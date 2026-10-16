@@ -1026,8 +1026,8 @@
 	Scroll ribbon left	Rulla verktygspanelen åt vänster
 	Scroll ribbon right	Rulla verktygspanelen åt höger
 	Apply Styles	Använd stilar
-	Dark page (white text on black)	Mörk sida (vit text på svart)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Visa dokument med inverterade färger, som Visa › Byt läge. Sparande, utskrift och PDF-filer påverkas inte.
+	Never change the document page color	Ändra aldrig dokumentets sidfärg
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Av: sidorna följer temat, ljusa i det ljusa temat och mörka i det mörka. På: sidorna behåller dokumentets egen färg i alla teman; bara Visa › Byt läge gör dem mörka. Sparande, utskrift och PDF-filer påverkas inte.
 	Only web (http, https) and email (mailto) links can be followed	Bara webblänkar (http, https) och e-postlänkar (mailto) kan följas
 	Character Border	Teckenkantlinje
 	Direction:	Riktning:

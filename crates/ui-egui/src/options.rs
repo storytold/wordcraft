@@ -182,13 +182,13 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     theme_picker(app, ui);
     interface_size_picker(app, ui);
     ui.checkbox(&mut app.ui.mini_toolbar, tl!("Show the mini toolbar when text is selected"));
-    let mut dark_page = app.session.view.dark_mode;
+    let mut never = app.ui.never_change_page.unwrap_or(false);
     if ui
-        .checkbox(&mut dark_page, tl!("Dark page (white text on black)"))
-        .on_hover_text(tl!("Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged."))
+        .checkbox(&mut never, tl!("Never change the document page color"))
+        .on_hover_text(tl!("Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged."))
         .changed()
     {
-        let _ = app.run("view.darkMode", json!({"value": dark_page}));
+        app.set_never_change_page(never);
     }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     default_app_button(app, ui);

@@ -938,8 +938,8 @@
 	{words} words	{words} mots
 	{selected} of {words} words	{selected} mots sur {words}
 	Apply Styles	Appliquer les styles
-	Dark page (white text on black)	Page sombre (texte blanc sur noir)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Affiche les documents avec les couleurs inversées, comme dans Affichage › Changer de mode. L’enregistrement, l’impression et les PDF restent inchangés.
+	Never change the document page color	Ne jamais modifier la couleur de page du document
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Désactivé : les pages suivent le thème, claires dans le thème clair, sombres dans le thème sombre. Activé : les pages gardent la couleur du document dans tous les thèmes ; seul Affichage › Changer de mode les assombrit. L'enregistrement, l'impression et les PDF ne changent pas.
 	Only web (http, https) and email (mailto) links can be followed	Seuls les liens Web (http, https) et les liens de messagerie (mailto) peuvent être suivis
 	Scroll ribbon left	Faire défiler le ruban vers la gauche
 	Scroll ribbon right	Faire défiler le ruban vers la droite

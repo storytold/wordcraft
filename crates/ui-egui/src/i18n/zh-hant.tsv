@@ -80,7 +80,7 @@
 	Compress punctuation at the start of a line	壓縮行首標點
 	Couldn't make WordCraft the default: {error}	無法將 WordCraft 設為預設應用程式：{error}
 	Custom dictionary	自訂字典
-	Dark page (white text on black)	深色頁面（黑底白字）
+	Never change the document page color	永不變更文件頁面顏色
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	拖出矩形以繪製表格，或拖出穿過儲存格的線條以分割儲存格。按 Esc 結束。
 	Draw Table	繪製表格
 	Define New Multilevel List	定義新的多層次清單
@@ -164,7 +164,7 @@
 	Search	搜尋
 	Search for templates	搜尋範本
 	Show all revisions inline	以內嵌方式顯示所有修訂
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	像「檢視 › 切換模式」一樣以反轉的色彩顯示文件。儲存、列印和 PDF 不受影響。
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	關閉：頁面跟隨主題，淺色主題下為淺色，深色主題下為深色。開啟：在任何主題下頁面都保持文件本身的顏色；只有「檢視 › 切換模式」會使其變暗。儲存、列印和 PDF 不受影響。
 	AutoSave saves every change to the file (needs a saved document)	自動儲存會將每次變更寫入檔案（文件需已儲存）
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	瀏覽器中無法使用自動儲存：它不能寫入您的檔案。儲存會下載一份複本。
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	自動儲存僅適用於 .docx、.odt 和 .rtf 檔案；{name} 無法保留所有格式。另存為 .docx 即可開啟自動儲存。

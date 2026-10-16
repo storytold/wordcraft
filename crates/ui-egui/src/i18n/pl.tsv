@@ -841,8 +841,8 @@
 	Scroll ribbon left	Przewiń wstążkę w lewo
 	Scroll ribbon right	Przewiń wstążkę w prawo
 	Apply Styles	Zastosuj style
-	Dark page (white text on black)	Ciemna strona (biały tekst na czarnym tle)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Pokazuj dokumenty w odwróconych kolorach, jak Widok › Przełącz tryb. Zapisywanie, drukowanie i pliki PDF pozostają bez zmian.
+	Never change the document page color	Nigdy nie zmieniaj koloru strony dokumentu
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Wyłączone: strony podążają za motywem, jasne w jasnym, ciemne w ciemnym. Włączone: strony zachowują kolor dokumentu w każdym motywie; zaciemnia je tylko Widok › Przełącz tryb. Zapisywanie, drukowanie i pliki PDF się nie zmieniają.
 	Only web (http, https) and email (mailto) links can be followed	Otwierać można tylko linki internetowe (http, https) i e-mailowe (mailto)
 	Character Border	Obramowanie znaku
 	Direction:	Kierunek:

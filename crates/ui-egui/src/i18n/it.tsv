@@ -932,8 +932,8 @@
 	Scroll ribbon left	Scorri la barra multifunzione a sinistra
 	Scroll ribbon right	Scorri la barra multifunzione a destra
 	Apply Styles	Applica stili
-	Dark page (white text on black)	Pagina scura (testo bianco su nero)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Mostra i documenti con i colori invertiti, come in Visualizza › Cambia modalità. Salvataggio, stampa e PDF non cambiano.
+	Never change the document page color	Non modificare mai il colore pagina del documento
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Disattivato: le pagine seguono il tema, chiare nel tema chiaro e scure in quello scuro. Attivato: le pagine mantengono il colore del documento in ogni tema; solo Visualizza › Cambia modalità le scurisce. Salvataggio, stampa e PDF non cambiano.
 	Only web (http, https) and email (mailto) links can be followed	Si possono seguire solo collegamenti web (http, https) e di posta elettronica (mailto)
 	Character Border	Bordo carattere
 	Direction:	Direzione:

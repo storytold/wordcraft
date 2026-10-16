@@ -937,8 +937,8 @@
 	Scroll ribbon left	Cuộn dải lệnh sang trái
 	Scroll ribbon right	Cuộn dải lệnh sang phải
 	Apply Styles	Áp dụng kiểu
-	Dark page (white text on black)	Trang tối (chữ trắng trên nền đen)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Hiện tài liệu với màu đảo ngược như Xem › Chuyển chế độ. Việc lưu, in và xuất PDF không bị ảnh hưởng.
+	Never change the document page color	Không bao giờ đổi màu trang của tài liệu
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Tắt: trang theo giao diện, sáng ở giao diện sáng và tối ở giao diện tối. Bật: trang giữ màu riêng của tài liệu ở mọi giao diện; chỉ Xem › Chuyển chế độ mới làm tối trang. Lưu, in và PDF không thay đổi.
 	Only web (http, https) and email (mailto) links can be followed	Chỉ mở được liên kết web (http, https) và email (mailto)
 	Character Border	Viền ký tự
 	Direction:	Hướng:

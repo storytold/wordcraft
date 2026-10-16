@@ -850,8 +850,8 @@ preview	Title	Örnek
 	{key}+Click to follow link	Bağlantıyı açmak için {key} tuşunu basılı tutup tıklayın
 	{selected} of {words} words	{words} sözcükten {selected} seçili
 	{words} words	{words} sözcük
-	Dark page (white text on black)	Koyu sayfa (siyah üzerine beyaz metin)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Belgeleri, Görünüm › Mod Değiştir'deki gibi ters renklerle gösterir. Kaydetme, yazdırma ve PDF'ler değişmez.
+	Never change the document page color	Belge sayfa rengini asla değiştirme
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Kapalı: sayfalar temayı izler; açık temada açık, koyu temada koyu olur. Açık: sayfalar her temada belgenin kendi rengini korur; yalnızca Görünüm › Mod Değiştir onları koyulaştırır. Kaydetme, yazdırma ve PDF'ler değişmez.
 	Only web (http, https) and email (mailto) links can be followed	Yalnızca web (http, https) ve e-posta (mailto) bağlantıları açılabilir
 
 	Apply Styles	Stilleri Uygula

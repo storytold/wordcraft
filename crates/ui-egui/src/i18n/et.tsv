@@ -911,8 +911,8 @@
 	Scroll ribbon left	Keri linti vasakule
 	Scroll ribbon right	Keri linti paremale
 	Apply Styles	Rakenda stiilid
-	Dark page (white text on black)	Tume leht (valge tekst mustal taustal)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Kuva dokumendid pööratud värvidega, nagu valik Vaade › Vaheta režiimi. Salvestamine, printimine ja PDF-id ei muutu.
+	Never change the document page color	Ära muuda kunagi dokumendi lehe värvi
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Väljas: lehed järgivad teemat, heleda teema puhul heledad, tumeda puhul tumedad. Sees: lehed säilitavad dokumendi enda värvi igas teemas; neid tumendab ainult Vaade › Vaheta režiimi. Salvestamine, printimine ja PDF-id ei muutu.
 	Only web (http, https) and email (mailto) links can be followed	Avada saab ainult veebi- (http, https) ja e-posti (mailto) linke
 	Character Border	Märgi ääris
 	Direction:	Suund:

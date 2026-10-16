@@ -527,7 +527,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
             ui.painter().rect_filled(r, 3.0, t.hover);
         }
         let lang = crate::i18n::current().code();
-        let dark_page = app.session.view.dark_mode;
+        let dark_page = app.page_is_dark();
         let key = format!("style:{id}:{skey}:{ppp}:{lang}:{dark_page}");
         let doc = &app.session.doc;
         let tex = app.previews.get_or(ui.ctx(), &key, || {

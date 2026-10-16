@@ -986,8 +986,8 @@
 	{words} words	단어 {words}개
 	{selected} of {words} words	전체 {words}개 중 {selected}개 선택
 	Apply Styles	스타일 적용
-	Dark page (white text on black)	어두운 페이지(검은 배경에 흰색 텍스트)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	보기 › 모드 전환처럼 문서의 색상을 반전해 표시합니다. 저장, 인쇄 및 PDF에는 영향을 주지 않습니다.
+	Never change the document page color	문서 페이지 색을 변경하지 않음
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	끔: 페이지가 테마를 따라 밝은 테마에서는 밝게, 어두운 테마에서는 어둡게 표시됩니다. 켬: 어떤 테마에서도 문서 고유의 색을 유지하며, 보기 › 모드 전환만 페이지를 어둡게 합니다. 저장, 인쇄, PDF는 바뀌지 않습니다.
 	Only web (http, https) and email (mailto) links can be followed	웹(http, https) 및 이메일(mailto) 링크만 열 수 있습니다.
 	Scroll ribbon left	리본을 왼쪽으로 스크롤
 	Scroll ribbon right	리본을 오른쪽으로 스크롤

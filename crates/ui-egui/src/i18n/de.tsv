@@ -82,7 +82,7 @@
 	Click level to modify:	Zu ändernde Ebene anklicken:
 	Color only	Nur Farbe
 	Compress punctuation at the start of a line	Satzzeichen am Zeilenanfang komprimieren
-	Dark page (white text on black)	Dunkle Seite (weißer Text auf Schwarz)
+	Never change the document page color	Seitenfarbe des Dokuments nie ändern
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Ziehen Sie ein Rechteck, um eine Tabelle zu zeichnen, oder eine Linie über Zellen, um sie zu teilen. Esc beendet.
 	Draw Table	Tabelle zeichnen
 	Define New Multilevel List	Neue mehrstufige Liste definieren
@@ -119,7 +119,7 @@
 	Right Margin	Rechter Rand
 	Search for templates	Vorlagen suchen
 	Show all revisions inline	Alle Änderungen im Text anzeigen
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Zeigt Dokumente mit invertierten Farben an, wie Ansicht › Modus wechseln. Speichern, Drucken und PDFs bleiben unverändert.
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Aus: Die Seiten folgen dem Design, hell im hellen, dunkel im dunklen Design. Ein: Die Seiten behalten in jedem Design die Farbe des Dokuments; nur Ansicht › Modus wechseln dunkelt sie ab. Speichern, Drucken und PDFs bleiben unverändert.
 	AutoSave saves every change to the file (needs a saved document)	AutoSpeichern speichert jede Änderung in der Datei (erfordert ein gespeichertes Dokument)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	AutoSpeichern ist im Browser nicht verfügbar: Es kann nicht in Ihre Dateien schreiben. „Speichern“ lädt eine Kopie herunter.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	AutoSpeichern behält nur .docx-, .odt- und .rtf-Dateien; {name} kann nicht die gesamte Formatierung bewahren. Speichern Sie als .docx, um AutoSpeichern zu aktivieren.

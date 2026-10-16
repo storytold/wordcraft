@@ -110,7 +110,7 @@
 	Confirm password:	Потврдите лозинку:
 	Couldn't make WordCraft the default: {error}	WordCraft није могао да постане подразумевана апликација: {error}
 	Custom dictionary	Прилагођени речник
-	Dark page (white text on black)	Тамна страница (бео текст на црном)
+	Never change the document page color	Никада не мењај боју странице документа
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Превуците правоугаоник да нацртате табелу или линију преко ћелија да их поделите. Esc завршава.
 	Draw Table	Нацртај табелу
 	Define New Multilevel List	Дефиниши нову вишенивоску листу
@@ -224,7 +224,7 @@
 	Phonetic Guide	Фонетски водич
 	Right (vertical)	Десно (вертикално)
 	Ruby text:	Руби текст:
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Прикажи документе са инвертованим бојама, као код Приказ › Промени режим. Чување, штампање и PDF нису погођени.
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Искључено: странице прате тему, светле у светлој, тамне у тамној. Укључено: странице у свакој теми задржавају боју документа; затамњује их само Приказ › Промени режим. Чување, штампа и PDF остају непромењени.
 	AutoSave saves every change to the file (needs a saved document)	Аутоматско чување уписује сваку измену у фајл (документ мора бити већ сачуван)
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Аутоматско чување није доступно у прегледачу: не може да уписује у ваше фајлове. Чување преузима копију.
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Аутоматско чување чува само .docx, .odt и .rtf фајлове; {name} не може да задржи сво форматирање. Сачувајте као .docx да бисте укључили аутоматско чување.

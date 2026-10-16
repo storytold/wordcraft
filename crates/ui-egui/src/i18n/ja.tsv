@@ -79,7 +79,7 @@
 	Compress punctuation at the start of a line	行頭の約物を詰める
 	Couldn't make WordCraft the default: {error}	WordCraft を既定のアプリにできませんでした: {error}
 	Custom dictionary	ユーザー辞書
-	Dark page (white text on black)	ダーク ページ (黒地に白い文字)
+	Never change the document page color	ドキュメントのページの色を変更しない
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	四角形をドラッグして表を描くか、セルを横切る線を引いて分割します。Esc で終了します。
 	Draw Table	表を描画
 	Define New Multilevel List	新しいアウトラインの定義
@@ -163,7 +163,7 @@
 	Search	検索
 	Search for templates	テンプレートを検索
 	Show all revisions inline	すべての変更履歴を本文中に表示
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	表示 › モードの切り替えと同様に、文書の色を反転して表示します。保存、印刷、PDF は変わりません。
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	オフ: ページはテーマに従い、ライト テーマでは明るく、ダーク テーマでは暗くなります。オン: どのテーマでもドキュメント本来の色を保ち、表示 › モードの切り替えだけがページを暗くします。保存、印刷、PDF は変わりません。
 	AutoSave saves every change to the file (needs a saved document)	自動保存は変更のたびにファイルへ保存します（保存済みの文書が必要です）
 	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	ブラウザーでは自動保存を使えません（ファイルに書き込めないため）。保存するとコピーがダウンロードされます。
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	自動保存の対象は .docx、.odt、.rtf ファイルだけです。{name} ではすべての書式を保持できません。自動保存をオンにするには .docx として保存してください。

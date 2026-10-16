@@ -282,7 +282,7 @@
 	Cut	Vyjmout
 	Dark	Tmavý
 	Dark Mode	Tmavý režim
-	Dark page (white text on black)	Tmavá stránka (bílý text na černém pozadí)
+	Never change the document page color	Nikdy neměnit barvu stránky dokumentu
 	Dashed	Čárkované
 	Data	Data
 	Date & Time	Datum a čas
@@ -1093,7 +1093,7 @@
 	Show all formatting marks	Zobrazit všechny netisknutelné znaky
 	Show all revisions inline	Zobrazit všechny revize přímo v textu
 	Show Comments	Zobrazit komentáře
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Zobrazí dokumenty s invertovanými barvami, podobně jako Zobrazení › Přepnout režimy. Ukládání, tisk a PDF zůstávají beze změny.
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Vypnuto: stránky následují motiv, ve světlém světlé, v tmavém tmavé. Zapnuto: stránky si v každém motivu ponechají barvu dokumentu; ztmavit je může jen Zobrazení › Přepnout režimy. Ukládání, tisk a PDF se nemění.
 	Show in the Styles gallery	Zobrazit v galerii stylů
 	Show Markup	Zobrazit revize
 	Show Notes	Zobrazit poznámky

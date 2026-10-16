@@ -843,8 +843,8 @@ preview	Title	Пример
 	{key}+Click to follow link	{key}+щелчок — перейти по ссылке
 	{selected} of {words} words	Слов: {selected} из {words}
 	{words} words	Слов: {words}
-	Dark page (white text on black)	Тёмная страница (белый текст на чёрном)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Показывать документы с инвертированными цветами, как «Вид › Сменить режим». Сохранение, печать и PDF не меняются.
+	Never change the document page color	Никогда не менять цвет страницы документа
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Выключено: страницы следуют теме: светлые в светлой, тёмные в тёмной. Включено: страницы сохраняют цвет документа в любой теме; затемнить их может только Вид › Сменить режим. Сохранение, печать и PDF не меняются.
 	Only web (http, https) and email (mailto) links can be followed	Переходить можно только по веб-ссылкам (http, https) и ссылкам на электронную почту (mailto)
 
 	Apply Styles	Применить стили

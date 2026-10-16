@@ -979,8 +979,8 @@
 	Browse…	Procurar…
 	{words} words	Palavras: {words}
 	{selected} of {words} words	Palavras: {words}; seleção: {selected}
-	Dark page (white text on black)	Página escura (texto branco sobre preto)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Mostra os documentos com as cores invertidas, como em Exibir › Alternar modos. Salvar, imprimir e PDFs não mudam.
+	Never change the document page color	Nunca alterar a cor da página do documento
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Desativado: as páginas seguem o tema, claras no tema claro e escuras no escuro. Ativado: as páginas mantêm a cor do documento em qualquer tema; só Exibir › Alternar modos as escurece. Salvar, imprimir e PDFs não mudam.
 	Only web (http, https) and email (mailto) links can be followed	Só é possível seguir links da web (http, https) e de e-mail (mailto)
 	Direction:	Direção:
 	Right-to-left	Da direita para a esquerda

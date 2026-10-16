@@ -945,8 +945,8 @@
 	Scroll ribbon left	Превъртане на лентата наляво
 	Scroll ribbon right	Превъртане на лентата надясно
 	Apply Styles	Прилагане на стилове
-	Dark page (white text on black)	Тъмна страница (бял текст на черно)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Документите се показват с обърнати цветове, както при Изглед › Смяна на режима. Запазването, отпечатването и PDF файловете не се променят.
+	Never change the document page color	Никога не променяй цвета на страницата на документа
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Изключено: страниците следват темата – светли в светлата, тъмни в тъмната. Включено: страниците запазват цвета на документа във всяка тема; само Изглед › Смяна на режима ги затъмнява. Записването, печатът и PDF не се променят.
 	Only web (http, https) and email (mailto) links can be followed	Могат да се отварят само уеб (http, https) и имейл (mailto) връзки
 	Character Border	Граница на знак
 	Direction:	Посока:

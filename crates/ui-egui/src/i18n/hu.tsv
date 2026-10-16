@@ -836,8 +836,8 @@
 	{key}+Click to follow link	{key}+kattintás: link megnyitása
 	{selected} of {words} words	{selected}/{words} szó
 	{words} words	{words} szó
-	Dark page (white text on black)	Sötét oldal (fehér szöveg feketén)
-	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	A dokumentumok fordított színekkel jelennek meg, mint a Nézet › Módváltás esetén. A mentés, a nyomtatás és a PDF változatlan marad.
+	Never change the document page color	Soha ne módosítsa a dokumentum oldalszínét
+	Off, pages follow the theme: light in the light theme, dark in the dark theme. On, pages keep the document's own colour in every theme; only View › Switch Modes darkens them. Saving, printing and PDFs are unchanged.	Ki: az oldalak követik a témát, világos témában világosak, sötétben sötétek. Be: az oldalak minden témában megtartják a dokumentum saját színét; csak a Nézet › Módváltás sötétíti el őket. A mentés, a nyomtatás és a PDF nem változik.
 	Only web (http, https) and email (mailto) links can be followed	Csak webes (http, https) és e-mail (mailto) link nyitható meg
 	Apply Styles	Stílusok alkalmazása
 	AutoSave documents you have saved in WordCraft	A WordCraftban mentett dokumentumok automatikus mentése

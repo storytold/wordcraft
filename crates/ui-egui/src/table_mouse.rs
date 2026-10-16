@@ -136,7 +136,7 @@ pub fn cursor(app: &WordApp, ui: &Ui, resp: &egui::Response, layout: &DocLayout,
 /// dragged, a dashed outline of where the table goes.
 pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLayout, rects: &[Rect], scale: f32) {
     let hover = painter.ctx().input(|i| i.pointer.hover_pos());
-    let dark = app.session.view.dark_mode;
+    let dark = app.page_is_dark();
     if let Some(d) = &app.canvas.table_drag {
         match d.target.spot {
             Spot::Handle => {
