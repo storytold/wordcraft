@@ -3649,6 +3649,43 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
     }
 }
 
+fn row_keeps_next(row: &table::RowLayout) -> bool {
+    let Some(items) = row.cells.first().and_then(|cell| row.items.get(cell.items.clone())) else { return false };
+    let Some((depth, story)) = items
+        .iter()
+        .filter_map(|item| match item {
+            Placed::Cell { table, story, .. } => Some((table.0.len() + 3, *story)),
+            _ => None,
+        })
+        .min_by_key(|(depth, _)| *depth)
+    else {
+        return false;
+    };
+    // Word takes the row's keep flag from the first paragraph of its first cell.
+    items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Lines { path, story: own, para, .. } if path.0.len() == depth && path.0.last() == Some(&0) && *own == story => {
+                Some(para.rp.keep_next)
+            }
+            _ => None,
+        })
+        .unwrap_or(false)
+}
+
+fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
+    if laid.height <= room + 0.01 {
+        return true;
+    }
+    if row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)) {
+        return false;
+    }
+    if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
+        return false;
+    }
+    table::split_row(laid, room).is_some()
+}
+
 fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
     let width = pb.col_w();
@@ -3676,6 +3713,19 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     // table (e.g. 3 header rows over 30 000 pages).
     const MAX_HEADER_REPEATS: usize = 200_000;
     let mut header_repeats = 0usize;
+    // Resolve kept chains once; nested paragraphs cannot keep their enclosing row.
+    let mut kept: Vec<(usize, f32)> = (0..tl.rows.len()).map(|i| (i, 0.0)).collect();
+    for i in (0..tl.rows.len().saturating_sub(1)).rev() {
+        let Some(row) = tl.rows.get(i) else { continue };
+        if i < header_rows.len() || !row_keeps_next(row) {
+            continue;
+        }
+        let Some((end, height)) = kept.get(i + 1).copied() else { continue };
+        if let Some(group) = kept.get_mut(i) {
+            *group = (end, row.height + height);
+        }
+    }
+    let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
     let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
         if let Some(pg) = pb.page() {
@@ -3714,7 +3764,23 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
-            if pb.y + cur.height <= pb.bottom + 0.01 {
+            // A fitting kept row follows the next row when that row cannot start below it.
+            // Move only the prefix's start; an oversized follower cannot separate its kept rows.
+            let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
+                && !pb.web
+                && !pb.at_top()
+                && !fresh
+                && rest.is_none()
+                && !ri.checked_sub(1).and_then(|prev| kept.get(prev)).is_some_and(|&(end, _)| end >= ri)
+                && kept.get(ri).is_some_and(|&(end, height)| {
+                    if end == ri {
+                        return false;
+                    }
+                    let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
+                    let page_height = pb.bottom - body_top - repeated_height;
+                    height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
+                });
+            if pb.y + cur.height <= pb.bottom + 0.01 && !defer_kept {
                 break;
             }
             // Measured in Word: a row with an at-least height doesn't split where less than that
@@ -3725,7 +3791,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                     r.props.height_rule == wordcraft_doc::props::HeightRule::AtLeast
                         && r.props.height.is_some_and(|h| h > room + 0.01 && h <= pb.bottom - body_top + 0.01)
                 });
-            let split = if splittable && !short_of_min { table::split_row(cur, room) } else { None };
+            let split = if splittable && !short_of_min && !defer_kept { table::split_row(cur, room) } else { None };
             match split {
                 Some((a, b)) => {
                     place(pb, &a);
