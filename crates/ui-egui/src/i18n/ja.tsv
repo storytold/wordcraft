@@ -2233,3 +2233,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Add Font status (#1789)
+	Added 1 font	フォントを 1 件追加しました
+	Added {n} fonts	フォントを {n} 件追加しました
+	{added}; {count} couldn't be read: {names}	{added}。読み込めなかったもの {count} 件: {names}
+	{names} and {n} more	{names} ほか {n} 件
+	{added}; {n} skipped (limit {max})	{added}。{n} 件をスキップしました (上限 {max})

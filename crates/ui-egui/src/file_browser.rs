@@ -147,7 +147,7 @@ pub(crate) struct FileBrowser {
 impl FileBrowser {
     pub(crate) fn new(req: FileDialogRequest, after: AfterPick, start: PathBuf, unavailable: bool) -> Self {
         let (name, filters) = match &req {
-            FileDialogRequest::Open { purpose } => {
+            FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
             FileDialogRequest::Save { name } => {
@@ -209,7 +209,7 @@ impl FileBrowser {
             return Step::Stay;
         }
         match self.req {
-            FileDialogRequest::Open { .. } => {
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => {
                 if path.is_file() {
                     return Step::Pick(path);
                 }
@@ -242,14 +242,14 @@ impl FileBrowser {
 
     fn title(&self) -> &'static str {
         match self.req {
-            FileDialogRequest::Open { .. } => "Open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save As",
         }
     }
 
     fn ok_label(&self) -> &'static str {
         match self.req {
-            FileDialogRequest::Open { .. } => "Open",
+            FileDialogRequest::Open { .. } | FileDialogRequest::OpenMany { .. } => "Open",
             FileDialogRequest::Save { .. } => "Save",
         }
     }

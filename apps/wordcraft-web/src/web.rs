@@ -193,13 +193,15 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
             } else {
                 rfd::AsyncFileDialog::new().add_filter("Documents", DOC_EXTS)
             };
+            let many = purpose == "font";
             wasm_bindgen_futures::spawn_local(async move {
-                let Some(file) = dialog.pick_file().await else {
-                    return;
-                };
-                let bytes = file.read().await;
-                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
-                ctx.request_repaint();
+                // Add Font takes every selected file (#1789); the others one.
+                let files = if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
+                for file in files.into_iter().take(MAX_PICKED_FILES) {
+                    let bytes = file.read().await;
+                    inbox.lock().unwrap_or_else(|e| e.into_inner()).push((file.file_name(), bytes));
+                    ctx.request_repaint();
+                }
             });
         })),
         // Exports ask for a name; the browser decides where the download goes.
@@ -219,6 +221,8 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
     }
 }
 
+/// Most files one multi-select pick (Add Font) reads.
+const MAX_PICKED_FILES: usize = 2000;
 /// Most local fonts one Load System Installed Fonts installs (a designer's machine has thousands).
 const MAX_SYSTEM_FONTS: usize = 500;
 /// Most font bytes one Load System Installed Fonts reads into memory (wasm memory is small).

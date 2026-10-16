@@ -2243,3 +2243,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# Add Font status (#1789)
+	Added 1 font	Dodat je 1 font
+	Added {n} fonts	Dodato fontova: {n}
+	{added}; {count} couldn't be read: {names}	{added}; nije moguće pročitati ({count}): {names}
+	{names} and {n} more	{names} i još {n}
+	{added}; {n} skipped (limit {max})	{added}; preskočeno: {n} (ograničenje {max})

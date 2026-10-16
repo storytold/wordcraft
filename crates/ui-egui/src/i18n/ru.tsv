@@ -2630,3 +2630,9 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# Add Font status (#1789)
+	Added 1 font	Добавлен 1 шрифт
+	Added {n} fonts	Добавлено шрифтов: {n}
+	{added}; {count} couldn't be read: {names}	{added}; не удалось прочитать ({count}): {names}
+	{names} and {n} more	{names} и ещё {n}
+	{added}; {n} skipped (limit {max})	{added}; пропущено: {n} (лимит {max})

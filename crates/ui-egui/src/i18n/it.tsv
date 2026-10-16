@@ -2641,3 +2641,9 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# Add Font status (#1789)
+	Added 1 font	1 tipo di carattere aggiunto
+	Added {n} fonts	{n} tipi di carattere aggiunti
+	{added}; {count} couldn't be read: {names}	{added}; {count} non leggibili: {names}
+	{names} and {n} more	{names} e altri {n}
+	{added}; {n} skipped (limit {max})	{added}; {n} saltati (limite {max})

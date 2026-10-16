@@ -2621,3 +2621,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# Add Font status (#1789)
+	Added 1 font	Добавен 1 шрифт
+	Added {n} fonts	Добавени шрифтове: {n}
+	{added}; {count} couldn't be read: {names}	{added}; не можаха да се прочетат ({count}): {names}
+	{names} and {n} more	{names} и още {n}
+	{added}; {n} skipped (limit {max})	{added}; пропуснати: {n} (ограничение {max})

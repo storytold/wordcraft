@@ -2647,3 +2647,9 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+# Add Font status (#1789)
+	Added 1 font	1 teckensnitt har lagts till
+	Added {n} fonts	{n} teckensnitt har lagts till
+	{added}; {count} couldn't be read: {names}	{added}; {count} kunde inte läsas: {names}
+	{names} and {n} more	{names} och {n} till
+	{added}; {n} skipped (limit {max})	{added}; {n} hoppades över (gräns {max})

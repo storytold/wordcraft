@@ -2629,3 +2629,9 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+# Add Font status (#1789)
+	Added 1 font	1 yazı tipi eklendi
+	Added {n} fonts	{n} yazı tipi eklendi
+	{added}; {count} couldn't be read: {names}	{added}; {count} okunamadı: {names}
+	{names} and {n} more	{names} ve {n} tane daha
+	{added}; {n} skipped (limit {max})	{added}; {n} atlandı (sınır {max})

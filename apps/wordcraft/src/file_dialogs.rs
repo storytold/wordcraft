@@ -27,7 +27,7 @@ type Request = (FileDialogRequest, Sender<FileDialogAnswer>);
 pub type Hook = Box<dyn Fn(FileDialogRequest) -> Receiver<FileDialogAnswer>>;
 
 /// A picker's answer, waited for off the UI thread.
-type Picking = Pin<Box<dyn Future<Output = Option<rfd::FileHandle>> + Send>>;
+type Picking = Pin<Box<dyn Future<Output = Vec<rfd::FileHandle>> + Send>>;
 
 /// Shows the dialogs the app queued; lives in the eframe app, which has the window.
 pub struct Launcher {
@@ -56,13 +56,18 @@ impl Launcher {
             // Built here, on the UI thread: macOS shows the panel as a sheet on the window now.
             let dialog = rfd::AsyncFileDialog::new().set_parent(parent);
             let picking: Picking = match req {
-                FileDialogRequest::Open { purpose } => Box::pin(open_filters(dialog, &purpose).pick_file()),
+                FileDialogRequest::Open { purpose } => {
+                    Box::pin(async move { open_filters(dialog, &purpose).pick_file().await.into_iter().collect() })
+                }
+                FileDialogRequest::OpenMany { purpose } => {
+                    Box::pin(async move { open_filters(dialog, &purpose).pick_files().await.unwrap_or_default() })
+                }
                 FileDialogRequest::Save { name } => {
                     let mut dialog = dialog.set_file_name(name.clone());
                     for (label, exts) in save_filters(&name) {
                         dialog = dialog.add_filter(label, &exts);
                     }
-                    Box::pin(dialog.save_file())
+                    Box::pin(async move { dialog.save_file().await.into_iter().collect() })
                 }
             };
             let ctx = self.ctx.clone();
@@ -70,7 +75,7 @@ impl Launcher {
                 // The picker only starts when first polled: without a system dialog it never does.
                 let picked = match no_system_dialog() {
                     Some(reason) => Err(reason),
-                    None => Ok(pollster::block_on(picking).map(|f| f.path().to_string_lossy().to_string())),
+                    None => Ok(pollster::block_on(picking).iter().map(|f| f.path().to_string_lossy().to_string()).collect()),
                 };
                 let _ = answer.send(picked);
                 ctx.request_repaint();
