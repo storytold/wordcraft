@@ -2624,3 +2624,10 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Zapuštěná
+	In margin	Na okraji
+	Drop Cap Options…	Možnosti iniciály…
+	Lines to drop:	Výška v řádcích:
+	Distance from text:	Vzdálenost od textu:
+	Distance from text	Vzdálenost od textu

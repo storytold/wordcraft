@@ -2233,3 +2233,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	本文内に表示
+	In margin	余白に表示
+	Drop Cap Options…	ドロップ キャップのオプション…
+	Lines to drop:	ドロップする行数:
+	Distance from text:	本文からの距離:
+	Distance from text	本文からの距離

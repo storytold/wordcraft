@@ -2245,3 +2245,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	下沉
+	In margin	悬挂
+	Drop Cap Options…	首字下沉选项…
+	Lines to drop:	下沉行数：
+	Distance from text:	距正文：
+	Distance from text	距正文

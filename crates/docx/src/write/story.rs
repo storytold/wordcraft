@@ -137,6 +137,12 @@ impl Writer<'_> {
             let tail = head.split_off(first.len_utf8()).ok();
             if let Some(mut tail) = tail {
                 head.props.drop_cap = Some(lines);
+                // The letter's own font goes on its run (`w:rFonts`).
+                if let Some(f) = p.props.drop_cap_font.as_ref().filter(|f| !f.trim().is_empty()) {
+                    for r in &mut head.runs {
+                        r.props.font = Some(f.clone());
+                    }
+                }
                 head.section = None;
                 self.para_inner(w, &head, rels, false, depth, true);
                 tail.props.drop_cap = None;

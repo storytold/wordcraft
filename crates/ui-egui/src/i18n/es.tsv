@@ -2599,3 +2599,10 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	En texto
+	In margin	En margen
+	Drop Cap Options…	Opciones de letra capital…
+	Lines to drop:	Líneas que ocupa:
+	Distance from text:	Distancia del texto:
+	Distance from text	Distancia del texto

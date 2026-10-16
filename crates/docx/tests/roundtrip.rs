@@ -165,6 +165,9 @@ fn every_para_prop_round_trips() {
         suppress_line_numbers: Some(true),
         bidi: Some(false),
         drop_cap: None,
+        drop_cap_margin: None,
+        drop_cap_distance: None,
+        drop_cap_font: None,
         frame: Some(wordcraft_doc::props::TextFrame {
             w: Some(144.0),
             h: Some(36.0),
@@ -2605,4 +2608,43 @@ fn page_background_picture_round_trips() {
     assert_eq!(r.settings.page_color, d.settings.page_color);
     // Saved again, it is still there.
     assert!(rt(&r).settings.page_picture.is_some());
+}
+
+/// #2601: Drop Cap Options — a dropped cap with its lines, distance from the text and font, and
+/// one in the margin, survive a save: `w:framePr w:dropCap="drop|margin" w:lines w:hSpace` on the
+/// letter's own paragraph, the font on the letter's run (ECMA-376 §17.3.1.11). The text after the
+/// letter keeps its own font.
+#[test]
+fn drop_cap_options_round_trip() {
+    let body = CharProps { font: Some("Liberation Serif".into()), ..Default::default() };
+    let mut dropped = Paragraph::with_text("Once upon a time", body.clone());
+    dropped.props.drop_cap = Some(2);
+    dropped.props.drop_cap_distance = Some(6.0);
+    dropped.props.drop_cap_font = Some("Liberation Mono".into());
+    let mut margin = Paragraph::with_text("In the margin", body.clone());
+    margin.props.drop_cap = Some(4);
+    margin.props.drop_cap_margin = Some(true);
+    let d = doc_with(vec![dropped, margin]);
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let mut z = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut xml = String::new();
+    std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
+    assert!(xml.contains(r#"w:dropCap="drop" w:lines="2" w:hSpace="120""#), "{xml}");
+    assert!(xml.contains(r#"w:dropCap="margin" w:lines="4""#), "{xml}");
+    assert!(xml.contains(r#"w:ascii="Liberation Mono""#), "the letter's font on its run: {xml}");
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let got = paras(&r);
+    assert_eq!(got.len(), 2, "each letter merges back into its paragraph");
+    let (a, b) = (&got[0], &got[1]);
+    assert_eq!(a.plain_text(), "Once upon a time");
+    assert_eq!(
+        (a.props.drop_cap, a.props.drop_cap_margin, a.props.drop_cap_distance, a.props.drop_cap_font.as_deref()),
+        (Some(2), None, Some(6.0), Some("Liberation Mono"))
+    );
+    assert!(a.runs.iter().all(|r| r.props.font.as_deref() == Some("Liberation Serif")), "the letter keeps the text's font: {:?}", a.runs);
+    assert_eq!(b.plain_text(), "In the margin");
+    assert_eq!(
+        (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
+        (Some(4), Some(true), None, None)
+    );
 }

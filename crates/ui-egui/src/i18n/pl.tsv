@@ -2622,3 +2622,10 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	W tekście
+	In margin	Na marginesie
+	Drop Cap Options…	Opcje inicjału…
+	Lines to drop:	Wysokość w wierszach:
+	Distance from text:	Odległość od tekstu:
+	Distance from text	Odległość od tekstu

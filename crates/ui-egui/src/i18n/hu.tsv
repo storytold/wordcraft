@@ -2628,3 +2628,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Süllyesztett
+	In margin	Margón
+	Drop Cap Options…	Iniciálé beállításai…
+	Lines to drop:	Sorok száma:
+	Distance from text:	Távolság a szövegtől:
+	Distance from text	Távolság a szövegtől

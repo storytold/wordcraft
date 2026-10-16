@@ -793,6 +793,16 @@ pub struct ParaProps {
     /// Drop cap: lines to drop (0 = none) — applies to the first character(s).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub drop_cap: Option<u8>,
+    /// Drop cap "In margin" (`w:dropCap="margin"`): the letter hangs in the left margin and the
+    /// text keeps its indent. Unset = dropped into the text.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_margin: Option<bool>,
+    /// The drop cap's distance from the text, in points (`w:hSpace`). Unset = 0.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_distance: Option<f32>,
+    /// The drop cap letter's font family (the cap run's `w:rFonts`). Unset = the text's font.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub drop_cap_font: Option<String>,
     /// A text frame (`w:framePr` other than a drop cap): the paragraph is placed apart from the
     /// text, which may wrap around it — a footer's page number in a frame, for instance.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -833,7 +843,7 @@ impl ParaProps {
     pub fn overlay(&mut self, patch: &ParaProps) {
         overlay_fields!(self, patch; style, align, indent_left, indent_right, indent_first, indent_left_chars, indent_right_chars, indent_first_chars, space_before, space_after, space_before_auto, space_after_auto, line_spacing,
             contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
-            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
+            suppress_hyphens, suppress_line_numbers, bidi, drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
             snap_to_grid);
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {

@@ -7232,3 +7232,48 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// #2601: Insert › Drop Cap's menu and Drop Cap Options. Dropped and In margin take the
+/// documented defaults (3 lines, distance 0, the text's font); the dialog's values (lines,
+/// distance, font) are kept and clamped; None takes the drop cap away with its font; each is one
+/// undo step and the caret stays where it was. The command is off where Word disables it: an
+/// empty paragraph, a table cell, a paragraph that starts with a space.
+#[test]
+fn drop_cap_options_set_position_lines_distance_and_font() {
+    let props = |s: &Session| s.doc.body.first().and_then(|b| b.as_para()).map(|p| p.props.clone()).unwrap_or_default();
+    let cap = |s: &Session| {
+        let p = props(s);
+        (p.drop_cap, p.drop_cap_margin, p.drop_cap_distance, p.drop_cap_font)
+    };
+    let mut s = s();
+    assert!(s.run("insert.dropCap", &json!({})).is_err(), "off in an empty paragraph");
+    run(&mut s, "text.insert", json!({"text": "Once upon a time"}));
+    let caret = s.sel.clone();
+    run(&mut s, "insert.dropCap", json!({"position": "margin"}));
+    assert_eq!(cap(&s), (Some(3), Some(true), None, None));
+    assert_eq!(s.sel, caret, "the caret stays");
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.2, "font": "Liberation Mono"}));
+    assert_eq!(cap(&s), (Some(5), None, Some(7.2), Some("Liberation Mono".to_string())));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(cap(&s), (Some(3), Some(true), None, None), "one undo step");
+    run(&mut s, "insert.dropCap", json!({"lines": 99, "distance": 1e30, "font": "  "}));
+    assert_eq!(cap(&s), (Some(10), None, Some(wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE), None), "clamped");
+    run(&mut s, "insert.dropCap", json!({"lines": -4, "distance": -3, "position": "sideways"}));
+    assert_eq!(cap(&s), (Some(1), None, None, None), "junk falls back to the nearest valid value");
+    run(&mut s, "insert.dropCap", json!({"font": "Liberation Mono", "distance": 3}));
+    run(&mut s, "insert.dropCap", json!({"position": "none"}));
+    assert_eq!(cap(&s), (None, None, None, None), "None takes the letter's font back too");
+    assert!(props(&s).is_empty());
+    run(&mut s, "insert.dropCap", json!({"lines": 2}));
+    run(&mut s, "insert.dropCap", json!({"lines": 0}));
+    assert_eq!(cap(&s), (None, None, None, None), "0 lines is None, as before");
+
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": " leading space"}));
+    assert!(s.run("insert.dropCap", &json!({})).is_err(), "off when the paragraph starts with a space");
+    let mut s = self::s();
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Cell"}));
+    assert!(s.sel.focus.path.cell().is_some());
+    assert!(s.run("insert.dropCap", &json!({})).is_err(), "off in a table cell");
+}

@@ -1114,7 +1114,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             menu_button(ui, app, "wordArt", Some("WordArt"), "WordArt", false, "", |ui, app| {
                 crate::wordart_menus::style_gallery(ui, app, "insert.wordArt")
             });
-            small(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", "insert.dropCap", json!({}), false);
+            menu_button(ui, app, "dropCap", Some("Drop Cap"), "Drop Cap", false, "insert.dropCap", drop_cap_items);
         });
         stack(ui, |ui| {
             small(ui, app, "signature", None, "Signature Line", "insert.signatureLine", json!({}), false);
@@ -1156,6 +1156,17 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
             mi(ui, app, "More Symbols…", "ui.dialog", json!({"name": "symbol"}));
         });
     });
+}
+
+/// Insert › Drop Cap's menu (#2601): None, Dropped and In margin (the current one checked),
+/// then the Drop Cap dialog.
+fn drop_cap_items(ui: &mut Ui, app: &mut WordApp) {
+    let current = wordcraft_engine::cmd::insert::drop_cap_state(&app.session).position;
+    for (label, v) in [("None", "none"), ("Dropped", "dropped"), ("In margin", "margin")] {
+        mi_check(ui, app, label, current == v, "insert.dropCap", json!({"position": v}));
+    }
+    ui.separator();
+    mi(ui, app, "Drop Cap Options…", "ui.dialog", json!({"name": "dropCap"}));
 }
 
 fn draw(app: &mut WordApp, ui: &mut Ui) {

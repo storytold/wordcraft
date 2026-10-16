@@ -2629,3 +2629,10 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Metin içinde
+	In margin	Kenar boşluğunda
+	Drop Cap Options…	Büyük başlangıç harfi seçenekleri…
+	Lines to drop:	Kaplayacağı satır:
+	Distance from text:	Metinden uzaklık:
+	Distance from text	Metinden uzaklık

@@ -199,10 +199,21 @@ impl Reader<'_> {
                         && p.props.drop_cap.is_none()
                         && let Some(Block::Para(mut first)) = out.pop().map(|b| (*b).clone())
                     {
-                        let lines = first.props.drop_cap;
                         let mut props = p.props.clone();
+                        props.drop_cap = first.props.drop_cap;
+                        props.drop_cap_margin = first.props.drop_cap_margin;
+                        props.drop_cap_distance = first.props.drop_cap_distance;
+                        // A letter in a font of its own: the drop cap's font, the letter itself
+                        // in the text's (so taking the drop cap away gives the letter its font back).
+                        let cap_font = first.runs.first().and_then(|r| r.props.font.clone());
+                        let text_font = p.runs.first().and_then(|r| r.props.font.clone());
+                        if cap_font.is_some() && cap_font != text_font {
+                            for r in &mut first.runs {
+                                r.props.font = text_font.clone();
+                            }
+                            props.drop_cap_font = cap_font;
+                        }
                         first.append(p);
-                        props.drop_cap = lines;
                         first.props = props;
                         out.push(para_block(first));
                         continue;

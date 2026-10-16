@@ -266,8 +266,11 @@ impl PropCtx {
                 "w:autoSpaceDN" => p.auto_space_dn = Some(on_off(k)),
                 "w:snapToGrid" => p.snap_to_grid = Some(on_off(k)),
                 "w:framePr" => {
-                    if matches!(k.attr("w:dropCap"), Some("drop") | Some("margin")) {
+                    if let Some(kind @ ("drop" | "margin")) = k.attr("w:dropCap") {
                         p.drop_cap = Some(k.attr("w:lines").and_then(u32_of).unwrap_or(3).clamp(1, 10) as u8);
+                        p.drop_cap_margin = (kind == "margin").then_some(true);
+                        p.drop_cap_distance =
+                            tw(k, "w:hSpace").filter(|d| d.is_finite() && *d > 0.0).map(|d| d.min(wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE));
                     } else {
                         p.frame = Some(text_frame(k));
                     }

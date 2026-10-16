@@ -205,10 +205,17 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
     toggle(w, "w:keepLines", p.keep_lines);
     toggle(w, "w:pageBreakBefore", p.page_break_before);
     if framed && let Some(lines) = p.drop_cap.filter(|l| *l > 0) {
-        w.empty(
-            "w:framePr",
-            &[("w:dropCap", "drop"), ("w:lines", &n(lines.min(10) as i64)), ("w:wrap", "around"), ("w:vAnchor", "text"), ("w:hAnchor", "text")],
-        );
+        // ECMA-376 §17.3.1.11: the drop cap's frame — dropped or in the margin, the lines it
+        // spans and its distance from the text (`w:hSpace`, twips).
+        let kind = if p.drop_cap_margin == Some(true) { "margin" } else { "drop" };
+        let lines = n(lines.min(10) as i64);
+        let space = p.drop_cap_distance.filter(|d| d.is_finite() && *d > 0.0).map(|d| twips(d.min(wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE)));
+        let mut a: Vec<(&str, &str)> = vec![("w:dropCap", kind), ("w:lines", &lines)];
+        if let Some(h) = &space {
+            a.push(("w:hSpace", h));
+        }
+        a.extend([("w:wrap", "around"), ("w:vAnchor", "text"), ("w:hAnchor", "text")]);
+        w.empty("w:framePr", &a);
     } else if let Some(f) = &p.frame {
         let (fw, fh, fx, fy) = (f.w.map(twips), f.h.map(twips), twips(f.x), twips(f.y));
         let (hs, vs) = (twips(f.h_space), twips(f.v_space));

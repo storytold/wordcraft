@@ -2245,3 +2245,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	No texto
+	In margin	Na margem
+	Drop Cap Options…	Opções de capitular…
+	Lines to drop:	Linhas ocupadas:
+	Distance from text:	Distância do texto:
+	Distance from text	Distância do texto

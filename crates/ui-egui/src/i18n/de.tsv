@@ -2232,3 +2232,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Im Text
+	In margin	Im Rand
+	Drop Cap Options…	Initialoptionen…
+	Lines to drop:	Initialhöhe (Zeilen):
+	Distance from text:	Abstand zum Text:
+	Distance from text	Abstand zum Text

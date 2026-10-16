@@ -331,7 +331,8 @@ pub struct ParaLayout {
     pub notes: Vec<(usize, u32)>,
     /// Proofing issues: (byte start, byte end, grammar?).
     pub issues: Vec<(usize, usize, bool)>,
-    /// Drop cap: (clusters at the start that form it, lines it drops, width with its gap).
+    /// Drop cap: (clusters at the start that form it, lines it drops, the indent of those lines:
+    /// the letter's width and its distance from the text, or 0 in the margin).
     pub drop_cap: Option<(usize, u8, f32)>,
     /// Clusters after which the line may break with a hyphen (soft hyphens, auto hyphenation), sorted.
     pub hyph_after: Vec<u32>,
@@ -1312,10 +1313,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             let mut big = (*rc).clone();
             // `clamp` would panic here when the text itself is larger than 1000 pt.
             big.size = (((lines - 1.0) * line_h + rc.size * 0.7) / 0.7).min(1000.0).max(rc.size);
+            if let Some(f) = &rp.drop_cap_font {
+                big.font = f.clone();
+            }
             let before = b.clusters.len();
             b.shape(first, 0, &Arc::new(big), None);
             let w: f32 = b.clusters.get(before..).map(|c| c.iter().map(|c| c.adv).sum()).unwrap_or(0.0);
-            drop_cap = Some((b.clusters.len() - before, rp.drop_cap, w + rc.size * 0.3));
+            // Dropped: the first lines step aside by the letter and its distance from the text.
+            // In margin: they keep their indent and the letter hangs left of them.
+            let indent = if rp.drop_cap_margin { 0.0 } else { w + rp.drop_cap_distance };
+            drop_cap = Some((b.clusters.len() - before, rp.drop_cap, indent));
             drop_cap_w = w;
             // The letter hangs beside the text; lines flow at the indent `break_lines` adds.
             for c in b.clusters.iter_mut().skip(before) {
@@ -1688,6 +1695,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             loop {
                 let mut lo = if first { first_left } else { rp.indent_left };
                 if let Some((_, dl, dw)) = pl.drop_cap
+                    && dw > 0.0
                     && lines.len() < dl as usize
                 {
                     lo = first_left.max(rp.indent_left) + dw;
@@ -2201,7 +2209,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     {
         let short = lines.len() < dl as usize;
         let dy = if short { (dl as f32 - 1.0) * l0.height } else { ln.baseline - l0.baseline };
-        let dx = dw.min(first_x0.unwrap_or(0.0) - first_left.max(rp.indent_left));
+        let lead = first_x0.unwrap_or(0.0) - first_left.max(rp.indent_left);
+        // In margin, the letter's right edge stays the distance away from the text's edge.
+        let dx = if rp.drop_cap_margin { lead.max(0.0) + pl.drop_cap_w + rp.drop_cap_distance } else { dw.min(lead) };
         // Toward the start edge: left, or right (and from the letter's right edge) when mirrored.
         let dx = if rtl_para { pl.drop_cap_w - dx } else { dx };
         if short {

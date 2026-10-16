@@ -2621,3 +2621,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Вградена
+	In margin	В полето
+	Drop Cap Options…	Опции за главна буква…
+	Lines to drop:	Редове на буквата:
+	Distance from text:	Разстояние от текста:
+	Distance from text	Разстояние от текста

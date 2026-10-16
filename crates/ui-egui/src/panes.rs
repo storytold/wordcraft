@@ -654,6 +654,9 @@ fn describe(prop: &str, v: &Value) -> String {
         "suppressLineNumbers" => "Suppress line numbers",
         "bidi" => "Right-to-left",
         "dropCap" => "Drop cap",
+        "dropCapMargin" => "In margin",
+        "dropCapDistance" => "Distance from text",
+        "dropCapFont" => "Font",
         "style" => "Style",
         "numbering" => "Numbering",
         "lang" => "Language",
@@ -674,6 +677,7 @@ fn describe(prop: &str, v: &Value) -> String {
             l @ 0..=8 => crate::i18n::fmt(tl!("Level {n}"), &[("n", &(l + 1).to_string())]),
             _ => tl!("Body Text").to_string(),
         },
+        ("dropCapFont", Value::String(s)) => s.clone(),
         ("dropCap", Value::Number(n)) => crate::i18n::fmt(tl!("{n} lines"), &[("n", &n.to_string())]),
         (_, Value::Number(n)) => pt(n.as_f64().unwrap_or(0.0)),
         ("align", Value::String(s)) => tl!(match s.as_str() {

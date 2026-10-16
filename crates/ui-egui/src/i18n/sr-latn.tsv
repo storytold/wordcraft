@@ -2243,3 +2243,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	U tekstu
+	In margin	Na margini
+	Drop Cap Options…	Opcije ukrasnog slova…
+	Lines to drop:	Broj redova:
+	Distance from text:	Rastojanje od teksta:
+	Distance from text	Rastojanje od teksta

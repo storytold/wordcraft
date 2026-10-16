@@ -2240,3 +2240,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Dans le texte
+	In margin	Dans la marge
+	Drop Cap Options…	Options de lettrine…
+	Lines to drop:	Hauteur (lignes) :
+	Distance from text:	Distance du texte :
+	Distance from text	Distance du texte

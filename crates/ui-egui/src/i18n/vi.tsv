@@ -2672,3 +2672,10 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# Drop Cap menu and Drop Cap Options (#2601)
+	Dropped	Trong văn bản
+	In margin	Trong lề
+	Drop Cap Options…	Tùy chọn chữ lớn đầu đoạn…
+	Lines to drop:	Số dòng chiếm:
+	Distance from text:	Khoảng cách tới văn bản:
+	Distance from text	Khoảng cách tới văn bản
