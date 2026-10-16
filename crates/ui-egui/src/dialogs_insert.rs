@@ -112,12 +112,14 @@ pub struct ColumnsForm {
     pub cols: Vec<(f32, f32)>,
     /// Line between columns.
     pub separator: bool,
-    /// `section`, `document` or `forward` (this point forward).
+    /// `section`, `document`, `forward` (this point forward) or `selection` (selected text).
     pub apply: String,
     /// The section's text width, in the interface unit.
     pub text_width: f32,
     /// The document has more than one section (offer "This section").
     pub sections: bool,
+    /// Text is selected that can take columns of its own (offer "Selected text", #2024).
+    pub selection: bool,
 }
 
 impl ColumnsForm {
@@ -131,14 +133,21 @@ impl ColumnsForm {
         let c = &sp.columns;
         let count = c.count.clamp(1, 12);
         let sections = app.session.doc.sections().len() > 1;
+        let selection = wordcraft_engine::cmd::page::selection_sectionable(&app.session);
+        let apply = match (selection, sections) {
+            (true, _) => "selection",
+            (false, true) => "section",
+            (false, false) => "document",
+        };
         let mut f = ColumnsForm {
             count,
             equal: true,
             cols: Vec::new(),
             separator: c.separator,
-            apply: if sections { "section" } else { "document" }.into(),
+            apply: apply.into(),
             text_width: sp.text_width() / k,
             sections,
+            selection,
         };
         if c.widths.len() == count as usize && count > 1 {
             f.equal = false;
@@ -437,6 +446,9 @@ fn columns_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ColumnsForm) -> bool {
         let mut options = vec![("document", "Whole document"), ("forward", "This point forward")];
         if f.sections {
             options.insert(0, ("section", "This section"));
+        }
+        if f.selection {
+            options.push(("selection", "Selected text"));
         }
         let shown = options.iter().find(|(k, _)| *k == f.apply).map(|(_, l)| *l).unwrap_or("This section");
         egui::ComboBox::from_id_salt("columns_apply").selected_text(tl!(shown)).width(180.0).show_ui(ui, |ui| {
@@ -1355,6 +1367,21 @@ mod tests {
         assert!(!again.equal && again.separator && again.cols.len() == 2);
         a.run("edit.undo", json!({})).unwrap();
         assert_eq!(wordcraft_engine::cmd::page::sect(&a.session).columns.count, 1);
+    }
+
+    /// With text selected, More Columns applies to the selected text by default, as in Word
+    /// (#2024): the other paragraphs keep one column.
+    #[test]
+    fn columns_dialog_applies_to_the_selected_text() {
+        let mut a = app();
+        assert!(!ColumnsForm::read(&a).selection, "no selection, no Selected text");
+        a.run("select.paragraph", json!({})).unwrap();
+        let mut f = ColumnsForm::read(&a);
+        assert_eq!((f.selection, f.apply.as_str()), (true, "selection"));
+        f.preset("two");
+        a.run("layout.columns", f.params()).unwrap();
+        let counts: Vec<u32> = a.session.doc.sections().iter().map(|(_, x)| x.columns.count).collect();
+        assert_eq!(counts, vec![2, 1]);
     }
 
     /// The Symbol dialog inserts in the chosen font and remembers the symbol.

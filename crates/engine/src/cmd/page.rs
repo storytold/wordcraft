@@ -27,7 +27,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("layout.size", "Size", "Layout › Page Setup", size).params(r#"{"name"?: "Letter|Legal|A4|…", "width"?: pt, "height"?: pt} (each side clamped to 7.2–1584 pt, 0.1–22 in; the section keeps its orientation)"#),
         CommandSpec::new("layout.columns", "Columns", "Layout › Page Setup", columns)
             .params(
-                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward"}"#,
+                r#"{"count": 1-12, "space"?: pt, "separator"?: bool, "preset"?: "left|right", "widths"?: [[width pt, space after pt], …] (unequal columns; sets the count), "apply"?: "section|document|forward|selection"} (default: selection when text is selected in the main text — section breaks around it — else section)"#,
             ),
         CommandSpec::new("layout.break", "Breaks", "Layout › Page Setup", breaks)
             .params(r#"{"kind": "page|column|textWrapping|nextPage|continuous|evenPage|oddPage"}"#),
@@ -569,7 +569,9 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
     // Equal columns keep one spacing; unequal ones remember the first gap for a later switch back.
     let space = widths.first().map(|w| w.1).unwrap_or(space);
     let cols = Columns { count: count as u32, space, separator: sep, widths };
-    match p::str(v, "apply").unwrap_or("section") {
+    // With text selected the gallery works on that text, as in Word (#2024).
+    let default = if selection_sectionable(s) { "selection" } else { "section" };
+    match p::str(v, "apply").unwrap_or(default) {
         "section" => with_sect(s, |x| x.columns = cols.clone()),
         "document" => {
             let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
@@ -585,8 +587,59 @@ fn columns(s: &mut Session, v: &Value) -> CmdResult {
             breaks(s, &json!({"kind": "continuous"}))?;
             with_sect(s, |x| x.columns = cols.clone())
         }
-        x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document or forward)"))),
+        "selection" => {
+            selection_to_sections(s)?;
+            with_sect(s, |x| x.columns = cols.clone())
+        }
+        x => Err(CmdError::Params(format!("unknown apply `{x}` (section, document, forward or selection)"))),
     }
+}
+
+/// Whether the selection can become sections of its own: text selected in the main text, outside
+/// tables.
+pub fn selection_sectionable(s: &Session) -> bool {
+    let (a, b) = s.sel.ordered();
+    !s.sel.is_collapsed() && [a, b].iter().all(|p| p.story == StoryRef::Body && p.path.depth() == 0)
+}
+
+/// Columns for the selected text (#2024), as Word does it: a continuous section break where the
+/// selection starts and one where it ends, splitting paragraphs there, unless that end already
+/// meets a section boundary (the document's start or end, or a section break). The selection keeps
+/// its text, which is then the section(s) between.
+fn selection_to_sections(s: &mut Session) -> Result<(), CmdError> {
+    if !selection_sectionable(s) {
+        return Err(CmdError::Params("selected text in the main text, outside tables, is needed".into()));
+    }
+    let old = s.sel.clone();
+    let (a, mut b) = old.ordered();
+    let block = |p: &Pos| p.path.0.first().copied().unwrap_or(0) as usize;
+    let len = |s: &Session, p: &Pos| s.doc.para_at(p).map(|q| q.len()).unwrap_or(0);
+    let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+    let after_break = |i: usize| i.checked_sub(1).is_some_and(|j| ends.contains(&j));
+    // A selection that took a section break with it ends before that break.
+    if b.off == 0 && block(&b) > block(&a) && after_break(block(&b)) {
+        let prev = Pos { path: wordcraft_doc::Path::top(block(&b) - 1), off: 0, ..b.clone() };
+        b = Pos { off: len(s, &prev), ..prev };
+    }
+    let last_block = s.doc.body.len().saturating_sub(1);
+    let end_break = !(b.off == len(s, &b) && (ends.contains(&block(&b)) || block(&b) == last_block));
+    let start_break = !(a.off == 0 && (block(&a) == 0 || after_break(block(&a))));
+    // The end first: the start's position doesn't move.
+    if end_break {
+        s.sel = Selection::caret(b.clone());
+        breaks(s, &json!({"kind": "continuous"}))?;
+    }
+    let (first, last) = if start_break {
+        s.sel = Selection::caret(a.clone());
+        breaks(s, &json!({"kind": "continuous"}))?;
+        let first = s.sel.focus.clone();
+        let last = shifted_by_split(&b, &a, &first);
+        (first, last)
+    } else {
+        (a, b)
+    };
+    s.sel = if old.anchor <= old.focus { Selection { anchor: first, focus: last } } else { Selection { anchor: last, focus: first } };
+    Ok(())
 }
 
 /// `[[width, space after], …]` in points: 1–12 columns, each at least 0.25", that fit the text
@@ -954,6 +1007,84 @@ mod tests {
         assert_eq!(counts, vec![1, 2]);
         assert_eq!(s.doc.last_section.start, SectionStart::Continuous);
         assert!(s.run("layout.columns", &json!({"count": 2, "apply": "elsewhere"})).is_err());
+    }
+
+    /// Each section's paragraphs (a section break's own paragraph shows as "") and column count.
+    fn sections_of(s: &Session) -> Vec<(Vec<String>, u32)> {
+        let mut from = 0;
+        let mut out = Vec::new();
+        for (end, x) in s.doc.sections() {
+            let paras = (from..=end).map(|i| s.doc.para_at(&Pos::body(i, 0)).map(|p| p.text.clone()).unwrap_or_default()).collect();
+            out.push((paras, x.columns.count));
+            from = end + 1;
+        }
+        out
+    }
+
+    fn select(s: &mut Session, from: (usize, usize), to: (usize, usize)) {
+        s.sel = Selection { anchor: Pos::body(from.0, from.1), focus: Pos::body(to.0, to.1) };
+    }
+
+    fn strs(v: &[&str]) -> Vec<String> {
+        v.iter().map(|x| x.to_string()).collect()
+    }
+
+    /// Columns on selected text (#2024), as observed in Word: a continuous section break before
+    /// and after the selection, the columns on the section between, the rest left alone.
+    #[test]
+    fn columns_apply_to_the_selected_text() {
+        let five = || Session::new(wordcraft_doc::Document::from_text("p1\np2\nalpha beta gamma\np4\np5"));
+        // A whole paragraph (a triple-click takes its mark): each break gets a paragraph of its own.
+        let mut s = five();
+        select(&mut s, (2, 0), (3, 0));
+        let whole = s.selected_text();
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s), vec![(strs(&["p1", "p2", ""]), 1), (strs(&["alpha beta gamma", ""]), 2), (strs(&["p4", "p5"]), 1)]);
+        assert!(s.doc.sections().iter().skip(1).all(|(_, x)| x.start == SectionStart::Continuous));
+        assert_eq!(s.selected_text(), whole, "the paragraph stays selected");
+        // The same paragraph again: its section changes, no new breaks.
+        select(&mut s, (3, 0), (4, 0));
+        s.run("layout.columns", &json!({"count": 3})).unwrap();
+        assert_eq!(sections_of(&s).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec![1, 3, 1]);
+        // Taking the section break along changes nothing more.
+        select(&mut s, (3, 0), (5, 0));
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s).iter().map(|(_, n)| *n).collect::<Vec<_>>(), vec![1, 2, 1]);
+        // One undo step takes the breaks and the columns away.
+        let mut s = five();
+        select(&mut s, (2, 0), (3, 0));
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(sections_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", "p5"]), 1)]);
+
+        // Words inside a paragraph: the breaks split it there.
+        let mut s = five();
+        select(&mut s, (2, 10), (2, 6));
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s), vec![(strs(&["p1", "p2", "alpha "]), 1), (strs(&["beta"]), 2), (strs(&[" gamma", "p4", "p5"]), 1)]);
+        assert_eq!(s.selected_text(), "beta");
+        assert!(s.sel.anchor > s.sel.focus, "a backward selection stays backward");
+
+        // At the document's start no break goes before it, at its end none after.
+        let mut s = five();
+        select(&mut s, (0, 0), (1, 0));
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s), vec![(strs(&["p1", ""]), 2), (strs(&["p2", "alpha beta gamma", "p4", "p5"]), 1)]);
+        let mut s = five();
+        select(&mut s, (4, 0), (4, 2));
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", ""]), 1), (strs(&["p5"]), 2)]);
+        // Select All: the whole document, no breaks.
+        let mut s = five();
+        s.run("select.all", &json!({})).unwrap();
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s), vec![(strs(&["p1", "p2", "alpha beta gamma", "p4", "p5"]), 2)]);
+
+        // Without a selection the caret's section changes; "selection" then needs one.
+        let mut s = five();
+        s.run("layout.columns", &json!({"count": 2})).unwrap();
+        assert_eq!(sections_of(&s).len(), 1);
+        assert!(s.run("layout.columns", &json!({"count": 2, "apply": "selection"})).is_err());
     }
 
     /// #407 Line Numbers options: start, count by, distance and restart; options alone keep the
