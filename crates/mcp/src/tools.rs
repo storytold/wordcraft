@@ -64,8 +64,22 @@ pub fn tool_definitions() -> Value {
         tool(
             "execute",
             "Run a command",
-            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}.",
+            "Run one command by id with params, e.g. {command:\"format.bold\"} or {command:\"insert.table\", params:{rows:3, cols:4}}. To insert a table that is already filled, use `insert_table`.",
             obj(json!({"command": s("Command id"), "params": {"type": "object", "description": "Command parameters"}}), &["command"]),
+            false
+        ),
+        tool(
+            "insert_table",
+            "Insert filled table",
+            "Insert a table at the caret, filled from `values` in one call (an array of rows, each an array of cells; all rows the same length, up to 1000 rows and 63 columns). Set `header` to make the first row a repeating header row.",
+            obj(
+                json!({
+                    "values": {"type": "array", "description": "Rows of cells (text, numbers or booleans)", "items": {"type": "array", "items": {"type": ["string", "number", "boolean", "null"]}}},
+                    "header": {"type": "boolean", "description": "First row is a header row that repeats on each page"},
+                    "style": s("Table style name (default GridTable1Light)")
+                }),
+                &["values"]
+            ),
             false
         ),
         tool(
@@ -190,6 +204,18 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "execute" => match st("command") {
             Some(c) => wrap(exec(b, c, a.get("params").cloned().unwrap_or(json!({})))),
             None => ToolResult::error("missing `command`"),
+        },
+        "insert_table" => match a.get("values") {
+            Some(values) => {
+                let mut params = json!({"values": values});
+                for k in ["header", "style"] {
+                    if let Some(x) = a.get(k) {
+                        params[k] = x.clone();
+                    }
+                }
+                wrap(exec(b, "insert.spreadsheet", params))
+            }
+            None => ToolResult::error("missing `values`: an array of rows, each an array of cells"),
         },
         "batch" => {
             let keep = a.get("keepGoing").and_then(Value::as_bool).unwrap_or(false);

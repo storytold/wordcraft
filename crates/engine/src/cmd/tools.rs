@@ -510,10 +510,10 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"path": string}"#),
         CommandSpec::new("insert.spreadsheet", "Spreadsheet Table", "Insert › Tables", |s, v| {
-            let csv = p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6");
-            let rows = super::mailings::parse_csv(csv);
+            let rows = spreadsheet_rows(v)?;
             let cols = rows.iter().map(Vec::len).max().unwrap_or(1).clamp(1, 63);
-            s.run("insert.table", &json!({"rows": rows.len().max(1), "cols": cols, "style": "GridTable1Light"}))?;
+            let style = p::str(v, "style").unwrap_or("GridTable1Light");
+            s.run("insert.table", &json!({"rows": rows.len().max(1), "cols": cols, "style": style}))?;
             let Some((tp, _, _)) = s.sel.focus.path.cell() else { return sel_result(s) };
             let t = s.doc.table_mut(s.sel.focus.story, &tp)?;
             for (r, row) in rows.iter().enumerate() {
@@ -523,9 +523,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                 }
             }
+            if p::bool(v, "header").unwrap_or(false)
+                && let Some(first) = t.rows.first_mut()
+            {
+                first.props.header = true;
+            }
             sel_result(s)
         })
-        .params(r#"{"csv"?: string}"#),
+        .params(r#"{"csv"?: string, "values"?: [[cell, …], …] (rows of equal length, at most 1000 rows × 63 columns; wins over csv), "header"?: bool (first row repeats on each page), "style"?: table style name (default GridTable1Light)}"#),
         CommandSpec::new("layout.linkToPrevious", "Link to Previous", "Header & Footer › Navigation", |s, v| {
             let header = p::bool(v, "footer").map(|f| !f).unwrap_or(true);
             let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
@@ -1764,6 +1769,39 @@ fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
     Ok(Value::Object(out))
 }
 
+/// The rows of an `insert.spreadsheet` call: `values` (a rectangular array of cells) or `csv`.
+fn spreadsheet_rows(v: &Value) -> Result<Vec<Vec<String>>, CmdError> {
+    let Some(values) = v.get("values").filter(|x| !x.is_null()) else {
+        return Ok(super::mailings::parse_csv(p::str(v, "csv").unwrap_or("A,B,C\n1,2,3\n4,5,6")));
+    };
+    let list = values.as_array().ok_or_else(|| CmdError::Params("`values` must be an array of rows".into()))?;
+    if list.is_empty() || list.len() > 1000 {
+        return Err(CmdError::Params("`values` needs 1 to 1000 rows".into()));
+    }
+    let mut rows: Vec<Vec<String>> = Vec::with_capacity(list.len());
+    for (r, row) in list.iter().enumerate() {
+        let cells = row.as_array().ok_or_else(|| CmdError::Params(format!("`values` row {} is not an array", r + 1)))?;
+        if cells.is_empty() || cells.len() > 63 {
+            return Err(CmdError::Params(format!("`values` row {} needs 1 to 63 cells", r + 1)));
+        }
+        if rows.first().is_some_and(|f| f.len() != cells.len()) {
+            return Err(CmdError::Params(format!("`values` row {} has {} cells, row 1 has {}", r + 1, cells.len(), rows.first().map_or(0, Vec::len))));
+        }
+        let mut out = Vec::with_capacity(cells.len());
+        for cell in cells {
+            out.push(match cell {
+                Value::String(x) => x.clone(),
+                Value::Number(x) => x.to_string(),
+                Value::Bool(x) => x.to_string(),
+                Value::Null => String::new(),
+                _ => return Err(CmdError::Params(format!("`values` row {} holds a cell that is not text, a number or a boolean", r + 1))),
+            });
+        }
+        rows.push(out);
+    }
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1865,5 +1903,30 @@ mod tests {
         s.run("review.language", &json!({"lang": "de-DE", "default": true})).unwrap();
         assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
         assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
+    }
+
+    /// #2242: `insert.spreadsheet` fills a table from `values`, with a repeating header and a style.
+    #[test]
+    fn spreadsheet_takes_values_header_and_style() {
+        let mut s = Session::new(Document::from_text(""));
+        s.run("insert.spreadsheet", &json!({"values": [["Month", "Cases"], ["Jan", 12], ["Feb", null]], "header": true, "style": "TableGrid"})).unwrap();
+        let Some(Block::Table(t)) = s.doc.body.iter().map(|b| &**b).find(|b| matches!(b, Block::Table(_))) else { panic!("no table") };
+        assert_eq!((t.rows.len(), t.rows[0].cells.len()), (3, 2));
+        assert!(t.rows[0].props.header && !t.rows[1].props.header);
+        assert_eq!(t.rows[1].cells[1].blocks[0].as_para().unwrap().text, "12");
+        assert_eq!(t.props.style.as_deref(), Some("TableGrid"));
+    }
+
+    /// #2242: malformed `values` is an error, never a panic, and leaves the document alone.
+    #[test]
+    fn spreadsheet_rejects_hostile_values() {
+        let wide: Vec<Value> = (0..64).map(|i| json!(i)).collect();
+        let many: Vec<Value> = (0..1001).map(|_| json!(["x"])).collect();
+        for bad in [json!("x"), json!(5), json!([]), json!(["a"]), json!([["a", "b"], ["c"]]), json!([wide]), json!(many), json!([[{"a": 1}]]), json!([[[1]]]), json!([[]])] {
+            let mut s = Session::new(Document::from_text("keep"));
+            assert!(s.run("insert.spreadsheet", &json!({"values": bad})).is_err(), "{bad}");
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "keep");
+            assert!(!s.doc.body.iter().any(|b| matches!(&**b, Block::Table(_))));
+        }
     }
 }
