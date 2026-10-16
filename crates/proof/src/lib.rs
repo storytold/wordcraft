@@ -399,14 +399,17 @@ pub fn is_correct(word: &str) -> bool {
 }
 
 /// The words every language's check accepts under `opts`: single letters, words without
-/// letters, words with digits (Ignore words that contain numbers) and words in capitals
-/// (Ignore words in UPPERCASE).
+/// letters, words with digits (Ignore words that contain numbers), words in capitals
+/// (Ignore words in UPPERCASE) and words in the user dictionary.
 fn accepted_by_options(word: &str, opts: &Options) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'').trim_matches('\'');
     w.chars().count() <= 1
         || !w.chars().any(char::is_alphabetic)
         || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit()))
         || (opts.ignore_uppercase && w.chars().all(|c| !c.is_lowercase()))
+        // The whole word: the languages split a hyphenated word into its parts, and an added
+        // `Unigranrio-RJ` is none of them (#2082).
+        || in_user_dictionary(&w.to_lowercase())
 }
 
 /// [`is_correct`] with the File › Options › Proofing choices.
