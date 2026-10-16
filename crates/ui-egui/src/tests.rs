@@ -7,6 +7,28 @@ fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }
 
+/// A module's command that opens a new document in place of this one asks to save unsaved
+/// changes first, like File › New; a clean document goes straight through.
+#[test]
+fn a_command_that_replaces_the_document_asks_to_save_first() {
+    fn replace(s: &mut Session, _: &Value) -> wordcraft_engine::CmdResult {
+        s.set_document(wordcraft_doc::Document::new());
+        Ok(json!({}))
+    }
+    let spec = || wordcraft_engine::CommandSpec::new("test.replace", "Replace", "Test", replace).replaces_document();
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.session.install_commands(vec![spec()]);
+    app.run("text.insert", json!({"text": "unsaved"})).unwrap();
+    let r = app.run("test.replace", json!({})).unwrap();
+    assert_eq!(r, json!({"pending": "saveChanges"}));
+    assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "nothing is lost yet");
+    app.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+    assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "cancel keeps the work");
+    app.session.dirty = false;
+    app.run("test.replace", json!({})).unwrap();
+    assert!(!app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "a saved document is replaced at once");
+}
+
 /// Issue #14: Mod+- (optional hyphen) also zoomed the whole window out, so it read as "zoom out".
 #[test]
 fn word_shortcuts_do_not_zoom_the_window() {

@@ -460,6 +460,13 @@ impl Document {
         story_word_count_of(bl, &self.numbering, &self.styles, &mut counters, 0)
     }
 
+    /// Every text-bearing story: the body, then each header, footer, footnote, endnote, comment
+    /// and text box, by part id. Use for an operation over the whole document; [`Document::counted_stories`]
+    /// is narrower (body plus the notes and text boxes it shows, for word counts).
+    pub fn text_stories(&self) -> Vec<StoryRef> {
+        std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k))).collect()
+    }
+
     /// The body, then the text boxes, footnotes and endnotes it shows (nested ones too), in
     /// document order. Headers, footers, comments and stories nothing points at aren't included.
     pub fn counted_stories(&self) -> Vec<StoryRef> {

@@ -97,6 +97,7 @@ impl WordApp {
         if moved(self) {
             return;
         }
+        self.addin_dialogs(ctx);
         updates_ui::show(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, ctx);

@@ -327,6 +327,62 @@ pub fn user_dictionary() -> Vec<String> {
     v
 }
 
+/// Extra English grammar or style checks from an installed module (LawCraft confusion pairs).
+pub type EnParagraphGrammarCheck = fn(&str) -> Vec<Issue>;
+
+/// Per-session English supplements from an optional module (legal word list, confusion checks).
+/// The host sets this on `Session::module_en` (wordcraft-engine) when a module is installed; proofing
+/// passes it through [`check_text_with_module`] so enabled and disabled sessions stay independent.
+#[derive(Clone, Copy, Default)]
+pub struct ModuleEn {
+    spelling: Option<&'static [&'static str]>,
+    grammar: Option<EnParagraphGrammarCheck>,
+}
+
+impl std::fmt::Debug for ModuleEn {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModuleEn").field("spelling_words", &self.spelling.map(|w| w.len())).field("grammar", &self.grammar.is_some()).finish()
+    }
+}
+
+impl PartialEq for ModuleEn {
+    fn eq(&self, other: &Self) -> bool {
+        self.spelling == other.spelling
+            && match (self.grammar, other.grammar) {
+                (None, None) => true,
+                (Some(a), Some(b)) => std::ptr::fn_addr_eq(a, b),
+                _ => false,
+            }
+    }
+}
+
+impl Eq for ModuleEn {}
+
+impl std::hash::Hash for ModuleEn {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        // Hash the spelling *contents*, matching the content comparison in `PartialEq`: two
+        // separate slices holding the same words must compare equal *and* hash equally.
+        self.spelling.hash(state);
+        self.grammar.map(|g| g as usize).hash(state);
+    }
+}
+
+impl ModuleEn {
+    /// Legal or other module base forms (sorted, lower case), or none when the module is off.
+    pub fn with_spelling(spelling: Option<&'static [&'static str]>) -> Self {
+        ModuleEn { spelling, grammar: None }
+    }
+
+    /// English grammar or style checks from the module.
+    pub fn with_grammar(self, grammar: Option<EnParagraphGrammarCheck>) -> Self {
+        ModuleEn { spelling: self.spelling, grammar }
+    }
+}
+
+fn in_module_spelling(lower: &str, module: ModuleEn) -> bool {
+    module.spelling.is_some_and(|words| words.binary_search_by(|w| w.cmp(&lower)).is_ok())
+}
+
 /// Longest custom-dictionary word kept, in characters (mirrors `file.options` validation).
 pub const MAX_CUSTOM_WORD_CHARS: usize = 64;
 /// Most custom-dictionary words read from one file (caps a hostile file).
@@ -447,12 +503,12 @@ fn base_known(d: &dict::Dictionary, w: &str) -> bool {
     d.get(w).is_some() || extra_words().contains(w)
 }
 
-fn known_core(w: &str) -> bool {
+fn known_core(w: &str, module: ModuleEn) -> bool {
     let d = dict::Dictionary::en_us();
     if base_known(d, w) || COMMON.split(' ').any(|c| c == w) {
         return true;
     }
-    if in_user_dictionary(w) {
+    if in_user_dictionary(w) || in_module_spelling(w, module) {
         return true;
     }
     // Inflections.
@@ -571,6 +627,11 @@ fn accepted_by_options(word: &str, opts: &Options) -> bool {
 
 /// [`is_correct`] with the File › Options › Proofing choices.
 pub fn is_correct_with(word: &str, opts: &Options) -> bool {
+    is_correct_with_module(word, opts, ModuleEn::default())
+}
+
+/// [`is_correct_with`] plus an optional module spelling supplement for this session.
+pub fn is_correct_with_module(word: &str, opts: &Options, module: ModuleEn) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'');
     let w = w.trim_matches('\'');
     if accepted_by_options(w, opts) {
@@ -580,12 +641,12 @@ pub fn is_correct_with(word: &str, opts: &Options) -> bool {
         return true; // other scripts: no dictionary
     }
     let lower = w.to_lowercase().replace('’', "'");
-    if known_core(&lower) {
+    if known_core(&lower, module) {
         return true;
     }
     // Hyphenated compounds: each part.
     if lower.contains('-') {
-        return lower.split('-').all(|p| p.is_empty() || known_core(p));
+        return lower.split('-').all(|p| p.is_empty() || known_core(p, module));
     }
     false
 }
@@ -649,8 +710,8 @@ fn english_preferred(lower: &str, lang: ProofLang) -> Option<String> {
 /// Is `word` spelled right in the English `lang` ([`ProofLang::En`], [`ProofLang::EnGb`],
 /// [`ProofLang::EnCa`])? The shared word list's words, less the other dialect's spellings
 /// (`colour` in American English, `color` in British), plus this dialect's spellings of the
-/// list's words ([`en_variants`]). The user dictionary overrules both.
-fn is_correct_english(word: &str, lang: ProofLang, opts: &Options) -> bool {
+/// list's words ([`en_variants`]), plus a module's supplement. The user dictionary overrules both.
+fn is_correct_english(word: &str, lang: ProofLang, opts: &Options, module: ModuleEn) -> bool {
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'').trim_matches('\'');
     if accepted_by_options(w, opts) {
         return true;
@@ -663,7 +724,8 @@ fn is_correct_english(word: &str, lang: ProofLang, opts: &Options) -> bool {
     if parts.iter().any(|p| en_variants::is_foreign(p, lang)) {
         return false;
     }
-    is_correct_with(word, opts) || (!parts.is_empty() && parts.iter().all(|p| known_core(p) || en_variants::known_variant(p, lang, known_core)))
+    is_correct_with_module(word, opts, module)
+        || (!parts.is_empty() && parts.iter().all(|p| known_core(p, module) || en_variants::known_variant(p, lang, |s| known_core(s, module))))
 }
 
 /// Spelling suggestions in the English `lang`: this dialect's spelling first when `word` is the
@@ -756,7 +818,12 @@ pub fn check_spelling(text: &str) -> Vec<Issue> {
 
 /// [`check_spelling`] with the File › Options › Proofing choices.
 pub fn check_spelling_with(text: &str, opts: &Options) -> Vec<Issue> {
-    spelling_issues(text, |_| ProofLang::En, opts)
+    check_spelling_with_module(text, opts, ModuleEn::default())
+}
+
+/// [`check_spelling_with`] plus a module spelling supplement for this session.
+pub fn check_spelling_with_module(text: &str, opts: &Options, module: ModuleEn) -> Vec<Issue> {
+    spelling_issues(text, |_| ProofLang::En, opts, module)
 }
 
 /// Spelling issues in a paragraph of text in `lang` (none for a language without a dictionary;
@@ -765,7 +832,7 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
     if !lang.is_proofed() {
         return Vec::new();
     }
-    spelling_issues(text, |_| lang, &Options::default())
+    spelling_issues(text, |_| lang, &Options::default(), ModuleEn::default())
 }
 
 /// Spelling issues of every word of `text`, each word spelled in `lang(word_start)`.
@@ -774,7 +841,7 @@ pub fn check_spelling_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// once per token and shared by every word punctuation splits out of it. Classifying per word
 /// rescanned the token each time, so a long whitespace-free run of punctuation-separated words
 /// cost quadratic scanning (#1335).
-fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options) -> Vec<Issue> {
+fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options, module: ModuleEn) -> Vec<Issue> {
     let mut token = (0, 0, false);
     words(text)
         .into_iter()
@@ -782,7 +849,7 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
             if a < token.0 || a >= token.1 {
                 token = enclosing_token(text, a, b);
             }
-            spelling_issue(text, a, b, lang(a), opts, token.2)
+            spelling_issue(text, a, b, lang(a), opts, token.2, module)
         })
         .collect()
 }
@@ -806,10 +873,10 @@ pub(crate) fn is_address(token: &str) -> bool {
 /// The spelling issue of the word at `a..b` of `text`, if it is misspelled in `lang`. Words in
 /// web and e-mail addresses are skipped (unless `opts` says otherwise); `internet` is the
 /// classification of the word's enclosing token, from [`enclosing_token`].
-fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool) -> Option<Issue> {
+fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Options, internet: bool, module: ModuleEn) -> Option<Issue> {
     let w = text.get(a..b)?;
     // A word with a Vietnamese-only letter (a name like Nguyễn in English text) isn't English.
-    if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with(w, lang, opts) {
+    if (opts.ignore_internet && internet) || (lang.is_english() && vi::is_vietnamese_word(w)) || is_correct_in_with_module(w, lang, opts, module) {
         return None;
     }
     let message = language(lang).map_or("Possible spelling mistake", |l| l.message);
@@ -835,9 +902,14 @@ fn composed(word: &str) -> std::borrow::Cow<'_, str> {
 /// [`is_correct_in`] with the File › Options › Proofing choices. A word with combining marks is
 /// checked as its composed form ([`composed`]).
 pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
+    is_correct_in_with_module(word, lang, opts, ModuleEn::default())
+}
+
+/// [`is_correct_in_with`] plus a module spelling supplement for this session.
+pub fn is_correct_in_with_module(word: &str, lang: ProofLang, opts: &Options, module: ModuleEn) -> bool {
     let word = &*composed(word);
     if lang.is_english() {
-        return is_correct_english(word, lang, opts);
+        return is_correct_english(word, lang, opts, module);
     }
     // A language WordCraft doesn't proof (Bulgarian, German, any other) has no spelling marks.
     language(lang).is_none_or(|l| accepted_by_options(word, opts) || (l.is_correct)(word, lang, opts))
@@ -887,6 +959,24 @@ pub fn check_text(text: &str, spans: &[(Range<usize>, ProofLang)]) -> Vec<Issue>
 /// `list_item` marks a list paragraph: items are often fragments, so the English rule asking for
 /// a capital on the paragraph's first word is off for it (later sentences are still checked).
 pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, list_item: bool) -> Vec<Issue> {
+    check_paragraph(text, spans, opts, grammar, list_item, ModuleEn::default())
+}
+
+/// [`check_text_with`] plus a module's English supplements (extra spelling words, extra grammar
+/// checks) for this session.
+pub fn check_text_with_module(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, module: ModuleEn) -> Vec<Issue> {
+    check_paragraph(text, spans, opts, grammar, false, module)
+}
+
+/// The full check: a list item (see [`check_text_with`]) and a module's supplements both apply.
+pub fn check_paragraph(
+    text: &str,
+    spans: &[(Range<usize>, ProofLang)],
+    opts: &Options,
+    grammar: bool,
+    list_item: bool,
+    module: ModuleEn,
+) -> Vec<Issue> {
     // Sorted, empty ones dropped, neighbours of one language merged.
     let mut sorted: Vec<&(Range<usize>, ProofLang)> = spans.iter().filter(|(r, _)| r.start < r.end).collect();
     sorted.sort_by_key(|s| s.0.start);
@@ -911,7 +1001,7 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
         let k = merged.partition_point(|(r, _)| r.end <= i);
         merged.get(k).filter(|(r, _)| r.start <= i).map_or(default, |s| s.1)
     };
-    let mut v: Vec<Issue> = spelling_issues(text, lang_at, opts);
+    let mut v: Vec<Issue> = spelling_issues(text, lang_at, opts, module);
     if !grammar {
         v.sort_by_key(|i| (i.start, i.end));
         return v;
@@ -932,6 +1022,9 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
     for lang in langs {
         let found = grammar_in(text, lang, !list_item);
         v.extend(found.into_iter().filter(|i| lang_at(i.start) == lang));
+    }
+    if let Some(f) = module.grammar {
+        v.extend(f(text).into_iter().filter(|i| lang_at(i.start) == ProofLang::En));
     }
     v.sort_by_key(|i| (i.start, i.end));
     v
@@ -1649,6 +1742,59 @@ mod tests {
         assert!(!is_correct("zxqwordcrafty"));
         add_word("zxqwordcrafty");
         assert!(is_correct("zxqwordcrafty"));
+    }
+
+    #[test]
+    fn module_en_spelling_supplement() {
+        assert!(!is_correct("zxqmoduleword"));
+        let on = ModuleEn::with_spelling(Some(&["zxqmoduleword"]));
+        assert!(is_correct_with_module("zxqmoduleword", &Options::default(), on));
+        assert!(!is_correct_with_module("zxqmoduleword", &Options::default(), ModuleEn::default()));
+    }
+
+    #[test]
+    fn module_en_grammar_hook() {
+        fn always_hello(text: &str) -> Vec<Issue> {
+            text.find("hello")
+                .map(|start| Issue {
+                    start,
+                    end: start + 5,
+                    kind: IssueKind::Grammar,
+                    message: "test".into(),
+                    suggestions: vec![],
+                    lang: ProofLang::En,
+                })
+                .into_iter()
+                .collect()
+        }
+        let module = ModuleEn::default().with_grammar(Some(always_hello));
+        let issues = check_text_with_module("Ok hello", &[(0..8, ProofLang::En)], &Options::default(), true, module);
+        let ours = issues.iter().filter(|i| i.message == "test").collect::<Vec<_>>();
+        assert_eq!(ours.len(), 1);
+        assert!(
+            check_text_with_module("Ok hello", &[(0..8, ProofLang::En)], &Options::default(), true, ModuleEn::default())
+                .iter()
+                .all(|i| i.message != "test")
+        );
+    }
+
+    /// `Eq` compares spelling by contents, so `Hash` must too: two separate slices holding the
+    /// same words compare equal *and* hash equally (a contract a `HashMap<ModuleEn, _>` relies on).
+    #[test]
+    fn module_en_eq_and_hash_agree_on_spelling_contents() {
+        use std::hash::{Hash, Hasher};
+        static A: [&str; 2] = ["affidavit", "voir"];
+        static B: [&str; 2] = ["affidavit", "voir"];
+        let a = ModuleEn::with_spelling(Some(&A));
+        let b = ModuleEn::with_spelling(Some(&B));
+        assert_eq!(a, b, "equal contents compare equal");
+        let hash = |m: ModuleEn| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            m.hash(&mut h);
+            h.finish()
+        };
+        assert_eq!(hash(a), hash(b), "equal values must hash equally");
+        assert_ne!(a, ModuleEn::with_spelling(Some(&["affidavit"])));
     }
 
     /// #40: the user dictionary survives a save and a fresh load.

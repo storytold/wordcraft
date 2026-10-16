@@ -23,6 +23,8 @@ use craft_ui::capture::CaptureSlot;
 
 use serde_json::{Value, json};
 
+use wordcraft_engine::file_access;
+
 use crate::WordApp;
 
 mod geometry;
