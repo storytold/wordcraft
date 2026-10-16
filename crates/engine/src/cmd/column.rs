@@ -98,7 +98,7 @@ fn make(s: &mut Session, a: Pos, b: Pos, xa: f32, xb: f32) {
     let l = s.layout();
     let segments = l.column_segments(&s.doc, &a, &b, left, right, s.page_hint, MAX_LINES);
     s.sel = Selection { anchor: a, focus: b };
-    s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None });
+    s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None, ranges: Vec::new() });
     s.pending = None;
 }
 
@@ -158,6 +158,10 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
             super::table::extend_selection(s, to);
         }
         return super::sel_result(s);
+    }
+    // Pieces selected with Ctrl/⌘ held: what they do differently from a column block.
+    if let Some(r) = super::multi::dispatch(s, id, mutates, run, v) {
+        return r;
     }
     let Some(segs) = s.column_segments().map(<[(Pos, Pos)]>::to_vec) else { return run(s, v) };
     let cells = s.cell_range().is_some();

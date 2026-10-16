@@ -135,6 +135,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 | Date | What landed |
+| 2026-10-16 | Multiple selection (#1031): with text already selected, holding Ctrl (⌘ on macOS) and dragging adds the text dragged over, Ctrl+click adds the sentence and Ctrl+double-click the word, as in Word; bold, font, highlight, paragraph formatting and styles apply to every piece, Copy/Cut/Delete take them all in one undo step, typing replaces the piece added last; `select.add` |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
 | 2026-10-12 | Fields keep `w:dirty` through DOCX saves (#877): a begin marker flagged by a generator that couldn't compute a result (pandoc-style TOC placeholders) keeps the flag on open/save — as a buffered field or a range field — so Word still refreshes it on open; computing a result (Update Field, Update Table) clears it, like Word's F9 |
@@ -403,6 +404,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Progress log: multiple selection with Ctrl+drag (#1031) |
 | 2026-10-14 | trivial | Progress log: row table border exceptions |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |
