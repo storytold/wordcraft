@@ -408,6 +408,7 @@ fn trigger_save_file_picker(
     let prom: js_sys::Promise = prom_val.dyn_into().map_err(|_| "not a promise".to_string())?;
 
     let bytes_vec = bytes.to_vec();
+    let window = window.clone();
     let saves = saves.clone();
     let ctx = ctx.clone();
     let name = name.to_string();
@@ -429,13 +430,10 @@ fn trigger_save_file_picker(
             Err(e) => {
                 let err_name =
                     js_sys::Reflect::get(&e, &wasm_bindgen::JsValue::from_str("name")).ok().and_then(|v| v.as_string()).unwrap_or_default();
-                if err_name == "AbortError" {
-                    log::debug!("save picker cancelled");
-                    SaveOutcome::Cancelled
-                } else {
-                    log::error!("showSaveFilePicker error: {e:?}");
-                    SaveOutcome::Failed(format!("{e:?}"))
-                }
+                // A browser can expose the picker but reject its promise (for example in
+                // a cross-origin iframe). Use the same download path as an absent API;
+                // cancelling a picker must never start an unwanted download (#1246).
+                crate::save_fallback::picker_rejected(&err_name, || trigger_anchor_download(&window, &name, &bytes_vec))
             }
         };
         saves.finish(ticket, outcome);
