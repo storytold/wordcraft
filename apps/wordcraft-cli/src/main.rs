@@ -47,6 +47,11 @@ USAGE:
   wordcraft-cli [<command>] -h | --help       this help
   wordcraft-cli --version
 
+A password-protected Word file is opened with --password PASS, --password-file PATH or the
+WORDCRAFT_PASSWORD environment variable; a password given on the command line is readable by
+every other process, so the other two are better. A file opened with a password is written with
+it again, as the app does. Exports that cannot carry a password (pdf, html, txt) stay plain.
+
 Paper: documents created here, and HTML, Markdown and text files (which give no page size), use
 the system region's paper (A4, or Letter in the US and other Letter regions), read from
 LC_ALL / LC_PAPER / LANG or the platform. Set WORDCRAFT_REGION=en-US (or another tag) for the
@@ -60,13 +65,24 @@ fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
 }
 
-fn open(path: &Path) -> Result<Session, String> {
+/// The error every subcommand gives when a required path is not there.
+fn missing_argument() -> Failure {
+    format!("missing argument\n\n{USAGE}").into()
+}
+
+/// Open a document for a subcommand. A password-protected Word file needs its password
+/// ([`password_from`]). As in the app, a document opened with one is saved with it again, so
+/// `convert` does not quietly write a copy the password no longer protects.
+fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
     let region = system_region();
-    let (doc, _) = wordcraft_engine::io::open_path_in(path, None, &region)?;
+    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
     let mut s = session(doc);
     s.path = Some(path.into());
+    if encrypted {
+        s.password = password.map(wordcraft_engine::io::Password::new);
+    }
     Ok(s)
 }
 
@@ -95,6 +111,41 @@ fn text_args<S: AsRef<OsStr>>(raw: &[S]) -> Result<(Vec<String>, Option<PathBuf>
         }
     }
     Ok((args, file))
+}
+
+/// The password for a protected Word file: `--password`, `--password-file`, or
+/// `WORDCRAFT_PASSWORD`, in that order. The file form exists because a password on a command line
+/// is readable by every other process on the machine; a trailing newline is dropped so a file
+/// written by `echo` works. Never logged, and never named in an error.
+fn password_from(args: &[String]) -> Result<Option<String>, String> {
+    if let Some(password) = arg_value(args, "--password") {
+        return Ok(Some(password));
+    }
+    if let Some(path) = arg_value(args, "--password-file") {
+        let raw = std::fs::read_to_string(&path).map_err(|e| format!("--password-file {path}: {e}"))?;
+        return Ok(Some(raw.trim_end_matches(['\r', '\n']).to_string()));
+    }
+    Ok(std::env::var("WORDCRAFT_PASSWORD").ok().filter(|p| !p.is_empty()))
+}
+
+/// The positional arguments, skipping every option's value so an option value is never read as a
+/// path. Mirrors [`validate_options`], which has already checked the options are known.
+fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while let Some(arg) = args.get(i) {
+        let takes_value =
+            arg.starts_with("--") && specs.iter().any(|s| s.name == arg && s.takes_value) && args.get(i + 1).is_some_and(|v| !v.starts_with("--"));
+        if takes_value {
+            i += 2;
+        } else {
+            if !arg.starts_with("--") {
+                out.push(arg);
+            }
+            i += 1;
+        }
+    }
+    out
 }
 
 /// A headless session in the system region: every way the CLI starts one gives `file.new` the
@@ -222,11 +273,26 @@ fn automation_roots(
     Ok((roots, left))
 }
 
-const NO_OPTIONS: &[OptionSpec] = &[];
-const CONVERT_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--markup", takes_value: false }, OptionSpec { name: "--format", takes_value: true }];
-const RENDER_OPTIONS: &[OptionSpec] = &[OptionSpec { name: "--page", takes_value: true }, OptionSpec { name: "--scale", takes_value: true }];
+/// The password a protected Word file is opened with: `--password` (which any other process on
+/// the machine can read from the command line), `--password-file`, or `WORDCRAFT_PASSWORD`.
+const PASSWORD_OPTIONS: &[OptionSpec] =
+    &[OptionSpec { name: "--password", takes_value: true }, OptionSpec { name: "--password-file", takes_value: true }];
+const CONVERT_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--markup", takes_value: false },
+    OptionSpec { name: "--format", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--password-file", takes_value: true },
+];
+const RENDER_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--page", takes_value: true },
+    OptionSpec { name: "--scale", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--password-file", takes_value: true },
+];
 const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--file", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--password-file", takes_value: true },
     OptionSpec { name: "--template", takes_value: true },
     OptionSpec { name: "--cmd", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
@@ -293,30 +359,25 @@ fn write_stdout(write: impl FnOnce(&mut std::io::StdoutLock<'static>) -> std::io
 
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
     let (args, file) = text_args(args)?;
-    // Opens the file by its real name, which its text in `args` may have lost.
-    let open = |text: &str| open(file.as_deref().unwrap_or(Path::new(text)));
+    // Opens the file by its real name, which its text in `args` may have lost, and with the
+    // password of a protected document (`password_from`).
+    let open = |text: &str, password: Option<&str>| open(file.as_deref().unwrap_or(Path::new(text)), password);
     let cmd = args.first().map(String::as_str).unwrap_or("");
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
     // Before options are checked or files and folders opened.
     if wants_help(cmd, &rest) {
         return write_stdout(|o| write!(o, "{USAGE}"));
     }
-    let pos = |i: usize| rest.iter().filter(|a| !a.starts_with("--")).nth(i).cloned().ok_or_else(|| format!("missing argument\n\n{USAGE}"));
     match cmd {
         "convert" => {
             validate_options("convert", &rest, CONVERT_OPTIONS)?;
             // `--format wordml2003` (or `flatopc`) picks the kind of `.xml` file; its value isn't a path.
             let format = arg_value(&rest, "--format");
-            let paths: Vec<&String> = rest
-                .iter()
-                .enumerate()
-                .filter(|(n, a)| !a.starts_with("--") && !(*n > 0 && rest.get(n - 1).is_some_and(|p| p == "--format")))
-                .map(|(_, a)| a)
-                .collect();
-            let missing = || format!("missing argument\n\n{USAGE}");
-            let (i, o) = (paths.first().ok_or_else(missing)?.to_string(), paths.get(1).ok_or_else(missing)?.to_string());
+            let paths = positionals(&rest, CONVERT_OPTIONS);
+            let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
-            let mut s = open(&i)?;
+            let password = password_from(&rest)?;
+            let mut s = open(&i, password.as_deref())?;
             let r = if o.to_ascii_lowercase().ends_with(".png") {
                 s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup}))
             } else {
@@ -331,29 +392,40 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             Ok(())
         }
         "info" => {
-            validate_options("info", &rest, NO_OPTIONS)?;
-            let mut s = open(&pos(0)?)?;
+            validate_options("info", &rest, PASSWORD_OPTIONS)?;
+            let paths = positionals(&rest, PASSWORD_OPTIONS);
+            let password = password_from(&rest)?;
+            let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let info = serde_json::to_string_pretty(&s.run("file.info", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
             write_stdout(|o| writeln!(o, "{info}"))
         }
         "text" => {
-            validate_options("text", &rest, NO_OPTIONS)?;
-            let s = open(&pos(0)?)?;
+            validate_options("text", &rest, PASSWORD_OPTIONS)?;
+            let paths = positionals(&rest, PASSWORD_OPTIONS);
+            let password = password_from(&rest)?;
+            let s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let text = listed_text(&s.doc)?;
             write_stdout(|o| writeln!(o, "{text}"))
         }
         "inspect" => {
-            validate_options("inspect", &rest, NO_OPTIONS)?;
-            let mut s = open(&pos(0)?)?;
+            validate_options("inspect", &rest, PASSWORD_OPTIONS)?;
+            let paths = positionals(&rest, PASSWORD_OPTIONS);
+            let password = password_from(&rest)?;
+            let mut s = open(paths.first().ok_or_else(missing_argument)?, password.as_deref())?;
             let tree = serde_json::to_string_pretty(&s.run("document.inspect", &json!({})).map_err(|e| e.to_string())?).unwrap_or_default();
             write_stdout(|o| writeln!(o, "{tree}"))
         }
         "render" => {
             validate_options("render", &rest, RENDER_OPTIONS)?;
-            let (i, o) = (pos(0)?, pos(1)?);
+            let paths = positionals(&rest, RENDER_OPTIONS);
+            let password = password_from(&rest)?;
+            let (Some(i), Some(o)) = (paths.first(), paths.get(1)) else {
+                return Err(missing_argument());
+            };
+            let (i, o) = (i.to_string(), o.to_string());
             let page = parse_page_arg("render", &rest)?.unwrap_or(1);
             let scale = parse_scale_arg("render", &rest)?.unwrap_or(2.0);
-            let mut s = open(&i)?;
+            let mut s = open(&i, password.as_deref())?;
             let r = s.run("file.exportPng", &json!({"path": o, "page": page, "scale": scale})).map_err(|e| e.to_string())?;
             write_stdout(|o| writeln!(o, "{r}"))
         }
@@ -361,8 +433,9 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             validate_options("run", &rest, RUN_OPTIONS)?;
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
+            let password = password_from(&rest)?;
             let mut s = match (arg_value(&rest, "--file"), arg_value(&rest, "--template")) {
-                (Some(f), _) => open(&f)?,
+                (Some(f), _) => open(&f, password.as_deref())?,
                 (None, Some(t)) => {
                     let mut s = session(wordcraft_doc::Document::new());
                     s.run("file.new", &json!({"template": t})).map_err(|e| e.to_string())?;
@@ -478,10 +551,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
         }
         "zotero" => {
             validate_options("zotero", &rest, ZOTERO_OPTIONS)?;
-            let name = pos(0)?;
-            let command = wordcraft_zotero::Command::from_name(&name).ok_or_else(|| format!("unknown Zotero command `{name}`\n\n{USAGE}"))?;
-            let file = pos(1)?;
-            let mut s = open(&file)?;
+            let paths = positionals(&rest, ZOTERO_OPTIONS);
+            let (Some(name), Some(file)) = (paths.first(), paths.get(1)) else {
+                return Err(missing_argument());
+            };
+            let command = wordcraft_zotero::Command::from_name(name).ok_or_else(|| format!("unknown Zotero command `{name}`\n\n{USAGE}"))?;
+            let mut s = open(file, None)?;
             for spec in rest.iter().zip(rest.iter().skip(1)).filter(|(a, _)| *a == "--cmd").map(|(_, v)| v) {
                 let (id, params) = match spec.split_once('=') {
                     Some((id, p)) => (id.to_string(), serde_json::from_str::<Value>(p).map_err(|e| format!("{id}: bad JSON params: {e}"))?),
@@ -576,7 +651,7 @@ mod tests {
 
     #[test]
     fn validators_accept_only_the_documented_options() {
-        assert!(validate_options("info", &args(&["file.docx"]), NO_OPTIONS).is_ok());
+        assert!(validate_options("info", &args(&["file.docx"]), PASSWORD_OPTIONS).is_ok());
         assert!(validate_options("render", &args(&["in.docx", "out.png", "--page", "2", "--scale", "1.5"]), RENDER_OPTIONS).is_ok());
         assert!(validate_options("run", &args(&["--cmd", "text.insert={}", "--cmd", "edit.undo", "--print"]), RUN_OPTIONS).is_ok());
         assert!(validate_options("commands", &args(&["--json"]), COMMANDS_OPTIONS).is_ok());
@@ -591,6 +666,41 @@ mod tests {
             )
             .is_ok()
         );
+    }
+
+    #[test]
+    fn an_option_value_is_never_read_as_a_path() {
+        // `--password`'s value sits between the paths and would be taken for one without
+        // `positionals`, so `render` would write its picture over a file called after the password.
+        assert_eq!(positionals(&args(&["in.docx", "--password", "secret", "out.png"]), RENDER_OPTIONS), vec!["in.docx", "out.png"]);
+        assert_eq!(positionals(&args(&["in.docx", "out.png", "--page", "2"]), RENDER_OPTIONS), vec!["in.docx", "out.png"]);
+        // A bare flag takes no value, so the next argument stays a path.
+        assert_eq!(positionals(&args(&["--print", "in.docx"]), RUN_OPTIONS), vec!["in.docx"]);
+        // `convert` is the one with a value-taking flag between the two paths.
+        assert_eq!(positionals(&args(&["in.docx", "--format", "flatopc", "out.docx"]), CONVERT_OPTIONS), vec!["in.docx", "out.docx"]);
+    }
+
+    #[test]
+    fn the_password_comes_from_an_option_a_file_or_the_environment() {
+        assert_eq!(password_from(&args(&["f.docx"])), Ok(None));
+        assert_eq!(password_from(&args(&["f.docx", "--password", "s3cret"])), Ok(Some("s3cret".into())));
+        // `--password` wins over the other two sources.
+        assert_eq!(password_from(&args(&["--password", "a", "--password-file", "/nonexistent"])), Ok(Some("a".into())));
+    }
+
+    #[test]
+    fn a_password_file_loses_only_its_trailing_newline() {
+        let path = std::env::temp_dir().join("wordcraft-cli-password-test.txt");
+        std::fs::write(&path, "s3cret\r\n").unwrap();
+        let got = password_from(&args(&["f.docx", "--password-file", &path.to_string_lossy()]));
+        std::fs::remove_file(&path).ok();
+        assert_eq!(got, Ok(Some("s3cret".into())));
+    }
+
+    #[test]
+    fn a_missing_password_file_is_named_without_the_password() {
+        let err = password_from(&args(&["f.docx", "--password-file", "/nonexistent/secret.txt"])).unwrap_err();
+        assert!(err.contains("--password-file"), "{err}");
     }
 
     #[test]
