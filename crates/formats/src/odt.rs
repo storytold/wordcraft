@@ -949,18 +949,21 @@ fn column_sep(a: &Attrs) -> bool {
 fn length(v: &str) -> Option<f32> {
     let v = v.trim();
     let num = |s: &str| s.trim().parse::<f32>().ok().filter(|x| x.is_finite());
-    if let Some(n) = v.strip_suffix("pt") {
-        num(n)
-    } else if let Some(n) = v.strip_suffix("in") {
-        num(n).map(|x| x * 72.0)
-    } else if let Some(n) = v.strip_suffix("cm") {
-        num(n).map(|x| x * 72.0 / 2.54)
-    } else if let Some(n) = v.strip_suffix("mm") {
-        num(n).map(|x| x * 72.0 / 25.4)
-    } else if let Some(n) = v.strip_suffix("pc") {
-        num(n).map(|x| x * 12.0)
-    } else if let Some(n) = v.strip_suffix("px") {
-        num(n).map(|x| x * 0.75)
+    let v_lower = v.to_ascii_lowercase();
+    if let Some(n) = v_lower.strip_suffix("pt") {
+        num(&v[..n.len()])
+    } else if let Some(n) = v_lower.strip_suffix("in") {
+        num(&v[..n.len()]).map(|x| x * 72.0)
+    } else if let Some(n) = v_lower.strip_suffix("cm") {
+        num(&v[..n.len()]).map(|x| x * 72.0 / 2.54)
+    } else if let Some(n) = v_lower.strip_suffix("mm") {
+        num(&v[..n.len()]).map(|x| x * 72.0 / 25.4)
+    } else if let Some(n) = v_lower.strip_suffix("pc").or_else(|| v_lower.strip_suffix("pi")) {
+        num(&v[..n.len()]).map(|x| x * 12.0)
+    } else if let Some(n) = v_lower.strip_suffix("px") {
+        num(&v[..n.len()]).map(|x| x * 0.75)
+    } else if let Some(n) = v_lower.strip_suffix('q') {
+        num(&v[..n.len()]).map(|x| x * (72.0 / 101.6))
     } else {
         num(v)
     }
@@ -1062,28 +1065,32 @@ impl Styles {
                     if let Some((_, s)) = &mut cur {
                         let d = &mut s.fmt;
                         if let Some(w) = get(&a, "fo:font-weight") {
-                            d.bold = Some(w == "bold" || w.parse::<u32>().is_ok_and(|n| n >= 600));
+                            let w = w.trim();
+                            d.bold = Some(w.eq_ignore_ascii_case("bold") || w.eq_ignore_ascii_case("bolder") || w.parse::<u32>().is_ok_and(|n| n >= 600));
                         }
                         if let Some(v) = get(&a, "fo:font-style") {
-                            d.italic = Some(v == "italic" || v == "oblique");
+                            let v = v.trim();
+                            d.italic = Some(v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique"));
                         }
-                        if let Some(v) = get(&a, "style:text-underline-style") {
-                            d.underline = Some(v != "none");
+                        if let Some(v) = get(&a, "style:text-underline-style").or_else(|| get(&a, "style:text-underline-type")) {
+                            let v = v.trim();
+                            d.underline = Some(!v.is_empty() && !v.eq_ignore_ascii_case("none"));
                         }
-                        if let Some(v) = get(&a, "style:text-line-through-style") {
-                            d.strike = Some(v != "none");
+                        if let Some(v) = get(&a, "style:text-line-through-style").or_else(|| get(&a, "style:text-line-through-type")) {
+                            let v = v.trim();
+                            d.strike = Some(!v.is_empty() && !v.eq_ignore_ascii_case("none"));
                         }
                         if let Some(v) = get(&a, "style:text-position") {
                             let v = v.trim();
                             let first = v.split_whitespace().next().unwrap_or("");
                             let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-                            d.sup = Some(first == "super" || pct > 0.0);
-                            d.sub = Some(first == "sub" || pct < 0.0);
+                            d.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+                            d.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
                         }
                         if let Some(c) = get(&a, "fo:color").and_then(model::parse_color) {
                             d.color = Some(c);
                         }
-                        if let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color) {
+                        if let Some(c) = get(&a, "fo:background-color").or_else(|| get(&a, "style:text-background-color")).and_then(model::parse_color) {
                             d.background = Some(c);
                         }
                         if let Some(sz) = get(&a, "fo:font-size").and_then(length).filter(|v| *v >= 1.0 && *v <= 1638.0) {
@@ -1115,20 +1122,20 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align") {
-                            Some("center") => Some(Align::Center),
-                            Some("end") | Some("right") => Some(Align::Right),
-                            Some("justify") => Some(Align::Justify),
-                            Some("start") | Some("left") => Some(Align::Left),
+                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()) {
+                            Some(ref v) if v == "center" => Some(Align::Center),
+                            Some(ref v) if v == "end" || v == "right" => Some(Align::Right),
+                            Some(ref v) if v == "justify" => Some(Align::Justify),
+                            Some(ref v) if v == "start" || v == "left" => Some(Align::Left),
                             _ => s.align,
                         };
-                        if get(&a, "fo:break-before") == Some("page") {
+                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
                             s.page_break = true;
                         }
                         if let Some(v) = get(&a, "style:page-number") {
                             s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
                         }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
+                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
                             s.border_bottom = true;
                         }
                     }
@@ -2340,6 +2347,43 @@ fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
         Some("portrait") => false,
         _ => sec.page_w > sec.page_h,
     };
+    if let Some(m_str) = get(a, "fo:margin") {
+        let parts: Vec<f32> = m_str.split_whitespace().filter_map(length).filter(|v| *v >= 0.0).collect();
+        let max_dim = sec.page_w.max(sec.page_h);
+        match parts.len() {
+            1 => {
+                let m = parts[0].min(max_dim);
+                sec.margin_top = m;
+                sec.margin_bottom = m;
+                sec.margin_left = m;
+                sec.margin_right = m;
+            }
+            2 => {
+                let tb = parts[0].min(max_dim);
+                let lr = parts[1].min(max_dim);
+                sec.margin_top = tb;
+                sec.margin_bottom = tb;
+                sec.margin_left = lr;
+                sec.margin_right = lr;
+            }
+            3 => {
+                let top = parts[0].min(max_dim);
+                let lr = parts[1].min(max_dim);
+                let bot = parts[2].min(max_dim);
+                sec.margin_top = top;
+                sec.margin_bottom = bot;
+                sec.margin_left = lr;
+                sec.margin_right = lr;
+            }
+            4 => {
+                sec.margin_top = parts[0].min(max_dim);
+                sec.margin_right = parts[1].min(max_dim);
+                sec.margin_bottom = parts[2].min(max_dim);
+                sec.margin_left = parts[3].min(max_dim);
+            }
+            _ => {}
+        }
+    }
     for (k, slot) in [
         ("fo:margin-top", &mut sec.margin_top),
         ("fo:margin-bottom", &mut sec.margin_bottom),
@@ -2360,9 +2404,58 @@ mod tests {
     #[test]
     fn lengths() {
         assert_eq!(length("1in"), Some(72.0));
+        assert_eq!(length("1IN"), Some(72.0));
         assert_eq!(length("12pt"), Some(12.0));
+        assert_eq!(length("12PT"), Some(12.0));
         assert!((length("2.54cm").unwrap() - 72.0).abs() < 0.01);
+        assert!((length("2.54CM").unwrap() - 72.0).abs() < 0.01);
+        assert!((length("25.4mm").unwrap() - 72.0).abs() < 0.01);
+        assert!((length("25.4MM").unwrap() - 72.0).abs() < 0.01);
+        assert_eq!(length("1pc"), Some(12.0));
+        assert_eq!(length("1PC"), Some(12.0));
+        assert_eq!(length("1pi"), Some(12.0));
+        assert_eq!(length("16px"), Some(12.0));
+        assert!((length("101.6q").unwrap() - 72.0).abs() < 0.01);
         assert_eq!(length("x"), None);
+    }
+
+    #[test]
+    fn page_layout_fo_margin_shorthand() {
+        let mut sec = SectionProps::default();
+        let attrs = vec![
+            ("fo:page-width".to_string(), "8.5in".to_string()),
+            ("fo:page-height".to_string(), "11in".to_string()),
+            ("fo:margin".to_string(), "1in".to_string()),
+            ("fo:margin-top".to_string(), "0.5in".to_string()),
+        ];
+        apply_layout(&attrs, &mut sec);
+        assert_eq!(sec.margin_top, 36.0);
+        assert_eq!(sec.margin_bottom, 72.0);
+        assert_eq!(sec.margin_left, 72.0);
+        assert_eq!(sec.margin_right, 72.0);
+    }
+
+    #[test]
+    fn odt_styles_case_insensitive_and_extended_properties() {
+        let xml = br##"<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0">
+            <office:styles>
+                <style:style style:name="MyStyle" style:family="paragraph">
+                    <style:paragraph-properties fo:text-align="RIGHT" fo:break-before="PAGE"/>
+                    <style:text-properties fo:font-weight="BOLD" fo:font-style="ITALIC" style:text-underline-style="SOLID" style:text-line-through-type="single" style:text-background-color="#ff0000" fo:font-size="14PT"/>
+                </style:style>
+            </office:styles>
+        </office:document-styles>"##;
+        let mut styles = Styles::default();
+        styles.read(xml, false);
+        let s = styles.map.get("MyStyle").expect("MyStyle should exist");
+        assert_eq!(s.align, Some(Align::Right));
+        assert!(s.page_break);
+        assert_eq!(s.fmt.bold, Some(true));
+        assert_eq!(s.fmt.italic, Some(true));
+        assert_eq!(s.fmt.underline, Some(true));
+        assert_eq!(s.fmt.strike, Some(true));
+        assert_eq!(s.fmt.background, Some(Rgb(255, 0, 0)));
+        assert_eq!(s.fmt.size, Some(14.0));
     }
 
     #[test]
