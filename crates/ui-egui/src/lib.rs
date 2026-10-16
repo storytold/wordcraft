@@ -472,6 +472,8 @@ pub struct WordApp {
     /// The document (id, revision) whose comment text [`WordApp::ensure_comment_fonts`] last
     /// looked at.
     comment_fonts_for: Option<(u64, u64)>,
+    /// The list of recent document paths [`WordApp::ensure_recent_fonts`] last looked at.
+    recent_fonts_for: Vec<String>,
     fonts_frames: u32,
     /// The effective interface theme last installed in egui ([`theme::apply`]).
     applied_theme: Option<theme::Appearance>,
@@ -599,6 +601,7 @@ impl WordApp {
             fonts_system_cjk: false,
             want_system_cjk: false,
             comment_fonts_for: None,
+            recent_fonts_for: Vec::new(),
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
@@ -1711,6 +1714,32 @@ impl WordApp {
         }
     }
 
+    /// Recent documents in Backstage (and the Start screen) show file names and paths with the
+    /// interface faces. Borrow document fallback faces for characters in non-Latin scripts (#2067),
+    /// as the caption and comments do.
+    fn ensure_recent_fonts(&mut self) {
+        if self.recent_fonts_for.as_slice() == self.ui.recent.as_slice() {
+            return;
+        }
+        self.recent_fonts_for = self.ui.recent.clone();
+        for p in &self.ui.recent {
+            if p.chars().any(wordcraft_fonts::is_cjk) {
+                self.want_system_cjk = true;
+            }
+            let new = theme::faces_for_preedit(p, &self.canvas.ime_faces, theme::caption_char_covered, |c| {
+                wordcraft_fonts::FontDb::global().fallback_for(c, u32::MAX)
+            });
+            if !new.is_empty() {
+                for face in new {
+                    if !self.canvas.ime_faces.iter().any(|f| f.id() == face.id()) {
+                        self.canvas.ime_faces.push(face);
+                    }
+                }
+                self.styled = false;
+            }
+        }
+    }
+
     /// Document title for the title bar (and the suggested file name). An untitled document is
     /// named in the interface language, as `Document1` is in English.
     pub fn title_stem(&self) -> String {
@@ -1758,6 +1787,7 @@ impl WordApp {
         // in this frame (dialog, drop, control channel) is picked up again at the end.
         self.ensure_caption_fonts();
         self.ensure_comment_fonts();
+        self.ensure_recent_fonts();
         self.install_ui_fonts(ctx, lang);
         if let Some(answer) = self.desktop_theme.take_change() {
             self.desktop_dark = Some(answer);
@@ -1868,6 +1898,7 @@ impl WordApp {
         // The open above may have changed the file name the caption draws.
         self.ensure_caption_fonts();
         self.ensure_comment_fonts();
+        self.ensure_recent_fonts();
         self.install_ui_fonts(ctx, lang);
         self.report_dirty();
     }
@@ -2555,6 +2586,32 @@ mod tests {
         let letter = 'ن';
         if wordcraft_fonts::FontDb::global().fallback_for(letter, u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
             assert!(arabic.canvas.ime_faces.iter().any(|f| f.covers(letter)), "the balloons borrow a face that covers the comment");
+        }
+        let n = arabic.canvas.ime_faces.len();
+        frame(&mut arabic);
+        assert_eq!(arabic.canvas.ime_faces.len(), n, "the face is added once");
+    }
+
+    /// Recent documents in Backstage and the Start screen draw file names and paths with the
+    /// interface faces, which have no Arabic, Hebrew, Thai …: a recent document borrows a
+    /// document fallback face that covers it (#2067).
+    #[test]
+    fn recent_documents_borrow_fallback_faces() {
+        let ctx = egui::Context::default();
+        let frame = |app: &mut WordApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        };
+        let mut latin = app();
+        latin.ui.recent.push("/home/ice/report.docx".into());
+        frame(&mut latin);
+        assert!(latin.canvas.ime_faces.is_empty(), "a Latin file name needs no extra face");
+
+        let mut arabic = app();
+        arabic.ui.recent.push("/home/ice/نواقص 2026.docx".into());
+        frame(&mut arabic);
+        let letter = 'ن';
+        if wordcraft_fonts::FontDb::global().fallback_for(letter, u32::MAX).is_some_and(|f| f.data().len() <= 16 << 20) {
+            assert!(arabic.canvas.ime_faces.iter().any(|f| f.covers(letter)), "the recent list borrows a face that covers the file name");
         }
         let n = arabic.canvas.ime_faces.len();
         frame(&mut arabic);

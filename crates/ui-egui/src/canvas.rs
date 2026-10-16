@@ -1841,8 +1841,22 @@ fn card_shapes(painter: &egui::Painter, t: &Tokens, card: Rect, color: Color32, 
 }
 
 /// Does `text` hold right-to-left letters (Arabic, Hebrew, Syriac, Thaana, N'Ko …)?
-fn has_rtl(text: &str) -> bool {
+pub(crate) fn has_rtl(text: &str) -> bool {
     text.chars().any(|c| matches!(unicode_bidi::bidi_class(c), unicode_bidi::BidiClass::R | unicode_bidi::BidiClass::AL))
+}
+
+/// Put `text` into visual display order for egui when it contains right-to-left characters.
+/// Uses an LTR base paragraph direction so left-aligned UI elements (recent files, paths) preserve
+/// trailing extensions and numbers in their proper visual order.
+pub(crate) fn bidi_display(text: &str) -> std::borrow::Cow<'_, str> {
+    if !has_rtl(text) {
+        return std::borrow::Cow::Borrowed(text);
+    }
+    let info = unicode_bidi::BidiInfo::new(text, Some(unicode_bidi::Level::ltr()));
+    match info.paragraphs.first() {
+        Some(p) => std::borrow::Cow::Owned(visual_row(&info, p, text, 0..text.len())),
+        None => std::borrow::Cow::Borrowed(text),
+    }
 }
 
 /// The row `line` of paragraph `p` of `para` in display order, for egui: the bidi runs left to
@@ -3620,6 +3634,13 @@ mod tests {
         let p = info.paragraphs.first().unwrap();
         assert_eq!(visual_row(&info, p, text, text.len()..text.len()), "");
         assert_eq!(visual_row(&info, p, text, 0..text.len() + 5), "");
+    }
+
+    #[test]
+    fn bidi_display_preserves_extensions_and_numbers() {
+        assert_eq!(bidi_display("report.docx").as_ref(), "report.docx");
+        assert_eq!(bidi_display("نواقص 2026.docx").as_ref(), "2026 نواقص.docx");
+        assert_eq!(bidi_display("مذكرة داخلية.docx").as_ref(), "داخلية مذكرة.docx");
     }
 
     #[test]
