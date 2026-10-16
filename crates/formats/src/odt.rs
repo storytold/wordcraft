@@ -344,7 +344,12 @@ impl Writer {
                         flush(&mut body, &mut spaces, prev_space);
                         prev_space = false;
                         match c {
-                            '\t' => body.push_str("<text:tab/>"),
+                            '\t' => {
+                                // The reader collapses a literal space after a tab, so spaces
+                                // that follow are written as `<text:s/>`.
+                                body.push_str("<text:tab/>");
+                                prev_space = true;
+                            }
                             '\n' => {
                                 body.push_str("<text:line-break/>");
                                 prev_space = true;
@@ -2919,5 +2924,14 @@ mod tests {
         assert!(back.revisions.first().is_some_and(|r| r.date.len() >= 19 && r.date.starts_with("20")), "{:?}", back.revisions);
         assert_eq!(marks(&back), marks(&doc));
         assert_eq!(marks(&back).len(), 1);
+    }
+
+    #[test]
+    fn spaces_after_a_tab_survive_a_round_trip() {
+        for src in ["a\t b", "a\t  b", "a\t   éa", "é\t 😀a", "a\t\t b"] {
+            let doc = Document::from_text(src);
+            let back = import(&export(&doc).unwrap()).unwrap();
+            assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), src, "{src:?}");
+        }
     }
 }
