@@ -2641,3 +2641,7 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# File › Options › Add-ins
+	Add-ins	Aggiunte
+	No add-ins are installed.	Nessuna aggiunta installata.
+	Each add-in stays off until you turn it on.	Ogni aggiunta resta disattivata finché non la attivi.

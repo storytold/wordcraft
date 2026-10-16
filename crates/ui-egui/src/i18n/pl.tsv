@@ -2622,3 +2622,7 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# File › Options › Add-ins
+	Add-ins	Dodatki
+	No add-ins are installed.	Nie zainstalowano żadnych dodatków.
+	Each add-in stays off until you turn it on.	Każdy dodatek pozostaje wyłączony, dopóki go nie włączysz.

@@ -1,0 +1,1081 @@
+{
+  "schema": 1,
+  "id": "missouri-appellate-brief",
+  "name": "Missouri appellate brief",
+  "jurisdiction": "Missouri",
+  "verified": true,
+  "citationPack": "missouri",
+  "docs": {
+    "appendix": {
+      "label": "Appendix",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal",
+        "prefix": "A",
+        "start": 1
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.5
+            }
+          }
+        },
+        {
+          "name": "Appendix Body",
+          "basedOn": "Normal",
+          "next": "Appendix Body"
+        },
+        {
+          "name": "Appendix Heading",
+          "basedOn": "Normal",
+          "next": "Appendix Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Appendix cover",
+          "style": "Appendix Heading"
+        },
+        {
+          "id": "contents",
+          "name": "Contents of the appendix",
+          "style": "Appendix Heading"
+        },
+        {
+          "id": "exhibits",
+          "name": "Exhibits",
+          "style": "Appendix Heading"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "minFontSize",
+          "pt": 13,
+          "font": "Times New Roman",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "exhibits"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.06",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Mo. Sup. Ct. R. 84.04(a)",
+          "effective": "2025-01-01"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 84.06",
+      "effective": "2025-01-01"
+    },
+    "brief": {
+      "label": "Appellant's initial brief",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.5
+            }
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Block Quote",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "indentLeft": 72,
+            "indentRight": 72
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Cover",
+          "style": "Heading",
+          "fields": [
+            "court",
+            "caseNumber",
+            "partyNames",
+            "partyRoles",
+            "caseTitle",
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email"
+          ]
+        },
+        {
+          "id": "tableOfContents",
+          "name": "Table of Contents",
+          "style": "Heading"
+        },
+        {
+          "id": "tableOfAuthorities",
+          "name": "Table of Authorities",
+          "style": "Heading"
+        },
+        {
+          "id": "jurisdictionalStatement",
+          "name": "Jurisdictional Statement",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(2)"
+        },
+        {
+          "id": "statementOfFacts",
+          "name": "Statement of Facts",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(3)"
+        },
+        {
+          "id": "pointsReliedOn",
+          "name": "Points Relied On",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(4)"
+        },
+        {
+          "id": "argument",
+          "name": "Argument",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(5)"
+        },
+        {
+          "id": "conclusion",
+          "name": "Conclusion",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(6)"
+        },
+        {
+          "id": "certificateOfCompliance",
+          "name": "Certificate of Compliance",
+          "style": "Certificate",
+          "source": "Mo. Sup. Ct. R. 84.04(b)"
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate",
+          "source": "Mo. Sup. Ct. R. 84.04(b)"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "wordLimit",
+          "limit": 31000,
+          "excludeSections": [
+            "cover",
+            "tableOfContents",
+            "tableOfAuthorities",
+            "certificateOfCompliance",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.04(b)(1)",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minFontSize",
+          "pt": 13,
+          "font": "Times New Roman",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 1.5,
+          "exceptStyles": [
+            "Caption",
+            "Heading",
+            "Block Quote",
+            "Signature",
+            "Certificate"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "tableOfContents",
+            "tableOfAuthorities",
+            "jurisdictionalStatement",
+            "statementOfFacts",
+            "pointsReliedOn",
+            "argument",
+            "conclusion",
+            "certificateOfCompliance",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.04(a)",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "noHyperlinks",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 84.03, 84.04, 84.06",
+      "effective": "2025-01-01"
+    },
+    "motion": {
+      "label": "Motion in the court of appeals",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.5
+            }
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "caption",
+          "name": "Caption",
+          "style": "Heading",
+          "fields": [
+            "court",
+            "caseNumber",
+            "partyNames",
+            "partyRoles",
+            "caseTitle"
+          ]
+        },
+        {
+          "id": "relief",
+          "name": "Relief sought",
+          "style": "Heading"
+        },
+        {
+          "id": "argument",
+          "name": "Supporting argument",
+          "style": "Heading"
+        },
+        {
+          "id": "conclusion",
+          "name": "Conclusion",
+          "style": "Heading"
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "minFontSize",
+          "pt": 13,
+          "font": "Times New Roman",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 1.5,
+          "exceptStyles": [
+            "Heading",
+            "Signature",
+            "Certificate"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "caption",
+            "relief",
+            "argument",
+            "conclusion",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.06",
+          "effective": "2025-01-01"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 84.03, 84.06",
+      "effective": "2025-01-01"
+    },
+    "petition": {
+      "label": "Original petition (trial court)",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "indentLeft": 216,
+            "indentRight": 216
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Block Quote",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "indentLeft": 72,
+            "indentRight": 72
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "caption",
+          "name": "Caption",
+          "style": "Caption",
+          "fields": [
+            "court",
+            "county",
+            "partyNames",
+            "partyRoles",
+            "partyAddresses",
+            "caseNumber"
+          ]
+        },
+        {
+          "id": "body",
+          "name": "Petition",
+          "style": "Body"
+        },
+        {
+          "id": "prayer",
+          "name": "Prayer for relief",
+          "style": "Body"
+        },
+        {
+          "id": "signature",
+          "name": "Signature block",
+          "style": "Signature",
+          "fields": [
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email"
+          ]
+        }
+      ],
+      "checks": [
+        {
+          "kind": "minFontSize",
+          "pt": 13,
+          "font": "Times New Roman",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 1.5,
+          "exceptStyles": [
+            "Caption",
+            "Heading",
+            "Block Quote",
+            "Signature"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "caption",
+            "body",
+            "signature"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.06",
+          "effective": "2025-01-01"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 84.03, 84.06",
+      "effective": "2025-01-01"
+    },
+    "reply": {
+      "label": "Reply brief",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.5
+            }
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Cover",
+          "style": "Heading"
+        },
+        {
+          "id": "argument",
+          "name": "Argument",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(5)"
+        },
+        {
+          "id": "conclusion",
+          "name": "Conclusion",
+          "style": "Heading"
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "wordLimit",
+          "limit": 7750,
+          "excludeSections": [
+            "cover",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.04(b)(1)",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minFontSize",
+          "pt": 13,
+          "font": "Times New Roman",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 1.5,
+          "exceptStyles": [
+            "Heading",
+            "Signature",
+            "Certificate"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "argument",
+            "conclusion",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.04(a)",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "noHyperlinks",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 84.03, 84.04",
+      "effective": "2025-01-01"
+    },
+    "respondentBrief": {
+      "label": "Respondent's brief",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 13
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.5
+            }
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Block Quote",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "indentLeft": 72,
+            "indentRight": 72
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Cover",
+          "style": "Heading",
+          "fields": [
+            "court",
+            "caseNumber",
+            "partyNames",
+            "partyRoles",
+            "caseTitle",
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email"
+          ]
+        },
+        {
+          "id": "tableOfContents",
+          "name": "Table of Contents",
+          "style": "Heading"
+        },
+        {
+          "id": "tableOfAuthorities",
+          "name": "Table of Authorities",
+          "style": "Heading"
+        },
+        {
+          "id": "jurisdictionalStatement",
+          "name": "Jurisdictional Statement",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(2)"
+        },
+        {
+          "id": "statementOfFacts",
+          "name": "Statement of Facts",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(3)"
+        },
+        {
+          "id": "pointsReliedOn",
+          "name": "Points Relied On",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(4)"
+        },
+        {
+          "id": "argument",
+          "name": "Argument",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(5)"
+        },
+        {
+          "id": "conclusion",
+          "name": "Conclusion",
+          "style": "Heading",
+          "source": "Mo. Sup. Ct. R. 84.04(a)(6)"
+        },
+        {
+          "id": "certificateOfCompliance",
+          "name": "Certificate of Compliance",
+          "style": "Certificate",
+          "source": "Mo. Sup. Ct. R. 84.04(b)"
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate",
+          "source": "Mo. Sup. Ct. R. 84.04(b)"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "wordLimit",
+          "limit": 27900,
+          "excludeSections": [
+            "cover",
+            "tableOfContents",
+            "tableOfAuthorities",
+            "certificateOfCompliance",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.04(b)(1)",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minFontSize",
+          "pt": 13,
+          "font": "Times New Roman",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 1.5,
+          "exceptStyles": [
+            "Caption",
+            "Heading",
+            "Block Quote",
+            "Signature",
+            "Certificate"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "tableOfContents",
+            "tableOfAuthorities",
+            "jurisdictionalStatement",
+            "statementOfFacts",
+            "pointsReliedOn",
+            "argument",
+            "conclusion",
+            "certificateOfCompliance",
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 84.04(a)",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "noHyperlinks",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Mo. Sup. Ct. R. 84.03",
+          "effective": "2025-01-01"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 84.03, 84.04, 84.06",
+      "effective": "2025-01-01"
+    }
+  }
+}

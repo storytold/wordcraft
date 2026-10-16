@@ -94,21 +94,23 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     typing_options(s, text);
     let t = if raw { None } else { autoformat(s, text) };
     type_text(s, t.as_deref().unwrap_or(text))?;
-    let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));
-    if raw || !trigger {
+    if raw || text.chars().count() != 1 {
         return sel_result(s);
     }
+    let ch = text.chars().next().unwrap_or('\0');
+    let punct_trigger = ch == ' ' || ",.;:!?".contains(ch);
     // The paragraph as typed, so an automatic change can be undone on its own.
     let f = s.sel.focus.clone();
     let typed = s.doc.para_at(&f).cloned().map(|p| (p, s.sel.clone()));
     // A list label ("a. ") becomes a list before AutoCorrect could capitalise it.
-    let listed = text == " " && s.prefs.autocorrect.enabled && list_autoformat(s)?;
-    if !listed {
+    let listed = punct_trigger && ch == ' ' && s.prefs.autocorrect.enabled && list_autoformat(s)?;
+    if punct_trigger && !listed {
         super::tools::autocorrect(s)?;
     }
-    if text == " " && !listed && s.prefs.autocorrect.enabled && s.prefs.autocorrect.dashes {
+    if punct_trigger && ch == ' ' && !listed && s.prefs.autocorrect.enabled && s.prefs.autocorrect.dashes {
         dash_autoformat(s)?;
     }
+    let _ = crate::hooks::run_on_text_autoformat(s, text)?;
     if let Some((para, sel)) = typed
         && s.doc.para_at(&f) != Some(&para)
     {

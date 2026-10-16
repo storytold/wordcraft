@@ -2247,3 +2247,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+# File › Options › Add-ins
+	Add-ins	Додаци
+	No add-ins are installed.	Нема инсталираних додатака.
+	Each add-in stays off until you turn it on.	Сваки додатак остаје искључен док га не укључите.

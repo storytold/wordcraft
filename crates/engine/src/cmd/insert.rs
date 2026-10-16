@@ -50,7 +50,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.deleteBookmark", "Delete Bookmark", "Insert › Links", delete_bookmark).params(r#"{"name": string}"#),
         CommandSpec::new("insert.header", "Header", "Insert › Header & Footer", |s, v| header_footer(s, v, true)).params(r#"{"text"?: string, "preset"?: "blank|blankThree|title"}"#),
         CommandSpec::new("insert.footer", "Footer", "Insert › Header & Footer", |s, v| header_footer(s, v, false)).params(r#"{"text"?: string, "preset"?: "blank|blankThree|pageNumber"}"#),
-        CommandSpec::new("insert.pageNumber", "Page Number", "Insert › Header & Footer", page_number).params(r#"{"position"?: "top|bottom|current", "align"?: "left|center|right", "format"?: "x of y"}"#),
+        CommandSpec::new("insert.pageNumber", "Page Number", "Insert › Header & Footer", page_number).params(r#"{"position"?: "top|bottom|current", "align"?: "left|center|right", "format"?: "x of y", "prefix"?: string (text before the page number, e.g. appendix "A")}"#),
         // Pure: going into an existing header/footer changes nothing; one the page doesn't have yet
         // is made by the mutating `insert.createHeader`/`insert.createFooter` (undoable, refused in
         // a protected document).
@@ -740,6 +740,11 @@ fn page_number(s: &mut Session, v: &Value) -> CmdResult {
         _ => Align::Center,
     };
     let x_of_y = p::str(v, "format").is_some_and(|f| f.contains("of"));
+    let prefix_param = p::str(v, "prefix");
+    let prefix = prefix_param.unwrap_or("");
+    if prefix.chars().count() > 16 {
+        return Err(CmdError::Params("`prefix` is at most 16 characters".into()));
+    }
     let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
     if position == "current" {
         let props = s.typing_props();
@@ -754,18 +759,35 @@ fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     para.props.align = Some(align);
     para.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Clear, leader: Default::default() }]);
     if x_of_y {
-        para.insert_text(0, "Page  of ", &CharProps::default())?;
-        para.insert_object(5, field, &CharProps { bold: Some(true), ..Default::default() })?;
+        let page_pos = if prefix.is_empty() {
+            para.insert_text(0, "Page  of ", &CharProps::default())?;
+            5
+        } else {
+            para.insert_text(0, prefix, &CharProps::default())?;
+            prefix.len()
+        };
+        para.insert_object(page_pos, field, &CharProps { bold: Some(true), ..Default::default() })?;
+        if !prefix.is_empty() {
+            para.insert_text(para.len(), " of ", &CharProps::default())?;
+        }
         let end = para.len();
         para.insert_object(
             end,
             InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
             &CharProps { bold: Some(true), ..Default::default() },
         )?;
-    } else {
+    } else if prefix.is_empty() {
         para.insert_object(0, field, &CharProps::default())?;
+    } else {
+        para.insert_text(0, prefix, &CharProps::default())?;
+        para.insert_object(prefix.len(), field, &CharProps::default())?;
     }
     s.doc.set_story(StoryRef::Part(id), vec![para_block(para)])?;
+    if let Some(pfx) = prefix_param {
+        super::page::with_sect(s, |sect| {
+            sect.page_num_prefix = if pfx.is_empty() { None } else { Some(pfx.to_string()) };
+        })?;
+    }
     Ok(json!({"story": id}))
 }
 

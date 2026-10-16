@@ -2599,3 +2599,7 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+# File › Options › Add-ins
+	Add-ins	Complementos
+	No add-ins are installed.	No hay complementos instalados.
+	Each add-in stays off until you turn it on.	Cada complemento permanece desactivado hasta que lo active.

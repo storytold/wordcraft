@@ -534,6 +534,11 @@ pub struct Settings {
     /// comments and tracked changes are saved without `w:date`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub remove_date_time: bool,
+    /// Document variables (`w:docVars`, ECMA-376 §17.15.1.20): name/value pairs that Word and other
+    /// readers keep with the document. WordCraft also stores per-section properties that have no
+    /// `w:sectPr` slot here (see [`section::PAGE_NUM_PREFIX_DOCVAR`]); those are consumed on read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub doc_vars: Vec<(String, String)>,
 }
 
 /// A saved zoom: a percentage, or a fit mode (the percentage it last came to).
@@ -648,6 +653,7 @@ impl Default for Settings {
             zoom: None,
             remove_personal_info: false,
             remove_date_time: false,
+            doc_vars: Vec::new(),
         }
     }
 }
@@ -1012,6 +1018,13 @@ impl Document {
         let Some(bl) = self.story(s) else { return 0 };
         let mut counters = numbering::Counters::default();
         story_word_count_of(bl, &self.numbering, &self.styles, &mut counters, 0)
+    }
+
+    /// Every text-bearing story: the body, then each header, footer, footnote, endnote, comment
+    /// and text box, by part id. Use for an operation over the whole document; [`Document::counted_stories`]
+    /// is narrower (body plus the notes and text boxes it shows, for word counts).
+    pub fn text_stories(&self) -> Vec<StoryRef> {
+        std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k))).collect()
     }
 
     /// The body, then the text boxes, footnotes and endnotes it shows (nested ones too), in

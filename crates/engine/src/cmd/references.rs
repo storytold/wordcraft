@@ -560,8 +560,17 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>) -> Result<(), CmdE
         let shift = if pass == 0 { 0 } else { entries.len() };
         for (k, e) in entries.iter().enumerate() {
             let target = Path::top(e.path.last() + if e.path.last() > start { shift } else { 0 });
-            let page =
-                l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
+            let page = l
+                .caret(&Pos { story: StoryRef::Body, path: target, off: e.lead })
+                .and_then(|c| l.pages.get(c.page))
+                .map(|pg| {
+                    if let Some((_, sp)) = s.doc.sections().get(pg.section) {
+                        sp.format_page_number(pg.number)
+                    } else {
+                        super::page::sect(s).format_page_number(pg.number)
+                    }
+                })
+                .unwrap_or_else(|| "1".to_string());
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let text = if show_page { format!("{}{sep}{page}", e.text) } else { e.text.clone() };
             let props = CharProps { link: links.get(k).cloned().flatten(), ..Default::default() };
@@ -915,7 +924,8 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
         para.touch();
     }
     super::citations::update_citations(s)?;
-    update_toc(s)
+    update_toc(s)?;
+    crate::hooks::run_on_update_fields(s)
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,
@@ -1083,6 +1093,19 @@ mod tests {
             })
         });
         assert!(instr.is_some_and(|i| i.contains(r#"STYLEREF  "heading 1""#)));
+    }
+
+    #[test]
+    fn update_fields_runs_registered_hooks() {
+        static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        fn mark(_: &mut Session) -> Result<(), CmdError> {
+            CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
+        }
+        crate::hooks::register_on_update_fields(mark);
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("references.updateFields", &json!({})).unwrap();
+        assert!(CALLED.load(std::sync::atomic::Ordering::SeqCst));
     }
 
     /// #402: Custom Table of Contents settings become TOC switches, and updating honours them:

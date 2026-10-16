@@ -837,10 +837,14 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
 fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
     let Some(p) = s.doc.para(story, path) else { return Vec::new() };
     let runs = wordcraft_layout::para::proof_runs(&s.doc, p, None);
-    wordcraft_layout::para::paragraph_issues(p, &runs, &s.prefs.spelling(), true)
-        .into_iter()
-        .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
-        .collect()
+    wordcraft_layout::para::paragraph_issues(
+        p,
+        &runs,
+        &wordcraft_layout::ProofOptions { grammar: true, spelling: s.prefs.spelling(), module: s.module_en },
+    )
+    .into_iter()
+    .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
+    .collect()
 }
 
 /// The issue under a position.
@@ -880,7 +884,7 @@ fn next_issue(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 fn all_issues(s: &mut Session, _: &Value) -> CmdResult {
-    let mut out = Vec::new();
+    let mut out: Vec<Value> = s.lint_findings().to_vec();
     for path in s.doc.para_paths(StoryRef::Body) {
         for (a, b, i) in para_issues(s, StoryRef::Body, &path) {
             out.push(issue_json(s, &a, &b, &i));

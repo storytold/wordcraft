@@ -2630,3 +2630,7 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# File › Options › Add-ins
+	Add-ins	Надстройки
+	No add-ins are installed.	Надстройки не установлены.
+	Each add-in stays off until you turn it on.	Каждая надстройка выключена, пока вы её не включите.

@@ -2621,3 +2621,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# File › Options › Add-ins
+	Add-ins	Добавки
+	No add-ins are installed.	Няма инсталирани добавки.
+	Each add-in stays off until you turn it on.	Всяка добавка е изключена, докато не я включите.

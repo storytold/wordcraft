@@ -40,6 +40,7 @@ js-sys = "0.3"
 
 [dev-dependencies]
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+wordcraft-law = { workspace = true }
 zip = { workspace = true }
 
 [build-dependencies]

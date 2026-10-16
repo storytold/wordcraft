@@ -71,7 +71,7 @@ impl Default for Headless {
 impl Backend for Headless {
     fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
         let roots = self.roots.clone();
-        file_access::confine(roots.as_ref(), || self.answer(method, params))
+        file_access::invoke_automation(|| file_access::confine(roots.as_ref(), || self.answer(method, params)))
     }
     fn has_ui(&self) -> bool {
         false

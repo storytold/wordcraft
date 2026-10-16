@@ -2632,3 +2632,7 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# File › Options › Add-ins
+	Add-ins	Dodaci
+	No add-ins are installed.	Nema instaliranih dodataka.
+	Each add-in stays off until you turn it on.	Svaki dodatak ostaje isključen dok ga ne uključite.

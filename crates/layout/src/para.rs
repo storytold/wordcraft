@@ -2663,41 +2663,29 @@ fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLang {
 }
 
 /// Spelling and grammar issues in a paragraph, in order: each word in its run's language
-/// ([`wordcraft_proof::check_text_with`]: what spelling skips, and grammar only with `grammar`),
+/// ([`wordcraft_proof::check_text_with_module`]: what spelling skips, and grammar only with `grammar`),
 /// and none touching a run left unchecked.
-pub fn paragraph_issues(p: &Paragraph, runs: &[ProofRun], spelling: &wordcraft_proof::Options, grammar: bool) -> Vec<wordcraft_proof::Issue> {
+pub fn paragraph_issues(p: &Paragraph, runs: &[ProofRun], opts: &crate::ProofOptions) -> Vec<wordcraft_proof::Issue> {
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
     }
-    let text = proof_text(p);
+    let text = p.proof_text();
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
-    wordcraft_proof::check_text_with(&text, &spans, spelling, grammar).into_iter().filter(|i| !skip(i.start, i.end)).collect()
+    wordcraft_proof::check_text_with_module(&text, &spans, &opts.spelling, opts.grammar, opts.module)
+        .into_iter()
+        .filter(|i| !skip(i.start, i.end))
+        .collect()
 }
 
 /// Spelling and grammar issues in a paragraph as squiggles: (start, end, is grammar).
 fn proof_issues(p: &Paragraph, runs: &[ProofRun], opts: &crate::ProofOptions) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar)
-        .into_iter()
-        .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
-        .collect()
+    paragraph_issues(p, runs, opts).into_iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect()
 }
 
-/// Text for proofing with the same byte offsets: inline objects and tracked deletions become
-/// U+0001 bytes (neither words nor spaces).
+/// Text for proofing with the same byte offsets as paragraph storage ([`wordcraft_doc::Paragraph::proof_text`]).
 pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
-    let mut out = String::with_capacity(p.text.len());
-    for (i, c) in p.text.char_indices() {
-        let deleted = c == wordcraft_doc::para::OBJ || p.props_of_char(i).del.is_some();
-        if deleted {
-            for _ in 0..c.len_utf8() {
-                out.push('\u{1}');
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    p.proof_text()
 }
 
 #[cfg(test)]

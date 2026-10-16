@@ -65,7 +65,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            if (back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape)))) && app.leave_addin_page() {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
@@ -88,7 +88,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     if active { semibold(14.0) } else { medium(14.0) },
                     if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) },
                 );
-                if resp.clicked() {
+                // Leaving File › Options for another page lets an add-in's options page save first.
+                if resp.clicked() && (id == app.ui.backstage_page || app.leave_addin_page()) {
                     match id {
                         // A document without a file goes to the Save As page (as in Word) instead
                         // of `file.save`, which would also open the native Save As dialog.

@@ -2647,3 +2647,7 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+# File › Options › Add-ins
+	Add-ins	Tillägg
+	No add-ins are installed.	Inga tillägg är installerade.
+	Each add-in stays off until you turn it on.	Varje tillägg är avstängt tills du slår på det.

@@ -2628,3 +2628,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# File › Options › Add-ins
+	Add-ins	Bővítmények
+	No add-ins are installed.	Nincs telepített bővítmény.
+	Each add-in stays off until you turn it on.	Minden bővítmény ki van kapcsolva, amíg be nem kapcsolja.

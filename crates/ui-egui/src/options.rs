@@ -101,6 +101,7 @@ fn pane_label(id: &str) -> &'static str {
         "accessibility" => "Accessibility",
         "advanced" => "Advanced",
         "agents" => "Agents",
+        "addins" => "Add-ins",
         _ => "General",
     }
 }
@@ -110,12 +111,16 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(RichText::new(tl!("Options")).font(semibold(26.0)));
     ui.add_space(16.0);
-    let current = if PANES.contains(&app.ui.options_pane.as_str()) { app.ui.options_pane.clone() } else { "general".to_string() };
+    // The built-in panes, then a page for each add-in that is on and has one.
+    let addin_panes = app.addin_panes();
+    let mut panes: Vec<(String, String)> = PANES.iter().map(|id| (id.to_string(), tl!(pane_label(id)).to_string())).collect();
+    panes.extend(addin_panes);
+    let current = if panes.iter().any(|(id, _)| *id == app.ui.options_pane) { app.ui.options_pane.clone() } else { "general".to_string() };
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.set_width(170.0);
-            for id in PANES {
-                let label = tl!(pane_label(id));
+            for (id, label) in &panes {
+                let (id, label) = (id.as_str(), label.as_str());
                 let active = current == id;
                 let (r, resp) = ui.allocate_exact_size(vec2(170.0, 30.0), egui::Sense::click());
                 resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, label));
@@ -127,7 +132,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 let font = if active { semibold(14.0) } else { crate::theme::regular(14.0) };
                 // Long translations stay inside the row; WidgetInfo above keeps the full name.
                 ui.painter().with_clip_rect(r).text(egui::pos2(r.min.x + 12.0, r.center().y), egui::Align2::LEFT_CENTER, label, font, t.text);
-                if resp.clicked() {
+                if resp.clicked() && (current == id || app.leave_addin_page()) {
                     app.ui.options_pane = id.to_string();
                 }
             }
@@ -146,13 +151,19 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 "accessibility" => accessibility(app, ui),
                 "advanced" => advanced(app, ui),
                 "agents" => agents(ui),
+                "addins" => crate::addins::page(app, ui),
+                pane if pane.starts_with("addin:") => {
+                    let id = pane.trim_start_matches("addin:").to_string();
+                    app.with_addin(&id, |a, app| a.options_page(app, ui));
+                }
                 _ => general(app, ui),
             }
         });
     });
 }
 
-fn section(ui: &mut Ui, title: &str) {
+/// A section heading on an options page (add-in pages use it too).
+pub fn section(ui: &mut Ui, title: &str) {
     ui.add_space(6.0);
     ui.label(RichText::new(tl!(title)).font(semibold(15.0)));
     ui.add_space(2.0);

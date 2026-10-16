@@ -266,6 +266,9 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
             r.doc.last_section = r.read_section(s, &rels);
         }
     }
+    // Document variables can carry per-section properties (`w:sectPr` has no extension slot), so
+    // apply them once every section is known.
+    props::apply_section_doc_vars(&mut r.doc);
 
     let core = root_rels.by_type(rt::CORE).map(|x| x.target.clone()).unwrap_or_else(|| "docProps/core.xml".into());
     r.read_core(&core);
@@ -1131,6 +1134,23 @@ impl Reader<'_> {
                         _ => None,
                     };
                     s.zoom = Some(Zoom { percent, fit }).filter(|z| z.percent != 100 || z.fit.is_some());
+                }
+                // §17.15.1.20: document variables. WordCraft's per-section page-number prefixes
+                // ride here (see `wordcraft_doc::section::PAGE_NUM_PREFIX_DOCVAR`); others are kept
+                // so a save preserves them.
+                "w:docVars" => {
+                    for v in k.children("w:docVar") {
+                        if s.doc_vars.len() >= crate::MAX_DOC_VARS {
+                            break;
+                        }
+                        let (Some(name), Some(val)) = (v.attr("w:name"), v.attr("w:val")) else { continue };
+                        if name.is_empty() {
+                            continue;
+                        }
+                        let name: String = name.chars().take(crate::MAX_DOC_VAR_NAME).collect();
+                        let val: String = val.chars().take(crate::MAX_DOC_VAR_VALUE).collect();
+                        s.doc_vars.push((name, val));
+                    }
                 }
                 _ => {}
             }

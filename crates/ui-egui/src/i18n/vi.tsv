@@ -2672,3 +2672,7 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# File › Options › Add-ins
+	Add-ins	Phần bổ trợ
+	No add-ins are installed.	Chưa cài đặt phần bổ trợ nào.
+	Each add-in stays off until you turn it on.	Mỗi phần bổ trợ tắt cho đến khi bạn bật.

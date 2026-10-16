@@ -907,6 +907,23 @@ impl Paragraph {
         out
     }
 
+    /// Text for proofing with the same byte offsets as [`Self::text`]: inline objects and tracked
+    /// deletions become U+0001 bytes (neither words nor spaces), matching layout proofing.
+    pub fn proof_text(&self) -> String {
+        let mut out = String::with_capacity(self.text.len());
+        for (i, c) in self.text.char_indices() {
+            let deleted = c == OBJ || self.props_of_char(i).del.is_some();
+            if deleted {
+                for _ in 0..c.len_utf8() {
+                    out.push('\u{1}');
+                }
+            } else {
+                out.push(c);
+            }
+        }
+        out
+    }
+
     fn check(&self, off: usize) -> Result<()> {
         if off > self.text.len() || !self.text.is_char_boundary(off) {
             return Err(DocError::BadOffset(off));
@@ -1430,6 +1447,22 @@ mod tests {
         assert_eq!(p.runs.len(), 1);
         p.delete(0, 4).unwrap();
         assert!(p.runs.is_empty());
+    }
+
+    #[test]
+    fn proof_text_keeps_byte_offsets_with_fields() {
+        let mut p = Paragraph::with_text("The statue of limitations.", CharProps::default());
+        p.insert_object(
+            0,
+            InlineObject::Field { instr: "PAGE".into(), result: "99999".into(), locked: false, code: false, dirty: false, form: String::new() },
+            &CharProps::default(),
+        )
+        .unwrap();
+        assert_ne!(p.plain_text(), p.proof_text(), "plain text expands the field result");
+        let statue = p.text.find("statue").expect("statue in storage");
+        let proof = p.proof_text();
+        let issue_start = proof.find("statue").expect("statue in proof text");
+        assert_eq!(issue_start, statue, "proof_text offsets match paragraph storage");
     }
 
     #[test]

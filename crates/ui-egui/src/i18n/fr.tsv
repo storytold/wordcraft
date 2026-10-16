@@ -2240,3 +2240,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+# File › Options › Add-ins
+	Add-ins	Compléments
+	No add-ins are installed.	Aucun complément n’est installé.
+	Each add-in stays off until you turn it on.	Chaque complément reste désactivé jusqu’à ce que vous l’activiez.

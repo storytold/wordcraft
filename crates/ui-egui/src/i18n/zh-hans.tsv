@@ -2245,3 +2245,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# File › Options › Add-ins
+	Add-ins	加载项
+	No add-ins are installed.	未安装任何加载项。
+	Each add-in stays off until you turn it on.	每个加载项在你打开之前保持关闭。

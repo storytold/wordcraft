@@ -42,6 +42,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "picture" => &[("Pictures", PICTURES)],
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
+        "json" => &[("JSON", &["json"]), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
 }
@@ -67,6 +68,8 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+    /// Hand the picked path to the add-in `id` ([`crate::addins::AddIn::file_picked`]).
+    AddIn { id: String, tag: String },
 }
 
 /// What to do once Save As has written the document.
@@ -207,6 +210,9 @@ impl WordApp {
             AfterPick::Recipients => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
+            }
+            AfterPick::AddIn { id, tag } => {
+                self.with_addin(&id, |a, app| a.file_picked(app, &tag, picked)).unwrap_or_else(|| Ok(json!({"cancelled": true})))
             }
             AfterPick::ComparePath { revised } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };

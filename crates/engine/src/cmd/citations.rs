@@ -327,16 +327,32 @@ pub fn specs() -> Vec<CommandSpec> {
             if entry.is_empty() {
                 return Err(CmdError::Params("select a citation or give `entry`".into()));
             }
+            let category = match p::u64(v, "category") {
+                Some(c) if (1..=16).contains(&c) => Some(c as u8),
+                Some(_) => return Err(CmdError::Params("`category` is 1-16".into())),
+                None => None,
+            };
             let (_, b) = s.sel.ordered();
-            s.doc.insert_object(&b, InlineObject::Field { instr: format!("TA \\l \"{}\"", entry.replace('"', "")), result: String::new(), locked: false, dirty: false, code: false, form: String::new() }, &CharProps { hidden: Some(true), ..Default::default() })?;
+            s.doc.insert_object(&b, ta_field(&entry, category), &CharProps { hidden: Some(true), ..Default::default() })?;
             Ok(json!({"entry": entry}))
         })
-        .params(r#"{"entry"?: string}"#)
+        .params(r#"{"entry"?: string, "category"?: 1-16 (Word's categories: 1 Cases, 2 Statutes, 3 Other Authorities, 4 Rules, 5 Treatises, 6 Regulations, 7 Constitutional Provisions)}"#)
         .key(super::non_mac("Alt+Shift+I")),
-        CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", |s, _| {
-            generated_list(s, "TOA", "Table of Authorities")?;
+        CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", |s, v| {
+            let mut instr = String::from("TOA");
+            match p::u64(v, "category") {
+                Some(c) if (1..=16).contains(&c) => instr.push_str(&format!(" \\c \"{c}\"")),
+                Some(_) => return Err(CmdError::Params("`category` is 1-16".into())),
+                None => {}
+            }
+            if p::bool(v, "passim").unwrap_or(false) {
+                instr.push_str(" \\p");
+            }
+            let title: String = p::str(v, "title").unwrap_or("Table of Authorities").chars().filter(|c| !c.is_control()).take(255).collect();
+            generated_list(s, &instr, &title)?;
             sel_result(s)
-        }),
+        })
+        .params(r#"{"category"?: 1-16 (TOA \c: only citations marked with that category), "passim"?: bool (TOA \p: "passim" for an authority cited on five or more pages), "title"?: string}"#),
         CommandSpec::new("references.updateAuthorities", "Update Table", "References › Table of Authorities", |s, _| {
             update_generated(s)?;
             sel_result(s)
@@ -682,6 +698,55 @@ fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// A citation mark (Word's `TA` field) for `entry`, in `category` (TA `\c`) when given. The
+/// field is hidden text, as References › Mark Citation inserts it.
+pub fn ta_field(entry: &str, category: Option<u8>) -> InlineObject {
+    let entry = entry.replace('"', "");
+    let instr = match category {
+        Some(c) => format!("TA \\l \"{entry}\" \\c {c}"),
+        None => format!("TA \\l \"{entry}\""),
+    };
+    InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() }
+}
+
+/// The value of a field switch (`\c "4"` or `\c 4` → `4`), if the instruction has it.
+fn switch_value(instr: &str, switch: char) -> Option<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in instr.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                if !quoted {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    let want = format!("\\{switch}");
+    let i = tokens.iter().position(|t| t.eq_ignore_ascii_case(&want))?;
+    tokens.get(i + 1).cloned()
+}
+
+/// Whether the field instruction has a switch (`\p`).
+fn has_switch(instr: &str, switch: char) -> bool {
+    let want = format!("\\{switch}");
+    instr.split_whitespace().any(|t| t.eq_ignore_ascii_case(&want))
+}
+
+/// Pages at which a table of authorities with `\p` prints "passim" instead (Word: five).
+const PASSIM_PAGES: usize = 5;
+
 /// Generated lists (BIBLIOGRAPHY, INDEX, table of figures, TOA): a heading paragraph holding
 /// the field, then entry paragraphs marked with the "GeneratedEntry" style family.
 pub(crate) fn generated_list(s: &mut Session, instr: &str, title: &str) -> Result<(), CmdError> {
@@ -711,7 +776,9 @@ fn list_kind(p: &Paragraph) -> Option<String> {
     })
 }
 
-const ENTRY_STYLE: &str = "ListEntry";
+/// The paragraph style of generated list entries (bibliography, index, table of authorities
+/// lines); [`update_generated`] replaces every paragraph of this style after a list's field.
+pub const ENTRY_STYLE: &str = "ListEntry";
 
 /// Rebuild every generated list.
 pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
@@ -783,6 +850,11 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             .filter_map(|(k, i)| s.doc.sources.get(i).map(|x| (entry(x, st.name, k.saturating_add(1)), !st.numbered())))
             .collect();
     }
+    // A TOA with `\c` lists only the citations marked with that category (a mark without one is
+    // in category 1, as Word's are).
+    let toa_category = kind.starts_with("TOA").then(|| switch_value(kind, 'c')).flatten();
+    let in_category = |ta: &str| toa_category.as_deref().is_none_or(|c| switch_value(ta, 'c').as_deref().unwrap_or("1") == c);
+    let passim = kind.starts_with("TOA") && has_switch(kind, 'p');
     // Collect marks with positions.
     let mut marks: Vec<(String, Pos)> = Vec::new();
     let caption_label = kind.split('"').nth(1).unwrap_or("Figure").to_string();
@@ -798,7 +870,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                 let t = instr.trim_start();
                 let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
-                if t.starts_with(want) {
+                if t.starts_with(want) && in_category(t) {
                     let e = t.split('"').nth(1).unwrap_or("").to_string();
                     marks.push((e, Pos { story: StoryRef::Body, path: path.clone(), off }));
                 }
@@ -820,7 +892,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             for off in p.object_offsets() {
                 if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                     let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
-                    if instr.trim_start().starts_with(want) {
+                    if instr.trim_start().starts_with(want) && in_category(instr.trim_start()) {
                         v.push(Pos { story: StoryRef::Body, path: path.clone(), off });
                     }
                 }
@@ -856,7 +928,11 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 out.push((l, false));
             }
         }
-        let list = pages.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+        let list = if passim && pages.len() >= PASSIM_PAGES {
+            "passim".to_string()
+        } else {
+            pages.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ")
+        };
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out
@@ -1121,6 +1197,53 @@ mod tests {
         s.run("references.updateAuthorities", &json!({})).unwrap();
         let after = s.doc.plain_text(StoryRef::Body);
         assert!(after.matches("Doe v. Roe").count() > t.matches("Doe v. Roe").count(), "{after}");
+    }
+
+    /// A table of authorities per category (TOA `\c`) lists only that category's marks, and `\p`
+    /// prints "passim" for an authority cited on five or more pages, as Word does.
+    #[test]
+    fn table_of_authorities_categories_and_passim() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Smith v. Jones\nSection 1.010\nTail"));
+        s.run("select.text", &json!({"text": "Smith v. Jones"})).unwrap();
+        s.run("references.markCitation", &json!({"category": 1})).unwrap();
+        s.run("select.text", &json!({"text": "Section 1.010"})).unwrap();
+        s.run("references.markCitation", &json!({"category": 2})).unwrap();
+        assert!(s.run("references.markCitation", &json!({"entry": "x", "category": 17})).is_err());
+        assert!(fields(&s).iter().any(|f| f.0 == "TA \\l \"Smith v. Jones\" \\c 1"), "{:?}", fields(&s));
+        for k in 0..5 {
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("text.pageBreak", &json!({})).unwrap();
+            s.run("text.newParagraph", &json!({})).unwrap();
+            s.run("text.insert", &json!({"text": format!("Again {k}")})).unwrap();
+        }
+        for k in 0..5 {
+            s.run("select.text", &json!({"text": format!("Again {k}")})).unwrap();
+            s.run("references.markCitation", &json!({"entry": "Smith v. Jones", "category": 1})).unwrap();
+        }
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.tableOfAuthorities", &json!({"category": 1, "passim": true, "title": "Cases"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.tableOfAuthorities", &json!({"category": 2, "title": "Statutes"})).unwrap();
+        assert!(fields(&s).iter().any(|f| f.0 == "TOA \\c \"1\" \\p"), "{:?}", fields(&s));
+        let t = s.doc.plain_text(StoryRef::Body);
+        assert!(t.contains("Smith v. Jones\tpassim"), "{t}");
+        assert!(t.contains("Section 1.010\t1"), "{t}");
+        let cases = t.find("Cases").unwrap();
+        let statutes = t.find("Statutes").unwrap();
+        let sec = t.rfind("Section 1.010\t").unwrap();
+        assert!(sec > statutes && statutes > cases, "statutes listed under Statutes only: {t}");
+        assert!(!t[cases..statutes].contains("Section 1.010"), "{t}");
+        assert!(s.run("references.tableOfAuthorities", &json!({"category": 0})).is_err());
+    }
+
+    #[test]
+    fn field_switch_values() {
+        assert_eq!(switch_value(r#"TOA \h \c "4" \p"#, 'c').as_deref(), Some("4"));
+        assert_eq!(switch_value(r#"TA \l "Doe, 1 U.S. 1 \c" \c 2"#, 'c').as_deref(), Some("2"));
+        assert_eq!(switch_value("TOA", 'c'), None);
+        assert!(has_switch(r#"TOA \c "1" \p"#, 'p') && !has_switch(r#"TOA \c "1""#, 'p'));
     }
 
     /// Field instructions and results in the body, in order.

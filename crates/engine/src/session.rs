@@ -23,7 +23,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, Path, Pos, StoryRef, Table};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, ViewMode};
 
-use crate::{CmdError, Registry};
+use crate::{CmdError, CommandSpec, Registry};
 
 /// A selection: anchor (where it started) and focus (where the caret is).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -466,6 +466,13 @@ pub struct Session {
     edit_marks: Vec<Pos>,
     /// How many Go Back presses since the last edit (which place comes next).
     go_back_step: usize,
+    /// Document-level lint findings by source (each module check keeps its own; Review ›
+    /// Proofing reads them all).
+    lint_findings: std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+    /// Commands to run before a PDF export (`(id, params)`); modules register checks here.
+    export_check_commands: Vec<(String, serde_json::Value)>,
+    /// English spelling and grammar supplements from optional modules (LawCraft when on).
+    pub module_en: wordcraft_proof::ModuleEn,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).
@@ -525,6 +532,11 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Optional modules the user turned on, by module id: off until the user switches one on
+    /// (File › Options › Add-ins). The core ships none of its own: a module brings its commands
+    /// and data (`wordcraft-law` is `law`), and the engine only reads this switch.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub modules: std::collections::BTreeMap<String, bool>,
 }
 
 impl Default for Prefs {
@@ -546,11 +558,18 @@ impl Default for Prefs {
             ignore_internet: true,
             detect_language: true,
             autocorrect: Default::default(),
+            modules: Default::default(),
         }
     }
 }
 
 impl Prefs {
+    /// Whether an optional module is turned on ([`Prefs::modules`]): a module is off until the
+    /// user switches it on (File › Options › Add-ins).
+    pub fn module_enabled(&self, id: &str) -> bool {
+        self.modules.get(id).copied().unwrap_or(false)
+    }
+
     /// What the spelling check skips.
     pub fn spelling(&self) -> wordcraft_proof::Options {
         wordcraft_proof::Options {
@@ -585,6 +604,36 @@ impl Session {
         {
             log::warn!("custom dictionary: save failed: {e}");
         }
+    }
+
+    /// Whether an optional module is turned on ([`Prefs::modules`], `law` for LawCraft): a
+    /// module is off until the user switches it on, and a host installs its commands only then.
+    pub fn module_enabled(&self, id: &str) -> bool {
+        self.prefs.module_enabled(id)
+    }
+
+    /// Install commands an optional module supplies (`law.profiles.apply` from LawCraft, say).
+    /// The host calls this once at start-up, when the module is turned on, and every way in
+    /// reaches them from then on: the ribbon, the command palette, shortcuts, the CLI, the JSON
+    /// control channel and the MCP server all dispatch by id. A command whose id the core
+    /// already has is skipped, so a module can never shadow core behaviour. Returns how many
+    /// commands were added.
+    ///
+    /// Nothing here knows what any module does: the engine holds the specs and the switch, the
+    /// module brings the behaviour.
+    pub fn install_commands(&mut self, specs: Vec<CommandSpec>) -> usize {
+        let mut all = self.registry.all().to_vec();
+        let mut added = 0;
+        for spec in specs {
+            if self.registry.get(spec.id).is_some() {
+                log::warn!("command `{}` is already registered; the module's is ignored", spec.id);
+                continue;
+            }
+            all.push(spec);
+            added += 1;
+        }
+        self.registry = Arc::new(crate::Registry::new(all));
+        added
     }
 
     pub fn new(doc: Document) -> Self {
@@ -650,7 +699,107 @@ impl Session {
             widened: None,
             edit_marks: Vec::new(),
             go_back_step: 0,
+            lint_findings: Default::default(),
+            export_check_commands: Vec::new(),
+            module_en: wordcraft_proof::ModuleEn::default(),
         }
+    }
+
+    /// Document-level lint findings for Review › Proofing (`review.issues`): every source's, in
+    /// source order, at most [`crate::lint::MAX_FINDINGS`].
+    pub fn lint_findings(&self) -> Vec<serde_json::Value> {
+        self.lint_findings.values().flatten().take(crate::lint::MAX_FINDINGS).cloned().collect()
+    }
+
+    /// The findings one source stored last.
+    pub fn lint_findings_of(&self, source: &str) -> &[serde_json::Value] {
+        self.lint_findings.get(source).map_or(&[], Vec::as_slice)
+    }
+
+    /// Replace one source's document-level lint findings (a module's check command calls this
+    /// with its own `source`, so separate checks don't overwrite each other).
+    pub fn set_lint_findings(&mut self, source: &str, findings: Vec<crate::lint::Finding>) {
+        let json: Vec<serde_json::Value> =
+            findings.into_iter().take(crate::lint::MAX_FINDINGS).map(|f| crate::lint::finding_json(&f, crate::cmd::pos_json)).collect();
+        if json.is_empty() {
+            self.lint_findings.remove(source);
+        } else {
+            self.lint_findings.insert(source.to_string(), json);
+        }
+    }
+
+    /// Forget every source whose name starts with `prefix` (a module turned off).
+    pub fn clear_lint_findings(&mut self, prefix: &str) {
+        self.lint_findings.retain(|k, _| !k.starts_with(prefix));
+    }
+
+    /// Keep only the export checks whose command id passes `keep` (a module turned off drops its own).
+    pub fn retain_export_check_commands(&mut self, keep: impl Fn(&str) -> bool) {
+        self.export_check_commands.retain(|(id, _)| keep(id));
+    }
+
+    /// Remove module commands by id (a module turned off). Core commands are never removed: a
+    /// module can't have installed one ([`Session::install_commands`] skips them). Returns how
+    /// many were removed.
+    pub fn uninstall_commands(&mut self, ids: &[&str]) -> usize {
+        let core = crate::cmd::registry();
+        let all: Vec<CommandSpec> = self.registry.all().iter().filter(|c| !ids.contains(&c.id) || core.get(c.id).is_some()).cloned().collect();
+        let removed = self.registry.all().len() - all.len();
+        if removed > 0 {
+            self.registry = Arc::new(crate::Registry::new(all));
+        }
+        removed
+    }
+
+    /// Commands run before a save or export; each command's result may include a `findings` array.
+    pub fn set_export_check_commands(&mut self, commands: Vec<(String, serde_json::Value)>) {
+        self.export_check_commands = commands;
+    }
+
+    /// Run [`export_check_commands`] with the export's own options and target `format` (a lower-case
+    /// extension such as `pdf`, `docx`, `png`) and return their findings. Each check stores its own
+    /// findings; a check that fails outright is stored as a finding of its own source.
+    /// Each command's parameters carry the actual `markup` option and the output `format`, so a
+    /// check that re-exports the document (such as `textSearchablePdf`) verifies what is being
+    /// written and only the checks that apply to that format run.
+    pub fn run_export_checks(&mut self, opts: &crate::io::ExportOptions, format: &str) -> Vec<serde_json::Value> {
+        let cmds = self.export_check_commands.clone();
+        let mut all = Vec::new();
+        for (id, params) in cmds {
+            let mut params = params;
+            if let Some(obj) = params.as_object_mut() {
+                obj.insert("markup".into(), serde_json::json!(opts.markup));
+                obj.insert("format".into(), serde_json::json!(format));
+            }
+            match self.run(&id, &params) {
+                Ok(v) => {
+                    // A check that failed on an earlier export and runs now drops that failure.
+                    self.set_lint_findings(&format!("export:{id}"), Vec::new());
+                    if let Some(arr) = v.get("findings").and_then(serde_json::Value::as_array) {
+                        for f in arr {
+                            all.push(f.clone());
+                            if all.len() >= crate::lint::MAX_FINDINGS {
+                                break;
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    // The same shape as any other lint finding, so Review › Proofing and
+                    // `review.issues` can show a failed check beside the rest.
+                    let finding = crate::lint::Finding::error(id.clone(), e.to_string());
+                    all.push(crate::lint::finding_json(&finding, crate::cmd::pos_json));
+                    self.set_lint_findings(&format!("export:{id}"), vec![finding]);
+                    if all.len() >= crate::lint::MAX_FINDINGS {
+                        break;
+                    }
+                }
+            }
+            if all.len() >= crate::lint::MAX_FINDINGS {
+                break;
+            }
+        }
+        all
     }
 
     /// Remember the caret as the place of an edit, for Go Back. Edits in the same paragraph as
@@ -799,7 +948,7 @@ impl Session {
             comment_balloons: false,
             field_codes: self.view.field_codes,
             outline: outline.clone(),
-            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
+            proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling(), module: self.module_en },
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
         self.layout = Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral));
@@ -1012,6 +1161,9 @@ impl Session {
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
         self.reset_history();
+        self.lint_findings.clear();
+        self.export_check_commands.clear();
+        crate::hooks::run_on_document_loaded(self);
         self.touch();
         self.dirty = false;
         self.relayout();
@@ -1103,6 +1255,9 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            lint_findings: _,
+            export_check_commands: _,
+            module_en: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

@@ -60,6 +60,13 @@ pub const WRONG_PASSWORD: &str = "the password is incorrect";
 /// transform, so this rides in the extension list Word and other readers skip.
 pub(crate) const CANVAS_SPIN_EXT: &str = "urn:wordcraft:canvas-xfrm";
 
+/// Most `w:docVars` document variables read from or written to a file (`w:settings/w:docVars`).
+pub const MAX_DOC_VARS: usize = 4096;
+/// Longest `w:docVar` name kept (ECMA-376 §17.15.1.20: at most 255 characters).
+pub const MAX_DOC_VAR_NAME: usize = 255;
+/// Longest `w:docVar` value kept.
+pub const MAX_DOC_VAR_VALUE: usize = 4096;
+
 /// Read a package that may be password-protected ([`is_encrypted`]): it is decrypted with
 /// `password` first. An encrypted package without a password gives
 /// [`DocxError::PasswordRequired`]; a wrong one, [`DocxError::WrongPassword`].

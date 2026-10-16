@@ -2624,3 +2624,7 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# File › Options › Add-ins
+	Add-ins	Doplňky
+	No add-ins are installed.	Nejsou nainstalovány žádné doplňky.
+	Each add-in stays off until you turn it on.	Každý doplněk zůstane vypnutý, dokud ho nezapnete.
