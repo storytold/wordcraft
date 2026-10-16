@@ -7232,3 +7232,77 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+fn style_size(s: &Session, id: &str) -> f32 {
+    s.doc.styles.resolve_char(Some(id), &Default::default()).size
+}
+
+#[test]
+fn scale_font_sizes_adds_points_to_every_style() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let ids: Vec<String> = s.doc.styles.styles.iter().map(|x| x.id.clone()).collect();
+    let before: Vec<f32> = ids.iter().map(|i| style_size(&s, i)).collect();
+    let base = s.doc.styles.resolve_char(None, &Default::default()).size;
+    let runs = serde_json::to_string(&s.doc.body).unwrap();
+    run(&mut s, "design.scaleFontSizes", json!({"delta": 2}));
+    // Every style (explicit or inherited) grows by exactly 2, once.
+    for (i, b) in ids.iter().zip(&before) {
+        assert_eq!(style_size(&s, i), b + 2.0, "{i}");
+    }
+    assert_eq!(s.doc.styles.resolve_char(None, &Default::default()).size, base + 2.0);
+    assert_eq!(serde_json::to_string(&s.doc.body).unwrap(), runs, "runs untouched");
+    run(&mut s, "edit.undo", json!({}));
+    for (i, b) in ids.iter().zip(&before) {
+        assert_eq!(style_size(&s, i), *b, "undo {i}");
+    }
+}
+
+#[test]
+fn scale_font_sizes_percent_and_clamp_and_errors() {
+    let mut s = Session::new(crate::sample::sample_document());
+    let n = style_size(&s, "Normal");
+    run(&mut s, "design.scaleFontSizes", json!({"percent": 10}));
+    assert_eq!(style_size(&s, "Normal"), (n * 1.1 * 2.0).round() / 2.0);
+    run(&mut s, "design.scaleFontSizes", json!({"delta": -500}));
+    assert_eq!(style_size(&s, "Normal"), 1.0);
+    for bad in [
+        json!({}),
+        json!({"delta": 1e9}),
+        json!({"percent": -100}),
+        json!({"percent": 1e9}),
+        json!({"delta": "x"}),
+        json!({"delta": 0}),
+        json!({"percent": 0}),
+        json!({"delta": 1, "percent": 10}),
+    ] {
+        assert!(s.run("design.scaleFontSizes", &bad).is_err(), "{bad}");
+    }
+}
+
+#[test]
+fn scale_font_sizes_reaches_char_table_and_cs_sizes_and_unset_default() {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Style, StyleKind, styles::TablePart};
+    let mut s = s();
+    s.doc.styles.default_chr.size = None;
+    s.doc.styles.default_chr.size_cs = Some(10.0);
+    let mut ch = Style { id: "Big".into(), name: "Big".into(), kind: StyleKind::Character, ..Default::default() };
+    ch.chr.size = Some(20.0);
+    ch.chr.size_cs = Some(22.0);
+    let mut tb = Style { id: "Grid".into(), name: "Grid".into(), kind: StyleKind::Table, ..Default::default() };
+    let mut parts = wordcraft_doc::styles::TableStyleParts::default();
+    parts.header_chr.size = Some(14.0);
+    parts.regions.entry(TablePart::Band2Horz).or_default().chr.size = Some(8.0);
+    tb.table = Some(parts);
+    s.doc.styles.styles.extend([ch, tb]);
+    run(&mut s, "design.scaleFontSizes", json!({"delta": 2}));
+    let st = &s.doc.styles;
+    assert_eq!(st.default_chr.size, Some(13.0), "unset default is 11 pt, made explicit");
+    assert_eq!(st.default_chr.size_cs, Some(12.0));
+    let big = CharProps { style: Some("Big".into()), ..Default::default() };
+    assert_eq!(st.resolve_char(None, &big).size, 22.0);
+    assert_eq!(st.resolve_char(None, &big).size_cs, 24.0);
+    let grid = st.styles.iter().find(|x| x.id == "Grid").and_then(|x| x.table.as_ref()).unwrap();
+    assert_eq!(grid.header_chr.size, Some(16.0));
+    assert_eq!(grid.regions.get(&TablePart::Band2Horz).unwrap().chr.size, Some(10.0));
+}

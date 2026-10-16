@@ -1,7 +1,7 @@
 //! Design tab: themes, style sets, colours, fonts, paragraph spacing, watermark, page colour, borders.
 
 use serde_json::{Value, json};
-use wordcraft_doc::props::{Border, BorderStyle, Borders, LineSpacing, Rgb, TextColor};
+use wordcraft_doc::props::{Border, BorderStyle, Borders, CharProps, LineSpacing, Rgb, TextColor};
 use wordcraft_doc::{Watermark, styles};
 
 use super::sel_result;
@@ -67,6 +67,8 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"name": "default|basic|lines|shaded|casual|centered|minimalist|title"}"#),
         CommandSpec::new("design.paragraphSpacing", "Paragraph Spacing", "Design › Document Formatting", para_spacing)
             .params(r#"{"value": "default|none|compact|tight|open|relaxed|double"}"#),
+        CommandSpec::new("design.scaleFontSizes", "Scale Font Sizes", "Design › Document Formatting", scale_font_sizes)
+            .params(r#"{"delta": pt (-1638..1638, not 0) | "percent": number (-99..1000, not 0; 10 = +10%)} (exactly one)"#),
         CommandSpec::new("design.watermark", "Watermark", "Design › Page Background", watermark)
             .params(r#"{"text"?: string, "remove"?: bool, "diagonal"?: bool, "color"?: "RRGGBB"}"#),
         CommandSpec::new("design.pageColor", "Page Color", "Design › Page Background", |s, v| {
@@ -193,6 +195,42 @@ fn para_spacing(s: &mut Session, v: &Value) -> CmdResult {
     s.doc.styles.default_para.space_before = Some(before);
     s.doc.styles.default_para.space_after = Some(after);
     s.doc.styles.default_para.line_spacing = Some(LineSpacing::Multiple(line));
+    sel_result(s)
+}
+
+/// Grow or shrink every style's font size at once. Only explicit style sizes change (including
+/// table style parts); styles that inherit one (via `based_on` or the defaults) follow, and runs
+/// keep their own direct formatting.
+fn scale_font_sizes(s: &mut Session, v: &Value) -> CmdResult {
+    let delta = p::f32(v, "delta");
+    let percent = p::f32(v, "percent");
+    if delta.is_some() == percent.is_some() {
+        return Err(CmdError::Params("give exactly one of `delta` (points) or `percent`".into()));
+    }
+    if delta.is_some_and(|d| !(-1638.0..=1638.0).contains(&d) || d == 0.0) || percent.is_some_and(|x| !(-99.0..=1000.0).contains(&x) || x == 0.0) {
+        return Err(CmdError::Params("`delta` must be non-zero within ±1638 pt and `percent` non-zero within -99..1000".into()));
+    }
+    let factor = 1.0 + percent.unwrap_or(0.0) / 100.0;
+    let scale = |size: f32| ((size * factor + delta.unwrap_or(0.0)).clamp(1.0, 1638.0) * 2.0).round() / 2.0;
+    let scale_chr = |c: &mut CharProps| {
+        c.size = c.size.map(scale);
+        c.size_cs = c.size_cs.map(scale);
+    };
+    let st = &mut s.doc.styles;
+    // An unset document default resolves to the fallback size; make it explicit so inheriting styles follow.
+    st.default_chr.size = Some(scale(st.default_chr.size.unwrap_or(styles::DEFAULT_FONT_SIZE)));
+    st.default_chr.size_cs = st.default_chr.size_cs.map(scale);
+    for style in &mut st.styles {
+        scale_chr(&mut style.chr);
+        if let Some(t) = style.table.as_mut() {
+            for c in [&mut t.header_chr, &mut t.band_chr, &mut t.first_col_chr, &mut t.last_col_chr, &mut t.total_chr, &mut t.col_band_chr] {
+                scale_chr(c);
+            }
+            for part in t.regions.values_mut() {
+                scale_chr(&mut part.chr);
+            }
+        }
+    }
     sel_result(s)
 }
 

@@ -445,6 +445,8 @@ impl Default for StyleSheet {
 /// The default heading colour.
 pub const HEADING_BLUE: Rgb = Rgb(0x0F, 0x47, 0x61);
 /// Default body/heading fonts (theme minor/major). Substituted by layout when not installed.
+/// Font size, points, of text no style or default gives one.
+pub const DEFAULT_FONT_SIZE: f32 = 11.0;
 pub const BODY_FONT: &str = "Aptos";
 pub const HEADING_FONT: &str = "Aptos Display";
 
