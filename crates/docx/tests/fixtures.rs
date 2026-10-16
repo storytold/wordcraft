@@ -589,6 +589,58 @@ fn vml_image_and_inline_drawing() {
     assert_eq!(d.media.get("pic.png").unwrap().as_slice(), png);
 }
 
+/// A picture with DrawingML's `a:alphaModFix` (Picture Format › Transparency) is faded: its
+/// alpha is multiplied into the pixels and the result kept as a PNG under its own key, so every
+/// renderer draws it faded without a new path. The original bytes stay. Two pictures of the same
+/// file at the same fade share the faded copy; one that can't be decoded is drawn opaque.
+#[test]
+fn alpha_mod_fix_fades_the_picture() {
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(2, 2, image::Rgba([255, 0, 0, 255])))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let pic = |blip: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="635000"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdImg">{blip}</a:blip></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>"#
+        )
+    };
+    let body = format!(
+        "<w:p>{}{}{}{}</w:p>",
+        pic(r#"<a:alphaModFix amt="25000"/>"#),
+        pic(""),
+        pic(r#"<a:alphaModFix amt="25000"/>"#),
+        pic(r#"<a:alphaModFix amt="100000"/>"#)
+    );
+    let doc = format!(r#"<w:document {W_NS}><w:body>{body}</w:body></w:document>"#);
+    let r = rels(&[("rIdImg", "image", "media/pic.png")]);
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", r.as_bytes()),
+        ("word/media/pic.png", &png),
+    ]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let media: Vec<&str> =
+        paras(&d)[0].objects.iter().map(|o| if let InlineObject::Image { media, .. } = o { media.as_str() } else { "?" }).collect();
+    assert_eq!(media, ["pic_a25000.png", "pic.png", "pic_a25000.png", "pic.png"]);
+    assert_eq!(d.media.get("pic.png").unwrap().as_slice(), &png[..]);
+    let faded = image::load_from_memory(d.media.get("pic_a25000.png").unwrap()).unwrap().into_rgba8();
+    assert_eq!((faded.width(), faded.height()), (2, 2));
+    assert_eq!(faded.get_pixel(0, 0).0, [255, 0, 0, 64]);
+    // Not a picture: drawn as it is.
+    let not_png: &[u8] = b"not a picture";
+    let bytes = zip(&[
+        ("_rels/.rels", ROOT_RELS.as_bytes()),
+        ("word/document.xml", doc.as_bytes()),
+        ("word/_rels/document.xml.rels", r.as_bytes()),
+        ("word/media/pic.png", not_png),
+    ]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let Some(InlineObject::Image { media, .. }) = paras(&d)[0].objects.first() else { panic!() };
+    assert_eq!(media, "pic.png");
+    assert_eq!(d.media.len(), 1);
+}
+
 #[test]
 fn chart_and_diagram_drawings_are_graphic_objects() {
     // A diagram's data holds a blip: the URI decides first, so no picture is read from it.

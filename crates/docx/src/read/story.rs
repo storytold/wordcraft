@@ -1142,6 +1142,11 @@ impl Reader<'_> {
         let blip = pic.find("a:blip")?;
         float.set_spin(xfrm_spin(pic.find("pic:spPr")));
         let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        // `a:alphaModFix amt="10000"`: the picture at 10 % opacity (Picture Format › Transparency).
+        let media = match blip.child("a:alphaModFix").and_then(|a| a.attr("amt")).and_then(int) {
+            Some(amt) => self.faded_media(&media, amt),
+            None => media,
+        };
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {
