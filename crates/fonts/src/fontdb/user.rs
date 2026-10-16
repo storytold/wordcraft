@@ -245,10 +245,13 @@ impl FontDb {
 
     /// Add the fonts a document embeds (#1171) for this run: not recorded as user fonts, never
     /// stored. Faces already available are kept. Lookups made while the family was missing are
-    /// forgotten ([`FontDb::generation`]), so text set in it now resolves to it. Returns how many
-    /// faces were added.
-    pub fn add_document_fonts(&self, files: Vec<Vec<u8>>) -> usize {
-        let added = self.add_fonts(files);
+    /// forgotten ([`FontDb::generation`]), so text set in it now resolves to it. Each file comes
+    /// with the name the document's font table gives it, which its faces answer to as well: Word
+    /// embeds a subset ("embed only the characters used") under a made-up family
+    /// (`___WRD_EMBED_SUB_46`), and the text asks for it by the table's name (#2240). Returns how
+    /// many faces were added.
+    pub fn add_document_fonts(&self, files: Vec<(Vec<u8>, String)>) -> usize {
+        let added = self.add_fonts(files.into_iter().map(|(data, name)| (data, Some(name))).collect());
         if added > 0 {
             self.fonts_changed();
         }

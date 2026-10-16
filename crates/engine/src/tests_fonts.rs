@@ -174,3 +174,21 @@ fn fonts_embedded_in_a_docx_lay_out_its_text() {
         assert!((x - mono).abs() < 0.01, "{family}: measured with the embedded font: {x} vs {mono} (missing {missing})");
     }
 }
+
+/// A font Word embeds as a subset ("embed only the characters used") goes by a made-up family
+/// inside (`___WRD_EMBED_SUB_46`), and the text asks for it by the font table's name
+/// (`OBRBWW+Century Schoolbook`): the text is measured with it all the same (#2240). It fell back
+/// to a substitute, as if nothing were embedded.
+#[test]
+fn a_subset_font_word_embeds_lays_out_text_set_in_its_table_name() {
+    const TEXT: &str = "illicit little lilies fill tiny jill";
+    const FAMILY: &str = "QWERTY+JetBrains Sub";
+    let end_x =
+        |bytes: &[u8]| Session::new(crate::io::open_bytes("e.docx", bytes).unwrap()).layout().caret_on(&Pos::body(0, TEXT.len()), 0).unwrap().x;
+    let mono = end_x(&docx_embedding("JetBrains Mono", None, TEXT));
+    let missing = end_x(&docx_embedding(FAMILY, None, TEXT));
+    assert!((missing - mono).abs() > 1.0, "not embedded, the text falls back: {missing} vs {mono}");
+    let subset = renamed("JetBrainsMono-Regular.ttf", "JetBrains Mono", "___WRD_EMBED_7");
+    let x = end_x(&docx_embedding(FAMILY, Some((&subset, "{6A0E3B57-1C2D-4E8F-9A7B-3D5C1E0F2B64}")), TEXT));
+    assert!((x - mono).abs() < 0.01, "measured with the embedded subset: {x} vs {mono} (missing {missing})");
+}

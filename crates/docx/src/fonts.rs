@@ -14,10 +14,20 @@ const MAX_FONTS: usize = 64;
 /// The font table's references to embedded font files, one per style.
 const EMBEDS: [&str; 4] = ["w:embedRegular", "w:embedBold", "w:embedItalic", "w:embedBoldItalic"];
 
+/// A font file a document embeds, and the name its font table gives the font: the name the text
+/// asks for, which a subset Word embeds doesn't carry inside (#2240).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EmbeddedFont {
+    /// `w:font/@w:name`.
+    pub name: String,
+    /// The font file, de-obfuscated.
+    pub data: Vec<u8>,
+}
+
 /// The font files `doc`'s font table embeds, de-obfuscated, in table order. Not checked to be
 /// fonts: that is up to the font database. Empty for a document read from anything but a package
 /// with a font table.
-pub fn embedded_fonts(doc: &Document) -> Vec<Vec<u8>> {
+pub fn embedded_fonts(doc: &Document) -> Vec<EmbeddedFont> {
     let Some(table) = doc.passthrough.get(FONT_TABLE_PART).and_then(|b| crate::xml::parse(b).ok()) else {
         return Vec::new();
     };
@@ -26,7 +36,10 @@ pub fn embedded_fonts(doc: &Document) -> Vec<Vec<u8>> {
         return Vec::new();
     };
     let mut out = Vec::new();
-    for embed in table.children("w:font").flat_map(|f| f.els().filter(|e| EMBEDS.contains(&e.name.as_str()))) {
+    let embeds = table
+        .children("w:font")
+        .flat_map(|f| f.els().filter(|e| EMBEDS.contains(&e.name.as_str())).map(move |e| (f.attr("w:name").unwrap_or(""), e)));
+    for (name, embed) in embeds {
         if out.len() >= MAX_FONTS {
             log::warn!("docx: more than {MAX_FONTS} embedded fonts; the rest are not loaded");
             break;
@@ -52,7 +65,7 @@ pub fn embedded_fonts(doc: &Document) -> Vec<Vec<u8>> {
         for (i, b) in data.iter_mut().take(32).enumerate() {
             *b ^= key.get(i % 16).copied().unwrap_or(0);
         }
-        out.push(data);
+        out.push(EmbeddedFont { name: name.to_string(), data });
     }
     out
 }

@@ -349,6 +349,9 @@ struct SysFallback {
     tried: std::collections::HashSet<&'static str>,
 }
 
+/// The longest name a document's font table gives an embedded font that faces take on.
+const MAX_FAMILY_NAME: usize = 128;
+
 /// Characters remembered as covered by no installed font (a cap on memory: once full the set
 /// starts over, and the coverage index answers again quickly).
 #[cfg(not(target_arch = "wasm32"))]
@@ -1072,20 +1075,26 @@ impl FontDb {
     /// Add a user font (TTF/OTF/TTC bytes). Returns the number of faces added (0 if unparseable or
     /// every face was already present).
     pub fn add_font(&self, bytes: Vec<u8>) -> usize {
-        self.add_fonts(vec![bytes])
+        self.add_fonts(vec![(bytes, None)])
     }
 
     /// Add the faces of several font files at once: lookups see all of them or none, never a
     /// family with only some of its styles (which would resolve, and be cached as, the wrong
-    /// face). Faces already present (same family and style) are skipped. Returns how many were
-    /// added.
-    fn add_fonts(&self, files: Vec<Vec<u8>>) -> usize {
+    /// face). A file given a `name` its faces don't go by (a document's font table's, see
+    /// [`FontDb::add_document_fonts`]) has them go by that name instead. Faces already present
+    /// (same family and style) are skipped. Returns how many were added.
+    fn add_fonts(&self, files: Vec<(Vec<u8>, Option<String>)>) -> usize {
         let mut new = Vec::new();
-        for bytes in files {
+        for (bytes, name) in files {
             let data = Arc::new(bytes);
+            let name: Option<String> = name.map(|n| n.trim().chars().take(MAX_FAMILY_NAME).collect()).filter(|n: &String| !n.is_empty());
             for f in enumerate_faces(&data) {
                 if let Some(mut face) = make_face(FontBytes::Owned(data.clone()), f.index, f.family, f.style, f.legacy, f.coords) {
                     face.local_names = f.local;
+                    if let Some(n) = name.as_deref().filter(|n| !face.named(n) && !face.local_names.iter().any(|l| l.name.eq_ignore_ascii_case(n))) {
+                        face.family = n.to_string();
+                        face.legacy_family = n.to_string();
+                    }
                     new.push(Arc::new(face));
                 }
             }
@@ -1194,7 +1203,7 @@ impl FontDb {
             p.dedup();
             p
         };
-        let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).collect();
+        let files = paths.iter().filter_map(|p| std::fs::read(p).ok()).map(|b| (b, None)).collect();
         self.add_fonts(files) > 0
     }
 
