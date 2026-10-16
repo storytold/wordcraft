@@ -7263,3 +7263,115 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+fn header_body_doc(wrap: wordcraft_doc::para::Wrap) -> Document {
+    use wordcraft_doc::para::{Anchor, Float};
+    let mut d = Document::from_text(&"Original body words ".repeat(600));
+    let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 300.0, y: 60.0, dist: 9.0, ..Default::default() };
+    let mut header = wordcraft_doc::Paragraph::new();
+    header.insert_object(0, rect_shape(240.0, 40.0, float), &Default::default()).unwrap();
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(header)]);
+    d.last_section.headers.default = Some(id);
+    d
+}
+
+#[test]
+fn header_picture_wraps_body_text() {
+    let d = header_body_doc(wordcraft_doc::para::Wrap::Square);
+    let l = lay(&d);
+    assert!(l.pages.len() > 1);
+    for page in 0..l.pages.len() {
+        let lines = line_boxes(&l, page, 0, d.last_section.margin_left);
+        assert_clear_of(&lines, Rect::new(300.0, 60.0, 240.0, 40.0), "body around header picture");
+    }
+}
+
+#[test]
+fn header_wrap_uses_the_page_slot() {
+    let mut d = header_body_doc(wordcraft_doc::para::Wrap::Square);
+    let empty = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())]);
+    d.last_section.title_page = true;
+    d.settings.even_odd_headers = true;
+    d.last_section.headers.first = Some(empty);
+    d.last_section.headers.even = Some(empty);
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3);
+    for page in 0..3 {
+        let lines = line_boxes(&l, page, 0, d.last_section.margin_left);
+        let first = lines.iter().find(|(x, _, right, _)| right - x > 1.0).unwrap();
+        if page < 2 {
+            assert!(first.2 > 300.0, "first/even header has no picture: {first:?}");
+        } else {
+            assert!(first.2 <= 291.01, "default header wraps: {first:?}");
+        }
+    }
+}
+
+#[test]
+fn nonwrapping_header_leaves_body() {
+    use wordcraft_doc::para::Wrap;
+    for wrap in [Wrap::BehindText, Wrap::InFrontOfText] {
+        let d = header_body_doc(wrap);
+        let l = lay(&d);
+        let lines = line_boxes(&l, 0, 0, d.last_section.margin_left);
+        assert!(lines[0].2 > 300.0, "nonwrapping header: {:?}", lines[0]);
+    }
+}
+
+#[test]
+fn header_wrap_clears_body_table() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for (wrap, y) in [(Wrap::TopAndBottom, 60.0), (Wrap::TopAndBottom, 80.0), (Wrap::InFrontOfText, 60.0)] {
+        let mut d = Document::new();
+        d.body = vec![std::sync::Arc::new(Block::Table(Table::new(2, 1, 468.0)))];
+        let float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y, ..Default::default() };
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, rect_shape(468.0, 40.0, float), &Default::default()).unwrap();
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(p)]);
+        d.last_section.headers.default = Some(id);
+        let l = lay(&d);
+        let top = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Cell { rect, .. } => Some(rect.y),
+                _ => None,
+            })
+            .fold(f32::MAX, f32::min);
+        let expected = if wrap == Wrap::TopAndBottom { y + 40.0 } else { 72.0 };
+        assert!((top - expected).abs() < 0.01, "table top {top}, expected {expected}");
+    }
+}
+
+#[test]
+fn header_table_clears_body_table() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let mut d = Document::new();
+    d.body = vec![std::sync::Arc::new(Block::Table(Table::new(80, 1, 468.0)))];
+    let mut header = Table::new(2, 1, 468.0);
+    header.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 80.0, ..Default::default() });
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![std::sync::Arc::new(Block::Table(header))]);
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    assert!(l.pages.len() > 1);
+    for page in &l.pages {
+        let bottom = page
+            .header
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Cell { rect, .. } => Some(rect.bottom()),
+                _ => None,
+            })
+            .fold(0.0, f32::max);
+        let top = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Cell { rect, .. } => Some(rect.y),
+                _ => None,
+            })
+            .fold(f32::MAX, f32::min);
+        assert!(top >= bottom - 0.01, "body table {top} overlaps header ending at {bottom}");
+    }
+}
