@@ -1406,6 +1406,9 @@
 	{cols}×{rows} Table	Tabla de {cols}×{rows}
 	AaBbYyZz	AaBbYyZz ÑñÁá
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Documento1
 	Username	Nombre de usuario
 	Display name	Nombre visible

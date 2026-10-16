@@ -1367,6 +1367,9 @@
 	{cols}×{rows} Table	{cols}×{rows} の表
 	AaBbYyZz	AaBbYyZz あア亜
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	文書 1
 	Username	ユーザー名
 	Display name	表示名

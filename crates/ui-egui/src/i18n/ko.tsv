@@ -1357,6 +1357,9 @@
 	{cols}×{rows} Table	{cols}×{rows} 표
 	AaBbYyZz	AaBbYyZz
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	문서1
 	Username	사용자 이름
 	Display name	표시 이름

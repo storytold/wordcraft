@@ -1232,6 +1232,9 @@
 	{cols}×{rows} Table	Tabel {cols}×{rows}
 	AaBbYyZz	AaBbYyZz ÕõÄäÖöÜü
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Dokument1
 	Username	Kasutajanimi
 	Display name	Kuvatav nimi

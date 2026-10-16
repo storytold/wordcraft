@@ -1368,6 +1368,9 @@
 	{cols}×{rows} Table	{cols}×{rows} 表格
 	AaBbYyZz	AaBbYyZz 中文
 	pt	點
+	cm	公分
+	mm	公釐
+	pi	派卡
 	Document1	文件1
 	Username	使用者名稱
 	Display name	顯示名稱

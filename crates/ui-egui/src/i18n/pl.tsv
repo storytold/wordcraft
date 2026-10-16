@@ -1349,6 +1349,9 @@
 	Width and spacing	Szerokość i odstępy
 	from Unicode (hex)	z Unicode (szesnastkowo)
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	{cols}×{rows} Table	Tabela {cols}×{rows}
 	{contributors} contributors · {commits} commits	Współtwórcy: {contributors} · commity: {commits}
 	Copyright Sign	Znak praw autorskich

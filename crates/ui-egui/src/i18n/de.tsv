@@ -1288,6 +1288,9 @@
 	{cols}×{rows} Table	{cols}×{rows}-Tabelle
 	AaBbYyZz	AaBbYyZz
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Document1
 	Username	Benutzername
 	Display name	Anzeigename

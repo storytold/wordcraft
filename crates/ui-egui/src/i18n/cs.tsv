@@ -1383,6 +1383,9 @@
 	{cols}×{rows} Table	Tabulka {cols}×{rows}
 	AaBbYyZz	AaBbYyZz ČčŘřŽž
 	pt	b.
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Dokument1
 	Username	Uživatelské jméno
 	Display name	Zobrazované jméno

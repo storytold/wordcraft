@@ -1379,6 +1379,9 @@
 	{cols}×{rows} Table	{cols}×{rows} 表格
 	AaBbYyZz	AaBbYyZz 中文
 	pt	磅
+	cm	厘米
+	mm	毫米
+	pi	派卡
 	Document1	文档1
 	Username	用户名
 	Display name	显示名称

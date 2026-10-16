@@ -1304,6 +1304,9 @@
 	{cols}×{rows} Table	Табела {cols}×{rows}
 	AaBbYyZz	AaBbYyZz ЂђЋћ
 	pt	пт
+	cm	цм
+	mm	мм
+	pi	pi
 	Document1	Документ1
 	Username	Корисничко име
 	Display name	Име за приказ

@@ -309,7 +309,7 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
                 {
                     // `1,5 cm; 3 cm` where the comma is the decimal separator.
                     let sep = if crate::options::decimal() == ',' { "; " } else { ", " };
-                    f.cleared.iter().map(|p| u.format_with(*p, crate::options::decimal())).collect::<Vec<_>>().join(sep)
+                    f.cleared.iter().map(|p| crate::options::length_in(u, *p)).collect::<Vec<_>>().join(sep)
                 }
             };
             ui.label(egui::RichText::new(list).weak());

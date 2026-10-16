@@ -1302,6 +1302,9 @@
 	{cols}×{rows} Table	Tableau {cols}×{rows}
 	AaBbYyZz	AaBbYyZz
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Document1
 	Username	Nom d’utilisateur
 	Display name	Nom d’affichage

@@ -1307,6 +1307,9 @@
 	{cols}×{rows} Table	Таблица {cols}×{rows}
 	AaBbYyZz	AaBbYyZz
 	pt	пт
+	cm	см
+	mm	мм
+	pi	pi
 	Document1	Документ1
 	Username	Потребителско име
 	Display name	Показвано име

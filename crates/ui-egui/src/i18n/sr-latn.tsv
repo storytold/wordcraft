@@ -1300,6 +1300,9 @@
 	{cols}×{rows} Table	Tabela {cols}×{rows}
 	AaBbYyZz	AaBbYyZz ČčĐđ
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Dokument1
 	Username	Korisničko ime
 	Display name	Ime za prikaz

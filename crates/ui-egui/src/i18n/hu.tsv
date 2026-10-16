@@ -1116,6 +1116,9 @@
 	Version	Verzió
 	% of all commits	Az összes commit %-a
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Save the document to turn on AutoSave	Az automatikus mentéshez mentsd a dokumentumot
 	Contributors	Közreműködők
 	Models	Modellek

@@ -1299,6 +1299,9 @@
 	{cols}×{rows} Table	Bảng {cols}×{rows}
 	AaBbYyZz	AaBbYyZz
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Document1
 	Username	Tên đăng nhập
 	Display name	Tên hiển thị

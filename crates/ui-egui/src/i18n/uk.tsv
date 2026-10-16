@@ -1379,6 +1379,9 @@
 	{cols}×{rows} Table	Таблиця {cols}×{rows}
 	AaBbYyZz	AaBbYyZz ЄєЇї
 	pt	пт
+	cm	см
+	mm	мм
+	pi	pi
 	Document1	Документ1
 	Username	Ім'я користувача
 	Display name	Відображуване ім'я

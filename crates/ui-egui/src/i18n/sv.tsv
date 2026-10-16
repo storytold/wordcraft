@@ -1396,6 +1396,9 @@
 	{cols}×{rows} Table	Tabell {cols}×{rows}
 	AaBbYyZz	AaBbÅåÖö
 	pt	pt
+	cm	cm
+	mm	mm
+	pi	pi
 	Document1	Dokument1
 	Username	Användarnamn
 	Display name	Visningsnamn
