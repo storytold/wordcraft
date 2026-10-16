@@ -1038,6 +1038,13 @@ fn lines(
                         equation(&ml.items, cx, base, alpha, opts.placeholders, out);
                     }
                 }
+                Some(o @ InlineObject::Field { .. }) => {
+                    if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { checked, .. }) = o.legacy_form() {
+                        let color = pl.styles.get(c.style as usize).map_or(Rgb::BLACK, |st| text_color(&st.rc.color, None));
+                        let frame = Rect::new(cx, base - c.obj_h, c.adv, c.obj_h + c.obj_d);
+                        check_box(frame, checked, color, alpha, out);
+                    }
+                }
                 _ => {}
             }
         }
@@ -1529,6 +1536,33 @@ fn author_index(doc: &Document, author: &str) -> u32 {
         }
     }
     seen.iter().position(|a| *a == author).unwrap_or(0) as u32
+}
+
+/// How far a legacy check box's square sits inside the room it takes on its line, on every side.
+pub const CHECK_BOX_INSET: f32 = 1.16;
+
+/// A legacy form check box (`FORMCHECKBOX`) in `frame`, the room it takes on its line (as wide
+/// as the text's line is tall): a square inset [`CHECK_BOX_INSET`] with a 0.72 pt border, and,
+/// checked, an X from corner to corner in 0.48 pt lines, in the text's colour. Measured on Word's
+/// PDF export: a 9.96 pt square for 10 pt Calibri, 22.08 pt for 20 pt.
+pub fn check_box(frame: Rect, checked: bool, color: Rgb, alpha: f32, out: &mut Vec<Draw>) {
+    let i = CHECK_BOX_INSET.min(frame.w / 4.0).min(frame.h / 4.0).max(0.0);
+    let sq = Rect::new(frame.x + i, frame.y + i, (frame.w - 2.0 * i).max(0.5), (frame.h - 2.0 * i).max(0.5));
+    let line =
+        |x0: f32, y0: f32, x1: f32, y1: f32, width: f32| Draw::Line { x0, y0, x1, y1, width, color, stroke: Stroke::Solid, alpha, text_bg: None };
+    let (l, t, r, b) = (sq.x, sq.y, sq.x + sq.w, sq.y + sq.h);
+    out.push(Draw::Shape {
+        rect: sq,
+        kind: ShapeKind::Rectangle,
+        fill: None,
+        stroke: Some(color),
+        stroke_width: 0.72,
+        effects: Default::default(),
+        corner: None,
+    });
+    if checked {
+        out.extend([line(l, t, r, b, 0.48), line(r, t, l, b, 0.48)]);
+    }
 }
 
 /// Automatic colour is black, or white on a dark background.

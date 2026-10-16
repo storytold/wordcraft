@@ -90,11 +90,28 @@ pub struct PdfOptions {
     pub comments: bool,
     /// Compress content streams.
     pub compress: bool,
+    /// Fillable form fields (AcroForm) for the document's form fields: legacy form fields and
+    /// content controls that may be edited, with their values. Not with `comments` (the pages
+    /// are scaled down).
+    pub form_fields: bool,
+    /// Fillable text fields over blanks drawn with underscores (`Name: ________`, `__/__/20__`);
+    /// the page looks the same. Not with `comments`.
+    pub blank_fields: bool,
 }
 
 impl Default for PdfOptions {
     fn default() -> Self {
-        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, comments: false, compress: true }
+        PdfOptions {
+            pages: None,
+            title: None,
+            author: None,
+            tagged: true,
+            include_markup: false,
+            comments: false,
+            compress: true,
+            form_fields: false,
+            blank_fields: false,
+        }
     }
 }
 
@@ -132,7 +149,7 @@ fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Re
     let mut outlined = HashSet::new();
     loop {
         match write_attempt(doc, lay, opts, &pages, &outlined)? {
-            Attempt::Done(bytes) => return Ok(bytes),
+            Attempt::Done(bytes) => return add_form_fields(doc, lay, opts, &pages, bytes),
             Attempt::BadFont(id, msg) if outlined.len() < MAX_OUTLINED_FONTS && outlined.insert(id) => {
                 log::warn!("PDF: {msg}; its text is drawn as outlines");
             }
@@ -1698,5 +1715,28 @@ fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
     Some(Image::from_rgba8(dec.to_rgba8().into_raw(), w, h))
 }
 
+mod forms;
+
 #[cfg(test)]
 mod tests;
+
+/// `pdf` with the fillable fields `opts` asks for, on the exported `pages` (layout indexes).
+fn add_form_fields(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], pdf: Vec<u8>) -> Result<Vec<u8>, PdfError> {
+    if !(opts.form_fields || opts.blank_fields) || opts.comments {
+        return Ok(pdf);
+    }
+    let mut fields = if opts.form_fields { forms::collect(doc, lay) } else { Vec::new() };
+    if opts.blank_fields {
+        fields.extend(forms::collect_blanks(doc, lay));
+    }
+    // Layout pages to output pages; fields on pages left out go too.
+    fields.retain_mut(|f| match pages.iter().position(|p| *p == f.page) {
+        Some(i) => {
+            f.page = i;
+            true
+        }
+        None => false,
+    });
+    forms::unique_names(&mut fields);
+    forms::add_acroform(pdf, &fields)
+}

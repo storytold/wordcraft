@@ -4909,6 +4909,32 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
 
+/// `formFields` and `blankFields` on the PDF export and save commands give the copy fillable
+/// fields; without them it has none.
+#[test]
+fn pdf_copies_get_fillable_fields_on_request() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Name: ____________"));
+    let dir = std::env::temp_dir().join(format!("wordcraft-form-fields-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("f.pdf");
+    let mut export = |v: serde_json::Value| {
+        let mut v = v;
+        v["path"] = json!(path.to_string_lossy());
+        let r = s.run("file.exportPdf", &v).unwrap();
+        (r, std::fs::read(&path).unwrap())
+    };
+    let has_form = |pdf: &[u8]| pdf.windows(9).any(|w| w == b"/AcroForm");
+    let (r, pdf) = export(json!({}));
+    assert_eq!((r["formFields"].as_bool(), r["blankFields"].as_bool()), (Some(false), Some(false)));
+    assert!(!has_form(&pdf));
+    let (r, pdf) = export(json!({"blankFields": true}));
+    assert_eq!(r["blankFields"], true);
+    assert!(has_form(&pdf) && pdf.windows(6).any(|w| w == b"(Name)"));
+    let o = cmd::file::export_options(&s, &json!({"formFields": true}));
+    assert!(o.form_fields && !o.blank_fields);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Print Markup (#589): `file.printMarkup` or a command's `markup` puts the comments into PDFs
 /// (balloons beside the scaled page) and at the end of HTML, Markdown and text copies.
 #[test]

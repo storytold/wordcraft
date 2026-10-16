@@ -31,7 +31,13 @@ pub fn save(ext: &str, doc: &Document, opts: &crate::io::ExportOptions) -> Optio
         "xml" => Some(wordcraft_docx::write_flat(doc).map_err(|e| e.to_string())),
         "png" => Some(render_png(doc, 0, 2.0, opts)),
         "pdf" => {
-            let pdf = wordcraft_pdf::PdfOptions { include_markup: opts.markup, comments: opts.markup && opts.comments, ..Default::default() };
+            let pdf = wordcraft_pdf::PdfOptions {
+                include_markup: opts.markup,
+                comments: opts.markup && opts.comments,
+                form_fields: opts.form_fields,
+                blank_fields: opts.blank_fields,
+                ..Default::default()
+            };
             Some(wordcraft_pdf::export(doc, &pdf).map_err(|e| e.to_string()))
         }
         other => wordcraft_formats::export_with(other, doc, &wordcraft_formats::ExportOptions { comments: opts.markup && opts.comments }),

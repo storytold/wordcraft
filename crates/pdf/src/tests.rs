@@ -1486,3 +1486,65 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// `form_fields` turns legacy form fields into AcroForm widgets with their names and values;
+/// `blank_fields` turns underscore blanks into text fields, transparent but for a date's.
+#[test]
+fn form_fields_are_fillable() {
+    use lopdf::Object;
+    use wordcraft_doc::Pos;
+    let field = |instr: &str, form: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: form.into(),
+    };
+    let text = "Ref. No. ________ on the day __/__/20__ ab";
+    let mut d = Document::from_text(text);
+    let at = text.len() - 1;
+    d.insert_object(
+        &Pos::body(0, at),
+        field("FORMCHECKBOX", r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/><w:checked/></w:checkBox></w:ffData>"#),
+        &Default::default(),
+    )
+    .unwrap();
+    d.insert_object(
+        &Pos::body(0, at),
+        field("FORMDROPDOWN", r#"<w:ffData><w:name w:val="List"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Alpha"/><w:listEntry w:val="Beta"/></w:ddList></w:ffData>"#),
+        &Default::default(),
+    )
+    .unwrap();
+    let fields = |opts: PdfOptions| -> Vec<(String, String, Option<Object>, bool)> {
+        let pdf = lopdf::Document::load_mem(&export(&d, &opts).unwrap()).unwrap();
+        let root = pdf.trailer.get(b"Root").and_then(Object::as_reference).unwrap();
+        let Ok(form) = pdf.get_dictionary(root).unwrap().get(b"AcroForm") else { return Vec::new() };
+        let form = form.as_dict().unwrap();
+        form.get(b"Fields")
+            .and_then(Object::as_array)
+            .unwrap()
+            .iter()
+            .map(|r| {
+                let w = pdf.get_dictionary(r.as_reference().unwrap()).unwrap();
+                let s = |k: &[u8]| match w.get(k) {
+                    Ok(Object::String(b, _)) => String::from_utf8_lossy(b).into_owned(),
+                    Ok(Object::Name(n)) => String::from_utf8_lossy(n).into_owned(),
+                    _ => String::new(),
+                };
+                (s(b"T"), s(b"FT"), w.get(b"V").ok().cloned(), w.has(b"MK"))
+            })
+            .collect()
+    };
+    assert!(fields(PdfOptions::default()).is_empty());
+    let got = fields(PdfOptions { form_fields: true, blank_fields: true, ..Default::default() });
+    let names: Vec<(&str, &str, bool)> = got.iter().map(|(t, ft, _, mk)| (t.as_str(), ft.as_str(), *mk)).collect();
+    // Form fields are opaque; a blank is transparent, a date blank white once filled in.
+    assert_eq!(names, [("List", "Ch", true), ("Box", "Btn", true), ("Ref_No", "Tx", false), ("day", "Tx", true)]);
+    assert_eq!(got[0].2, Some(Object::string_literal("Beta")));
+    assert_eq!(got[1].2, Some(Object::Name(b"Yes".to_vec())));
+    // Each option alone; none beside Print Markup's comments (the pages are scaled down).
+    assert_eq!(fields(PdfOptions { form_fields: true, ..Default::default() }).len(), 2);
+    assert_eq!(fields(PdfOptions { blank_fields: true, ..Default::default() }).len(), 2);
+    assert!(fields(PdfOptions { form_fields: true, include_markup: true, comments: true, ..Default::default() }).is_empty());
+}

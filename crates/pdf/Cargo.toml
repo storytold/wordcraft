@@ -15,6 +15,7 @@ wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-metafile = { workspace = true }
 craft-pdf = { workspace = true }
+lopdf = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
 thiserror = { workspace = true }
@@ -23,6 +24,8 @@ log = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()` panics on wasm32).
 js-sys = "0.3"
+# lopdf's random numbers (encryption, unused here) from the browser.
+lopdf = { workspace = true, features = ["wasm_js"] }
 
 [dev-dependencies]
 hayro-syntax = "0.7.2"
