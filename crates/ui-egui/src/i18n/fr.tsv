@@ -2240,3 +2240,408 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+
+# Added 2026-10-16: equation gallery, built-in style names, citation styles, paper sizes,
+# watermarks and newer dialogs (402 entries), with a native-speaker review of the catalog.
+	1×2 Empty Matrix	Matrice vide 1×2
+	1×3 Empty Matrix	Matrice vide 1×3
+	2×1 Empty Matrix	Matrice vide 2×1
+	2×2 Determinant	Déterminant 2×2
+	2×2 Empty Matrix	Matrice vide 2×2
+	2×2 Identity Matrix	Matrice identité 2×2
+	2×2 Identity Matrix (sparse)	Matrice identité 2×2 (creuse)
+	2×2 Matrix in Brackets	Matrice 2×2 entre crochets
+	2×2 Matrix in Double Bars	Matrice 2×2 entre doubles barres
+	2×2 Matrix in Parentheses	Matrice 2×2 entre parenthèses
+	2×3 Empty Matrix	Matrice vide 2×3
+	3×1 Empty Matrix	Matrice vide 3×1
+	3×2 Empty Matrix	Matrice vide 3×2
+	3×3 Empty Matrix	Matrice vide 3×3
+	3×3 Identity Matrix	Matrice identité 3×3
+	3×3 Identity Matrix (sparse)	Matrice identité 3×3 (creuse)
+	A xor B	A ou exclusif B
+	APA	APA
+	ASAP	AU PLUS VITE
+	AaBbCcDd	AaBbCcDd
+	Absolute value cases	Valeur absolue par cas
+	Accents	Accents
+	Acute	Accent aigu
+	All - Linear	Tout - Linéaire
+	All - Professional	Tout - Professionnel
+	Angle Brackets	Chevrons
+	Angle Brackets with Separator	Chevrons avec séparateur
+	Angle Brackets with Two Separators	Chevrons avec deux séparateurs
+	Annotation Reference	Marque de commentaire
+	Annotation Subject	Objet du commentaire
+	Annotation Text	Texte de commentaire
+	B4 (JIS)   10.12" × 14.33"	B4 (JIS)   10.12" × 14.33"
+	B5 (JIS)   7.17" × 10.12"	B5 (JIS)   7.17" × 10.12"
+	Baseline Dots	Points sur la ligne de base
+	Basic Math	Mathématiques de base
+	Bayes' rule	Théorème de Bayes
+	Binomial Coefficient	Coefficient binomial
+	Binomial Coefficient (angle)	Coefficient binomial (chevrons)
+	Binomial Coefficient with Angle Brackets	Coefficient binomial entre chevrons
+	Binomial expansion of (x+a)ⁿ	Développement binomial de (x+a)ⁿ
+	Body text in a short paragraph to show spacing.	Corps de texte dans un court paragraphe pour montrer l’espacement.
+	Book Title	Titre du livre
+	Boxed Formula	Formule encadrée
+	Boxed Formula (example)	Formule encadrée (exemple)
+	Boxed Formulas	Formules encadrées
+	Braces	Accolades
+	Braces with Separator	Accolades avec séparateur
+	Brackets	Crochets
+	Brackets with Separators	Crochets avec séparateurs
+	Breve	Brève
+	CONFIDENTIAL	CONFIDENTIEL
+	Cases (Three Conditions)	Cas (trois conditions)
+	Cases (Two Conditions)	Cas (deux conditions)
+	Cases and Stacks	Cas et empilements
+	Category	Catégorie
+	Ceiling	Partie entière supérieure
+	Centered as Group	Centré en groupe
+	Change in y over change in x	Variation de y sur variation de x
+	Change to Level 1	Passer au niveau 1
+	Change to Level 2	Passer au niveau 2
+	Change to Level 3	Passer au niveau 3
+	Change to Level 4	Passer au niveau 4
+	Change to Level 5	Passer au niveau 5
+	Change to Level 6	Passer au niveau 6
+	Change to Level 7	Passer au niveau 7
+	Change to Level 8	Passer au niveau 8
+	Change to Level 9	Passer au niveau 9
+	Check	Caron
+	Chicago	Chicago
+	Circle area from its radius	Aire du cercle à partir de son rayon
+	Circled Dot	Point cerclé
+	Circled Plus	Plus cerclé
+	Circled Times	Fois cerclé
+	Colon Equal	Deux-points égal
+	Common Accent Objects	Accents courants
+	Common Brackets	Parenthèses et crochets courants
+	Common Fractions	Fractions courantes
+	Common Functions	Fonctions courantes
+	Common Large Operators	Grands opérateurs courants
+	Common Operator Structures	Structures d’opérateurs courantes
+	Common Operators	Opérateurs courants
+	Common Radicals	Radicaux courants
+	Common Subscripts and Superscripts	Indices et exposants courants
+	Contour Integral	Intégrale curviligne
+	Contour Integral with Limits	Intégrale curviligne avec bornes
+	Contour Integral with Stacked Limits	Intégrale curviligne avec bornes empilées
+	Contour Integrals	Intégrales curvilignes
+	Contributors	Contributeurs
+	Convert between built-up and linear form	Basculer entre forme développée et forme linéaire
+	Coproduct	Coproduit
+	Coproduct with Limits	Coproduit avec bornes
+	Coproduct with Lower Limit	Coproduit avec borne inférieure
+	Coproduct with Subscript-Superscript Limits	Coproduit avec bornes en indice et exposant
+	Cosecant Function	Cosécante
+	Cosine 2x	Cosinus 2x
+	Cosine Function	Cosinus
+	Cotangent Function	Cotangente
+	Cube Root	Racine cubique
+	Current - Linear	Sélection - Linéaire
+	Current - Professional	Sélection - Professionnel
+	DO NOT COPY	NE PAS COPIER
+	DRAFT	BROUILLON
+	Default Paragraph Font	Police par défaut
+	Delta Equal To	Delta égal à
+	Delta over arrow	Delta au-dessus d’une flèche
+	Derivative as a limit	Dérivée comme limite
+	Diagonal Dots	Points diagonaux
+	Differential	Différentielle
+	Differential theta	Différentielle thêta
+	Differential x	Différentielle x
+	Differential y	Différentielle y
+	Differentials	Différentielles
+	Dot	Point
+	Dots	Points
+	Double Bar	Double barre
+	Double Dot	Double point
+	Double Integral	Intégrale double
+	Double Integral with Limits	Intégrale double avec bornes
+	Double Integral with Stacked Limits	Intégrale double avec bornes empilées
+	Double Left Arrow with Text Above	Double flèche gauche avec texte au-dessus
+	Double Left Arrow with Text Below	Double flèche gauche avec texte en dessous
+	Double Left Right Arrow with Text Above	Double flèche bidirectionnelle avec texte au-dessus
+	Double Left Right Arrow with Text Below	Double flèche bidirectionnelle avec texte en dessous
+	Double Right Arrow with Text Above	Double flèche droite avec texte au-dessus
+	Double Right Arrow with Text Below	Double flèche droite avec texte en dessous
+	Double Square Brackets	Doubles crochets
+	Double Vertical Bars	Doubles barres verticales
+	Double summation	Somme double
+	Emphasis	Accentuation
+	Empty Matrices	Matrices vides
+	Endnote Reference	Appel de note de fin
+	Endnote Text	Note de fin
+	Enter bookmark name:	Nom du signet :
+	Envelope #10   4.12" × 9.50"	Enveloppe nº 10   4.12" × 9.50"
+	Envelope Address	Adresse destinataire
+	Envelope DL   4.33" × 8.66"	Enveloppe DL   4.33" × 8.66"
+	Envelope Return	Adresse expéditeur
+	Equal Equal	Égal égal
+	Equal by Definition	Égal par définition
+	Euler's identity	Identité d’Euler
+	Executive   7.25" × 10.50"	Executive   7.25" × 10.50"
+	Exponential	Exponentielle
+	Exponential series	Série exponentielle
+	Find “{text}” in the document	Rechercher « {text} » dans le document
+	Floor	Partie entière inférieure
+	Footnote Reference	Appel de note de bas de page
+	Footnote Text	Note de bas de page
+	For which item:	Pour quel élément :
+	Functions	Fonctions
+	GB/T 7714	GB/T 7714
+	GOST (name sort)	GOST (tri par nom)
+	GOST (title sort)	GOST (tri par titre)
+	Geometry	Géométrie
+	Good afternoon	Bon après-midi
+	Good evening	Bonsoir
+	Good morning	Bonjour
+	Grave	Accent grave
+	Greek Letters	Lettres grecques
+	Grid Table 1 Light	Grille claire 1
+	Grid Table 4 – Blue	Grille 4 – Bleu
+	Grid Table 4 – Green	Grille 4 – Vert
+	Grid Table 4 – Orange	Grille 4 – Orange
+	Grid Table 4 – Purple	Grille 4 – Violet
+	Grouping Character Above	Caractère de regroupement au-dessus
+	Grouping Character Below	Caractère de regroupement en dessous
+	Harvard (Anglia)	Harvard (Anglia)
+	Hat	Accent circonflexe
+	Heading	Titre
+	Heading text	Texte de titre
+	Hyperbolic Cosecant Function	Cosécante hyperbolique
+	Hyperbolic Cosine Function	Cosinus hyperbolique
+	Hyperbolic Cotangent Function	Cotangente hyperbolique
+	Hyperbolic Functions	Fonctions hyperboliques
+	Hyperbolic Secant Function	Sécante hyperbolique
+	Hyperbolic Sine Function	Sinus hyperbolique
+	Hyperbolic Tangent Function	Tangente hyperbolique
+	Hyperlink	Lien hypertexte
+	Hypotenuse	Hypoténuse
+	IEEE	IEEE
+	ISO 690 (author-date)	ISO 690 (auteur-date)
+	ISO 690 (numerical)	ISO 690 (numérique)
+	Identity Matrices	Matrices identité
+	Index Heading	Titre d’index
+	Index {n}	Index {n}
+	Insert reference to:	Insérer une référence à :
+	Integral of e^(−x²)	Intégrale de e^(−x²)
+	Integral with Limits	Intégrale avec bornes
+	Integral with Stacked Limits	Intégrale avec bornes empilées
+	Integrals	Intégrales
+	Intense Emphasis	Accentuation intense
+	Intense Quote	Citation intense
+	Intense Reference	Référence intense
+	Intersection	Intersection
+	Intersection with Limits	Intersection avec bornes
+	Intersection with Lower Limit	Intersection avec borne inférieure
+	Intersection with Subscript-Superscript Limits	Intersection avec bornes en indice et exposant
+	Inverse Cosecant Function	Arc cosécante
+	Inverse Cosine Function	Arc cosinus
+	Inverse Cotangent Function	Arc cotangente
+	Inverse Functions	Fonctions réciproques
+	Inverse Hyperbolic Cosecant Function	Argument cosécante hyperbolique
+	Inverse Hyperbolic Cosine Function	Argument cosinus hyperbolique
+	Inverse Hyperbolic Cotangent Function	Argument cotangente hyperbolique
+	Inverse Hyperbolic Functions	Fonctions hyperboliques réciproques
+	Inverse Hyperbolic Secant Function	Argument sécante hyperbolique
+	Inverse Hyperbolic Sine Function	Argument sinus hyperbolique
+	Inverse Hyperbolic Tangent Function	Argument tangente hyperbolique
+	Inverse Secant Function	Arc sécante
+	Inverse Sine Function	Arc sinus
+	Inverse Tangent Function	Arc tangente
+	Justification of a display equation	Alignement d’une équation hors texte
+	Keywords	Mots-clés
+	Large	Grand
+	Left Arrow with Text Above	Flèche gauche avec texte au-dessus
+	Left Arrow with Text Below	Flèche gauche avec texte en dessous
+	Left Bracket Twice	Double crochet gauche
+	Left Right Arrow Above	Flèche bidirectionnelle au-dessus
+	Left Right Arrow with Text Above	Flèche bidirectionnelle avec texte au-dessus
+	Left Right Arrow with Text Below	Flèche bidirectionnelle avec texte en dessous
+	Left Subscript-Superscript	Indice-exposant à gauche
+	Leftwards Arrow Above	Flèche vers la gauche au-dessus
+	Leftwards Harpoon Above	Harpon vers la gauche au-dessus
+	Legal   8.50" × 14.00"	Legal   8.50" × 14.00"
+	Letter   8.50" × 11.00"	Letter   8.50" × 11.00"
+	Letter-Like Symbols	Symboles de type lettre
+	Level 1	Niveau 1
+	Level 2	Niveau 2
+	Level 3	Niveau 3
+	Level 4	Niveau 4
+	Level 5	Niveau 5
+	Level 6	Niveau 6
+	Level 7	Niveau 7
+	Level 8	Niveau 8
+	Level 9	Niveau 9
+	Limit	Limite
+	Limit Example	Exemple de limite
+	Limit and	Limite et
+	Line Number	Numéro de ligne
+	Linear Fraction	Fraction linéaire
+	List Paragraph	Paragraphe de liste
+	List Table 3 – Blue	Liste 3 – Bleu
+	List Table 3 – Green	Liste 3 – Vert
+	List Table 3 – Orange	Liste 3 – Orange
+	List Table 3 – Purple	Liste 3 – Violet
+	Log	Log
+	Logarithm	Logarithme
+	Logarithm with Base	Logarithme de base donnée
+	Logical AND	ET logique
+	Logical AND with Limits	ET logique avec bornes
+	Logical OR	OU logique
+	Logical OR with Limits	OU logique avec bornes
+	MLA	MLA
+	Matrices with Brackets	Matrices entre crochets
+	Maximum	Maximum
+	Maximum Example	Exemple de maximum
+	Measured By	Mesuré par
+	Midline Dots	Points médians
+	Minimum	Minimum
+	Minus Equal	Moins égal
+	Models	Modèles
+	Natural Logarithm	Logarithme népérien
+	Negated Relations	Relations niées
+	No Spacing	Sans interligne
+	Normal	Normal
+	Normal Indent	Retrait normal
+	Normal Table	Tableau normal
+	Normal probability density	Densité de la loi normale
+	Number the equation; the number sits at the right margin (or type # then the number)	Numéroter l’équation ; le numéro se place dans la marge droite (ou tapez # puis le numéro)
+	One half	Un demi
+	Operator Structures	Structures d’opérateurs
+	Operators	Opérateurs
+	Other Large Operators	Autres grands opérateurs
+	Outward Brackets	Crochets inversés
+	Overbar	Barre supérieure
+	Overbars and Underbars	Barres supérieures et inférieures
+	Overbrace	Accolade supérieure
+	Parentheses	Parenthèses
+	Parentheses with Separator	Parenthèses avec séparateur
+	Partial Differential	Différentielle partielle
+	Pi Over 2	Pi sur 2
+	Plain Table 1	Tableau simple 1
+	Plus Equal	Plus égal
+	Power series of (1+x)ⁿ	Série entière de (1+x)ⁿ
+	Product	Produit
+	Product of A	Produit de A
+	Product with Limits	Produit avec bornes
+	Product with Lower Limit	Produit avec borne inférieure
+	Product with Subscript-Superscript Limits	Produit avec bornes en indice et exposant
+	Products and Coproducts	Produits et coproduits
+	Quadratic Root	Racine du trinôme
+	Quote	Citation
+	Radical with Degree	Radical avec indice
+	Radicals	Radicaux
+	Reference type:	Type de référence :
+	Right Arrow with Text Above	Flèche droite avec texte au-dessus
+	Right Arrow with Text Below	Flèche droite avec texte en dessous
+	Right Bracket Twice	Double crochet droit
+	Rightwards Arrow Above	Flèche vers la droite au-dessus
+	Rightwards Harpoon Above	Harpon vers la droite au-dessus
+	Roots of ax²+bx+c	Racines de ax²+bx+c
+	SAMPLE	SPÉCIMEN
+	SIST02	SIST02
+	Scripts	Indices et exposants
+	Secant Function	Sécante
+	Show the equation in the line of text	Afficher l’équation dans la ligne de texte
+	Show the equation on a line of its own	Afficher l’équation sur sa propre ligne
+	Sides of a right triangle	Côtés d’un triangle rectangle
+	Sine Function	Sinus
+	Sine and cosine series of f(x)	Séries de sinus et cosinus de f(x)
+	Sine theta	Sinus thêta
+	Single Brackets	Délimiteurs simples
+	Single Left Angle	Chevron gauche seul
+	Single Left Bar	Barre gauche seule
+	Single Left Brace	Accolade gauche seule
+	Single Left Bracket	Crochet gauche seul
+	Single Left Parenthesis	Parenthèse gauche seule
+	Single Right Brace	Accolade droite seule
+	Single Right Bracket	Crochet droit seul
+	Single Right Parenthesis	Parenthèse droite seule
+	Skewed Fraction	Fraction oblique
+	Small change	Petite variation
+	Sparse Matrices	Matrices creuses
+	Square Root	Racine carrée
+	Square Root with Degree	Racine carrée avec indice
+	Square Union	Union carrée
+	Stack Object	Empilement
+	Stack Object (Three)	Empilement (trois)
+	Stacked Fraction	Fraction empilée
+	Stacked, no bar	Empilé, sans barre
+	Statement   5.50" × 8.50"	Statement   5.50" × 8.50"
+	Strong	Élevé
+	Style: APA	Style : APA
+	Subject	Objet
+	Subscript-Superscript	Indice-exposant
+	Subscripts and Superscripts	Indices et exposants
+	Subtitle	Sous-titre
+	Subtle Emphasis	Accentuation légère
+	Subtle Reference	Référence légère
+	Sum of cosines	Somme de cosinus
+	Sum or difference of sines	Somme ou différence de sinus
+	Summation	Somme
+	Summation from 0 to n	Somme de 0 à n
+	Summation over binomials	Somme de coefficients binomiaux
+	Summation with Limits	Somme avec bornes
+	Summation with Lower Limit	Somme avec borne inférieure
+	Summation with Subscript Limit	Somme avec borne en indice
+	Summation with Subscript-Superscript Limits	Somme avec bornes en indice et exposant
+	Summations	Sommes
+	Surface Integral	Intégrale de surface
+	Surface Integral with Limits	Intégrale de surface avec bornes
+	Surface Integral with Stacked Limits	Intégrale de surface avec bornes empilées
+	TOA Heading	En-tête de table des autorités
+	TOC Heading	En-tête de table des matières
+	TOC {n}	TM {n}
+	Table Grid	Grille du tableau
+	Table of Figures	Table des illustrations
+	Tabloid   11.00" × 17.00"	Tabloïd   11.00" × 17.00"
+	Tangent Function	Tangente
+	Tangent formula	Formule de la tangente
+	Text over Colon Equal	Texte au-dessus de deux-points égal
+	Text over Equal	Texte au-dessus du signe égal
+	This document has no bookmarks.	Ce document ne contient aucun signet.
+	Tilde	Tilde
+	Trigonometric Functions	Fonctions trigonométriques
+	Triple Dot	Triple point
+	Triple Integral	Intégrale triple
+	Triple Integral with Limits	Intégrale triple avec bornes
+	Triple Integral with Stacked Limits	Intégrale triple avec bornes empilées
+	Turabian	Turabian
+	Type a page number, or +2 / -1.	Saisissez un numéro de page, ou +2 / -1.
+	Type equations in LaTeX	Saisir les équations en LaTeX
+	Type equations in the linear format (UnicodeMath)	Saisir les équations au format linéaire (UnicodeMath)
+	Type normal (non-math) text in the equation	Saisir du texte normal (non mathématique) dans l’équation
+	Typing	Saisie
+	URGENT	URGENT
+	Underbar	Barre inférieure
+	Underbrace	Accolade inférieure
+	Union	Union
+	Union of intersections	Union d’intersections
+	Union with Limits	Union avec bornes
+	Union with Lower Limit	Union avec borne inférieure
+	Union with Plus	Union disjointe
+	Union with Subscript-Superscript Limits	Union avec bornes en indice et exposant
+	Unions and Intersections	Unions et intersections
+	Up Diagonal Dots	Points diagonaux montants
+	Vector A	Vecteur A
+	Vector AB	Vecteur AB
+	Vertical Bars	Barres verticales
+	Vertical Dots	Points verticaux
+	Volume Integral	Intégrale de volume
+	Volume Integral with Limits	Intégrale de volume avec bornes
+	Volume Integral with Stacked Limits	Intégrale de volume avec bornes empilées
+	Wait for the print job to finish submitting before closing.	Attendez la fin de l’envoi du travail d’impression avant de fermer.
+	Wildcards (regex)	Caractères génériques (regex)
+	Yields	Donne
+	n×n Identity Matrix	Matrice identité n×n
+	n×n Matrix	Matrice n×n
+	tOGGLE cASE	iNVERSER lA cASSE
+	x bar	x barre
+	✓ None	✓ Aucun
+preview	Title	Titre
+template	Letter	Lettre
