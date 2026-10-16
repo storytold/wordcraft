@@ -96,14 +96,8 @@ pub(crate) fn columns(app: &mut WordApp, ui: &Ui, layout: &DocLayout, page: usiz
     let Some(first) = row.first().copied() else { return };
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter_at(bar.expand(1.0));
-    // The table's left edge, then each cell's right border: where it is, or while a border of
-    // the table is dragged, where it's going.
-    let edges: Vec<(f32, f32)> = std::iter::once(first.x)
-        .chain(row.iter().map(|b| b.right()))
-        .map(|x| (x, x0 + crate::table_resize::moved(app, ui.ctx(), page, true, x) * scale))
-        .collect();
-    for (i, (x, sx)) in edges.into_iter().enumerate() {
-        marker(&painter, Rect::from_center_size(pos2(sx, bar.center().y), vec2(7.0, bar.height() - 2.0)), &t);
+    for (i, (x, sx)) in column_edges(app, ui.ctx(), layout, page, x0, scale).into_iter().enumerate() {
+        marker(&painter, column_marker(bar, sx), &t);
         let zone = Rect::from_center_size(pos2(sx, bar.center().y), vec2(8.0, bar.height()));
         grip(app, ui, layout, zone, true, i, (page, x, first.y + first.h / 2.0));
     }
@@ -115,12 +109,31 @@ pub(crate) fn columns(app: &mut WordApp, ui: &Ui, layout: &DocLayout, page: usiz
     }
 }
 
-/// The vertical ruler's markers (`bar`; the page's top at screen y `y0`, `scale` pixels per
-/// point): one on the bottom of each of the caret's table's rows on the page.
-pub(crate) fn rows(app: &mut WordApp, ui: &Ui, layout: &DocLayout, page: usize, bar: Rect, y0: f32, scale: f32) {
-    // Each row's bottom, and the cell it's taken from (a press in the middle of it grabs the
-    // bottom): its shortest box, as a vertically merged cell's box spans all its rows (#640), and
-    // of those the leftmost.
+/// The caret row's borders on the horizontal ruler, the table's left edge first: each as (page
+/// x, screen x), where it is or, while a border of the table is dragged, where it's going.
+fn column_edges(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, page: usize, x0: f32, scale: f32) -> Vec<(f32, f32)> {
+    let row = caret_row(app, layout, page);
+    let Some(first) = row.first() else { return Vec::new() };
+    std::iter::once(first.x)
+        .chain(row.iter().map(|b| b.right()))
+        .map(|x| (x, x0 + crate::table_resize::moved(app, ctx, page, true, x) * scale))
+        .collect()
+}
+
+/// A column marker's box on the horizontal ruler `bar`, centred on screen x `sx`.
+fn column_marker(bar: Rect, sx: f32) -> Rect {
+    Rect::from_center_size(pos2(sx, bar.center().y), vec2(7.0, bar.height() - 2.0))
+}
+
+/// The boxes `columns` draws on the horizontal ruler `bar`, for its numbers to keep clear of (#1878).
+pub(crate) fn column_markers(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, page: usize, bar: Rect, x0: f32, scale: f32) -> Vec<Rect> {
+    column_edges(app, ctx, layout, page, x0, scale).into_iter().map(|(_, sx)| column_marker(bar, sx)).collect()
+}
+
+/// Each row of the caret's table on `page` with the cell its bottom is taken from (a press in
+/// the middle of it grabs the bottom): its shortest box, as a vertically merged cell's box spans
+/// all its rows (#640), and of those the leftmost.
+fn row_bottoms(app: &WordApp, layout: &DocLayout, page: usize) -> Vec<(usize, wordcraft_geom::Rect)> {
     let mut rows: Vec<(usize, wordcraft_geom::Rect)> = Vec::new();
     for (r, _, b) in cells(app, layout, page) {
         match rows.iter_mut().find(|(row, _)| *row == r) {
@@ -129,11 +142,30 @@ pub(crate) fn rows(app: &mut WordApp, ui: &Ui, layout: &DocLayout, page: usize, 
             None => rows.push((r, b)),
         }
     }
+    rows
+}
+
+/// A row marker's box on the vertical ruler `bar`, centred on screen y `sy`.
+fn row_marker(bar: Rect, sy: f32) -> Rect {
+    Rect::from_center_size(pos2(bar.center().x, sy), vec2(bar.width() - 2.0, 7.0))
+}
+
+/// The boxes `rows` draws on the vertical ruler `bar`, for its numbers to keep clear of (#1878).
+pub(crate) fn row_markers(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, page: usize, bar: Rect, y0: f32, scale: f32) -> Vec<Rect> {
+    row_bottoms(app, layout, page)
+        .into_iter()
+        .map(|(_, b)| row_marker(bar, y0 + crate::table_resize::moved(app, ctx, page, false, b.bottom()) * scale))
+        .collect()
+}
+
+/// The vertical ruler's markers (`bar`; the page's top at screen y `y0`, `scale` pixels per
+/// point): one on the bottom of each of the caret's table's rows on the page.
+pub(crate) fn rows(app: &mut WordApp, ui: &Ui, layout: &DocLayout, page: usize, bar: Rect, y0: f32, scale: f32) {
     let t = Tokens::get(ui.ctx());
     let painter = ui.painter_at(bar.expand(1.0));
-    for (r, b) in rows {
+    for (r, b) in row_bottoms(app, layout, page) {
         let sy = y0 + crate::table_resize::moved(app, ui.ctx(), page, false, b.bottom()) * scale;
-        marker(&painter, Rect::from_center_size(pos2(bar.center().x, sy), vec2(bar.width() - 2.0, 7.0)), &t);
+        marker(&painter, row_marker(bar, sy), &t);
         let zone = Rect::from_center_size(pos2(bar.center().x, sy), vec2(bar.width(), 8.0));
         grip(app, ui, layout, zone, false, r, (page, b.x + b.w / 2.0, b.bottom()));
     }

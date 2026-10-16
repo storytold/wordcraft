@@ -2386,7 +2386,9 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     }
 }
 
-/// Horizontal and vertical rulers for the caret's page and paragraph.
+/// Horizontal and vertical rulers for the caret's page and paragraph. Each spans that page's
+/// rect on screen at the page's own scale and is clipped to its strip, whatever the layout
+/// (one column, One Page, Multiple Pages), and follows the caret to another page (#1878).
 fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layout: &DocLayout, scale: f32) {
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
@@ -2417,16 +2419,24 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     // A distance along the reading direction (points from the page's start edge) and back.
     let sx = |d: f32| ruler_x(d, x0, scale, page.w, rtl);
     let s_at = |x: f32| ruler_d(x, x0, scale, page.w, rtl);
-    for (d, mark) in ruler_marks(origin, page.w, (unit, div, step), scale) {
-        let x = sx(d);
-        match mark {
-            RulerMark::Label(n) => {
-                hp.text(pos2(x, bar.center().y), egui::Align2::CENTER_CENTER, n.abs().to_string(), regular(9.5), t.ruler_tick);
-            }
-            RulerMark::Tick(len) => {
-                hp.line_segment([pos2(x, bar.center().y - len / 2.0), pos2(x, bar.center().y + len / 2.0)], Stroke::new(1.0, t.ruler_tick));
-            }
-        }
+    // The caret paragraph's column (in a table, the cell's text) and where it starts, from the
+    // page's start edge (the right edge when right-to-left).
+    let (col_x, w) = crate::table_ruler::text_area(app, layout, pi).unwrap_or((page.body.x, page.body.w));
+    let start = if rtl { page.w - (col_x + w) } else { col_x };
+    // Indents and tabs are measured from the paragraph's start edge: the right margin of a
+    // right-to-left paragraph, where the start-indent markers sit.
+    let px = |s: f32| sx(start + s);
+    let dist_at = |x: f32| s_at(x) - start;
+    // The markers the numbers keep clear of (#1878): the indents, the tab stops, a table's columns.
+    let mut keep_clear: Vec<Rect> = Vec::new();
+    if let Some(rp) = &rp {
+        let [first, left, right] = [rp.indent_left + rp.indent_first, rp.indent_left, w - rp.indent_right].map(px);
+        keep_clear.extend(indent_marker_rects(first, left, right, bar));
+        keep_clear.extend(crate::ruler_tabs::marker_rects(app, bar, &px, &rp.tabs));
+    }
+    keep_clear.extend(crate::table_ruler::column_markers(app, ui.ctx(), layout, pi, bar, x0, scale));
+    for (d, mark) in ruler_marks(origin, page.body.w, page.w, (unit, div, step), scale) {
+        ruler_mark(&hp, pos2(sx(d), bar.center().y), mark, true, &keep_clear, &t);
     }
     // Margins: the edges of the white text area drag the section's margins. Registered before
     // the indent markers, so a marker sitting on an edge keeps the pointer where they overlap.
@@ -2437,16 +2447,8 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     ] {
         margin_handle(app, ui, edge, zone, |p| (p.x - x0) / scale, &sect);
     }
-    // Indent markers for the caret's paragraph (relative to its column, or in a table to the
-    // cell's text).
-    let (col_x, w) = crate::table_ruler::text_area(app, layout, pi).unwrap_or((page.body.x, page.body.w));
-    // Where the paragraph starts, from the page's start edge (the right edge when right-to-left).
-    let start = if rtl { page.w - (col_x + w) } else { col_x };
+    // Indent markers for the caret's paragraph.
     if let Some(rp) = rp {
-        // Indents and tabs are measured from the paragraph's start edge: the right margin of a
-        // right-to-left paragraph, where the start-indent markers sit.
-        let px = |s: f32| sx(start + s);
-        let dist_at = |x: f32| s_at(x) - start;
         let first = px(rp.indent_left + rp.indent_first);
         let left = px(rp.indent_left);
         let right = px(w - rp.indent_right);
@@ -2521,7 +2523,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     // Vertical.
     let vp = ui.painter_at(v);
     let y0 = pr.min.y;
-    let vbar = Rect::from_min_max(pos2(v.min.x + 4.0, y0), pos2(v.max.x - 3.0, y0 + page.h.min(20_000.0) * scale));
+    let vbar = Rect::from_min_max(pos2(v.min.x + 4.0, y0), pos2(v.max.x - 3.0, pr.max.y));
     vp.rect_filled(vbar, 0.0, t.ruler_margin);
     let (te, be) = (y0 + page.body.y * scale, y0 + page.body.bottom() * scale);
     vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, te), pos2(vbar.max.x, be)), 0.0, t.ruler);
@@ -2529,80 +2531,132 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         let zone = Rect::from_min_max(pos2(vbar.min.x, ey - 4.0), pos2(vbar.max.x, ey + 4.0));
         margin_handle(app, ui, edge, zone, |p| (p.y - y0) / scale, &sect);
     }
-    let origin = page.body.y;
-    let mut k = -((origin / unit).ceil() as i32) * div;
-    loop {
-        let ypt = origin + k as f32 * unit / div as f32;
-        if ypt > page.h.min(20_000.0) {
-            break;
-        }
-        if ypt >= 0.0 && k % div == 0 && k != 0 {
-            vp.text(
-                pos2(vbar.center().x, y0 + ypt * scale),
-                egui::Align2::CENTER_CENTER,
-                (k / div * step).abs().to_string(),
-                regular(9.5),
-                t.ruler_tick,
-            );
-        } else if ypt >= 0.0 && k % (div / 2) == 0 {
-            let sy = y0 + ypt * scale;
-            vp.line_segment([pos2(vbar.center().x - 2.5, sy), pos2(vbar.center().x + 2.5, sy)], Stroke::new(1.0, t.ruler_tick));
-        }
-        k += 1;
-        if k > 2000 {
-            break;
-        }
+    // The same graduations down the page; the numbers keep clear of a table's row markers.
+    let keep_clear = crate::table_ruler::row_markers(app, ui.ctx(), layout, pi, vbar, y0, scale);
+    for (d, mark) in ruler_marks(page.body.y, page.body.h, page.h.min(20_000.0), (unit, div, step), scale) {
+        ruler_mark(&vp, pos2(vbar.center().x, y0 + d * scale), mark, false, &keep_clear, &t);
     }
     // In a table, its rows' bottom borders.
     crate::table_ruler::rows(app, ui, layout, pi, vbar, y0, scale);
 }
 
-/// One mark drawn along a horizontal ruler.
+/// The indent markers' outlines on the horizontal ruler `bar`, each centred on its screen x:
+/// first line (a flag at the top), left and right (at the bottom).
+fn indent_marker_rects(first: f32, left: f32, right: f32, bar: Rect) -> [Rect; 3] {
+    [
+        Rect::from_min_max(pos2(first - 4.5, bar.min.y), pos2(first + 4.5, bar.min.y + 5.0)),
+        Rect::from_min_max(pos2(left - 4.5, bar.max.y - 8.0), pos2(left + 4.5, bar.max.y + 1.0)),
+        Rect::from_min_max(pos2(right - 4.5, bar.max.y - 6.0), pos2(right + 4.5, bar.max.y - 1.0)),
+    ]
+}
+
+/// One mark drawn along a ruler.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum RulerMark {
-    /// A whole-inch number, `n` inches from the start margin.
+    /// A number, `n` units from the start margin.
     Label(i32),
     /// A tick line, `len` screen points long.
     Tick(f32),
 }
 
-/// The marks of a horizontal ruler with their distance from the page's start edge (points along
-/// the reading direction): ticks every 1/8 inch past `origin` (the start margin, so the margin is
-/// numbered backwards to the page edge) out to `width`, their labels counting whole inches from
-/// the start margin. Sub-half-inch ticks drop out when they'd sit closer than ~4 screen points.
-fn ruler_marks(origin: f32, width: f32, (unit, div, step): (f32, i32, i32), scale: f32) -> Vec<(f32, RulerMark)> {
+/// A whole unit's tick where it has no number.
+const UNIT_TICK: f32 = 7.0;
+/// The least room between two numbers on a ruler (screen points).
+const RULER_LABEL_PX: f32 = 30.0;
+/// The least room between two ticks on a ruler (screen points).
+const RULER_TICK_PX: f32 = 4.0;
+/// The sparsest a ruler gets: past this it is left blank.
+const RULER_SPARSEST: i32 = 1 << 20;
+/// Most marks on one ruler (page sizes come from files).
+const RULER_MAX_MARKS: usize = 2000;
+
+/// How a ruler thins out as the page shrinks on screen (#1878).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RulerDensity {
+    /// A number every this many units: 1, 2, 4, 8…
+    label_every: i32,
+    /// A tick every this many of the unit's subdivisions: 1, 2, 4…
+    tick_every: i32,
+}
+
+/// The density of a ruler whose unit takes `px_per_unit` screen points and has `div`
+/// subdivisions: the fewest units between numbers (doubling from 1) that keep them at least
+/// `RULER_LABEL_PX` apart, and the fewest subdivisions between ticks that keep those at least
+/// `RULER_TICK_PX` apart. The numbers' text keeps its size.
+fn ruler_density(px_per_unit: f32, div: i32) -> RulerDensity {
+    let px = if px_per_unit.is_finite() { px_per_unit.max(0.0) } else { 0.0 };
+    let every = |px: f32, room: f32| {
+        let mut n = 1;
+        while px * (n as f32) < room && n < RULER_SPARSEST {
+            n *= 2;
+        }
+        n
+    };
+    RulerDensity { label_every: every(px, RULER_LABEL_PX), tick_every: every(px / div.max(1) as f32, RULER_TICK_PX) }
+}
+
+/// The marks of a ruler with their distance from the page's start edge (points along the
+/// reading direction): ticks from the page edge out to `width` on the grid of the start margin
+/// `origin`, numbered in whole units from that margin across the `text` area only (the margins
+/// get ticks, #1878). Whole units, halves, quarters and the rest get shorter ticks in turn, and
+/// zoomed out the numbers and ticks thin out (`ruler_density`).
+fn ruler_marks(origin: f32, text: f32, width: f32, (unit, div, step): (f32, i32, i32), scale: f32) -> Vec<(f32, RulerMark)> {
     let div = div.max(2);
     let mut marks = Vec::new();
-    let mut k = -((origin / unit).ceil() as i32) * div;
-    loop {
+    if !(unit.is_finite() && unit > 0.0 && origin.is_finite() && text.is_finite() && width.is_finite() && scale.is_finite()) {
+        return marks;
+    }
+    let density = ruler_density(scale * unit, div);
+    let per_label = div.saturating_mul(density.label_every);
+    // The first subdivision at or before the page edge, on the ticks' grid.
+    let edge = ((origin / unit).ceil().clamp(-1e6, 1e6) as i32).saturating_mul(div).saturating_neg();
+    let mut k = edge.div_euclid(density.tick_every) * density.tick_every;
+    for _ in 0..RULER_MAX_MARKS {
         let d = origin + k as f32 * unit / div as f32;
-        if d > width {
+        if d > width + 1e-3 {
             break;
         }
-        if d >= 0.0 {
-            let mark = if k % div == 0 {
-                (k != 0).then_some(RulerMark::Label(k / div * step))
-            } else if scale * unit / div as f32 > 4.0 || k % 2 == 0 {
-                Some(RulerMark::Tick(if k % (div / 2) == 0 {
-                    5.0
-                } else if div >= 8 && k % (div / 4) == 0 {
-                    3.0
-                } else {
-                    1.5
-                }))
+        if d >= -1e-3 && k != 0 {
+            let in_text = k > 0 && d <= origin + text + 1e-3;
+            let mark = if k % per_label == 0 && in_text {
+                RulerMark::Label(k / div * step)
+            } else if k % div == 0 {
+                RulerMark::Tick(UNIT_TICK)
+            } else if k % (div / 2) == 0 {
+                RulerMark::Tick(5.0)
+            } else if div >= 8 && k % (div / 4) == 0 {
+                RulerMark::Tick(3.0)
             } else {
-                None
+                RulerMark::Tick(1.5)
             };
-            if let Some(mark) = mark {
-                marks.push((d, mark));
-            }
+            marks.push((d, mark));
         }
-        k += 1;
-        if k > 400 {
-            break;
-        }
+        k = k.saturating_add(density.tick_every);
     }
     marks
+}
+
+/// Draw one graduation at `at` on a ruler, across it when `horizontal`: a tick, or a number,
+/// unless its text would sit on a marker in `keep_clear`, where a whole unit's tick stands in.
+fn ruler_mark(p: &egui::Painter, at: Pos2, mark: RulerMark, horizontal: bool, keep_clear: &[Rect], t: &Tokens) {
+    let len = match mark {
+        RulerMark::Label(n) => {
+            let galley = p.layout_no_wrap(n.to_string(), regular(9.5), t.ruler_tick);
+            let r = Rect::from_center_size(at, galley.size());
+            if !keep_clear.iter().any(|o| o.intersects(r)) {
+                p.galley(r.min, galley, t.ruler_tick);
+                return;
+            }
+            UNIT_TICK
+        }
+        RulerMark::Tick(len) => len,
+    };
+    let (a, b) = if horizontal {
+        (pos2(at.x, at.y - len / 2.0), pos2(at.x, at.y + len / 2.0))
+    } else {
+        (pos2(at.x - len / 2.0, at.y), pos2(at.x + len / 2.0, at.y))
+    };
+    p.line_segment([a, b], Stroke::new(1.0, t.ruler_tick));
 }
 
 /// Screen x of a point `d` points from the page's start edge, on a page whose left edge sits at
@@ -4445,21 +4499,21 @@ mod tests {
             }
         }
 
-        // The marks: inches labelled from the start margin (the page edge counts backwards into
-        // the margin, the margin itself has no mark), half inches the long ticks, ending on the
-        // far page edge.
-        let marks = ruler_marks(72.0, page_w, (unit, 8, 1), scale);
+        // The marks: inches labelled from the start margin (the page edge an inch before it gets
+        // a whole-inch tick, not a number, #1878; the margin itself has no mark), half inches the
+        // long ticks, ending on the far page edge.
+        let marks = ruler_marks(72.0, body_right - body_x, page_w, (unit, 8, 1), scale);
         let at = |d: f32| marks.iter().find(|(td, _)| (*td - d).abs() < 1e-4).map(|(_, m)| *m);
         assert_eq!(marks.first().map(|(d, _)| *d), Some(0.0));
         assert_eq!(marks.last().map(|(d, _)| *d), Some(page_w));
-        assert_eq!(at(0.0), Some(RulerMark::Label(-1)));
+        assert_eq!(at(0.0), Some(RulerMark::Tick(UNIT_TICK)));
         assert_eq!(at(72.0), None);
         assert_eq!(at(72.0 + unit), Some(RulerMark::Label(1)));
         assert_eq!(at(72.0 + 2.0 * unit), Some(RulerMark::Label(2)));
         assert_eq!(at(72.0 + unit / 2.0), Some(RulerMark::Tick(5.0)));
         assert_eq!(at(72.0 + unit / 8.0), Some(RulerMark::Tick(1.5)));
         // Zoomed out, sub-half-inch ticks drop out rather than smudge together.
-        let coarse = ruler_marks(72.0, page_w, (unit, 8, 1), 0.3);
+        let coarse = ruler_marks(72.0, body_right - body_x, page_w, (unit, 8, 1), 0.3);
         assert!(!coarse.iter().any(|(_, m)| matches!(m, RulerMark::Tick(1.5))));
         assert!(coarse.iter().any(|(_, m)| matches!(m, RulerMark::Tick(3.0))));
         // Laid on screen, the same ticks run the other way when mirrored.
@@ -4518,6 +4572,298 @@ mod tests {
         assert!(after1 > centre && after1 > after2, "right to left: the numbers rise away from the right margin");
         assert!((after1 - (2.0 * centre - before1)).abs() < 1.0, "1 mirrors about the page centre: {before1} → {after1}");
         assert!((after2 - (2.0 * centre - before2)).abs() < 1.0, "2 mirrors about the page centre: {before2} → {after2}");
+    }
+
+    /// #1878: a ruler's numbers and ticks thin out as the page shrinks on screen, so they never
+    /// pile up: the fewest units between numbers (1, 2, 4, 8…) that keep them 30 px apart, and
+    /// the fewest subdivisions between ticks that keep those 4 px apart.
+    #[test]
+    fn ruler_density_thins_out_as_the_page_shrinks() {
+        let d = |px, div| {
+            let d = ruler_density(px, div);
+            (d.label_every, d.tick_every)
+        };
+        // Inches (8 subdivisions) at 100%, 50%, 25% and 10%: 96, 48, 24 and 9.6 px per inch.
+        assert_eq!(d(96.0, 8), (1, 1));
+        assert_eq!(d(48.0, 8), (1, 1));
+        assert_eq!(d(24.0, 8), (2, 2));
+        assert_eq!(d(9.6, 8), (4, 4));
+        // Centimetres (4 subdivisions) at the same zooms: 37.8, 18.9, 9.45 and 3.78 px per cm.
+        assert_eq!(d(37.8, 4), (1, 1));
+        assert_eq!(d(18.9, 4), (2, 1));
+        assert_eq!(d(9.45, 4), (4, 2));
+        assert_eq!(d(3.78, 4), (8, 8));
+        // Hostile sizes leave the ruler blank rather than loop or panic.
+        assert_eq!(d(0.0, 8), (RULER_SPARSEST, RULER_SPARSEST));
+        for px in [-1.0, f32::NAN, f32::INFINITY] {
+            let (l, t) = d(px, 0);
+            assert!(l >= 1 && t >= 1, "{px}");
+        }
+        // Every numbered position is on the ticks' grid, whatever the zoom.
+        for div in [4, 8] {
+            for z in 1..=200 {
+                let px = z as f32 * 0.5;
+                let d = ruler_density(px, div);
+                assert_eq!(div * d.label_every % d.tick_every, 0, "{px} px per unit, {div} subdivisions");
+            }
+        }
+    }
+
+    /// #1878: a ruler numbers the text area only (the margins get ticks), its numbers are never
+    /// closer than 30 px however far out the page is zoomed, and whole units without a number
+    /// keep a long tick.
+    #[test]
+    fn ruler_marks_number_the_text_area_and_thin_out_zoomed_out() {
+        let (unit, page_w, text_w) = (72.0, 612.0, 468.0);
+        let at = |marks: &[(f32, RulerMark)], d: f32| marks.iter().find(|(td, _)| (*td - d).abs() < 1e-3).map(|(_, m)| *m);
+        let labels = |marks: &[(f32, RulerMark)]| {
+            marks
+                .iter()
+                .filter_map(|(d, m)| match m {
+                    RulerMark::Label(n) => Some((*d, *n)),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        // 90 px per inch: a number at every inch of the text area, 1 to 6; the margins get the
+        // whole-inch tick instead (the page edge an inch before the margin, 7 past it).
+        let marks = ruler_marks(72.0, text_w, page_w, (unit, 8, 1), 1.25);
+        assert_eq!(labels(&marks), (1..=6).map(|n| (72.0 + n as f32 * unit, n)).collect::<Vec<_>>());
+        assert_eq!(at(&marks, 0.0), Some(RulerMark::Tick(UNIT_TICK)));
+        assert_eq!(at(&marks, 72.0 + 7.0 * unit), Some(RulerMark::Tick(UNIT_TICK)));
+        // 10.8 px per inch: a number every 4 inches, ticks at whole and half inches only.
+        let tiny = ruler_marks(72.0, text_w, page_w, (unit, 8, 1), 0.15);
+        assert_eq!(labels(&tiny), vec![(72.0 + 4.0 * unit, 4)]);
+        assert!(tiny.iter().all(|(d, _)| ((d - 72.0) / (unit / 2.0)).fract().abs() < 1e-3), "{tiny:?}");
+        assert!(tiny.len() >= 8, "{tiny:?}");
+        // At every zoom and in every unit the numbers are at least 30 px apart, positive, and
+        // only across the text area.
+        for z in 1..=100 {
+            let scale = z as f32 * 0.05;
+            for (unit, div, step) in [(72.0, 8, 1), (wordcraft_geom::PT_PER_CM, 4, 1), (wordcraft_geom::PT_PER_CM, 4, 10), (72.0, 8, 72)] {
+                let marks = ruler_marks(72.0, text_w, page_w, (unit, div, step), scale);
+                let found = labels(&marks);
+                let xs: Vec<f32> = found.iter().map(|(d, _)| d * scale).collect();
+                assert!(xs.windows(2).all(|w| w[1] - w[0] >= RULER_LABEL_PX - 1e-3), "scale {scale}, unit {unit}: {xs:?}");
+                assert!(found.iter().all(|(d, n)| *d > 72.0 && *d <= 72.0 + text_w + 1e-3 && *n > 0), "scale {scale}, unit {unit}: {found:?}");
+            }
+        }
+        // Hostile sizes: nothing, or a bounded list, and no panic.
+        assert!(ruler_marks(f32::NAN, text_w, page_w, (unit, 8, 1), 1.0).is_empty());
+        assert!(ruler_marks(72.0, text_w, f32::INFINITY, (unit, 8, 1), 1.0).is_empty());
+        assert!(ruler_marks(72.0, text_w, page_w, (0.0, 8, 1), 1.0).is_empty());
+        assert!(ruler_marks(1e9, text_w, 1e9, (unit, 8, 1), 1.0).len() <= RULER_MAX_MARKS);
+        assert!(ruler_marks(72.0, text_w, 1e9, (unit, 8, 1), 1.0).len() <= RULER_MAX_MARKS);
+    }
+
+    /// The rulers as one frame of `a` drew them: each bar (the grey strip over the page) and the
+    /// numbers along it, as (text, centre x) across and (text, centre y) down.
+    #[derive(Default)]
+    struct DrawnRulers {
+        h_bar: Option<Rect>,
+        v_bar: Option<Rect>,
+        h_labels: Vec<(String, f32)>,
+        v_labels: Vec<(String, f32)>,
+    }
+
+    fn drawn_rulers(ctx: &egui::Context, a: &mut WordApp, t: &mut f64) -> DrawnRulers {
+        *t += 1.0 / 60.0;
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0));
+        let input = egui::RawInput { time: Some(*t), screen_rect: Some(screen), ..Default::default() };
+        let out = ctx.run_ui(input, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        });
+        let grey = Tokens::get(ctx).ruler_margin;
+        let mut d = DrawnRulers::default();
+        if let Some(area) = a.canvas.canvas_rect {
+            let h = Rect::from_min_max(pos2(area.min.x, area.min.y - RULER), pos2(area.max.x, area.min.y));
+            let v = Rect::from_min_max(pos2(area.min.x - RULER, area.min.y), pos2(area.min.x, area.max.y));
+            for c in &out.shapes {
+                match &c.shape {
+                    // The bars: the widest grey rect across the top strip, the tallest down the
+                    // left one (a table's markers are grey too, but small).
+                    egui::Shape::Rect(rs) if rs.fill == grey => {
+                        let r = rs.rect;
+                        if r.min.y >= h.min.y && r.max.y <= h.max.y && d.h_bar.is_none_or(|b| b.width() < r.width()) {
+                            d.h_bar = Some(r);
+                        }
+                        if r.min.x >= v.min.x && r.max.x <= v.max.x && d.v_bar.is_none_or(|b| b.height() < r.height()) {
+                            d.v_bar = Some(r);
+                        }
+                    }
+                    egui::Shape::Text(text) => {
+                        let centre = text.pos + text.galley.size() / 2.0;
+                        if text.pos.y >= h.min.y && text.pos.y < h.max.y && text.pos.x >= h.min.x {
+                            d.h_labels.push((text.galley.text().to_owned(), centre.x));
+                        } else if text.pos.x >= v.min.x && text.pos.x < v.max.x && text.pos.y >= v.min.y && text.pos.y < v.max.y {
+                            d.v_labels.push((text.galley.text().to_owned(), centre.y));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        out.drop_without_applying_deltas();
+        d
+    }
+
+    /// #1878: in Multiple Pages both rulers belong to the caret's page: the horizontal one spans
+    /// that page's rect on screen and the vertical one its height, and they follow the caret to
+    /// another page of the row and to the next row.
+    #[test]
+    fn the_rulers_span_the_caret_page_in_multiple_pages() {
+        let ctx = egui::Context::default();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "One"})).unwrap();
+        for text in ["Two", "Three", "Four"] {
+            a.run("insert.pageBreak", json!({})).unwrap();
+            a.run("text.insert", json!({"text": text})).unwrap();
+        }
+        a.run("edit.goto", json!({"page": 1})).unwrap();
+        a.run("view.multiplePages", json!({})).unwrap();
+        let mut t = 0.0;
+        let frames = |a: &mut WordApp, t: &mut f64| {
+            for _ in 0..4 {
+                drawn_rulers(&ctx, a, t);
+            }
+            drawn_rulers(&ctx, a, t)
+        };
+        let d = frames(&mut a, &mut t);
+        let rects = a.canvas.page_rects.clone();
+        assert!(rects.len() == 4 && a.canvas.cols >= 2, "pages side by side: {} per row of {}", a.canvas.cols, rects.len());
+        let same_x = |bar: Option<Rect>, pr: Rect| bar.is_some_and(|b| (b.min.x - pr.min.x).abs() < 0.5 && (b.max.x - pr.max.x).abs() < 0.5);
+        let same_y = |bar: Option<Rect>, pr: Rect| bar.is_some_and(|b| (b.min.y - pr.min.y).abs() < 0.5 && (b.max.y - pr.max.y).abs() < 0.5);
+        assert!(same_x(d.h_bar, rects[0]), "the horizontal ruler spans page 1: {:?} vs {:?}", d.h_bar, rects[0]);
+        assert!(same_y(d.v_bar, rects[0]), "the vertical ruler spans page 1: {:?} vs {:?}", d.v_bar, rects[0]);
+        assert!(!same_x(d.h_bar, rects[1]), "pages 1 and 2 sit side by side");
+        // The caret moves to the second page of the row: the horizontal ruler follows it there.
+        a.run("edit.goto", json!({"page": 2})).unwrap();
+        let d = frames(&mut a, &mut t);
+        let rects = a.canvas.page_rects.clone();
+        assert!(same_x(d.h_bar, rects[1]), "the horizontal ruler follows the caret to page 2: {:?} vs {:?}", d.h_bar, rects[1]);
+        assert!(same_y(d.v_bar, rects[1]));
+        // And down to the next row: the vertical ruler moves to that page's height.
+        let below = (0..rects.len()).find(|i| rects[*i].min.y > rects[0].min.y + 1.0).expect("a second row of pages");
+        a.run("edit.goto", json!({"page": below + 1})).unwrap();
+        let d = frames(&mut a, &mut t);
+        let rects = a.canvas.page_rects.clone();
+        assert!(same_y(d.v_bar, rects[below]), "the vertical ruler spans page {}: {:?} vs {:?}", below + 1, d.v_bar, rects[below]);
+        assert!(same_x(d.h_bar, rects[below]));
+        assert!(!same_y(d.v_bar, rects[0]), "page 1 is in the row above");
+    }
+
+    /// #1878: the rulers number the text area only, a number gives way to an indent marker on
+    /// it, and zoomed far out the numbers thin out instead of piling up.
+    #[test]
+    fn ruler_numbers_skip_the_margins_and_the_markers_and_thin_out() {
+        let ctx = egui::Context::default();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("view.zoom", json!({"value": 100})).unwrap();
+        let mut t = 0.0;
+        let frames = |a: &mut WordApp, t: &mut f64| {
+            for _ in 0..4 {
+                drawn_rulers(&ctx, a, t);
+            }
+            drawn_rulers(&ctx, a, t)
+        };
+        let names = |labels: &[(String, f32)]| labels.iter().map(|(s, _)| s.clone()).collect::<Vec<String>>();
+        // Inches at 100% on a Letter page with inch margins: 1 to 6 across the text, 1 to 9 down
+        // it; the page edges an inch outside the margins get no "1", "7" or "10".
+        let d = frames(&mut a, &mut t);
+        assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5", "6"]);
+        let down = names(&d.v_labels);
+        assert!(down.len() >= 6 && down[..6] == ["1", "2", "3", "4", "5", "6"], "down the page to the bottom of the view: {down:?}");
+        let pr = a.canvas.page_rects[0];
+        let scale = pr.width() / 612.0;
+        assert!((d.v_labels[0].1 - (pr.min.y + 144.0 * scale)).abs() < 1.0, "the first number is an inch below the top margin");
+        // A left indent of an inch puts the indent markers on the "1", which gives way.
+        a.run("para.indents", json!({"left": 72.0})).unwrap();
+        let d = frames(&mut a, &mut t);
+        assert_eq!(names(&d.h_labels), ["2", "3", "4", "5", "6"]);
+        a.run("para.indents", json!({"left": 0.0})).unwrap();
+        let d = frames(&mut a, &mut t);
+        assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5", "6"]);
+        // At 10% an inch is 9.6 px: a number every 4 inches, the text keeps its size.
+        a.run("view.zoom", json!({"value": 10})).unwrap();
+        let d = frames(&mut a, &mut t);
+        assert_eq!(names(&d.h_labels), ["4"]);
+        assert_eq!(names(&d.v_labels), ["4", "8"]);
+        let (y4, y8) = (d.v_labels[0].1, d.v_labels[1].1);
+        assert!(y8 - y4 >= RULER_LABEL_PX, "the numbers stay apart: {y4} and {y8}");
+    }
+
+    /// #1878: a number also gives way to a tab stop's glyph (set, or being dragged to it) and to
+    /// a table's column and row markers sitting on it.
+    #[test]
+    fn ruler_numbers_give_way_to_tab_stops_and_table_markers() {
+        use crate::ruler_tabs::TabDrag;
+        use wordcraft_doc::props::{TabAlign, TabLeader};
+        let ctx = egui::Context::default();
+        let mut t = 0.0;
+        let frames = |a: &mut WordApp, t: &mut f64| {
+            for _ in 0..4 {
+                drawn_rulers(&ctx, a, t);
+            }
+            drawn_rulers(&ctx, a, t)
+        };
+        let names = |labels: &[(String, f32)]| labels.iter().map(|(s, _)| s.clone()).collect::<Vec<String>>();
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("view.zoom", json!({"value": 100})).unwrap();
+        assert_eq!(names(&frames(&mut a, &mut t).h_labels), ["1", "2", "3", "4", "5", "6"]);
+        // A tab stop an inch in sits on the "1".
+        a.run("para.tabs", json!({"tabs": [{"pos": 72.0}]})).unwrap();
+        assert_eq!(names(&frames(&mut a, &mut t).h_labels), ["2", "3", "4", "5", "6"]);
+        // Dragged to two inches it counts where it lands: the "1" is back and the "2" gives way.
+        let para = a.session.sel.focus.clone();
+        let drag =
+            |at: f32, off: bool| Some(TabDrag { from: Some(72.0), para: para.clone(), align: TabAlign::Left, leader: TabLeader::None, at, off });
+        a.canvas.tab_drag = drag(144.0, false);
+        assert_eq!(names(&drawn_rulers(&ctx, &mut a, &mut t).h_labels), ["1", "3", "4", "5", "6"]);
+        // Off the ruler it counts nowhere.
+        a.canvas.tab_drag = drag(144.0, true);
+        assert_eq!(names(&drawn_rulers(&ctx, &mut a, &mut t).h_labels), ["1", "2", "3", "4", "5", "6"]);
+        a.run("para.tabs", json!({"clearAll": true})).unwrap();
+        assert_eq!(names(&frames(&mut a, &mut t).h_labels), ["1", "2", "3", "4", "5", "6"]);
+        // A three-column table with the caret in the first cell. Narrowing that column puts the
+        // table's right border six inches from the margin: its marker takes the "6", while the
+        // caret cell's own edge (and so its indent marker) ends well short of any whole inch.
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.table", json!({"rows": 1, "cols": 3})).unwrap();
+        a.run("text.insert", json!({"text": "A"})).unwrap();
+        a.run("view.zoom", json!({"value": 100})).unwrap();
+        let cell = |a: &mut WordApp, c: usize| {
+            a.session.layout().pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    wordcraft_layout::Placed::Cell { rect, row: 0, cell, .. } if *cell == c => Some(*rect),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let body = a.session.layout().pages[0].body;
+        let (first, last) = (cell(&mut a, 0), cell(&mut a, 2));
+        let width = body.x + 432.0 - first.x - (last.right() - first.right());
+        a.run("table.columnWidth", json!({"width": width})).unwrap();
+        let d = frames(&mut a, &mut t);
+        let (first, last) = (cell(&mut a, 0), cell(&mut a, 2));
+        assert!((last.right() - (body.x + 432.0)).abs() < 0.5, "the table ends six inches in: {last:?}");
+        let off_inch = (first.right() - body.x).rem_euclid(72.0);
+        assert!((12.0..=60.0).contains(&off_inch), "the caret cell's edge is off the whole inches: {first:?}");
+        assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5"]);
+        let down = names(&d.v_labels);
+        assert!(down.len() >= 3 && down[..3] == ["1", "2", "3"], "{down:?}");
+        // The row's bottom an inch below the top margin takes the "1" down the page.
+        let height = body.y + 72.0 - first.y;
+        a.run("table.rowHeight", json!({"height": height, "rule": "exact"})).unwrap();
+        let d = frames(&mut a, &mut t);
+        assert!((cell(&mut a, 0).bottom() - (body.y + 72.0)).abs() < 0.5);
+        let down = names(&d.v_labels);
+        assert!(down.len() >= 3 && down[..3] == ["2", "3", "4"], "{down:?}");
+        assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5"]);
     }
 
     /// Ruler tab gestures are safe: a click on an indent marker places nothing, only the
