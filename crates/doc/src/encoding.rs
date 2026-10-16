@@ -1,7 +1,8 @@
 //! Windows-1252 (the byte encoding legacy Word text pieces use) and the other single-byte Windows
 //! code pages RTF files name with `\ansicpg` or a font's `\fcharset` (Cyrillic 1251, Central
-//! European 1250, Greek, Turkish, Hebrew, Arabic, Baltic, Vietnamese, Thai), and Mac OS Roman
-//! (10000, RTF `\mac`).
+//! European 1250, Greek, Turkish, Hebrew, Arabic, Baltic, Vietnamese, Thai), Mac OS Roman
+//! (10000, RTF `\mac`), and the East Asian multibyte code pages (932 Shift-JIS, 936 GBK, 949 UHC,
+//! 950 Big5), whose bytes decode as runs rather than one at a time.
 
 /// Windows-1252 code points for 0x80..=0x9F.
 const CP1252: [u16; 32] = [
@@ -286,13 +287,47 @@ pub fn code_page_byte(code_page: u16, b: u8) -> char {
     if b >= 0x80 && OEM_CODE_PAGES.contains(&code_page) { oem_byte(code_page, b) } else { windows_byte(code_page, b) }
 }
 
+/// The East Asian multibyte code pages a document format names with `\ansicpg` or a font's `\cpg`:
+/// 932 Shift-JIS (Japanese), 936 GBK (Simplified Chinese), 949 UHC (Korean) and 950 Big5
+/// (Traditional Chinese).
+pub const MULTIBYTE_CODE_PAGES: [u16; 4] = [932, 936, 949, 950];
+
+/// Whether `code_page` is one of the East Asian multibyte code pages ([`MULTIBYTE_CODE_PAGES`]):
+/// its bytes decode as a run, a lead byte together with its trail byte.
+pub fn is_multibyte_code_page(code_page: u16) -> bool {
+    multibyte_encoding_name(code_page).is_some()
+}
+
+/// The WHATWG encoding name of an East Asian multibyte code page (see [`MULTIBYTE_CODE_PAGES`]),
+/// for `encoding_rs::Encoding::for_label`; `None` for the single-byte code pages, whose bytes
+/// decode one at a time, and anything else.
+pub fn multibyte_encoding_name(code_page: u16) -> Option<&'static str> {
+    Some(match code_page {
+        932 => "shift_jis",
+        936 => "gbk",
+        949 => "euc-kr",
+        950 => "big5",
+        _ => return None,
+    })
+}
+
+/// Whether a document format can name `code_page` for its text: a single-byte Windows, DOS or Mac
+/// one ([`is_byte_code_page`]) or an East Asian multibyte one ([`is_multibyte_code_page`]).
+pub fn is_text_code_page(code_page: u16) -> bool {
+    is_byte_code_page(code_page) || is_multibyte_code_page(code_page)
+}
+
 /// The code page of an RTF or Word font charset (`\fcharset`): 204 Russian → 1251, 238 Eastern
-/// European → 1250, 77 Mac → 10000, 254 PC → 437… `None` for the ANSI and default charsets (the
-/// document's code page applies), symbol fonts and the double-byte East Asian charsets.
+/// European → 1250, 77 Mac → 10000, 254 PC → 437, 255 OEM → 437, 128 Japanese → 932, 129 Korean →
+/// 949, 134 Simplified Chinese → 936, 136 Traditional Chinese → 950… `None` for the ANSI and
+/// default charsets (the document's code page applies) and symbol fonts.
 pub fn charset_code_page(charset: i32) -> Option<u16> {
     Some(match charset {
         77 => MAC_ROMAN_CODE_PAGE,
-        254 => 437,
+        128 => 932,
+        129 => 949,
+        134 => 936,
+        136 => 950,
         161 => 1253,
         162 => 1254,
         163 => 1258,
@@ -302,6 +337,8 @@ pub fn charset_code_page(charset: i32) -> Option<u16> {
         204 => 1251,
         222 => 874,
         238 => 1250,
+        254 => 437,
+        255 => 437,
         _ => return None,
     })
 }
@@ -344,6 +381,25 @@ mod tests {
             assert!(is_byte_code_page(cp), "{cp}");
         }
         assert!(!is_byte_code_page(932) && !is_byte_code_page(0) && !SINGLE_BYTE_CODE_PAGES.contains(&10000));
+    }
+
+    /// #1653: the East Asian charsets and code pages RTF names are multibyte: their bytes decode
+    /// as runs (a lead byte and its trail byte together), not one at a time.
+    #[test]
+    fn east_asian_code_pages_are_multibyte() {
+        assert_eq!(charset_code_page(128), Some(932), "Japanese");
+        assert_eq!(charset_code_page(129), Some(949), "Korean");
+        assert_eq!(charset_code_page(134), Some(936), "Simplified Chinese");
+        assert_eq!(charset_code_page(136), Some(950), "Traditional Chinese");
+        assert_eq!(charset_code_page(255), Some(437), "OEM is single-byte");
+        assert_eq!(MULTIBYTE_CODE_PAGES, [932, 936, 949, 950]);
+        for cp in MULTIBYTE_CODE_PAGES {
+            assert!(is_multibyte_code_page(cp) && is_text_code_page(cp), "{cp}");
+            assert!(!is_byte_code_page(cp) && !SINGLE_BYTE_CODE_PAGES.contains(&cp), "{cp}");
+            assert!(multibyte_encoding_name(cp).is_some(), "{cp}");
+        }
+        assert!(is_text_code_page(1251) && is_text_code_page(437) && is_text_code_page(10000));
+        assert!(!is_text_code_page(0) && !is_text_code_page(9999));
     }
 
     #[test]
