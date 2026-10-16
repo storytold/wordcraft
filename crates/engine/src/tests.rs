@@ -3266,6 +3266,39 @@ fn html_pictures_through_a_symlink_out_of_the_folder_are_not_loaded() {
     assert!(doc.plain_text(StoryRef::Body).contains("Link"));
 }
 
+/// `file.open` on a path reads only a regular file: a named pipe blocked until a writer came, and
+/// `/dev/zero` read until memory ran out.
+#[cfg(unix)]
+#[test]
+fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
+    let dir = scratch_dir("open-fifo");
+    let fifo = dir.join("pipe.docx");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+    let zero = dir.join("zero.txt");
+    std::os::unix::fs::symlink("/dev/zero", &zero).unwrap();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (pipe, device) = (fifo.clone(), zero.clone());
+    std::thread::spawn(move || {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let by_command = s.run("file.open", &json!({"path": pipe.to_string_lossy()})).map(|_| ());
+        let _ = tx.send([by_command.map_err(|e| e.to_string()), crate::io::read_document(&device).map(|_| ())]);
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    if got.is_err() {
+        // Unblock the stuck reader so the thread ends, then fail.
+        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let [pipe, device] = got.expect("opening a named pipe blocked");
+    assert!(pipe.unwrap_err().contains("not a file"));
+    assert!(device.unwrap_err().contains("not a file"));
+}
+
 #[cfg(unix)]
 #[test]
 fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {

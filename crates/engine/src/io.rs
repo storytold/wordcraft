@@ -346,12 +346,7 @@ pub fn open_path_with(path: &std::path::Path, password: Option<&str>) -> Result<
 /// [`open_path_with`] in `region` (see [`open_bytes_in`]).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wordcraft_geom::Region) -> Result<(Document, bool), String> {
-    crate::file_access::check_read(&path.to_string_lossy())?;
-    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    if meta.len() > 2 << 30 {
-        return Err(format!("{}: file is larger than 2 GB", path.display()));
-    }
-    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let bytes = read_document(path)?;
     let name = path.to_string_lossy();
     if matches!(ext_of(&name).as_str(), "html" | "htm" | "xhtml") {
         // Pictures referenced by a relative path load from beside the HTML file.
@@ -363,6 +358,32 @@ pub fn open_path_in(path: &std::path::Path, password: Option<&str>, region: &wor
         return Ok((doc, false));
     }
     open_bytes_in(&name, &bytes, password, region)
+}
+
+/// Largest document file opened by path.
+#[cfg(not(target_arch = "wasm32"))]
+const MAX_DOCUMENT: u64 = 2 << 30;
+
+/// The bytes of the document at `path`, read as `file.open` reads a path: inside the automation
+/// read root, and only a regular file of at most 2 GB. A named pipe would block the open and a
+/// device such as `/dev/zero` would never end ([`read_regular_file`]). Public for the app, which
+/// opens a file whose name isn't valid Unicode through `file.open`'s `data` (#1440).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn read_document(path: &std::path::Path) -> Result<Vec<u8>, String> {
+    crate::file_access::check_read(&path.to_string_lossy())?;
+    let meta = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    if !meta.is_file() {
+        return Err(format!("{}: not a file", path.display()));
+    }
+    if meta.len() > MAX_DOCUMENT {
+        return Err(format!("{}: file is larger than 2 GB", path.display()));
+    }
+    // Checked again on the opened file, which may not be the one just looked at.
+    match read_regular_file(path, MAX_DOCUMENT) {
+        Some(bytes) if bytes.len() as u64 <= MAX_DOCUMENT => Ok(bytes),
+        Some(_) => Err(format!("{}: file is larger than 2 GB", path.display())),
+        None => Err(format!("{}: could not be read as a file", path.display())),
+    }
 }
 
 /// The pictures an HTML file names by a path relative to its folder.
