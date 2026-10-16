@@ -9,8 +9,8 @@
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
 //! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
-//! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
-//! carried. Anything unexpected returns `None`, and the generated part is written as before.
+//! relationship are dropped unless owned: mail merge is regenerated with remapped external
+//! sources by `mail_merge`. Anything unexpected returns `None`, and the generated part is written as before.
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
 const OWNED: &[&str] = &[
@@ -19,6 +19,7 @@ const OWNED: &[&str] = &[
     "w:displayBackgroundShape",
     "w:mirrorMargins",
     "w:attachedTemplate",
+    "w:mailMerge",
     "w:linkStyles",
     "w:trackRevisions",
     "w:documentProtection",

@@ -1,7 +1,9 @@
 //! [`Document`] → DOCX.
 
 mod embed;
+mod mail_merge;
 mod settings_merge;
+pub(crate) use mail_merge::keep_rels as mail_merge_rels;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
 mod math;
 mod props;
@@ -395,12 +397,14 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     let mut settings_rels = PartRels::default();
     let template = doc.settings.attached_template.as_deref().map(str::trim).filter(|t| !t.is_empty());
     let template_rel = template.map(|t| settings_rels.add(rt::ATTACHED_TEMPLATE, t, true));
+    let mail_merge = mail_merge::write(doc, &mut settings_rels)?;
     push_part(
         &mut entries,
         &mut overrides,
         "word/settings.xml",
         {
-            let generated = settings_xml(doc, notes_part(doc, &wr, true), notes_part(doc, &wr, false), template_rel.as_deref());
+            let generated =
+                settings_xml(doc, notes_part(doc, &wr, true), notes_part(doc, &wr, false), template_rel.as_deref(), mail_merge.as_deref());
             match doc.passthrough.get(crate::package::SETTINGS_ORIG) {
                 Some(orig) => settings_merge::merge(orig, &generated).unwrap_or(generated),
                 None => generated,
@@ -955,7 +959,7 @@ fn notes_part(doc: &Document, wr: &Writer<'_>, foot: bool) -> bool {
 
 /// `w:settings`, its children in the schema's order (CT_Settings is a sequence). `template_rel`
 /// is the id of the attached template's relationship, when there is one.
-fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>) -> Vec<u8> {
+fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: Option<&str>, mail_merge: Option<&str>) -> Vec<u8> {
     let s = &doc.settings;
     let s_notes = (&doc.footnote_separators, &doc.endnote_separators);
     let mut w = W::new();
@@ -993,6 +997,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     }
     if s.link_styles {
         w.empty("w:linkStyles", &[]);
+    }
+    if let Some(xml) = mail_merge {
+        w.raw(xml);
     }
     if s.track_changes {
         w.empty("w:trackRevisions", &[]);

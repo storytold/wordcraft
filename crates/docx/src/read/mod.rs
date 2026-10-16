@@ -1049,10 +1049,14 @@ impl Reader<'_> {
 
     fn read_settings(&mut self, path: &str) -> Result<(), DocxError> {
         let Some(root) = self.xml(path)? else { return Ok(()) };
-        if let Some(b) = self.pkg.get(path).filter(|b| crate::write::settings_has_unowned(b)) {
+        let mail_merge = root.child("w:mailMerge").is_some();
+        if let Some(b) = self.pkg.get(path).filter(|b| mail_merge || crate::write::settings_has_unowned(b)) {
             self.doc.passthrough.insert(crate::package::SETTINGS_ORIG.into(), Arc::new(b.to_vec()));
         }
         let rels = self.pkg.rels(path);
+        if mail_merge {
+            self.doc.passthrough.insert(crate::package::MAIL_MERGE_RELS.into(), Arc::new(crate::write::mail_merge_rels(&rels)?));
+        }
         let s = &mut self.doc.settings;
         for k in root.els() {
             match k.name.as_str() {

@@ -338,7 +338,9 @@ fn extended_properties_are_kept_without_words_counts_and_personal_ones_follow_th
         assert!(!a.contains(gone), "{gone}: {a}");
     }
     assert!(a.contains("<Application>WordCraft</Application>"));
-    let private = make(SETTINGS);
+    // This privacy fixture has no mail-merge source relationships; do not include a dangling source.
+    let settings = SETTINGS.replace(r#"<w:mailMerge><w:mainDocumentType w:val="formLetters"/><w:dataSource r:id="rId9"/></w:mailMerge>"#, "");
+    let private = make(&settings);
     assert!(!private.contains("Company") && !private.contains("Manager"), "{private}");
     assert!(private.contains("<Template>Normal.dotm</Template>"));
 }

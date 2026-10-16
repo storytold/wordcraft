@@ -1,6 +1,6 @@
 # File-format parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (every table style part round-trips, #714); previously trivial: VML freeforms read and kept on save; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: `flowChartOr` draws its circle and cross spokes, as in Word; previously trivial: RTF: Mac OS Roman and DOS text, #1653; previously trivial: VML text boxes keep their internal margins, fit to their text and vertical alignment; hidden drawings not shown; previously trivial: PDF export draws horizontal and vertical lines inside groups, #1474; previously trivial: symbol-font text exported as Unicode, #776; previously trivial: text-box margins, Resize shape to fit text and freeforms in groups, #743; previously trivial: formatted paste from the system clipboard's HTML and RTF, #687; previously trivial: independent complex-script formatting inheritance and round-trip regression tests; previously trivial: import/export fixes for TXT, RTF, ODT, HTML and LaTeX, #433–#440; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-16 · **Change:** trivial (external mail-merge sources survive DOCX saves; previously trivial: every table style part round-trips, #714); previously trivial: VML freeforms read and kept on save; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: `flowChartOr` draws its circle and cross spokes, as in Word; previously trivial: RTF: Mac OS Roman and DOS text, #1653; previously trivial: VML text boxes keep their internal margins, fit to their text and vertical alignment; hidden drawings not shown; previously trivial: PDF export draws horizontal and vertical lines inside groups, #1474; previously trivial: symbol-font text exported as Unicode, #776; previously trivial: text-box margins, Resize shape to fit text and freeforms in groups, #743; previously trivial: formatted paste from the system clipboard's HTML and RTF, #687; previously trivial: independent complex-script formatting inheritance and round-trip regression tests; previously trivial: import/export fixes for TXT, RTF, ODT, HTML and LaTeX, #433–#440; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
 
 Every format Word opens or saves, what WordCraft does with it, and how it's tested. Fidelity is the
 share of a typical real-world file's content and formatting that survives (read: shows correctly;
@@ -187,9 +187,20 @@ hold was dropped without a warning (on 18 real-world Word documents: compatibili
 of 18; the privacy options are modelled since #1062). Now the writer merges into the
 file's original (`crates/docx/src/write/settings_merge.rs`): the original root and every child
 the model doesn't own stay byte for byte; owned children follow the model, in CT_Settings order;
-in `w:compat` only `compatibilityMode` is replaced. Kept children that point at a relationship
-(a mail-merge data source) are dropped. Files WordCraft wrote itself keep nothing extra. Tests:
-`crates/docx/tests/settings_merge.rs`.
+in `w:compat` only `compatibilityMode` is replaced. External mail-merge sources now have their
+own preservation path: `w:mailMerge` (including query, connection string and ODSO settings) is
+kept with its referenced external `mailMergeSource` and `mailMergeHeaderSource` relationships.
+IDs are allocated with the attached-template relationship and rewritten in the kept subtree;
+unrelated relationships are not emitted. Opening or saving never connects to a source or runs
+a query. Two-save synthetic tests retain three MERGEFIELD instructions and an ordinary text edit.
+Missing, duplicate, wrong-type or empty source relationships refuse the save with a mail-merge
+error instead of silently dropping the template's identity. Internal recipient-data parts are
+not supported by this slice: a referenced internal relationship also refuses the save. Other
+unowned settings with relationship IDs remain outside this preservation path. Files WordCraft
+wrote itself keep nothing extra. Tests: `crates/docx/tests/settings_merge.rs` and `mail_merge.rs`.
+Public format references: [mailMerge](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.mailmerge)
+and [ODSO source reference](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.sourcereference).
+No new Microsoft Word runtime comparison or corpus-readiness claim accompanies these synthetic tests.
 
 ## Unmodelled-part preservation
 
@@ -210,6 +221,7 @@ attributes inside stories and style or list definitions; a regenerated theme. Te
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | External mail-merge settings and sources survive two DOCX saves; source-reference errors are explicit; wider corpus and internal recipient-data gaps remain |
 | 2026-10-13 | trivial | A cell's explicit top vertical alignment (`w:vAlign w:val="top"`) is kept on read and write and beats a table style that centres or bottom-aligns (#1288) |
 | 2026-10-14 | trivial | Row table border exceptions survive DOCX saves |
 | 2026-10-12 | trivial | Fields keep `w:dirty` through DOCX round trips — on buffered fields and range-field begin markers alike — and computing a result (Update Field, Update Table) clears it like Word's F9, so a generator's placeholder TOC still refreshes when Word opens the file until WordCraft replaces the placeholder (#877) |
