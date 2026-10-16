@@ -1186,7 +1186,7 @@ impl WordApp {
         // Drawing leaves the caret where it was: following it would pull the view off the ink.
         if self.session.selects_whole_story() || id == "select.all" {
             self.canvas.scroll_to_caret = false;
-        } else if !id.starts_with("view.") && !id.starts_with("document.") && !id.starts_with("format.state") && !id.starts_with("draw.") {
+        } else if !["ui.", "view.", "document.", "format.state", "draw."].iter().any(|p| id.starts_with(p)) {
             self.canvas.scroll_to_caret = true;
         }
         for req in std::mem::take(&mut self.session.ui_requests) {
@@ -6556,6 +6556,17 @@ mod tests {
         keeps_view(&mut a, "draw.stroke", json!({"page": 0, "points": [[300, 500], [400, 500]], "tool": "pencil"}));
         keeps_view(&mut a, "draw.erase", json!({"page": 0, "x": 350, "y": 500}));
         a.canvas.scroll_to_caret = false;
+        a.run("text.insert", json!({"text": "x"})).unwrap();
+        assert!(a.canvas.scroll_to_caret, "typing still brings the caret into view");
+    }
+
+    /// #2054: clicking a ribbon tab while a footer is being edited scrolled the page a little.
+    #[test]
+    fn ribbon_tab_click_does_not_follow_the_caret() {
+        let mut a = typed();
+        a.canvas.scroll_to_caret = false;
+        a.run("ui.tab", json!({"tab": "Design"})).unwrap();
+        assert!(!a.canvas.scroll_to_caret, "switching tabs left the view alone");
         a.run("text.insert", json!({"text": "x"})).unwrap();
         assert!(a.canvas.scroll_to_caret, "typing still brings the caret into view");
     }
