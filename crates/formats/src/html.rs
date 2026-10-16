@@ -13,6 +13,7 @@
 
 use std::sync::Arc;
 
+use wordcraft_doc::props::VAlign;
 use wordcraft_doc::{Align, Document};
 
 use crate::model::{
@@ -1080,6 +1081,26 @@ impl<'r> Builder<'r> {
                 }
                 let num = |k: &str| attr(attrs, k).and_then(|v| v.trim().parse::<u32>().ok()).map(|v| v.clamp(1, 63));
                 let shading = attr(attrs, "bgcolor").and_then(parse_color).or(fmt.background);
+                let mut valign = attr(attrs, "valign").and_then(|v| match v.trim().to_ascii_lowercase().as_str() {
+                    "top" => Some(VAlign::Top),
+                    "middle" | "center" => Some(VAlign::Center),
+                    "bottom" => Some(VAlign::Bottom),
+                    _ => None,
+                });
+                if let Some(st) = attr(attrs, "style") {
+                    for decl in st.split(';') {
+                        if let Some((k, v)) = decl.split_once(':') {
+                            if k.trim().eq_ignore_ascii_case("vertical-align") {
+                                match v.trim().to_ascii_lowercase().as_str() {
+                                    "top" => valign = Some(VAlign::Top),
+                                    "middle" | "center" => valign = Some(VAlign::Center),
+                                    "bottom" => valign = Some(VAlign::Bottom),
+                                    _ => {}
+                                }
+                            }
+                        }
+                    }
+                }
                 self.cells.push(Cell {
                     blocks: Vec::new(),
                     colspan: num("colspan").unwrap_or(1),
@@ -1088,6 +1109,7 @@ impl<'r> Builder<'r> {
                     header: name == "th",
                     shading,
                     borders: None,
+                    valign,
                 });
                 fmt.background = None;
                 self.containers.push(Vec::new());
@@ -1441,7 +1463,12 @@ fn table_html(t: &FTable, out: &mut String, depth: usize) {
             if c.rowspan > 1 {
                 attrs.push_str(&format!(" rowspan=\"{}\"", c.rowspan));
             }
-            let mut css = vec!["padding:4px 6px".to_string(), "vertical-align:top".to_string()];
+            let v_css = match c.valign {
+                Some(VAlign::Center) => "vertical-align:middle",
+                Some(VAlign::Bottom) => "vertical-align:bottom",
+                _ => "vertical-align:top",
+            };
+            let mut css = vec!["padding:4px 6px".to_string(), v_css.to_string()];
             if !t.borderless {
                 css.insert(0, "border:1px solid #999".to_string());
             }
@@ -1784,5 +1811,23 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+    }
+
+    #[test]
+    fn table_cell_vertical_alignment() {
+        let f = parse("<table><tr><td valign=top>top</td><td valign=\"center\">mid</td><td style=\"vertical-align: bottom\">bot</td></tr></table>");
+        let FBlock::Table(t) = &f.blocks[0] else { panic!() };
+        assert_eq!(t.rows[0][0].valign, Some(VAlign::Top));
+        assert_eq!(t.rows[0][1].valign, Some(VAlign::Center));
+        assert_eq!(t.rows[0][2].valign, Some(VAlign::Bottom));
+        let doc = crate::model::to_doc(&f);
+        let wordcraft_doc::Block::Table(dt) = &*doc.body[0] else { panic!() };
+        assert_eq!(dt.rows[0].cells[0].props.valign, Some(VAlign::Top));
+        assert_eq!(dt.rows[0].cells[1].props.valign, Some(VAlign::Center));
+        assert_eq!(dt.rows[0].cells[2].props.valign, Some(VAlign::Bottom));
+        let html = export(&doc);
+        assert!(html.contains("vertical-align:top"));
+        assert!(html.contains("vertical-align:middle"));
+        assert!(html.contains("vertical-align:bottom"));
     }
 }

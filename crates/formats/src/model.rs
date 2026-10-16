@@ -7,7 +7,7 @@ use std::sync::Arc;
 use wordcraft_doc::numbering::{AbstractNum, Level, ListKind, Num, levels_for};
 use wordcraft_doc::para::{InlineObject, OBJ, PAGE_BREAK, Run};
 use wordcraft_doc::props::{
-    Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VMerge, VertAlign,
+    Border, BorderStyle, Borders, CellProps, CharProps, NumRef, ParaProps, RowProps, TextColor, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -227,11 +227,12 @@ pub struct Cell {
     pub shading: Option<Rgb>,
     /// The cell's own borders (RTF `\clbrdr…`), drawn whatever the table's style.
     pub borders: Option<wordcraft_doc::props::Borders>,
+    pub valign: Option<VAlign>,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { blocks: Vec::new(), colspan: 1, rowspan: 1, covered: false, header: false, shading: None, borders: None }
+        Cell { blocks: Vec::new(), colspan: 1, rowspan: 1, covered: false, header: false, shading: None, borders: None, valign: None }
     }
 }
 
@@ -644,7 +645,15 @@ impl<'a> Builder<'a> {
                     VMerge::None
                 };
                 row.cells.push(wordcraft_doc::Cell {
-                    props: CellProps { width: Some(w), span: span as u32, vmerge, shading: c.shading, borders: c.borders, ..Default::default() },
+                    props: CellProps {
+                        width: Some(w),
+                        span: span as u32,
+                        vmerge,
+                        shading: c.shading,
+                        borders: c.borders,
+                        valign: c.valign,
+                        ..Default::default()
+                    },
                     blocks,
                     controls: Default::default(),
                 });
@@ -977,6 +986,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
                 header,
                 shading: c.props.shading,
                 borders: c.props.borders,
+                valign: c.props.valign,
             });
         }
         rows.push(cells);
