@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use kurbo::BezPath;
 use skrifa::instance::{Location, LocationRef, Size};
-use skrifa::outline::{DrawSettings, OutlinePen};
+use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, OutlinePen, Target};
 use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
@@ -82,6 +82,8 @@ pub struct FontFace {
     pub instance: Option<harfrust::ShaperInstance>,
     /// Basic Multilingual Plane coverage bitset, built on first use.
     bmp: std::sync::OnceLock<Box<[u64]>>,
+    // Some legacy CJK fonts assemble their contours with TrueType instructions.
+    outline_hinter: std::sync::OnceLock<Option<HintingInstance>>,
 }
 
 /// A cheap `Copy` handle to a face. Faces are never unloaded, so the handle lives for the rest of
@@ -175,7 +177,28 @@ impl FontFace {
         if let Some(f) = self.skrifa()
             && let Some(g) = f.outline_glyphs().get(GlyphId::new(gid))
         {
-            let _ = g.draw(DrawSettings::unhinted(Size::unscaled(), self.location()), &mut pen);
+            let hinter = self.outline_hinter.get_or_init(|| {
+                let outlines = f.outline_glyphs();
+                if !outlines.require_interpreter() {
+                    return None;
+                }
+                // At UPEM pixels, hinted coordinates remain in font units. This
+                // executes contour assembly without tying the cache to view zoom.
+                HintingInstance::new(
+                    &outlines,
+                    Size::new(self.upem as f32),
+                    self.location(),
+                    HintingOptions { engine: Engine::Interpreter, target: Target::Mono },
+                )
+                .map_err(|e| log::warn!("Cannot initialize outline interpreter for {}: {e}", self.family))
+                .ok()
+            });
+            let settings =
+                hinter.as_ref().map_or_else(|| DrawSettings::unhinted(Size::unscaled(), self.location()), |h| DrawSettings::hinted(h, false));
+            if let Err(e) = g.draw(settings, &mut pen) {
+                log::warn!("Cannot draw glyph {gid} in {}: {e}", self.family);
+                return BezPath::new();
+            }
         }
         pen.0
     }
@@ -849,6 +872,7 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         bytes,
         index,
         bmp: std::sync::OnceLock::new(),
+        outline_hinter: std::sync::OnceLock::new(),
     })
 }
 
@@ -1708,6 +1732,26 @@ mod tests_sysfonts;
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    #[ignore = "requires a locally licensed kaiu.ttf; set WORDCRAFT_TEST_KAI_FONT"]
+    fn kai_contours_include_complete_character_body() {
+        use kurbo::Shape;
+        let path = std::env::var_os("WORDCRAFT_TEST_KAI_FONT").expect("set WORDCRAFT_TEST_KAI_FONT");
+        let db = super::FontDb::with_font_dirs(vec![]);
+        db.set_system_fallback(false);
+        assert!(db.add_font(std::fs::read(path).unwrap()) > 0);
+        let face = db.face("DFKai-SB", "Regular");
+        assert_eq!(face.family, "DFKai-SB");
+        for ch in ['中', '文', '契', '約'] {
+            let outline = face.glyph_outline(face.glyph_for(ch));
+            let bounds = outline.bounding_box();
+            eprintln!("{ch}: {bounds:?}, upem={}", face.upem);
+            assert!(bounds.width() > face.upem * 0.5, "{ch}: missing horizontal strokes");
+            assert!(bounds.height() > face.upem * 0.5, "{ch}: missing vertical strokes");
+            assert!(std::sync::Arc::ptr_eq(&db.outline(&face, face.glyph_for(ch)), &db.outline(&face, face.glyph_for(ch))));
+        }
+    }
+
     use super::*;
 
     #[test]
