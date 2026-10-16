@@ -67,16 +67,32 @@ pub fn specs() -> Vec<CommandSpec> {
             if entry.is_empty() {
                 return Err(CmdError::Params("select a citation or give `entry`".into()));
             }
+            let category = match p::u64(v, "category") {
+                Some(c) if (1..=16).contains(&c) => Some(c as u8),
+                Some(_) => return Err(CmdError::Params("`category` is 1-16".into())),
+                None => None,
+            };
             let (_, b) = s.sel.ordered();
-            s.doc.insert_object(&b, InlineObject::Field { instr: format!("TA \\l \"{}\"", entry.replace('"', "")), result: String::new(), locked: false, dirty: false, code: false, form: String::new() }, &CharProps { hidden: Some(true), ..Default::default() })?;
+            s.doc.insert_object(&b, ta_field(&entry, category), &CharProps { hidden: Some(true), ..Default::default() })?;
             Ok(json!({"entry": entry}))
         })
-        .params(r#"{"entry"?: string}"#)
+        .params(r#"{"entry"?: string, "category"?: 1-16 (Word's categories: 1 Cases, 2 Statutes, 3 Other Authorities, 4 Rules, 5 Treatises, 6 Regulations, 7 Constitutional Provisions)}"#)
         .key(super::non_mac("Alt+Shift+I")),
-        CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", |s, _| {
-            generated_list(s, "TOA", "Table of Authorities")?;
+        CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", |s, v| {
+            let mut instr = String::from("TOA");
+            match p::u64(v, "category") {
+                Some(c) if (1..=16).contains(&c) => instr.push_str(&format!(" \\c \"{c}\"")),
+                Some(_) => return Err(CmdError::Params("`category` is 1-16".into())),
+                None => {}
+            }
+            if p::bool(v, "passim").unwrap_or(false) {
+                instr.push_str(" \\p");
+            }
+            let title: String = p::str(v, "title").unwrap_or("Table of Authorities").chars().filter(|c| !c.is_control()).take(255).collect();
+            generated_list(s, &instr, &title)?;
             sel_result(s)
-        }),
+        })
+        .params(r#"{"category"?: 1-16 (TOA \c: only citations marked with that category), "passim"?: bool (TOA \p: "passim" for an authority cited on five or more pages), "title"?: string}"#),
         CommandSpec::new("references.updateAuthorities", "Update Table", "References › Table of Authorities", |s, _| {
             update_generated(s)?;
             sel_result(s)

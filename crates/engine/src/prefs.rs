@@ -56,6 +56,11 @@ pub struct Prefs {
     /// in Word). A damaged saved value reads as the defaults.
     #[serde(deserialize_with = "crate::cmd::tools::lenient_autocorrect")]
     pub autocorrect: crate::cmd::tools::AutoCorrectPrefs,
+    /// Optional modules the user turned on, by module id: off until the user switches one on
+    /// (File › Options › Add-ins). The core ships none of its own: a module brings its commands
+    /// and data (`wordcraft-law` is `law`), and the engine only reads this switch.
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub modules: std::collections::BTreeMap<String, bool>,
 }
 
 impl Default for Prefs {
@@ -80,11 +85,18 @@ impl Default for Prefs {
             detect_language: true,
             default_language: None,
             autocorrect: Default::default(),
+            modules: Default::default(),
         }
     }
 }
 
 impl Prefs {
+    /// Whether an optional module is turned on ([`Prefs::modules`]): a module is off until the
+    /// user switches it on (File › Options › Add-ins).
+    pub fn module_enabled(&self, id: &str) -> bool {
+        self.modules.get(id).copied().unwrap_or(false)
+    }
+
     /// What the spelling check skips.
     pub fn spelling(&self) -> wordcraft_proof::Options {
         wordcraft_proof::Options {

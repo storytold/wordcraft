@@ -59,6 +59,7 @@ wordcraft-engine = { workspace = true, features = ["test-support"] }
 # interface tests lay out explicitly: default faces plus monochrome emoji fallbacks.
 egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
+wordcraft-law = { workspace = true }
 zip = { workspace = true }
 
 [build-dependencies]

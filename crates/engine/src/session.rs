@@ -8,7 +8,7 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, PartKind, Path, Pos, StoryRef};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, ViewMode};
 
-use crate::{CmdError, ImeEditOutcome, Registry};
+use crate::{CmdError, CommandSpec, ImeEditOutcome, Registry};
 
 mod documents;
 mod views;
@@ -234,6 +234,13 @@ pub struct Session {
     order: Vec<u64>,
     /// Untitled documents made so far, for the next one's name (`Document3`).
     untitled_count: u32,
+    /// Document-level lint findings by source (each module check keeps its own; Review ›
+    /// Proofing reads them all).
+    lint_findings: std::collections::BTreeMap<String, Vec<serde_json::Value>>,
+    /// Commands to run before a PDF export (`(id, params)`); modules register checks here.
+    export_check_commands: Vec<(String, serde_json::Value)>,
+    /// English spelling and grammar supplements from optional modules (LawCraft when on).
+    pub module_en: wordcraft_proof::ModuleEn,
 }
 
 impl Session {

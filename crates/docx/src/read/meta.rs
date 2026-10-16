@@ -91,6 +91,23 @@ impl Reader<'_> {
                     };
                     s.zoom = Some(Zoom { percent, fit }).filter(|z| z.percent != 100 || z.fit.is_some());
                 }
+                // §17.15.1.20: document variables. WordCraft's per-section page-number prefixes
+                // ride here (see `wordcraft_doc::section::PAGE_NUM_PREFIX_DOCVAR`); others are kept
+                // so a save preserves them.
+                "w:docVars" => {
+                    for v in k.children("w:docVar") {
+                        if s.doc_vars.len() >= crate::MAX_DOC_VARS {
+                            break;
+                        }
+                        let (Some(name), Some(val)) = (v.attr("w:name"), v.attr("w:val")) else { continue };
+                        if name.is_empty() {
+                            continue;
+                        }
+                        let name: String = name.chars().take(crate::MAX_DOC_VAR_NAME).collect();
+                        let val: String = val.chars().take(crate::MAX_DOC_VAR_VALUE).collect();
+                        s.doc_vars.push((name, val));
+                    }
+                }
                 _ => {}
             }
         }

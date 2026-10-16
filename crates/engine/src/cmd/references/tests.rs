@@ -100,6 +100,19 @@ fn docx_styleref_header_shows_each_page_s_chapter() {
     assert!(instr.is_some_and(|i| i.contains(r#"STYLEREF  "heading 1""#)));
 }
 
+#[test]
+fn update_fields_runs_registered_hooks() {
+    static CALLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    fn mark(_: &mut Session) -> Result<(), CmdError> {
+        CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+    crate::hooks::register_on_update_fields(mark);
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.run("references.updateFields", &json!({})).unwrap();
+    assert!(CALLED.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 /// #402: Custom Table of Contents settings become TOC switches, and updating honours them:
 /// levels (`\o`), a style with a level (`\t`), no hyperlinks, page numbers after a space
 /// (`\p`), or none at all (`\n`).

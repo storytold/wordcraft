@@ -505,8 +505,17 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             {
                 *top = top.saturating_add(u32::try_from(shift).unwrap_or(u32::MAX));
             }
-            let page =
-                l.caret(&Pos { story: StoryRef::Body, path: target, off: e.lead }).and_then(|c| l.pages.get(c.page)).map(|pg| pg.number).unwrap_or(1);
+            let page = l
+                .caret(&Pos { story: StoryRef::Body, path: target, off: e.lead })
+                .and_then(|c| l.pages.get(c.page))
+                .map(|pg| {
+                    if let Some((_, sp)) = s.doc.sections().get(pg.section) {
+                        sp.format_page_number(pg.number)
+                    } else {
+                        super::page::sect(s).format_page_number(pg.number)
+                    }
+                })
+                .unwrap_or_else(|| "1".to_string());
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let link = links.get(k).cloned().flatten();
             // With a bookmark to point at, the page number is a `PAGEREF` field, as Word writes

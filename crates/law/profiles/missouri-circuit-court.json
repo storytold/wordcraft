@@ -1,0 +1,991 @@
+{
+  "schema": 1,
+  "id": "missouri-circuit-court",
+  "name": "Missouri circuit court",
+  "jurisdiction": "Missouri",
+  "verified": true,
+  "docs": {
+    "motion": {
+      "label": "Motion",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "indentFirst": 36
+          }
+        },
+        {
+          "name": "Numbered",
+          "basedOn": "Body",
+          "next": "Numbered",
+          "para": {
+            "indentLeft": 72,
+            "indentFirst": -30,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Title",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "bold": true,
+            "caps": true,
+            "spacing": 0,
+            "kern": 0
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "contextualSpacing": false,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Court",
+          "basedOn": "Normal",
+          "next": "Court State",
+          "chr": {
+            "bold": true,
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Court State",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "italic": false,
+            "color": "auto"
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "next": "Signature",
+          "para": {
+            "indentLeft": 234,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Certificate Heading",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "spaceBefore": 18,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        }
+      ],
+      "sections": [
+        {
+          "id": "caption",
+          "name": "Caption",
+          "style": "Caption",
+          "matchStyle": "Court",
+          "fields": [
+            "court",
+            "county",
+            "partyNames",
+            "partyRoles",
+            "caseNumber"
+          ]
+        },
+        {
+          "id": "title",
+          "name": "Title",
+          "style": "Title",
+          "matchStyle": "Title"
+        },
+        {
+          "id": "body",
+          "name": "Body",
+          "style": "Body",
+          "matchStyle": "Body"
+        },
+        {
+          "id": "signature",
+          "name": "Signature block",
+          "style": "Signature",
+          "matchStyle": "Signature",
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "fields": [
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email",
+            "signature"
+          ]
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate",
+          "matchStyle": "Certificate Heading",
+          "source": "Mo. Sup. Ct. R. 43.01"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "caption",
+            "title",
+            "body",
+            "signature"
+          ],
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 43.01",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Missouri e-Filing (no rule cited)",
+          "effective": "2026-10-15"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 55.03",
+      "effective": "2026-10-15"
+    },
+    "notice": {
+      "label": "Notice",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "indentFirst": 36
+          }
+        },
+        {
+          "name": "Numbered",
+          "basedOn": "Body",
+          "next": "Numbered",
+          "para": {
+            "indentLeft": 72,
+            "indentFirst": -30,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Title",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "bold": true,
+            "caps": true,
+            "spacing": 0,
+            "kern": 0
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "contextualSpacing": false,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Court",
+          "basedOn": "Normal",
+          "next": "Court State",
+          "chr": {
+            "bold": true,
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Court State",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "italic": false,
+            "color": "auto"
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "next": "Signature",
+          "para": {
+            "indentLeft": 234,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Certificate Heading",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "spaceBefore": 18,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        }
+      ],
+      "sections": [
+        {
+          "id": "caption",
+          "name": "Caption",
+          "style": "Caption",
+          "matchStyle": "Court",
+          "fields": [
+            "court",
+            "county",
+            "partyNames",
+            "partyRoles",
+            "caseNumber"
+          ]
+        },
+        {
+          "id": "title",
+          "name": "Title",
+          "style": "Title",
+          "matchStyle": "Title"
+        },
+        {
+          "id": "body",
+          "name": "Body",
+          "style": "Body",
+          "matchStyle": "Body"
+        },
+        {
+          "id": "signature",
+          "name": "Signature block",
+          "style": "Signature",
+          "matchStyle": "Signature",
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "fields": [
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email",
+            "signature"
+          ]
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate",
+          "matchStyle": "Certificate Heading",
+          "source": "Mo. Sup. Ct. R. 43.01"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "caption",
+            "title",
+            "body",
+            "signature"
+          ],
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 43.01",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Missouri e-Filing (no rule cited)",
+          "effective": "2026-10-15"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 55.03",
+      "effective": "2026-10-15"
+    },
+    "answer": {
+      "label": "Answer",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "indentFirst": 36
+          }
+        },
+        {
+          "name": "Numbered",
+          "basedOn": "Body",
+          "next": "Numbered",
+          "para": {
+            "indentLeft": 72,
+            "indentFirst": -30,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Title",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "bold": true,
+            "caps": true,
+            "spacing": 0,
+            "kern": 0
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "contextualSpacing": false,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Court",
+          "basedOn": "Normal",
+          "next": "Court State",
+          "chr": {
+            "bold": true,
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Court State",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "italic": false,
+            "color": "auto"
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "next": "Signature",
+          "para": {
+            "indentLeft": 234,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Certificate Heading",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "spaceBefore": 18,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        }
+      ],
+      "sections": [
+        {
+          "id": "caption",
+          "name": "Caption",
+          "style": "Caption",
+          "matchStyle": "Court",
+          "fields": [
+            "court",
+            "county",
+            "partyNames",
+            "partyRoles",
+            "caseNumber"
+          ]
+        },
+        {
+          "id": "title",
+          "name": "Title",
+          "style": "Title",
+          "matchStyle": "Title"
+        },
+        {
+          "id": "body",
+          "name": "Body",
+          "style": "Body",
+          "matchStyle": "Body"
+        },
+        {
+          "id": "signature",
+          "name": "Signature block",
+          "style": "Signature",
+          "matchStyle": "Signature",
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "fields": [
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email",
+            "signature"
+          ]
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate",
+          "matchStyle": "Certificate Heading",
+          "source": "Mo. Sup. Ct. R. 43.01"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "caption",
+            "title",
+            "body",
+            "signature"
+          ],
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "certificateOfService"
+          ],
+          "source": "Mo. Sup. Ct. R. 43.01",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Missouri e-Filing (no rule cited)",
+          "effective": "2026-10-15"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 55.03",
+      "effective": "2026-10-15"
+    },
+    "petition": {
+      "label": "Petition",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "indentFirst": 36
+          }
+        },
+        {
+          "name": "Numbered",
+          "basedOn": "Body",
+          "next": "Numbered",
+          "para": {
+            "indentLeft": 72,
+            "indentFirst": -30,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Title",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "bold": true,
+            "caps": true,
+            "spacing": 0,
+            "kern": 0
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "contextualSpacing": false,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Court",
+          "basedOn": "Normal",
+          "next": "Court State",
+          "chr": {
+            "bold": true,
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Court State",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "caps": true
+          },
+          "para": {
+            "align": "center",
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceAfter": 24
+          }
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Caption",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 12,
+            "italic": false,
+            "color": "auto"
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            },
+            "spaceBefore": 0,
+            "spaceAfter": 0
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "next": "Signature",
+          "para": {
+            "indentLeft": 234,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        },
+        {
+          "name": "Certificate Heading",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "spaceBefore": 18,
+            "spaceAfter": 12
+          }
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "next": "Certificate",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.15
+            }
+          }
+        }
+      ],
+      "sections": [
+        {
+          "id": "caption",
+          "name": "Caption",
+          "style": "Caption",
+          "matchStyle": "Court",
+          "fields": [
+            "court",
+            "county",
+            "partyNames",
+            "partyRoles",
+            "caseNumber"
+          ]
+        },
+        {
+          "id": "title",
+          "name": "Title",
+          "style": "Title",
+          "matchStyle": "Title"
+        },
+        {
+          "id": "body",
+          "name": "Body",
+          "style": "Body",
+          "matchStyle": "Body"
+        },
+        {
+          "id": "signature",
+          "name": "Signature block",
+          "style": "Signature",
+          "matchStyle": "Signature",
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "fields": [
+            "attorneyName",
+            "barNumber",
+            "attorneyAddress",
+            "telephone",
+            "email",
+            "signature"
+          ]
+        },
+        {
+          "id": "verification",
+          "name": "Verification",
+          "style": "Certificate"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "caption",
+            "title",
+            "body",
+            "signature"
+          ],
+          "source": "Mo. Sup. Ct. R. 55.03",
+          "effective": "2026-10-15"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "Missouri e-Filing (no rule cited)",
+          "effective": "2026-10-15"
+        }
+      ],
+      "source": "Mo. Sup. Ct. R. 55.03",
+      "effective": "2026-10-15"
+    }
+  }
+}

@@ -34,6 +34,55 @@ pub(super) fn table_of_figures(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// A citation mark (Word's `TA` field) for `entry`, in `category` (TA `\c`) when given. The
+/// field is hidden text, as References › Mark Citation inserts it.
+pub fn ta_field(entry: &str, category: Option<u8>) -> InlineObject {
+    let entry = entry.replace('"', "");
+    let instr = match category {
+        Some(c) => format!("TA \\l \"{entry}\" \\c {c}"),
+        None => format!("TA \\l \"{entry}\""),
+    };
+    InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() }
+}
+
+/// The value of a field switch (`\c "4"` or `\c 4` → `4`), if the instruction has it.
+fn switch_value(instr: &str, switch: char) -> Option<String> {
+    let mut tokens = Vec::new();
+    let mut cur = String::new();
+    let mut quoted = false;
+    for ch in instr.chars() {
+        match ch {
+            '"' => {
+                quoted = !quoted;
+                if !quoted {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c if c.is_whitespace() && !quoted => {
+                if !cur.is_empty() {
+                    tokens.push(std::mem::take(&mut cur));
+                }
+            }
+            c => cur.push(c),
+        }
+    }
+    if !cur.is_empty() {
+        tokens.push(cur);
+    }
+    let want = format!("\\{switch}");
+    let i = tokens.iter().position(|t| t.eq_ignore_ascii_case(&want))?;
+    tokens.get(i + 1).cloned()
+}
+
+/// Whether the field instruction has a switch (`\p`).
+fn has_switch(instr: &str, switch: char) -> bool {
+    let want = format!("\\{switch}");
+    instr.split_whitespace().any(|t| t.eq_ignore_ascii_case(&want))
+}
+
+/// Pages at which a table of authorities with `\p` prints "passim" instead (Word: five).
+const PASSIM_PAGES: usize = 5;
+
 /// Generated lists (BIBLIOGRAPHY, INDEX, table of figures, TOA): a heading paragraph holding
 /// the field, then entry paragraphs marked with the "GeneratedEntry" style family.
 pub(crate) fn generated_list(s: &mut Session, instr: &str, title: &str) -> Result<(), CmdError> {
@@ -249,6 +298,11 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             .filter_map(|(k, i)| s.doc.sources.get(i).map(|x| (entry(x, st.name, k.saturating_add(1)), !st.numbered())))
             .collect();
     }
+    // A TOA with `\c` lists only the citations marked with that category (a mark without one is
+    // in category 1, as Word's are).
+    let toa_category = kind.starts_with("TOA").then(|| switch_value(kind, 'c')).flatten();
+    let in_category = |ta: &str| toa_category.as_deref().is_none_or(|c| switch_value(ta, 'c').as_deref().unwrap_or("1") == c);
+    let passim = kind.starts_with("TOA") && has_switch(kind, 'p');
     // Collect marks with positions.
     let mut marks: Vec<(String, Pos)> = Vec::new();
     let figures = figures_label(kind);
@@ -266,7 +320,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                 let t = instr.trim_start();
                 let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
-                if t.starts_with(want) {
+                if t.starts_with(want) && in_category(t) {
                     let e = t.split('"').nth(1).unwrap_or("").to_string();
                     marks.push((e, Pos { story: StoryRef::Body, path: path.clone(), off }));
                 }
@@ -288,7 +342,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             for off in p.object_offsets() {
                 if let Some(InlineObject::Field { instr, .. }) = p.object_at(off) {
                     let want = if kind.starts_with("INDEX") { "XE" } else { "TA" };
-                    if instr.trim_start().starts_with(want) {
+                    if instr.trim_start().starts_with(want) && in_category(instr.trim_start()) {
                         v.push(Pos { story: StoryRef::Body, path: path.clone(), off });
                     }
                 }
@@ -327,7 +381,11 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 out.push((l, false));
             }
         }
-        let list = pages.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
+        let list = if passim && pages.len() >= PASSIM_PAGES {
+            "passim".to_string()
+        } else {
+            pages.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ")
+        };
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out
