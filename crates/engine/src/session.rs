@@ -805,6 +805,10 @@ impl Session {
         self.layout = Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral));
         l
     }
+    /// Cache hit/miss counters, for performance probes (temporary).
+    pub fn cache_stats(&self) -> (u64, u64) {
+        (self.cache.hits, self.cache.misses)
+    }
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)

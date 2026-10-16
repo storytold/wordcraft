@@ -741,7 +741,7 @@ impl Ctx<'_> {
         exclusions: &[para::Exclusion],
         label: Option<(String, Level)>,
     ) -> Arc<ParaLayout> {
-        let (key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref());
+        let (key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref(), true);
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
             self.cache.hits += 1;
@@ -749,6 +749,25 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let pl = Arc::new(para::layout_para(p, &self.para_env(width, label, table, exclusions, eq_number)));
+        self.cache.paras.insert(key, pl.clone());
+        pl
+    }
+
+    /// The layout of the paragraph after a keep-with-next block, through the cache. A lookahead
+    /// is measured with the same key the paragraph gets when it is placed (label-less: a
+    /// lookahead doesn't take its list label), so the shape it computes is reused by the
+    /// placement and by later passes; proofing participates as usual, so an entry first made by
+    /// a lookahead still carries the proofing marks. Unlike [`Self::para_labelled`] it does not
+    /// advance the equation counter — a lookahead doesn't count ([`Self::para_key`]).
+    fn para_lookahead(&mut self, p: &Paragraph, width: f32) -> Arc<ParaLayout> {
+        let (key, eq_number) = self.para_key(p, width, None, &[], None, false);
+        self.cache.used.insert(key.clone());
+        if let Some(pl) = self.cache.paras.get(&key) {
+            self.cache.hits += 1;
+            return pl.clone();
+        }
+        self.cache.misses += 1;
+        let pl = Arc::new(para::layout_para(p, &self.para_env(width, None, None, &[], eq_number)));
         self.cache.paras.insert(key, pl.clone());
         pl
     }
@@ -764,7 +783,7 @@ impl Ctx<'_> {
         label: Option<(String, Level)>,
         measure: impl FnOnce(&ParaLayout) -> (f32, f32),
     ) -> (f32, f32) {
-        let (key, eq_number) = self.para_key(p, width, table, &[], label.as_ref());
+        let (key, eq_number) = self.para_key(p, width, table, &[], label.as_ref(), true);
         self.cache.used.insert(key.clone());
         if let Some(m) = self.cache.measures.get(&key) {
             self.cache.hits += 1;
@@ -785,6 +804,7 @@ impl Ctx<'_> {
         table: Option<&para::CellText>,
         exclusions: &[para::Exclusion],
         label: Option<&(String, Level)>,
+        advance_eq: bool,
     ) -> (Key, u32) {
         let page = if has_page_fields(p) { Some(self.fields.page_key()) } else { None };
         if self.track_totals && !self.uses_totals && has_total_fields(p) {
@@ -800,7 +820,9 @@ impl Ctx<'_> {
             })
             .sum();
         let eq_number = self.eq_count;
-        self.eq_count = self.eq_count.saturating_add(eq_here);
+        if advance_eq {
+            self.eq_count = self.eq_count.saturating_add(eq_here);
+        }
         let key = Key {
             rev: p.rev,
             width: width.to_bits(),
@@ -3604,27 +3626,10 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
-            // Don't advance list counters for a lookahead: lay out without the label.
-            let rp = ctx.doc.styles.resolve_para(&p.props);
-            let env = para::ParaEnv {
-                doc: ctx.doc,
-                width,
-                label: None,
-                fields: &ctx.fields,
-                show_hidden: ctx.opts.show_hidden,
-                field_codes: ctx.opts.field_codes,
-                hide_deleted: ctx.opts.hides_deleted(StoryRef::Body),
-                table: None,
-                proofing: None,
-                numeral: ctx.opts.numeral,
-                exclusions: &[],
-                eq_number: ctx.eq_count,
-                read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
-                grid: ctx.grid,
-                fit_objects: false,
-            };
-            let _ = rp;
-            let pl = para::layout_para(p, &env);
+            // Through the cache: the lookahead shape is the one the paragraph is placed with,
+            // so keeping it costs nothing on the next pass (#bug: every keep-with-next block
+            // re-shaped the whole paragraph after it on every keystroke).
+            let pl = ctx.para_lookahead(p, width);
             if pl.rp.keep_next && depth < 8 {
                 pl.rp.space_before + pl.height + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1)
             } else {
