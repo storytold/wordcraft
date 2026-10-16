@@ -274,14 +274,22 @@ fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"deleted": ids}))
 }
 
-/// Comments in document order with their anchors.
+/// Comments in reading order with their anchors: every story the reader sees, in
+/// `Document::shown_stories` order (#2289). A comment anchored only in a story nothing shows
+/// (a removed header) has no anchor.
 pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
     let mut found: Vec<(u32, Option<Pos>)> = Vec::new();
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for o in p.object_offsets() {
-            if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
-                found.push((*id, Some(Pos { story: StoryRef::Body, path: path.clone(), off: o })));
+    // The balloons ask every frame; most documents have no comments.
+    if s.doc.comments.is_empty() {
+        return found;
+    }
+    for story in s.doc.shown_stories() {
+        for path in s.doc.para_paths(story) {
+            let Some(p) = s.doc.para(story, &path) else { continue };
+            for o in p.object_offsets() {
+                if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
+                    found.push((*id, Some(Pos { story, path: path.clone(), off: o })));
+                }
             }
         }
     }
@@ -311,8 +319,16 @@ fn list_comments(s: &mut Session, _: &Value) -> CmdResult {
 
 fn nav_comment(s: &mut Session, dir: i32) -> CmdResult {
     let list: Vec<Pos> = comment_list(s).into_iter().filter_map(|(_, p)| p).collect();
-    let caret = s.sel.focus.clone();
-    let t = if dir > 0 { list.iter().find(|p| **p > caret).or(list.first()) } else { list.iter().rev().find(|p| **p < caret).or(list.last()) };
+    // Reading order: the story's place in `shown_stories`, then the place in the story. Part ids
+    // follow creation, not reading, so `Pos` order won't do across stories.
+    let rank: BTreeMap<StoryRef, usize> = s.doc.shown_stories().into_iter().enumerate().map(|(i, st)| (st, i)).collect();
+    let key = |p: &Pos| rank.get(&p.story).map(|i| (*i, p.path.clone(), p.off));
+    let caret = key(&s.sel.focus);
+    let t = if dir > 0 {
+        list.iter().find(|p| caret.is_some() && key(p) > caret).or(list.first())
+    } else {
+        list.iter().rev().find(|p| caret.is_some() && key(p) < caret).or(list.last())
+    };
     if let Some(p) = t {
         s.sel = Selection::caret(p.clone());
     }
@@ -1479,6 +1495,138 @@ mod tests {
         s.run("review.deleteComment", &json!({"id": root})).unwrap();
         assert!(s.doc.comments.is_empty());
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    /// A comment on the whole of the story the caret is in; its id and that story.
+    fn comment_here(s: &mut Session, text: &str) -> (u64, wordcraft_doc::StoryRef) {
+        let story = s.sel.focus.story;
+        s.run("select.all", &json!({})).unwrap();
+        (s.run("review.newComment", &json!({"text": text})).unwrap()["id"].as_u64().unwrap(), story)
+    }
+
+    /// Comments in a header, a footer, a text box and a footnote, made in that order, then one
+    /// on a word of the body. Returns each comment's id and story in reading order, which isn't
+    /// the order they were made: the body, the text box and footnote it shows, then the header
+    /// and the footer.
+    fn comments_in_every_story(s: &mut Session) -> Vec<(u64, wordcraft_doc::StoryRef)> {
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body text with a comment on it."})).unwrap();
+        s.run("insert.header", &json!({"text": "header"})).unwrap();
+        let header = comment_here(s, "header");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("insert.footer", &json!({"text": "footer"})).unwrap();
+        let footer = comment_here(s, "footer");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.textBox", &json!({"text": "boxed"})).unwrap();
+        let text_box = comment_here(s, "text box");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.footnote", &json!({"text": "noted"})).unwrap();
+        let note = comment_here(s, "footnote");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("select.text", &json!({"text": "comment"})).unwrap();
+        let body = (s.run("review.newComment", &json!({"text": "body"})).unwrap()["id"].as_u64().unwrap(), wordcraft_doc::StoryRef::Body);
+        s.run("caret.docStart", &json!({})).unwrap();
+        vec![body, text_box, note, header, footer]
+    }
+
+    /// `review.comments` as (id, the anchor's story).
+    fn listed(s: &mut Session) -> Vec<(u64, Option<wordcraft_doc::StoryRef>)> {
+        let list = s.run("review.comments", &json!({})).unwrap();
+        list.as_array().unwrap().iter().map(|c| (c["id"].as_u64().unwrap(), serde_json::from_value(c["anchor"]["story"].clone()).ok())).collect()
+    }
+
+    /// The stories Next Comment visits, `n` presses from the caret.
+    fn next_stories(s: &mut Session, n: usize) -> Vec<wordcraft_doc::StoryRef> {
+        (0..n)
+            .map(|_| {
+                s.run("review.nextComment", &json!({})).unwrap();
+                s.sel.focus.story
+            })
+            .collect()
+    }
+
+    /// #2289: comments in headers, footers, text boxes and footnotes are listed with their
+    /// anchors, in reading order rather than the order their stories were made.
+    #[test]
+    fn comments_outside_the_body_are_listed_with_their_anchors() {
+        let mut s = Session::new(Document::new());
+        let want: Vec<_> = comments_in_every_story(&mut s).into_iter().map(|(id, st)| (id, Some(st))).collect();
+        assert_eq!(listed(&mut s), want);
+    }
+
+    /// #2289: Next and Previous Comment go through every story's comments in reading order and
+    /// wrap around.
+    #[test]
+    fn next_and_previous_comment_reach_comments_outside_the_body() {
+        let mut s = Session::new(Document::new());
+        let want: Vec<_> = comments_in_every_story(&mut s).into_iter().map(|(_, st)| st).collect();
+        let mut wrapped = want.clone();
+        wrapped.push(want[0]);
+        assert_eq!(next_stories(&mut s, want.len() + 1), wrapped, "Next visits each comment, then wraps to the first");
+        let back: Vec<_> = (0..want.len())
+            .map(|_| {
+                s.run("review.previousComment", &json!({})).unwrap();
+                s.sel.focus.story
+            })
+            .collect();
+        let mut rev = want.clone();
+        rev.reverse();
+        assert_eq!(back, rev, "Previous from the first comment wraps to the last");
+    }
+
+    /// #2289: a header comes before the footer whichever was made first.
+    #[test]
+    fn next_comment_reaches_the_header_before_the_footer() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body"})).unwrap();
+        s.run("insert.footer", &json!({"text": "footer"})).unwrap();
+        let footer = comment_here(&mut s, "footer").1;
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("insert.header", &json!({"text": "header"})).unwrap();
+        let header = comment_here(&mut s, "header").1;
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        assert_eq!(next_stories(&mut s, 2), vec![header, footer]);
+    }
+
+    /// #2289: a comment left in a story nothing shows any more (a removed header, a deleted
+    /// footnote's text) has no anchor, and Next never takes the caret into that hidden story.
+    #[test]
+    fn comments_in_hidden_stories_are_not_navigated_to() {
+        let mut s = Session::new(Document::new());
+        let all = comments_in_every_story(&mut s);
+        let (note, header) = (all[2], all[3]);
+        s.run("insert.removeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.backspace", &json!({})).unwrap();
+        assert!(!s.doc.shown_stories().contains(&note.1), "the footnote's reference is gone");
+        let list = listed(&mut s);
+        for hidden in [note, header] {
+            assert!(list.contains(&(hidden.0, None)), "comment {} sits in a hidden story: {list:?}", hidden.0);
+        }
+        let shown = [all[0].1, all[1].1, all[4].1];
+        for st in next_stories(&mut s, all.len()) {
+            assert!(shown.contains(&st), "Next went to hidden {st:?}");
+        }
+    }
+
+    /// Text inside a comment isn't an anchor: a comment marker in a comment's own story is not
+    /// listed as that comment's place in the document.
+    #[test]
+    fn comment_list_skips_comment_text() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "hello"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        let id = s.run("review.newComment", &json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        let part = s.doc.comments.get(&id).unwrap().part;
+        let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(part), path: wordcraft_doc::Path::top(0), off: 0 };
+        s.doc.insert_object(&at, wordcraft_doc::InlineObject::CommentStart { id }, &Default::default()).unwrap();
+        let list = super::comment_list(&s);
+        assert_eq!(list.iter().filter(|(x, _)| *x == id).count(), 1);
+        assert_eq!(list.first().and_then(|(_, p)| p.as_ref()).map(|p| p.story), Some(wordcraft_doc::StoryRef::Body));
     }
 
     #[test]

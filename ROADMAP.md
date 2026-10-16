@@ -145,6 +145,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-14 | Page-break-only list paragraphs no longer print stray bullets or numbers. The next item keeps its number, matching the reference export. |
 | 2026-10-12 | Backspace at the start of the paragraph after a table nested in a cell moves into the nested table's last cell, no longer into the last cell of the table around it |
 | 2026-10-14 | Grouped `flowChartOr` shapes draw their circle and crossing spokes, as in Word |
+| 2026-10-15 | Comments in headers, footers, notes and text boxes are listed with their place in the document, get a balloon beside their text, and Next, Previous and Go to reach them in reading order: the body with its notes and text boxes, then headers and footers. A comment left in a removed header or a deleted note's text isn't navigated to (#2289) |
 | 2026-10-14 | Deleting a comment removes its anchors from headers, footers, notes and text boxes too, not just the body, and deletes the whole thread below it, replies to replies included; no anchor or reply is left pointing at a deleted comment (#1345) |
 | 2026-10-14 | Legacy DOC DIB conversion checks the BMP header and copy before allocation, uses the caller's decode allowance, and caps PNG output while encoding; a BMP fallback is kept when it fits. A generated 1-pixel regression covers 57/58/512-byte limits. Resource-exhaustion consequences remain unmeasured. Related: #1334 and #1554 |
 | 2026-10-13 | Justified vertical page alignment (#1320): a section set to Justified spreads each page's paragraphs and tables from the top margin to the bottom one, as Word does, including the last page and pages ending in a manual page break. DOCX `w:vAlign="both"` opens as Justified (it showed centred) and saves back; `layout.verticalAlign` takes `justify`, and Page Setup has a Vertical alignment box |
@@ -414,6 +415,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-14 | trivial | Field instructions spanning paragraphs no longer add blank lines during pagination; empty result paragraphs still take a line. |
 | 2026-10-14 | trivial | A list paragraph containing only a page break has no visible label; it still advances the list counter. Ordinary empty list items keep their label. |
 | 2026-10-14 | trivial | Floating-table overlap checks use visible line content; empty line-break lines no longer move a table |
+| 2026-10-15 | trivial | Progress log: comments outside the body in the list, balloons and Next/Previous (#2289) |
 | 2026-10-14 | trivial | Progress log: deleting a comment leaves no dangling anchors or replies (#1345) |
 | 2026-10-14 | minor | Legacy DOC DIB conversion byte limits only; related #1334/#1554, stage and readiness estimates unchanged |
 | 2026-10-13 | trivial | Progress log: justified vertical page alignment (#1320) |
