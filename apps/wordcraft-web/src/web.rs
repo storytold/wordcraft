@@ -29,7 +29,13 @@ pub fn start() {
         };
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
-        if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
+        // `?host=parent`: a same-origin page framing WordCraft (such as a Nextcloud app) opens
+        // documents in it and stores what it saves (`host`).
+        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        let app_bridge = bridge.clone();
+        if bridge.is_none()
+            && let Err(e) = guard_unload(dirty.clone(), saves.clone())
+        {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -56,23 +62,37 @@ pub fn start() {
                     // The browser's locale picks the new document's paper, the units and the
                     // decimal separator (#838).
                     let region = wordcraft_ui_egui::i18n::system_region();
-                    let sample = query().contains("sample");
+                    let sample = if app_bridge.is_some() { false } else { query().contains("sample") };
                     let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
                     let mut session = Session::new(doc);
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
-                    let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone()));
+                    let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
+                    if let Some(bridge) = &app_bridge {
+                        bridge.connect(&mut services, inbox.clone(), cc.egui_ctx.clone());
+                    }
+                    let mut app = WordApp::new(session, services);
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
                     // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    // In host mode the parent sends the document to edit; no start screen meanwhile.
+                    if !sample && app_bridge.is_none() {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages }))
+                    if let Some(bridge) = &app_bridge {
+                        if let Some(author) = query_param("author") {
+                            crate::host::Bridge::set_author(&mut app, &author);
+                        }
+                        bridge.post_ready();
+                    }
+                    Ok(Box::new(WebShell { app, inbox, messages, bridge: app_bridge }))
                 }),
             )
             .await;
+        if let (Err(e), Some(bridge)) = (&result, &bridge) {
+            bridge.post_failed(&format!("{e:?}"));
+        }
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
@@ -86,12 +106,17 @@ fn query() -> String {
     web_sys::window().and_then(|w| w.location().search().ok()).unwrap_or_default()
 }
 
+fn query_param(key: &str) -> Option<String> {
+    web_sys::UrlSearchParams::new_with_str(&query()).ok()?.get(key)
+}
+
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
 /// and feed them through the inbox.
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
+    bridge: Option<crate::host::Bridge>,
 }
 
 impl eframe::App for WebShell {
@@ -124,6 +149,9 @@ impl eframe::App for WebShell {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.app.ui(ui);
+        if let Some(bridge) = &self.bridge {
+            bridge.sync(&mut self.app);
+        }
     }
 }
 
