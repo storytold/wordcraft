@@ -15,7 +15,7 @@
 use std::collections::HashMap;
 
 use serde_json::{Value, json};
-use wordcraft_doc::props::{Align, Highlight, LineSpacing, TextColor, Underline};
+use wordcraft_doc::props::{Align, Highlight, LineSpacing, TextColor, Underline, VertAlign};
 use wordcraft_doc::{Path, Pos, StoryRef};
 use wordcraft_plugin::office::{Action, MAX_ACTIONS, Permission, Step};
 
@@ -24,6 +24,10 @@ use crate::{CmdError, CmdResult, CommandSpec, Session};
 
 /// Most items a collection load or a search answers.
 const MAX_ITEMS: usize = 10_000;
+
+/// The `Font` properties (WordApi 1.1).
+const FONT_PROPS: &[&str] =
+    &["bold", "italic", "underline", "size", "name", "color", "highlightColor", "strikeThrough", "doubleStrikeThrough", "subscript", "superscript"];
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
@@ -654,10 +658,14 @@ fn load(s: &mut Session, addin: &str, obj: &Obj, props: &[String]) -> R<Value> {
                             TextColor::Rgb(rgb) => format!("#{}", rgb.hex().to_ascii_uppercase()),
                         }),
                         "highlightColor" => c.highlight.map(|h| json!(format!("#{}", h.hex().to_ascii_uppercase()))).unwrap_or(Value::Null),
+                        "strikeThrough" => json!(c.strike),
+                        "doubleStrikeThrough" => json!(c.double_strike),
+                        "subscript" => json!(c.vert_align == VertAlign::Subscript),
+                        "superscript" => json!(c.vert_align == VertAlign::Superscript),
                         _ => Value::Bool(false),
                     })
                     .collect();
-                if !matches!(p, "bold" | "italic" | "underline" | "size" | "name" | "color" | "highlightColor") {
+                if !FONT_PROPS.contains(&p) {
                     return Err(invalid(format!("Font has no property `{p}`")));
                 }
                 common(vals)
@@ -703,14 +711,28 @@ fn num(value: &Value, what: &str) -> R<f64> {
     value.as_f64().filter(|v| v.is_finite()).ok_or_else(|| invalid(format!("{what} is a number")))
 }
 
-/// `#RRGGBB` (or `RRGGBB`) as WordCraft's `RRGGBB`.
+/// A colour as add-ins give it, as WordCraft's `RRGGBB`: `#RRGGBB` (or `RRGGBB`), `#RGB`,
+/// `#RRGGBBAA` (text has no transparency: the alpha is dropped) or a CSS colour name (`blue`,
+/// `DarkSlateGray`: any case). Office.js takes these wherever it takes a colour.
 fn color(value: &Value) -> R<String> {
     let c = value.as_str().map(str::trim).unwrap_or("");
-    let hexed = c.trim_start_matches('#');
-    if hexed.len() != 6 || !hexed.chars().all(|ch| ch.is_ascii_hexdigit()) {
-        return Err(invalid(format!("`{c}` isn't a colour like #FF0000")));
+    let (hex, marked) = match c.strip_prefix('#') {
+        Some(h) => (h, true),
+        None => (c, false),
+    };
+    if hex.bytes().all(|b| b.is_ascii_hexdigit()) {
+        match (hex.len(), marked) {
+            (6 | 8, _) => return Ok(hex.get(..6).unwrap_or_default().to_ascii_uppercase()),
+            (3, true) => return Ok(hex.chars().flat_map(|ch| [ch, ch]).collect::<String>().to_ascii_uppercase()),
+            _ => {}
+        }
     }
-    Ok(hexed.to_ascii_uppercase())
+    css_color(c).map(str::to_string).ok_or_else(|| invalid(format!("`{c}` isn't a colour like #FF0000 or a colour name like Blue")))
+}
+
+/// A CSS named colour's `RRGGBB` (case doesn't matter).
+fn css_color(name: &str) -> Option<&'static str> {
+    CSS_COLORS.iter().find(|(n, _)| n.eq_ignore_ascii_case(name)).map(|(_, hex)| *hex)
 }
 
 /// A highlight colour: a name (`Yellow`, `BrightGreen`…), its `#RRGGBB`, or null for none.
@@ -721,14 +743,23 @@ fn highlight(value: &Value) -> R<String> {
         Value::String(t) => t.trim().to_string(),
         _ => return Err(invalid("highlightColor is a colour name or #RRGGBB")),
     };
-    let hex = name.trim_start_matches('#').to_ascii_uppercase();
+    // Word's highlight names first (its `Pink` isn't CSS's), then a CSS name by its colour.
+    let word_name = Highlight::ALL.iter().any(|h| highlight_label(*h).eq_ignore_ascii_case(&name));
+    let hex = match css_color(&name) {
+        Some(css) if !word_name => css.to_string(),
+        _ => name.trim_start_matches('#').to_ascii_uppercase(),
+    };
     for h in Highlight::ALL {
-        let label = serde_json::to_value(h).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
+        let label = highlight_label(h);
         if label.eq_ignore_ascii_case(&name) || h.rgb().is_some_and(|x| x.hex().eq_ignore_ascii_case(&hex)) {
             return Ok(label);
         }
     }
     Err(invalid(format!("`{name}` isn't one of the highlight colours")))
+}
+
+fn highlight_label(h: Highlight) -> String {
+    serde_json::to_value(h).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
 }
 
 fn set(s: &mut Session, obj: &Obj, prop: &str, value: &Value) -> R<()> {
@@ -818,6 +849,10 @@ fn set(s: &mut Session, obj: &Obj, prop: &str, value: &Value) -> R<()> {
                 }
                 "color" => ("format.color", json!({"color": color(value)?})),
                 "highlightColor" => ("format.highlight", json!({"color": highlight(value)?})),
+                "strikeThrough" => ("format.strikethrough", json!({"value": bool_value(value, p)?})),
+                "doubleStrikeThrough" => ("format.doubleStrikethrough", json!({"value": bool_value(value, p)?})),
+                "subscript" => ("format.subscript", json!({"value": bool_value(value, p)?})),
+                "superscript" => ("format.superscript", json!({"value": bool_value(value, p)?})),
                 _ => return Err(invalid(format!("Font.{p} can't be set"))),
             };
             if a == b {
@@ -884,6 +919,26 @@ fn insert_paragraph(s: &mut Session, path: &Path, text: &str, after: bool) -> R<
         path.clone()
     };
     Ok(json!({"id": para_id(&new)}))
+}
+
+/// `insertBreak(breakType, location)` at `at`: a page or line break, or a section break (in the
+/// main text only, as `layout.break` puts it).
+fn insert_break(s: &mut Session, at: &Pos, kind: &str) -> R<Value> {
+    let kind = match kind.to_ascii_lowercase().as_str() {
+        "page" => "page",
+        "line" => "textWrapping",
+        "sectionnext" | "next" => "nextPage",
+        "sectioncontinuous" => "continuous",
+        "sectioneven" => "evenPage",
+        "sectionodd" => "oddPage",
+        other => return Err(invalid(format!("`{other}` isn't a break type (Page, Line, SectionNext, SectionContinuous, SectionEven, SectionOdd)"))),
+    };
+    select(s, at, at)?;
+    run(s, "layout.break", json!({"kind": kind}))?;
+    if matches!(kind, "page" | "textWrapping") && s.sel.focus.path == at.path {
+        note(Edit::Text(at.path.clone(), at.off, (s.sel.focus.off as isize - at.off as isize).max(0)));
+    }
+    Ok(Value::Null)
 }
 
 /// Deletes `a..b`; a whole paragraph goes with its mark.
@@ -1004,6 +1059,32 @@ fn call(s: &mut Session, addin: &str, obj: &Obj, method: &str, args: &[Value]) -
                 other => Err(invalid(format!("Body.insertParagraph takes Start or End, not `{other}`"))),
             }
         }
+        (Obj::Body, "insertBreak") => {
+            let (a, b) = body_range(s);
+            let kind = location(args, 0, "page");
+            match location(args, 1, "end").as_str() {
+                "start" => insert_break(s, &a, &kind),
+                "end" => insert_break(s, &b, &kind),
+                other => Err(invalid(format!("Body.insertBreak takes Start or End, not `{other}`"))),
+            }
+        }
+        (Obj::Paragraph(path), "insertBreak") => {
+            let (a, b) = para_range(s, path);
+            let kind = location(args, 0, "page");
+            match location(args, 1, "after").as_str() {
+                "before" => insert_break(s, &a, &kind),
+                "after" => insert_break(s, &b, &kind),
+                other => Err(invalid(format!("Paragraph.insertBreak takes Before or After, not `{other}`"))),
+            }
+        }
+        (Obj::Range(a, b), "insertBreak") => {
+            let kind = location(args, 0, "page");
+            match location(args, 1, "after").as_str() {
+                "before" | "start" => insert_break(s, a, &kind),
+                "after" | "end" => insert_break(s, b, &kind),
+                other => Err(invalid(format!("Range.insertBreak takes Before or After, not `{other}`"))),
+            }
+        }
         (Obj::Body, "clear") => {
             let (a, b) = body_range(s);
             delete(s, &a, &b)?;
@@ -1078,6 +1159,159 @@ fn call(s: &mut Session, addin: &str, obj: &Obj, method: &str, args: &[Value]) -
         (o, m) => Err(OfficeError("NotImplemented", format!("{}.{m}() isn't supported yet", name(o)))),
     }
 }
+
+/// The CSS named colours (CSS Color Module Level 4: 148 names, `grey` spellings included), as
+/// `RRGGBB`.
+const CSS_COLORS: &[(&str, &str)] = &[
+    ("aliceblue", "F0F8FF"),
+    ("antiquewhite", "FAEBD7"),
+    ("aqua", "00FFFF"),
+    ("aquamarine", "7FFFD4"),
+    ("azure", "F0FFFF"),
+    ("beige", "F5F5DC"),
+    ("bisque", "FFE4C4"),
+    ("black", "000000"),
+    ("blanchedalmond", "FFEBCD"),
+    ("blue", "0000FF"),
+    ("blueviolet", "8A2BE2"),
+    ("brown", "A52A2A"),
+    ("burlywood", "DEB887"),
+    ("cadetblue", "5F9EA0"),
+    ("chartreuse", "7FFF00"),
+    ("chocolate", "D2691E"),
+    ("coral", "FF7F50"),
+    ("cornflowerblue", "6495ED"),
+    ("cornsilk", "FFF8DC"),
+    ("crimson", "DC143C"),
+    ("cyan", "00FFFF"),
+    ("darkblue", "00008B"),
+    ("darkcyan", "008B8B"),
+    ("darkgoldenrod", "B8860B"),
+    ("darkgray", "A9A9A9"),
+    ("darkgreen", "006400"),
+    ("darkgrey", "A9A9A9"),
+    ("darkkhaki", "BDB76B"),
+    ("darkmagenta", "8B008B"),
+    ("darkolivegreen", "556B2F"),
+    ("darkorange", "FF8C00"),
+    ("darkorchid", "9932CC"),
+    ("darkred", "8B0000"),
+    ("darksalmon", "E9967A"),
+    ("darkseagreen", "8FBC8F"),
+    ("darkslateblue", "483D8B"),
+    ("darkslategray", "2F4F4F"),
+    ("darkslategrey", "2F4F4F"),
+    ("darkturquoise", "00CED1"),
+    ("darkviolet", "9400D3"),
+    ("deeppink", "FF1493"),
+    ("deepskyblue", "00BFFF"),
+    ("dimgray", "696969"),
+    ("dimgrey", "696969"),
+    ("dodgerblue", "1E90FF"),
+    ("firebrick", "B22222"),
+    ("floralwhite", "FFFAF0"),
+    ("forestgreen", "228B22"),
+    ("fuchsia", "FF00FF"),
+    ("gainsboro", "DCDCDC"),
+    ("ghostwhite", "F8F8FF"),
+    ("gold", "FFD700"),
+    ("goldenrod", "DAA520"),
+    ("gray", "808080"),
+    ("green", "008000"),
+    ("greenyellow", "ADFF2F"),
+    ("grey", "808080"),
+    ("honeydew", "F0FFF0"),
+    ("hotpink", "FF69B4"),
+    ("indianred", "CD5C5C"),
+    ("indigo", "4B0082"),
+    ("ivory", "FFFFF0"),
+    ("khaki", "F0E68C"),
+    ("lavender", "E6E6FA"),
+    ("lavenderblush", "FFF0F5"),
+    ("lawngreen", "7CFC00"),
+    ("lemonchiffon", "FFFACD"),
+    ("lightblue", "ADD8E6"),
+    ("lightcoral", "F08080"),
+    ("lightcyan", "E0FFFF"),
+    ("lightgoldenrodyellow", "FAFAD2"),
+    ("lightgray", "D3D3D3"),
+    ("lightgreen", "90EE90"),
+    ("lightgrey", "D3D3D3"),
+    ("lightpink", "FFB6C1"),
+    ("lightsalmon", "FFA07A"),
+    ("lightseagreen", "20B2AA"),
+    ("lightskyblue", "87CEFA"),
+    ("lightslategray", "778899"),
+    ("lightslategrey", "778899"),
+    ("lightsteelblue", "B0C4DE"),
+    ("lightyellow", "FFFFE0"),
+    ("lime", "00FF00"),
+    ("limegreen", "32CD32"),
+    ("linen", "FAF0E6"),
+    ("magenta", "FF00FF"),
+    ("maroon", "800000"),
+    ("mediumaquamarine", "66CDAA"),
+    ("mediumblue", "0000CD"),
+    ("mediumorchid", "BA55D3"),
+    ("mediumpurple", "9370DB"),
+    ("mediumseagreen", "3CB371"),
+    ("mediumslateblue", "7B68EE"),
+    ("mediumspringgreen", "00FA9A"),
+    ("mediumturquoise", "48D1CC"),
+    ("mediumvioletred", "C71585"),
+    ("midnightblue", "191970"),
+    ("mintcream", "F5FFFA"),
+    ("mistyrose", "FFE4E1"),
+    ("moccasin", "FFE4B5"),
+    ("navajowhite", "FFDEAD"),
+    ("navy", "000080"),
+    ("oldlace", "FDF5E6"),
+    ("olive", "808000"),
+    ("olivedrab", "6B8E23"),
+    ("orange", "FFA500"),
+    ("orangered", "FF4500"),
+    ("orchid", "DA70D6"),
+    ("palegoldenrod", "EEE8AA"),
+    ("palegreen", "98FB98"),
+    ("paleturquoise", "AFEEEE"),
+    ("palevioletred", "DB7093"),
+    ("papayawhip", "FFEFD5"),
+    ("peachpuff", "FFDAB9"),
+    ("peru", "CD853F"),
+    ("pink", "FFC0CB"),
+    ("plum", "DDA0DD"),
+    ("powderblue", "B0E0E6"),
+    ("purple", "800080"),
+    ("rebeccapurple", "663399"),
+    ("red", "FF0000"),
+    ("rosybrown", "BC8F8F"),
+    ("royalblue", "4169E1"),
+    ("saddlebrown", "8B4513"),
+    ("salmon", "FA8072"),
+    ("sandybrown", "F4A460"),
+    ("seagreen", "2E8B57"),
+    ("seashell", "FFF5EE"),
+    ("sienna", "A0522D"),
+    ("silver", "C0C0C0"),
+    ("skyblue", "87CEEB"),
+    ("slateblue", "6A5ACD"),
+    ("slategray", "708090"),
+    ("slategrey", "708090"),
+    ("snow", "FFFAFA"),
+    ("springgreen", "00FF7F"),
+    ("steelblue", "4682B4"),
+    ("tan", "D2B48C"),
+    ("teal", "008080"),
+    ("thistle", "D8BFD8"),
+    ("tomato", "FF6347"),
+    ("turquoise", "40E0D0"),
+    ("violet", "EE82EE"),
+    ("wheat", "F5DEB3"),
+    ("white", "FFFFFF"),
+    ("whitesmoke", "F5F5F5"),
+    ("yellow", "FFFF00"),
+    ("yellowgreen", "9ACD32"),
+];
 
 #[cfg(test)]
 mod tests;

@@ -7,6 +7,12 @@
 //! the document by [`wordcraft_ui_egui::office_pane::pump`]. Web views can only be created with
 //! the window's handle, which the app has in `ui()`: [`Host::flush`] does the creating, moving and
 //! answering once a frame.
+//!
+//! Sample add-in pages also load Microsoft's `office.js` from its CDN. The bootstrap script turns
+//! such scripts off before they run (all platforms); on Windows the web view also can't resolve
+//! those hosts ([`BLOCKED_HOSTS`]). wry has no safe hook for a page's sub-resource requests on
+//! macOS (WKWebView content rule lists need Objective-C calls, which this crate can't make
+//! without `unsafe`), so there the bootstrap is the only guard.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -17,6 +23,22 @@ use wordcraft_ui_egui::office_pane::OfficeHost;
 use wry::dpi::{LogicalPosition, LogicalSize};
 use wry::raw_window_handle::HasWindowHandle;
 use wry::{Rect, WebView, WebViewBuilder};
+
+/// Hosts that serve Microsoft's `office.js`, which an add-in page must never run in WordCraft:
+/// the Windows web view resolves them to nothing.
+#[cfg(target_os = "windows")]
+const BLOCKED_HOSTS: &[&str] = &["appsforoffice.microsoft.com", "officeapis.public.onecdn.static.microsoft"];
+
+/// WebView2's arguments: wry's defaults (which giving any replaces), and no address for
+/// [`BLOCKED_HOSTS`].
+#[cfg(target_os = "windows")]
+fn browser_args() -> String {
+    let rules: Vec<String> = BLOCKED_HOSTS.iter().map(|h| format!("MAP {h} ~NOTFOUND")).collect();
+    format!(
+        "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required --host-resolver-rules=\"{}\"",
+        rules.join(", ")
+    )
+}
 
 /// The scripts that make a page an Office add-in host: the bootstrap, the generated
 /// `wasm-bindgen` glue and the library itself.
@@ -68,7 +90,7 @@ struct View {
     webview: Option<WebView>,
     rect: egui::Rect,
     visible: bool,
-    /// Calls waiting for the page (`run_function`, answers).
+    /// Scripts waiting for the page (answers, function commands, events).
     scripts: Vec<String>,
     closed: bool,
 }
@@ -133,6 +155,11 @@ impl Host {
                     });
                 if let Some(lib) = &library {
                     builder = builder.with_initialization_script(lib.script.clone());
+                }
+                #[cfg(target_os = "windows")]
+                {
+                    use wry::WebViewBuilderExtWindows;
+                    builder = builder.with_additional_browser_args(browser_args());
                 }
                 match builder.build_as_child(window) {
                     Ok(w) => view.webview = Some(w),
@@ -207,9 +234,9 @@ impl OfficeHost for Host {
             v.visible = false;
         }
     }
-    fn run_function(&mut self, key: &str, url: &str, function: &str) {
+    fn load_hidden(&mut self, key: &str, url: &str) {
         let mut inner = self.0.borrow_mut();
-        let view = inner.views.entry(key.to_string()).or_insert_with(|| View {
+        inner.views.entry(key.to_string()).or_insert_with(|| View {
             url: url.to_string(),
             webview: None,
             rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0)),
@@ -217,7 +244,11 @@ impl OfficeHost for Host {
             scripts: Vec::new(),
             closed: false,
         });
-        view.scripts.push(call("__craftOfficeRunFunction", function));
+    }
+    fn call(&mut self, key: &str, entry: &str, json: &str) {
+        if let Some(v) = self.0.borrow_mut().views.get_mut(key) {
+            v.scripts.push(call(entry, json));
+        }
     }
     fn take_messages(&mut self) -> Vec<(String, String)> {
         let inbox = self.0.borrow().inbox.clone();
@@ -266,5 +297,13 @@ mod tests {
         assert_eq!(super::base64(b"foo"), "Zm9v");
         assert_eq!(super::base64(&[0, 255, 128, 7]), "AP+ABw==");
         assert_eq!(super::call("f", "a\"b"), "globalThis.f && globalThis.f(\"a\\\"b\");");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn office_js_hosts_resolve_to_nothing_on_windows() {
+        let args = super::browser_args();
+        assert!(args.starts_with("--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection"));
+        assert!(args.contains("MAP officeapis.public.onecdn.static.microsoft ~NOTFOUND"), "{args}");
     }
 }

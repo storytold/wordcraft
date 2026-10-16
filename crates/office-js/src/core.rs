@@ -423,6 +423,34 @@ pub fn enum_value(key: &str) -> String {
     }
 }
 
+/// A function command as the host hands it to the page: `__craftOfficeRunFunction({"call",
+/// "name", "control"})`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionCall {
+    pub call: Json,
+    pub name: String,
+    pub control: String,
+}
+
+impl FunctionCall {
+    /// Reads the host's `{"call", "name", "control"}`; `None` without a usable name.
+    pub fn parse(text: &str) -> Option<FunctionCall> {
+        let v: Json = serde_json::from_str(text).ok()?;
+        let name = v.get("name").and_then(Json::as_str).map(str::trim).filter(|n| !n.is_empty() && n.len() <= 256)?.to_string();
+        let control = v.get("control").and_then(Json::as_str).unwrap_or_default().chars().take(256).collect();
+        Some(FunctionCall { call: v.get("call").cloned().unwrap_or(Json::Null), name, control })
+    }
+
+    /// The event telling the host the call is over (`event.completed()`), or what went wrong.
+    pub fn done(&self, error: Option<&str>) -> Json {
+        let mut m = json!({"event": "functionDone", "call": self.call});
+        if let Some(e) = error {
+            m["error"] = json!(e.chars().take(500).collect::<String>());
+        }
+        m
+    }
+}
+
 /// The requirement sets reported as supported, with the highest version.
 /// WordApi is answered as 1.3 although only its text, paragraph, range, font and properties
 /// objects are there (no content controls, pictures, tables or HTML/OOXML): add-ins check the set
@@ -430,7 +458,14 @@ pub fn enum_value(key: &str) -> String {
 /// sets the same way. What's missing is listed in docs/officejs.md. The plugin host checks Office
 /// add-ins' `<Requirements>` against the same table (`wordcraft_plugin::office::API_SETS`; a test
 /// there keeps them equal).
-pub const REQUIREMENT_SETS: &[(&str, (u32, u32))] = &[("WordApi", (1, 3)), ("Settings", (1, 1)), ("Selection", (1, 1)), ("TextCoercion", (1, 1))];
+pub const REQUIREMENT_SETS: &[(&str, (u32, u32))] = &[
+    ("WordApi", (1, 3)),
+    ("Settings", (1, 1)),
+    ("Selection", (1, 1)),
+    ("TextCoercion", (1, 1)),
+    ("DocumentEvents", (1, 1)),
+    ("AddinCommands", (1, 1)),
+];
 
 /// The Common API methods this library implements (`<Requirements><Methods>`), as the plugin
 /// host checks them (`wordcraft_plugin::office::API_METHODS`).
@@ -602,6 +637,18 @@ mod tests {
     }
 
     #[test]
+    fn function_calls_read_the_hosts_call_and_answer_done() {
+        let c = FunctionCall::parse(r#"{"call": 4, "name": " writeValue ", "control": "Contoso.Button"}"#).unwrap();
+        assert_eq!((c.name.as_str(), c.control.as_str()), ("writeValue", "Contoso.Button"));
+        assert_eq!(c.done(None), json!({"event": "functionDone", "call": 4}));
+        assert_eq!(c.done(Some("boom")), json!({"event": "functionDone", "call": 4, "error": "boom"}));
+        for bad in ["", "{}", r#"{"call": 1, "name": ""}"#, r#"{"name": 3}"#, "[1]"] {
+            assert!(FunctionCall::parse(bad).is_none(), "{bad}");
+        }
+        assert!(FunctionCall::parse(&json!({"name": "x".repeat(300)}).to_string()).is_none());
+    }
+
+    #[test]
     fn enums_and_load_arguments_and_requirement_sets() {
         assert_eq!(enum_value("end"), "End");
         assert_eq!(enum_value("gridTable1Light_Accent1"), "GridTable1Light_Accent1");
@@ -612,6 +659,7 @@ mod tests {
         assert_eq!(load_props(&json!({"text": true, "style": false})), ["text"]);
         assert!(is_set_supported("Settings", Some("1.1")) && is_set_supported("textcoercion", None));
         assert!(is_set_supported("WordApi", Some("1.3")) && is_set_supported("WordApi", None));
+        assert!(is_set_supported("AddinCommands", Some("1.1")) && is_set_supported("DocumentEvents", None));
         assert!(!is_set_supported("WordApi", Some("1.4")));
         assert!(!is_set_supported("Settings", Some("1.2")) && !is_set_supported("ExcelApi", Some("1.1")));
         assert_eq!(id_string(&json!(3)), Some("3".into()));

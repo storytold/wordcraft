@@ -318,6 +318,49 @@ mod office {
         assert!(crate::unload(&id));
     }
 
+    /// A function command (a menu item whose action is `ExecuteFunction`) carries the function's
+    /// name, the function file, and the control id the function reads as `event.source.id`.
+    #[test]
+    fn function_commands_carry_their_function_file_and_control_id() {
+        let xml = MANIFEST.replace("0d5c7a1e-2222-4bcd-9eaf-0123456789ab", "0d5c7a1e-4444-4bcd-9eaf-0123456789ab").replace(
+            r#"<DesktopFormFactor>"#,
+            r#"<DesktopFormFactor>
+          <FunctionFile resid="Commands.Url"/>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="Acme.Fn"><Label resid="Group.Label"/>
+                <Control xsi:type="Menu" id="Acme.Menu"><Label resid="Group.Label"/>
+                  <Items>
+                    <Item id="Acme.Function Button"><Label resid="Button.Label"/>
+                      <Action xsi:type="ExecuteFunction"><FunctionName>writeValue</FunctionName></Action>
+                    </Item>
+                  </Items>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>"#,
+        ).replace(
+            r#"<bt:Url id="Pane.Url" DefaultValue="https://acme.example/pane.html"/>"#,
+            r#"<bt:Url id="Pane.Url" DefaultValue="https://acme.example/pane.html"/><bt:Url id="Commands.Url" DefaultValue="https://acme.example/commands.html"/>"#,
+        );
+        let m = parse_manifest(&xml, "wordcraft").unwrap();
+        let o = m.office.as_ref().unwrap();
+        let (id, cmd) = o.commands.iter().find(|(_, c)| matches!(c, OfficeCommand::ExecuteFunction { .. })).expect("a function command");
+        assert_eq!(id, "Acme.Function_Button", "the command id is the control id, sanitised");
+        assert_eq!(
+            cmd,
+            &OfficeCommand::ExecuteFunction {
+                function: "writeValue".into(),
+                url: "https://acme.example/commands.html".into(),
+                control: "Acme.Function Button".into()
+            }
+        );
+        // Saved before the control id was kept, a command reads back without one.
+        let old: OfficeCommand =
+            serde_json::from_value(serde_json::json!({"kind": "executeFunction", "function": "f", "url": "https://a.example/f.html"})).unwrap();
+        assert!(matches!(old, OfficeCommand::ExecuteFunction { control, .. } if control.is_empty()));
+    }
+
     /// The host blocks Office add-ins that need more than WordCraft's Office.js reports: both
     /// read the same table.
     #[test]

@@ -192,6 +192,10 @@ struct Web {
     inbox: Vec<(String, String)>,
     replies: Vec<(String, String)>,
     hidden: Vec<String>,
+    /// Pages loaded hidden: (key, url); calls into pages: (key, entry, json).
+    hidden_pages: Vec<(String, String)>,
+    calls: Vec<(String, String, String)>,
+    closed: Vec<String>,
 }
 
 impl wordcraft_ui_egui::office_pane::OfficeHost for FakeWeb {
@@ -204,8 +208,15 @@ impl wordcraft_ui_egui::office_pane::OfficeHost for FakeWeb {
     fn hide(&mut self, key: &str) {
         self.0.lock().unwrap().hidden.push(key.into());
     }
-    fn close(&mut self, _key: &str) {}
-    fn run_function(&mut self, _key: &str, _url: &str, _function: &str) {}
+    fn close(&mut self, key: &str) {
+        self.0.lock().unwrap().closed.push(key.into());
+    }
+    fn load_hidden(&mut self, key: &str, url: &str) {
+        self.0.lock().unwrap().hidden_pages.push((key.into(), url.into()));
+    }
+    fn call(&mut self, key: &str, entry: &str, json: &str) {
+        self.0.lock().unwrap().calls.push((key.into(), entry.into(), json.into()));
+    }
     fn take_messages(&mut self) -> Vec<(String, String)> {
         std::mem::take(&mut self.0.lock().unwrap().inbox)
     }
@@ -375,4 +386,88 @@ fn blocked_add_ins_say_why_and_offer_to_install_what_they_need() {
     assert!(!wordcraft_plugin::get("t.ui-reports").unwrap().enabled());
     wordcraft_plugin::unload("t.ui-reports");
     wordcraft_plugin::unload("t.ui-vba");
+}
+
+#[test]
+fn function_commands_run_in_their_page_and_are_given_up_on_if_they_never_complete() {
+    let _g = serial();
+    let manifest = r#"<?xml version="1.0" encoding="UTF-8"?>
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0" xsi:type="TaskPaneApp">
+  <Id>0d5c7a1e-0000-4bcd-9eaf-0000000000cc</Id><Version>1.0.0.0</Version><ProviderName>Tests</ProviderName><DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Function Test"/><Description DefaultValue="Tests"/>
+  <Hosts><Host Name="Document"/></Hosts>
+  <DefaultSettings><SourceLocation DefaultValue="https://tests.example/pane.html"/></DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts><Host xsi:type="Document"><DesktopFormFactor>
+      <FunctionFile resid="Commands.Url"/>
+      <ExtensionPoint xsi:type="PrimaryCommandSurface"><OfficeTab id="TabHome"><Group id="T.Group"><Label resid="L"/>
+        <Control xsi:type="Button" id="T.Run"><Label resid="L"/><Action xsi:type="ExecuteFunction"><FunctionName>writeValue</FunctionName></Action></Control>
+      </Group></OfficeTab></ExtensionPoint>
+    </DesktopFormFactor></Host></Hosts>
+    <Resources><bt:Urls><bt:Url id="Commands.Url" DefaultValue="https://tests.example/commands.html"/></bt:Urls>
+      <bt:ShortStrings><bt:String id="L" DefaultValue="Run"/></bt:ShortStrings></Resources>
+  </VersionOverrides>
+</OfficeApp>"#;
+    let m = wordcraft_plugin::office::parse_manifest(manifest, wordcraft_plugin::HOST_ID).unwrap();
+    let id = m.id.clone();
+    wordcraft_plugin::add(m, std::env::temp_dir());
+    let web = FakeWeb::default();
+    let services = Services { office: Some(Box::new(web.clone())), ..Default::default() };
+    let mut h = harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Hello")), services));
+    h.run_steps(2);
+    let run = |h: &mut Harness<'_, WordApp>| {
+        h.state_mut().run("plugins.run", json!({"plugin": id, "command": "T.Run"})).unwrap();
+        h.run_steps(2);
+    };
+    run(&mut h);
+    let (key, url) = web.0.lock().unwrap().hidden_pages.last().cloned().expect("the function file was loaded");
+    assert_eq!(url, "https://tests.example/commands.html");
+    assert!(web.0.lock().unwrap().calls.is_empty(), "nothing is called before the page is ready");
+    let sent = |w: &FakeWeb| {
+        w.0.lock()
+            .unwrap()
+            .calls
+            .iter()
+            .filter(|(_, e, _)| e == "__craftOfficeRunFunction")
+            .map(|(k, _, j)| (k.clone(), j.clone()))
+            .collect::<Vec<_>>()
+    };
+    // The page's library says it's ready: the call goes in, with the control's id.
+    web.0.lock().unwrap().inbox.push((key.clone(), json!({"event": "ready"}).to_string()));
+    h.run_steps(2);
+    let calls = sent(&web);
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].0, key);
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&calls[0].1).unwrap(), json!({"call": 1, "name": "writeValue", "control": "T.Run"}));
+    assert_eq!(h.state().office.calls.len(), 1, "waiting for event.completed()");
+    // The page says the function completed: nothing waits any more.
+    web.0.lock().unwrap().inbox.push((key.clone(), json!({"event": "functionDone", "call": 1}).to_string()));
+    h.run_steps(2);
+    assert!(h.state().office.calls.is_empty());
+    assert!(web.0.lock().unwrap().replies.is_empty(), "a page's events aren't answered");
+    // One that failed says why in the status bar; a ready page gets the call at once.
+    run(&mut h);
+    assert_eq!(sent(&web).len(), 2);
+    web.0.lock().unwrap().inbox.push((key.clone(), json!({"event": "functionDone", "call": 2, "error": "no function `writeValue`"}).to_string()));
+    h.run_steps(2);
+    assert!(h.state().office.calls.is_empty());
+    assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| m.contains("no function `writeValue`")), "{:?}", h.state().status_msg);
+    // Ready pages hear of selection changes, once per change.
+    let heard = |w: &FakeWeb| w.0.lock().unwrap().calls.iter().filter(|(k, e, _)| *k == key && e == "__craftOfficeEvent").count();
+    h.state_mut().run("select.all", json!({})).unwrap();
+    h.run_steps(2);
+    assert_eq!(heard(&web), 1);
+    h.run_steps(2);
+    assert_eq!(heard(&web), 1, "once per change");
+    // One that never completes is given up on, and its page closed.
+    run(&mut h);
+    assert_eq!(h.state().office.calls.len(), 1);
+    wordcraft_ui_egui::office_pane::pump(h.state_mut(), 1.0e6);
+    assert!(h.state().office.calls.is_empty());
+    assert!(web.0.lock().unwrap().closed.contains(&key));
+    assert!(!h.state().office.ready.contains(&key));
+    assert!(h.state().status_msg.as_ref().is_some_and(|(m, _)| m.contains("Function Test")), "{:?}", h.state().status_msg);
+    wordcraft_plugin::unload(&id);
 }

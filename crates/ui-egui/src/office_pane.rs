@@ -7,6 +7,12 @@
 //! `{"id": n, "actions": [...]}`; [`pump`] runs it with `office.sync` and answers
 //! `{"id": n, "results"|"error": …}`. Native web views are drawn above the window's content, so
 //! the page is hidden while the File tab or a dialog is open.
+//!
+//! The library also sends events: `{"event": "ready"}` once it has started in a page (function
+//! commands wait for it), and `{"event": "functionDone", "call": n, "error"?}` when a function
+//! command's function calls `event.completed()` (or fails). The host calls into the page with
+//! `__craftOfficeRunFunction({"call", "name", "control"})` and `__craftOfficeEvent({"type"})`
+//! (`documentSelectionChanged`).
 
 use egui::Ui;
 use serde_json::{Value as Json, json};
@@ -22,14 +28,41 @@ pub trait OfficeHost {
     fn hide(&mut self, key: &str);
     /// Closes the page.
     fn close(&mut self, key: &str);
-    /// Loads `url` without showing it and calls `function` there once the add-in is ready
-    /// (an `ExecuteFunction` command).
-    fn run_function(&mut self, key: &str, url: &str, function: &str);
+    /// Loads `url` for `key` without showing it (a function file's page, for `ExecuteFunction`
+    /// commands); nothing if that page is already there.
+    fn load_hidden(&mut self, key: &str, url: &str);
     /// The messages pages sent since the last call: (key, JSON).
     fn take_messages(&mut self) -> Vec<(String, String)>;
-    /// Answers the page for `key`.
+    /// Answers the page for `key` (`__craftOfficeReply(json)`).
     fn reply(&mut self, key: &str, json: &str);
+    /// Calls the library's `globalThis.<entry>(json)` in the page for `key`
+    /// (`__craftOfficeRunFunction`, `__craftOfficeEvent`).
+    fn call(&mut self, key: &str, entry: &str, json: &str);
 }
+
+/// How long a function command may run before WordCraft stops waiting for its
+/// `event.completed()`, says so and closes its page (the next command loads it afresh), in
+/// seconds.
+pub const FUNCTION_TIMEOUT: f64 = 5.0 * 60.0;
+
+/// A function command waiting for its page, or for its `event.completed()`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FunctionCall {
+    pub id: u64,
+    /// The function page.
+    pub key: String,
+    pub plugin: String,
+    pub function: String,
+    /// The manifest's control id (`event.source.id`).
+    pub control: String,
+    /// When it was asked for (`egui` time, seconds; set by the first [`pump`] after), and
+    /// whether it was handed to the page.
+    pub asked: Option<f64>,
+    pub sent: bool,
+}
+
+/// Most function commands waiting at once (more are refused).
+const MAX_CALLS: usize = 100;
 
 /// An open task pane.
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +83,13 @@ pub struct Panes {
     pub current: usize,
     /// Pages running a function command (no pane): key → add-in.
     pub function_pages: Vec<(String, String)>,
+    /// Function commands not finished yet.
+    pub calls: Vec<FunctionCall>,
+    next_call: u64,
+    /// Pages whose library has started (`{"event": "ready"}`).
+    pub ready: std::collections::BTreeSet<String>,
+    /// The selection last told to the pages.
+    selection: Option<wordcraft_engine::Selection>,
     /// The page shown last frame, to hide it when it stops showing.
     shown: Option<String>,
 }
@@ -75,16 +115,42 @@ pub fn open(app: &mut WordApp, plugin: &str, title: &str, url: &str, pane: Optio
     }
 }
 
-/// Runs an add-in's function command in a page with no pane.
-pub fn run_function(app: &mut WordApp, plugin: &str, url: &str, function: &str) {
+/// Runs an add-in's function command in a page with no pane: loads its function file (hidden)
+/// and, once the library there is ready, calls the function with `event.source.id` = `control`.
+pub fn run_function(app: &mut WordApp, plugin: &str, url: &str, function: &str, control: &str) {
     let k = key(plugin, Some("functions"), url);
     let Some(host) = app.services.office.as_mut() else {
         app.status(crate::tl!("Office add-ins need the WordCraft desktop app on macOS or Windows."));
         return;
     };
-    host.run_function(&k, url, function);
+    if app.office.calls.len() >= MAX_CALLS {
+        return;
+    }
+    host.load_hidden(&k, url);
     if !app.office.function_pages.iter().any(|(fk, _)| *fk == k) {
-        app.office.function_pages.push((k, plugin.to_string()));
+        app.office.function_pages.push((k.clone(), plugin.to_string()));
+    }
+    app.office.next_call = app.office.next_call.wrapping_add(1);
+    let id = app.office.next_call;
+    app.office.calls.push(FunctionCall {
+        id,
+        key: k,
+        plugin: plugin.into(),
+        function: function.into(),
+        control: control.into(),
+        asked: None,
+        sent: false,
+    });
+    send_calls(app);
+}
+
+/// Hands waiting function calls to the pages that are ready.
+fn send_calls(app: &mut WordApp) {
+    let Some(host) = app.services.office.as_mut() else { return };
+    for c in app.office.calls.iter_mut().filter(|c| !c.sent && app.office.ready.contains(&c.key)) {
+        let call = json!({"call": c.id, "name": c.function, "control": c.control}).to_string();
+        host.call(&c.key, "__craftOfficeRunFunction", &call);
+        c.sent = true;
     }
 }
 
@@ -94,6 +160,7 @@ fn close(app: &mut WordApp, i: usize) {
         return;
     }
     let pane = app.office.open.remove(i);
+    app.office.ready.remove(&pane.key);
     if let Some(host) = app.services.office.as_mut() {
         host.close(&pane.key);
     }
@@ -103,11 +170,17 @@ fn close(app: &mut WordApp, i: usize) {
     app.office.current = app.office.current.min(app.office.open.len().saturating_sub(1));
 }
 
-/// Answers the pages' messages: each is one `context.sync()` (`office.sync`).
-pub fn pump(app: &mut WordApp) {
+/// Answers the pages' messages (each `context.sync()` is one `office.sync`), takes their events,
+/// tells them of selection changes, and gives up on function commands that never finished.
+/// `now` is `egui`'s time, in seconds.
+pub fn pump(app: &mut WordApp, now: f64) {
     let Some(host) = app.services.office.as_mut() else { return };
     let messages = host.take_messages();
     for (k, text) in messages {
+        let msg: Json = serde_json::from_str(&text).unwrap_or(Json::Null);
+        if event(app, &k, &msg) {
+            continue;
+        }
         let plugin = app
             .office
             .open
@@ -119,6 +192,75 @@ pub fn pump(app: &mut WordApp) {
         if let Some(host) = app.services.office.as_mut() {
             host.reply(&k, &answer.to_string());
         }
+    }
+    expire_calls(app, now);
+    selection_events(app);
+}
+
+/// An event from a page's library (not a `context.sync()`): true if `msg` was one.
+fn event(app: &mut WordApp, key: &str, msg: &Json) -> bool {
+    let Some(kind) = msg.get("event").and_then(Json::as_str) else { return false };
+    match kind {
+        "ready" => {
+            app.office.ready.insert(key.to_string());
+            send_calls(app);
+        }
+        "functionDone" => {
+            let id = msg.get("call").and_then(Json::as_u64);
+            if let Some(i) = app.office.calls.iter().position(|c| Some(c.id) == id && c.key == key) {
+                let c = app.office.calls.remove(i);
+                if let Some(e) = msg.get("error").and_then(Json::as_str) {
+                    let name = wordcraft_plugin::get(&c.plugin).map(|p| p.manifest.name.clone()).unwrap_or(c.plugin);
+                    let e: String = e.chars().take(300).collect();
+                    app.status(crate::i18n::fmt(
+                        crate::tl!("The add-in {name} reported an error: {error}"),
+                        &[("name", name.as_str()), ("error", e.as_str())],
+                    ));
+                }
+            }
+        }
+        _ => {}
+    }
+    true
+}
+
+/// Stops waiting for function commands asked for more than [`FUNCTION_TIMEOUT`] before `now`,
+/// says which add-in didn't finish, and closes its page (the next command loads it afresh).
+pub fn expire_calls(app: &mut WordApp, now: f64) {
+    for c in app.office.calls.iter_mut() {
+        c.asked.get_or_insert(now);
+    }
+    let (late, keep): (Vec<FunctionCall>, Vec<FunctionCall>) =
+        app.office.calls.drain(..).partition(|c| c.asked.is_some_and(|t| now - t > FUNCTION_TIMEOUT));
+    app.office.calls = keep;
+    let Some(c) = late.first() else { return };
+    for c in &late {
+        app.office.calls.retain(|x| x.key != c.key);
+        app.office.function_pages.retain(|(k, _)| *k != c.key);
+        app.office.ready.remove(&c.key);
+        if let Some(host) = app.services.office.as_mut() {
+            host.close(&c.key);
+        }
+    }
+    let name = wordcraft_plugin::get(&c.plugin).map(|p| p.manifest.name.clone()).unwrap_or_else(|| c.plugin.clone());
+    app.status(crate::i18n::fmt(crate::tl!("The add-in {name} didn't finish its command."), &[("name", name.as_str())]));
+}
+
+/// Tells the ready pages that the selection changed (`Office.EventType.DocumentSelectionChanged`).
+fn selection_events(app: &mut WordApp) {
+    let now = Some(app.session.sel.clone());
+    if now == app.office.selection {
+        return;
+    }
+    let first = app.office.selection.is_none();
+    app.office.selection = now;
+    if first || app.office.ready.is_empty() {
+        return;
+    }
+    let Some(host) = app.services.office.as_mut() else { return };
+    let ev = json!({"type": "documentSelectionChanged"}).to_string();
+    for k in &app.office.ready {
+        host.call(k, "__craftOfficeEvent", &ev);
     }
 }
 

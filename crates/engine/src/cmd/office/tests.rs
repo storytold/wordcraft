@@ -200,3 +200,65 @@ fn a_failing_action_changes_nothing_and_permissions_hold() {
     ok(&mut s, &none, json!([{"op": "call", "path": [{"p": "settings"}], "method": "save", "args": [{"k": 1}]}]));
     assert_eq!(ok(&mut s, &none, json!([{"op": "load", "path": [{"p": "settings"}], "props": []}]))[0], json!({"k": 1}));
 }
+
+#[test]
+fn colours_take_css_names_and_fonts_their_word_api_properties() {
+    let a = Addin::new("0d5c7a1e-0000-4bcd-9eaf-000000000006", "ReadWriteDocument");
+    let mut s = session("Blue words\nMore");
+    let first = then(&paragraphs(), json!([{"m": "getFirst"}, {"p": "font"}]));
+    // What the add-in templates do: `paragraph.font.color = "blue"`, beside other actions of the
+    // same sync (all or nothing, so one bad colour used to fail them all).
+    let r = ok(
+        &mut s,
+        &a,
+        json!([
+            {"op": "set", "path": first, "prop": "color", "value": "blue"},
+            {"op": "set", "path": first, "prop": "strikeThrough", "value": true},
+            {"op": "set", "path": first, "prop": "superscript", "value": true},
+            {"op": "load", "path": first, "props": ["color", "strikeThrough", "doubleStrikeThrough", "subscript", "superscript"]},
+        ]),
+    );
+    assert_eq!(r[3], json!({"color": "#0000FF", "strikeThrough": true, "doubleStrikeThrough": false, "subscript": false, "superscript": true}));
+    for (name, hex) in [
+        ("DarkSlateGray", "#2F4F4F"),
+        ("REBECCAPURPLE", "#663399"),
+        ("grey", "#808080"),
+        ("#a0b1c2", "#A0B1C2"),
+        (" Tomato ", "#FF6347"),
+        ("#f80", "#FF8800"),
+        ("00ff7f", "#00FF7F"),
+        ("#11223380", "#112233"),
+    ] {
+        let r =
+            ok(&mut s, &a, json!([{"op": "set", "path": first, "prop": "color", "value": name}, {"op": "load", "path": first, "props": ["color"]}]));
+        assert_eq!(r[1]["color"], hex, "{name}");
+    }
+    for bad in ["bleu", "#12345", "transparent", "", "fed", "#GGGGGG", "rgb(1,2,3)"] {
+        let e = sync(&mut s, &a, json!([{"op": "set", "path": first, "prop": "color", "value": bad}])).unwrap_err();
+        assert_eq!(e["code"], "InvalidArgument", "{bad}");
+    }
+    // Highlights: Word's names (its Pink is #FF00FF), a CSS name of one of its colours, hex.
+    for (name, hex) in [("Pink", "#FF00FF"), ("yellow", "#FFFF00"), ("lime", "#00FF00"), ("#0000ff", "#0000FF")] {
+        let r = ok(
+            &mut s,
+            &a,
+            json!([{"op": "set", "path": first, "prop": "highlightColor", "value": name}, {"op": "load", "path": first, "props": ["highlightColor"]}]),
+        );
+        assert_eq!(r[1]["highlightColor"], hex, "{name}");
+    }
+    assert!(sync(&mut s, &a, json!([{"op": "set", "path": first, "prop": "highlightColor", "value": "salmon"}])).is_err(), "not a highlight colour");
+}
+
+#[test]
+fn breaks_go_before_or_after() {
+    let a = Addin::new("0d5c7a1e-0000-4bcd-9eaf-000000000007", "ReadWriteDocument");
+    let mut s = session("One\nTwo");
+    let first = then(&paragraphs(), json!([{"m": "getFirst"}]));
+    ok(&mut s, &a, json!([{"op": "call", "path": first, "method": "insertBreak", "args": ["Page", "After"]}]));
+    assert!(s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().text.contains(wordcraft_doc::para::PAGE_BREAK));
+    ok(&mut s, &a, json!([{"op": "call", "path": [{"p": "document"}, {"m": "getSelection"}], "method": "insertBreak", "args": ["Line", "Before"]}]));
+    let e = sync(&mut s, &a, json!([{"op": "call", "path": body(), "method": "insertBreak", "args": ["Column", "End"]}])).unwrap_err();
+    assert_eq!(e["code"], "InvalidArgument");
+    let e = sync(&mut s, &a, json!([{"op": "call", "path": body(), "method": "insertBreak", "args": ["Page", "Before"]}])).unwrap_err();
+    assert_eq!(e["code"], "InvalidArgument");
+}
