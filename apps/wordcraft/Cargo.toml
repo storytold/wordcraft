@@ -53,6 +53,9 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 # types that arboard doesn't read, and the formats offered. Already in the build through arboard's
 # `wayland-data-control` feature, at this version.
 wl-clipboard-rs = "0.9"
+# The last way links are opened, after xdg-open and the desktop portal (`open_url.rs`, #2349).
+# Already in the build through eframe's `links` feature, at this version.
+webbrowser = "1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The upstream default-apps button opens Windows Settings; printing uses craft-print instead.

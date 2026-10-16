@@ -63,6 +63,7 @@ pub mod keys;
 pub mod keytips;
 pub mod mini_toolbar;
 pub mod objects;
+pub mod open_url;
 pub mod options;
 pub mod panes;
 pub mod paste_picture;
@@ -167,6 +168,9 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// Desktop (Linux and BSD): open every link the interface follows with the system instead of
+    /// egui's opener ([`open_url`], #2349). `None` (the web, macOS, Windows): egui opens links.
+    pub open_url: Option<open_url::Hook>,
 }
 
 /// How Save in the Save Changes prompt went.
@@ -530,6 +534,8 @@ pub struct WordApp {
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// Links the host is opening, and the notice for one it couldn't ([`open_url`]).
+    open_urls: open_url::State,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -634,6 +640,7 @@ impl WordApp {
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             dialog_pick: None,
             file_dialog: None,
+            open_urls: open_url::State::default(),
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: file_browser::State::default(),
             info_editing: None,
@@ -2033,6 +2040,8 @@ impl WordApp {
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+        open_url::route(self, &ctx);
+        open_url::show(self, &ctx);
         let title = if self.has_document() {
             format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" })
         } else {
