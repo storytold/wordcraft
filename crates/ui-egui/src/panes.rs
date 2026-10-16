@@ -127,6 +127,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
         out.state.store(ui.ctx(), r.id);
     }
     if r.changed() || picked.is_some() {
+        app.ui.nav_tab = "results".into();
         ui.data_mut(|d| d.insert_temp(qid, q.clone()));
         if !q.is_empty() {
             let _ = app.session.run("edit.find", &json!({"text": q}));

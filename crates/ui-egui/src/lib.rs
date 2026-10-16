@@ -1217,6 +1217,7 @@ impl WordApp {
         // Ctrl+F: type straight into the Navigation pane's search box (#712).
         if req.get("focus").and_then(Value::as_str) == Some("navSearch") {
             self.nav_search_focus = true;
+            self.ui.nav_tab = "results".into();
         }
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
@@ -6687,6 +6688,7 @@ mod tests {
         h.step();
         h.step();
         assert!(h.state().session.view.nav_pane, "the Navigation pane opened");
+        assert_eq!(h.state().ui.nav_tab, "results", "Find exposes its results (#2096)");
         assert!(h.state().dialog.is_none(), "no dialog: {:?}", h.state().dialog.as_ref().map(|d| d.name()));
         h.event(key(egui::Key::C, egui::Modifiers::NONE));
         h.event(egui::Event::Text("cool".into()));
@@ -6695,7 +6697,17 @@ mod tests {
         assert_eq!(nav_query(&h), "cool", "typed into the pane's search box");
         assert_eq!(h.state().session.find.results.len(), 1);
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns fire clay. Kilns cool.");
+        // Manual navigation remains available until the next search edit.
+        h.state_mut().ui.nav_tab = "headings".into();
+        h.step();
+        assert_eq!(h.state().ui.nav_tab, "headings");
+        h.event(egui::Event::Text("missing".into()));
+        h.step();
+        h.step();
+        assert_eq!(h.state().ui.nav_tab, "results", "editing the query reveals even an empty result list");
+        assert!(h.state().session.find.results.is_empty());
         // With text selected, Ctrl+F searches for it.
+        h.state_mut().ui.nav_tab = "pages".into();
         h.state_mut().run("select.text", json!({"text": "Kilns"})).unwrap();
         h.state_mut().canvas.want_focus = true;
         h.step();
@@ -6703,6 +6715,7 @@ mod tests {
         h.step();
         h.step();
         assert_eq!(nav_query(&h), "Kilns");
+        assert_eq!(h.state().ui.nav_tab, "results", "Find leaves Pages to show the selected-text matches");
         assert_eq!(h.state().session.find.results.len(), 2);
         // Ctrl+H: the Replace tab; Go To: the Go To tab of the same dialog.
         h.state_mut().canvas.want_focus = true;
