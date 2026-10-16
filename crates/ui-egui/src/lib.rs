@@ -1972,6 +1972,15 @@ impl WordApp {
             raw.events.push(egui::Event::PointerMoved(*p));
         }
         let n = n.min(self.synthetic.len());
+        if self.synthetic.iter().take(n).any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
+            // Control input belongs to this window's remembered widget even while another app
+            // is active. Give only this input frame egui focus, without requesting OS activation.
+            raw.focused = true;
+            if let (Some(ctx), Some(id)) = (&self.ctx, self.canvas.widget_id) {
+                // Canvas keys run before painting updates last frame's native focus flag.
+                self.canvas.focused = ctx.memory(|m| m.has_focus(id));
+            }
+        }
         raw.events.extend(self.synthetic.drain(..n));
     }
 
@@ -3696,6 +3705,126 @@ mod tests {
         }
         assert_eq!(a.canvas.scroll_offset, before, "holding a press on the ribbon leaves the document where it is");
         frame(&mut a, vec![btn(ribbon, false)]);
+    }
+
+    fn control_frame(a: &mut WordApp, ctx: &egui::Context, focused: bool) {
+        let mut raw = egui::RawInput {
+            focused,
+            time: Some(ctx.input(|i| i.time) + 1.0 / 60.0),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
+            ..Default::default()
+        };
+        a.raw_input_hook(&mut raw);
+        ctx.run_ui(raw, |ui| {
+            a.logic(ui.ctx());
+            a.ui(ui);
+        })
+        .drop_without_applying_deltas();
+    }
+
+    fn control_input(a: &mut WordApp, ctx: &egui::Context, method: &str, params: Value) {
+        let (req, _reply) = ControlRequest::new(method, params);
+        let control::Outcome::Done(v) = control::handle(a, ctx, &req) else { panic!("input is queued") };
+        assert_eq!(v["result"]["queued"], true);
+    }
+
+    /// #2420: an inactive native window still delivers control input to its focused widget.
+    #[test]
+    fn control_keyboard_reaches_the_background_document_once() {
+        for focused in [true, false] {
+            let ctx = egui::Context::default();
+            let mut a = app();
+            a.run("document.setText", json!({"text": "Seed"})).unwrap();
+            for _ in 0..4 {
+                control_frame(&mut a, &ctx, true);
+            }
+            assert!(a.canvas.focused);
+            for _ in 0..2 {
+                control_frame(&mut a, &ctx, focused);
+            }
+            a.run("select.all", json!({})).unwrap();
+            // Two queued requests are delivered in order across the key's release boundary.
+            control_input(&mut a, &ctx, "ui.key", json!({"key": "b", "cmd": true}));
+            control_input(&mut a, &ctx, "ui.text", json!({"text": "Written"}));
+            control_frame(&mut a, &ctx, focused);
+            assert_eq!(a.session.doc.para_at(&a.session.sel.focus).unwrap().props_of_char(0).bold, Some(true), "focused={focused}: Mod+B applied");
+            assert_eq!(body_text(&a), "Seed", "text waits behind the key's release");
+            control_frame(&mut a, &ctx, focused);
+            assert_eq!(body_text(&a), "Written", "focused={focused}: text applied");
+            assert!(a.synthetic.is_empty());
+            let rev = a.session.rev();
+            for _ in 0..3 {
+                control_frame(&mut a, &ctx, true);
+            }
+            assert_eq!(a.session.rev(), rev, "foregrounding never replays an input");
+            a.run("edit.undo", json!({})).unwrap();
+            assert_eq!(body_text(&a), "Seed", "one Undo reverses the one text input");
+        }
+    }
+
+    #[test]
+    fn control_keyboard_keeps_the_background_widget_target() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("document.setText", json!({"text": "Seed"})).unwrap();
+        for _ in 0..4 {
+            control_frame(&mut a, &ctx, true);
+        }
+        a.run("edit.advancedFind", json!({})).unwrap();
+        for _ in 0..2 {
+            control_frame(&mut a, &ctx, true);
+        }
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))));
+        for _ in 0..2 {
+            control_frame(&mut a, &ctx, false);
+        }
+        control_input(&mut a, &ctx, "ui.text", json!({"text": "Needle"}));
+        control_frame(&mut a, &ctx, false);
+        assert!(matches!(&a.dialog, Some(dialogs::Dialog::Find { query, .. }) if query == "Needle"));
+        control_input(&mut a, &ctx, "ui.key", json!({"key": "Backspace"}));
+        control_frame(&mut a, &ctx, false);
+        assert!(matches!(&a.dialog, Some(dialogs::Dialog::Find { query, .. }) if query == "Needl"));
+        assert_eq!(body_text(&a), "Seed", "the Find field, not the document, owns the input");
+        control_input(&mut a, &ctx, "ui.key", json!({"key": "Escape"}));
+        control_frame(&mut a, &ctx, false);
+        assert!(a.dialog.is_none());
+        a.run("file.close", json!({})).unwrap();
+        for focused in [true, true, false, false] {
+            control_frame(&mut a, &ctx, focused);
+        }
+        assert!(matches!(a.dialog, Some(dialogs::Dialog::SaveChanges { .. })));
+        control_input(&mut a, &ctx, "ui.key", json!({"key": "Escape"}));
+        control_frame(&mut a, &ctx, false);
+        assert!(a.dialog.is_none());
+        assert!(a.session.dirty && a.has_document() && !a.quit_requested);
+        assert_eq!(body_text(&a), "Seed", "Cancel preserves the unsaved document");
+    }
+
+    #[test]
+    fn control_keyboard_preserves_native_focus_and_document_protection() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("document.setText", json!({"text": "Seed"})).unwrap();
+        for _ in 0..4 {
+            control_frame(&mut a, &ctx, true);
+        }
+        a.run("select.all", json!({})).unwrap();
+        a.run("review.restrict", json!({"mode": "readOnly"})).unwrap();
+        let doc = a.session.doc.clone();
+        for _ in 0..2 {
+            control_frame(&mut a, &ctx, false);
+        }
+        control_input(&mut a, &ctx, "ui.key", json!({"key": "b", "cmd": true}));
+        control_input(&mut a, &ctx, "ui.text", json!({"text": "Refused"}));
+        for _ in 0..3 {
+            control_frame(&mut a, &ctx, false);
+        }
+        assert_eq!(a.session.doc, doc, "control input respects the same protection as real keys");
+        assert!(a.synthetic.is_empty());
+        let mut native = egui::RawInput { focused: false, ..Default::default() };
+        a.raw_input_hook(&mut native);
+        assert!(!native.focused, "a frame without control keys keeps the native focus state");
+        assert!(!a.canvas.focused);
     }
 
     /// The control channel's `ui.wheel` scrolls the canvas like a mouse wheel over it.
