@@ -193,6 +193,24 @@ fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
 }
 
 #[test]
+fn drop_cap_button_toggles_and_explicit_lines_set() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Drop cap"}));
+
+    run(&mut s, "insert.dropCap", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.drop_cap), Some(3));
+
+    run(&mut s, "insert.dropCap", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.drop_cap), None);
+
+    run(&mut s, "insert.dropCap", json!({"lines": 2}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.drop_cap), Some(2));
+
+    run(&mut s, "insert.dropCap", json!({"lines": 0}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).and_then(|p| p.props.drop_cap), None);
+}
+
+#[test]
 fn custom_dictionary_words_persist_through_their_file() {
     // #40: adding a word through a command writes it to the session's file, and loading
     // that file makes the word known (only the desktop app wires this up).

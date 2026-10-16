@@ -107,8 +107,16 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.pageField", "Insert Page Field", "Insert › Text › Quick Parts", |s, _| field(s, &json!({"instr": "PAGE"})))
             .key(super::mac_or("Ctrl+Shift+P", "Alt+Shift+P")),
         CommandSpec::new("insert.dropCap", "Drop Cap", "Insert › Text", |s, v| {
-            let lines = p::u64(v, "lines").unwrap_or(3).min(10) as u8;
-            super::para::fmt(s, &|p| p.drop_cap = Some(lines))
+            let drop_cap = match p::u64(v, "lines") {
+                Some(0) => None,
+                Some(lines) => Some(lines.min(10) as u8),
+                None => {
+                    let story = s.sel.focus.story;
+                    let active = super::selected_paths(s).iter().all(|path| s.doc.para(story, path).is_some_and(|p| p.props.drop_cap.unwrap_or(0) > 0));
+                    (!active).then_some(3)
+                }
+            };
+            super::para::fmt(s, &|p| p.drop_cap = drop_cap)
         })
         .params(r#"{"lines"?: n (0 = none)}"#),
         CommandSpec::new("insert.horizontalLine", "Horizontal Line", "Home › Paragraph › Borders", |s, _| {
