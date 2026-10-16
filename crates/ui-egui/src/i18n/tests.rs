@@ -532,6 +532,32 @@ fn only_cjk_languages_ask_for_an_installed_cjk_font() {
 }
 
 #[test]
+fn simplified_chinese_locales_and_saved_preference_work_without_changing_the_document() {
+    let zh = lang("zh-hans");
+    for tag in ["zh-hans", "zh-Hans", "zh-CN", "zh_CN.UTF-8", "zh-Hans-CN", "zh-SG"] {
+        assert_eq!(lang_from_tag(tag), Some(zh), "{tag}");
+    }
+    assert!(zh.is_simplified_chinese());
+    assert!(!lang("zh-hant").is_simplified_chinese());
+    assert!(!lang("ja").is_simplified_chinese());
+    assert!(!lang("ko").is_simplified_chinese());
+    assert!(!lang("en").is_simplified_chinese());
+
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "zh-hans"})).unwrap();
+    assert_eq!(result["effective"], "zh-hans");
+    assert_eq!(app.ui.language, "zh-hans");
+    // Interface font selection does not alter document content or document font selection (#1969).
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+
+    // Switching to Traditional Chinese keeps document content intact and clears is_simplified_chinese.
+    let result_hant = app.run("ui.language", serde_json::json!({"value": "zh-hant"})).unwrap();
+    assert_eq!(result_hant["effective"], "zh-hant");
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+}
+
+#[test]
 fn russian_locales_and_saved_preference_work_without_changing_the_document() {
     let ru = lang("ru");
     for tag in ["ru", "ru-RU", "ru_RU.UTF-8", "RU-ru", "ru_UA.UTF-8", "ru-Cyrl-RU"] {

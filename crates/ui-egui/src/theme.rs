@@ -415,7 +415,19 @@ pub fn install_fonts_language_extra(
     system_cjk: bool,
     faces: &[Arc<wordcraft_fonts::FontFace>],
 ) {
-    let mut fonts = font_definitions_language(prefer_hans, prefer_korean, system_cjk);
+    install_fonts_language_full_extra(ctx, prefer_hans, prefer_korean, prefer_hans, system_cjk, faces);
+}
+
+/// [`install_fonts_language_extra`] with explicit Simplified Chinese preference for native macOS fonts (#1969).
+pub fn install_fonts_language_full_extra(
+    ctx: &egui::Context,
+    prefer_hans: bool,
+    prefer_korean: bool,
+    simplified_chinese: bool,
+    system_cjk: bool,
+    faces: &[Arc<wordcraft_fonts::FontFace>],
+) {
+    let mut fonts = font_definitions_language_full(prefer_hans, prefer_korean, simplified_chinese, system_cjk);
     add_fallback_faces(&mut fonts, faces);
     ctx.set_fonts(fonts);
 }
@@ -471,6 +483,11 @@ pub fn font_definitions(prefer_hans: bool, system_cjk: bool) -> FontDefinitions 
 
 /// The interface fonts, ordered for the preferred CJK writing system.
 pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_cjk: bool) -> FontDefinitions {
+    font_definitions_language_full(prefer_hans, prefer_korean, prefer_hans, system_cjk)
+}
+
+/// The interface fonts, with explicit Simplified Chinese preference for native macOS fonts (#1969).
+pub fn font_definitions_language_full(prefer_hans: bool, prefer_korean: bool, simplified_chinese: bool, system_cjk: bool) -> FontDefinitions {
     let mut fonts = FontDefinitions::default();
     let add = |fonts: &mut FontDefinitions, name: &str, bytes: &'static [u8]| {
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
@@ -497,6 +514,17 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
             }
         }
     };
+    // On macOS, prefer native PingFang SC Regular for a Simplified Chinese interface (#1969),
+    // before the bundled craft-fonts faces. Bundled faces follow immediately as reliable fallbacks.
+    #[cfg(all(not(target_arch = "wasm32"), target_os = "macos"))]
+    if system_cjk
+        && simplified_chinese
+        && let Some(f) = macos_pingfang_sc_font()
+    {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("native {}", f.family), data);
+    }
     let cjk = wordcraft_fonts::ui_cjk_fonts_for(prefer_hans, prefer_korean);
     for f in &cjk {
         // The same static bytes the document fonts use: one copy in the binary.
@@ -511,10 +539,19 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
         data.index = f.index;
         add_cjk(&mut fonts, format!("system {}", f.family), data);
     }
+    #[cfg(not(target_os = "macos"))]
+    let _ = simplified_chinese;
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
+}
+
+/// The native macOS PingFang SC Regular interface font, cached once (#1969).
+#[cfg(all(not(target_arch = "wasm32"), target_os = "macos"))]
+fn macos_pingfang_sc_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static PINGFANG: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    PINGFANG.get_or_init(wordcraft_fonts::macos_pingfang_sc_ui_font).as_ref()
 }
 
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
@@ -872,5 +909,69 @@ mod tests {
             symbols.iter().filter(|(c, _)| !f.has_glyph(&font, *c)).map(|(c, file)| format!("{c} U+{:04X} in {file}", *c as u32)).collect()
         });
         assert!(missing.is_empty(), "symbols without a glyph: {missing:#?}");
+    }
+
+    #[test]
+    fn macos_simplified_chinese_ui_font_preference() {
+        // When simplified_chinese is true on macOS, PingFang SC is preferred before bundled CJK fonts (#1969).
+        let defs_zh = super::font_definitions_language_full(true, false, true, true);
+        let prop_zh = &defs_zh.families[&egui::FontFamily::Proportional];
+        // Inter is always first for Latin characters.
+        assert_eq!(prop_zh.first().map(String::as_str), Some("Inter"));
+        if cfg!(target_os = "macos") && wordcraft_fonts::macos_pingfang_sc_ui_font().is_some() {
+            assert!(prop_zh.iter().any(|name| name.starts_with("native PingFang SC")), "must include native PingFang SC");
+            let pf_pos = prop_zh.iter().position(|name| name.starts_with("native PingFang SC")).unwrap();
+            // PingFang SC must precede any bundled CJK faces.
+            if let Some(cjk_pos) = prop_zh.iter().position(|name| name.contains("Noto Sans") || name.contains("UDPGothic")) {
+                assert!(pf_pos < cjk_pos, "native PingFang SC must precede bundled CJK fonts in priority order");
+            }
+        }
+
+        // Traditional Chinese (zh-hant) must NOT include native PingFang SC (Requirement 6).
+        let defs_hant = super::font_definitions_language_full(true, false, false, true);
+        let prop_hant = &defs_hant.families[&egui::FontFamily::Proportional];
+        assert!(!prop_hant.iter().any(|name| name.starts_with("native PingFang SC")), "Traditional Chinese must not use PingFang SC");
+
+        // Japanese must NOT include native PingFang SC.
+        let defs_ja = super::font_definitions_language_full(false, false, false, true);
+        let prop_ja = &defs_ja.families[&egui::FontFamily::Proportional];
+        assert!(!prop_ja.iter().any(|name| name.starts_with("native PingFang SC")), "Japanese must not use PingFang SC");
+
+        // Korean must NOT include native PingFang SC.
+        let defs_ko = super::font_definitions_language_full(false, true, false, true);
+        let prop_ko = &defs_ko.families[&egui::FontFamily::Proportional];
+        assert!(!prop_ko.iter().any(|name| name.starts_with("native PingFang SC")), "Korean must not use PingFang SC");
+
+        // English must NOT include native PingFang SC.
+        let defs_en = super::font_definitions_language_full(false, false, false, false);
+        let prop_en = &defs_en.families[&egui::FontFamily::Proportional];
+        assert!(!prop_en.iter().any(|name| name.starts_with("native PingFang SC")), "English must not use PingFang SC");
+    }
+
+    #[test]
+    fn chinese_interface_renders_headings_and_mixed_latin() {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(super::font_definitions_language_full(true, false, true, true));
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            // Test real rendering of heading: 第一章 项目概况
+            let heading = "第一章 项目概况";
+            let response = ui.heading(heading);
+            assert!(response.rect.width() > 0.0);
+            assert!(response.rect.height() > 0.0);
+
+            // Test mixed Chinese/Latin interface text
+            let mixed = "第一章 项目概况 - Chapter 1: Project Overview (2026)";
+            let label_response = ui.label(mixed);
+            assert!(label_response.rect.width() > 0.0);
+            assert!(label_response.rect.height() > 0.0);
+        })
+        .drop_without_applying_deltas();
+
+        // Verify glyph availability when native PingFang SC or bundled CJK fonts are available (#1969).
+        if (cfg!(target_os = "macos") && wordcraft_fonts::macos_pingfang_sc_ui_font().is_some()) || !wordcraft_fonts::ui_cjk_fonts(false).is_empty() {
+            let font = super::regular(14.0);
+            let missing: Vec<char> = ctx.fonts_mut(|f| "第一章 项目概况".chars().filter(|c| !f.has_glyph(&font, *c)).collect());
+            assert!(missing.is_empty(), "missing glyphs for heading: {missing:?}");
+        }
     }
 }

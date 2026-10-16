@@ -464,6 +464,8 @@ pub struct WordApp {
     fonts_hans: bool,
     /// Whether the installed UI fonts use the Korean CJK face order.
     fonts_korean: bool,
+    /// Whether the installed UI fonts prefer native Simplified Chinese (PingFang SC, #1969).
+    fonts_simplified_chinese: bool,
     /// Whether the installed UI fonts include an installed CJK fallback font (#241).
     fonts_system_cjk: bool,
     /// CJK text is (about to be) on screen in a non-CJK interface, e.g. the language names in
@@ -596,6 +598,7 @@ impl WordApp {
             styled: false,
             fonts_hans: false,
             fonts_korean: false,
+            fonts_simplified_chinese: false,
             fonts_system_cjk: false,
             want_system_cjk: false,
             comment_fonts_for: None,
@@ -1876,11 +1879,23 @@ impl WordApp {
     /// face has changed since the last install.
     fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
-        if !self.styled || lang.prefers_hans() != self.fonts_hans || lang.prefers_korean() != self.fonts_korean || system_cjk != self.fonts_system_cjk
+        if !self.styled
+            || lang.prefers_hans() != self.fonts_hans
+            || lang.prefers_korean() != self.fonts_korean
+            || lang.is_simplified_chinese() != self.fonts_simplified_chinese
+            || system_cjk != self.fonts_system_cjk
         {
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, &self.canvas.ime_faces);
+            theme::install_fonts_language_full_extra(
+                ctx,
+                lang.prefers_hans(),
+                lang.prefers_korean(),
+                lang.is_simplified_chinese(),
+                system_cjk,
+                &self.canvas.ime_faces,
+            );
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
+            self.fonts_simplified_chinese = lang.is_simplified_chinese();
             self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
