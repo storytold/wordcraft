@@ -3184,6 +3184,29 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             applied_before = pl.rp.space_before.min(0.0);
         }
     }
+    // A wrapping picture that fits a column moves with its anchor instead of clipping below it.
+    let picture_paragraph = p.objects.len() == 1 && p.text.chars().all(|c| c == wordcraft_doc::para::OBJ || c.is_whitespace());
+    let float_overflows = picture_paragraph
+        && p.objects.iter().enumerate().any(|(i, o)| {
+            let picture = match o {
+                InlineObject::Image { .. } => true,
+                InlineObject::Group { children, .. } => children.iter().any(|c| matches!(c.obj, InlineObject::Image { .. })),
+                _ => false,
+            };
+            picture
+                && floating(o).is_some_and(|(_, _, f)| {
+                    f.v_rel == Anchor::Paragraph
+                        && !matches!(f.wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText)
+                        && float_rects
+                            .get(&i)
+                            .is_some_and(|r| r.bottom() > pb.bottom + 0.01 && r.bottom() - anchor_y <= pb.uncapped_bottom() - pb.top + 0.01)
+                })
+        });
+    if float_overflows && !pb.web && !pb.at_top() {
+        pb.advance(block, body_top);
+        pb.y += pl.rp.space_before.min(0.0);
+        applied_before = pl.rp.space_before.min(0.0);
+    }
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !pb.excl.is_empty()) {
         let y0 = pb.y;

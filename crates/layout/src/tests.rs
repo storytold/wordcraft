@@ -7263,3 +7263,73 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+fn fit_image(float: wordcraft_doc::para::Float) -> InlineObject {
+    InlineObject::Image { media: "original-probe".into(), w: 400.0, h: 280.0, alt: String::new(), float, crop: [0.0; 4], ole: None }
+}
+
+fn image_rects(items: &[Placed]) -> Vec<Rect> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn paragraph_floats_fit_the_page() {
+    use wordcraft_doc::para::{Anchor, Float, GroupChild, Wrap};
+    for grouped in [false, true] {
+        let mut d = Document::from_text("\n\n");
+        for block in 0..3 {
+            let p = d.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
+            p.props.space_after = Some(280.0);
+            let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 9.0, ..Default::default() };
+            let o = if grouped {
+                InlineObject::Group {
+                    w: 400.0,
+                    h: 280.0,
+                    float: f,
+                    ch_w: 400.0,
+                    ch_h: 280.0,
+                    children: vec![GroupChild { x: 0.0, y: 0.0, obj: fit_image(Default::default()) }],
+                    canvas: None,
+                }
+            } else {
+                fit_image(f)
+            };
+            p.insert_object(0, o, &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        assert_eq!(l.pages.iter().map(|p| image_rects(&p.items).len()).sum::<usize>(), 3);
+        for page in &l.pages {
+            for r in image_rects(&page.items) {
+                assert!(r.bottom() <= page.body.bottom() + 0.01, "picture {r:?} overflows body {:?}", page.body);
+            }
+        }
+    }
+}
+
+#[test]
+fn page_float_keeps_its_position() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Before\n");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(520.0);
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 650.0, ..Default::default() };
+    d.insert_object(&Pos::body(1, 0), fit_image(f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    assert!((image_rects(&l.pages[0].items)[0].y - 650.0).abs() < 0.01);
+}
+
+#[test]
+fn annotation_keeps_its_anchor() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Before\nAnchor");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(520.0);
+    let f = Float { wrap: Wrap::Square, v_rel: Anchor::Paragraph, y: 300.0, ..Default::default() };
+    d.insert_object(&Pos::body(1, 0), rect_shape(10.0, 10.0, f), &Default::default()).unwrap();
+    assert_eq!(lay(&d).pages.len(), 1);
+}
