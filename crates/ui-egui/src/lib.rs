@@ -4338,6 +4338,60 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// #1015: focusing Save is not enough: its dialog must expose the question and any failed
+    /// save's explanation, so assistive technology has context for the three choices.
+    #[test]
+    fn save_prompt_exposes_its_context_to_accessibility() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{By, NodeT, Queryable};
+        let dir = scratch("save-accessibility");
+        let path = docx_on_disk(&dir, "Draft");
+        let mut a = app();
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        a.canvas.want_focus = true;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(6);
+        assert!(h.state().canvas.focused);
+        h.state_mut().run("file.close", json!({})).unwrap();
+        h.run_steps(3);
+        let save = h.query_all_by_role(Role::Button).find(|n| n.accesskit_node().label().as_deref() == Some("Save") && n.is_focused()).unwrap();
+        let mut ancestor = save.parent();
+        let mut roles = Vec::new();
+        while let Some(node) = ancestor {
+            roles.push(node.accesskit_node().role());
+            ancestor = node.parent();
+        }
+        assert!(roles.iter().any(|r| matches!(r, Role::Dialog | Role::AlertDialog)), "Save has no dialog ancestor: {roles:?}");
+        let dialog = h.get(By::new().predicate(|n| matches!(n.role(), Role::Dialog | Role::AlertDialog)));
+        let node = dialog.accesskit_node();
+        assert!(node.label().is_some_and(|s| s.contains("contract.docx") && s.contains("save changes")));
+        assert!(node.description().is_some_and(|s| s.contains("Your changes will be lost")));
+        for label in ["Save", "Don't Save", "Cancel"] {
+            assert!(dialog.query_by_role_and_label(Role::Button, label).is_some(), "missing {label}");
+        }
+        let reason = "Couldn't save contract.docx: disk full";
+        if let Some(dialogs::Dialog::SaveChanges { message, .. }) = &mut h.state_mut().dialog {
+            *message = reason.into();
+        }
+        h.run_steps(2);
+        let dialog = h.get(By::new().predicate(|n| matches!(n.role(), Role::Dialog | Role::AlertDialog)));
+        assert!(dialog.accesskit_node().description().is_some_and(|s| s.contains(reason)));
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        assert!(h.state().canvas.focused && h.state().session.dirty);
+        assert!(body_text(h.state()).contains("Revised Draft"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// `ui.print` hands the document's PDF to the host's print hook, and is an error (with
     /// nothing printed) when the host has none.
     #[test]

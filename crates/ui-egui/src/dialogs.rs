@@ -1296,7 +1296,22 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.set_min_width(340.0);
         close = body(app, ui, &mut d);
     });
-    if shown.is_some() {
+    if let Some(shown) = &shown {
+        if let Dialog::SaveChanges { name, message, .. } = &d {
+            let question = crate::i18n::fmt(tl!("Do you want to save changes to {name}?"), &[("name", name)]);
+            let mut description = tl!("Your changes will be lost if you don't save them.").to_string();
+            if !message.is_empty() {
+                description.push('\n');
+                description.push_str(message);
+            }
+            // This is an urgent decision, not another application window. Keep its context with
+            // the focused choice, including when a failed Save brings the same prompt back.
+            ctx.accesskit_node_builder(shown.response.id, |node| {
+                node.set_role(egui::accesskit::Role::AlertDialog);
+                node.set_label(question);
+                node.set_description(description);
+            });
+        }
         count_dialog_frame(ctx, id);
     }
     if open && !close {
