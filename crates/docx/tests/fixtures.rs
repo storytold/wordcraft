@@ -2830,3 +2830,19 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+#[test]
+fn break_spacing_flag_roundtrips() {
+    for (flag, expected) in [
+        ("", false),
+        (r#"<w:suppressSpBfAfterPgBrk w:val="0"/>"#, false),
+        (r#"<w:suppressSpBfAfterPgBrk/>"#, true),
+        (r#"<w:suppressSpBfAfterPgBrk w:val="1"/>"#, true),
+    ] {
+        let settings = format!("<w:compat>{flag}</w:compat>");
+        let d = with_settings(Some(&settings));
+        assert_eq!(d.settings.suppress_break_spacing, expected, "{flag}");
+        let reopened = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(reopened.settings.suppress_break_spacing, expected, "{flag}");
+    }
+}

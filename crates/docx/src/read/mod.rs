@@ -1068,6 +1068,7 @@ impl Reader<'_> {
                 "w:removePersonalInformation" => s.remove_personal_info = on_off(k),
                 "w:removeDateAndTime" => s.remove_date_time = on_off(k),
                 "w:compat" => {
+                    s.suppress_break_spacing = k.child("w:suppressSpBfAfterPgBrk").is_some_and(on_off);
                     s.allow_space_of_same_style_in_table = k.child("w:allowSpaceOfSameStyleInTable").is_some_and(on_off);
                     // Only Word's own setting: another `w:uri` names a different application's.
                     let mode = k
