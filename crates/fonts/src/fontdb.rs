@@ -1443,11 +1443,34 @@ impl FontDb {
 
     /// The fallback face for `c`, and the number of loaded faces it was chosen from.
     fn search_fallback(&self, c: char, exclude: u32) -> (Option<Arc<FontFace>>, usize) {
+        if let Some(face) = self.circle_fallback(c, exclude) {
+            return (Some(face), self.read_faces().len());
+        }
         let (found, n) = self.loaded_fallback(c, exclude);
         if found.is_some() {
             return (found, n);
         }
         self.system_search(c, exclude)
+    }
+
+    fn circle_fallback(&self, c: char, exclude: u32) -> Option<Arc<FontFace>> {
+        if c != '\u{25CF}' {
+            return None;
+        }
+        // Word uses this text face for an uncovered black circle, before a UI sans.
+        const FAMILY: &str = "Times New Roman";
+        let find = || self.find(FAMILY, "Regular").filter(|f| f.id != exclude && f.covers(c));
+        if let Some(face) = find() {
+            return Some(face);
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let enabled = self.sys.lock().unwrap_or_else(|e| e.into_inner()).enabled;
+            if enabled {
+                self.load_cataloged(FAMILY);
+            }
+        }
+        find()
     }
 
     /// [`Self::search_fallback`] when no loaded face covers `c`: load a system font that does,

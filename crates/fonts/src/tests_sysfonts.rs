@@ -456,3 +456,77 @@ fn font_list_previews_load_nothing_for_good() {
     assert_eq!(db.loaded_font_bytes(), used, "memory stays bounded across previews");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Give an OFL test face a complete synthetic name table without adding a font asset.
+fn named_face(file: &str, family: &str) -> Vec<u8> {
+    let mut data = std::fs::read(Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/fonts").join(file)).unwrap();
+    let style = if file.contains("Bold") { "Bold" } else { "Regular" };
+    let names =
+        [(1, family.to_string()), (2, style.to_string()), (4, format!("{family} {style}")), (6, format!("{}-{style}", family.replace(' ', "")))];
+    let mut table = Vec::new();
+    table.extend_from_slice(&0u16.to_be_bytes());
+    table.extend_from_slice(&(names.len() as u16).to_be_bytes());
+    table.extend_from_slice(&(6u16 + 12 * names.len() as u16).to_be_bytes());
+    let mut strings = Vec::new();
+    for (id, value) in names {
+        let bytes: Vec<_> = value.encode_utf16().flat_map(u16::to_be_bytes).collect();
+        for n in [3, 1, 0x409, id, bytes.len() as u16, strings.len() as u16] {
+            table.extend_from_slice(&n.to_be_bytes());
+        }
+        strings.extend_from_slice(&bytes);
+    }
+    table.extend_from_slice(&strings);
+    data.resize(data.len().next_multiple_of(4), 0);
+    let offset = data.len() as u32;
+    let count = u16::from_be_bytes(data[4..6].try_into().unwrap()) as usize;
+    let entry = (0..count).map(|i| 12 + i * 16).find(|i| &data[*i..*i + 4] == b"name").unwrap();
+    data[entry + 8..entry + 12].copy_from_slice(&offset.to_be_bytes());
+    data[entry + 12..entry + 16].copy_from_slice(&(table.len() as u32).to_be_bytes());
+    data.extend_from_slice(&table);
+    data
+}
+
+#[test]
+fn circle_uses_installed_face() {
+    let dir = font_dir("circle-fallback");
+    std::fs::write(dir.join("Text-Regular.ttf"), named_face("SourceSans3-Regular.ttf", "Times New Roman")).unwrap();
+    std::fs::write(dir.join("Text-Bold.ttf"), named_face("SourceSans3-Bold.ttf", "Times New Roman")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let primary = db.face("Source Serif 4", "Regular");
+    assert!(!primary.covers('●'), "the requested face lacks the marker");
+    assert!(!db.is_loaded("Times New Roman"), "fallback must find a cataloged face");
+    db.set_system_fallback(false);
+    assert_eq!(db.fallback_for('●', primary.id()).unwrap().family, FALLBACK_FAMILY);
+    assert!(!db.is_loaded("Times New Roman"));
+    db.set_system_fallback(true);
+    let found = db.fallback_for('●', primary.id()).unwrap();
+    assert_eq!(found.family, "Times New Roman");
+    assert!(found.covers('●'));
+    assert_ne!(db.fallback_for('●', found.id()).unwrap().id(), found.id(), "the excluded face cannot be reused");
+    assert_eq!(db.fallback_for('●', primary.id()).unwrap().id(), found.id());
+    let bold = db.fallback_styled('●', primary.id(), true, false).unwrap();
+    assert_eq!(bold.family, "Times New Roman");
+    assert!(bold.weight >= 600.0 && bold.covers('●'));
+    assert_eq!(db.fallback_for('A', primary.id()).unwrap().family, FALLBACK_FAMILY, "ordinary character fallback is unchanged");
+}
+
+#[test]
+fn circle_without_text_face() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    let primary = db.face("Source Serif 4", "Regular");
+    let found = db.fallback_for('●', primary.id()).unwrap();
+    assert_eq!(found.family, FALLBACK_FAMILY);
+    assert!(found.covers('●'));
+}
+
+#[test]
+fn circle_checks_face_coverage() {
+    let db = FontDb::with_font_dirs(Vec::new());
+    db.set_system_fallback(false);
+    db.add_document_fonts(vec![named_face("SourceSerif4-Regular.ttf", "Times New Roman")]);
+    let preferred = db.face("Times New Roman", "Regular");
+    assert!(!preferred.covers('●'));
+    let primary = db.face("Source Serif 4", "Regular");
+    assert_eq!(db.fallback_for('●', primary.id()).unwrap().family, FALLBACK_FAMILY);
+}

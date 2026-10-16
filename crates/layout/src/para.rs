@@ -2704,9 +2704,11 @@ pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
 mod label_spacing_tests {
     use super::*;
 
+    const ROBOTO_METRICS: (f32, f32) = (11.1328125, 2.9296875);
+
     // Inject measured metric pairs after shaping so these regressions do not depend on
     // the fonts installed on the test host. Word for Mac 16.113.3, original Roboto probes.
-    fn measured_label_lines(spacing: LineSpacing, label_metrics: (f32, f32), label_ascent: f32, wrap: bool) -> Vec<Line> {
+    fn measured_label_lines(spacing: LineSpacing, label_metrics: (f32, f32), label_ascent: f32, wrap: bool, text_metrics: (f32, f32)) -> Vec<Line> {
         let doc = Document::new();
         let fields = FieldCtx::default();
         let level = Level { chr: CharProps { size: Some(24.0), ..Default::default() }, suffix: LevelSuffix::Nothing, ..Default::default() };
@@ -2734,7 +2736,7 @@ mod label_spacing_tests {
         label.ascent = label_ascent;
         let label_style = label.style;
         for (i, st) in pl.styles.iter_mut().enumerate() {
-            (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { (11.1328125, 2.9296875) };
+            (st.ascent, st.descent) = if i == label_style as usize { label_metrics } else { text_metrics };
         }
         let mark_style = pl.clusters[0].style;
         break_lines(&mut pl, &env, mark_style, Some(&level));
@@ -2742,9 +2744,18 @@ mod label_spacing_tests {
     }
 
     #[test]
+    fn fallback_label_ascent() {
+        let body = (1921.0 / 2048.0 * 11.0, 434.0 / 2048.0 * 11.0);
+        let low = measured_label_lines(LineSpacing::Multiple(1.15), (9.802246, 2.379395), 9.802246, false, body);
+        let tall = measured_label_lines(LineSpacing::Multiple(1.15), (11.0, 3.586), 11.0, false, body);
+        assert!((low[0].height - 14.546265).abs() < 0.001);
+        assert!((tall[0].height - low[0].height - 0.682129).abs() < 0.001);
+    }
+
+    #[test]
     fn large_label_overflow_is_not_multiplied() {
         for (multiple, expected) in [(1.0, 25.20), (1.25, 28.80), (2.0, 39.36)] {
-            let lines = measured_label_lines(LineSpacing::Multiple(multiple), (22.265625, 5.859375), 22.265625, false);
+            let lines = measured_label_lines(LineSpacing::Multiple(multiple), (22.265625, 5.859375), 22.265625, false, ROBOTO_METRICS);
             assert!((lines[0].height - expected).abs() <= 0.25, "{multiple}: {} vs {expected}", lines[0].height);
             if multiple == 1.0 {
                 assert!((lines[0].height - lines[0].baseline - 2.9296875).abs() < 0.001, "label descent must not move the text baseline");
@@ -2754,7 +2765,7 @@ mod label_spacing_tests {
 
     #[test]
     fn small_label_descent_does_not_inflate_text_spacing() {
-        let lines = measured_label_lines(LineSpacing::Multiple(1.25), (8.499023, 3.5009766), 9.0, false);
+        let lines = measured_label_lines(LineSpacing::Multiple(1.25), (8.499023, 3.5009766), 9.0, false, ROBOTO_METRICS);
         assert!((lines[0].height - 17.52).abs() <= 0.25, "{}", lines[0].height);
     }
 
@@ -2763,7 +2774,7 @@ mod label_spacing_tests {
         // Apple Symbols 24 pt: full leading gives an 18 pt label ascent. The text
         // pitch is still Roboto 12 pt. A shorter final fallback run must not hide it.
         for metrics in [(16.998047, 7.001953), (8.0, 3.0)] {
-            let lines = measured_label_lines(LineSpacing::Multiple(1.25), metrics, 18.0, false);
+            let lines = measured_label_lines(LineSpacing::Multiple(1.25), metrics, 18.0, false, ROBOTO_METRICS);
             assert!((lines[0].height - 24.48).abs() <= 0.25, "{}", lines[0].height);
         }
     }
@@ -2773,7 +2784,7 @@ mod label_spacing_tests {
         for (metrics, ascent, expected) in
             [((22.265625, 5.859375), 22.265625, 25.20), ((8.499023, 3.5009766), 9.0, 13.92), ((16.998047, 7.001953), 18.0, 20.88)]
         {
-            let lines = measured_label_lines(LineSpacing::AtLeast(12.0), metrics, ascent, false);
+            let lines = measured_label_lines(LineSpacing::AtLeast(12.0), metrics, ascent, false, ROBOTO_METRICS);
             assert!((lines[0].height - expected).abs() <= 0.25, "{}", lines[0].height);
         }
     }
@@ -2781,14 +2792,14 @@ mod label_spacing_tests {
     #[test]
     fn labels_keep_fixed_and_minimum_spacing_rules() {
         for (spacing, expected) in [(LineSpacing::Exactly(24.0), 24.0), (LineSpacing::AtLeast(30.0), 30.0)] {
-            let lines = measured_label_lines(spacing, (22.265625, 5.859375), 22.265625, false);
+            let lines = measured_label_lines(spacing, (22.265625, 5.859375), 22.265625, false, ROBOTO_METRICS);
             assert!((lines[0].height - expected).abs() < 0.001);
         }
     }
 
     #[test]
     fn label_overflow_only_affects_the_first_wrapped_line() {
-        let lines = measured_label_lines(LineSpacing::Multiple(1.25), (22.265625, 5.859375), 22.265625, true);
+        let lines = measured_label_lines(LineSpacing::Multiple(1.25), (22.265625, 5.859375), 22.265625, true, ROBOTO_METRICS);
         assert!(lines.len() > 1);
         assert!((lines[0].height - 28.80).abs() <= 0.25);
         for line in &lines[1..] {
