@@ -570,8 +570,9 @@ fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOpti
 }
 
 /// One line of `text` in `face` at `size` points, black on white, in a `w`×`h` point raster at
-/// `scale` pixels per point, starting `margin` points in with the baseline `margin` + the face's
-/// ascent down: a font list entry. Outlines come straight from the face, not the shared outline
+/// `scale` pixels per point, starting `margin` points in with the capitals centred in `h`: a font
+/// list entry. Not the face's ascent: a font with a tall one (Amiri Quran's is 1.8 em) put the
+/// name below the row (#2570). Outlines come straight from the face, not the shared outline
 /// cache, so a face read just for the preview leaves nothing behind once dropped (#848).
 pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32, w: f32, h: f32, margin: f32, scale: f32) -> Rendered {
     let fin = |v: f32, d: f32| if v.is_finite() && v >= 0.0 { v } else { d };
@@ -586,8 +587,8 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
     let upem = if face.upem.is_finite() && face.upem > 0.0 { face.upem } else { 1000.0 };
     let k = size / upem;
     let view = Affine::scale(scale as f64);
-    let ascent = if face.ascent.is_finite() { face.ascent.clamp(0.0, upem * 4.0) } else { upem * 0.8 };
-    let baseline = margin + ascent * k;
+    let cap = if face.cap_height.is_finite() { face.cap_height.clamp(upem * 0.3, upem) } else { upem * 0.7 };
+    let baseline = (h as f64 + cap * k) / 2.0;
     let mut x = margin;
     let colour = face.has_color_glyphs();
     for g in wordcraft_fonts::shape(face, text, &[], |c| c) {
@@ -1132,6 +1133,60 @@ pub fn render_items(doc: &Document, items: &[Draw], x: f32, y: f32, w: f32, h: f
 mod tests {
     use super::*;
     use wordcraft_layout::{LayoutCache, LayoutOptions, layout};
+
+    /// The first and last pixel rows with ink in a black-on-white [`render_text_line`] raster.
+    fn ink_rows(img: &Rendered) -> Option<(usize, usize)> {
+        let w = img.width as usize * 4;
+        let rows: Vec<usize> = img.pixels.chunks(w).enumerate().filter(|(_, r)| r.chunks(4).any(|p| p[0] < 128)).map(|(i, _)| i).collect();
+        Some((*rows.first()?, *rows.last()?))
+    }
+
+    /// #2570: a font with a very tall ascent (Amiri Quran's is 1.8 em, for stacked marks) put its
+    /// font list entry's baseline below the row, so the name was cut in half, and every tall-ascent
+    /// font sat lower than its neighbours. The entry's capitals are now centred in the row,
+    /// whatever the ascent.
+    #[test]
+    fn a_tall_ascent_font_list_entry_sits_where_the_others_do() {
+        // Source Sans 3 renamed (same length) with its ascent set to Amiri Quran's 1815/1000 em.
+        let mut data = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/../../assets/fonts/SourceSans3-Regular.ttf")).unwrap();
+        let utf16 = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
+        for (from, to) in [(utf16("Source Sans 3"), utf16("Talled Sans 3")), (b"Source Sans 3".to_vec(), b"Talled Sans 3".to_vec())] {
+            let mut i = 0;
+            while let Some(at) = data[i..].windows(from.len()).position(|w| w == from) {
+                data[i + at..i + at + to.len()].copy_from_slice(&to);
+                i += at + to.len();
+            }
+        }
+        let table = |data: &[u8], tag: &[u8; 4]| {
+            let n = u16::from_be_bytes([data[4], data[5]]) as usize;
+            (0..n)
+                .map(|k| 12 + k * 16)
+                .find(|&r| &data[r..r + 4] == tag)
+                .map(|r| u32::from_be_bytes(data[r + 8..r + 12].try_into().unwrap()) as usize)
+                .unwrap()
+        };
+        let upem = u16::from_be_bytes(data[table(&data, b"head") + 18..][..2].try_into().unwrap()) as f64;
+        let tall = ((upem * 1.815) as i16).to_be_bytes();
+        let (hhea, os2) = (table(&data, b"hhea"), table(&data, b"OS/2"));
+        for at in [hhea + 4, os2 + 68, os2 + 74] {
+            data[at..at + 2].copy_from_slice(&tall);
+        }
+        assert!(wordcraft_fonts::FontDb::global().add_font(data) > 0);
+        let db = wordcraft_fonts::FontDb::global();
+        let tall_face = db.face("Talled Sans 3", "Regular");
+        let normal = db.face(wordcraft_fonts::FALLBACK_FAMILY, "Regular");
+        assert_eq!(tall_face.family, "Talled Sans 3");
+        assert!(tall_face.ascent > normal.ascent * 1.5, "patched ascent {} vs {}", tall_face.ascent, normal.ascent);
+        // The font list's entry: 13 pt text in a 244×22 pt row, 2 pt in.
+        let entry = |f: &wordcraft_fonts::FontFace| ink_rows(&render_text_line(f, "Amiri Quran", 13.0, 244.0, 22.0, 2.0, 2.0));
+        let (top, bottom) = entry(&normal).unwrap();
+        let (tall_top, tall_bottom) = entry(&tall_face).unwrap();
+        assert_eq!((tall_top, tall_bottom), (top, bottom), "same glyphs, same place in the row");
+        assert!(top > 0 && bottom < 43, "the name isn't clipped: ink rows {top}..={bottom} of 44");
+        // Centred: as much room above the capitals as below the descender, within a few pixels.
+        let (above, below) = (top as i32, 43 - bottom as i32);
+        assert!((above - below).abs() <= 6, "rows above {above}, below {below}");
+    }
 
     /// #299: the caret's background is the page colour, a highlight, or the dark page.
     #[test]
