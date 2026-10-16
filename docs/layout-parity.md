@@ -159,6 +159,7 @@ No overall parity estimate changes from these probes.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | trivial | Text overflowing a narrow column into a wide one is broken for the column it lands in, as in Word (#2382; text after a column break already was, #934) |
 | 2026-10-14 | trivial | Row table border exceptions draw without leaking into other rows |
 | 2026-10-14 | trivial | Consistent cell widths override a stale table grid |
 | 2026-10-14 | trivial | Paragraphs inside complex-field instructions take no flow height; empty result paragraphs keep their line. |
