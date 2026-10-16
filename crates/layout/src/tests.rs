@@ -880,6 +880,44 @@ fn right_tab_aligns_text_end() {
 }
 
 #[test]
+fn narrow_cells_keep_their_width() {
+    let mut p = wordcraft_doc::Paragraph::with_text("WW", wordcraft_doc::CharProps { size: Some(6.0), ..Default::default() });
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(p.clone())];
+    let wide = lay(&d);
+    let advance = wide.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Lines { para, .. } => Some(para.clusters.iter().map(|c| c.adv).sum::<f32>()),
+            _ => None,
+        })
+        .unwrap();
+    let narrow = advance - 0.25;
+    assert!(narrow > 6.0 && advance < 12.0, "probe width {advance}");
+    for (width, expected_lines) in [(narrow, 2), (1.0, 2), (12.0, 1)] {
+        let mut table = Table::new(1, 1, width);
+        table.props.style = None;
+        table.props.fixed = true;
+        table.props.cell_margins = Some([0.0; 4]);
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p.clone())];
+        d.body = vec![std::sync::Arc::new(Block::Table(table))];
+        let l = lay(&d);
+        let lines = l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(para.lines.len()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(lines, expected_lines, "cell width {width}, text width {advance}");
+    }
+}
+
+#[test]
 fn lists_get_labels_and_indent() {
     let mut d = Document::from_text("one\ntwo\nthree");
     let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);

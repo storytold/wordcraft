@@ -1613,9 +1613,11 @@ fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>)
 }
 
 fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+    // Narrow cells and float spans must retain their usable width.
+    const MIN_LINE_WIDTH: f32 = 1.0;
     let suffix = level.map(|l| l.suffix);
     let rp = pl.rp.clone();
-    let width = env.width.max(12.0);
+    let width = env.width.max(MIN_LINE_WIDTH);
     let base_right = (width - rp.indent_right).max(1.0);
     let default_tab = env.doc.settings.default_tab;
     let first_left = rp.indent_left + rp.indent_first;
@@ -1697,7 +1699,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                         narrowed = !rest.is_empty() || a > lo || b < base_right;
                         row_rest = rest;
                         row_first = lines.len();
-                        break (a, b.max(a + 12.0));
+                        break (a, b.max(a + MIN_LINE_WIDTH));
                     }
                     Err(below) if below > top && guard < 50 => {
                         top = below;
@@ -1705,7 +1707,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     }
                     Ok((None, _)) | Err(_) => {
                         row_first = lines.len();
-                        break (lo, base_right.max(lo + 12.0));
+                        break (lo, base_right.max(lo + MIN_LINE_WIDTH));
                     }
                 }
             }
