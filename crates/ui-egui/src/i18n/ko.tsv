@@ -13,10 +13,13 @@
 	Add	추가
 	Add a comment	댓글 추가
 	Add a Table	표 추가
+	Add Heading Above	위에 제목 추가
+	Add Heading Below	아래에 제목 추가
 	Add Object to Selection	선택 영역에 개체 추가
 	Add Space Before Paragraph	단락 앞에 간격 추가
 	Add space between Asian and Latin text	아시아 문자와 라틴 문자 사이에 간격 추가
 	Add space between Asian text and numbers	아시아 문자와 숫자 사이에 간격 추가
+	Add Subheading	하위 제목 추가
 	Add tab stop at:	탭 위치 추가:
 	Add Text	텍스트 추가
 	Add to Dictionary	사전에 추가
@@ -1402,6 +1405,7 @@
 	Flip Horizontal	가로로 뒤집기
 	Move Paragraph Up	단락 위로 이동
 	Move Paragraph Down	단락 아래로 이동
+	Move Section	섹션 이동
 	Promote	수준 올리기
 	Demote	수준 내리기
 	Go Back	뒤로 이동

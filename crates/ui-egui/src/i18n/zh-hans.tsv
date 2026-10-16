@@ -25,10 +25,13 @@
 	Add	添加
 	Add a comment	添加批注
 	Add a Table	添加表格
+	Add Heading Above	在上方添加同级标题
+	Add Heading Below	在下方添加同级标题
 	Add Object to Selection	将对象添加到所选内容
 	Add Space Before Paragraph	在段前添加间距
 	Add space between Asian and Latin text	在亚洲文字与西文之间添加间距
 	Add space between Asian text and numbers	在亚洲文字与数字之间添加间距
+	Add Subheading	添加子标题
 	Add tab stop at:	制表位添加位置：
 	Add Text	添加文字
 	Add to Dictionary	添加到词典
@@ -1426,6 +1429,7 @@
 	Flip Horizontal	水平翻转
 	Move Paragraph Up	上移段落
 	Move Paragraph Down	下移段落
+	Move Section	移动整节
 	Promote	升级
 	Demote	降级
 	Go Back	返回上次编辑位置

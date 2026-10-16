@@ -24,10 +24,13 @@
 	Add	Додати
 	Add a comment	Додати коментар
 	Add a Table	Додати таблицю
+	Add Heading Above	Додати заголовок вище
+	Add Heading Below	Додати заголовок нижче
 	Add Object to Selection	Додати об'єкт до виділення
 	Add Space Before Paragraph	Додати інтервал перед абзацом
 	Add space between Asian and Latin text	Додавати інтервал між азійським і латинським текстом
 	Add space between Asian text and numbers	Додавати інтервал між азійським текстом і числами
+	Add Subheading	Додати підзаголовок
 	Add tab stop at:	Додати позицію табуляції:
 	Add Text	Додати текст
 	Add to Dictionary	Додати до словника
@@ -1426,6 +1429,7 @@
 	Flip Horizontal	Віддзеркалити по горизонталі
 	Move Paragraph Up	Перемістити абзац угору
 	Move Paragraph Down	Перемістити абзац униз
+	Move Section	Перемістити розділ
 	Promote	Підвищити рівень
 	Demote	Понизити рівень
 	Go Back	Повернутися назад

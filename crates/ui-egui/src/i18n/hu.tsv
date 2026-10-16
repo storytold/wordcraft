@@ -28,6 +28,8 @@
 	Add	Hozzáadás
 	Add a comment	Megjegyzés hozzáadása
 	Add a Table	Táblázat hozzáadása
+	Add Heading Above	Címsor hozzáadása fölé
+	Add Heading Below	Címsor hozzáadása alá
 	Add Space Before Paragraph	Térköz a bekezdés előtt
 	Add Text	Szöveg hozzáadása
 	Add to Dictionary	Felvétel a szótárba
@@ -1452,6 +1454,7 @@
 	Add Object to Selection	Objektum hozzáadása a kijelöléshez
 	Add space between Asian and Latin text	Térköz az ázsiai és a latin betűs szöveg között
 	Add space between Asian text and numbers	Térköz az ázsiai szöveg és a számok között
+	Add Subheading	Alcím hozzáadása
 	Allow hanging punctuation	Kilógó írásjelek engedélyezése
 	Allow Latin text to wrap in the middle of a word	A latin betűs szöveg szó közben is törhet
 	Apply Asian line-breaking rules (kinsoku)	Ázsiai sortörési szabályok alkalmazása (kinsoku)
@@ -1752,6 +1755,7 @@
 	Insert Time Field	Időmező beszúrása
 	Lock Fields	Mezők zárolása
 	Move Paragraph Down	Bekezdés mozgatása lefelé
+	Move Section	Szakasz mozgatása
 	Move Paragraph Up	Bekezdés mozgatása felfelé
 	Next Field	Következő mező
 	Previous Field	Előző mező

@@ -22,6 +22,8 @@
 	Add Space Before Paragraph	Lisa lõigu ette vahe
 	Add Text	Lisa tekst
 	Add a Table	Lisa tabel
+	Add Heading Above	Lisa pealkiri üles
+	Add Heading Below	Lisa pealkiri alla
 	Add a comment	Lisa kommentaar
 	Add to Dictionary	Lisa sõnastikku
 	Add to Style Gallery	Lisa stiilivalikusse
@@ -1134,6 +1136,7 @@
 	Add Object to Selection	Lisa objekt valikusse
 	Add space between Asian and Latin text	Lisa vahe Aasia ja ladina teksti vahele
 	Add space between Asian text and numbers	Lisa vahe Aasia teksti ja numbrite vahele
+	Add Subheading	Lisa alapealkiri
 	Allow hanging punctuation	Luba rippuvad kirjavahemärgid
 	Allow Latin text to wrap in the middle of a word	Luba ladina tekstil murduda keset sõna
 	Apply Asian line-breaking rules (kinsoku)	Rakenda Aasia reamurdmisreegleid (kinsoku)
@@ -1423,6 +1426,7 @@
 	from Unicode (hex)	Unicode (kuueteistkümnend)
 	Move Paragraph Up	Teisalda lõik üles
 	Move Paragraph Down	Teisalda lõik alla
+	Move Section	Teisalda jaotis
 	Promote	Tõsta taset
 	Demote	Langeta taset
 	Go Back	Mine tagasi

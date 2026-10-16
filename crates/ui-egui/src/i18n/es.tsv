@@ -28,9 +28,12 @@
 	Add Space Before Paragraph	Añadir espacio antes del párrafo
 	Add space between Asian and Latin text	Añadir espacio entre texto asiático y latino
 	Add space between Asian text and numbers	Añadir espacio entre texto asiático y números
+	Add Subheading	Añadir subtítulo
 	Add tab stop at:	Añadir tabulación en:
 	Add Text	Añadir texto
 	Add a Table	Añadir una tabla
+	Add Heading Above	Añadir título encima
+	Add Heading Below	Añadir título debajo
 	Add a comment	Añadir un comentario
 	Add to Dictionary	Añadir al diccionario
 	Add to Style Gallery	Añadir a la galería de estilos
@@ -1454,6 +1457,7 @@
 	Flip Horizontal	Voltear horizontalmente
 	Move Paragraph Up	Subir párrafo
 	Move Paragraph Down	Bajar párrafo
+	Move Section	Mover sección
 	Promote	Promover
 	Demote	Degradar
 	Go Back	Volver

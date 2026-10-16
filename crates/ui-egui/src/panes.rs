@@ -2,9 +2,9 @@
 //! Accessibility and Alt Text (see `a11y_pane`), Restrict Editing ([`crate::dialogs_review`]), Comments,
 //! and the SmartArt Text Pane.
 
-use egui::{Stroke, Ui, vec2};
+use egui::{Pos2, Rect, Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Path, Pos, StoryRef};
 
 use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
@@ -168,7 +168,11 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
                 job.append(pre, 0.0, fmt(ui.visuals().text_color()));
                 // The match is marked the way Find marks it on the page, per theme (#656).
                 let mark = Tokens::get(ui.ctx()).find_highlight;
-                job.append(hit, 0.0, egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() });
+                job.append(
+                    hit,
+                    0.0,
+                    egui::TextFormat { font_id: semibold(12.0), background: mark, color: ui.visuals().text_color(), ..Default::default() },
+                );
                 job.append(post, 0.0, fmt(ui.visuals().text_color()));
                 job.wrap.max_width = ui.available_width();
                 if ui.add(egui::Button::new(job).frame(false)).clicked() {
@@ -177,56 +181,288 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
                 ui.separator();
             }
         }
-        _ => {
-            let caret = app.session.sel.focus.clone();
-            let mut current: Option<usize> = None;
-            let mut items = Vec::new();
-            for path in app.session.doc.para_paths(StoryRef::Body) {
-                let Some(p) = app.session.doc.para(StoryRef::Body, &path) else { continue };
-                let rp = app.session.doc.styles.resolve_para(&p.props);
-                if let Some(lv) = rp.outline_level {
-                    let txt = p.plain_text().trim().to_string();
-                    if txt.is_empty() || rp.style.starts_with("TOC") {
-                        continue;
-                    }
-                    if path <= caret.path {
-                        current = Some(items.len());
-                    }
-                    items.push((path, lv, txt));
-                }
-            }
-            if items.is_empty() {
-                ui.label(egui::RichText::new(tl!("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.")).weak());
-            }
-            for (i, (path, lv, txt)) in items.into_iter().enumerate() {
-                if nav_heading(ui, lv, &txt, current == Some(i)).clicked() {
-                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path, off: 0 }}));
-                    // Align the chosen heading's page immediately against this pane, rather
-                    // than the indeterminate minimum movement from scroll_to_rect.
-                    app.canvas.nav_to_caret = true;
-                    app.canvas.scroll_to_caret = false;
-                    app.canvas.want_focus = true;
-                }
-            }
-        }
+        _ => outline(app, ui),
     });
 }
 
-/// Constrain each heading to the available pane width so long document text cannot
-/// enlarge the panel. The full heading stays accessible on hover.
-fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool) -> egui::Response {
-    ui.horizontal(|ui| {
-        ui.add_space(level as f32 * 14.0);
-        let label = egui::RichText::new(text).font(if level == 0 { semibold(12.5) } else { regular(12.5) });
-        ui.add_sized(
-            vec2(ui.available_width(), ui.spacing().interact_size.y),
-            // The trailing grow atom takes the spare width, so the text starts flush left
-            // under its parent instead of centred, as in Word (#1199).
-            egui::Button::selectable(selected, (label, egui::Atom::grow())).truncate(),
-        )
-        .on_hover_text(text)
-    })
-    .inner
+/// What the outline's context menu can do. Everything but the table of contents works on a whole
+/// section at a time — the heading and the paragraphs under it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Edit {
+    Promote,
+    Demote,
+    Remove,
+    Hide,
+    Above,
+    Below,
+    Child,
+    Toc,
+}
+
+impl Edit {
+    /// The menu, in the order it shows the commands: the heading's own level, then what happens to
+    /// its section, then the headings added around it, and last the table of contents the outline
+    /// is for. [`Edit::starts_group`] rules those four groups off from one another.
+    const ALL: [Edit; 8] = [Edit::Promote, Edit::Demote, Edit::Remove, Edit::Hide, Edit::Above, Edit::Below, Edit::Child, Edit::Toc];
+
+    /// The command that carries it out. The menu draws each command's own label, so what a search
+    /// finds by name is what the menu says (and every label is translated once, in the catalog).
+    fn command(self) -> &'static str {
+        match self {
+            Edit::Promote => "nav.promote",
+            Edit::Demote => "nav.demote",
+            Edit::Remove => "nav.remove",
+            Edit::Hide => "nav.hideFromToc",
+            Edit::Above => "nav.addAbove",
+            Edit::Below => "nav.addBelow",
+            Edit::Child => "nav.addSubheading",
+            // The References tab's own command, which inserts a three-level table at the caret (or
+            // refreshes the one already there) — the outline is what such a table is built from.
+            Edit::Toc => "references.toc",
+        }
+    }
+
+    /// Whether a rule is drawn above it, to set the groups apart.
+    fn starts_group(self) -> bool {
+        matches!(self, Edit::Remove | Edit::Above | Edit::Toc)
+    }
+
+    /// What it runs with: every command works on the heading's path except the table, which goes
+    /// where the caret is like the References tab's own.
+    fn params(self, path: &Path) -> Value {
+        if self == Edit::Toc { json!({"levels": 3}) } else { json!({"path": path.0}) }
+    }
+
+    /// Whether the page should follow the caret the command leaves behind: adding a heading puts it
+    /// in the new one so it can be typed straight away, and deleting one leaves it where the
+    /// section was. Promoting, demoting and hiding leave the text where it is.
+    fn moves_caret(self) -> bool {
+        matches!(self, Edit::Remove | Edit::Above | Edit::Below | Edit::Child)
+    }
+}
+
+/// The Headings tab: the outline as a tree that can be worked on rather than only read. A row
+/// jumps to its paragraph, the triangle (or a double-click) folds the section under a heading,
+/// the context menu promotes, demotes, adds to and takes out whole sections, and a row can be
+/// dragged above or below another one to move its section there. Word's pane navigates; this is
+/// the editable outline of an online editor (Tencent Docs, WPS), on the same tree.
+fn outline(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let caret = app.session.sel.focus.clone();
+    // (paragraph, level 1–9, title) for every heading of the body, TOC entries excluded.
+    let mut items: Vec<(Path, u8, String)> = Vec::new();
+    let mut current: Option<usize> = None;
+    for path in app.session.doc.para_paths(StoryRef::Body) {
+        let Some(p) = app.session.doc.para(StoryRef::Body, &path) else { continue };
+        let rp = app.session.doc.styles.resolve_para(&p.props);
+        if rp.style.starts_with("TOC") {
+            continue;
+        }
+        let Some(lv) = rp.outline_level.filter(|l| *l < 9) else { continue };
+        if path <= caret.path {
+            current = Some(items.len());
+        }
+        items.push((path, lv + 1, p.plain_text().trim().to_string()));
+    }
+    if items.is_empty() {
+        ui.label(egui::RichText::new(tl!("Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.")).weak());
+        return;
+    }
+    // The rows to draw: everything not tucked away under a folded heading.
+    let mut shown: Vec<usize> = Vec::new();
+    let mut folded: Option<u8> = None;
+    for (i, (path, level, _)) in items.iter().enumerate() {
+        if let Some(open) = folded {
+            if *level > open {
+                continue;
+            }
+            folded = None;
+        }
+        shown.push(i);
+        if has_children(&items, i) && app.ui.nav_collapsed.contains(&path.0) {
+            folded = Some(*level);
+        }
+    }
+    ui.spacing_mut().item_spacing.y = 1.0;
+    // The menu's wording, read off the commands themselves so the pane and a command search never
+    // drift apart.
+    let menu: Vec<&'static str> = Edit::ALL.iter().map(|e| app.session.registry.get(e.command()).map_or("", |c| c.label)).collect();
+    let mut rows: Vec<(usize, Rect)> = Vec::new();
+    let mut edits: Vec<(Edit, Path)> = Vec::new();
+    let mut dropped = false;
+    for &i in &shown {
+        let path = items[i].0.clone();
+        let level = items[i].1;
+        let text = items[i].2.clone();
+        let kids = has_children(&items, i);
+        let empty = text.is_empty();
+        // An empty heading still gets a row — it is what Add Heading Above/Below/Subheading makes —
+        // so it reads as its style instead of a blank line.
+        let title = if empty { crate::i18n::fmt(tl!("Heading {n}"), &[("n", &level.to_string())]) } else { text };
+        let open = !app.ui.nav_collapsed.contains(&path.0);
+        let resp = outline_row(
+            ui,
+            &t,
+            Row {
+                level,
+                title: &title,
+                dim: empty,
+                selected: current == Some(i),
+                dragging: app.ui.nav_drag.as_deref() == Some(path.0.as_slice()),
+                kids,
+                open,
+            },
+        );
+        rows.push((i, resp.rect));
+        // The triangle folds; anywhere else the row goes to the heading, as the pane always did.
+        let on_triangle = resp.clicked()
+            && ui.input(|i| i.pointer.interact_pos().is_some_and(|p| p.x < resp.rect.min.x + 4.0 + level.saturating_sub(1) as f32 * 14.0 + 12.0));
+        if kids && (on_triangle || resp.double_clicked()) {
+            if open {
+                app.ui.nav_collapsed.push(path.0.clone());
+            } else {
+                app.ui.nav_collapsed.retain(|k| *k != path.0);
+            }
+        } else if resp.clicked() {
+            let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path: path.clone(), off: 0 }}));
+            // Align the chosen heading's page immediately against this pane, rather
+            // than the indeterminate minimum movement from scroll_to_rect.
+            app.canvas.nav_to_caret = true;
+            app.canvas.scroll_to_caret = false;
+            app.canvas.want_focus = true;
+        }
+        resp.context_menu(|ui| {
+            for (n, edit) in Edit::ALL.iter().enumerate() {
+                if n > 0 && edit.starts_group() {
+                    ui.separator();
+                }
+                if ui.button(tl!(menu[n])).clicked() {
+                    edits.push((*edit, path.clone()));
+                    ui.close();
+                }
+            }
+        });
+        if resp.drag_started() {
+            app.ui.nav_drag = Some(path.0.clone());
+        }
+        if resp.drag_stopped() {
+            dropped = true;
+        }
+    }
+    // Where the dragged section would land, drawn as a line while it is still in the air.
+    let pointer = ui.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()));
+    let landing = app.ui.nav_drag.as_ref().and(pointer).and_then(|p| landing(&items, &rows, p));
+    if let Some((_, y)) = &landing
+        && let (Some((_, r0)), Some((_, r1))) = (rows.first(), rows.last())
+    {
+        ui.painter().hline(r0.min.x..=r1.max.x, *y, Stroke::new(2.0, t.accent));
+    }
+    if dropped && let (Some(from), Some((at, _))) = (app.ui.nav_drag.take(), landing) {
+        let _ = app.run("nav.move", json!({"path": from, "before": at}));
+    }
+    for (edit, path) in edits {
+        let _ = app.run(edit.command(), edit.params(&path));
+        if edit.moves_caret() {
+            app.canvas.nav_to_caret = true;
+            app.canvas.scroll_to_caret = false;
+            app.canvas.want_focus = true;
+        }
+    }
+}
+
+/// The height of one outline row.
+const ROW_H: f32 = 20.0;
+
+/// One row of the outline, as the pane draws it.
+struct Row<'a> {
+    /// Heading level, 1–9: the title is indented 14 pt under its parent per level.
+    level: u8,
+    /// What the row reads: the heading's text, or its style's name while it is still empty.
+    title: &'a str,
+    /// An empty heading is drawn dimmed, so it reads as a place to type rather than a blank line.
+    dim: bool,
+    /// The caret is in this heading's section.
+    selected: bool,
+    /// This is the row being dragged.
+    dragging: bool,
+    /// A section follows it, so the row gets a fold triangle.
+    kids: bool,
+    /// That section is open (the triangle points down).
+    open: bool,
+}
+
+/// Draw one heading row: the fold triangle, the title indented under its parent, and the
+/// background marking the section the caret is in. Long titles elide inside the pane instead of
+/// stretching it (#1199), and the whole title is on hover. What a click, a drag or a right-click
+/// does with the row belongs to the pane, which knows the document.
+fn outline_row(ui: &mut Ui, t: &Tokens, row: Row<'_>) -> egui::Response {
+    let (rect, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), egui::Sense::click_and_drag());
+    if row.selected || row.dragging || resp.hovered() {
+        let fill = if row.selected { t.selection } else { t.hover };
+        ui.painter().rect_filled(rect, 3.0, fill);
+    }
+    let indent = 4.0 + row.level.saturating_sub(1) as f32 * 14.0;
+    if row.kids {
+        let c = pos2(rect.min.x + indent + 4.0, rect.center().y);
+        let d = 3.6;
+        let points = if row.open {
+            vec![pos2(c.x - d, c.y - d * 0.6), pos2(c.x + d, c.y - d * 0.6), pos2(c.x, c.y + d * 0.8)]
+        } else {
+            vec![pos2(c.x - d * 0.6, c.y - d), pos2(c.x - d * 0.6, c.y + d), pos2(c.x + d * 0.8, c.y)]
+        };
+        ui.painter().add(egui::Shape::convex_polygon(points, t.text_dim, Stroke::NONE));
+    }
+    let color = if row.dim { t.text_disabled } else { t.text };
+    let text_x = rect.min.x + indent + 13.0;
+    let mut job = egui::text::LayoutJob::single_section(
+        row.title.to_string(),
+        egui::TextFormat { font_id: if row.level == 1 { semibold(12.5) } else { regular(12.5) }, color, ..Default::default() },
+    );
+    // One line, elided: a long heading stays inside the pane (#1199).
+    job.wrap.max_width = (rect.max.x - text_x - 2.0).max(0.0);
+    job.wrap.max_rows = 1;
+    job.wrap.overflow_character = Some('…');
+    let galley = ui.painter().layout_job(job);
+    ui.painter().galley(pos2(text_x, rect.center().y - galley.size().y / 2.0), galley, color);
+    resp.clone().on_hover_text(row.title)
+}
+
+/// Whether a heading opens a section: another heading deeper than it follows before one at its
+/// level or above.
+fn has_children(items: &[(Path, u8, String)], i: usize) -> bool {
+    items.get(i + 1).is_some_and(|(_, l, _)| *l > items[i].1)
+}
+
+/// Where a drop at `pos` would put the dragged section: the paragraph it goes in front of, as the
+/// path `nav.move` wants, and the height the drop line is drawn at. Dropping on a row's upper half
+/// lands before that heading; the lower half lands after its whole section, in front of the next
+/// heading at its level or above. `None` (no line) = the end of the container it is in.
+fn landing(items: &[(Path, u8, String)], rows: &[(usize, Rect)], pos: Pos2) -> Option<(serde_json::Value, f32)> {
+    let (top, bottom) = (rows.first()?.1, rows.last()?.1);
+    if pos.y < top.min.y {
+        return rows.first().map(|(i, r)| (json!(items[*i].0.0), r.min.y));
+    }
+    if pos.y > bottom.max.y {
+        return None;
+    }
+    let (i, rect) = *rows.iter().find(|(_, r)| r.contains(pos))?;
+    if pos.y <= rect.center().y {
+        return Some((json!(items[i].0.0), rect.min.y));
+    }
+    // Past this heading's section: the first heading that is no longer under it, and the line at
+    // that row — or, when it is the last section, at the bottom of the last row it covers.
+    let level = items[i].1;
+    let next = items.iter().enumerate().skip(i + 1).find(|(_, (_, l, _))| *l <= level);
+    match next {
+        Some((j, (p, _, _))) if p.parent() == items[i].0.parent() => {
+            let y = rows
+                .iter()
+                .find(|(k, _)| *k == j)
+                .map_or_else(|| rows.iter().filter(|(k, _)| *k >= i).map(|(_, r)| r.max.y).next_back().unwrap_or(rect.max.y), |(_, r)| r.min.y);
+            Some((json!(p.0), y))
+        }
+        _ => None,
+    }
 }
 
 /// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
@@ -747,17 +983,22 @@ mod navigation_tests {
     #[test]
     fn long_headings_truncate_without_stretching_navigation() {
         let text = "An extremely long heading with words that must stay inside the navigation pane ".repeat(20);
-        for (width, level) in [(260.0, 0), (180.0, 5)] {
+        // Level 1 and a deep level: indentation must not eat the width either way.
+        for (width, level) in [(260.0, 1), (180.0, 6)] {
             let ctx = egui::Context::default();
             crate::theme::install_fonts(&ctx);
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 600.0));
             let mut panel_rect = egui::Rect::NOTHING;
             let mut heading_rect = egui::Rect::NOTHING;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test")
-                    .default_size(width)
-                    .resizable(true)
-                    .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| nav_heading(ui, level, &text, true)).inner);
+                let result = egui::Panel::left("navigation_test").default_size(width).resizable(true).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| {
+                            let t = Tokens::get(ui.ctx());
+                            outline_row(ui, &t, Row { level, title: &text, dim: false, selected: true, dragging: false, kids: false, open: true })
+                        })
+                        .inner
+                });
                 panel_rect = result.response.rect;
                 heading_rect = result.inner.rect;
             });
@@ -786,7 +1027,10 @@ mod navigation_tests {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 600.0));
             let mut panel_left = 0.0;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| nav_heading(ui, level, "Kilns", false));
+                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| {
+                    let t = Tokens::get(ui.ctx());
+                    outline_row(ui, &t, Row { level, title: "Kilns", dim: false, selected: false, dragging: false, kids: false, open: true })
+                });
                 panel_left = result.response.rect.min.x;
             });
             let x = output
@@ -800,8 +1044,51 @@ mod navigation_tests {
             output.drop_without_applying_deltas();
             x - panel_left
         };
-        let (top, second) = (text_left(0), text_left(1));
+        let (top, second) = (text_left(1), text_left(2));
         assert!(top < 30.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
         assert!((second - top - 14.0).abs() < 0.5, "a level-2 heading is indented 14px under its parent: {top} / {second}");
+    }
+
+    /// The rows of the tree below, one per heading, stacked as the pane lays them out.
+    fn tree() -> (Vec<(Path, u8, String)>, Vec<(usize, Rect)>) {
+        let items: Vec<(Path, u8, String)> =
+            [(0, 1u8, "One"), (1, 2, "One A"), (2, 1, "Two")].into_iter().map(|(i, l, t)| (Path::top(i), l, t.to_string())).collect();
+        let rows = (0..3).map(|i| (i, Rect::from_min_size(pos2(0.0, i as f32 * ROW_H), vec2(200.0, ROW_H)))).collect();
+        (items, rows)
+    }
+
+    /// A section is what moves, so a row that opens one has children and a row that closes one does
+    /// not (#1199's tree).
+    #[test]
+    fn a_row_has_children_when_a_deeper_heading_follows() {
+        let (items, _) = tree();
+        assert!(has_children(&items, 0), "One opens a section");
+        assert!(!has_children(&items, 1), "One A is a leaf");
+        assert!(!has_children(&items, 2), "Two is the last heading");
+    }
+
+    /// A drop lands where the pointer says: the upper half of a row is in front of its heading, and
+    /// the lower half is past its whole section. The line drawn is the one the section appears at.
+    #[test]
+    fn a_drop_lands_before_a_heading_or_after_its_section() {
+        let (items, rows) = tree();
+        let at_row = |i: usize, frac: f32| rows[i].1.min.y + ROW_H * frac;
+        let path = |v: &Value| v.as_array().map(|a| a.iter().filter_map(Value::as_u64).collect::<Vec<_>>());
+        let land = |y: f32| landing(&items, &rows, pos2(10.0, y)).map(|(at, line)| (path(&at), line));
+        // Above the first row: the very top of the outline.
+        assert_eq!(land(-5.0), Some((Some(vec![0]), rows[0].1.min.y)));
+        // The upper half of a row is in front of it; the lower half is past it.
+        assert_eq!(land(at_row(1, 0.25)), Some((Some(vec![1]), rows[1].1.min.y)));
+        assert_eq!(land(at_row(0, 0.75)), Some((Some(vec![2]), rows[2].1.min.y)), "past One and the subheading under it");
+        assert_eq!(land(at_row(1, 0.75)), Some((Some(vec![2]), rows[2].1.min.y)), "past One A's section");
+        // Past the last section there is nothing left to go in front of.
+        assert_eq!(land(at_row(2, 0.75)), None);
+        assert_eq!(land(rows[2].1.max.y + 5.0), None);
+    }
+
+    /// An empty outline has nowhere to drop, and the pane must not index into nothing.
+    #[test]
+    fn a_drop_into_an_empty_outline_lands_nowhere() {
+        assert!(landing(&[], &[], pos2(0.0, 0.0)).is_none());
     }
 }

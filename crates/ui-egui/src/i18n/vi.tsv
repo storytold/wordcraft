@@ -31,9 +31,12 @@
 	Add Space Before Paragraph	Thêm khoảng cách trước đoạn
 	Add space between Asian and Latin text	Thêm khoảng cách giữa chữ châu Á và chữ Latin
 	Add space between Asian text and numbers	Thêm khoảng cách giữa chữ châu Á và chữ số
+	Add Subheading	Thêm tiêu đề phụ
 	Add tab stop at:	Thêm mốc tab tại:
 	Add Text	Thêm văn bản
 	Add a Table	Thêm bảng
+	Add Heading Above	Thêm tiêu đề lên trên
+	Add Heading Below	Thêm tiêu đề xuống dưới
 	Add a comment	Thêm nhận xét
 	Add to Dictionary	Thêm vào từ điển
 	Add to Style Gallery	Thêm vào thư viện kiểu
@@ -1344,6 +1347,7 @@
 	Flip Horizontal	Lật ngang
 	Move Paragraph Up	Di chuyển đoạn lên
 	Move Paragraph Down	Di chuyển đoạn xuống
+	Move Section	Di chuyển phần
 	Promote	Nâng lên
 	Demote	Hạ xuống
 	Go Back	Quay lại

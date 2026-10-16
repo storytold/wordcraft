@@ -22,10 +22,13 @@
 	Add	Ajouter
 	Add a comment	Ajouter un commentaire
 	Add a Table	Ajouter un tableau
+	Add Heading Above	Ajouter un titre au-dessus
+	Add Heading Below	Ajouter un titre en dessous
 	Add Object to Selection	Ajouter l’objet à la sélection
 	Add Space Before Paragraph	Ajouter un espace avant le paragraphe
 	Add space between Asian and Latin text	Ajouter un espace entre le texte asiatique et le texte latin
 	Add space between Asian text and numbers	Ajouter un espace entre le texte asiatique et les chiffres
+	Add Subheading	Ajouter un sous-titre
 	Add tab stop at:	Ajouter un taquet de tabulation à :
 	Add Text	Ajouter du texte
 	Add to Dictionary	Ajouter au dictionnaire
@@ -1347,6 +1350,7 @@
 	Flip Horizontal	Retourner horizontalement
 	Move Paragraph Up	Déplacer le paragraphe vers le haut
 	Move Paragraph Down	Déplacer le paragraphe vers le bas
+	Move Section	Déplacer la section
 	Promote	Élever d’un niveau
 	Demote	Abaisser le niveau
 	Go Back	Revenir en arrière
