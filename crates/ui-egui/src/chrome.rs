@@ -358,8 +358,9 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     qat_end = if rtl { ui.min_rect().min.x } else { ui.min_rect().max.x };
                     ui.with_layout(crate::rtl::far_side(ui, egui::Align::Center), |ui| {
-                        // The people in a live session (protocol 2; Share is on the tab strip).
-                        if app.has_document() && app.session.active_room().is_some() {
+                        // The chat button and the people in a live session (protocol 2; Share is on
+                        // the tab strip).
+                        if app.has_document() && (app.session.active_room().is_some() || crate::chat_ui::has_button(app)) {
                             crate::collab_ui::title_bar(app, ui, control_h);
                             ui.add_space(10.0);
                         }

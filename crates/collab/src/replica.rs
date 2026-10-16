@@ -27,6 +27,8 @@ use crate::{APP, CollabError, SCHEMA};
 const LOCAL: &str = "wordcraft/local";
 const REMOTE: &str = "wordcraft/remote";
 const SEED: &str = "seed";
+/// Chat edits: neither the model's edits nor tracked by the undo manager.
+const CHAT: &str = "wordcraft/chat";
 /// Updates kept while they wait for earlier ones.
 const MAX_HELD: usize = 1_000;
 
@@ -47,6 +49,8 @@ pub struct Refreshed {
     pub changed: Vec<(StoryRef, Path)>,
     /// More than paragraphs changed (stories, styles, the whole document).
     pub structural: bool,
+    /// The chat changed (it's in `doc.chat`).
+    pub chat: bool,
 }
 
 /// What remote transactions (and undos) changed since the last [`Replica::refresh`].
@@ -58,11 +62,13 @@ struct Changes {
     /// Top-level body blocks whose content changed.
     body_blocks: HashSet<BranchID>,
     roots: HashSet<&'static str>,
+    /// The chat (`chat`, `chatMeta`).
+    chat: bool,
 }
 
 impl Changes {
     fn any(&self) -> bool {
-        self.meta || self.body_list || !self.body_blocks.is_empty() || !self.roots.is_empty()
+        self.meta || self.body_list || !self.body_blocks.is_empty() || !self.roots.is_empty() || self.chat
     }
 }
 
@@ -77,9 +83,10 @@ fn origin_is(txn: &TransactionMut, name: &str) -> bool {
     txn.origin().is_some_and(|o| *o == Origin::from(name))
 }
 
-/// Remote updates and undos change the model; our own commits and the seed already did.
+/// Remote updates and undos change the model; our own commits, chat edits and the seed already
+/// did.
 fn recorded(txn: &TransactionMut) -> bool {
-    !origin_is(txn, LOCAL) && !origin_is(txn, SEED)
+    !origin_is(txn, LOCAL) && !origin_is(txn, SEED) && !origin_is(txn, CHAT)
 }
 
 fn out_str(o: Option<Out>) -> Option<Arc<str>> {
@@ -377,6 +384,21 @@ impl Replica {
             }
         });
         undo.expand_scope(&doc, &order);
+        // The chat: observed, never in the undo manager's scope (Undo never removes a message).
+        let chat = doc.get_or_insert_array(crate::chat::ROOT);
+        let ch = changes.clone();
+        chat.observe_deep("wordcraft/chat", move |txn, _| {
+            if recorded(txn) {
+                lock(&ch).chat = true;
+            }
+        });
+        let chat_meta = doc.get_or_insert_map(crate::chat::META);
+        let ch = changes.clone();
+        chat_meta.observe("wordcraft/chatMeta", move |txn, _| {
+            if recorded(txn) {
+                lock(&ch).chat = true;
+            }
+        });
         Replica { doc, client_id, undo, tick, changes, outbox, base: None, body_ids: HashMap::new(), held: Vec::new(), floor: 0 }
     }
 
@@ -481,6 +503,7 @@ impl Replica {
             meta.insert(&mut txn, "schema", i64::from(SCHEMA));
             meta.insert(&mut txn, "title", title);
             write_doc(&mut txn, None, doc);
+            crate::chat::seed(&mut txn, &doc.chat);
         }));
         if r.is_err() {
             return Err(CollabError::Other("the document couldn't be shared".into()));
@@ -598,6 +621,8 @@ impl Replica {
                 d.body = Vec::new();
                 read_roots(&txn, &mut d, None, &MAP_ROOTS);
                 d.body = read_body(&txn, None, &HashMap::new(), &HashSet::new()).0;
+                // Joining brings the room's chat in.
+                d.chat = Arc::new(crate::chat::read(&txn));
                 d.ensure_nonempty();
                 d
             };
@@ -606,7 +631,7 @@ impl Replica {
             doc.set_id_space(self.id_space());
             self.base = Some(doc.clone());
             self.index_body();
-            return Ok(Some(Refreshed { doc, changed: vec![], structural: true }));
+            return Ok(Some(Refreshed { doc, changed: vec![], structural: true, chat: true }));
         }
         let ch = std::mem::take(&mut *lock(&self.changes));
         if !ch.any() {
@@ -621,6 +646,9 @@ impl Replica {
         let structural = !ch.roots.is_empty();
         {
             let txn = self.doc.transact();
+            if ch.chat {
+                doc.chat = Arc::new(crate::chat::read(&txn));
+            }
             if ch.body_list || !ch.body_blocks.is_empty() {
                 let (body, fresh) = read_body(&txn, Some(&base.body), &self.body_ids, &ch.body_blocks);
                 doc.body = body;
@@ -650,7 +678,7 @@ impl Replica {
         doc.set_id_space(self.id_space());
         self.base = Some(doc.clone());
         self.index_body();
-        Ok(Some(Refreshed { doc, changed, structural }))
+        Ok(Some(Refreshed { doc, changed, structural, chat: ch.chat }))
     }
 
     // ------------------------------------------------------------ undo
@@ -710,6 +738,38 @@ impl Replica {
     pub fn diff_for(&self, sv: &[u8]) -> Result<Vec<u8>, CollabError> {
         let sv = StateVector::decode_v1(sv).map_err(|e| CollabError::Corrupt(e.to_string()))?;
         Ok(self.doc.transact().encode_state_as_update_v1(&sv))
+    }
+
+    // ------------------------------------------------------------ chat
+
+    /// The room's chat as it is now.
+    pub fn chat_now(&self) -> wordcraft_doc::chat::Chat {
+        crate::chat::read(&self.doc.transact())
+    }
+
+    /// Applies a chat edit to the shared document (one transaction, outside undo). Returns the
+    /// update to send (`None`: nothing changed), the messages a clear removed, and the chat
+    /// after it, which the last synced document now holds too. Refused edits change nothing.
+    pub fn chat(&mut self, op: &crate::chat::ChatOp) -> Result<(Option<Vec<u8>>, usize, wordcraft_doc::chat::Chat), CollabError> {
+        let ydoc = self.doc.clone();
+        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut txn = ydoc.transact_mut_with(CHAT);
+            crate::chat::apply(&mut txn, op)
+        }));
+        let removed = match r {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                // A refused edit wrote nothing; drop an empty transaction's update, if any.
+                let _ = self.take_outbox();
+                return Err(CollabError::Other(e));
+            }
+            Err(_) => return Err(CollabError::Other("the chat couldn't be changed".into())),
+        };
+        let chat = self.chat_now();
+        if let Some(b) = self.base.as_mut() {
+            b.chat = Arc::new(chat.clone());
+        }
+        Ok((self.take_outbox()?, removed, chat))
     }
 
     /// The whole document as one update (snapshots, recovery).

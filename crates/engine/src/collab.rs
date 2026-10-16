@@ -147,6 +147,8 @@ pub struct Room {
     in_memory: bool,
     /// Status-bar messages not shown yet ([`Session::collab_take_notices`]).
     notices: Vec<String>,
+    /// This person is typing in the chat (awareness `typing: true`).
+    typing: bool,
 }
 
 impl Room {
@@ -175,6 +177,11 @@ impl Room {
                 Some(Peer { client_id: id, user, anchor: pos("anchor"), focus: pos("focus") })
             })
             .collect()
+    }
+    /// The names of the people typing in the chat now (awareness `typing: true`), sorted.
+    pub fn typing(&self) -> Vec<String> {
+        let states: Vec<&Json> = self.awareness.present().map(|(_, st)| st).collect();
+        wordcraft_collab::chat::typing(states)
     }
     fn info(&self) -> Json {
         let people: Vec<Json> = self.peers().iter().map(|p| json!({"clientId": p.client_id, "user": p.user})).collect();
@@ -244,6 +251,34 @@ pub fn specs() -> Vec<CommandSpec> {
 
 fn bad(m: impl Into<String>) -> CmdError {
     CmdError::Params(m.into())
+}
+
+/// Who writes chat messages: the room's user in a live session, the app's own user otherwise.
+pub(crate) fn chat_user(s: &mut Session) -> User {
+    match &s.collab.room {
+        Some(r) if r.document == s.document_id() => r.user.clone(),
+        _ => user_from_prefs(s),
+    }
+}
+
+/// A chat edit in a live session: applied to the room's shared document and sent. `None`: not
+/// in a room (the document's own chat takes it). The messages a clear removed, and the chat.
+pub(crate) fn chat_op(s: &mut Session, op: &wordcraft_collab::chat::ChatOp) -> Option<Result<(usize, wordcraft_doc::chat::Chat), CmdError>> {
+    let doc_id = s.document_id();
+    let r = s.collab.room.as_mut().filter(|r| r.document == doc_id)?;
+    if let Some(why) = &r.refused {
+        return Some(Err(CmdError::Disabled(why.clone())));
+    }
+    Some(match r.replica.chat(op) {
+        Ok((update, removed, chat)) => {
+            if let Some(u) = update {
+                send_update(r, &u);
+            }
+            Ok((removed, chat))
+        }
+        Err(CollabError::Other(m)) => Err(CmdError::Params(m)),
+        Err(e) => Err(CmdError::Failed(e.to_string())),
+    })
 }
 
 fn user_from_prefs(s: &mut Session) -> User {
@@ -404,6 +439,7 @@ fn join_with(s: &mut Session, prm: &Json, in_memory: bool) -> CmdResult {
         outbox: Default::default(),
         in_memory,
         notices: vec![],
+        typing: false,
     };
     // A room's undo is the person's own: the document's history starts here.
     s.reset_history();
@@ -843,6 +879,31 @@ impl Session {
         out
     }
 
+    /// Whether this person is typing in the chat: others see "Name is typing…" (awareness
+    /// `typing: true`). The chat panel calls it as the draft changes; sending ends it.
+    pub fn chat_typing(&mut self, on: bool) {
+        let Some(r) = self.collab.room.as_mut() else { return };
+        if r.typing == on {
+            return;
+        }
+        r.typing = on;
+        send_awareness(self, true);
+    }
+
+    /// The people typing in the chat now (none outside a live session).
+    pub fn chat_typing_names(&self) -> Vec<String> {
+        self.collab.room.as_ref().map(Room::typing).unwrap_or_default()
+    }
+
+    /// The chat's own user id: the room's user in a live session, the app's own user otherwise
+    /// (`None` before one was made).
+    pub fn chat_user_id(&self) -> Option<String> {
+        match &self.collab.room {
+            Some(r) => Some(r.user.id.clone()),
+            None => Some(self.prefs.collab_user_id.clone()).filter(|id| !id.is_empty()),
+        }
+    }
+
     /// The document's live session.
     pub fn active_room(&self) -> Option<&Room> {
         self.collab.room.as_ref()
@@ -926,6 +987,9 @@ fn send_awareness(s: &mut Session, force: bool) {
         return;
     }
     let mut state = json!({"user": r.user});
+    if r.typing {
+        state["typing"] = json!(true);
+    }
     if let (Some(a), Some(f)) = (r.replica.sticky(&s.sel.anchor), r.replica.sticky(&s.sel.focus)) {
         state["selection"] = json!({
             "story": story_name(s.sel.focus.story),

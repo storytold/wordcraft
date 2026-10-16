@@ -62,7 +62,10 @@ impl Session {
                 }
             }
             Err(_) => {
+                // The chat isn't rolled back (its changes may have been shared already).
+                let chat = self.doc.chat.clone();
                 self.doc = doc;
+                self.doc.chat = chat;
                 self.sel = sel;
                 self.history = history;
                 self.redo = redo;
@@ -234,6 +237,8 @@ impl Session {
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
         };
+        // The chat isn't part of undo: it stays as it is now.
+        self.doc.chat = cur.doc.chat.clone();
         self.redo.push(Arc::new(cur));
         // Undo swaps the whole body back: a composition belongs to the text it showed.
         self.note_body_replaced();
@@ -260,6 +265,7 @@ impl Session {
             pending: std::mem::replace(&mut self.pending, u.pending),
             column: std::mem::replace(&mut self.column, u.column),
         };
+        self.doc.chat = cur.doc.chat.clone();
         self.history.push(Arc::new(cur));
         self.note_body_replaced();
         self.refresh_math_session();

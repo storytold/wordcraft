@@ -269,6 +269,16 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             PartRels::default(),
         );
     }
+    // The document chat (craft-collab `docs/chat.md`); an empty chat writes no part.
+    if !doc.chat.is_empty() {
+        let part = wordcraft_doc::chat::PART_NAME;
+        if entries.iter().any(|(n, _)| n.eq_ignore_ascii_case(part)) {
+            log::warn!("docx: {part} is taken by a kept part; the chat is left out");
+        } else {
+            root.add(wordcraft_doc::chat::RELATIONSHIP, part, false);
+            push_part(&mut entries, &mut overrides, part, doc.chat.to_part_bytes(), wordcraft_doc::chat::CONTENT_TYPE, PartRels::default());
+        }
+    }
     entries.insert(0, ("_rels/.rels".into(), root.xml()));
 
     // Content types.

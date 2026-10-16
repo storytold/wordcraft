@@ -46,6 +46,9 @@ pub struct ViewState {
     /// selected shapes' fill.
     #[serde(default)]
     pub format_shape_pane: bool,
+    /// The chat panel (document chat, `view.chat`).
+    #[serde(default)]
+    pub chat_pane: bool,
     pub multi_page: bool,
     /// One Page or Page Width was chosen last: keep one page per row when a typed or wheel zoom replaces the fit mode.
     #[serde(default)]
@@ -183,6 +186,7 @@ impl Default for ViewState {
             accessibility_pane: false,
             alt_text_pane: false,
             format_shape_pane: false,
+            chat_pane: false,
             multi_page: false,
             single_column: false,
             fit: String::new(),

@@ -275,7 +275,9 @@ impl Session {
                     self.merge.preview = merge_preview;
                 }
                 if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                    let chat = self.doc.chat.clone();
                     self.doc = d;
+                    self.doc.chat = chat;
                     self.sel = s;
                     self.history = h;
                     self.redo = r;
@@ -453,7 +455,10 @@ impl Session {
                         let _ = self.close_document(d);
                     }
                     if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                        // The chat isn't rolled back (its changes may have been shared already).
+                        let chat = self.doc.chat.clone();
                         self.doc = d;
+                        self.doc.chat = chat;
                         self.sel = s;
                         self.history = h;
                         self.redo = r;

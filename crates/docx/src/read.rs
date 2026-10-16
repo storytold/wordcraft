@@ -324,6 +324,16 @@ fn read_opened_in(pkg: &Package, chunks: ChunkState) -> Result<(Document, usize,
     }
     r.read_glossary(&rels);
     r.keep_custom_xml(&root_rels, &rels);
+    // The document chat (craft-collab `docs/chat.md`): modelled, never kept as an opaque part. A
+    // damaged one is left out with a warning; the document opens all the same.
+    if let Some(rel) = root_rels.by_type(wordcraft_doc::chat::RELATIONSHIP).filter(|x| !x.external)
+        && let Some(bytes) = pkg.get(&rel.target)
+    {
+        match wordcraft_doc::chat::Chat::from_part_bytes(bytes) {
+            Ok(chat) => r.doc.chat = Arc::new(chat),
+            Err(e) => log::warn!("docx: ignoring the chat part {}: {e}", rel.target),
+        }
+    }
     // The document's ribbon (tabs, groups, macro buttons) is modelled when that's all it holds;
     // then it isn't kept as a package part as well.
     let modelled = read_ribbon(&mut r.doc, pkg, &root_rels);

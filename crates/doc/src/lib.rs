@@ -13,6 +13,7 @@
 pub mod bidi;
 mod byte_store;
 pub mod cfb_guard;
+pub mod chat;
 pub mod chart;
 mod cjk_numbers;
 pub mod cluster;
@@ -140,6 +141,10 @@ pub struct Document {
     /// person's copy uses (see [`IdSpace`]). Not part of the document.
     #[serde(skip)]
     pub id_space: IdSpace,
+    /// The document chat (craft-collab `docs/chat.md`): saved in the file, shared in a live
+    /// session, never part of undo. Shared, so undo snapshots don't copy it.
+    #[serde(skip_serializing_if = "chat::arc_is_empty")]
+    pub chat: Arc<chat::Chat>,
     /// Lookup cache for [`Document::add_media`]; not part of the document (never saved, ignored
     /// by `==`).
     #[serde(skip)]

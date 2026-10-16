@@ -4,6 +4,9 @@
 //! commands, `in` lines go to the session's collab inbox, `out` lines are matched against what
 //! the session sent, `model` lines against the document, `notice` lines against the status-bar
 //! messages, and `decodesTo` against what another peer would build from every update so far.
+//! The chat transcripts (`wordcraft-1-chat*`, craft-collab `docs/chat.md`) add `chat` lines (the
+//! document's chat), `typing` lines (who the app shows typing) and `chatDecodesTo`; `run` lines
+//! may be refused (`fails`), and ids the app makes up are bound (`"$mine1"`) and reused.
 //!
 //! The transcripts live in the craft-collab repository: `CRAFT_COLLAB_DIR`, or a checkout next
 //! to this one (`../craft-collab-wordcraft`, then `../craft-collab`). Without one the test says
@@ -42,14 +45,15 @@ fn transcripts() -> Option<Vec<PathBuf>> {
     None
 }
 
-/// Pattern matching of `out` lines: `$any`, `$b64`, `$int`, `$absent`, `$clientId`.
+/// Pattern matching of `out` lines: `$any`, `$b64`, `$int`, `$absent`, and variables bound the
+/// first time they meet a value (`$clientId`, `$mine1`, …).
 fn matches(pat: &Json, v: Option<&Json>, vars: &mut BTreeMap<String, Json>) -> bool {
     match pat {
         Json::String(p) if p == "$absent" => v.is_none(),
         Json::String(p) if p == "$any" => v.is_some(),
         Json::String(p) if p == "$b64" => v.and_then(Json::as_str).is_some_and(|s| b64_decode(s).is_ok()),
         Json::String(p) if p == "$int" => v.is_some_and(|v| v.is_i64() || v.is_u64()),
-        Json::String(p) if p == "$clientId" => match (vars.get(p), v) {
+        Json::String(p) if p.starts_with('$') && p.len() > 1 => match (vars.get(p), v) {
             (Some(bound), Some(v)) => bound == v,
             (None, Some(v)) => {
                 vars.insert(p.clone(), v.clone());
@@ -148,6 +152,25 @@ fn model_of(title: &str, doc: Option<&Document>) -> Json {
     json!({"title": title, "body": doc.map(|d| blocks_json(&d.body)).unwrap_or_default()})
 }
 
+/// `run` params with every string naming a bound variable replaced by its value.
+fn substitute(v: &Json, vars: &BTreeMap<String, Json>) -> Json {
+    match v {
+        Json::String(s) if s.starts_with('$') => vars.get(s).cloned().unwrap_or_else(|| v.clone()),
+        Json::Array(a) => Json::Array(a.iter().map(|x| substitute(x, vars)).collect()),
+        Json::Object(o) => Json::Object(o.iter().map(|(k, x)| (k.clone(), substitute(x, vars))).collect()),
+        _ => v.clone(),
+    }
+}
+
+/// The chat another peer reads from `updates` (already decrypted).
+fn decoded_chat(updates: &[Vec<u8>]) -> Json {
+    let mut r = Replica::new(77);
+    for u in updates {
+        let _ = r.apply_update(u);
+    }
+    r.chat_now().to_json()
+}
+
 /// What another peer builds from `updates` (already decrypted).
 fn decoded(updates: &[Vec<u8>]) -> Json {
     let mut r = Replica::new(77);
@@ -231,12 +254,18 @@ fn replay(path: &PathBuf) -> Result<(), String> {
         match l["t"].as_str().unwrap_or("") {
             "run" => {
                 let cmd = l["command"].as_str().unwrap_or("");
-                let params = l["params"].clone();
+                let params = substitute(&l["params"], &r.vars);
+                let fails = l.get("fails").and_then(Json::as_bool) == Some(true);
                 if cmd == "collab.join" {
                     r.room = params["room"].as_str().unwrap_or("").to_string();
                     r.key = params.get("key").and_then(Json::as_str).and_then(|k| Key::from_base64(k).ok());
                 }
-                r.s.run(cmd, &params).map_err(|e| format!("line {n}: {cmd}: {e}"))?;
+                match r.s.run(cmd, &params) {
+                    Ok(out) if fails => return Err(format!("line {n}: {cmd} should have been refused, gave {out}")),
+                    Ok(_) | Err(_) if fails => {}
+                    Ok(_) => {}
+                    Err(e) => return Err(format!("line {n}: {cmd}: {e}")),
+                }
                 r.collect();
             }
             "in" => {
@@ -280,6 +309,12 @@ fn replay(path: &PathBuf) -> Result<(), String> {
                                 return Err(format!("line {n}: decodes to\n{got}\nnot\n{want}"));
                             }
                         }
+                        if let Some(want) = l.get("chatDecodesTo") {
+                            let got = decoded_chat(&r.updates);
+                            if !matches(want, Some(&got), &mut r.vars) {
+                                return Err(format!("line {n}: the chat decodes to\n{got}\nnot\n{want}"));
+                            }
+                        }
                     }
                     None if optional => {}
                     None => return Err(format!("line {n}: expected {pat}\n sent: {:?}", r.pending)),
@@ -295,6 +330,21 @@ fn replay(path: &PathBuf) -> Result<(), String> {
                 let got = r.model();
                 if got != l["model"] {
                     return Err(format!("line {n}: model\n{got}\nnot\n{}", l["model"]));
+                }
+            }
+            "chat" => {
+                let got = r.s.doc.chat.to_json();
+                if !matches(&l["chat"], Some(&got), &mut r.vars) {
+                    return Err(format!("line {n}: the chat is\n{got}\nnot\n{}", l["chat"]));
+                }
+            }
+            "typing" => {
+                let mut want: Vec<String> =
+                    l["names"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(str::to_string)).collect()).unwrap_or_default();
+                want.sort();
+                let got = r.s.chat_typing_names();
+                if got != want {
+                    return Err(format!("line {n}: typing {got:?}, expected {want:?}"));
                 }
             }
             "notice" => {
@@ -317,6 +367,9 @@ fn craft_collab_transcripts() {
     };
     let mut failures = Vec::new();
     assert!(files.len() >= 5, "{files:?}");
+    if !files.iter().any(|f| f.to_string_lossy().contains("-chat")) {
+        eprintln!("craft-collab's chat transcripts (wordcraft-1-chat*) aren't here yet: replaying the others");
+    }
     for f in &files {
         eprintln!("replaying {}", f.display());
         if let Err(e) = replay(f) {

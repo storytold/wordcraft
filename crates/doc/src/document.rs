@@ -77,6 +77,7 @@ impl Document {
             glossary: Vec::new(),
             ribbon: None,
             id_space: IdSpace::default(),
+            chat: Arc::default(),
             media_index: MediaIndex::default(),
             kept: Default::default(),
         }
@@ -157,6 +158,7 @@ impl Document {
             ribbon,
             // Where new ids come from, not content.
             id_space: _,
+            chat,
             media_index: _,
             kept: _,
         } = self;
@@ -179,6 +181,7 @@ impl Document {
             glossary: other_glossary,
             ribbon: other_ribbon,
             id_space: _,
+            chat: other_chat,
             media_index: _,
             kept: _,
         } = other;
@@ -199,6 +202,7 @@ impl Document {
             && same_bytes(passthrough, other_passthrough)
             && same_glossary(glossary, other_glossary)
             && ribbon == other_ribbon
+            && (Arc::ptr_eq(chat, other_chat) || chat == other_chat)
     }
 
     pub fn story(&self, s: StoryRef) -> Option<&Blocks> {
