@@ -3128,6 +3128,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     if pb.at_top() && (after_break_mark || (broke_before && ctx.doc.settings.compat_mode >= 15)) {
         before = 0.0;
     } else if pb.at_top()
+        && !ctx.doc.settings.sum_paragraph_spacing
         && let Some((_, _, after, _, _)) = &prev_para
     {
         // After a page break before or a section break the space between the paragraphs is

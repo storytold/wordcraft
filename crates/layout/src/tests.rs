@@ -7263,3 +7263,27 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+#[test]
+fn section_start_summed_spacing() {
+    for summed in [false, true] {
+        let mut d = Document::from_text("Section end\nSection start");
+        d.settings.sum_paragraph_spacing = summed;
+        let first = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        first.props.space_after = Some(10.0);
+        first.section = Some(Box::default());
+        let next = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+        next.props.space_before = Some(24.0);
+        let l = lay(&d);
+        let top = l.pages[1]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { path, y, .. } if *path == Path::top(1) => Some(*y),
+                _ => None,
+            })
+            .unwrap();
+        let gap = if summed { 24.0 } else { 14.0 };
+        assert!((top - d.last_section.margin_top - gap).abs() < 0.01, "summed={summed}: {top}");
+    }
+}
