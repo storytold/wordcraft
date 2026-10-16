@@ -894,6 +894,40 @@ fn inline_picture_figure_keeps_its_alt_text() {
     assert!(raw("").contains("/Alt(picture)"), "no alt text keeps the fallback");
 }
 
+/// A tagged PDF of one picture in a paragraph, placed by `float`, with alt text "A red square".
+fn tagged_picture_pdf(float: wordcraft_doc::para::Float) -> String {
+    let mut d = Document::new();
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "A red square".into(), float, crop: [0.0; 4], ole: None };
+    p.insert_object(n, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+}
+
+/// A picture marked decorative is an artifact in tagged PDF, inline, rotated or floating, so
+/// screen readers skip it; the same picture not marked decorative stays a Figure with its alt text.
+#[test]
+fn decorative_pictures_are_artifacts_not_figures() {
+    use wordcraft_doc::para::{AltText, Anchor, Float, Wrap};
+    let decorative = AltText { decorative: true, ..Default::default() };
+    let floating = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() };
+    let cases = [
+        ("inline", Float::default()),
+        ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        ("floating", floating.clone()),
+        ("rotated floating", Float { rot: 30.0, ..floating }),
+    ];
+    for (name, float) in cases {
+        let plain = tagged_picture_pdf(float.clone());
+        assert!(plain.contains("/Alt(A red square)"), "{name}: a described picture is a Figure with its alt text");
+        let raw = tagged_picture_pdf(Float { alt: decorative.clone(), ..float });
+        assert!(!raw.contains("/Alt("), "{name}: a decorative picture has no Figure and no alt text");
+        assert!(raw.contains("1 0 0 rg"), "{name}: the decorative picture is still drawn");
+    }
+}
+
 /// An EMF file of the given records, with a 25 mm frame and 1000 device pixels across (0.04 per 0.01 mm).
 fn emf_file(records: &[Vec<u8>]) -> Vec<u8> {
     let le32 = |vals: &[i32]| -> Vec<u8> { vals.iter().flat_map(|v| v.to_le_bytes()).collect() };

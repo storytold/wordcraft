@@ -883,14 +883,21 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                 continue;
             }
             match obj {
-                Some(InlineObject::Image { media, w, h, alt, .. }) => {
+                Some(o @ InlineObject::Image { media, w, h, alt, .. }) => {
                     if !buf.is_empty() {
                         out.push_text(&std::mem::take(&mut buf), &f);
                     }
+                    // A picture marked decorative keeps its description in the document, but
+                    // exports with none (`alt=""`), so screen readers skip it.
+                    let alt = if o.is_decorative() { "" } else { alt.as_str() };
                     match doc.media.get(media) {
-                        Some(data) => {
-                            out.inlines.push(Inline::Image(Img { data: data.clone(), ext: media_ext(media, data), w: *w, h: *h, alt: alt.clone() }))
-                        }
+                        Some(data) => out.inlines.push(Inline::Image(Img {
+                            data: data.clone(),
+                            ext: media_ext(media, data),
+                            w: *w,
+                            h: *h,
+                            alt: alt.to_string(),
+                        })),
                         None if !alt.is_empty() => buf.push_str(alt),
                         None => {}
                     }

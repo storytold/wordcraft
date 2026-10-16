@@ -598,6 +598,31 @@ fn chart_alt_text_is_an_image_alt_never_body_text() {
     assert_eq!(para_texts(&d), ["See below"]);
 }
 
+/// A picture marked decorative exports with an empty alt text, though it keeps its description,
+/// so screen readers skip it; the same picture not marked decorative keeps its alt text.
+#[test]
+fn decorative_picture_exports_with_empty_alt_text() {
+    use wordcraft_doc::para::{AltText, Float};
+    let doc = |decorative: bool| {
+        let mut d = Document::new();
+        let media = d.add_media(png(), "png");
+        let float = Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() };
+        let pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "Blue bar".into(), float, crop: [0.0; 4], ole: None };
+        let mut p = Paragraph::with_text("Logo: ", CharProps::default());
+        let n = p.len();
+        p.insert_object(n, pic, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+        d
+    };
+    let text = |d: &Document, ext: &str| String::from_utf8(export(ext, d).unwrap().unwrap()).unwrap();
+    let (plain, decorative) = (doc(false), doc(true));
+    assert!(text(&plain, "html").contains(r#"alt="Blue bar""#), "{}", text(&plain, "html"));
+    assert!(text(&plain, "md").contains("![Blue bar]("), "{}", text(&plain, "md"));
+    let (html, md) = (text(&decorative, "html"), text(&decorative, "md"));
+    assert!(html.contains(r#"alt="""#) && !html.contains("Blue bar"), "{html}");
+    assert!(md.contains("![](") && !md.contains("Blue bar"), "{md}");
+}
+
 /// Hostile Markdown and HTML that rescanned the rest of the text from every `[`, `![`, `<` or `&`
 /// took quadratic time: a few hundred KB froze the importer for tens of seconds.
 #[test]

@@ -819,6 +819,11 @@ impl Exporter<'_> {
                     for d in &draws {
                         match d {
                             Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // A picture marked decorative, straight or rotated: an artifact screen readers skip.
+                            Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
+                            Draw::Rotated { items, .. } if items.iter().any(|i| matches!(i, Draw::Image { decorative: true, .. })) => {
+                                self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d))
+                            }
                             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
                             // A rotated inline picture.
                             Draw::Rotated { items, .. } if items.iter().any(|i| matches!(i, Draw::Image { .. })) => {
@@ -836,11 +841,13 @@ impl Exporter<'_> {
                     }
                 }
                 Placed::Image { story, path, off, .. } => {
-                    let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
+                    let obj = self.doc.para(*story, path).and_then(|p| p.object_at(*off));
+                    let role = if obj.is_some_and(InlineObject::is_decorative) { Role::Artifact(ArtifactType::Other) } else { Role::Figure };
+                    let alt = match obj {
                         Some(InlineObject::Image { alt, .. }) => alt.clone(),
                         _ => String::new(),
                     };
-                    self.tagged(s, Role::Figure, Some(&alt), |me, s| {
+                    self.tagged(s, role, Some(&alt), |me, s| {
                         for d in &draws {
                             me.draw(s, d);
                         }
