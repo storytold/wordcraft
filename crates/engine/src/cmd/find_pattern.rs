@@ -94,7 +94,7 @@ fn replace_code(c: char) -> Option<char> {
 }
 
 /// A character code (`^13`, `^0151`, `^u8212`) as the character it stands for here.
-fn code_char(n: u32) -> Option<char> {
+fn code_char(n: u32, is_ansi: bool) -> Option<char> {
     Some(match n {
         13 => PARA_MARK,
         11 => '\n',
@@ -102,6 +102,13 @@ fn code_char(n: u32) -> Option<char> {
         14 => '\u{0E}',
         30 => '\u{2011}',
         31 => '\u{AD}',
+        n if is_ansi && n <= 255 => {
+            let c = wordcraft_doc::encoding::cp1252(n as u8);
+            if c.is_control() && c != '\t' || c == '\u{FFFD}' {
+                return None;
+            }
+            c
+        }
         n => char::from_u32(n).filter(|c| !c.is_control() || *c == '\t')?,
     })
 }
@@ -114,8 +121,9 @@ fn numeric_code(chars: &[char], i: usize) -> Option<(char, usize)> {
     if digits.is_empty() {
         return None;
     }
+    let is_ansi = chars.get(i) != Some(&'u') && digits.starts_with('0');
     let n: u32 = digits.parse().ok()?;
-    Some((code_char(n)?, start - i + digits.chars().count()))
+    Some((code_char(n, is_ansi)?, start - i + digits.chars().count()))
 }
 
 /// A literal character as a regex atom.

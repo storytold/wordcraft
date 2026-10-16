@@ -729,6 +729,13 @@ fn find_replace_special_codes() {
     assert_eq!(text(&s), "x y <1><2> a-b");
     // `special: false` reads the text literally.
     assert_eq!(run(&mut s, "edit.find", json!({"text": "^#", "special": false}))["count"], 0);
+
+    // Numeric codes: ANSI ^0151 and Unicode ^u8212 (em dash).
+    run(&mut s, "document.setText", json!({"text": "a—b—c"}));
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "^0151", "special": true}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "^u8212"}))["count"], 2);
+    assert_eq!(run(&mut s, "edit.replaceAll", json!({"text": "^0151", "with": "--"}))["replaced"], 2);
+    assert_eq!(text(&s), "a--b--c");
 }
 
 #[test]
