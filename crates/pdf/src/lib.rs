@@ -414,6 +414,7 @@ type Civil = (i64, u8, u8, u8, u8, u8);
 
 /// `YYYY-MM-DD[THH:MM[:SS]]…` → civil time.
 fn parse_iso(s: &str) -> Option<Civil> {
+    let s = s.trim();
     let n = |a: usize, b: usize| s.get(a..b).and_then(|x| x.parse::<i64>().ok());
     let (y, mo, d) = (n(0, 4)?, n(5, 7)?, n(8, 10)?);
     if !(1..=12).contains(&mo) || !(1..=31).contains(&d) {
@@ -1416,7 +1417,10 @@ impl Exporter<'_> {
             }
             m
         });
-        let pos = marks.get(name)?.clone();
+        let pos = marks
+            .get(name)
+            .or_else(|| marks.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?
+            .clone();
         if let Some(c) = self.lay.caret(&pos)
             && let Some(out) = self.out_index.get(&c.page)
         {
@@ -1433,7 +1437,13 @@ impl Exporter<'_> {
                     _ => None,
                 })
                 .unwrap_or(c.x);
-            return Some((*out, x, c.top));
+            let (x, y) = self
+                .lay
+                .pages
+                .get(c.page)
+                .map(|p| Fit::of(p).point(x, c.top))
+                .unwrap_or((x, c.top));
+            return Some((*out, x, y));
         }
         self.locate(pos.story, &pos.path)
     }

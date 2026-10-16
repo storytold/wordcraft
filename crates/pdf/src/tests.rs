@@ -1027,6 +1027,14 @@ fn bookmark_destination_is_the_page_of_its_start() {
     assert_eq!(page, 1, "the bookmark is on the second page");
     assert!((x - 72.0).abs() < 1.0 && y < 150.0, "{x} {y}");
     assert_eq!(ex.bookmark("first").map(|b| b.0), Some(0));
+
+    // Case-insensitive lookup matches
+    let (page_ci, x_ci, y_ci) = ex.bookmark("TARGET").unwrap();
+    assert_eq!(page_ci, 1);
+    assert_eq!((x_ci, y_ci), (x, y));
+
+    // Whitespace in ISO date string is parsed successfully
+    assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
 }
 
 /// Print Markup (#589): the comments and their replies print beside each page, which is scaled
