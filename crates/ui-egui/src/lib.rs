@@ -3388,6 +3388,67 @@ mod tests {
         assert_eq!((a.canvas.scale, &a.canvas.page_rects), (scale, &pages));
     }
 
+    /// Issue #1743: Ctrl/⌘ + wheel only zooms. The one view movement is the anchor correction that
+    /// keeps the page point under the pointer there; the touchpad coast still running when the
+    /// wheel starts zooming (animation effects off) doesn't scroll on top of it.
+    #[test]
+    fn ctrl_wheel_zoom_does_not_scroll_the_document() {
+        for modifiers in [egui::Modifiers::CTRL, egui::Modifiers::COMMAND] {
+            let ctx = egui::Context::default();
+            let system = std::rc::Rc::new(std::cell::Cell::new(Some(false)));
+            let mut a = app_with_system_animations(&system);
+            a.run("text.insert", json!({"text": "lorem ipsum dolor sit amet consectetur ".repeat(1200)})).unwrap();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+            let mut t = 0.0;
+            let mut frame = |a: &mut WordApp, events: Vec<egui::Event>| {
+                t += 1.0 / 60.0;
+                let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+                ctx.run_ui(input, |ui| {
+                    a.logic(ui.ctx());
+                    a.ui(ui);
+                })
+                .drop_without_applying_deltas();
+            };
+            for _ in 0..3 {
+                frame(&mut a, Vec::new());
+            }
+            let rect = a.canvas.canvas_rect.unwrap();
+            let pointer = rect.center() + egui::vec2(30.0, 40.0);
+            frame(&mut a, vec![egui::Event::PointerMoved(pointer)]);
+            let wheel = |delta: f32, modifiers| egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, delta),
+                phase: egui::TouchPhase::Move,
+                modifiers,
+            };
+            // Scroll down a little, so the pointer is well inside the document.
+            frame(&mut a, vec![wheel(-3.0, egui::Modifiers::NONE)]);
+            for _ in 0..40 {
+                frame(&mut a, Vec::new());
+            }
+            let layout = a.session.layout();
+            let under = |a: &WordApp| canvas::page_at(&a.canvas.page_rects, &layout, a.canvas.scale, pointer);
+            let (page, x, y) = under(&a).unwrap();
+            let scale = a.canvas.scale;
+            frame(&mut a, vec![wheel(50.0, modifiers)]);
+            let mut last = a.canvas.scroll_offset;
+            for n in 0..60 {
+                last = a.canvas.scroll_offset;
+                if n > 0 {
+                    frame(&mut a, Vec::new());
+                }
+                let (p, px, py) = under(&a).unwrap();
+                assert_eq!(p, page);
+                assert!(
+                    ((px - x).abs() < 1.0 || a.canvas.scroll_offset.x == 0.0) && (py - y).abs() < 1.0,
+                    "the page point stays under the pointer ({modifiers:?} frame {n}): ({x},{y}) -> ({px},{py})"
+                );
+            }
+            assert_eq!(a.canvas.scroll_offset, last, "nothing scrolls once the zoom has settled ({modifiers:?})");
+            assert!(a.canvas.scale > scale, "zoomed ({modifiers:?})");
+        }
+    }
+
     /// Issue #688: dragging a selection past the viewport's bottom edge scrolls on, and the
     /// selection keeps growing as the content moves under the stationary pointer.
     #[test]

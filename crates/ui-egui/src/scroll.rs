@@ -174,11 +174,16 @@ impl CanvasScroll {
         let mut touchpad = Vec2::ZERO;
         let mut lifted = false;
         let mut stop = false;
+        let mut zooming = false;
         for event in &input.events {
             match event {
                 Event::MouseWheel { unit, delta, phase, modifiers } => {
                     // Ctrl/⌘+wheel zooms (egui turns it into a zoom factor).
-                    if !hovered || modifiers.matches_any(opts.zoom_modifier) {
+                    if !hovered {
+                        continue;
+                    }
+                    if modifiers.matches_any(opts.zoom_modifier) {
+                        zooming = true;
                         continue;
                     }
                     let d = axis_lock(if delta.is_finite() { *delta } else { Vec2::ZERO }, *modifiers, opts);
@@ -201,6 +206,13 @@ impl CanvasScroll {
                 Event::Key { pressed: true, .. } | Event::PointerButton { pressed: true, .. } | Event::Text(_) => stop = true,
                 _ => {}
             }
+        }
+        // The wheel zooms this frame: whatever was still gliding (a coast, a notch easing in)
+        // stops rather than scroll the page on top of the zoom's anchor correction (#1743). The early
+        // return deliberately drops this frame's other deltas too.
+        if zooming {
+            self.hit_edge();
+            return Vec2::ZERO;
         }
         now += touchpad;
         let fed = touchpad != Vec2::ZERO;
@@ -235,6 +247,12 @@ impl CanvasScroll {
     pub fn hit_edge(&mut self) {
         self.momentum.cancel();
         self.pending = Vec2::ZERO;
+    }
+
+    /// A zoom took over the wheel: drop any coast or queued notches so they don't scroll the page
+    /// on top of the anchor correction that keeps the pointer's page point in place (#1743).
+    pub fn cancel(&mut self) {
+        self.hit_edge();
     }
 
     /// Scrolling continues without new input: keep repainting.
@@ -423,6 +441,47 @@ mod tests {
         })
         .drop_without_applying_deltas();
         seen
+    }
+
+    /// One frame of [`CanvasScroll::frame`] with the pointer on a 400x300 screen.
+    fn canvas_frame(ctx: &egui::Context, scroll: &mut CanvasScroll, t: f64, events: Vec<Event>) -> Vec2 {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0));
+        let input = egui::RawInput { events, time: Some(t), screen_rect: Some(screen), ..Default::default() };
+        let mut out = Vec2::ZERO;
+        ctx.run_ui(input, |ui| {
+            let opts = ui.ctx().options(|o| o.input_options);
+            out = ui.input(|i| scroll.frame(i, &opts, true, NOTCH_PX, 300.0, true));
+        })
+        .drop_without_applying_deltas();
+        out
+    }
+
+    /// Issue #1743: a Ctrl/⌘+wheel event drops queued wheel notches instead of scrolling them on top
+    /// of the zoom. (The touchpad-coast case is covered by `ctrl_wheel_zoom_does_not_scroll_the_document`.)
+    #[test]
+    fn zoom_modifier_wheel_clears_queued_notches() {
+        for modifiers in [Modifiers::CTRL, Modifiers::COMMAND] {
+            let ctx = egui::Context::default();
+            let mut scroll = CanvasScroll::default();
+            let mut t = 0.0;
+            let mut next = || {
+                t += f64::from(FRAME);
+                t
+            };
+            canvas_frame(&ctx, &mut scroll, next(), vec![Event::PointerMoved(egui::pos2(50.0, 50.0))]);
+            // A fresh fling and a queued notch.
+            for _ in 0..6 {
+                canvas_frame(&ctx, &mut scroll, next(), vec![wheel(MouseWheelUnit::Point, Vec2::new(0.0, -30.0), Modifiers::NONE)]);
+            }
+            canvas_frame(&ctx, &mut scroll, next(), vec![wheel(MouseWheelUnit::Line, Vec2::new(0.0, -5.0), Modifiers::NONE)]);
+            assert!(scroll.is_animating(), "something is still gliding");
+            let moved = canvas_frame(&ctx, &mut scroll, next(), vec![wheel(MouseWheelUnit::Line, Vec2::new(0.0, 1.0), modifiers)]);
+            assert_eq!(moved, Vec2::ZERO, "the zoom frame scrolls nothing ({modifiers:?})");
+            assert!(!scroll.is_animating(), "nothing glides on after the zoom ({modifiers:?})");
+            for _ in 0..5 {
+                assert_eq!(canvas_frame(&ctx, &mut scroll, next(), Vec::new()), Vec2::ZERO, "no leftover scroll ({modifiers:?})");
+            }
+        }
     }
 
     /// egui's own scroll areas ease a wheel notch in over several frames; with animation effects

@@ -862,6 +862,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         }
         let pct = (app.canvas.scale / PX_PER_PT * zoom_delta * 100.0).clamp(if reading { 75.0 } else { 10.0 }, if reading { 150.0 } else { 500.0 });
         let id = if reading { "view.readTextSize" } else { "view.zoom" };
+        app.canvas.wheel.cancel();
         let _ = app.run(id, json!({"value": pct}));
     }
     let avail = if app.session.view.read_mode { area.size() } else { area.size() - vec2(14.0, 0.0) };
