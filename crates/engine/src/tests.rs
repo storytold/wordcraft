@@ -6231,6 +6231,10 @@ fn ordinals_and_untagged_text_sort_and_sum_as_numbers() {
     run(&mut t, "table.sort", json!({"column": 0, "header": false}));
     assert_eq!(column_texts(&t), ["1.", "2.", "10."]);
 
+    let mut t = column_table("en-US", &["10", "(50)", "20"]);
+    run(&mut t, "table.sort", json!({"column": 0, "header": false}));
+    assert_eq!(column_texts(&t), ["(50)", "10", "20"]);
+
     let mut s = s();
     s.set_editing_language(Some("pl-PL"));
     s.doc.styles.default_chr.lang = None;
