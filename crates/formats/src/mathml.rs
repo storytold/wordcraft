@@ -174,8 +174,16 @@ fn node(n: &MNode, o: &mut String, depth: usize, eq_arr: bool) {
                 o.push_str("<mmultiscripts>");
                 group(base, o, depth);
                 o.push_str("<mprescripts/>");
-                group(sub, o, depth);
-                group(sup, o, depth);
+                if sub.is_empty() {
+                    o.push_str("<none/>");
+                } else {
+                    group(sub, o, depth);
+                }
+                if sup.is_empty() {
+                    o.push_str("<none/>");
+                } else {
+                    group(sup, o, depth);
+                }
                 o.push_str("</mmultiscripts>");
             }
         },
@@ -442,7 +450,8 @@ pub fn local(name: &str) -> &str {
 /// The linear format of a `<math>` element, and whether it's a display equation. `None` when it
 /// holds nothing.
 pub fn read(math: &El) -> Option<(String, bool)> {
-    let display = math.attr("display").is_some_and(|d| d.eq_ignore_ascii_case("block")) || math.attr("mode").is_some_and(|d| d == "display");
+    let display = math.attr("display").is_some_and(|d| d.eq_ignore_ascii_case("block"))
+        || math.attr("mode").is_some_and(|d| d.eq_ignore_ascii_case("display"));
     let linear = linear_of(math);
     let linear: String = linear.chars().filter(|c| !c.is_control()).collect();
     let linear = linear.trim().to_string();
@@ -635,7 +644,20 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
                 Some(p) => {
                     let sub = script(p + 1, budget);
                     let sup = script(p + 2, budget);
-                    vec![MNode::Script { kind: ScriptKind::Pre, base, sub, sup }]
+                    let pre_node = MNode::Script { kind: ScriptKind::Pre, base, sub, sup };
+                    if p > 1 {
+                        let post_sub = script(1, budget);
+                        let post_sup = script(2, budget);
+                        let kind = match (post_sub.is_empty(), post_sup.is_empty()) {
+                            (true, true) => return vec![pre_node],
+                            (false, true) => ScriptKind::Sub,
+                            (true, false) => ScriptKind::Sup,
+                            (false, false) => ScriptKind::SubSup,
+                        };
+                        vec![MNode::Script { kind, base: vec![pre_node], sub: post_sub, sup: post_sup }]
+                    } else {
+                        vec![pre_node]
+                    }
                 }
                 None => {
                     let sub = script(1, budget);
@@ -659,10 +681,9 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             vec![MNode::Delim { beg, end, sep, grow: true, shp_match: false, elems }]
         }
         "mtable" => {
-            let rows: Vec<Vec<Arg>> = e
-                .els()
-                .filter(|r| matches!(local(&r.name), "mtr" | "mlabeledtr"))
-                .take(256)
+            let mtr_list: Vec<&El> = e.els().filter(|r| matches!(local(&r.name), "mtr" | "mlabeledtr")).take(256).collect();
+            let rows: Vec<Vec<Arg>> = mtr_list
+                .iter()
                 .map(|r| r.els().filter(|c| local(&c.name) == "mtd").take(256).map(|c| children(c, d, budget)).collect())
                 .collect();
             if rows.is_empty() {
@@ -675,14 +696,73 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             if marked && rows.iter().all(|r| r.len() <= 1) {
                 return vec![MNode::EqArr { rows: rows.into_iter().map(|mut r| r.pop().unwrap_or_default()).collect() }];
             }
-            vec![MNode::Matrix { rows, col_jc: Vec::new() }]
+            let mut col_jc: Vec<ColJc> = e
+                .attr("columnalign")
+                .map(|ca| {
+                    ca.split_whitespace()
+                        .map(|a| match a {
+                            "left" => ColJc::Left,
+                            "right" => ColJc::Right,
+                            _ => ColJc::Center,
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            if col_jc.is_empty() {
+                if let Some(first_row) = mtr_list.first() {
+                    let cell_aligns: Vec<ColJc> = first_row
+                        .els()
+                        .filter(|c| local(&c.name) == "mtd")
+                        .map(|c| match c.attr("columnalign") {
+                            Some("left") => ColJc::Left,
+                            Some("right") => ColJc::Right,
+                            _ => ColJc::Center,
+                        })
+                        .collect();
+                    if cell_aligns.iter().any(|a| *a != ColJc::Center) {
+                        col_jc = cell_aligns;
+                    }
+                }
+            }
+            vec![MNode::Matrix { rows, col_jc }]
+        }
+        "mpadded" => {
+            let zero_wid = e.attr("width").is_some_and(|w| w.trim() == "0");
+            let zero_asc = e.attr("height").is_some_and(|h| h.trim() == "0");
+            let zero_desc = e.attr("depth").is_some_and(|d| d.trim() == "0");
+            let ch = children(e, d, budget);
+            if zero_wid || zero_asc || zero_desc {
+                if let [MNode::Phant { show, e, .. }] = ch.as_slice() {
+                    vec![MNode::Phant { show: *show, zero_wid, zero_asc, zero_desc, e: e.clone() }]
+                } else {
+                    vec![MNode::Phant { show: true, zero_wid, zero_asc, zero_desc, e: ch }]
+                }
+            } else {
+                ch
+            }
         }
         "mphantom" => vec![MNode::Phant { show: false, zero_wid: false, zero_asc: false, zero_desc: false, e: children(e, d, budget) }],
         "menclose" => {
             let n = e.attr("notation").unwrap_or("longdiv");
             let has = |k: &str| n.split_whitespace().any(|w| w == k);
-            if has("box") || has("roundedbox") {
-                return vec![MNode::BorderBox { hide: [false; 4], strike: [false; 4], e: children(e, d, budget) }];
+            let is_box = has("box") || has("roundedbox") || has("circle");
+            let has_border = is_box || has("top") || has("bottom") || has("left") || has("right");
+            let has_strike = has("horizontalstrike") || has("verticalstrike") || has("updiagonalstrike") || has("downdiagonalstrike");
+            if has_border || has_strike {
+                let hide = if is_box {
+                    [false; 4]
+                } else if has_border {
+                    [!has("top"), !has("bottom"), !has("left"), !has("right")]
+                } else {
+                    [true; 4]
+                };
+                let strike = [
+                    has("horizontalstrike"),
+                    has("verticalstrike"),
+                    has("updiagonalstrike"),
+                    has("downdiagonalstrike"),
+                ];
+                return vec![MNode::BorderBox { hide, strike, e: children(e, d, budget) }];
             }
             children(e, d, budget)
         }
@@ -750,7 +830,7 @@ mod tests {
         let gc = to_mathml(&[MNode::GroupChr { chr: '⏟', top: false, e: parse_linear("a") }], false, "");
         assert!(gc.contains("<munder><mrow><mi>a</mi></mrow><mo stretchy=\"true\">⏟</mo></munder>"), "{gc}");
         let pre = to_mathml(&[MNode::Script { kind: ScriptKind::Pre, base: parse_linear("C"), sub: parse_linear("n"), sup: vec![] }], false, "");
-        assert!(pre.contains("<mprescripts/>"), "{pre}");
+        assert!(pre.contains("<mprescripts/>") && pre.contains("<none/>"), "{pre}");
         let eq = to_mathml(&[MNode::EqArr { rows: vec![parse_linear("x&=1"), parse_linear("y&=2")] }], false, "");
         assert!(eq.contains("<mtd><mi>x</mi><mo>=</mo><mn>1</mn></mtd>") && !eq.contains("<mo>&amp;</mo>"), "{eq}");
         let ph = to_mathml(&[MNode::Phant { show: false, zero_wid: true, zero_asc: false, zero_desc: false, e: parse_linear("a") }], false, "");
@@ -881,6 +961,25 @@ mod tests {
         let ml = ml.replace("application/x-unicodemath", "x-ignored");
         let t = tree(&ml);
         assert!(matches!(t.as_slice(), [MNode::EqArr { .. }]), "{ml}: {t:?}");
+    }
+
+    #[test]
+    fn mmultiscripts_and_borderbox_round_trip() {
+        let html = "<math><mmultiscripts><mi>X</mi><mn>1</mn><none/><mprescripts/><none/><mn>2</mn></mmultiscripts></math>";
+        let p = pasted(html);
+        assert!(!p.is_empty(), "should parse mmultiscripts with pre and post scripts");
+
+        let html_box = "<math><menclose notation='top bottom horizontalstrike'><mi>x</mi></menclose></math>";
+        let p_box = pasted(html_box);
+        assert!(!p_box.is_empty(), "should parse menclose");
+
+        let html_tbl = "<math><mtable columnalign='left right'><mtr><mtd><mi>a</mi></mtd><mtd><mi>b</mi></mtd></mtr></mtable></math>";
+        let p_tbl = pasted(html_tbl);
+        assert!(!p_tbl.is_empty(), "should parse mtable with columnalign");
+
+        let html_pad = "<math><mpadded width='0'><mphantom><mi>z</mi></mphantom></mpadded></math>";
+        let p_pad = pasted(html_pad);
+        assert!(!p_pad.is_empty(), "should parse mpadded phantom");
     }
 
     #[test]
