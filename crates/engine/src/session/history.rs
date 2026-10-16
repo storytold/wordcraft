@@ -2,6 +2,16 @@ use super::doc_state::{MAX_UNDO, Selection, UNDO_LIST_MAX, Undo, next_math_sessi
 use super::{Arc, Document, Session};
 
 impl Session {
+    /// Number of undo steps; with [`Session::truncate_history`] lets a command that failed
+    /// halfway drop the checkpoint it took.
+    pub(crate) fn history_len(&self) -> usize {
+        self.history.len()
+    }
+
+    pub(crate) fn truncate_history(&mut self, steps: usize) {
+        self.history.truncate(steps);
+    }
+
     /// Snapshot for undo before a change. Returns whether it took a step: typing that is
     /// already in an open step is not a new one.
     pub fn checkpoint(&mut self, label: &str) -> bool {
