@@ -224,7 +224,7 @@ impl Writer {
                     let a = esc(a);
                     out.push_str(&format!("{{\\*\\bkmkstart {a}}}{{\\*\\bkmkend {a}}}"));
                 }
-                Inline::Figure(_) | Inline::Equation { .. } => {}
+                Inline::Figure(_) | Inline::Equation { .. } | Inline::Field { .. } | Inline::Shape(_) => {}
             }
         }
     }

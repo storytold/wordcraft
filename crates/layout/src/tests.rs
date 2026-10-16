@@ -3117,6 +3117,66 @@ fn text_boxes_show_in_headers_footers_cells_and_notes() {
     assert_eq!(l.header_footer_text_box_at(0, r.x + 5.0, r.y + 5.0), Some(inline));
 }
 
+/// A float placed `y` points down from its paragraph's top, with text wrapping around it.
+fn para_float(y: f32) -> wordcraft_doc::para::Float {
+    wordcraft_doc::para::Float { wrap: wordcraft_doc::para::Wrap::Square, v_rel: wordcraft_doc::para::Anchor::Paragraph, y, ..Default::default() }
+}
+
+/// The first paragraph whose caret is at least `y` down page 1.
+fn first_para_below(l: &DocLayout, n: usize, y: f32) -> usize {
+    (0..n).find(|i| l.caret(&Pos::body(*i, 0)).is_some_and(|c| c.page == 0 && c.top >= y)).expect("a paragraph low on page 1")
+}
+
+#[test]
+fn a_paragraph_whose_float_would_run_past_the_bottom_margin_moves_with_it() {
+    // As LibreOffice lays it out: the paragraph and its picture start the next page instead of
+    // the picture running over the footer.
+    let n = 60;
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(n));
+    let at = first_para_below(&lay(&d), n, 600.0);
+    let id = text_box_at(&mut d, &Pos::body(at, 0), "Picture", 200.0, 200.0, para_float(0.0));
+    let l = lay(&d);
+    let b = l.text_box(id, 0).expect("placed");
+    assert_eq!(b.page, 1);
+    assert_eq!(l.caret(&Pos::body(at, 0)).map(|c| c.page), Some(1));
+    assert_eq!(l.caret(&Pos::body(at - 1, 0)).map(|c| c.page), Some(0));
+    let s = &d.last_section;
+    assert!(b.rect.y + b.rect.h <= s.page_h - s.margin_bottom, "{:?}", b.rect);
+    // A float that fits where it is keeps its paragraph there.
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(n));
+    let id = text_box_at(&mut d, &Pos::body(at, 0), "Small", 40.0, 20.0, para_float(0.0));
+    let l = lay(&d);
+    assert_eq!(l.text_box(id, 0).map(|b| b.page), Some(0));
+    assert_eq!(l.caret(&Pos::body(at, 0)).map(|c| c.page), Some(0));
+}
+
+#[test]
+fn a_float_taller_than_the_page_does_not_move_its_paragraph() {
+    // An empty page wouldn't hold it either: it stays (and pages still end).
+    let n = 60;
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(n));
+    let at = first_para_below(&lay(&d), n, 600.0);
+    text_box_at(&mut d, &Pos::body(at, 0), "Huge", 200.0, 900.0, para_float(0.0));
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(at, 0)).map(|c| c.page), Some(0));
+}
+
+#[test]
+fn keep_with_next_counts_the_next_paragraphs_float() {
+    // A heading kept with a paragraph whose picture moves it to the next page goes along.
+    let n = 60;
+    let mut d = Document::from_text(&"Body paragraph.\n".repeat(n));
+    let at = first_para_below(&lay(&d), n, 600.0);
+    text_box_at(&mut d, &Pos::body(at, 0), "Picture", 200.0, 200.0, para_float(0.0));
+    let heading = at - 1;
+    if let Some(Block::Para(p)) = d.body.get_mut(heading).map(Arc::make_mut) {
+        p.props.keep_next = Some(true);
+    }
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(heading, 0)).map(|c| c.page), Some(1));
+    assert_eq!(l.caret(&Pos::body(at, 0)).map(|c| c.page), Some(1));
+}
+
 #[test]
 fn footnotes_inside_text_boxes_are_numbered_and_placed() {
     let mut d = Document::from_text(&"Body text line.\n".repeat(30));

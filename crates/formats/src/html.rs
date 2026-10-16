@@ -1392,6 +1392,8 @@ pub fn inlines_html(inlines: &[Inline]) -> String {
             Inline::Figure(alt) => o.push_str(&format!("<img alt=\"{}\">", esc(alt))),
             // MathML, which browsers, Word and LibreOffice show as an equation (#816).
             Inline::Equation { linear, display } => o.push_str(&crate::mathml::linear_to_mathml(linear, *display)),
+            Inline::Field { result, .. } => o.push_str(&esc(result)),
+            Inline::Shape(_) => {}
         }
     }
     o
