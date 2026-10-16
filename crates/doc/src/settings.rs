@@ -170,6 +170,11 @@ pub struct Settings {
     /// it is laid out.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub odf: Option<OdfLayout>,
+    /// Document variables (`w:docVars`, ECMA-376 §17.15.1.20): name/value pairs that Word and other
+    /// readers keep with the document. WordCraft also stores per-section properties that have no
+    /// `w:sectPr` slot here (see [`section::PAGE_NUM_PREFIX_DOCVAR`]); those are consumed on read.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub doc_vars: Vec<(String, String)>,
 }
 
 /// A document opened from ODF, for the layout: rules of the standard that differ from Word's (a
@@ -329,6 +334,7 @@ impl Default for Settings {
             remove_personal_info: false,
             remove_date_time: false,
             odf: None,
+            doc_vars: Vec::new(),
         }
     }
 }

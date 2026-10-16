@@ -87,6 +87,8 @@ pub struct DocState {
     pub(super) widened: Option<Widened>,
     pub(super) edit_marks: Vec<Pos>,
     pub(super) go_back_step: usize,
+    /// LawCraft and other modules: this document's lint findings by source.
+    pub(super) lint_findings: std::collections::BTreeMap<String, Vec<serde_json::Value>>,
 }
 
 impl DocState {
@@ -143,6 +145,7 @@ impl DocState {
             widened: None,
             edit_marks: Vec::new(),
             go_back_step: 0,
+            lint_findings: Default::default(),
         }
     }
 
@@ -246,6 +249,7 @@ impl Session {
             widened: _,
             edit_marks: _,
             go_back_step: _,
+            lint_findings: _,
             // Shared by every open document.
             // Names the document it belongs to, so it never applies to another one.
             review_style: _,
@@ -289,6 +293,9 @@ impl Session {
             ime_origin: _,
             // A picked Drawing Canvas member is cleared by a switch, not kept per document.
             member: _,
+            // Set by modules for the whole app.
+            export_check_commands: _,
+            module_en: _,
             others: _,
             order: _,
             untitled_count: _,
@@ -344,6 +351,7 @@ impl Session {
             widened,
             edit_marks,
             go_back_step,
+            lint_findings,
         } = d;
         swap(&mut self.doc, doc);
         swap(&mut self.sel, sel);
@@ -395,6 +403,7 @@ impl Session {
         swap(&mut self.go_back_step, go_back_step);
         // A picked Drawing Canvas member (#2637) belongs to the document left behind.
         self.member = None;
+        swap(&mut self.lint_findings, lint_findings);
     }
 
     /// Make document `id` active without anything else a switch by the user does.

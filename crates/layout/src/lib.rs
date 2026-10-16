@@ -21,6 +21,7 @@ fn test_fonts() {
 }
 
 pub mod balloons;
+pub mod module_proof;
 mod contour;
 pub mod display;
 pub mod fields;
@@ -248,11 +249,13 @@ pub struct ProofOptions {
     /// Mark grammar errors as you type.
     pub grammar: bool,
     pub spelling: wordcraft_proof::Options,
+    /// Optional module supplements (legal dictionary, confusion checks) for this session.
+    pub module: crate::module_proof::ModuleEn,
 }
 
 impl Default for ProofOptions {
     fn default() -> Self {
-        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default() }
+        ProofOptions { grammar: true, spelling: wordcraft_proof::Options::default(), module: crate::module_proof::ModuleEn::default() }
     }
 }
 
