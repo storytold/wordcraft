@@ -364,6 +364,14 @@ fn graphic_alt(alt: &str, kind: GraphicKind) -> &str {
     if alt.trim().is_empty() { kind.noun() } else { alt }
 }
 
+/// The alt text of an inline figure: a graphic's (see [`graphic_alt`]) or a described shape's.
+fn figure_alt(alt: &str, kind: Option<GraphicKind>) -> &str {
+    match kind {
+        Some(k) => graphic_alt(alt, k),
+        None => alt,
+    }
+}
+
 /// Add the segments of a kurbo path to a krilla path.
 fn append_path(pb: &mut PathBuilder, path: &kurbo::BezPath) {
     let f = |v: f64| v as f32;
@@ -825,8 +833,8 @@ impl Exporter<'_> {
                                 let alt = items.iter().find_map(|i| if let Draw::Image { alt, .. } = i { Some(alt.as_str()) } else { None });
                                 self.tagged(s, Role::Figure, alt, |me, s| me.draw(s, d))
                             }
-                            // An inline chart or diagram: its text is part of the figure, not the paragraph.
-                            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(graphic_alt(alt, *kind)), |me, s| {
+                            // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
+                            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
                                 for d in inner {
                                     me.draw(s, d);
                                 }
@@ -846,6 +854,12 @@ impl Exporter<'_> {
                         }
                     });
                 }
+                // A floating shape with a description: a figure (see `shape_figure_alt`).
+                Placed::Shape { alt, .. } if !alt.is_empty() => self.tagged(s, Role::Figure, Some(alt), |me, s| {
+                    for d in &draws {
+                        me.draw(s, d);
+                    }
+                }),
                 Placed::Graphic { story, path, off, graphic, .. } => {
                     let alt = match self.doc.para(*story, path).and_then(|p| p.object_at(*off)) {
                         Some(InlineObject::Graphic { alt, .. }) => graphic_alt(alt, graphic.kind).to_string(),

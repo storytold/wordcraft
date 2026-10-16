@@ -1486,3 +1486,58 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// A tagged PDF of a paragraph with one blue rectangle placed by `float`: a text box showing
+/// "Inside the box" when `text_box`.
+fn tagged_shape_pdf(float: wordcraft_doc::para::Float, text_box: bool) -> String {
+    use wordcraft_doc::para::ShapeKind;
+    let mut d = Document::from_text("Body");
+    let story = text_box
+        .then(|| d.add_part(wordcraft_doc::PartKind::TextBox, vec![para_block(Paragraph::with_text("Inside the box", CharProps::default()))]));
+    let kind = if text_box { ShapeKind::TextBox } else { ShapeKind::Rectangle };
+    let shape = InlineObject::Shape {
+        kind,
+        w: 120.0,
+        h: 60.0,
+        fill: Some(wordcraft_doc::props::Rgb(0, 0, 0xFF)),
+        stroke: None,
+        stroke_width: 0.0,
+        float,
+        story,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 4), shape, &Default::default()).unwrap();
+    String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap()).into_owned()
+}
+
+/// A shape with a description is a Figure with it in tagged PDF, inline, rotated or floating; one
+/// without, or marked decorative, stays an artifact screen readers skip, and so does a text box's
+/// frame: its text is read as text, not replaced by its description.
+#[test]
+fn described_shapes_are_figures_with_their_description() {
+    use wordcraft_doc::para::{AltText, Anchor, Float, Wrap};
+    let described = AltText { text: "Arrow pointing to the exit".into(), ..Default::default() };
+    let floating = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() };
+    let cases = [
+        ("inline", Float::default()),
+        ("rotated inline", Float { rot: 30.0, ..Default::default() }),
+        ("floating", floating.clone()),
+        ("rotated floating", Float { rot: 30.0, ..floating }),
+    ];
+    for (name, float) in cases {
+        let raw = tagged_shape_pdf(Float { alt: described.clone(), ..float.clone() }, false);
+        assert!(raw.contains("/Alt(Arrow pointing to the exit)"), "{name}: a described shape is a Figure with its description");
+        assert!(raw.contains("0 0 1 rg"), "{name}: the shape is drawn");
+        assert!(!tagged_shape_pdf(float.clone(), false).contains("/Alt("), "{name}: an undescribed shape stays an artifact");
+        let decorative = AltText { decorative: true, ..described.clone() };
+        assert!(
+            !tagged_shape_pdf(Float { alt: decorative, ..float.clone() }, false).contains("/Alt("),
+            "{name}: a decorative shape stays an artifact"
+        );
+        let text_box = tagged_shape_pdf(Float { alt: described.clone(), ..float }, true);
+        assert!(!text_box.contains("/Alt("), "{name}: a text box is not a Figure");
+        assert_eq!(text_box.matches("/S/P").count(), 2, "{name}: the text box's text is read as a paragraph");
+    }
+}
