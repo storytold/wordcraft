@@ -777,6 +777,7 @@ fn builds(s: &str) -> bool {
             '/' | '⁄'
                 | '∕'
                 | '¦'
+                | '"'
                 | '^'
                 | '_'
                 | '√'
@@ -820,6 +821,16 @@ fn plain(n: &MNode) -> bool {
     }
 }
 
+/// Normal-text runs inside structures written as `"…"`, so rebuilding them keeps them (#2581).
+fn quote_normal(a: Arg) -> Arg {
+    a.into_iter()
+        .map(|n| match n {
+            MNode::Run(r) if r.nor && !r.text.contains('"') => MNode::Run(MRun::new(format!("\"{}\"", r.text))),
+            other => crate::math_linear::map_args(other, &quote_normal),
+        })
+        .collect()
+}
+
 /// Unclosed brackets (still being typed) or LaTeX braces.
 fn unbalanced(nodes: &[MNode], depth: usize) -> bool {
     if depth > MAX_DEPTH {
@@ -845,8 +856,9 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
         tidy(root);
         return None;
     }
-    let text = to_linear(&region);
-    if !latex && !builds(&text) {
+    let text = if latex { to_linear(&region) } else { to_linear(&quote_normal(region.clone())) };
+    // An open `"` is normal text still being typed: its spaces stay (#2581).
+    if !latex && (!builds(&text) || text.matches('"').count() % 2 == 1) {
         tidy(root);
         return None;
     }
@@ -864,11 +876,22 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
         tidy(root);
         return None;
     }
+    // `a/` then a space: the caret goes into the empty denominator (#2581).
+    let empty_den = matches!(built.last(), Some(MNode::Frac { den, .. }) if den.is_empty());
     let new_units = units(&built);
     let before = node_start(a, start);
     a.splice(start..at, built);
     let out = MathPos { path: pos.path, off: before + new_units };
     tidy(root);
+    if empty_den
+        && let Some(a) = arg_at(root, &out.path)
+        && let Some(Loc::Before(i)) = out.off.checked_sub(1).map(|o| locate(a, o))
+        && matches!(a.get(i), Some(MNode::Frac { den, .. }) if den.is_empty())
+    {
+        let mut path = out.path;
+        path.push((i, 1));
+        return Some(MathPos { path, off: 0 });
+    }
     Some(clamp(root, &out))
 }
 
@@ -1212,6 +1235,38 @@ mod tests {
         let built = eq.clone();
         assert_eq!(build_up(&mut eq, &p, false), None);
         assert_eq!(eq, built, "{}", lin(&eq));
+    }
+
+    #[test]
+    fn build_up_quoted_text_and_an_open_fraction() {
+        // #2581: an open quote doesn't build up, so its spaces stay; closed, it is normal text.
+        let mut eq: Arg = Vec::new();
+        let p = insert_text(&mut eq, &MathPos::default(), "\"Giro dos", TypeStyle::default());
+        assert_eq!(build_up(&mut eq, &p, false), None);
+        let p = insert_text(&mut eq, &p, " Estoques\"", TypeStyle::default());
+        let p = build_up(&mut eq, &p, false).unwrap();
+        assert!(matches!(&eq[..], [MNode::Run(r)] if r.nor && r.text == "Giro dos Estoques"), "{eq:#?}");
+        // `a/` then a space: a fraction with the caret in its empty denominator.
+        let p = insert_text(&mut eq, &p, "=a/", TypeStyle::default());
+        let p = build_up(&mut eq, &p, false).unwrap();
+        assert_eq!(p, MathPos::new(vec![(2, 1)], 0), "{eq:#?}");
+        insert_text(&mut eq, &p, "b", TypeStyle::default());
+        assert!(matches!(&eq[2], MNode::Frac { den, .. } if den == &vec![MNode::Run(MRun::new("b"))]), "{eq:#?}");
+        // A complete fraction leaves the caret after it.
+        let mut eq: Arg = Vec::new();
+        let p = insert_text(&mut eq, &MathPos::default(), "a/b", TypeStyle::default());
+        assert_eq!(build_up(&mut eq, &p, false), Some(MathPos::new(vec![], 1)));
+    }
+
+    #[test]
+    fn build_up_keeps_normal_text_inside_structures() {
+        // Rebuilding a fraction with a normal-text numerator keeps its spaces (#2581).
+        let mut eq = parse_linear("\"Net sales\"/2");
+        let p = insert_text(&mut eq, &MathPos::new(vec![], 1), "+x^2", TypeStyle::default());
+        build_up(&mut eq, &p, false).unwrap();
+        let MNode::Frac { num, .. } = &eq[0] else { panic!("{eq:#?}") };
+        assert!(matches!(&num[..], [MNode::Run(r)] if r.nor && r.text == "Net sales"), "{eq:#?}");
+        assert!(matches!(eq.last(), Some(MNode::Script { .. })), "{eq:#?}");
     }
 
     #[test]

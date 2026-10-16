@@ -677,6 +677,25 @@ mod tests {
     }
 
     #[test]
+    fn quoted_words_keep_their_spaces_and_a_fraction_waits_for_its_denominator() {
+        // #2581, typed key by key: `"…"` is normal text, and `x/` then a space puts the caret in
+        // the denominator.
+        let mut s = session();
+        s.run("insert.equation", &json!({})).unwrap();
+        for c in "\"Giro dos Estoques\"=\"Custo das Vendas (CMV)\"/ \"Saldo Médio dos Estoques\" ".chars() {
+            s.run("equation.type", &json!({"text": c.to_string()})).unwrap();
+        }
+        let nodes = nodes_of(&s, &s.math.as_ref().unwrap().at).unwrap();
+        let normal = |a: &[MNode], t: &str| matches!(a, [MNode::Run(r)] if r.nor && r.text == t);
+        assert!(normal(&nodes[..1], "Giro dos Estoques"), "{nodes:#?}");
+        let Some(MNode::Frac { num, den, .. }) = nodes.last() else { panic!("{nodes:#?}") };
+        assert!(normal(num, "Custo das Vendas (CMV)"), "{num:#?}");
+        assert!(normal(den, "Saldo Médio dos Estoques"), "{den:#?}");
+        let r = s.run("equation.get", &json!({})).unwrap();
+        assert!(r["latex"].as_str().unwrap().contains("\\text{Saldo Médio dos Estoques}"), "{r}");
+    }
+
+    #[test]
     fn structures_symbols_and_navigation() {
         let mut s = session();
         s.run("equation.insertStructure", &json!({"id": "frac.stacked"})).unwrap();
