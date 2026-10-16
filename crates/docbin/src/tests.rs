@@ -2285,3 +2285,48 @@ fn second_table_gets_its_own_grid() {
     assert_eq!(tables[1].props.align, None, "alignment reset");
     assert_eq!(tables[1].props.indent, None, "indent reset");
 }
+
+#[test]
+fn sprm_t_cell_width_twips_and_percentage() {
+    // [MS-DOC] §2.9.290 sprmTCellWidth (0xD635):
+    // cb (1 byte), itcFirst (1 byte), itcLim (1 byte), ftsWidth (1 byte), wWidth (2 bytes).
+    // ftsWidth = 3 (twips): 1440 twips = 72.0 pt.
+    let w_twips = [0u8, 2, 3, 0xA0, 0x05]; // cell 0..2, fts=3, 1440 dxa
+    // ftsWidth = 2 (percentage in 50ths of a percent): 2500 = 50.0%.
+    let w_pct = [2u8, 3, 2, 0xC4, 0x09]; // cell 2..3, fts=2, 2500 (50%)
+    let papx = [sprm_cb(0xD635, &w_twips), sprm_cb(0xD635, &w_pct)].concat();
+
+    let row = crate::table::decode(&papx);
+    assert_eq!(row.width_of(0), Some(72.0));
+    assert_eq!(row.width_of(1), Some(72.0));
+    assert_eq!(row.width_pct_of(2), Some(50.0));
+
+    // End-to-end document test: row cells receive the preferred widths.
+    let text = "a\u{7}b\u{7}c\u{7}\u{7}\r";
+    let in_tbl = grpprl(&[(0x2416, &[0x01]), (0x6649, &[1, 0, 0, 0])]);
+    let ttp = [
+        grpprl(&[(0x2416, &[0x01]), (0x2417, &[0x01]), (0x6649, &[1, 0, 0, 0])]),
+        t_def_edges(&[0, 1440, 2880, 4320]),
+        sprm_cb(0xD635, &w_twips),
+        sprm_cb(0xD635, &w_pct),
+    ]
+    .concat();
+    let spec = StructSpec {
+        text,
+        header_stories: vec![],
+        sections: vec![(text.chars().count() as u32, Vec::new())],
+        chpx_runs: vec![(0, Vec::new())],
+        papx_entries: vec![(0, 0, in_tbl), (6, 0, ttp), (7, 0, Vec::new())],
+        plf_lst: Vec::new(),
+        plf_lfo: Vec::new(),
+        note_stories: vec![],
+        endnote_stories: vec![],
+        extra_pairs: Vec::new(),
+        data_stream: Vec::new(),
+    };
+    let doc = read(&struct_doc(&spec)).expect("opens");
+    let table = doc.body[0].as_table().expect("table block");
+    assert_eq!(table.rows[0].cells[0].props.width, Some(72.0));
+    assert_eq!(table.rows[0].cells[1].props.width, Some(72.0));
+    assert_eq!(table.rows[0].cells[2].props.width_pct, Some(50.0));
+}
