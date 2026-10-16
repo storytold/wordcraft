@@ -2245,3 +2245,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+	PDF import	Імпорт PDF
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF тепер є редагованою копією. Збережіть її як новий документ; початковий PDF не змінено.
+	PDF imported as an editable copy.	PDF імпортовано як редаговану копію.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	Макет PDF відновлюється приблизно. Таблиці, стовпці, форми, посилання, анотації та структура документа не відновлюються.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Деякі сторінки не містять тексту, який можна видобути. Їхні зображення залишаються зображеннями; OCR не виконується.
+	Vector drawings, rules and decorative backgrounds are not imported.	Векторні малюнки, лінії та декоративні тла не імпортуються.
+	Some characters have no usable Unicode mapping and were replaced with �.	Деякі символи не мають придатного зіставлення Unicode, і їх замінено на �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Перевірте повернутий вміст, текст справа наліво та незвично розташований вміст після перетворення на горизонтальний текст і зображення в рядку.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	Інтерпретатор PDF повідомив про непідтримуваний або нечитабельний вміст; перевірте перетворений документ.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Щоб захистити перетворений документ, задайте пароль під час збереження. Пароль PDF розблоковує лише початковий файл.

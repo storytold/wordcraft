@@ -2647,3 +2647,13 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	PDF import	PDF-import
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF-filen är nu en redigerbar kopia. Spara den som ett nytt dokument; den ursprungliga PDF-filen har inte ändrats.
+	PDF imported as an editable copy.	PDF importerad som en redigerbar kopia.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	PDF-layouten återskapas ungefärligt. Tabeller, spalter, formulär, länkar, kommentarer och dokumentstruktur återskapas inte.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Vissa sidor har ingen text som kan extraheras. Deras bilder förblir bilder; ingen OCR utförs.
+	Vector drawings, rules and decorative backgrounds are not imported.	Vektorritningar, linjer och dekorativa bakgrunder importeras inte.
+	Some characters have no usable Unicode mapping and were replaced with �.	Vissa tecken saknar en användbar Unicode-mappning och har ersatts med �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Roterat innehåll, text från höger till vänster eller ovanligt placerat innehåll behöver granskas efter omvandlingen till vågrät text och bilder i textraden.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	PDF-tolken rapporterade innehåll som inte stöds eller inte kan läsas; granska det konverterade dokumentet.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Skydda det konverterade dokumentet genom att ange ett lösenord när det sparas. PDF-lösenordet låser bara upp källfilen.

@@ -2488,3 +2488,13 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+	PDF import	PDF 가져오기
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF가 이제 편집 가능한 사본이 되었습니다. 새 문서로 저장하세요. 원본 PDF는 변경되지 않았습니다.
+	PDF imported as an editable copy.	PDF를 편집 가능한 사본으로 가져왔습니다.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	PDF 레이아웃은 대략적으로 재구성됩니다. 표, 단, 양식, 링크, 주석 및 문서 구조는 재구성되지 않습니다.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	일부 페이지에는 추출 가능한 텍스트가 없습니다. 이미지는 이미지로 유지되며 OCR은 수행되지 않습니다.
+	Vector drawings, rules and decorative backgrounds are not imported.	벡터 그림, 선 및 장식용 배경은 가져오지 않습니다.
+	Some characters have no usable Unicode mapping and were replaced with �.	일부 문자에 사용 가능한 Unicode 매핑이 없어 �로 대체되었습니다.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	회전된 콘텐츠, 오른쪽에서 왼쪽으로 쓰인 콘텐츠 또는 특이하게 배치된 콘텐츠는 가로 텍스트와 인라인 이미지로 변환한 후 검토해야 합니다.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	PDF 인터프리터가 지원되지 않거나 읽을 수 없는 콘텐츠를 보고했습니다. 변환된 문서를 확인하세요.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	변환된 문서를 보호하려면 저장할 때 암호를 설정하세요. PDF 암호는 원본 파일의 잠금만 해제합니다.

@@ -381,6 +381,9 @@ pub enum Dialog {
         #[serde(skip)]
         note: String,
     },
+    PdfImportReport {
+        warnings: Vec<String>,
+    },
     /// Tabs: 0 About, 1 Contributors, 2 Models.
     About {
         tab: u8,
@@ -816,6 +819,7 @@ impl Dialog {
             Dialog::Refs(d) => d.name(),
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
+            Dialog::PdfImportReport { .. } => "pdfImportReport",
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
@@ -1263,6 +1267,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Refs(d) => d.title(),
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
+        Dialog::PdfImportReport { .. } => "PDF import",
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
@@ -2364,6 +2369,16 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 let _ = app.run("edit.pasteSpecial", params);
             }
             ok || cancel
+        }
+        Dialog::PdfImportReport { warnings } => {
+            ui.set_max_width(460.0);
+            ui.label(tl!("The PDF is now an editable copy. Save it as a new document; the original PDF has not changed."));
+            ui.add_space(8.0);
+            for warning in warnings {
+                ui.label(tl!(warning.as_str()));
+            }
+            ui.add_space(8.0);
+            ui.button(tl!("OK")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape))
         }
         Dialog::About { tab } => {
             ui.set_width(660.0);

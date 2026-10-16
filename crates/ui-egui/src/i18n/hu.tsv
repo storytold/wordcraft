@@ -2628,3 +2628,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	PDF import	PDF-importálás
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	A PDF most szerkeszthető másolat. Mentse új dokumentumként; az eredeti PDF nem változott.
+	PDF imported as an editable copy.	A PDF szerkeszthető másolatként lett importálva.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	A PDF elrendezése közelítőleg áll helyre. A táblázatok, hasábok, űrlapok, hivatkozások, megjegyzések és a dokumentumszerkezet nem állnak helyre.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Egyes oldalakon nincs kinyerhető szöveg. A képek képek maradnak; OCR nem történik.
+	Vector drawings, rules and decorative backgrounds are not imported.	A vektoros rajzok, vonalak és díszítő hátterek nem kerülnek importálásra.
+	Some characters have no usable Unicode mapping and were replaced with �.	Egyes karakterekhez nincs használható Unicode-megfeleltetés, ezért � helyettesíti őket.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Az elforgatott, jobbról balra haladó vagy szokatlanul elhelyezett tartalmat a vízszintes szöveggé és szövegközi képekké alakítás után ellenőrizni kell.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	A PDF-értelmező nem támogatott vagy olvashatatlan tartalmat jelzett; ellenőrizze az átalakított dokumentumot.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Az átalakított dokumentum védelméhez mentéskor állítson be jelszót. A PDF jelszava csak a forrásfájlt oldja fel.

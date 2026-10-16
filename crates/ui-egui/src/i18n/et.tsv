@@ -2267,3 +2267,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+	PDF import	PDF-i import
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF on nüüd muudetav koopia. Salvestage see uue dokumendina; algne PDF ei ole muutunud.
+	PDF imported as an editable copy.	PDF imporditi muudetava koopiana.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	PDF-i paigutus taastatakse ligikaudselt. Tabeleid, veerge, vorme, linke, märkusi ega dokumendi struktuuri ei taastata.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Mõnel lehel puudub eraldatav tekst. Nende pildid jäävad piltideks; tekstituvastust ei tehta.
+	Vector drawings, rules and decorative backgrounds are not imported.	Vektorjooniseid, jooni ega dekoratiivseid taustu ei impordita.
+	Some characters have no usable Unicode mapping and were replaced with �.	Mõnel märgil puudub kasutatav Unicode’i vastendus ja see asendati märgiga �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Pööratud, paremalt vasakule või ebatavaliselt paigutatud sisu tuleb pärast rõhtsaks tekstiks ja tekstisisesteks piltideks teisendamist üle vaadata.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	PDF-i interpretaator teatas toetamata või loetamatust sisust; vaadake teisendatud dokument üle.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Teisendatud dokumendi kaitsmiseks määrake salvestamisel parool. PDF-i parool avab ainult lähtefaili.

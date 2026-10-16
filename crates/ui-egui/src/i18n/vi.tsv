@@ -2672,3 +2672,15 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+
+# Editable PDF import report
+	PDF import	Nhập PDF
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF hiện là bản sao có thể chỉnh sửa. Hãy lưu thành tài liệu mới; tệp PDF gốc không thay đổi.
+	PDF imported as an editable copy.	Đã nhập PDF dưới dạng bản sao có thể chỉnh sửa.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	Bố cục PDF được tái dựng gần đúng. Bảng, cột, biểu mẫu, liên kết, chú thích và cấu trúc tài liệu không được tái dựng.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Một số trang không có văn bản có thể trích xuất. Hình ảnh trên các trang đó vẫn là hình ảnh; không thực hiện nhận dạng ký tự quang học (OCR).
+	Vector drawings, rules and decorative backgrounds are not imported.	Hình vẽ vectơ, đường kẻ và nền trang trí không được nhập.
+	Some characters have no usable Unicode mapping and were replaced with �.	Một số ký tự không có ánh xạ Unicode hợp lệ và đã được thay bằng �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Nội dung bị xoay, viết từ phải sang trái hoặc có vị trí bất thường cần được kiểm tra sau khi chuyển thành văn bản ngang và hình ảnh trong dòng.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	Bộ xử lý PDF báo có nội dung không được hỗ trợ hoặc không đọc được; hãy kiểm tra tài liệu đã chuyển đổi.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Để bảo vệ tài liệu đã chuyển đổi, hãy đặt mật khẩu khi lưu. Mật khẩu PDF chỉ mở khóa tệp nguồn.

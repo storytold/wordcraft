@@ -2630,3 +2630,13 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	PDF import	Импорт PDF
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF теперь является редактируемой копией. Сохраните её как новый документ; исходный PDF не изменён.
+	PDF imported as an editable copy.	PDF импортирован как редактируемая копия.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	Макет PDF восстанавливается приблизительно. Таблицы, столбцы, формы, ссылки, аннотации и структура документа не восстанавливаются.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	На некоторых страницах нет извлекаемого текста. Изображения остаются изображениями; OCR не выполняется.
+	Vector drawings, rules and decorative backgrounds are not imported.	Векторные рисунки, линии и декоративные фоны не импортируются.
+	Some characters have no usable Unicode mapping and were replaced with �.	У некоторых символов нет пригодного сопоставления с Unicode, и они заменены на �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Проверьте повёрнутое содержимое, текст справа налево и необычно расположенное содержимое после преобразования в горизонтальный текст и изображения в строке.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	Интерпретатор PDF сообщил о неподдерживаемом или нечитаемом содержимом; проверьте преобразованный документ.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Чтобы защитить преобразованный документ, задайте пароль при сохранении. Пароль PDF открывает только исходный файл.

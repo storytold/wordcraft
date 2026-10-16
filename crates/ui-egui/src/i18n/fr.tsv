@@ -2240,3 +2240,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+	PDF import	Importation PDF
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	Le PDF est maintenant une copie modifiable. Enregistrez-la dans un nouveau document ; le PDF original n’a pas été modifié.
+	PDF imported as an editable copy.	PDF importé sous forme de copie modifiable.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	La mise en page du PDF est reconstruite approximativement. Les tableaux, colonnes, formulaires, liens, annotations et la structure du document ne sont pas reconstruits.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Certaines pages ne contiennent aucun texte extractible. Leurs images restent des images ; aucune reconnaissance de texte n’est effectuée.
+	Vector drawings, rules and decorative backgrounds are not imported.	Les dessins vectoriels, les traits et les arrière-plans décoratifs ne sont pas importés.
+	Some characters have no usable Unicode mapping and were replaced with �.	Certains caractères n’ont pas de correspondance Unicode utilisable et ont été remplacés par �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Vérifiez le contenu pivoté, de droite à gauche ou placé de manière inhabituelle après sa conversion en texte horizontal et en images intégrées au texte.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	L’interpréteur PDF a signalé du contenu non pris en charge ou illisible ; vérifiez le document converti.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Pour protéger le document converti, définissez un mot de passe lors de l’enregistrement. Le mot de passe du PDF déverrouille uniquement la source.

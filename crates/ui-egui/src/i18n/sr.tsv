@@ -2247,3 +2247,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+	PDF import	Увоз PDF-а
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF је сада копија која може да се уређује. Сачувајте је као нов документ; изворни PDF није промењен.
+	PDF imported as an editable copy.	PDF је увезен као копија која може да се уређује.
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	Распоред PDF-а се обнавља приближно. Табеле, колоне, обрасци, везе, напомене и структура документа се не обнављају.
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	Неке странице немају текст који може да се издвоји. Њихове слике остају слике; OCR се не обавља.
+	Vector drawings, rules and decorative backgrounds are not imported.	Векторски цртежи, линије и украсне позадине се не увозе.
+	Some characters have no usable Unicode mapping and were replaced with �.	Неки знакови немају употребљиво Unicode пресликавање и замењени су знаком �.
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	Ротирани садржај, текст здесна налево или необично постављен садржај треба проверити након претварања у водоравни текст и слике у реду текста.
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	PDF интерпретатор је пријавио неподржан или нечитљив садржај; проверите претворени документ.
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	Да бисте заштитили претворени документ, поставите лозинку при чувању. Лозинка PDF-а откључава само изворну датотеку.

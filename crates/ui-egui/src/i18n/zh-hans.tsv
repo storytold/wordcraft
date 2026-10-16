@@ -2245,3 +2245,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	PDF import	PDF 导入
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF 现已成为可编辑的副本。请将其保存为新文档；原始 PDF 未被更改。
+	PDF imported as an editable copy.	PDF 已导入为可编辑副本。
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	PDF 布局仅作近似重建。表格、分栏、表单、链接、批注和文档结构不会重建。
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	部分页面没有可提取的文本。其中的图片仍保留为图片，不会执行 OCR。
+	Vector drawings, rules and decorative backgrounds are not imported.	不会导入矢量图形、线条和装饰性背景。
+	Some characters have no usable Unicode mapping and were replaced with �.	部分字符没有可用的 Unicode 映射，已替换为 �。
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	旋转的内容、从右向左书写的内容或位置特殊的内容转换为横排文本和行内图片后，需要检查。
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	PDF 解释器报告了不支持或无法读取的内容，请检查转换后的文档。
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	要保护转换后的文档，请在保存时设置密码。PDF 密码仅用于解锁源文件。

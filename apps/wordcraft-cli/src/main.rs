@@ -61,12 +61,17 @@ fn wants_help(cmd: &str, rest: &[String]) -> bool {
 }
 
 fn open(path: &Path) -> Result<Session, String> {
-    // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
-    // paper, as in the app: A4 in Italy, Letter in the US (#1381).
-    let region = system_region();
-    let (doc, _) = wordcraft_engine::io::open_path_in(path, None, &region)?;
-    let mut s = session(doc);
-    s.path = Some(path.into());
+    // Preserve non-Unicode paths and regional paper defaults while reporting PDF conversion.
+    let opened = wordcraft_engine::io::open_path_report_in(path, None, &system_region())?;
+    let mut s = session(opened.doc);
+    if let Some(summary) = opened.pdf {
+        for warning in summary.warnings {
+            eprintln!("PDF import: {warning}");
+        }
+        s.dirty = true;
+    } else {
+        s.path = Some(path.into());
+    }
     Ok(s)
 }
 
@@ -563,6 +568,22 @@ fn main() -> ExitCode {
             eprintln!("wordcraft-cli: {e}");
             ExitCode::FAILURE
         }
+    }
+}
+
+#[cfg(test)]
+mod pdf_import_tests {
+    #[test]
+    fn cli_open_does_not_set_the_pdf_as_an_implicit_save_target() {
+        let path = std::env::temp_dir().join(format!("wordcraft-cli-pdf-import-{}.pdf", std::process::id()));
+        let bytes = wordcraft_engine::io::save_bytes("sample.pdf", &wordcraft_doc::Document::from_text("CLI import")).unwrap();
+        std::fs::write(&path, &bytes).unwrap();
+        let mut session = super::open(&path).unwrap();
+        assert!(session.path.is_none() && session.dirty);
+        let result = session.run("file.save", &serde_json::json!({})).unwrap();
+        assert_eq!(result["saved"], false);
+        assert_eq!(std::fs::read(&path).unwrap(), bytes);
+        std::fs::remove_file(path).unwrap();
     }
 }
 

@@ -78,3 +78,46 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `crates/ui-egui/src/i18n/fr.tsv` | @pechnikov2026-star | Original translation from the English interface labels in this repository; no other product localisation copied | MIT OR Apache-2.0 | French interface catalog |
 | `crates/ui-egui/src/i18n/sv.tsv` | Erik Holmbom (@holmbom) with Claude Code | Original translation from the English interface labels in this repository; no other product localisation or other catalog used | MIT OR Apache-2.0 | Swedish interface catalog; AI-assisted, terminology and the running app reviewed by a native speaker |
 | `crates/ui-egui/src/i18n/hr.tsv` | Andrej Škvorc (@andrejskvorc) with Claude Code (Sonnet 5.5); proofread with Gemini | Original translation from the English interface labels in this repository; no other product localisation copied | MIT OR Apache-2.0 | Croatian interface catalog; reviewed and corrected in the running interface, menu by menu, by the native-speaker author, who also checked the Gemini suggestions |
+
+
+
+## PDF import dependencies
+
+The `hayro-interpret` dependency (MIT OR Apache-2.0) bundles the following resources; no font files are added to this repository:
+
+| Resource                           | Author          | Source                                                                  | Licence      | Use                       |
+|------------------------------------|-----------------|-------------------------------------------------------------------------|--------------|---------------------------|
+| Standard PDF substitute CFF fonts | PDFium Authors  | `hayro-interpret` 0.7.0, `assets/LICENSE_FOXIT`                           | BSD-3-Clause | Decode standard PDF fonts |
+| CGATS color conversion data       | hayro upstream  | `hayro-interpret` 0.7.0, `assets/CGATS_LICENSE.txt`                       | CC0-1.0      | Convert PDF image colors  |
+
+The BSD notice for the standard PDF substitute fonts follows:
+
+```text
+// Copyright 2014 PDFium Authors. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//    * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//    * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//    * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

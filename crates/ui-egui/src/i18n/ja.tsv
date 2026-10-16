@@ -2233,3 +2233,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+	PDF import	PDF のインポート
+	The PDF is now an editable copy. Save it as a new document; the original PDF has not changed.	PDF は編集可能なコピーになりました。新しい文書として保存してください。元の PDF は変更されていません。
+	PDF imported as an editable copy.	PDF を編集可能なコピーとしてインポートしました。
+	PDF layout is reconstructed approximately. Tables, columns, forms, links, annotations and document structure are not reconstructed.	PDF のレイアウトは近似的に再構成されます。表、段組み、フォーム、リンク、注釈、文書構造は再構成されません。
+	Some pages have no extractable text. Their pictures remain images; OCR is not performed.	抽出可能なテキストがないページがあります。画像は画像のままで、OCR は実行されません。
+	Vector drawings, rules and decorative backgrounds are not imported.	ベクター描画、罫線、装飾的な背景はインポートされません。
+	Some characters have no usable Unicode mapping and were replaced with �.	一部の文字には使用可能な Unicode 対応付けがなく、� に置き換えられました。
+	Rotated, right-to-left or unusually positioned content needs review after conversion to horizontal text and inline pictures.	回転した内容、右から左に書かれた内容、特殊な配置の内容は、横書きテキストと行内画像への変換後に確認が必要です。
+	The PDF interpreter reported unsupported or unreadable content; inspect the converted document.	PDF インタープリターが非対応または読み取り不能な内容を報告しました。変換後の文書を確認してください。
+	To protect the converted document, set a password when saving it. The PDF password only unlocks the source.	変換後の文書を保護するには、保存時にパスワードを設定してください。PDF のパスワードは元のファイルのロック解除にのみ使われます。
