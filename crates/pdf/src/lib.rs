@@ -48,6 +48,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
+use wordcraft_layout::para::{ClKind, LineEnd};
 use wordcraft_layout::wordart::ArtPaint;
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
@@ -1481,14 +1482,31 @@ impl Exporter<'_> {
         for (out, pi) in pages.iter().enumerate() {
             let Some(page) = self.lay.pages.get(*pi) else { continue };
             for it in &page.items {
-                let Placed::Lines { story: StoryRef::Body, path, para, l0: 0, x, y, .. } = it else { continue };
+                let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, .. } = it else { continue };
                 let Some(p) = self.doc.para(StoryRef::Body, path) else { continue };
                 let Some(level) = self.doc.styles.resolve_para(&p.props).outline_level else { continue };
+                // A leading page break can be placed on the previous page without the heading.
+                let first = para
+                    .lines
+                    .iter()
+                    .take_while(|line| {
+                        line.end == LineEnd::PageBreak
+                            && para
+                                .clusters
+                                .get(line.c0..line.c1)
+                                .is_some_and(|cs| cs.iter().all(|c| matches!(c.kind, ClKind::PageBreak | ClKind::Marker)))
+                    })
+                    .count();
+                if !(*l0..*l1).contains(&first) {
+                    continue;
+                }
+                let Some(line) = para.lines.get(first) else { continue };
+                let Some(piece) = para.lines.get(*l0) else { continue };
                 let title: String = self.title_text(p, para).split_whitespace().collect::<Vec<_>>().join(" ").chars().take(200).collect();
                 if title.is_empty() {
                     continue;
                 }
-                let (x, y) = Fit::of(page).point(*x, *y);
+                let (x, y) = Fit::of(page).point(*x, *y + line.top - piece.top);
                 flat.push((level.min(8), title, out, x, y));
             }
         }
