@@ -1,0 +1,95 @@
+{
+  "schema": 1,
+  "id": "federal",
+  "name": "Federal citation forms",
+  "jurisdiction": "Federal",
+  "effective": "2024-01-01",
+  "rules": [
+    {
+      "id": "usReporter",
+      "kind": "case",
+      "source": "Bluebook R. 10.4 (U.S. Reports)",
+      "detect": "\\b\\d+\\s+U\\.\\s*S\\.\\s+\\d+\\b",
+      "extendTail": true,
+      "valid": "^\\d+\\s+U\\.\\s*S\\.\\s+\\d+(?:,\\s*\\d+(?:[-–—]\\d+)?)?\\s+\\(\\s*\\d{4}\\s*\\)$",
+      "finder": true,
+      "message": "U.S. Reports citations use U.S. with periods and usually include a year parenthetical."
+    },
+    {
+      "id": "sCtReporter",
+      "kind": "case",
+      "source": "Bluebook R. 10.4 (Supreme Court Reporter)",
+      "detect": "\\b\\d+\\s+S\\.\\s+Ct\\.\\s+\\d+\\b",
+      "extendTail": true,
+      "valid": "^\\d+\\s+S\\.\\s+Ct\\.\\s+\\d+(?:,\\s*\\d+(?:[-–—]\\d+)?)?\\s+\\(\\s*\\d{4}\\s*\\)$",
+      "finder": true,
+      "message": "Supreme Court Reporter citations use S. Ct. with a space after S. and a year parenthetical."
+    },
+    {
+      "id": "sCtReporterTight",
+      "kind": "case",
+      "source": "Bluebook R. 10.4 (Supreme Court Reporter)",
+      "detect": "\\b\\d+\\s+S\\.Ct\\.\\s+\\d+\\b",
+      "message": "Supreme Court Reporter citations use S. Ct. with a space after S."
+    },
+    {
+      "id": "federalReporterWrong",
+      "kind": "case",
+      "source": "Bluebook R. 10.4 (Federal Reporters)",
+      "detect": "\\b\\d+\\s+F(?:2d|3d|4th)\\s+\\d+",
+      "message": "Use F.2d, F.3d, or F.4th (with a period after F)."
+    },
+    {
+      "id": "federalCirMissingYear",
+      "kind": "case",
+      "source": "Bluebook R. 10.4 (court parenthetical)",
+      "detect": "\\(\\s*(?:[1-9]\\d?(?:st|nd|rd|th)|[23]d)\\s+Cir\\.\\s*\\)",
+      "message": "The court parenthetical needs a four-digit year, e.g. (8th Cir. 2009)."
+    },
+    {
+      "id": "federalCourtParen",
+      "kind": "case",
+      "source": "Bluebook R. 10.4 (court parenthetical)",
+      "detect": "\\b\\d+\\s+F\\.(?:2d|3d|4th| Supp\\. (?:2d|3d))\\s+\\d+\\b",
+      "extendTail": true,
+      "valid": "^\\d+\\s+F\\.(?:2d|3d|4th| Supp\\. (?:2d|3d))\\s+\\d+(?:,\\s*\\d+(?:[-–—]\\d+)?)?\\s+\\(\\s*(?:(?:[1-9]\\d?(?:st|nd|rd|th)|[23]d|D\\.C\\.|Fed\\.)\\s+Cir\\.|(?:[A-Z]\\.\\s*){1,4}(?:[A-Z][a-z]+\\.?)?)\\s*\\d{4}\\s*\\)$",
+      "finder": true,
+      "message": "Federal appellate and district reporter citations need a court parenthetical with the year, e.g. (8th Cir. 2009)."
+    },
+    {
+      "id": "uscSection",
+      "kind": "statute",
+      "source": "Bluebook R. 12 (U.S.C.)",
+      "detect": "\\b\\d+\\s+U\\.S\\.C\\.\\s*§?\\s*\\d+",
+      "valid": "^\\d+\\s+U\\.S\\.C\\.\\s*§\\s*\\d+[\\w.-]*$",
+      "finder": true,
+      "message": "U.S. Code citations use title, U.S.C., and the section symbol, e.g. 42 U.S.C. § 1983."
+    },
+    {
+      "id": "fedRuleApp",
+      "kind": "rule",
+      "source": "Bluebook R. 12.9.3 (Federal Rules of Appellate Procedure)",
+      "detect": "\\bFed\\.?\\s*R\\.?\\s*App\\.?\\s*P\\.?\\s+\\d+(?:\\([a-z0-9]+\\))*",
+      "valid": "^Fed\\.\\s+R\\.\\s+App\\.\\s+P\\.\\s+\\d+(?:\\([a-z0-9]+\\))*$",
+      "finder": true,
+      "message": "Federal Rules of Appellate Procedure: Fed. R. App. P. 32(a)."
+    },
+    {
+      "id": "fedRuleCiv",
+      "kind": "rule",
+      "source": "Bluebook R. 12.9.1 (Federal Rules of Civil Procedure)",
+      "detect": "\\bFed\\.?\\s*R\\.?\\s*Civ\\.?\\s*P\\.?\\s+\\d+(?:\\([a-z0-9]+\\))*",
+      "valid": "^Fed\\.\\s+R\\.\\s+Civ\\.\\s+P\\.\\s+\\d+(?:\\([a-z0-9]+\\))*$",
+      "finder": true,
+      "message": "Federal Rules of Civil Procedure: Fed. R. Civ. P. 12(b)(6)."
+    },
+    {
+      "id": "federalRecordCite",
+      "kind": "record",
+      "source": "Bluebook R. 10.9 (record citations)",
+      "detect": "\\((?:R\\.|Rec\\.|Tr\\.|App\\.|J\\.A\\.)(?:\\s+at)?\\s+\\d+\\)",
+      "valid": "^\\((?:R\\.|Tr\\.|App\\.)\\s+at\\s+\\d+\\)|^\\(J\\.A\\.\\s+\\d+\\)$",
+      "message": "Record citations use (R. at 12), (Tr. at 3), (App. at 5), or (J.A. 12)."
+    }
+  ]
+}

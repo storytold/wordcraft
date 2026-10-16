@@ -10,6 +10,15 @@ fn new_document_is_valid() {
 }
 
 #[test]
+fn text_stories_cover_the_body_and_every_part() {
+    let mut d = Document::new();
+    assert_eq!(d.text_stories(), vec![StoryRef::Body]);
+    d.parts.insert(2, Part::default());
+    d.parts.insert(1, Part::default());
+    assert_eq!(d.text_stories(), vec![StoryRef::Body, StoryRef::Part(1), StoryRef::Part(2)]);
+}
+
+#[test]
 fn word_count() {
     let d = Document::from_text("Hello, world!\nThis is — a test 42.\n\n");
     assert_eq!(d.word_count(), 7);

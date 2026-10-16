@@ -19,6 +19,10 @@ wordcraft-fonts = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The control key file's location (shared with the MCP bridge).
 wordcraft-control-key = { workspace = true }
+# LawCraft: court profiles. An add-in (File › Options › Add-ins; law.enabled in the editing
+# preferences); its commands, ribbon tab and options page come only when the user turns it on.
+wordcraft-law = { workspace = true }
+wordcraft-law-ui = { workspace = true }
 eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }

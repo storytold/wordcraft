@@ -3182,24 +3182,21 @@ fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLang {
 }
 
 /// Spelling and grammar issues in a paragraph, in order: each word in its run's language
-/// ([`wordcraft_proof::check_text_with`]: what spelling skips, and grammar only with `grammar`),
+/// ([`wordcraft_proof::check_text_with_module`]: what spelling skips, and grammar only with `grammar`),
 /// and none touching a run left unchecked.
 ///
 /// `list_item` (see [`is_list_item`]) turns off the capital-first-word grammar rule.
-pub fn paragraph_issues(
-    p: &Paragraph,
-    runs: &[ProofRun],
-    spelling: &wordcraft_proof::Options,
-    grammar: bool,
-    list_item: bool,
-) -> Vec<wordcraft_proof::Issue> {
+pub fn paragraph_issues(p: &Paragraph, runs: &[ProofRun], opts: &crate::ProofOptions, list_item: bool) -> Vec<wordcraft_proof::Issue> {
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
     }
-    let text = proof_text(p);
+    let text = p.proof_text();
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
-    wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item).into_iter().filter(|i| !skip(i.start, i.end)).collect()
+    wordcraft_proof::check_paragraph(&text, &spans, &opts.spelling, opts.grammar, list_item, opts.module)
+        .into_iter()
+        .filter(|i| !skip(i.start, i.end))
+        .collect()
 }
 
 /// Whether the paragraph is a list item: its own numbering, or its style's, names a list (not 0).
@@ -3215,28 +3212,16 @@ fn proof_issues(
     typing: Option<(usize, usize)>,
     list_item: bool,
 ) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
+    paragraph_issues(p, runs, opts, list_item)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
         .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))
         .collect()
 }
 
-/// Text for proofing with the same byte offsets: inline objects and tracked deletions become
-/// U+0001 bytes (neither words nor spaces).
+/// Text for proofing with the same byte offsets as paragraph storage ([`wordcraft_doc::Paragraph::proof_text`]).
 pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
-    let mut out = String::with_capacity(p.text.len());
-    for (i, c) in p.text.char_indices() {
-        let deleted = c == wordcraft_doc::para::OBJ || p.props_of_char(i).del.is_some();
-        if deleted {
-            for _ in 0..c.len_utf8() {
-                out.push('\u{1}');
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
+    p.proof_text()
 }
 
 #[cfg(test)]

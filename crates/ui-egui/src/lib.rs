@@ -22,6 +22,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod addins;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -646,6 +647,8 @@ pub struct WordApp {
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// The add-ins the host gave the app ([`addins`]), in File › Options › Add-ins order.
+    addins: Vec<Box<dyn addins::AddIn>>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -757,6 +760,7 @@ impl WordApp {
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             dialog_pick: None,
             file_dialog: None,
+            addins: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: file_browser::State::default(),
             info_editing: None,
@@ -907,7 +911,12 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && discards_document(id, &params) {
+        if let Some(what) = self.addin_input_dialog(id, &params) {
+            return Ok(json!({"pending": what}));
+        }
+        // A module's command that opens a new document in place of this one asks too.
+        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
+        if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && (replaces || discards_document(id, &params)) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -933,11 +942,17 @@ impl WordApp {
         {
             return r;
         }
+        // An add-in being turned off first saves what its options page has pending.
+        self.guard_addin_off(id, &params)?;
+        let modules_changed = id == "file.options" && params.get("modules").is_some();
         let applied = applied_font(id, &params);
         let r = self.execute_user(id, params);
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
+        }
+        if modules_changed && r.is_ok() {
+            self.sync_addins();
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
             push_recent_font(&mut self.ui.recent_fonts, &name);
@@ -1479,6 +1494,12 @@ impl WordApp {
         if req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme") {
             self.ui.theme = if self.ui_is_dark() { theme::Appearance::Light } else { theme::Appearance::Dark };
         }
+        // An add-in's own window: the add-in opens it (`{"addin": id, "open": what}`).
+        if let Some(id) = req.get("addin").and_then(Value::as_str) {
+            let what = req.get("open").and_then(Value::as_str).unwrap_or("");
+            self.with_addin(id, |a, _| a.open(what));
+            return;
+        }
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),
@@ -1497,7 +1518,9 @@ impl WordApp {
                 "options" => {
                     self.ui.backstage = true;
                     self.ui.backstage_page = "options".into();
-                    if let Some(pane) = req.get("pane").and_then(Value::as_str) {
+                    if let Some(pane) = req.get("pane").and_then(Value::as_str)
+                        && (pane == self.ui.options_pane || self.leave_addin_page())
+                    {
                         self.ui.options_pane = pane.into();
                     }
                 }
@@ -1554,12 +1577,22 @@ impl WordApp {
                 json!({"tab": self.ui.tab})
             }
             "ui.backstage" => {
-                self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
-                if let Some(pg) = s("page") {
-                    self.ui.backstage_page = pg.into();
-                }
-                if let Some(pane) = s("pane") {
-                    self.ui.options_pane = pane.into();
+                let want = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
+                let page = s("page").map(str::to_string);
+                let pane = s("pane").map(str::to_string);
+                // Leaving an add-in's options page (closing File, another page or pane) lets it
+                // save first; when it can't, it stays.
+                let leaving = !want
+                    || page.as_deref().is_some_and(|p| p != self.ui.backstage_page)
+                    || pane.as_deref().is_some_and(|p| p != self.ui.options_pane);
+                if !leaving || self.leave_addin_page() {
+                    self.ui.backstage = want;
+                    if let Some(pg) = page {
+                        self.ui.backstage_page = pg;
+                    }
+                    if let Some(pane) = pane {
+                        self.ui.options_pane = pane;
+                    }
                 }
                 json!({"backstage": self.ui.backstage})
             }
@@ -2463,6 +2496,7 @@ impl WordApp {
         }
         content_controls::popup(self, &ctx);
         dialogs::show(self, &ctx);
+        self.addin_dialogs(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, &ctx);
         colors::show(self, &ctx);
@@ -2952,6 +2986,28 @@ mod tests {
 
     fn mod_key(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
+    }
+
+    /// A module's command that opens a new document in place of this one asks to save unsaved
+    /// changes first, like File › New; a clean document goes straight through.
+    #[test]
+    fn a_command_that_replaces_the_document_asks_to_save_first() {
+        fn replace(s: &mut Session, _: &Value) -> wordcraft_engine::CmdResult {
+            s.set_document(wordcraft_doc::Document::new());
+            Ok(json!({}))
+        }
+        let spec = || wordcraft_engine::CommandSpec::new("test.replace", "Replace", "Test", replace).replaces_document();
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.session.install_commands(vec![spec()]);
+        app.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let r = app.run("test.replace", json!({})).unwrap();
+        assert_eq!(r, json!({"pending": "saveChanges"}));
+        assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "nothing is lost yet");
+        app.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "cancel keeps the work");
+        app.session.dirty = false;
+        app.run("test.replace", json!({})).unwrap();
+        assert!(!app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "a saved document is replaced at once");
     }
 
     /// Issue #14: Mod+- (optional hyphen) also zoomed the whole window out, so it read as "zoom out".
