@@ -851,14 +851,27 @@ pub fn update_seq(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// Whether `instr` has the one-letter switch `\sw`, also run together with another (`\p\h`).
+fn has_switch(instr: &str, sw: char) -> bool {
+    instr.split('\\').skip(1).any(|s| {
+        let mut chars = s.chars();
+        chars.next().is_some_and(|c| c.eq_ignore_ascii_case(&sw)) && chars.next().is_none_or(|c| !c.is_alphanumeric())
+    })
+}
+
 /// Update fields in the body: dates, SEQ numbering, cross-references, TOC.
 pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
     update_seq(s)?;
-    let mut pages: std::collections::HashMap<String, u32> = Default::default();
-    for (name, pos) in s.doc.bookmarks() {
+    let mut pages: std::collections::HashMap<String, (u32, NumFormat)> = Default::default();
+    let formats: Vec<NumFormat> = s.doc.sections().into_iter().map(|(_, sec)| sec.page_num_format).collect();
+    let marks = s.doc.bookmarks();
+    for (name, pos) in marks {
         let l = s.layout();
-        let page = l.caret(&pos).and_then(|c| l.pages.get(c.page)).map(|p| p.number).unwrap_or(1);
-        pages.entry(name).or_insert(page);
+        let page_info = l.caret(&pos).and_then(|c| l.pages.get(c.page)).map(|p| {
+            let format = formats.get(p.section).copied().unwrap_or_default();
+            (p.number, format)
+        }).unwrap_or((1, NumFormat::Decimal));
+        pages.entry(name).or_insert(page_info);
     }
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
@@ -889,8 +902,22 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
                     updates.push((k, super::insert::format_date(&pic)));
                 }
                 "REF" | "PAGEREF" => {
-                    let target = instr.split_whitespace().nth(1).unwrap_or("");
-                    let r = if name == "REF" { bookmark_text(&s.doc, target) } else { pages.get(target).map(u32::to_string) };
+                    let f = FieldCode::parse(instr);
+                    let target = f.args.first().map(|s| s.split('\\').next().unwrap_or("").trim_matches('"')).unwrap_or("");
+                    let r = if name == "REF" {
+                        if !has_switch(instr, 'p') {
+                            bookmark_text(&s.doc, target)
+                        } else {
+                            None
+                        }
+                    } else if !has_switch(instr, 'p') {
+                        pages.get(target).map(|(num, page_fmt)| {
+                            let fmt = wordcraft_layout::fields::format_switch(instr).unwrap_or(*page_fmt);
+                            fmt.format(*num)
+                        })
+                    } else {
+                        None
+                    };
                     if let Some(r) = r {
                         updates.push((k, r));
                     }
@@ -1147,4 +1174,27 @@ mod tests {
         s.run("references.caption", &json!({"label": "Table", "excludeLabel": true, "format": "ROMAN"})).unwrap();
         assert_eq!(s.doc.body.last().unwrap().as_para().unwrap().plain_text(), "I");
     }
+
+    #[test]
+    fn update_fields_ref_and_pageref() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Bookmark target text here.\nSecond paragraph."));
+        s.run("select.text", &json!({"text": "Bookmark target text"})).unwrap();
+        s.run("insert.bookmark", &json!({"name": "TargetMark"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF \"TargetMark\" \\h", "result": "old"})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF TargetMark\\h", "result": "old"})).unwrap();
+        s.run("insert.field", &json!({"instr": "PAGEREF \"TargetMark\" \\* Roman", "result": "0"})).unwrap();
+        s.run("insert.field", &json!({"instr": "PAGEREF TargetMark \\p", "result": "above"})).unwrap();
+        s.run("insert.field", &json!({"instr": "REF TargetMark \\p", "result": "above"})).unwrap();
+
+        update_fields(&mut s).unwrap();
+
+        let res: Vec<(String, String)> = fields(&s);
+        assert_eq!(res[0], ("REF \"TargetMark\" \\h".into(), "Bookmark target text".into()));
+        assert_eq!(res[1], ("REF TargetMark\\h".into(), "Bookmark target text".into()));
+        assert_eq!(res[2], ("PAGEREF \"TargetMark\" \\* Roman".into(), "I".into()));
+        assert_eq!(res[3], ("PAGEREF TargetMark \\p".into(), "above".into()));
+        assert_eq!(res[4], ("REF TargetMark \\p".into(), "above".into()));
+    }
 }
+
