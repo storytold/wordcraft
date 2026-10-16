@@ -24,10 +24,11 @@ fn document_xml(bytes: &[u8]) -> String {
     s
 }
 
-/// The text boxes' stories in body order.
+/// The text boxes' stories in body order, a group's members among them
+/// (`text_boxes`, not `text_box`, which only sees an object that is itself a box).
 fn boxes(d: &Document) -> Vec<u32> {
     let mut out = Vec::new();
-    d.objects_in_reading_order(&mut |o| out.extend(o.text_box()));
+    d.objects_in_reading_order(&mut |o| out.extend(o.text_boxes()));
     out.retain(|id| d.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox));
     out
 }
