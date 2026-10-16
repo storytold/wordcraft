@@ -484,8 +484,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let zfont = TypeRung::Caption.regular();
                     let ztrack = TypeRung::Caption.tracking();
                     let zw = text_width(ui.painter(), &ztxt, &zfont, ztrack, t.text_dim);
-                    let (zr, zresp) = ui.allocate_exact_size(vec2(zw + 1.0, TypeRung::Caption.line_height()), Sense::click());
-                    paint_text(ui.painter(), pos2(zr.min.x, zr.min.y), Align2::LEFT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
+                    // A fixed width for three digits plus a small reserve, so the controls to the
+                    // left don't shift as the percentage gains or loses digits (#1975).
+                    let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
+                    let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                    paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
                     if zresp.clicked() && !reading {
                         let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
                     }
@@ -640,6 +643,41 @@ mod tests {
         assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello");
         frame(&ctx, &mut n, vec![], &mut a);
         assert!(!egui::Popup::is_id_open(&ctx, popup), "the list closes");
+    }
+
+    /// #1975: the zoom percentage gains and loses digits (9% → 100% → 500%); the controls to its
+    /// left must not shift with it.
+    #[test]
+    fn status_bar_controls_hold_still_across_zoom_levels() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let ctx = ctx();
+        ctx.enable_accesskit();
+        let names = ["Focus", "Print Layout", "Web Layout"];
+        let mut seen: Vec<(f32, Vec<f64>)> = Vec::new();
+        for (n, zoom) in [10.0_f32, 9.0, 100.0, 500.0].into_iter().enumerate() {
+            a.canvas.scale = zoom / 100.0 * crate::canvas::PX_PER_PT;
+            let input = egui::RawInput {
+                time: Some(n as f64 / 60.0),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| status_bar(&mut a, ui));
+            out.textures_delta.clear();
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            let xs: Vec<f64> = names
+                .iter()
+                .map(|name| {
+                    let node =
+                        update.nodes.iter().find(|(_, node)| node.label() == Some(*name)).unwrap_or_else(|| panic!("{name} is drawn")).1.clone();
+                    node.bounds().unwrap().x0
+                })
+                .collect();
+            seen.push((zoom, xs));
+        }
+        let first = &seen[0].1;
+        for (zoom, xs) in &seen {
+            assert_eq!(xs, first, "status bar controls moved at {zoom}% zoom");
+        }
     }
 
     #[test]
