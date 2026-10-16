@@ -42,6 +42,7 @@ pub fn esc(s: &str) -> String {
             '\t' => o.push_str("\\tab "),
             '\n' => o.push_str("\\line "),
             '\u{000C}' => o.push_str("\\page "),
+            '\u{000E}' => o.push_str("\\column "),
             '\u{00A0}' => o.push_str("\\~"),
             '\u{00AD}' => o.push_str("\\-"),
             '\u{2011}' => o.push_str("\\_"),
@@ -1596,6 +1597,7 @@ impl Reader {
             "line" => self.ch('\n'),
             "tab" => self.ch('\t'),
             "page" => self.ch('\u{000C}'),
+            "column" => self.ch('\u{000E}'),
             "emdash" => self.ch('—'),
             "endash" => self.ch('–'),
             "bullet" => self.ch('•'),
@@ -1966,6 +1968,10 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                     }
                     b'_' => {
                         r.ch('\u{2011}');
+                        i += 2;
+                    }
+                    b' ' => {
+                        r.ch('\u{00A0}');
                         i += 2;
                     }
                     b'\n' | b'\r' => {
@@ -2684,5 +2690,18 @@ mod tests {
     #[test]
     fn escapes() {
         assert_eq!(esc("a{b}\\c\té😀"), "a\\{b\\}\\\\c\\tab \\u233?\\u-10179?\\u-8704?");
+        assert_eq!(esc("col1\u{000E}col2"), "col1\\column col2");
+    }
+
+    #[test]
+    fn column_break_and_escaped_space_import_export() {
+        let rtf = br#"{\rtf1\ansi Col1\column Col2\ hello\ world\par}"#;
+        let f = parse(rtf).unwrap();
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert_eq!(p.text(), "Col1\u{000E}Col2\u{00A0}hello\u{00A0}world");
+
+        let exported = esc("Col1\u{000E}Col2");
+        assert_eq!(exported, "Col1\\column Col2");
     }
 }
+
