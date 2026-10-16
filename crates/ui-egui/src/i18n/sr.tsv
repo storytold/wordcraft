@@ -30,10 +30,13 @@
 	Add	Додај
 	Add a comment	Додај коментар
 	Add a Table	Додај табелу
+	Add Heading Above	Додај наслов изнад
+	Add Heading Below	Додај наслов испод
 	Add Object to Selection	Додај објекат у избор
 	Add Space Before Paragraph	Додај размак пре пасуса
 	Add space between Asian and Latin text	Додај размак између азијског и латиничног текста
 	Add space between Asian text and numbers	Додај размак између азијског текста и бројева
+	Add Subheading	Додај поднаслов
 	Add tab stop at:	Додај табулатор на:
 	Add Text	Додај текст
 	Add to Dictionary	Додај у речник
@@ -1428,6 +1431,7 @@
 	Flip Horizontal	Окрени хоризонтално
 	Move Paragraph Up	Помери пасус нагоре
 	Move Paragraph Down	Помери пасус надоле
+	Move Section	Премести одељак
 	Promote	Подигни ниво
 	Demote	Спусти ниво
 	Go Back	Врати се назад

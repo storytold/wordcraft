@@ -26,10 +26,13 @@
 	Add	Dodaj
 	Add a comment	Dodaj komentar
 	Add a Table	Dodaj tabelu
+	Add Heading Above	Dodaj naslov iznad
+	Add Heading Below	Dodaj naslov ispod
 	Add Object to Selection	Dodaj objekat u izbor
 	Add Space Before Paragraph	Dodaj razmak pre pasusa
 	Add space between Asian and Latin text	Dodaj razmak između azijskog i latiničnog teksta
 	Add space between Asian text and numbers	Dodaj razmak između azijskog teksta i brojeva
+	Add Subheading	Dodaj podnaslov
 	Add tab stop at:	Dodaj tabulator na:
 	Add Text	Dodaj tekst
 	Add to Dictionary	Dodaj u rečnik
@@ -1424,6 +1427,7 @@
 	Flip Horizontal	Okreni horizontalno
 	Move Paragraph Up	Pomeri pasus nagore
 	Move Paragraph Down	Pomeri pasus nadole
+	Move Section	Premesti odeljak
 	Promote	Podigni nivo
 	Demote	Spusti nivo
 	Go Back	Vrati se nazad

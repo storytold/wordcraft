@@ -40,12 +40,15 @@
 	Add	Přidat
 	Add a comment	Přidat komentář
 	Add a Table	Přidat tabulku
+	Add Heading Above	Přidat nadpis nad
+	Add Heading Below	Přidat nadpis pod
 	Add at least one field.	Přidejte alespoň jedno pole.
 	Add Field	Přidat pole
 	Add Object to Selection	Přidat objekt do výběru
 	Add Space Before Paragraph	Přidat mezeru před odstavec
 	Add space between Asian and Latin text	Přidávat mezery mezi asijským textem a latinkou
 	Add space between Asian text and numbers	Přidávat mezery mezi asijským textem a čísly
+	Add Subheading	Přidat podnadpis
 	Add tab stop at:	Přidat zarážku tabulátoru na:
 	Add Text	Přidat text
 	Add to Dictionary	Přidat do slovníku
@@ -1710,6 +1713,7 @@
 	Draw\nTable	Nakreslit\ntabulku
 	Move Paragraph Up	Přesunout odstavec nahoru
 	Move Paragraph Down	Přesunout odstavec dolů
+	Move Section	Přesunout oddíl
 	Promote	Zvýšit úroveň
 	Demote	Snížit úroveň
 	Go Back	Přejít zpět

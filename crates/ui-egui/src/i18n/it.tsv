@@ -29,9 +29,12 @@
 	Add Space Before Paragraph	Aggiungi spazio prima del paragrafo
 	Add space between Asian and Latin text	Aggiungi spazio tra testo asiatico e latino
 	Add space between Asian text and numbers	Aggiungi spazio tra testo asiatico e numeri
+	Add Subheading	Aggiungi sottotitolo
 	Add tab stop at:	Aggiungi tabulazione a:
 	Add Text	Aggiungi testo
 	Add a Table	Aggiungi una tabella
+	Add Heading Above	Aggiungi titolo sopra
+	Add Heading Below	Aggiungi titolo sotto
 	Add a comment	Aggiungi un commento
 	Add to Dictionary	Aggiungi al dizionario
 	Add to Style Gallery	Aggiungi alla raccolta stili
@@ -1438,6 +1441,7 @@
 	Left Only	Solo a sinistra
 	More Commands…	Altri comandi…
 	Move Paragraph Down	Sposta paragrafo giù
+	Move Section	Sposta sezione
 	Move Paragraph Up	Sposta paragrafo su
 	New Group	Nuovo gruppo
 	New Tab	Nuova scheda

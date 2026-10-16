@@ -25,6 +25,8 @@
 	Add	Ekle
 	Add a comment	Yorum ekle
 	Add a Table	Tablo Ekle
+	Add Heading Above	Üste Başlık Ekle
+	Add Heading Below	Alta Başlık Ekle
 	Add Space Before Paragraph	Paragraf Öncesine Boşluk Ekle
 	Add Text	Metin Ekle
 	Add to Dictionary	Sözlüğe Ekle
@@ -1456,6 +1458,7 @@ preview	Title	Örnek
 	Add Object to Selection	Nesneyi Seçime Ekle
 	Add space between Asian and Latin text	Asya ve Latin metni arasına boşluk ekle
 	Add space between Asian text and numbers	Asya metni ile sayılar arasına boşluk ekle
+	Add Subheading	Alt Başlık Ekle
 	Allow hanging punctuation	Asılı noktalamaya izin ver
 	Allow Latin text to wrap in the middle of a word	Latin metninin sözcük ortasında alt satıra geçmesine izin ver
 	Apply Asian line-breaking rules (kinsoku)	Asya satır bölme kurallarını uygula (kinsoku)
@@ -1734,6 +1737,7 @@ preview	Title	Örnek
 	Insert Time Field	Saat Alanı Ekle
 	Lock Fields	Alanları Kilitle
 	Move Paragraph Down	Paragrafı Aşağı Taşı
+	Move Section	Bölümü Taşı
 	Move Paragraph Up	Paragrafı Yukarı Taşı
 	Next Field	Sonraki Alan
 	Previous Field	Önceki Alan

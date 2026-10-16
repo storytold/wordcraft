@@ -26,6 +26,8 @@
 	Add	Добавить
 	Add a comment	Добавить комментарий
 	Add a Table	Добавить таблицу
+	Add Heading Above	Добавить заголовок выше
+	Add Heading Below	Добавить заголовок ниже
 	Add Space Before Paragraph	Добавить интервал перед абзацем
 	Add Text	Добавить текст
 	Add to Dictionary	Добавить в словарь
@@ -1457,6 +1459,7 @@ preview	Title	Пример
 	Add Object to Selection	Добавить объект к выделению
 	Add space between Asian and Latin text	Добавлять пробел между азиатским и латинским текстом
 	Add space between Asian text and numbers	Добавлять пробел между азиатским текстом и числами
+	Add Subheading	Добавить подзаголовок
 	Allow hanging punctuation	Разрешить висячую пунктуацию
 	Allow Latin text to wrap in the middle of a word	Разрешить перенос латинского текста посреди слова
 	Apply Asian line-breaking rules (kinsoku)	Применять азиатские правила переноса строк (кинсоку)
@@ -1732,6 +1735,7 @@ preview	Title	Пример
 	Insert Time Field	Вставить поле времени
 	Lock Fields	Заблокировать поля
 	Move Paragraph Down	Переместить абзац вниз
+	Move Section	Переместить раздел
 	Move Paragraph Up	Переместить абзац вверх
 	Next Field	Следующее поле
 	Previous Field	Предыдущее поле

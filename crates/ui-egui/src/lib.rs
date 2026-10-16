@@ -256,6 +256,14 @@ pub struct UiState {
     #[serde(rename = "dark", skip_serializing)]
     pub(crate) legacy_dark: Option<bool>,
     pub nav_tab: String,
+    /// Headings folded shut in the Navigation pane's outline, as their paragraph paths. Not saved:
+    /// Word opens the pane with everything open (the blocks move with edits, so a saved set of
+    /// indices would fold the wrong headings next time).
+    #[serde(skip)]
+    pub nav_collapsed: Vec<Vec<u32>>,
+    /// The heading being dragged in the Navigation pane, as its paragraph path; never saved.
+    #[serde(skip)]
+    pub nav_drag: Option<Vec<u32>>,
     pub show_discord: bool,
     /// User name (File › Options) for comments and tracked changes; empty keeps the default.
     pub author: String,
@@ -351,6 +359,8 @@ impl Default for UiState {
             animations: theme::Animations::default(),
             legacy_dark: None,
             nav_tab: "headings".into(),
+            nav_collapsed: Vec::new(),
+            nav_drag: None,
             show_discord: true,
             author: String::new(),
             window: None,

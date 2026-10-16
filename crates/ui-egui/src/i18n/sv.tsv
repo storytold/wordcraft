@@ -29,9 +29,12 @@
 	Add Space Before Paragraph	Lägg till avstånd före stycke
 	Add space between Asian and Latin text	Lägg till mellanrum mellan asiatisk och latinsk text
 	Add space between Asian text and numbers	Lägg till mellanrum mellan asiatisk text och siffror
+	Add Subheading	Lägg till underrubrik
 	Add tab stop at:	Lägg till tabbstopp vid:
 	Add Text	Lägg till text
 	Add a Table	Lägg till en tabell
+	Add Heading Above	Lägg till rubrik ovanför
+	Add Heading Below	Lägg till rubrik nedanför
 	Add a comment	Lägg till en kommentar
 	Add to Dictionary	Lägg till i ordlistan
 	Add to Style Gallery	Lägg till i stilgalleriet
@@ -1444,6 +1447,7 @@
 	Flip Horizontal	Vänd vågrätt
 	Move Paragraph Up	Flytta stycket uppåt
 	Move Paragraph Down	Flytta stycket nedåt
+	Move Section	Flytta avsnitt
 	Promote	Höj nivå
 	Demote	Sänk nivå
 	Go Back	Gå tillbaka

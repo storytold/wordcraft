@@ -25,6 +25,7 @@ pub mod inspector;
 pub mod lists;
 pub mod mailings;
 pub mod moves;
+pub mod nav;
 pub mod objects;
 pub mod options;
 pub mod outline;
@@ -71,6 +72,7 @@ pub fn registry() -> Registry {
     v.extend(inspector::specs());
     v.extend(view::specs());
     v.extend(outline::specs());
+    v.extend(nav::specs());
     v.extend(insert::specs());
     v.extend(equation::specs());
     v.extend(page::specs());

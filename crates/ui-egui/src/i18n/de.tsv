@@ -24,10 +24,13 @@
 	Add	Hinzufügen
 	Add a comment	Kommentar hinzufügen
 	Add a Table	Tabelle hinzufügen
+	Add Heading Above	Überschrift oberhalb hinzufügen
+	Add Heading Below	Überschrift unterhalb hinzufügen
 	Add Object to Selection	Objekt zur Auswahl hinzufügen
 	Add Space Before Paragraph	Abstand vor Absatz hinzufügen
 	Add space between Asian and Latin text	Abstand zwischen asiatischem und lateinischem Text hinzufügen
 	Add space between Asian text and numbers	Abstand zwischen asiatischem Text und Zahlen hinzufügen
+	Add Subheading	Unterüberschrift hinzufügen
 	Add tab stop at:	Tabstopp hinzufügen bei:
 	Add Text	Text hinzufügen
 	Add to Dictionary	Zum Wörterbuch hinzufügen
@@ -1354,6 +1357,7 @@
 	Draw\nTable	Tabelle\nzeichnen
 	Move Paragraph Up	Absatz nach oben verschieben
 	Move Paragraph Down	Absatz nach unten verschieben
+	Move Section	Abschnitt verschieben
 	Promote	Höher stufen
 	Demote	Tiefer stufen
 	Go Back	Zurückspringen
