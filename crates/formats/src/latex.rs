@@ -584,6 +584,25 @@ const MATH_SYMBOLS: &[(char, &str)] = &[
     ('⌈', "lceil"),
     ('⌉', "rceil"),
     ('°', "circ"),
+    ('⊤', "top"),
+    ('•', "bullet"),
+    ('⋆', "star"),
+    ('†', "dagger"),
+    ('‡', "ddagger"),
+    ('⊖', "ominus"),
+    ('⊙', "odot"),
+    ('⊘', "oslash"),
+    ('⊎', "uplus"),
+    ('⊏', "sqsubset"),
+    ('⊐', "sqsupset"),
+    ('⊑', "sqsubseteq"),
+    ('⊒', "sqsupseteq"),
+    ('≺', "prec"),
+    ('≻', "succ"),
+    ('⪯', "preceq"),
+    ('⪰', "succeq"),
+    ('≐', "doteq"),
+    ('≍', "asymp"),
 ];
 
 /// Extra input spellings mapped to the same symbols.
@@ -610,6 +629,8 @@ const MATH_ALIASES: &[(&str, char)] = &[
     ("Vert", '‖'),
     ("lvert", '|'),
     ("rvert", '|'),
+    ("hbar", 'ℏ'),
+    ("bot", '⊥'),
 ];
 
 /// Operator names written upright in both formats.
@@ -632,13 +653,56 @@ const MATH_COMMANDS: &[&str] = &[
     "boldsymbol",
     "left",
     "right",
+    "middle",
     "quad",
     "qquad",
+    "enspace",
+    "thinspace",
+    "medspace",
+    "thickspace",
+    "negthinspace",
+    "negmedspace",
+    "negthickspace",
     "displaystyle",
     "textstyle",
+    "scriptstyle",
+    "scriptscriptstyle",
     "limits",
     "nolimits",
     "not",
+    "text",
+    "textrm",
+    "textit",
+    "textbf",
+    "mbox",
+    "hbox",
+    "vec",
+    "hat",
+    "widehat",
+    "tilde",
+    "widetilde",
+    "bar",
+    "overline",
+    "underline",
+    "dot",
+    "ddot",
+    "dddot",
+    "check",
+    "breve",
+    "acute",
+    "grave",
+    "mathring",
+    "boxed",
+    "fbox",
+    "phantom",
+    "overbrace",
+    "underbrace",
+    "binom",
+    "dbinom",
+    "tbinom",
+    "tag",
+    "pmod",
+    "bmod",
 ];
 
 /// May `\\name` from an equation's text be written to the exported file as a command? Only the
@@ -681,6 +745,22 @@ fn balanced(chars: &[char], closers: &[Option<usize>], open: usize) -> Option<(S
 /// A linear-format equation as LaTeX math.
 pub fn linear_to_latex(linear: &str) -> String {
     linear_to_latex_at(linear, 0)
+}
+
+fn wrap_last_atom(o: &mut String, cmd: &str) {
+    if o.ends_with('}') {
+        if let Some(open) = o.rfind('{') {
+            let inner = o[open + 1..o.len() - 1].to_string();
+            o.truncate(open);
+            o.push_str(&format!("\\{cmd}{{{inner}}}"));
+            return;
+        }
+    }
+    if let Some(prev) = o.pop() {
+        o.push_str(&format!("\\{cmd}{{{prev}}}"));
+    } else {
+        o.push_str(&format!("\\{cmd}{{}}"));
+    }
 }
 
 fn linear_to_latex_at(linear: &str, depth: usize) -> String {
@@ -763,6 +843,76 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
             '{' => o.push_str("\\{"),
             '}' => o.push_str("\\}"),
             '~' => o.push_str("\\sim "),
+            '\u{20D7}' => {
+                wrap_last_atom(&mut o, "vec");
+                i += 1;
+                continue;
+            }
+            '\u{0302}' => {
+                wrap_last_atom(&mut o, "hat");
+                i += 1;
+                continue;
+            }
+            '\u{0303}' => {
+                wrap_last_atom(&mut o, "tilde");
+                i += 1;
+                continue;
+            }
+            '\u{0304}' | '\u{0305}' | '¯' => {
+                wrap_last_atom(&mut o, "bar");
+                i += 1;
+                continue;
+            }
+            '\u{0307}' => {
+                wrap_last_atom(&mut o, "dot");
+                i += 1;
+                continue;
+            }
+            '\u{0308}' => {
+                wrap_last_atom(&mut o, "ddot");
+                i += 1;
+                continue;
+            }
+            '\u{20DB}' => {
+                wrap_last_atom(&mut o, "dddot");
+                i += 1;
+                continue;
+            }
+            '\u{030C}' => {
+                wrap_last_atom(&mut o, "check");
+                i += 1;
+                continue;
+            }
+            '\u{0306}' => {
+                wrap_last_atom(&mut o, "breve");
+                i += 1;
+                continue;
+            }
+            '\u{0301}' => {
+                wrap_last_atom(&mut o, "acute");
+                i += 1;
+                continue;
+            }
+            '\u{0300}' => {
+                wrap_last_atom(&mut o, "grave");
+                i += 1;
+                continue;
+            }
+            '\u{030A}' => {
+                wrap_last_atom(&mut o, "mathring");
+                i += 1;
+                continue;
+            }
+            '\u{20D6}' => {
+                wrap_last_atom(&mut o, "overleftarrow");
+                i += 1;
+                continue;
+            }
+            '\u{20E1}' => {
+                wrap_last_atom(&mut o, "overleftrightarrow");
+                i += 1;
+                continue;
+            }
             c => match MATH_SYMBOLS.iter().find(|(s, _)| *s == c) {
                 Some((_, name)) => {
                     o.push('\\');
@@ -2992,6 +3142,8 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
             (r"\left( a \right)", "( a )"),
             (r"\sin x + \text{if } y", "sin x + if y"),
             (r"a \cdot b \times c \neq d", "a ⋅ b × c ≠ d"),
+            (r"\vec{a} + \hat{x} + \top \bot", "a⃗ + x̂ + ⊤ ⊥"),
+            (r"\bullet \star \dagger \ddagger \ominus \odot", "• ⋆ † ‡ ⊖ ⊙"),
             (r"\unknowncmd", r"\unknowncmd"),
         ] {
             assert_eq!(latex_to_linear(tex), linear, "{tex}");
@@ -3004,6 +3156,10 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
             ("a_(i+1)", r"a_{i+1}"),
             ("50% & #", r"50\% \& \#"),
             ("√(3&x)", r"\sqrt[3]{x}"),
+            ("a⃗+x̂", r"\vec{a}+\hat{x}"),
+            ("x̄+ẏ+z̈", r"\bar{x}+\dot{y}+\ddot{z}"),
+            ("⊤ ⊥ • ⋆", r"\top \perp \bullet \star"),
+            (r"\quad \qquad", r"\quad \qquad"),
         ] {
             assert_eq!(linear_to_latex(linear), tex, "{linear}");
         }
