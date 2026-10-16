@@ -82,3 +82,8 @@ harness = false
 [[test]]
 name = "plugin_requires"
 harness = false
+
+# Runs without libtest: the test binary doubles as the protocol 2.2 add-in it starts.
+[[test]]
+name = "plugin_protocol_22"
+harness = false

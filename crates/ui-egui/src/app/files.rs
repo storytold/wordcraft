@@ -190,9 +190,9 @@ impl WordApp {
         if std::mem::replace(&mut self.closing_told, true) {
             return;
         }
-        let paths: Vec<_> = self.session.documents().into_iter().filter_map(|d| d.path).collect();
-        for path in &paths {
-            wordcraft_engine::cmd::plugins::notify(wordcraft_plugin::DocumentEvent::Closed, path);
+        let paths: Vec<_> = self.session.documents().into_iter().filter_map(|d| d.path.map(|p| (p, d.id))).collect();
+        for (path, id) in &paths {
+            wordcraft_engine::cmd::plugins::notify(wordcraft_plugin::DocumentEvent::Closed, path, &wordcraft_engine::plugin_document_id(*id));
         }
         if !paths.is_empty() {
             wordcraft_plugin::wait_for_events(wordcraft_plugin::DocumentEvent::Closed.timeout());

@@ -1,6 +1,6 @@
 # Add-ins (plugins)
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-15 · **Change:** minor (Office add-ins: `office.js` defused, function commands, colour names, more of the Word API; [officejs.md](officejs.md); previously minor: manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-16 · **Change:** minor (protocol 2.2: documents carry an `id`, multi-line form fields, `text.insert {literal: true}`; previously minor: Office add-ins: `office.js` defused, function commands, colour names, more of the Word API; [officejs.md](officejs.md); previously minor: manifest 1.3: add-ins that require other add-ins, with version ranges; previously minor: protocol 2: the push channel, transports and live sessions; previously minor: protocol 1.2: dialogs WordCraft draws, opening local files, document events, `context.document`; previously minor: ribbon buttons that run macros: `macros/run` gets the button; previously minor: protocol 1.1: host requests, VBA macros through an add-in, the Developer tab's Code group; Office add-ins; previously major: first version: out-of-process add-ins, protocol 1, File › Options › Add-ins, install from GitHub) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 An add-in adds **commands** that people and agents run, and can put them on the ribbon (a group
 on a built-in tab, or a tab of its own) and in the right-click menu. It's a separate program,
@@ -135,7 +135,7 @@ loaded with `--plugin` before that keep working.
 | `events` | The document events the add-in hears (protocol 1.2): `documentOpened`, `documentSaved`, `documentClosed`. Names WordCraft doesn't know are ignored; at most 64 |
 | `ui.menus[]` | A right-click menu item: `menu` (`text`, the default, always shown; `table` in a table; `picture` with a picture, shape or text box selected), `command`, `label`, `params`. Items go at the end of the menu, after a separator |
 | `requires.apps` | Manifest 1.3. Per app id, the app versions the add-in works with (`{"wordcraft": ">=0.7.0"}`); an app missing from the map isn't constrained. See [Requirements](#requirements-manifest-13) |
-| `requires.protocol` | The plugin protocol versions it needs (`">=1.2"`), checked against `host.protocol` (`"2.0"`) |
+| `requires.protocol` | The plugin protocol versions it needs (`">=1.2"`), checked against `host.protocol` (`"2.2"`) |
 | `requires.features` | Names from `host.features` (`dialogs`, `open`, `events`, `document`, `push`, `collab`) that must all be present |
 | `requires.addins[]` | Other add-ins it needs: `id`, `version` (a range; default `*`), `github` (`owner/repo` to install it from), `optional` (default false), `why` (shown to the person, at most 200 characters). At most 32 |
 
@@ -164,7 +164,7 @@ Sent once, after the process starts. Answer within 10 s with any result, for exa
 `host.id` says which app started the add-in, so one add-in can answer each app with its own
 commands.
 
-Since manifest 1.3, `host.protocol` is the protocol version as text (`"2.0"`, what
+Since manifest 1.3, `host.protocol` is the protocol version as text (`"2.2"`, what
 `requires.protocol` is checked against), and `addins` lists every installed add-in as
 `{id, version, enabled}` (`enabled`: turned on, not blocked and not failed), so an add-in can adapt
 to the optional ones it found.
@@ -344,7 +344,7 @@ fact:
 |---|---|---|
 | `events/documentOpened` | `{path, name}` | A document was opened from a local file: File › Open, Recent, a file dropped on the window, an add-in's `open`, `file.open` from a script (not one opened from bytes, on the web) |
 | `events/documentSaved` | `{path, name, format}` | Save or Save As to a local file succeeded (`format`: the file's extension, lower case). Not AutoSave's writes or recovery copies (`file.save {"autosave": true}` tells no one) |
-| `events/documentClosed` | `{path, name}` | A document that has a file is closed: replaced by File › Open or New in its window, or the app quits with it open |
+| `events/documentClosed` | `{path, name}` | A document that has a file is closed (File › Close, `file.closeDocument`), or the app quits with it open. File › Open and New open another document beside it, so they close nothing |
 
 `path` is absolute. The answer is `{}` or `{"message": "Uploaded to Nextcloud"}`; WordCraft shows
 the message in its status bar, and an error answer as an error there, naming the add-in.
@@ -384,6 +384,45 @@ added. The Share dialog (Share on the tab strip) runs a transport's `share` comm
 or `join` command (`{link, name, color}`), the conventions craft-collab's conformance checker
 uses. The `collab/*` messages, rooms, encryption and limits are protocol 2's; WordCraft's shared
 document (schema 1) and behaviour are in [collab.md](collab.md).
+
+## Protocol 2.2: document ids, multi-line fields, literal text
+
+The same in GridCraft, WordCraft and DeckCraft, normative in
+[craft plugin protocol 2.2](https://github.com/sirmmo/craft-collab/blob/main/docs/protocol-2.2.md).
+It adds to 2.0 and 2.1 and changes nothing that exists. `host.protocol` is `"2.2"`; WordCraft
+lists in `host.features` exactly the additions it implements: `multiline` and `literalValues`.
+
+**The document `id`.** `context.document` (`commands/run`, `macros/run`) and the params of
+`events/documentOpened`, `documentSaved` and `documentClosed` carry `id`, an opaque text
+(`"doc-3"`; compare it, don't parse it). It stays the same for the document while WordCraft runs,
+saved, renamed by Save As or not, and is never reused for another document, in any window. Each
+open document has its own (File › New and File › Open open another one beside it; a mail merge's
+result or a recovered document gets a new one too); `documentClosed` carries the closed
+document's id, whichever document is active. It isn't saved
+in the file: key lasting trust on `path`, and on `id` for the session.
+
+**Multi-line fields (`multiline`).** A form's `text` field with `"multiline": true` is a multi-line
+editor: Enter starts a new line instead of pressing OK, and it scrolls past its height.
+`"code": true` makes it monospace with Tab indenting, and implies `multiline`. `rows` is its height
+in lines (2–30, default 8). Its value may hold 200,000 characters (a one-line field 100,000); the
+dialog gets wider for it. Other field kinds ignore the keys (a password box stays on one line);
+keys of the wrong type make the dialog malformed.
+
+```json
+{"id": "code", "label": "R code", "value": "m <- lm(y ~ x)\nsummary(m)", "multiline": true, "code": true, "rows": 10}
+```
+
+**Literal text (`literalValues`).** `text.insert {text, literal: true}` puts the text in exactly as
+given: no smart quotes, AutoCorrect or AutoFormat as you type (lists from `1. ` or `* `, dashes
+from `--`), and paragraph breaks (`\r`) separate paragraphs as pasted text does rather than as
+Enter presses, so an empty list item doesn't end the list. `raw: true` (already there) skips the
+automatic changes the same way. Without either, `text.insert` types as the keyboard does.
+
+**Not applicable.** `functionDocument`, `openedBeforeCalc`, `emptyResult` and `invalidate` concern
+formula functions, which only GridCraft has (WordCraft's table formulas and fields never call an
+add-in), so WordCraft doesn't list them. `documentOpened` keeps protocol 1.2's timing: sent after
+the document opened, never holding it up. `host/functions/invalidate` is answered as an unknown
+method (`-32601`), during a command, an event or on the push channel.
 
 ## Office add-ins
 
@@ -564,6 +603,7 @@ in the zip are kept.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | Protocol 2.2 (shared, craft-collab `docs/protocol-2.2.md`): `host.protocol` `"2.2"`; `id` in `context.document` and the document events; multi-line and code form fields (`multiline`); `text.insert {literal: true}` (`literalValues`); the formula-function features don't apply |
 | 2026-10-15 | minor | Office add-ins ([officejs.md](officejs.md)): Microsoft's `office.js` defused in the page and the globals made irreplaceable; function commands run end to end (`Office.actions.associate`, the control id as `event.source.id`, `event.completed()`, a 5-minute limit); CSS colour names; `set()`, `insertBreak`, strikethrough and sub/superscript; `DocumentSelectionChanged`; common-API enums; late `Office.initialize` |
 | 2026-10-15 | minor | Manifest 1.3 (shared with GridCraft and DeckCraft): `requires` (apps, protocol, features, other add-ins with Cargo-style version ranges), blocked add-ins (`state`, `blockedBy`, `requiredBy`), start order, `host.protocol` and `addins` in `initialize`, `plugins.requirements`, `plugins.installMissing`, `plugins.install` `github`/`withRequirements`/`force`/`version` (newest release in range), `plugins.load` `force`, Install Missing, asking before turning off a needed add-in or updating out of range; Office add-ins' `<Requirements>` sets and methods checked |
 | 2026-10-15 | minor | Protocol 2 (2.0.1, shared with GridCraft and DeckCraft): the push channel (standard output read all the time, notifications and anytime requests, 64 MiB lines, flood cut-off), `host.features` `push`/`collab` and `host.collab`, manifest `collab` for transports, `collab.join` in command answers; live sessions in [collab.md](collab.md) |

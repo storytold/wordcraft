@@ -59,12 +59,16 @@ pub use process::{Connection, HostError, HostHandler, Notifier, RequestError};
 /// without changing it; a plugin checks `host.features` instead.
 pub const PROTOCOL_VERSION: u32 = 1;
 /// The plugin protocol this host speaks, as manifests' `requires.protocol` is checked against
-/// (`initialize`'s `host.protocol`): protocol 2 (the push channel), with manifests 1.3.
-pub const PROTOCOL: &str = "2.0";
+/// (`initialize`'s `host.protocol`): protocol 2 (the push channel), with manifests 1.3, and the
+/// additions of 2.2 that apply to a word processor (the document `id`, multi-line form fields,
+/// literal text). 2.2's formula-function additions are GridCraft's and aren't announced here.
+pub const PROTOCOL: &str = "2.2";
 /// What this host does beyond protocol 1.1 (`initialize`'s `host.features`): host drawn dialogs,
 /// opening files, document events and `context.document` (protocol 1.2); the push channel and
-/// co-editing (protocol 2).
-pub const FEATURES: &[&str] = &["dialogs", "open", "events", "document", "push", "collab"];
+/// co-editing (protocol 2); multi-line form fields and `text.insert {literal: true}` (2.2).
+/// Exactly what's implemented: no `functionDocument`, `openedBeforeCalc`, `emptyResult` or
+/// `invalidate` (WordCraft has no plugin functions).
+pub const FEATURES: &[&str] = &["dialogs", "open", "events", "document", "push", "collab", "multiline", "literalValues"];
 /// This app's id in a manifest's `apps` and `uiFor`, and in `initialize`'s `host.id`.
 pub const HOST_ID: &str = "wordcraft";
 /// This app's name in `initialize`'s `host.name`.

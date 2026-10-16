@@ -20,6 +20,11 @@ use crate::CmdError;
 /// another document, even across sessions.
 static NEXT_DOCUMENT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// A document's id as add-ins see it (plugin protocol 2.2): `doc-3`.
+pub fn plugin_document_id(id: u64) -> String {
+    format!("doc-{id}")
+}
+
 pub(super) fn next_document_id() -> u64 {
     NEXT_DOCUMENT_ID.fetch_add(1, Ordering::Relaxed)
 }
@@ -530,11 +535,12 @@ impl Session {
     /// active document; what a window does then is the front end's choice. An id that isn't
     /// open is an error.
     pub fn close_document(&mut self, id: u64) -> Result<(), CmdError> {
-        // Add-ins that listen hear that the document's file closed (protocol 1.2's documentClosed).
+        // Add-ins that listen hear that the document's file closed (protocol 1.2's documentClosed,
+        // with the document's own id, 2.2).
         let closed = self.documents().into_iter().find(|d| d.id == id).and_then(|d| d.path);
         let notify = |path: Option<PathBuf>| {
             if let Some(path) = path {
-                crate::cmd::plugins::notify(wordcraft_plugin::DocumentEvent::Closed, &path);
+                crate::cmd::plugins::notify(wordcraft_plugin::DocumentEvent::Closed, &path, &plugin_document_id(id));
             }
         };
         if id != self.document_id {

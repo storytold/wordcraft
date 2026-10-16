@@ -1060,6 +1060,9 @@ fn handle(s: &mut Session, p: Pushed) -> bool {
                 Ok(json!({}))
             }
             "collab/snapshot" => snapshot(s, &p.plugin, &params),
+            // Protocol 2.2's invalidation is for formula functions, which WordCraft doesn't have:
+            // unknown here as everywhere (not "not now").
+            "host/functions/invalidate" => Err(wordcraft_plugin::HostError::unknown()),
             m if m.starts_with("host/") => Err(wordcraft_plugin::HostError {
                 code: -32000,
                 message: format!("{m} is only available while the add-in runs a command"),
