@@ -299,6 +299,8 @@ pub struct Part {
 pub struct TextBody {
     pub vert: props::TextVert,
     pub anchor: props::VAlign,
+    /// `a:bodyPr/@upright`: text stays upright when its shape turns.
+    pub upright: bool,
     /// Create Link: the text box (another `TextBox` part, shown by its own shape) the text
     /// continues in when it doesn't fit this one. The linked box shows the rest of this box's
     /// story; its own blocks are unused. See [`Document::text_box_chains`].

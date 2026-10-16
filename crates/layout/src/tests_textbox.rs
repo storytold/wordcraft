@@ -80,6 +80,41 @@ fn align_text_and_text_direction_place_the_text_in_the_box() {
 }
 
 #[test]
+fn rotated_group_text_turns() {
+    for grouped in [false, true] {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "Heading", 70.0, 15.0, TextBody::default());
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        let mut shape = p.objects[0].clone();
+        shape.float_mut().unwrap().set_spin(Spin::new(-90.0, false, false));
+        p.objects[0] = if grouped {
+            InlineObject::Group {
+                w: 100.0,
+                h: 100.0,
+                float: Default::default(),
+                ch_w: 100.0,
+                ch_h: 100.0,
+                children: vec![wordcraft_doc::para::GroupChild { x: 15.0, y: 40.0, obj: shape }],
+                canvas: None,
+            }
+        } else {
+            shape
+        };
+        let l = lay(&d);
+        assert_eq!(lines(&l, id)[0].2, TextDirection::Up, "grouped={grouped}");
+    }
+}
+
+#[test]
+fn upright_box_text_stays() {
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "Heading", 70.0, 15.0, TextBody { upright: true, ..Default::default() });
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.objects[0].float_mut().unwrap().set_spin(Spin::new(90.0, false, false));
+    assert_eq!(lines(&lay(&d), id)[0].2, TextDirection::Horizontal);
+}
+
+#[test]
 fn linked_boxes_continue_the_text() {
     let mut d = Document::from_text("one\ntwo");
     let text = "Words that run on well past the first little box. ".repeat(6);
