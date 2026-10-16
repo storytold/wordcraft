@@ -59,6 +59,10 @@ pub struct ColumnBlock {
     /// Set when the block is whole table cells (Select Cell, Row, Column or Table, or the mouse in
     /// a table's selection areas): one segment per paragraph of the cells.
     pub cells: Option<CellRange>,
+    /// Set when the block is pieces of text selected one after another with Ctrl/⌘ held
+    /// (`select.add`, #1031): each piece as it was made, in the order it was added; the last is
+    /// `sel`. Empty for a column block or whole cells.
+    pub ranges: Vec<Selection>,
 }
 
 /// Whole table cells selected: rows `rows.0..=rows.1` and every cell of them that reaches into
