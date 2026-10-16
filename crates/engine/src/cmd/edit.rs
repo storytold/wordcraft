@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
-use wordcraft_doc::{Pos, StoryRef};
+use wordcraft_doc::{Path, Pos, StoryRef};
 
 use super::{delete_selection, find_pattern, pos_json, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -27,8 +27,9 @@ fn undo_to(s: &mut Session, v: &Value) -> CmdResult {
     Ok(r)
 }
 
+/// Something to cut: text, or whole table cells (an empty cell's selection has no length, #1744).
 fn has_sel(s: &Session) -> Option<&'static str> {
-    if s.sel.is_collapsed() { Some("nothing is selected") } else { None }
+    if s.sel.is_collapsed() && s.cell_range().is_none() { Some("nothing is selected") } else { None }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -155,11 +156,25 @@ pub fn specs() -> Vec<CommandSpec> {
 }
 
 fn copy(s: &mut Session, _: &Value) -> CmdResult {
+    let whole = super::table::selected_table(s);
+    copy_with(s, whole.as_ref())
+}
+
+/// Copy, `whole` being the table the selection covers whole, if it does.
+fn copy_with(s: &mut Session, whole: Option<&Path>) -> CmdResult {
     let (a, b) = s.sel.ordered();
-    if a == b {
-        return Ok(json!({"text": ""}));
-    }
-    let f = s.doc.copy_range(&a, &b);
+    // Whole table cells selected copy as a table, even empty ones (their selection has no
+    // length): the whole table, or a table of just the selected rows or cells (#1744).
+    let table = match (whole, s.cell_range()) {
+        (Some(tp), _) => s.doc.copy_block(a.story, tp),
+        (None, Some(r)) => s.doc.copy_table_cells(r.story, &r.table, r.rows, r.cols),
+        (None, None) => None,
+    };
+    let f = match table {
+        Some(f) => f,
+        None if a == b => return Ok(json!({"text": ""})),
+        None => s.doc.copy_range(&a, &b),
+    };
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
@@ -176,8 +191,26 @@ pub(crate) fn copy_result(s: &mut Session) -> Value {
     if s.clipboard_html.is_empty() { json!({"text": s.clipboard_text}) } else { json!({"text": s.clipboard_text, "html": s.clipboard_html}) }
 }
 
-fn cut(s: &mut Session, v: &Value) -> CmdResult {
-    let r = copy(s, v)?;
+fn cut(s: &mut Session, _: &Value) -> CmdResult {
+    let whole = super::table::selected_table(s);
+    let r = copy_with(s, whole.as_ref())?;
+    // A whole table selected: Cut removes the table, as Delete Table does (#1744). With Track
+    // Changes on, the cut below marks its text deleted (a tracked cut may become a move).
+    if !s.doc.settings.track_changes
+        && let Some(tp) = &whole
+    {
+        super::table::delete_table_at(s, tp)?;
+        super::controls::restore_placeholder(s)?;
+        return Ok(r);
+    }
+    // Whole rows or some cells: their text goes, the rows and cells stay, as in Word.
+    if whole.is_none()
+        && let Some(range) = s.cell_range().cloned()
+    {
+        super::table::clear_cells(s, &range)?;
+        super::controls::restore_placeholder(s)?;
+        return Ok(r);
+    }
     // A tracked cut of a paragraph or sentence may become a move when pasted.
     if !super::moves::cut_tracked(s)? {
         delete_selection(s)?;
