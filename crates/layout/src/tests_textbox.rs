@@ -178,3 +178,91 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     let (shown, ..) = two(20.0, TextBody { inset: Some([u32::MAX; 4]), ..Default::default() });
     assert!(shown >= 1);
 }
+
+fn auto_fit_case(body: TextBody, wrap: Wrap, h: f32) -> (Document, u32) {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("");
+    let id = text_box(&mut d, 0, "First\nSecond\nThird", 180.0, h, body);
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    p.props.line_spacing = Some(LineSpacing::Exactly(16.0));
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let InlineObject::Shape { float, .. } = &mut p.objects[0] else { panic!("shape") };
+    *float = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 100.0, ..Default::default() };
+    (d, id)
+}
+
+#[test]
+fn auto_fit_grows_shape_frame() {
+    let body = TextBody { auto_fit: true, inset: Some([25_400; 4]), ..Default::default() };
+    let (d, id) = auto_fit_case(body, Wrap::InFrontOfText, 14.0);
+    let l = lay(&d);
+    let r = frame_of(&l, id);
+    assert!((r.h - 52.0).abs() < 0.01, "three exact16pt lines plus 2pt top/bottom margins: {r:?}");
+    assert_eq!((r.x, r.y, r.w), (72.0, 100.0, 180.0));
+    let painted = l.pages[0].items.iter().find_map(|it| match it {
+        Placed::Shape { rect, .. } if *rect == r => Some(*rect),
+        _ => None,
+    });
+    assert_eq!(painted, Some(r), "shape paint and object hit frame use the same fitted size");
+}
+
+#[test]
+fn auto_fit_wraps_at_fitted_edge() {
+    let body = TextBody { auto_fit: true, inset: Some([25_400; 4]), ..Default::default() };
+    let (mut d, id) = auto_fit_case(body, Wrap::TopAndBottom, 14.0);
+    d.body.extend(Document::from_text(&"Text below the resized shape. ".repeat(50)).body);
+    let l = lay(&d);
+    let r = frame_of(&l, id);
+    assert!((r.h - 52.0).abs() < 0.01);
+    let mut below = false;
+    for it in &l.pages[0].items {
+        let Placed::Lines { story: StoryRef::Body, para, l0, l1, y, .. } = it else { continue };
+        let first = &para.lines[*l0];
+        for line in &para.lines[*l0..*l1] {
+            let top = y + line.top - first.top;
+            assert!(top + line.height <= r.y + 0.01 || top >= r.bottom() - 0.01, "line at {top} overlaps fitted frame {r:?}");
+            below |= top >= r.bottom() - 0.01;
+        }
+    }
+    assert!(below);
+}
+
+#[test]
+fn fixed_shape_keeps_frame_height() {
+    for h in [14.0, 80.0] {
+        let (d, id) = auto_fit_case(TextBody { inset: Some([25_400; 4]), ..Default::default() }, Wrap::InFrontOfText, h);
+        assert_eq!(frame_of(&lay(&d), id).h, h);
+    }
+}
+
+#[test]
+fn auto_fit_shrinks_shape_frame() {
+    let body = TextBody { auto_fit: true, inset: Some([25_400; 4]), ..Default::default() };
+    let (mut d, id) = auto_fit_case(body, Wrap::InFrontOfText, 80.0);
+    let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+    let props = p.props.clone();
+    *p = Paragraph::with_text("Short", Default::default());
+    p.props = props;
+    assert!((frame_of(&lay(&d), id).h - 20.0).abs() < 0.01);
+}
+
+#[test]
+fn auto_fit_includes_outline() {
+    use wordcraft_doc::props::Rgb;
+    let body = TextBody { auto_fit: true, inset: Some([25_400; 4]), ..Default::default() };
+    for (height, text, expected) in [(14.0, "First\nSecond\nThird", 53.0), (80.0, "Short", 21.0)] {
+        let (mut d, id) = auto_fit_case(body, Wrap::InFrontOfText, height);
+        let p = d.para_mut(StoryRef::Part(id), &Path::top(0)).unwrap();
+        let props = p.props.clone();
+        *p = Paragraph::with_text(text, Default::default());
+        p.props = props;
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        let InlineObject::Shape { stroke, stroke_width, .. } = &mut p.objects[0] else { panic!("shape") };
+        *stroke = Some(Rgb(0, 0, 0));
+        *stroke_width = 1.0;
+        assert!((frame_of(&lay(&d), id).h - expected).abs() < 0.01);
+    }
+}

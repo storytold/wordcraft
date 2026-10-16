@@ -95,6 +95,34 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
     layout_box(ctx, story, blocks, &[], len, BoxContext::Other, depth + 1, None).items
 }
 
+/// Measure an unlinked horizontal auto-fit shape before positioning and wrapping it.
+pub(super) fn fit_size(ctx: &mut Ctx, obj: &wordcraft_doc::para::InlineObject, w: f32, h: f32, depth: usize) -> (f32, f32) {
+    let Some(id) = obj.text_box() else { return (w, h) };
+    let Some(part) = ctx.doc.parts.get(&id) else { return (w, h) };
+    let body = part.body;
+    if !body.auto_fit || body.vert != TextVert::Horz {
+        return (w, h);
+    }
+    ctx.chains.build(ctx.doc);
+    if ctx.chains.member.contains_key(&id) || !ctx.boxes.enter(id) {
+        return (w, h);
+    }
+    let blocks = part.blocks.clone();
+    let (len, _) = frame(&body, w, h);
+    let counters = ctx.counters.clone();
+    let eq_count = ctx.eq_count;
+    let items = lay(ctx, id, &blocks, len, body.vert, depth);
+    (ctx.counters, ctx.eq_count) = (counters, eq_count);
+    ctx.boxes.leave();
+    let [_, top, _, bottom] = body.insets_pt();
+    // Word fits the frame to the text and both margins, including a visible outline's width.
+    let outline = match obj {
+        wordcraft_doc::para::InlineObject::Shape { stroke: Some(_), stroke_width, .. } => wordcraft_geom::finite(*stroke_width).max(0.0),
+        _ => 0.0,
+    };
+    (w, extent(&items) + top + bottom + outline)
+}
+
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
 /// share of a linked chain's, cut to what fits, aligned and turned as the box says.
 pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {

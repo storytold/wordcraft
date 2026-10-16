@@ -1096,6 +1096,7 @@ fn layout_box(
                     if left_out(oi) {
                         continue;
                     }
+                    let (w, h) = textbox::fit_size(ctx, o, w, h, depth);
                     let r = float_rect(frame, (0.0, width), y, w, h, float);
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
@@ -2877,6 +2878,7 @@ fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             rects.insert(oi, r);
@@ -2949,7 +2951,10 @@ fn place_objects(
                 continue;
             }
             let rect = if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                floats.get(&oi).copied().unwrap_or_else(|| {
+                    let (w, h) = textbox::fit_size(ctx, obj, w, h, depth);
+                    float_rect(at.page, at.col, at.para_y, w, h, float)
+                })
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
