@@ -817,6 +817,12 @@ impl Session {
         Arc::new(wordcraft_layout::layout(&self.doc, &mut LayoutCache::new(), &opts))
     }
 
+    /// The paragraph layout cache's running (hits, misses): a miss is a paragraph laid out
+    /// afresh. Benchmarks and performance tests read it to count work, not wall time.
+    pub fn layout_cache_stats(&self) -> (u64, u64) {
+        (self.cache.hits, self.cache.misses)
+    }
+
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
         self.layout = None;
