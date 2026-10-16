@@ -161,7 +161,7 @@ fn list_marker(t: &str) -> Option<Marker> {
         (Marker { ordered: true, ch: d, len: digits + 1, start }, digits + 1)
     };
     let rest = t.get(len..)?;
-    if rest.is_empty() || rest.starts_with(' ') { Some(m) } else { None }
+    if rest.is_empty() || rest.starts_with([' ', '\t']) { Some(m) } else { None }
 }
 
 fn split_row(l: &str) -> Vec<String> {
@@ -421,6 +421,33 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
     out
 }
 
+fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
+    let mut cols = 0;
+    let mut bytes = 0;
+    let mut rest = after;
+    while let Some(c) = rest.chars().next() {
+        match c {
+            ' ' => {
+                cols += 1;
+                bytes += 1;
+                rest = &rest[1..];
+                if cols >= 4 {
+                    break;
+                }
+            }
+            '\t' => {
+                let col = ind + marker_len + cols;
+                let n = 4 - col % 4;
+                cols += n;
+                bytes += 1;
+                break;
+            }
+            _ => break,
+        }
+    }
+    (cols, bytes)
+}
+
 /// Parse a list starting at `lines[i]`; returns the index after it.
 fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>) -> usize {
     let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start())) else { return i + 1 };
@@ -435,13 +462,16 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             break;
         }
         let after = t.get(m.len..).unwrap_or("");
-        let spaces = indent(after);
-        let content_indent = if is_blank(after) || spaces > 4 { ind + m.len + 1 } else { ind + m.len + spaces };
-        let mut item: Vec<String> =
-            vec![if is_blank(after) { String::new() } else { after.get(spaces.min(4).min(after.len())..).unwrap_or("").to_string() }];
-        if spaces > 4 {
-            item[0] = after.get(1..).unwrap_or("").to_string();
-        }
+        let (spaces, skip) = if indent(after) > 4 {
+            (1, 1)
+        } else if after.starts_with([' ', '\t']) {
+            marker_space(ind, m.len, after)
+        } else {
+            (0, 0)
+        };
+        let content_indent = if is_blank(after) { ind + m.len + 1 } else { ind + m.len + spaces };
+        let item0 = if is_blank(after) { String::new() } else { after.get(skip.min(after.len())..).unwrap_or("").to_string() };
+        let mut item: Vec<String> = vec![item0];
         i += 1;
         while let Some(l) = lines.get(i) {
             if is_blank(l) {
@@ -1082,13 +1112,17 @@ fn escape_line_start(s: String) -> String {
         || t.starts_with('>')
         || t.starts_with("- ")
         || t.starts_with("+ ")
+        || t.starts_with("-\t")
+        || t.starts_with("+\t")
         || t == "-"
         || t == "+"
         || t.starts_with('=')
         || thematic_break(t)
         || {
             let d = t.chars().take_while(|c| c.is_ascii_digit()).count();
-            d > 0 && t.get(d..).is_some_and(|r| r.starts_with(". ") || r.starts_with(") ") || r == "." || r == ")")
+            d > 0
+                && t.get(d..)
+                    .is_some_and(|r| r.starts_with(". ") || r.starts_with(") ") || r.starts_with(".\t") || r.starts_with(")\t") || r == "." || r == ")")
         };
     if !needs {
         return if cols > 3 || lead.contains('\t') { format!("{indent}{t}") } else { s };
@@ -1680,4 +1714,22 @@ mod tests {
         assert_eq!(back_table2.rows[1][0].text(), "a`b|c");
         assert_eq!(back_table2.rows[1][1].text(), "CRITICAL_DISTINCTIVE_INFO");
     }
+
+    #[test]
+    fn tab_separated_list_markers() {
+        let f = parse("-\tbullet item\n*\tstar item\n+\tplus item\n1.\tone item\n2)\ttwo item\n");
+        assert_eq!(f.blocks.len(), 5);
+        for (i, b) in f.blocks.iter().enumerate() {
+            let FBlock::Para(p) = b else { panic!("block {i} not a para") };
+            assert!(p.list.is_some(), "block {i} should be a list item: {:?}", p);
+        }
+        let FBlock::Para(p0) = &f.blocks[0] else { panic!() };
+        assert_eq!(p0.text(), "bullet item");
+        assert_eq!(p0.list.unwrap().ordered, false);
+
+        let FBlock::Para(p3) = &f.blocks[3] else { panic!() };
+        assert_eq!(p3.text(), "one item");
+        assert_eq!(p3.list.unwrap().ordered, true);
+    }
 }
+
