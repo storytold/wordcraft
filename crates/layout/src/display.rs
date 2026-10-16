@@ -629,6 +629,15 @@ fn lines(
 ) {
     let Some(first) = pl.lines.get(l0) else { return };
     let para = doc.para(story, path);
+    // Inside a text box whose shape style gives its text a colour, that is what automatic means.
+    let auto = match story {
+        StoryRef::Part(id) => doc.parts.get(&id).and_then(|p| p.body.auto_color),
+        StoryRef::Body => None,
+    };
+    let ink = |c: &TextColor, background: Option<Rgb>| match (c, auto) {
+        (TextColor::Auto, Some(rgb)) => rgb,
+        _ => text_color(c, background),
+    };
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
         let top = y + (line.top - first.top);
@@ -709,7 +718,7 @@ fn lines(
                     face: st.face,
                     size: st.size,
                     glyphs: lab.glyphs.get(run.glyphs.clone()).into_iter().flatten().map(|g| (g.gid, gx + g.dx, base - st.shift - g.dy)).collect(),
-                    color: text_color(&st.rc.color, None),
+                    color: ink(&st.rc.color, None),
                     alpha,
                     synth_bold: st.synth_bold,
                     synth_italic: st.synth_italic,
@@ -729,7 +738,7 @@ fn lines(
                 face: st.face,
                 size: st.size,
                 glyphs: vec![(gid, hx, base - st.shift)],
-                color: text_color(&st.rc.color, None),
+                color: ink(&st.rc.color, None),
                 alpha,
                 synth_bold: st.synth_bold,
                 synth_italic: st.synth_italic,
@@ -848,7 +857,7 @@ fn lines(
                 (Some(_), _) if moved_to => MOVE_COLOR,
                 (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
                 (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
-                _ => text_color(&rc.color, rc.shading.or(rc.highlight)),
+                _ => ink(&rc.color, rc.shading.or(rc.highlight)),
             };
             // The highlight or shading drawn under this run (as filled in the backgrounds pass).
             let text_bg = rc.highlight.or(rc.shading);
@@ -1003,7 +1012,7 @@ fn lines(
                 face: st.face,
                 size: st.size,
                 glyphs,
-                color: text_color(&st.rc.color, None),
+                color: ink(&st.rc.color, None),
                 alpha,
                 synth_bold: false,
                 synth_italic: false,
@@ -1053,7 +1062,7 @@ fn lines(
                 rect,
                 kind: e.kind,
                 fill: None,
-                stroke: Some(text_color(&st.rc.color, None)),
+                stroke: Some(ink(&st.rc.color, None)),
                 stroke_width: e.stroke,
                 effects: Default::default(),
                 corner: None,
@@ -1078,7 +1087,7 @@ fn lines(
                     face: st.face,
                     size: st.size,
                     glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
-                    color: text_color(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
+                    color: ink(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
                     alpha,
                     synth_bold: st.synth_bold,
                     synth_italic: st.synth_italic,

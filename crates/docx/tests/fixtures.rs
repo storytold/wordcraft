@@ -616,6 +616,26 @@ fn chart_and_diagram_drawings_are_graphic_objects() {
     }
 }
 
+/// `wp:anchor/@relativeHeight` is the stacking order of floating objects; it is read, and
+/// written back as read, so a panel listed after its text boxes still stays below them.
+/// A text box shape's style text colour (`wps:style/a:fontRef`) is kept on its story, as what
+/// automatic text colour means inside it; a box without one has none.
+#[test]
+fn a_text_box_s_style_font_colour_is_read() {
+    let shape = |style: &str| {
+        format!(
+            r#"<w:r><w:drawing><wp:anchor behindDoc="0"><wp:positionH relativeFrom="column"><wp:posOffset>0</wp:posOffset></wp:positionH><wp:positionV relativeFrom="paragraph"><wp:posOffset>0</wp:posOffset></wp:positionV><wp:extent cx="1270000" cy="635000"/><wp:wrapNone/><wp:docPr id="1" name="S"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr>{style}<wps:txbx><w:txbxContent><w:p><w:r><w:t>In the box</w:t></w:r></w:p></w:txbxContent></wps:txbx><wps:bodyPr/></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>"#
+        )
+    };
+    let style = r#"<wps:style><a:lnRef idx="2"><a:srgbClr val="000000"/></a:lnRef><a:fillRef idx="1"><a:srgbClr val="203040"/></a:fillRef><a:effectRef idx="0"><a:srgbClr val="000000"/></a:effectRef><a:fontRef idx="minor"><a:srgbClr val="FFFFFF"/></a:fontRef></wps:style>"#;
+    let d = read_body(&format!("<w:p>{}{}</w:p>", shape(style), shape("")));
+    let boxes: Vec<_> =
+        paras(&d)[0].objects.iter().filter_map(|o| if let InlineObject::Shape { story: Some(id), .. } = o { Some(*id) } else { None }).collect();
+    let [styled, plain] = boxes.as_slice() else { panic!("{boxes:?}") };
+    assert_eq!(d.parts[styled].body.auto_color, Some(Rgb(0xFF, 0xFF, 0xFF)));
+    assert_eq!(d.parts[plain].body.auto_color, None);
+}
+
 #[test]
 fn a_chart_part_is_built_once_and_only_through_a_chart_relationship() {
     let chart = r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart><c:plotArea><c:barChart><c:ser><c:val><c:numLit><c:ptCount val="2"/><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>2</c:v></c:pt></c:numLit></c:val></c:ser></c:barChart></c:plotArea></c:chart></c:chartSpace>"#;
