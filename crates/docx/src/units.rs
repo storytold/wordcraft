@@ -60,7 +60,10 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => {
+            let s = v.trim();
+            s != "0" && !s.eq_ignore_ascii_case("false") && !s.eq_ignore_ascii_case("off")
+        }
     }
 }
 
@@ -100,5 +103,25 @@ mod tests {
         assert_eq!(measure("x", 20.0), None);
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
+    }
+
+    #[test]
+    fn on_off_parsing() {
+        let el = |val: Option<&str>| {
+            let attr = val.map(|v| format!(r#"w:val="{v}""#)).unwrap_or_default();
+            crate::xml::parse(format!(r#"<w:b xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" {attr}/>"#).as_bytes()).unwrap()
+        };
+        assert!(on_off(&el(None)));
+        assert!(on_off(&el(Some("1"))));
+        assert!(on_off(&el(Some("true"))));
+        assert!(on_off(&el(Some("on"))));
+        assert!(on_off(&el(Some("ON"))));
+        assert!(!on_off(&el(Some("0"))));
+        assert!(!on_off(&el(Some("false"))));
+        assert!(!on_off(&el(Some("FALSE"))));
+        assert!(!on_off(&el(Some("False"))));
+        assert!(!on_off(&el(Some("off"))));
+        assert!(!on_off(&el(Some("OFF"))));
+        assert!(!on_off(&el(Some("  off  "))));
     }
 }

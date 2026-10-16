@@ -480,7 +480,12 @@ pub fn look(e: &El) -> TableLook {
         l.banded_rows = bits & 0x0200 == 0;
         l.banded_columns = bits & 0x0400 == 0;
     }
-    let b = |name: &str| e.attr(name).map(|v| !matches!(v, "0" | "false" | "off"));
+    let b = |name: &str| {
+        e.attr(name).map(|v| {
+            let s = v.trim();
+            s != "0" && !s.eq_ignore_ascii_case("false") && !s.eq_ignore_ascii_case("off")
+        })
+    };
     if let Some(v) = b("w:firstRow") {
         l.header_row = v;
     }
