@@ -1436,7 +1436,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         && resp.contains_pointer()
         && !ui.input(|i| i.pointer.latest_pos()).is_some_and(|p| over_balloon(app, p))
     {
-        deselect_balloon(app, ui.ctx());
+        deselect_balloon(app);
     }
     // Space and Enter also set `Response::clicked` on a focused click-sensing widget
     // (egui's fake primary click). `request_focus` always interrupts IME; on X11 that
@@ -1619,7 +1619,7 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
     let mw = markup_width(app);
     let float = floating_comments(app);
     if app.canvas.balloon.is_some_and(|id| (mw <= 0.0 && !float) || !app.session.doc.comments.contains_key(&id)) {
-        deselect_balloon(app, ui.ctx());
+        deselect_balloon(app);
     }
     if mw <= 0.0 && !float {
         return;
@@ -1806,7 +1806,7 @@ fn balloons(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, rects: &[Re
         }
     }
     if let Some((id, p)) = clicked {
-        select_balloon(app, ui.ctx(), id);
+        select_balloon(app, id);
         app.session.sel = wordcraft_engine::Selection::caret(p);
     }
 }
@@ -1992,7 +1992,7 @@ fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, id: u
         let _ = app.run("review.resolveComment", json!({"id": id}));
     }
     if delete {
-        deselect_balloon(app, ui.ctx());
+        deselect_balloon(app);
         let _ = app.run("review.deleteComment", json!({"id": id}));
     }
     card
@@ -2000,11 +2000,11 @@ fn active_balloon(app: &mut WordApp, ui: &mut Ui, painter: &egui::Painter, id: u
 
 /// Select a comment's balloon (its text gets the keyboard), writing back any edit in the one
 /// selected before.
-pub fn select_balloon(app: &mut WordApp, ctx: &egui::Context, id: u32) {
+pub fn select_balloon(app: &mut WordApp, id: u32) {
     if app.canvas.balloon == Some(id) {
         return;
     }
-    deselect_balloon(app, ctx);
+    deselect_balloon(app);
     app.canvas.balloon = Some(id);
     app.canvas.balloon_focus = true;
     app.canvas.balloon_h = 0.0;
@@ -2017,16 +2017,17 @@ fn over_balloon(app: &WordApp, p: Pos2) -> bool {
 
 /// Leave the selected balloon, writing back what was typed in it (its fields may not be drawn
 /// again to notice they lost focus).
-pub fn deselect_balloon(app: &mut WordApp, ctx: &egui::Context) {
+pub fn deselect_balloon(app: &mut WordApp) {
     let Some(id) = app.canvas.balloon.take() else { return };
     app.canvas.balloon_reply = false;
     app.canvas.balloon_focus = false;
     let thread: Vec<u32> =
         std::iter::once(id).chain(app.session.doc.comments.iter().filter(|(_, c)| c.parent == Some(id)).map(|(k, _)| *k)).collect();
     for c in thread {
-        crate::panes::commit_comment(app, ctx, c);
+        // A refusal is on the status line; the draft stays for when the balloon is selected again.
+        let _ = crate::panes::commit_comment(app, c);
     }
-    crate::panes::commit_reply(app, ctx, id);
+    let _ = crate::panes::commit_reply(app, id);
 }
 
 fn dashed(p: &egui::Painter, a: Pos2, b: Pos2, s: Stroke) {
@@ -3656,10 +3657,7 @@ mod tests {
             h.step();
         }
         assert_eq!(h.state().session.undo_depth(), depth, "nothing is written while typing");
-        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
-        for _ in 0..3 {
-            h.step();
-        }
+        leave_field(&mut h);
         let part = h.state().session.doc.comments[&id].part;
         let text = h.state().session.doc.plain_text(StoryRef::Part(part));
         assert!(text.contains("Edited twice") && text.contains("Original"), "{text:?}");
@@ -3737,6 +3735,221 @@ mod tests {
         double_click(&mut h, body);
         assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
         assert_eq!(h.state().session.doc.plain_text(footer), "Page foot");
+    }
+
+    /// #513: right-clicking a picture selects it and offers Wrap Text, as in Word; choosing
+    /// Square there wraps text around it.
+    /// #1348: an app with one comment ("Original") on some text, its balloon on screen.
+    fn comment_harness() -> (egui_kittest::Harness<'static, WordApp>, u32) {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Some text here"})).unwrap();
+        a.run("select.text", json!({"text": "text"})).unwrap();
+        let id = a.run("review.newComment", json!({"text": "Original"})).unwrap()["id"].as_u64().unwrap() as u32;
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        (h, id)
+    }
+
+    /// Click comment `id`'s balloon (from no selected balloon), so its text has the keyboard.
+    fn click_balloon(h: &mut egui_kittest::Harness<'static, WordApp>, id: u32) {
+        h.state_mut().canvas.balloon = None;
+        for _ in 0..2 {
+            h.step();
+        }
+        let card = h.state().canvas.balloon_rects.iter().find(|(i, _)| *i == id).map(|(_, r)| *r).expect("the comment has a balloon");
+        let at = card.left_top() + vec2(30.0, 8.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(h.state().canvas.balloon, Some(id), "the click selected the balloon");
+    }
+
+    fn type_in(h: &mut egui_kittest::Harness<'static, WordApp>, text: &str) {
+        h.event(egui::Event::Text(text.into()));
+        h.step();
+    }
+
+    /// Leave the comment field by clicking on the page (which also leaves the balloon).
+    fn leave_field(h: &mut egui_kittest::Harness<'static, WordApp>) {
+        let at = h.state().canvas.page_rects[0].center();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        for _ in 0..3 {
+            h.step();
+        }
+    }
+
+    fn press_escape(h: &mut egui_kittest::Harness<'static, WordApp>) {
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        for _ in 0..3 {
+            h.step();
+        }
+    }
+
+    fn comment_text(app: &WordApp, id: u32) -> String {
+        let part = app.session.doc.comments[&id].part;
+        app.session.doc.plain_text(StoryRef::Part(part))
+    }
+
+    /// #1348: an edit the document refuses (here read-only protection) keeps what was typed and
+    /// says why; once the edit is allowed, leaving the field again writes it.
+    #[test]
+    fn a_refused_comment_edit_keeps_the_draft() {
+        let (mut h, id) = comment_harness();
+        click_balloon(&mut h, id);
+        type_in(&mut h, "Edited");
+        h.state_mut().session.doc.settings.protection = Some("readOnly".into());
+        leave_field(&mut h);
+        assert_eq!(comment_text(h.state(), id), "Original", "the protected document refused the edit");
+        let status = h.state().status_msg.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
+        assert!(status.contains("protected"), "the refusal is shown: {status:?}");
+        h.state_mut().session.doc.settings.protection = None;
+        click_balloon(&mut h, id);
+        leave_field(&mut h);
+        let text = comment_text(h.state(), id);
+        assert!(text.contains("Edited"), "the typed text survived the refusal: {text:?}");
+    }
+
+    /// #1348: a draft typed in one document never lands in another document's comment that happens
+    /// to have the same id.
+    #[test]
+    fn a_comment_draft_stays_with_its_document() {
+        let (mut h, id) = comment_harness();
+        click_balloon(&mut h, id);
+        type_in(&mut h, " stale");
+        // An agent replaces the document while the balloon is still being typed in.
+        h.state_mut().session.set_document(wordcraft_doc::Document::new());
+        let a = h.state_mut();
+        a.run("text.insert", json!({"text": "Other words here"})).unwrap();
+        a.run("select.text", json!({"text": "words"})).unwrap();
+        let fresh = a.run("review.newComment", json!({"text": "Fresh"})).unwrap()["id"].as_u64().unwrap() as u32;
+        assert_eq!(fresh, id, "the new document reuses the comment id");
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        for _ in 0..3 {
+            h.step();
+        }
+        click_balloon(&mut h, fresh);
+        leave_field(&mut h);
+        assert_eq!(comment_text(h.state(), fresh), "Fresh", "the old document's draft didn't leak in");
+    }
+
+    /// #1348: saving while a comment is still being typed in saves what was typed.
+    #[test]
+    fn saving_writes_a_pending_comment_draft_first() {
+        let (mut h, id) = comment_harness();
+        click_balloon(&mut h, id);
+        type_in(&mut h, "Typed ");
+        let path = std::env::temp_dir().join(format!("wordcraft-1348-save-{}.docx", std::process::id()));
+        h.state_mut().run("file.save", json!({"path": path.to_string_lossy()})).unwrap();
+        let text = comment_text(h.state(), id);
+        assert!(text.contains("Typed"), "the draft was written before saving: {text:?}");
+        assert!(!h.state().session.dirty, "and saved");
+        let saved = wordcraft_engine::io::open_path(&path).unwrap();
+        let _ = std::fs::remove_file(&path);
+        let part = saved.comments.values().next().expect("the comment was saved").part;
+        assert!(saved.plain_text(StoryRef::Part(part)).contains("Typed"), "the file has the typed text");
+    }
+
+    /// #1348: closing a document whose only change is a comment still being typed asks to save.
+    #[test]
+    fn closing_with_a_pending_comment_draft_asks_to_save() {
+        let (mut h, id) = comment_harness();
+        h.state_mut().session.dirty = false;
+        click_balloon(&mut h, id);
+        type_in(&mut h, "Typed ");
+        assert!(!h.state_mut().close_requested(), "the typed comment is an unsaved change");
+        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
+    }
+
+    /// #1348: a comment edit typed, then refused (the document became read-only).
+    fn refused_draft() -> (egui_kittest::Harness<'static, WordApp>, u32) {
+        let (mut h, id) = comment_harness();
+        h.state_mut().session.dirty = false;
+        click_balloon(&mut h, id);
+        type_in(&mut h, "Refused ");
+        h.state_mut().session.doc.settings.protection = Some("readOnly".into());
+        (h, id)
+    }
+
+    /// #1348: a draft the document refuses doesn't keep the window open: closing asks to save,
+    /// and Don't Save drops the draft and closes.
+    #[test]
+    fn a_refused_comment_draft_can_be_dropped_on_close() {
+        let (mut h, _) = refused_draft();
+        assert!(!h.state_mut().close_requested(), "the refused draft is an unsaved change");
+        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "the save prompt asks about it");
+        h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert!(h.state_mut().close_requested(), "Don't Save closes");
+    }
+
+    /// #1348: New with a refused draft asks to save; Don't Save makes the new document.
+    #[test]
+    fn a_refused_comment_draft_can_be_dropped_on_new() {
+        let (mut h, _) = refused_draft();
+        let document = h.state().session.document_id();
+        h.state_mut().run("file.new", json!({})).unwrap();
+        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "the save prompt asks about it");
+        h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert_ne!(h.state().session.document_id(), document, "Don't Save made the new document");
+    }
+
+    /// #1348: Save with a refused draft saves the rest of the document, keeps the draft and says why.
+    #[test]
+    fn saving_with_a_refused_comment_draft_saves_the_document() {
+        let (mut h, id) = refused_draft();
+        h.state_mut().session.dirty = true;
+        let path = std::env::temp_dir().join(format!("wordcraft-1348-refused-{}.docx", std::process::id()));
+        let r = h.state_mut().run("file.save", json!({"path": path.to_string_lossy()}));
+        let saved = wordcraft_engine::io::open_path(&path);
+        let _ = std::fs::remove_file(&path);
+        assert!(r.is_ok(), "{r:?}");
+        assert!(saved.is_ok(), "the document was saved");
+        assert!(!h.state().session.dirty);
+        assert!(crate::panes::comment_draft(h.state(), id).is_some_and(|d| d.contains("Refused")), "the draft stays");
+        let status = h.state().status_msg.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
+        assert!(status.contains("protected"), "the refusal is shown: {status:?}");
+    }
+
+    /// #1348: in a read-only document the comment fields can't be typed in.
+    #[test]
+    fn comment_fields_are_read_only_where_comments_cant_change() {
+        let (mut h, id) = comment_harness();
+        h.state_mut().session.doc.settings.protection = Some("readOnly".into());
+        h.step();
+        click_balloon(&mut h, id);
+        type_in(&mut h, "Typed ");
+        assert_eq!(crate::panes::comment_draft(h.state(), id), None, "nothing was typed");
+        assert_eq!(comment_text(h.state(), id), "Original");
+    }
+
+    /// #1348: Escape in a comment field throws the draft away and shows the comment's text again.
+    #[test]
+    fn escape_reverts_a_comment_draft() {
+        let (mut h, id) = comment_harness();
+        click_balloon(&mut h, id);
+        type_in(&mut h, "Discarded ");
+        press_escape(&mut h);
+        assert_eq!(crate::panes::comment_draft(h.state(), id), None, "the draft is gone");
+        assert_eq!(comment_text(h.state(), id), "Original", "nothing was written");
+        leave_field(&mut h);
+        assert_eq!(comment_text(h.state(), id), "Original", "and nothing is written later");
     }
 
     /// #513: right-clicking a picture selects it and offers Wrap Text, as in Word; choosing
