@@ -1151,22 +1151,33 @@ impl Exporter<'_> {
                 seg(s, -nx, -ny);
             }
             LineStyle::Wave => {
-                let (a, b) = (x0.min(x1), x0.max(x1));
                 let amp = (w * 1.2).max(0.8);
                 let step = amp * 2.0;
-                let mut pb = PathBuilder::new();
-                pb.move_to(a, y0);
-                let mut x = a;
-                let mut up = true;
-                while x < b && x - a < 20_000.0 {
-                    let nx = (x + step).min(b);
-                    pb.quad_to((x + nx) / 2.0, if up { y0 - amp } else { y0 + amp }, nx, y0);
-                    x = nx;
-                    up = !up;
-                }
-                s.set_stroke(Some(stroke(w * 0.8, None, LineCap::Round)));
-                if let Some(p) = pb.finish() {
-                    s.draw_path(&p);
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt();
+                if len >= 1e-3 {
+                    let (ux, uy) = (dx / len, dy / len);
+                    let (nx, ny) = (-uy, ux);
+                    let mut pb = PathBuilder::new();
+                    pb.move_to(x0, y0);
+                    let mut t = 0.0;
+                    let mut up = true;
+                    while t < len && t < 20_000.0 {
+                        let nt = (t + step).min(len);
+                        let mid_t = (t + nt) / 2.0;
+                        let sign = if up { -1.0 } else { 1.0 };
+                        let cx = x0 + ux * mid_t + nx * amp * sign;
+                        let cy = y0 + uy * mid_t + ny * amp * sign;
+                        let ex = x0 + ux * nt;
+                        let ey = y0 + uy * nt;
+                        pb.quad_to(cx, cy, ex, ey);
+                        t = nt;
+                        up = !up;
+                    }
+                    s.set_stroke(Some(stroke(w * 0.8, None, LineCap::Round)));
+                    if let Some(p) = pb.finish() {
+                        s.draw_path(&p);
+                    }
                 }
             }
         }

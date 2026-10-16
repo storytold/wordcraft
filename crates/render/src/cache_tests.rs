@@ -44,7 +44,8 @@ fn media_cache_counts_the_source_bytes_it_holds() {
 /// A wave stroke starting around 1e20 never advanced (`x + step == x`), pushing curves until memory ran out.
 #[test]
 fn wave_stroke_at_a_huge_coordinate_ends() {
-    assert!(wave_path(1e20, 2e20, 0.0, 1.0).elements().len() < 3);
-    assert!(wave_path(0.0, 1e20, 0.0, 1.0).elements().len() < 20_100);
-    assert!(wave_path(0.0, 100.0, 0.0, 1.0).elements().len() > 10);
+    assert!(wave_path(1e20, 0.0, 2e20, 0.0, 1.0).elements().len() < 3);
+    assert!(wave_path(0.0, 0.0, 1e20, 0.0, 1.0).elements().len() < 20_100);
+    assert!(wave_path(0.0, 0.0, 100.0, 0.0, 1.0).elements().len() > 10);
+    assert!(wave_path(0.0, 0.0, 0.0, 100.0, 1.0).elements().len() > 10, "vertical wave strokes produce elements");
 }
