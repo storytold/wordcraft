@@ -2830,3 +2830,41 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+/// The math namespace, declared on the math element itself (the fixture root doesn't).
+const M_NS: &str = r#"xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math""#;
+
+fn equations(p: &Paragraph) -> Vec<(String, bool)> {
+    p.objects
+        .iter()
+        .filter_map(|o| match o {
+            InlineObject::Equation { linear, display, .. } => Some((linear.clone(), *display)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// #1273: an equation straight in the body (EG_BlockLevelElts allows math content) gets a
+/// paragraph of its own instead of vanishing.
+#[test]
+fn body_level_equation_is_kept() {
+    let d = read_body(&format!(
+        r#"<w:p><w:r><w:t>before</w:t></w:r></w:p><m:oMathPara {M_NS}><m:oMath><m:r><m:t>a=b</m:t></m:r></m:oMath></m:oMathPara><m:oMath {M_NS}><m:r><m:t>c</m:t></m:r></m:oMath><w:p><w:r><w:t>after</w:t></w:r></w:p>"#
+    ));
+    let ps = paras(&d);
+    assert_eq!(ps.len(), 4, "{:?}", ps.iter().map(|p| p.plain_text()).collect::<Vec<_>>());
+    assert_eq!(equations(ps[1]), vec![("a=b".to_string(), true)]);
+    assert_eq!(equations(ps[2]), vec![("c".to_string(), false)]);
+}
+
+/// #1273: an equation guarded by markup compatibility (`Requires="m"`) is read as an equation,
+/// not replaced by its fallback.
+#[test]
+fn equation_in_alternate_content_is_read() {
+    let d = read_body(&format!(
+        r#"<w:p><mc:AlternateContent {M_NS}><mc:Choice Requires="m"><m:oMath><m:r><m:t>x+1</m:t></m:r></m:oMath></mc:Choice><mc:Fallback><w:r><w:t>[picture]</w:t></w:r></mc:Fallback></mc:AlternateContent></w:p>"#
+    ));
+    let p = paras(&d)[0];
+    assert_eq!(equations(p), vec![("x+1".to_string(), false)]);
+    assert!(!p.plain_text().contains("[picture]"));
+}
