@@ -339,8 +339,14 @@ impl Writer {
             vec![LINE_WIDTH / cols as f32; cols]
         };
         let col = |w: f32| format!("p{{{}pt}}", num((w - 2.0 * TABCOLSEP).max(12.0)));
-        let spec: String = widths.iter().map(|w| format!("{}|", col(*w))).collect();
-        let mut o = format!("\\noindent\\begin{{tabular}}{{|{spec}}}\n\\hline\n");
+        let (spec, hline) = if t.borderless {
+            let s: String = widths.iter().map(|w| col(*w)).collect::<Vec<_>>().join(" ");
+            (s, "")
+        } else {
+            let s: String = widths.iter().map(|w| format!("{}|", col(*w))).collect();
+            (format!("|{s}"), "\\hline\n")
+        };
+        let mut o = format!("\\noindent\\begin{{tabular}}{{{spec}}}\n{hline}");
         for row in &t.rows {
             let mut cells = Vec::new();
             let mut g = 0usize;
@@ -357,8 +363,9 @@ impl Writer {
                     body = format!("\\cellcolor[HTML]{{{}}}{body}", hex(sh));
                 }
                 if span > 1 {
-                    let left = if g == 0 { "|" } else { "" };
-                    body = format!("\\multicolumn{{{span}}}{{{left}{}|}}{{{body}}}", col(w));
+                    let bar = if t.borderless { "" } else { "|" };
+                    let left = if g == 0 && !t.borderless { "|" } else { "" };
+                    body = format!("\\multicolumn{{{span}}}{{{left}{}{bar}}}{{{body}}}", col(w));
                 }
                 cells.push(body);
                 g += span;
@@ -367,7 +374,11 @@ impl Writer {
                 continue;
             }
             o.push_str(&cells.join(" & "));
-            o.push_str(" \\\\\n\\hline\n");
+            if t.borderless {
+                o.push_str(" \\\\\n");
+            } else {
+                o.push_str(" \\\\\n\\hline\n");
+            }
         }
         o.push_str("\\end{tabular}\n");
         self.out.push_str(&o);
@@ -427,6 +438,29 @@ pub fn escape_text(s: &str) -> String {
             '`' => o.push_str("\\textasciigrave{}"),
             '\'' if prev == '\'' => o.push_str("{}'"),
             '\t' => o.push_str("\\quad{}"),
+            '…' => o.push_str("\\ldots{}"),
+            '—' => o.push_str("\\textemdash{}"),
+            '–' => o.push_str("\\textendash{}"),
+            '•' => o.push_str("\\textbullet{}"),
+            '©' => o.push_str("\\textcopyright{}"),
+            '®' => o.push_str("\\textregistered{}"),
+            '™' => o.push_str("\\texttrademark{}"),
+            '§' => o.push_str("\\textsection{}"),
+            '¶' => o.push_str("\\textparagraph{}"),
+            '°' => o.push_str("\\textdegree{}"),
+            '±' => o.push_str("\\textpm{}"),
+            '×' => o.push_str("\\texttimes{}"),
+            '÷' => o.push_str("\\textdiv{}"),
+            '†' => o.push_str("\\dag{}"),
+            '‡' => o.push_str("\\ddag{}"),
+            '£' => o.push_str("\\pounds{}"),
+            '€' => o.push_str("\\texteuro{}"),
+            '«' => o.push_str("\\guillemotleft{}"),
+            '»' => o.push_str("\\guillemotright{}"),
+            '“' => o.push_str("\\textquotedblleft{}"),
+            '”' => o.push_str("\\textquotedblright{}"),
+            '‘' => o.push_str("\\textquoteleft{}"),
+            '’' => o.push_str("\\textquoteright{}"),
             '\n' | '\u{000B}' => {
                 // A line break; LaTeX refuses one with nothing before it on the line.
                 o.push_str(if line_has_text { "\\\\\n" } else { "\\mbox{}\\\\\n" });
@@ -1319,6 +1353,15 @@ fn text_symbol(name: &str) -> Option<&'static str> {
         "textquotedblright" => "”",
         "guillemotleft" | "guillemetleft" => "«",
         "guillemotright" | "guillemetright" => "»",
+        "quotesinglbase" => "‚",
+        "quotedblbase" => "„",
+        "guilsinglleft" => "‹",
+        "guilsinglright" => "›",
+        "textperthousand" => "‰",
+        "textminus" => "−",
+        "textcelsius" => "℃",
+        "textinterrobang" => "‽",
+        "textnumero" | "No" => "№",
         "copyright" | "textcopyright" => "©",
         "textregistered" => "®",
         "texttrademark" => "™",
@@ -2611,7 +2654,9 @@ fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
     if !row.is_empty() {
         rows.push(row);
     }
-    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless: false };
+    let has_hrule = toks.iter().any(|t| matches!(t, Tok::Cmd(c) if matches!(c.as_str(), "hline" | "toprule" | "midrule" | "bottomrule" | "cline" | "cmidrule")));
+    let borderless = !spec.contains('|') && !has_hrule;
+    let mut out = FTable { rows: Vec::new(), widths: Vec::new(), borderless };
     // Rows still covered by a `\multirow` above, per grid column.
     let mut covering: Vec<u32> = Vec::new();
     for r in rows {
@@ -3046,7 +3091,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
 
     #[test]
     fn special_characters_round_trip() {
-        let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
+        let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there … — – • © ® ™ § ¶ ° ± × ÷ † ‡ £ € « » “ ” ‘ ’";
         let d = Document::from_text(text);
         let tex = export(&d);
         let back = import(tex.as_bytes());
@@ -3074,5 +3119,15 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
         assert_eq!(bt.widths, vec![100.0, 200.0]);
         assert_eq!(bt.rows[1][0].colspan, 2);
+        assert!(!bt.borderless);
+
+        let t_borderless = FTable { rows: vec![vec![cell("x"), cell("y")]], widths: vec![100.0, 200.0], borderless: true };
+        let mut w_bl = Writer::default();
+        w_bl.table(&t_borderless);
+        assert!(w_bl.out.contains("\\begin{tabular}{p{88pt} p{188pt}}\nx & y \\\\\n\\end{tabular}"), "{}", w_bl.out);
+        assert!(!w_bl.out.contains("\\hline"));
+        let back_bl = parse(&w_bl.out);
+        let FBlock::Table(bt_bl) = &back_bl.blocks[0] else { panic!() };
+        assert!(bt_bl.borderless);
     }
 }
