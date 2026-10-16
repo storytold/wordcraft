@@ -1,6 +1,6 @@
 # UI parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-14 · **Change:** trivial (Modify Table Style formats every table style part, #714); previously trivial: a click on the ribbon chrome hands the keyboard to the page in the same frame, #1093 follow-up; previously trivial: Page Setup vertical alignment, #1320; previously trivial: the app opens on the Home tab every launch, as in Word; previously trivial: no document behind the Start screen, #1129; previously trivial: equation pictures share a few textures, #1002; previously trivial: selection bar in the left margin, #856; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously major: first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-15 · **Change:** trivial (Format Painter mouse-up and word scope, #1455; previously trivial: Modify Table Style formats every table style part, #714); previously trivial: a click on the ribbon chrome hands the keyboard to the page in the same frame, #1093 follow-up; previously trivial: Page Setup vertical alignment, #1320; previously trivial: the app opens on the Home tab every launch, as in Word; previously trivial: no document behind the Start screen, #1129; previously trivial: equation pictures share a few textures, #1002; previously trivial: selection bar in the left margin, #856; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously major: first version; ribbon, dialogs, shortcuts and on-canvas interaction measured from `crates/ui-egui` and the command registry) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft looks and feels next to Word: ribbon, dialogs, panes, keyboard, mouse and touch.
 Typing behaviour has its own checklist ([`typing-parity.md`](typing-parity.md)). All assets are our
@@ -11,7 +11,8 @@ Document title opens Rename Document; the account badge opens Options › Genera
 **Dimension: ~65% (estimated), 59–92 h to full** (the sum of the rows below; dialog depth is counted here, not under features).
 
 | Area | WordCraft | Word | Parity | Hours |
-|---|---|---|---|---|
+|---|---|---|
+| 2026-10-15 | trivial | Format Painter applies on a single-click release, disarms after one use and keeps trailing spaces outside a collapsed-caret word target (#1455) |---|---|
 | Ribbon tabs and groups | All Word tabs including contextual Table Design/Layout, Picture Format, Shape Format, Header & Footer, Equation, Outlining (Outline view, #493); ribbon overflow (#43, #129). Draw tab: Select, Eraser, Pen, Pencil, Highlighter with colour and thickness (#307); Lasso (drag to move, Delete, recolour), Add Pen gallery (right-click to remove), Ink to Shape (lines, arrows, rectangles, ellipses, polygons), Ink Replay with play/pause/rewind/forward bar (#395); missing: Ink to Math. The app opens on Home every launch, as in Word: the active tab is not restored between runs, but going File and back to the editor returns to the tab that was showing, contextual tabs included | Same plus Draw | 85% | (Draw in features) |
 | Keytips (Alt / F10) | Ribbon badges (#43) and numbered Quick Access Toolbar badges in the user's button order (#620); File › Options › Advanced › Display switch saved per user (`ui.keytips`); Alt leaves macOS Option typing alone | ✅ | 85% | 1–2 |
 | Mini-toolbar on selection | ✅ (#43, two rows #535) | ✅ | 80% | 1–2 |
@@ -54,6 +55,19 @@ Document title opens Rename Document; the account badge opens Options › Genera
 | Platform conventions (macOS menus/traffic lights #255, Windows title bar, Linux CSD on Wayland #78) | partial | native | 70% | 3–5 |
 | Screen readers (VoiceOver, Narrator, Orca) | AccessKit on; the document canvas describes paragraphs, headings (level), list items, tables, links, pictures (alt text) and the caret and selection, for the pages on screen (#488); Windows Magnifier follows the caret, also onto an empty line after Enter or Shift+Enter (#1119); not yet tried with real screen readers | full | 50% | 5–8 |
 | Right-to-left (mirrored) interface | ❌ | ✅ (Arabic, Hebrew Word) | 0% | in localization |
+
+## Format Painter scope (#1455)
+
+A one-use painter applies on mouse release even when the target is a collapsed caret,
+then disarms. For that caret case, character formatting covers the target word without
+its trailing spaces, matching ordinary collapsed-caret formatting. A dragged or explicit
+selection keeps its selected range. Copy Formatting / Paste Formatting uses the same
+engine command. Web Copy Formatting also advertises Ctrl/Command+Alt+Shift+C through
+the normal customizable shortcut registry, avoiding the browser inspector and preserving
+the copyright and Keep Text Only bindings. Native defaults remain unchanged. Trusted
+Chromium keyboard input passed in direct and same-origin iframe views, including alias
+display, removal, reassignment, copyright insertion and strict saved-DOCX checks. Native
+physical-mouse qualification remains pending.
 
 ## Revision history
 

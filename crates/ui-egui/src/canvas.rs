@@ -2368,7 +2368,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.canvas.dragging = false;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
-        if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
+        if app.session.painter.is_some() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }
     }

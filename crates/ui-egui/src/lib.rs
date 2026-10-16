@@ -2663,6 +2663,122 @@ mod tests {
         assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
     }
 
+    #[test]
+    fn format_painter_single_click_formats_the_target_word_and_finishes() {
+        let mut a = app();
+        let text = "ORIGEM formatada e DESTINO comum";
+        a.run("text.insert", json!({"text": text})).unwrap();
+        let mut start = a.session.sel.focus.clone();
+        start.off = 0;
+        let mut end = start.clone();
+        end.off = "ORIGEM".len();
+        a.run("caret.set", json!({"pos": start})).unwrap();
+        a.run("caret.set", json!({"pos": end, "extend": true})).unwrap();
+        for id in ["format.bold", "format.italic", "format.underline"] {
+            a.run(id, json!({})).unwrap();
+        }
+        let source = a.session.doc.para_at(&start).unwrap().props_of_char(0).clone();
+        a.run("edit.formatPainter", json!({})).unwrap();
+        let mut target = start.clone();
+        target.off = text.find("DESTINO").unwrap() + 2;
+        let mut h = harness(a);
+        h.run_steps(6);
+        let caret = h.state_mut().session.layout().caret_on(&target, 0).unwrap();
+        let p = canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height * 0.5).unwrap();
+        h.event(egui::Event::PointerMoved(p));
+        h.run_steps(1);
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: p, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.run_steps(1);
+        }
+        assert!(h.state().session.painter.is_none(), "one click consumes the non-sticky painter");
+        let para = h.state().session.doc.para_at(&target).unwrap();
+        let got = para.props_of_char(target.off);
+        assert_eq!((&got.bold, &got.italic, &got.underline), (&source.bold, &source.italic, &source.underline));
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text);
+        assert_ne!(para.props_of_char(text.find("DESTINO").unwrap() + "DESTINO".len()).bold, source.bold, "trailing space stays plain");
+        assert_ne!(para.props_of_char(text.len() - 2).bold, source.bold, "surrounding text stays plain");
+    }
+
+    #[test]
+    fn format_painter_double_click_drag_and_copy_paste_preserve_target_scope() {
+        for gesture in ["double", "drag", "commands"] {
+            let mut a = app();
+            let text = "ORIGEM formatada e DESTINO comum";
+            a.run("text.insert", json!({"text": text})).unwrap();
+            let mut source_start = a.session.sel.focus.clone();
+            source_start.off = 0;
+            let mut source_end = source_start.clone();
+            source_end.off = "ORIGEM".len();
+            a.run("caret.set", json!({"pos": source_start})).unwrap();
+            a.run("caret.set", json!({"pos": source_end, "extend": true})).unwrap();
+            for id in ["format.bold", "format.italic", "format.underline"] {
+                a.run(id, json!({})).unwrap();
+            }
+            let source = a.session.doc.para_at(&source_start).unwrap().props_of_char(0).clone();
+            let mut target_start = source_start.clone();
+            target_start.off = text.find("DESTINO").unwrap();
+            let mut target_end = target_start.clone();
+            target_end.off += "DESTINO".len();
+            a.run(if gesture == "commands" { "edit.copyFormat" } else { "edit.formatPainter" }, json!({})).unwrap();
+            let mut h = harness(a);
+            h.run_steps(6);
+            if gesture == "commands" {
+                h.state_mut().run("caret.set", json!({"pos": target_start})).unwrap();
+                h.state_mut().run("caret.set", json!({"pos": target_end, "extend": true})).unwrap();
+                h.state_mut().run("edit.pasteFormat", json!({})).unwrap();
+            } else {
+                let mut press = target_start.clone();
+                if gesture == "double" {
+                    press.off += 2;
+                }
+                let caret = h.state_mut().session.layout().caret_on(&press, 0).unwrap();
+                let start = canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height * 0.5).unwrap();
+                let caret = h.state_mut().session.layout().caret_on(&target_end, 0).unwrap();
+                let end = canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height * 0.5).unwrap();
+                h.event(egui::Event::PointerMoved(start));
+                h.run_steps(1);
+                let clicks = if gesture == "double" { 2 } else { 1 };
+                for _ in 0..clicks {
+                    h.event(egui::Event::PointerButton {
+                        pos: start,
+                        button: egui::PointerButton::Primary,
+                        pressed: true,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    h.run_steps(1);
+                    let release = if gesture == "drag" {
+                        h.event(egui::Event::PointerMoved(end));
+                        h.run_steps(2);
+                        end
+                    } else {
+                        start
+                    };
+                    h.event(egui::Event::PointerButton {
+                        pos: release,
+                        button: egui::PointerButton::Primary,
+                        pressed: false,
+                        modifiers: egui::Modifiers::NONE,
+                    });
+                    h.run_steps(1);
+                }
+            }
+            assert!(h.state().session.painter.is_none(), "{gesture}: one-use painter must disarm");
+            let para = h.state().session.doc.para_at(&target_start).unwrap();
+            for off in target_start.off..target_end.off {
+                let got = para.props_of_char(off);
+                assert_eq!(
+                    (&got.bold, &got.italic, &got.underline),
+                    (&source.bold, &source.italic, &source.underline),
+                    "{gesture}: target offset {off}"
+                );
+            }
+            assert_ne!(para.props_of_char(target_end.off).bold, source.bold, "{gesture}: trailing space stays plain");
+            assert_ne!(para.props_of_char(text.len() - 2).bold, source.bold, "{gesture}: surrounding text stays plain");
+            assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text);
+        }
+    }
+
     fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
         egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
