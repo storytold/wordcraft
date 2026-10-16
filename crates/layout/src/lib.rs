@@ -3288,12 +3288,14 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 - new_notes.iter().map(|n| n.h).sum::<f32>()
                 - if pb.notes.is_empty() && !new_notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 }
                 - extra;
-            let bottom = pb.y + lead + (l.top + l.height - first.top);
+            let has_notes = !pb.notes.is_empty() || !new_notes.is_empty() || !line_notes.is_empty();
+            // Word fits auto-spaced text by its natural bottom; exact spacing keeps its box.
+            let height = if has_notes { l.height } else { l.fit_height };
+            let bottom = pb.y + lead + (l.top + height - first.top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
             // the bottom margin as usual.
-            let has_notes = !pb.notes.is_empty() || !new_notes.is_empty() || !line_notes.is_empty();
             let tail = if has_notes && l1 + 1 == n {
                 *after_on_page.get_or_insert_with(|| space_after_kept(ctx, block, &pl.rp, label.is_some()))
             } else {

@@ -6742,17 +6742,28 @@ fn space_after_stays_clear_of_the_footnote_separator() {
 
 #[test]
 fn space_after_may_overflow_the_bottom_margin_without_notes() {
-    // Without footnotes nothing changes: the last line only has to fit, its space after may run
-    // past the bottom margin (Word).
+    // Without footnotes the last line's natural height fits; extra auto leading and space
+    // after may run past the bottom margin (Word Mac auto-spacing probe).
     let mut tight = 0;
     for before in 0..=300 {
         let (d, t, _) = space_after_doc(before as f32, false);
         let l = lay(&d);
         let bottom_margin = d.last_section.page_h - d.last_section.margin_bottom;
         let (pieces, _) = para_pieces(&l, t);
-        let &(_, _, _, bottom) = pieces.last().unwrap();
-        assert!(bottom <= bottom_margin + 0.01, "before {before}: {bottom}");
-        if bottom > bottom_margin - 6.0 {
+        let &(page, _, l1, bottom) = pieces.last().unwrap();
+        let para = l.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { path, para, .. } if path.0 == [t as u32] => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        let line = &para.lines[l1 - 1];
+        let desc = para.clusters[line.c0..line.c1].iter().map(|c| para.styles[c.style as usize].descent).fold(0.0f32, f32::max);
+        let text_bottom = bottom - (line.top + line.height - line.baseline - desc);
+        assert!(text_bottom <= bottom_margin + 0.01, "before {before}: {text_bottom}");
+        if text_bottom > bottom_margin - 6.0 {
             tight += 1;
         }
     }
@@ -7262,4 +7273,73 @@ fn row_nil_overrides_style() {
     t.rows[0].cells[0].props.borders = Some(Borders { right: Some(Border::single(2.0)), ..Default::default() });
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
+}
+
+#[test]
+fn auto_leading_fits_page_bottom() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(11.0), ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::with_text("x", chr.clone());
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    let mut sample = Document::new();
+    sample.body = vec![wordcraft_doc::para_block(p)];
+    let measured = lay(&sample);
+    let Some(Placed::Lines { para, .. }) = measured.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })) else { panic!() };
+    let natural = para.lines[0].height;
+    let height = natural * 1.15;
+    // Word Mac: auto spacing fits by natural height, including a visible line; exact keeps its box.
+    for (text, spacing, room, page) in [
+        ("", LineSpacing::Multiple(1.15), height + 1.0, 0),
+        ("", LineSpacing::Multiple(1.15), (natural + height) / 2.0, 0),
+        ("x", LineSpacing::Multiple(1.15), (natural + height) / 2.0, 0),
+        ("", LineSpacing::Multiple(1.15), natural - 1.0, 1),
+        ("", LineSpacing::Exactly(height), (natural + height) / 2.0, 1),
+    ] {
+        let props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), widow_control: Some(false), ..Default::default() };
+        let mut filler = wordcraft_doc::Paragraph::with_text("Filler", chr.clone());
+        filler.props = props.clone();
+        filler.props.line_spacing = Some(LineSpacing::Exactly(160.0 - room));
+        let mut line = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        line.props = props.clone();
+        line.props.line_spacing = Some(spacing);
+        line.props.space_after = Some(12.0);
+        let mut next = wordcraft_doc::Paragraph::with_text("", chr.clone());
+        next.props = props;
+        next.insert_object(0, picture(100.0, 70.0, Default::default()), &chr).unwrap();
+        let mut d = Document::new();
+        d.last_section.page_h = 200.0;
+        d.last_section.margin_top = 20.0;
+        d.last_section.margin_bottom = 20.0;
+        d.body = vec![wordcraft_doc::para_block(filler), wordcraft_doc::para_block(line), wordcraft_doc::para_block(next)];
+        let l = lay(&d);
+        let boxes = para_boxes(&l);
+        assert_eq!(boxes[1].0, page, "{text:?} {spacing:?}, room {room}");
+        assert_eq!(boxes[2].0, 1);
+        let photo_top = if page == 0 { 20.0 } else { 20.0 + height + 12.0 };
+        assert!((boxes[2].2 - photo_top).abs() < 0.01, "{} vs {photo_top}", boxes[2].2);
+    }
+}
+
+#[test]
+fn picture_leading_fits_bottom() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+    let mut photo = wordcraft_doc::Paragraph::with_text("", chr.clone());
+    photo.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+    photo.props.space_after = Some(0.0);
+    photo.insert_object(0, picture(100.0, 70.0, Default::default()), &chr).unwrap();
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(photo.clone())];
+    let measured = lay(&d);
+    let Some(Placed::Lines { para, .. }) = measured.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })) else { panic!() };
+    let desc = para.styles[para.clusters[0].style as usize].descent;
+    let room = 70.0 + desc / 2.0;
+    let mut filler = wordcraft_doc::Paragraph::with_text("Filler", chr);
+    filler.props.line_spacing = Some(LineSpacing::Exactly(160.0 - room));
+    filler.props.space_after = Some(0.0);
+    d.last_section.page_h = 200.0;
+    d.last_section.margin_top = 20.0;
+    d.last_section.margin_bottom = 20.0;
+    d.body = vec![wordcraft_doc::para_block(filler), wordcraft_doc::para_block(photo)];
+    assert_eq!(para_boxes(&lay(&d))[1].0, 0, "the picture fits without its extra leading");
 }

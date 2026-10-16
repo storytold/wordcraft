@@ -139,6 +139,8 @@ pub enum LineEnd {
 pub struct Line {
     pub top: f32,
     pub height: f32,
+    /// Height needed at the page bottom, excluding extra automatic leading.
+    pub(crate) fit_height: f32,
     pub baseline: f32,
     /// Cluster index range.
     pub c0: usize,
@@ -2043,6 +2045,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };
 
+        let fit_height = if !centred && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m > 1.0) {
+            let desc = if obj_asc > asc && pl.label.is_none() && picture_clusters_only(pl, c0, c1) { 0.0 } else { desc };
+            (baseline - top + desc).min(height)
+        } else {
+            height
+        };
+
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
         for k in (c0..c1).rev() {
@@ -2126,6 +2135,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         let mut line = Line {
             top,
             height,
+            fit_height,
             baseline,
             c0,
             c1,
@@ -2172,6 +2182,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 lines.push(Line {
                     top,
                     height: h,
+                    fit_height: if grid.is_none() && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m > 1.0) { natural } else { h },
                     baseline: top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
                     c0: n,
                     c1: n,
@@ -2226,6 +2237,7 @@ fn even_row(row: &mut [Line]) -> f32 {
     let h = row.iter().map(|l| l.height).fold(0.0f32, f32::max);
     for l in row {
         l.baseline += h - l.height;
+        l.fit_height += h - l.height;
         l.height = h;
     }
     h
@@ -2310,6 +2322,16 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
         LineSpacing::Multiple(m) => asc * m.min(1.0),
         LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
     }
+}
+
+fn picture_clusters_only(pl: &ParaLayout, c0: usize, c1: usize) -> bool {
+    pl.clusters.get(c0..c1).is_some_and(|cs| {
+        cs.iter().all(|c| match c.kind {
+            ClKind::Object(i) => !pl.maths.iter().any(|(k, _)| *k == i),
+            ClKind::Space | ClKind::Tab | ClKind::Marker => true,
+            _ => false,
+        })
+    })
 }
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
