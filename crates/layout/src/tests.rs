@@ -729,6 +729,68 @@ fn page_break_char_starts_new_page() {
     assert_eq!(l.pages.len(), 2);
 }
 
+/// Legacy form fields are drawn as Word draws them: a check box is a square as tall as the text's
+/// line, inset 1.16 pt, taking that line height of room, with an X when checked (`w:checked`
+/// beating `w:default`); a drop-down shows its selected entry whatever result was saved.
+#[test]
+fn legacy_form_fields_are_drawn() {
+    let field = |form: &str| InlineObject::Field {
+        instr: "FORMCHECKBOX".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: form.into(),
+    };
+    let check_box = |state: &str| format!(r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/>{state}</w:checkBox></w:ffData>"#);
+    let draws_of = |o: InlineObject| {
+        let mut d = Document::from_text("ab");
+        d.insert_object(&Pos::body(0, 1), o, &Default::default()).unwrap();
+        let l = lay(&d);
+        let b_x = l.caret(&Pos::body(0, 1 + wordcraft_doc::para::OBJ.len_utf8())).unwrap().x;
+        let a_x = l.caret(&Pos::body(0, 1)).unwrap().x;
+        (display::page_display(&d, &l.pages[0], &display::DisplayOptions::default()), b_x - a_x)
+    };
+    let squares = |items: &[display::Draw]| -> Vec<wordcraft_geom::Rect> {
+        items
+            .iter()
+            .filter_map(|i| {
+                if let display::Draw::Shape { rect, kind: wordcraft_doc::para::ShapeKind::Rectangle, stroke: Some(_), .. } = i {
+                    Some(*rect)
+                } else {
+                    None
+                }
+            })
+            .collect()
+    };
+    let diagonals = |items: &[display::Draw]| {
+        items.iter().filter(|i| matches!(i, display::Draw::Line { x0, x1, y0, y1, .. } if (x1 - x0).abs() > 1.0 && (y1 - y0).abs() > 1.0)).count()
+    };
+    let (items, room) = draws_of(field(&check_box(r#"<w:default w:val="0"/>"#)));
+    let sq = squares(&items);
+    assert_eq!(sq.len(), 1, "one square: {items:?}");
+    assert!((sq[0].w - sq[0].h).abs() < 0.01 && (room - sq[0].w - 2.0 * display::CHECK_BOX_INSET).abs() < 0.01, "{:?} in {room}", sq[0]);
+    assert!(sq[0].w > 8.0 && sq[0].w < 14.0, "about the line's height: {}", sq[0].w);
+    assert_eq!(diagonals(&items), 0, "unchecked");
+    assert_eq!(diagonals(&draws_of(field(&check_box(r#"<w:default w:val="1"/>"#))).0), 2, "checked by default");
+    assert_eq!(diagonals(&draws_of(field(&check_box(r#"<w:default w:val="1"/><w:checked w:val="0"/>"#))).0), 0, "w:checked wins");
+    // An explicit size: 20 pt is about twice the 10-11 pt text's square.
+    let (big, _) = draws_of(field(&check_box(r#"<w:size w:val="40"/><w:default w:val="0"/>"#)));
+    assert!(squares(&big)[0].w > sq[0].w * 1.6, "{:?} vs {:?}", squares(&big), sq);
+    // A drop-down shows its selected entry.
+    let dd = InlineObject::Field {
+        instr: "FORMDROPDOWN".into(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: r#"<w:ffData><w:name w:val="List"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Alpha"/><w:listEntry w:val="Beta"/></w:ddList></w:ffData>"#.into(),
+    };
+    let (items, _) = draws_of(dd);
+    let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+    assert!(text.contains("Beta") && !text.contains("Alpha"), "{text}");
+}
+
 #[test]
 fn a_missing_roman_font_is_drawn_as_word_draws_it() {
     // Measured in Word: a font that isn't installed is drawn in Cambria when the font table calls

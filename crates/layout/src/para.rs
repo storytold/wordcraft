@@ -1370,8 +1370,32 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }
                         }
-                        Some(InlineObject::Field { instr, result, code, .. }) => {
-                            if env.field_codes != *code {
+                        Some(o @ InlineObject::Field { instr, result, code, .. }) => {
+                            let form = if env.field_codes != *code { None } else { o.legacy_form() };
+                            if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
+                                // Word draws a legacy check box as a square as tall as the text's
+                                // line (its ascent and descent), scaled to an explicit size, and
+                                // takes that much room on the line (see `display::check_box`).
+                                let (a, d) = b.styles.get(si as usize).map_or((rc.size * 0.8, rc.size * 0.2), |s| (s.ascent, s.descent));
+                                let scale = size.map_or(1.0, |sz| sz / rc.size.max(0.5));
+                                let (a, d) = (a * scale, d * scale);
+                                b.clusters.push(Cluster {
+                                    start,
+                                    end,
+                                    adv: a + d,
+                                    kind: ClKind::Object(k),
+                                    style: si,
+                                    g0: g,
+                                    g1: g,
+                                    break_after: false,
+                                    obj_h: a.max(0.01),
+                                    obj_d: d,
+                                    dot: false,
+                                });
+                            } else if let Some(text) = form.as_ref().and_then(|f| f.shown_text()) {
+                                // A drop-down shows its selected entry, whatever result was saved.
+                                b.shape_atomic(text, start, end, &rc);
+                            } else if env.field_codes != *code {
                                 // The code in braces on grey, like Word's field shading.
                                 let mut shaded = (*rc).clone();
                                 if shaded.highlight.is_none() && shaded.shading.is_none() {
