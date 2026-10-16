@@ -239,6 +239,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         t.on_accent,
                     );
                     ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
+                    // Drawn by hand: screen readers get its name from here.
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, share));
                     if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                     }
@@ -317,6 +319,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
                             ui.painter().text(r.center(), Align2::CENTER_CENTER, "»", medium(12.5), t.text);
+                            // "»" means nothing read aloud: the button says what it holds.
+                            let more = tl!("More tabs");
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, more));
+                            let resp = resp.on_hover_text(more);
                             egui::Popup::menu(&resp).show(|ui| {
                                 for (tab, shown) in left_out {
                                     if ui.selectable_label(false, shown).clicked() {
@@ -2932,6 +2938,29 @@ mod tests {
             h.run_steps(2);
             assert_eq!(h.state().ui.tab, tab);
         }
+    }
+
+    /// #1110: the strip's drawn buttons have names for screen readers: Share, and the "»" that
+    /// holds the tabs that don't fit ("More tabs", not a glyph).
+    #[test]
+    fn the_tab_strip_buttons_have_names() {
+        use egui_kittest::kittest::Queryable;
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(760.0, 700.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("Share"));
+        let more = h.get_by_role_and_label(egui::accesskit::Role::Button, tl!("More tabs"));
+        more.click();
+        h.run_steps(2);
+        // The menu lists a tab that didn't fit (View is among the last on a narrow strip).
+        assert!(h.query_by_label(tl!("View")).is_some(), "the » menu lists the tabs left out");
     }
 
     #[test]
