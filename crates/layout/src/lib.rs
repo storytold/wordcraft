@@ -3688,6 +3688,19 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         pb.y += row.height;
         pb.content_bottom = pb.content_bottom.max(pb.y);
     };
+    // The bottom edges of the vertical merges going on from the row above: Word closes a merged
+    // cell where a page break cuts it, at the foot of one page and the head of the next.
+    let close = |pb: &mut PageBuilder, edges: &[Placed]| {
+        let (x, y) = (pb.col_x() + tl.x, pb.y);
+        if let Some(pg) = pb.page() {
+            for it in edges {
+                let mut it = it.clone();
+                it.translate(x, y);
+                pg.items.push(it);
+            }
+        }
+    };
+    let mut above: &[Placed] = &[];
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
     // after them can't start under them there, the table starts on the next page.
     let first = header_rows.len();
@@ -3729,13 +3742,14 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             match split {
                 Some((a, b)) => {
                     place(pb, &a);
+                    close(pb, &b.open);
                     table_notes(ctx, pb, &a.items);
                     rest = Some(b);
                 }
                 // Like Word, a row that does not fit on an empty page, or under the header rows
                 // repeated there, is placed anyway and runs into the bottom margin.
                 None if pb.at_top() || fresh => break,
-                None => {}
+                None => close(pb, above),
             }
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.
@@ -3750,11 +3764,18 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                     }
                 }
             }
+            close(pb, above);
             fresh = true;
+            // The whole row moved on: a merged cell's text running on into it starts at the
+            // cell's top margin.
+            if rest.is_none() {
+                rest = table::at_page_top(row);
+            }
         }
         let last = rest.as_ref().unwrap_or(row);
         place(pb, last);
         table_notes(ctx, pb, &last.items);
+        above = &row.open;
     }
 }
 
