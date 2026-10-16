@@ -157,6 +157,17 @@ pub fn align_val(a: Align) -> &'static str {
     }
 }
 
+/// A tab stop's or positional tab's `w:leader` value.
+pub fn tab_leader(l: TabLeader) -> &'static str {
+    match l {
+        TabLeader::None => "none",
+        TabLeader::Dot => "dot",
+        TabLeader::Hyphen => "hyphen",
+        TabLeader::Underscore => "underscore",
+        TabLeader::MiddleDot => "middleDot",
+    }
+}
+
 fn border_el(w: &mut W, name: &str, b: &Border) {
     let sz = n(round(b.width.clamp(0.0, 12.0) * 8.0));
     let space = n(round(b.space.clamp(0.0, 31.0)));
@@ -273,15 +284,7 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
             let pos = twips(t.pos);
             match t.leader {
                 TabLeader::None => w.empty("w:tab", &[("w:val", val), ("w:pos", &pos)]),
-                l => {
-                    let lv = match l {
-                        TabLeader::Dot => "dot",
-                        TabLeader::Hyphen => "hyphen",
-                        TabLeader::Underscore => "underscore",
-                        _ => "middleDot",
-                    };
-                    w.empty("w:tab", &[("w:val", val), ("w:leader", lv), ("w:pos", &pos)]);
-                }
+                l => w.empty("w:tab", &[("w:val", val), ("w:leader", tab_leader(l)), ("w:pos", &pos)]),
             }
         }
         w.close("w:tabs");

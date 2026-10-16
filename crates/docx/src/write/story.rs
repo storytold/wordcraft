@@ -780,6 +780,17 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
+            InlineObject::PositionalTab { align, relative_to, leader } => {
+                self.rev_open(w, props);
+                w.open("w:r", &[]);
+                self.rpr(w, props);
+                w.empty(
+                    "w:ptab",
+                    &[("w:relativeTo", relative_to.ooxml()), ("w:alignment", align.ooxml()), ("w:leader", super::props::tab_leader(*leader))],
+                );
+                w.close("w:r");
+                self.rev_close(w, props);
+            }
             InlineObject::Opaque { format, xml, text } => {
                 if format == "docx" && crate::xml::parse(xml.as_bytes()).is_ok() {
                     w.raw(xml);

@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use wordcraft_doc::math::MathJc;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
-use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, RubyAlign, SOFT_HYPHEN, WrapText};
+use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, NoteKind, OBJ, PAGE_BREAK, PTabAlign, PTabBase, RubyAlign, SOFT_HYPHEN, WrapText};
 use wordcraft_doc::props::{Align, CharProps, LineSpacing, ParaProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::resolve::{ResolvedChar, ResolvedPara};
 use wordcraft_doc::{Document, Paragraph};
@@ -346,6 +346,8 @@ pub struct ParaLayout {
     pub rubies: Vec<RubyLayout>,
     /// Display equations (on lines of their own): cluster index and justification.
     pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
+    /// Positional tabs (laid out as tab clusters): cluster index, alignment, base and leader.
+    pub ptabs: Vec<(usize, PTabAlign, PTabBase, TabLeader)>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
     /// tracked deletions in the final text. Resolved as laid out, table formatting included.
     pub left_out: Vec<std::ops::Range<usize>>,
@@ -1252,6 +1254,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut enclosures = Vec::new();
     let mut rubies = Vec::new();
     let mut displays = Vec::new();
+    let mut ptabs = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
@@ -1445,6 +1448,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             }
                         }
                         Some(InlineObject::Opaque { text, .. }) => b.shape_atomic(text, start, end, &rc),
+                        Some(InlineObject::PositionalTab { align, relative_to, leader }) => {
+                            push(&mut b, ClKind::Tab, 0.0, 0.0);
+                            ptabs.push((b.clusters.len() - 1, *align, *relative_to, *leader));
+                        }
                         _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
                     }
                 }
@@ -1575,6 +1582,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         maths,
         rubies,
         displays,
+        ptabs,
         left_out: Vec::new(),
         enclosures,
     };
@@ -1610,6 +1618,21 @@ fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>)
         let n = if x < -0.01 { ((x - 0.01) / d).ceil() } else { ((x + 0.01) / d).floor() + 1.0 };
         TabStop { pos: (n * d).min(1e6), align: TabAlign::Left, leader: TabLeader::None }
     })
+}
+
+/// A positional tab's stop (column coordinates): the left edge, centre or right edge of the
+/// column (`margin`) or of the space between the indents (`indent`), whatever the tab stops.
+fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, width: f32, indents: (f32, f32)) -> TabStop {
+    let (lo, hi) = match base {
+        PTabBase::Margin => (0.0, width),
+        PTabBase::Indent => (indents.0, width - indents.1),
+    };
+    let (pos, align) = match align {
+        PTabAlign::Left => (lo, TabAlign::Left),
+        PTabAlign::Center => ((lo + hi) / 2.0, TabAlign::Center),
+        PTabAlign::Right => (hi, TabAlign::Right),
+    };
+    TabStop { pos, align, leader }
 }
 
 fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
@@ -1765,9 +1788,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 ClKind::Tab => {
                     has_tab = true;
                     resolve_tab(pl, &mut pending_tab, &mut xs, c0, x, &mut x);
-                    let stop = next_tab(x, &rp.tabs, default_tab, hanging_at);
+                    let ptab = pl.ptabs.iter().find(|t| t.0 == j).map(|&(_, a, b, l)| ptab_stop(a, b, l, width, (rp.indent_left, rp.indent_right)));
+                    let stop = ptab.unwrap_or_else(|| next_tab(x, &rp.tabs, default_tab, hanging_at));
+                    // A positional tab whose place the text has passed goes there on the next line
+                    // (ECMA-376 §17.3.3.23); a line with nothing but markers on it is empty.
+                    if ptab.is_some() && stop.pos < x - 0.01 && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+                        end = LineEnd::Wrap;
+                        break;
+                    }
                     xs.push(x);
-                    if stop.pos > right_edge + 0.01 && j > c0 && stop.align == TabAlign::Left {
+                    if ptab.is_none() && stop.pos > right_edge + 0.01 && j > c0 && stop.align == TabAlign::Left {
                         // Tab past the right indent wraps (Word moves it to the next line).
                         if let Some(c) = pl.clusters.get_mut(j) {
                             c.adv = 0.0;

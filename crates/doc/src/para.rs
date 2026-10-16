@@ -316,6 +316,60 @@ pub enum NoteKind {
     Endnote,
 }
 
+/// Where a positional tab ([`InlineObject::PositionalTab`]) lands on its line, and how the text
+/// after it lines up there (ECMA-376 `ST_PTabAlignment`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PTabAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
+impl PTabAlign {
+    pub const ALL: [PTabAlign; 3] = [PTabAlign::Left, PTabAlign::Center, PTabAlign::Right];
+
+    /// The OOXML name (`left`, `center`, `right`).
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            PTabAlign::Left => "left",
+            PTabAlign::Center => "center",
+            PTabAlign::Right => "right",
+        }
+    }
+
+    pub fn from_ooxml(v: &str) -> Option<PTabAlign> {
+        PTabAlign::ALL.into_iter().find(|a| a.ooxml() == v)
+    }
+}
+
+/// What a positional tab's place is measured against (ECMA-376 `ST_PTabRelativeTo`): the text
+/// margins, or the paragraph's indents.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub enum PTabBase {
+    #[default]
+    Margin,
+    Indent,
+}
+
+impl PTabBase {
+    pub const ALL: [PTabBase; 2] = [PTabBase::Margin, PTabBase::Indent];
+
+    /// The OOXML name (`margin`, `indent`).
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            PTabBase::Margin => "margin",
+            PTabBase::Indent => "indent",
+        }
+    }
+
+    pub fn from_ooxml(v: &str) -> Option<PTabBase> {
+        PTabBase::ALL.into_iter().find(|a| a.ooxml() == v)
+    }
+}
+
 /// How ruby (phonetic guide) text lines up over its base text (ECMA-376 `ST_RubyAlign`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -549,6 +603,17 @@ pub enum InlineObject {
         #[serde(default, skip_serializing_if = "CharProps::is_empty")]
         props: Box<CharProps>,
     },
+    /// A positional tab (Word's alignment tab, `w:ptab`): it goes to the left edge, centre or
+    /// right edge of the margins or of the indents, whatever the paragraph's tab stops, and the
+    /// text after it lines up there. Text already past that place sends it to the next line.
+    PositionalTab {
+        #[serde(default)]
+        align: PTabAlign,
+        #[serde(default)]
+        relative_to: PTabBase,
+        #[serde(default)]
+        leader: crate::props::TabLeader,
+    },
     /// Something we don't model, kept for round-trip (raw XML of the source format).
     Opaque {
         format: String,
@@ -756,6 +821,7 @@ impl InlineObject {
             InlineObject::Field { result, .. } => result,
             InlineObject::Equation { linear, .. } => linear,
             InlineObject::Ruby { base, .. } => base,
+            InlineObject::PositionalTab { .. } => "\t",
             InlineObject::Opaque { text, .. } => text,
             _ => "",
         }

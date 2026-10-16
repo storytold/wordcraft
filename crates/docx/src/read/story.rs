@@ -6,7 +6,7 @@ use wordcraft_doc::connector::{ConnEnd, ShapeExtra};
 use wordcraft_doc::control::{ContentControl, ControlKind, ControlWrap};
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
-use wordcraft_doc::para::{AltText, Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap, WrapText, cap_alt};
+use wordcraft_doc::para::{AltText, Anchor, Float, FloatAlign, NoteKind, PTabAlign, PTabBase, ShapeKind, Wrap, WrapText, cap_alt};
 use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb, TextColor};
 use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
@@ -618,7 +618,15 @@ impl Reader<'_> {
                     f.instr.push_str(&k.text());
                 }
             }
-            "w:tab" | "w:ptab" => self.emit_text(sc, pb, "\t", props),
+            "w:tab" => self.emit_text(sc, pb, "\t", props),
+            // Alignment and base are required (ECMA-376 §17.3.3.23); without them it stays a plain tab.
+            "w:ptab" => match (k.attr("w:alignment").and_then(PTabAlign::from_ooxml), k.attr("w:relativeTo").and_then(PTabBase::from_ooxml)) {
+                (Some(align), Some(relative_to)) => {
+                    let leader = super::props::tab_leader(k.attr("w:leader").unwrap_or("none"));
+                    self.emit_obj(sc, pb, InlineObject::PositionalTab { align, relative_to, leader }, props)
+                }
+                _ => self.emit_text(sc, pb, "\t", props),
+            },
             "w:br" => {
                 if sc.fields.iter().any(|f| f.phase == Phase::Instr) {
                     return;

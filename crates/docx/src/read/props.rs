@@ -372,14 +372,18 @@ fn tab_stop(t: &El) -> Option<TabStop> {
         "clear" => TabAlign::Clear,
         _ => TabAlign::Left,
     };
-    let leader = match t.attr("w:leader").unwrap_or("none") {
+    Some(TabStop { pos, align, leader: tab_leader(t.attr("w:leader").unwrap_or("none")) })
+}
+
+/// A tab stop's or positional tab's `w:leader` (`ST_TabTlc`, `ST_PTabLeader`).
+pub(crate) fn tab_leader(v: &str) -> TabLeader {
+    match v {
         "dot" => TabLeader::Dot,
         "hyphen" => TabLeader::Hyphen,
         "underscore" | "heavy" => TabLeader::Underscore,
         "middleDot" => TabLeader::MiddleDot,
         _ => TabLeader::None,
-    };
-    Some(TabStop { pos, align, leader })
+    }
 }
 
 /// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).

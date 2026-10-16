@@ -879,6 +879,79 @@ fn right_tab_aligns_text_end() {
     assert!((end - 472.0).abs() < 1.0, "{end}");
 }
 
+/// A paragraph `before` + positional tab + `after`, with left and right indents and a custom
+/// left tab stop at 50 pt that the positional tab must ignore.
+fn ptab_doc(before: &str, after: &str, ptab: InlineObject, indents: (f32, f32)) -> Document {
+    let mut d = Document::from_text(&format!("{before}{after}"));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_left = Some(indents.0);
+        p.indent_right = Some(indents.1);
+        p.tabs = Some(vec![wordcraft_doc::props::TabStop { pos: 50.0, align: Default::default(), leader: Default::default() }]);
+    })
+    .unwrap();
+    d.insert_object(&Pos::body(0, before.len()), ptab, &Default::default()).unwrap();
+    d
+}
+
+fn ptab(align: wordcraft_doc::para::PTabAlign, relative_to: wordcraft_doc::para::PTabBase, leader: wordcraft_doc::props::TabLeader) -> InlineObject {
+    InlineObject::PositionalTab { align, relative_to, leader }
+}
+
+/// ECMA-376 §17.3.3.23: a right positional tab relative to the margin ends the text after it on
+/// the right margin, past the right indent, whatever the paragraph's tab stops; its leader fills
+/// the gap.
+#[test]
+fn right_positional_tab_ends_text_on_the_right_margin() {
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let d = ptab_doc("Left", "Right", ptab(PTabAlign::Right, PTabBase::Margin, wordcraft_doc::props::TabLeader::Dot), (0.0, 36.0));
+    let l = lay(&d);
+    let end = l.caret(&Pos::body(0, d.body[0].as_para().unwrap().len())).unwrap().x;
+    assert!((end - 540.0).abs() < 1.0, "end of the text after the tab: {end}");
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    assert!(para.lines[0].leaders.iter().any(|(_, ld)| *ld == wordcraft_doc::props::TabLeader::Dot), "{:?}", para.lines[0].leaders);
+}
+
+/// Relative to the indents, a centre positional tab centres the text after it between the left
+/// and right indents, not between the margins.
+#[test]
+fn center_positional_tab_relative_to_indents_centres_between_them() {
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let d = ptab_doc("a", "Mid", ptab(PTabAlign::Center, PTabBase::Indent, wordcraft_doc::props::TabLeader::None), (36.0, 108.0));
+    let l = lay(&d);
+    let from = l.caret(&Pos::body(0, 1 + wordcraft_doc::para::OBJ.len_utf8())).unwrap().x;
+    let to = l.caret(&Pos::body(0, d.body[0].as_para().unwrap().len())).unwrap().x;
+    // Indents at 36 and 468 - 108 = 360 from the margin: centre 198, page x 270.
+    assert!(((from + to) / 2.0 - 270.0).abs() < 1.0, "centre of the text after the tab: {}", (from + to) / 2.0);
+}
+
+/// Text already past the positional tab's place sends it to the next line, where it goes to
+/// that place.
+#[test]
+fn positional_tab_behind_the_text_moves_to_the_next_line() {
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let before = "word ".repeat(14);
+    let d = ptab_doc(&before, "X", ptab(PTabAlign::Left, PTabBase::Margin, wordcraft_doc::props::TabLeader::None), (0.0, 0.0));
+    let l = lay(&d);
+    let first = l.caret(&Pos::body(0, 0)).unwrap();
+    let x = l.caret(&Pos::body(0, before.len() + wordcraft_doc::para::OBJ.len_utf8())).unwrap();
+    assert!(x.top > first.top + 1.0, "X on the next line: {} vs {}", x.top, first.top);
+    assert!((x.x - 72.0).abs() < 0.5, "X at the left margin: {}", x.x);
+}
+
+/// A line holding only markers (a bookmark) before the positional tab is still empty: the tab
+/// doesn't leave it blank to go to the next line, even when its place is behind the indent.
+#[test]
+fn positional_tab_after_only_a_bookmark_stays_on_its_line() {
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let mut d = ptab_doc("", "X", ptab(PTabAlign::Left, PTabBase::Margin, wordcraft_doc::props::TabLeader::None), (36.0, 0.0));
+    d.insert_object(&Pos::body(0, 0), InlineObject::BookmarkStart { name: "top".into() }, &Default::default()).unwrap();
+    let l = lay(&d);
+    let para = l.pages[0].items.iter().find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    assert_eq!(para.lines.len(), 1);
+    let x = l.caret(&Pos::body(0, 2 * wordcraft_doc::para::OBJ.len_utf8())).unwrap().x;
+    assert!((x - 108.0).abs() < 0.5, "X at the indent: {x}");
+}
+
 #[test]
 fn lists_get_labels_and_indent() {
     let mut d = Document::from_text("one\ntwo\nthree");
