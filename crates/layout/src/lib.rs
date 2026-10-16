@@ -3176,7 +3176,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
     // that doesn't breaks as usual, its last lines going over with the next paragraph.
     if pl.rp.keep_lines || (pl.rp.keep_next && pb.y + pl.height <= pb.bottom + 0.01) {
-        let need = pl.height + if pl.rp.keep_next { next_first_line(ctx, block, width, 0) } else { 0.0 };
+        let need = pl.height + if pl.rp.keep_next { next_first_line(ctx, block, width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         if pb.y + need > pb.bottom && !pb.at_top() && need <= pb.uncapped_bottom() - pb.top {
             pb.advance(block, body_top);
@@ -3601,15 +3601,17 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// of it under keep lines together — or all of it and what it keeps with in turn when it is
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966).
-fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32 {
+fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
     match ctx.doc.body.get(block + 1).map(|b| &**b) {
         Some(Block::Para(p)) => {
-            // Don't advance list counters for a lookahead: lay out without the label.
+            // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
+            let label =
+                p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
             let env = para::ParaEnv {
                 doc: ctx.doc,
                 width,
-                label: None,
+                label,
                 fields: &ctx.fields,
                 show_hidden: ctx.opts.show_hidden,
                 field_codes: ctx.opts.field_codes,
@@ -3623,10 +3625,9 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
                 grid: ctx.grid,
                 fit_objects: false,
             };
-            let _ = rp;
             let pl = para::layout_para(p, &env);
             if pl.rp.keep_next && depth < 8 {
-                pl.rp.space_before + pl.height + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1)
+                pl.rp.space_before + pl.height + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
