@@ -2,6 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod automation_args;
+mod script;
 
 use std::ffi::{OsStr, OsString};
 use std::fmt;
@@ -26,9 +27,15 @@ USAGE:
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
   wordcraft-cli render <file> <out.png> [--page N] [--scale S]
-  wordcraft-cli run [--file F | --template T] --cmd 'id={json}' [--cmd …] [--save OUT] [--print]
-                    [--author NAME]           run commands headlessly, then save (--author names
-                                              who tracked changes and comments are by)
+  wordcraft-cli run [--file F | --template T] [--script FILE|-] --cmd 'id={json}' [--cmd …]
+                    [--save OUT] [--print] [--author NAME]
+                                              run commands headlessly, then save (--author names
+                                              who tracked changes and comments are by).
+                                              --script runs a JSON file (- is stdin) first:
+                                              {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
+                                              \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
+                                              formats follow the extension (docx and pdf in one run);
+                                              relative paths resolve against the script's folder
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
@@ -229,6 +236,7 @@ const RUN_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--file", takes_value: true },
     OptionSpec { name: "--template", takes_value: true },
     OptionSpec { name: "--cmd", takes_value: true },
+    OptionSpec { name: "--script", takes_value: true },
     OptionSpec { name: "--save", takes_value: true },
     OptionSpec { name: "--page", takes_value: true },
     OptionSpec { name: "--scale", takes_value: true },
@@ -361,7 +369,18 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             validate_options("run", &rest, RUN_OPTIONS)?;
             let page = parse_page_arg("run", &rest)?;
             let scale = parse_scale_arg("run", &rest)?;
-            let mut s = match (arg_value(&rest, "--file"), arg_value(&rest, "--template")) {
+            let script = match arg_value(&rest, "--script") {
+                Some(path) if !path.starts_with("--") => Some(script::load(&path)?),
+                _ if rest.iter().any(|a| a == "--script") => return Err("run: --script requires a value".into()),
+                _ => None,
+            };
+            // A source named on the command line wins over both of the script's.
+            let (mut from_file, mut from_template) = (arg_value(&rest, "--file"), arg_value(&rest, "--template"));
+            if from_file.is_none() && from_template.is_none() {
+                from_file = script.as_ref().and_then(|c| c.file.clone());
+                from_template = script.as_ref().and_then(|c| c.template.clone());
+            }
+            let mut s = match (from_file, from_template) {
                 (Some(f), _) => open(&f)?,
                 (None, Some(t)) => {
                     let mut s = session(wordcraft_doc::Document::new());
@@ -373,6 +392,13 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             if let Some(name) = arg_value(&rest, "--author") {
                 set_author(&mut s, &name)?;
             }
+            let print = rest.iter().any(|a| a == "--print");
+            for (n, (id, params)) in script.iter().flat_map(|c| c.commands.iter()).enumerate() {
+                let r = s.run(id, params).map_err(|e| format!("command {} ({id}): {e}", n + 1))?;
+                if print {
+                    write_stdout(|o| writeln!(o, "{id}: {r}"))?;
+                }
+            }
             let mut i = 0;
             while i < rest.len() {
                 if rest.get(i).map(String::as_str) == Some("--cmd") {
@@ -382,7 +408,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                         None => (spec.clone(), json!({})),
                     };
                     let r = s.run(&id, &params).map_err(|e| format!("{id}: {e}"))?;
-                    if rest.iter().any(|a| a == "--print") {
+                    if print {
                         write_stdout(|o| writeln!(o, "{id}: {r}"))?;
                     }
                     i += 2;
@@ -390,7 +416,18 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     i += 1;
                 }
             }
-            if let Some(out) = arg_value(&rest, "--save") {
+            let outputs: Vec<String> = script.iter().flat_map(|c| c.save.iter().cloned()).chain(arg_value(&rest, "--save")).collect();
+            // Check every output can be made before writing any, so a bad one leaves no half-done job.
+            for out in &outputs {
+                let parent = Path::new(out).parent().filter(|p| !p.as_os_str().is_empty());
+                if let Some(p) = parent.filter(|p| !p.is_dir()) {
+                    return Err(format!("{out}: folder {} does not exist", p.display()).into());
+                }
+                if !out.to_ascii_lowercase().ends_with(".png") {
+                    wordcraft_engine::io::save_bytes(out, &s.doc)?;
+                }
+            }
+            for out in outputs {
                 let r = if out.to_ascii_lowercase().ends_with(".png") {
                     let mut v = json!({"path": out});
                     if let Some(n) = page {
@@ -569,6 +606,7 @@ fn main() -> ExitCode {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Read;
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).into()).collect()
@@ -892,5 +930,139 @@ mod tests {
         assert!(!run_invalid.exists());
 
         let _ = std::fs::remove_dir_all(dir);
+    }
+    /// A scratch folder that removes itself, even when the test fails.
+    struct ScriptDir(PathBuf);
+
+    impl std::ops::Deref for ScriptDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for ScriptDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn script_dir(tag: &str) -> ScriptDir {
+        let dir = std::env::temp_dir().join(format!("wc-cli-script-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ScriptDir(dir)
+    }
+
+    fn write_script(dir: &Path, text: &str) -> String {
+        let p = dir.join("job.json");
+        std::fs::write(&p, text).unwrap();
+        p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn script_builds_a_document_and_saves_docx_and_pdf_relative_to_the_script() {
+        let dir = script_dir("two");
+        let script = write_script(
+            &dir,
+            r#"{"template":"blank","commands":[{"command":"text.insert","params":{"text":"Hello script"}},{"command":"format.bold"}],"save":["out.docx","out.pdf"]}"#,
+        );
+        run(&args(&["run", "--script", &script])).unwrap();
+        assert!(std::fs::read(dir.join("out.pdf")).unwrap().starts_with(b"%PDF"));
+        let doc = open(&dir.join("out.docx")).unwrap().doc;
+        let json = serde_json::to_string(&doc).unwrap();
+        assert!(json.contains("Hello script") && json.contains("\"bold\":true"));
+    }
+
+    #[test]
+    fn script_with_a_bad_output_writes_no_output() {
+        let dir = script_dir("badout");
+        let script = write_script(&dir, r#"{"commands":["caret.docEnd"],"save":["a.docx","b.xyz"]}"#);
+        let e = run(&args(&["run", "--script", &script])).unwrap_err().to_string();
+        assert_eq!(e.matches("b.xyz").count(), 1, "{e}");
+        assert!(!dir.join("a.docx").exists());
+        let script = write_script(&dir, r#"{"commands":["caret.docEnd"],"save":["a.docx","nope/b.docx"]}"#);
+        assert!(run(&args(&["run", "--script", &script])).is_err());
+        assert!(!dir.join("a.docx").exists());
+    }
+
+    #[test]
+    fn command_line_template_wins_over_the_scripts_file() {
+        let dir = script_dir("source");
+        let input = dir.join("in.docx");
+        run(&args(&["run", "--template", "blank", "--cmd", "text.insert={\"text\":\"FROM FILE\"}", "--save", &input.to_string_lossy()])).unwrap();
+        let script = write_script(&dir, r#"{"file":"in.docx","commands":["caret.docEnd"]}"#);
+        let (a, b) = (dir.join("a.txt"), dir.join("b.txt"));
+        run(&args(&["run", "--script", &script, "--template", "blank", "--save", &a.to_string_lossy()])).unwrap();
+        assert!(!std::fs::read_to_string(&a).unwrap().contains("FROM FILE"));
+        run(&args(&["run", "--script", &script, "--save", &b.to_string_lossy()])).unwrap();
+        assert!(std::fs::read_to_string(&b).unwrap().contains("FROM FILE"));
+    }
+
+    #[test]
+    fn script_value_missing_is_reported() {
+        let e = run(&args(&["run", "--script", "--cmd", "caret.docEnd"])).unwrap_err().to_string();
+        assert!(e.contains("--script requires a value"), "{e}");
+    }
+
+    #[test]
+    fn script_reads_from_a_stream_and_caps_its_size() {
+        let s = script::load_from(&br#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#[..], "-", None).unwrap();
+        assert_eq!((s.commands.len(), s.save), (1, vec!["o.docx".to_string()]));
+        let big = std::io::repeat(b' ').take(script::MAX_SCRIPT_BYTES + 10);
+        let e = script::load_from(big, "-", None).unwrap_err();
+        assert!(e.contains("too large"), "{e}");
+        assert!(script::load_from(&b"{"[..], "-", None).is_err());
+    }
+
+    #[test]
+    fn script_commands_run_before_cmd_flags() {
+        let dir = script_dir("order");
+        let script = write_script(&dir, r#"{"commands":[{"command":"text.insert","params":{"text":"first"}}]}"#);
+        let out = dir.join("o.txt");
+        run(&args(&["run", "--script", &script, "--cmd", "text.insert={\"text\":\" second\"}", "--save", &out.to_string_lossy()])).unwrap();
+        assert!(std::fs::read_to_string(&out).unwrap().contains("first second"));
+    }
+
+    #[test]
+    fn script_failure_names_the_command_and_writes_nothing() {
+        let dir = script_dir("fail");
+        let script =
+            write_script(&dir, r#"{"commands":[{"command":"text.insert","params":{"text":"x"}},{"command":"no.such.command"}],"save":["out.docx"]}"#);
+        let e = run(&args(&["run", "--script", &script])).unwrap_err().to_string();
+        assert!(e.contains("command 2") && e.contains("no.such.command"), "{e}");
+        assert!(!dir.join("out.docx").exists());
+    }
+
+    #[test]
+    fn script_rejects_junk_empty_missing_and_huge_input() {
+        let dir = script_dir("junk");
+        for text in [
+            "not json",
+            "[]",
+            "{}",
+            r#"{"commands":[]}"#,
+            r#"{"commands":[{"params":{}}]}"#,
+            r#"{"commands":[1]}"#,
+            r#"{"commands":[{"command":"a"}],"save":[1]}"#,
+        ] {
+            let script = write_script(&dir, text);
+            assert!(run(&args(&["run", "--script", &script])).is_err(), "{text}");
+        }
+        assert!(run(&args(&["run", "--script", &dir.join("missing.json").to_string_lossy()])).is_err());
+        let huge = write_script(&dir, &" ".repeat(5 * 1024 * 1024));
+        let e = run(&args(&["run", "--script", &huge])).unwrap_err().to_string();
+        assert!(e.contains("too large"), "{e}");
+    }
+
+    #[test]
+    fn script_parse_resolves_paths_against_the_base() {
+        let s = script::parse(r#"{"file":"in.docx","commands":[{"command":"edit.undo"}],"save":["/abs/o.pdf","o.docx"]}"#, Some(Path::new("/base")))
+            .unwrap();
+        assert_eq!(s.file.as_deref(), Some("/base/in.docx"));
+        assert_eq!(s.save, vec!["/abs/o.pdf".to_string(), "/base/o.docx".to_string()]);
+        let s = script::parse(r#"{"commands":["caret.docEnd"],"save":["o.docx"]}"#, None).unwrap();
+        assert_eq!(s.save, vec!["o.docx".to_string()]);
+        assert_eq!(s.commands.len(), 1);
     }
 }
