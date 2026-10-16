@@ -31,6 +31,9 @@
 //! - **Czech** ([`ProofLang::Cs`], module [`cs`]): the installed Hunspell `cs_CZ` dictionary
 //!   (not bundled), dictionary-driven suggestions and generic checks with Czech messages.
 //!   Hyphenation uses the existing English fallback; no Czech patterns are bundled.
+//! - **Vietnamese** ([`ProofLang::Vi`], module [`vi`]): spelling by the Vietnamese syllable
+//!   rules (onset, rhyme, tone), no dictionary needed; also detected in paragraphs typed under the
+//!   default English. No suggestions or grammar yet.
 //! - **Other languages** ([`ProofLang::Other`]): no spelling or grammar marks, like Word without
 //!   the language's proofing tools.
 //! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns (English, Polish, Portuguese),
@@ -146,6 +149,7 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     it::reload_dictionary();
     hr::reload_dictionary();
     tr::reload_dictionary();
+    vi::reload_dictionary();
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -157,6 +161,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
         (ProofLang::Pt, pt::installed_path()),
         (ProofLang::It, it::installed_path()),
         (ProofLang::Hr, hr::installed_path()),
+        (ProofLang::Vi, vi::installed_path()),
         (ProofLang::Tr, tr::installed_path()),
     ]
 }
@@ -598,6 +603,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Tr => "Olası yazım hatası",
         ProofLang::Ru => "Возможна орфографическая ошибка",
         ProofLang::Cs => "Možná pravopisná chyba",
+        ProofLang::Vi => "Có thể sai chính tả",
         _ => "Possible spelling mistake",
     };
     Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
@@ -619,6 +625,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         ProofLang::Tr => accepted_by_options(word, opts) || tr::is_correct(word),
         ProofLang::Ru => accepted_by_options(word, opts) || ru::is_correct(word),
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct(word),
+        ProofLang::Vi => accepted_by_options(word, opts) || vi::is_correct(word),
         ProofLang::Bg | ProofLang::Other => true,
     }
 }
@@ -634,7 +641,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Tr => tr::suggest(word, max),
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
-        ProofLang::Bg | ProofLang::Other => Vec::new(),
+        ProofLang::Bg | ProofLang::Vi | ProofLang::Other => Vec::new(),
     }
 }
 
@@ -651,7 +658,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
         ProofLang::Tr => tr::grammar::check(text),
         ProofLang::Ru => ru::grammar::check(text),
         ProofLang::Cs => cs::grammar::check(text),
-        ProofLang::Bg | ProofLang::Other => Vec::new(),
+        ProofLang::Bg | ProofLang::Vi | ProofLang::Other => Vec::new(),
     }
 }
 
@@ -678,13 +685,13 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
             _ => merged.push((r.clone(), *l)),
         }
     }
-    // A paragraph typed in Vietnamese under the default English language is Vietnamese, which
-    // has no proofing tools: no marks (Word detects the language the same way).
+    // A paragraph typed in Vietnamese under the default English language is Vietnamese (Word
+    // detects the language the same way).
     let default = if vi::looks_vietnamese(text) {
         for (_, l) in merged.iter_mut().filter(|(_, l)| *l == ProofLang::En) {
-            *l = ProofLang::Other;
+            *l = ProofLang::Vi;
         }
-        ProofLang::Other
+        ProofLang::Vi
     } else {
         ProofLang::En
     };
@@ -1298,7 +1305,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Vi, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1336,7 +1343,7 @@ mod tests {
 
         #[test]
         fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..8), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Other];
+            let langs = [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Vi, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());

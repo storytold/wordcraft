@@ -35,6 +35,9 @@ pub enum ProofLang {
     /// Czech (`cs`, `cs-CZ`): the installed Hunspell dictionary, dictionary-driven suggestions
     /// and generic punctuation checks. Hyphenation keeps the fallback English patterns.
     Cs,
+    /// Vietnamese (`vi`, `vi-VN`): spelling by the Vietnamese syllable rules ([`crate::vi`]); no
+    /// grammar rules or suggestions yet. Hyphenation keeps the fallback English patterns.
+    Vi,
     /// A language without proofing tools here (`fr-FR`, `ja-JP`, `x-none`…). Like Word without
     /// the language's proofing tools: no spelling or grammar marks, so its words are never
     /// flagged as English misspellings. Hyphenation keeps using the English patterns, as before
@@ -44,8 +47,8 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 8] =
-        [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs];
+    pub const PROOFED: [ProofLang; 9] =
+        [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Vi];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). Only the primary subtag
     /// counts. No tag (or an empty one) is English, WordCraft's default editing language.
@@ -70,6 +73,8 @@ impl ProofLang {
             ProofLang::Ru
         } else if primary.eq_ignore_ascii_case("cs") || primary.eq_ignore_ascii_case("ces") || primary.eq_ignore_ascii_case("cze") {
             ProofLang::Cs
+        } else if primary.eq_ignore_ascii_case("vi") || primary.eq_ignore_ascii_case("vie") {
+            ProofLang::Vi
         } else {
             ProofLang::Other
         }
@@ -87,6 +92,7 @@ impl ProofLang {
             ProofLang::Tr => "tr",
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
+            ProofLang::Vi => "vi",
             ProofLang::Other => "",
         }
     }
@@ -170,6 +176,9 @@ mod tests {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Cs, "{t}");
         }
         assert_eq!(ProofLang::Cs.code(), "cs");
+        for t in ["vi", "vi-VN", "VI_vn", "vie"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Vi, "{t}");
+        }
         assert!(ProofLang::Cs.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Cs));
         for t in ["en", "en-US", "en-GB", "EN_au", "en-Latn-US"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::En, "{t}");
