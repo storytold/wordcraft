@@ -925,6 +925,11 @@ fn vml_textpath_in_header_is_the_watermark() {
     let wm = read(flat, true).0.expect("watermark");
     assert_eq!((wm.color, wm.diagonal, wm.semitransparent), (Rgb(0x33, 0x66, 0x99), false, true));
 
+    // Fill color on v:fill, WordWatermarkObject id, and rotation:360 (horizontal).
+    let fill_color_and_360 = r##"<v:shape id="WordWatermarkObject42" type="#_x0000_t136" style="position:absolute;width:300pt;height:60pt;rotation:360"><v:fill color="#112233" opacity=".5"/><v:textpath string="DRAFT"/></v:shape>"##;
+    let wm = read(fill_color_and_360, true).0.expect("watermark from fill color");
+    assert_eq!((wm.text.as_str(), wm.color, wm.diagonal, wm.semitransparent), ("DRAFT", Rgb(0x11, 0x22, 0x33), false, true));
+
     // Not watermarks: the same shape in the body (WordArt); header WordArt that isn't centred
     // and isn't Word's watermark (a logo); a textpath turned off; a watermark-like shape inside a
     // header's text box.

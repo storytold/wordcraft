@@ -1864,7 +1864,7 @@ fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
     }
     let style = shape.attr("style").unwrap_or("");
     let centred = |k: &str| vml_style(style, k).is_some_and(|v| v.eq_ignore_ascii_case("center"));
-    let word = shape.attr("id").is_some_and(|id| id.starts_with("PowerPlusWaterMarkObject"));
+    let word = shape.attr("id").is_some_and(|id| id.to_ascii_lowercase().contains("watermark"));
     let placed = vml_style(style, "position").is_some_and(|p| p.eq_ignore_ascii_case("absolute"))
         && centred("mso-position-horizontal")
         && centred("mso-position-vertical");
@@ -1882,9 +1882,15 @@ fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
         .map(|f| f.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace()).chars().take(100).collect::<String>())
         .filter(|f| !f.is_empty())
         .unwrap_or(default.font);
-    let color = shape.attr("fillcolor").and_then(vml_color).unwrap_or(default.color);
+    let color = shape
+        .attr("fillcolor")
+        .or_else(|| shape.child("v:fill").and_then(|f| f.attr("color")))
+        .and_then(vml_color)
+        .unwrap_or(default.color);
     let opacity = shape.child("v:fill").and_then(|f| f.attr("opacity")).and_then(vml_fraction).unwrap_or(1.0);
-    Some(wordcraft_doc::Watermark { text, font, color, diagonal: vml_spin(style).deg != 0.0, semitransparent: opacity < 1.0 })
+    let deg = vml_spin(style).deg.rem_euclid(360.0);
+    let diagonal = deg > 1.0 && deg < 359.0;
+    Some(wordcraft_doc::Watermark { text, font, color, diagonal, semitransparent: opacity < 1.0 })
 }
 
 /// A VML fraction (`opacity`): a number, a percentage, or 65536ths with an `f` suffix; 0..=1.
