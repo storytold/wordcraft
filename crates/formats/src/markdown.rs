@@ -226,7 +226,7 @@ fn interrupts(l: &str) -> bool {
     if indent(l) >= 4 {
         return false;
     }
-    let t = l.trim_start();
+    let t = l.trim_start_matches([' ', '\t']);
     atx_heading(t).is_some()
         || thematic_break(t)
         || fence(t).is_some()
@@ -249,7 +249,7 @@ fn join_lines(lines: &[String]) -> String {
     let mut s = String::new();
     let n = lines.len();
     for (i, l) in lines.iter().enumerate() {
-        let l = l.trim_start();
+        let l = l.trim_start_matches([' ', '\t']);
         if i + 1 == n {
             s.push_str(l.trim_end());
         } else if l.ends_with("  ") {
@@ -308,7 +308,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
             out.extend(code.into_iter().map(code_para));
             continue;
         }
-        let t = line.trim_start();
+        let t = line.trim_start_matches([' ', '\t']);
         // Setext heading underline.
         if !para.is_empty() {
             let u = t.trim_end();
@@ -342,7 +342,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
             i += 1;
             while let Some(l) = lines.get(i) {
                 i += 1;
-                let lt = l.trim_start();
+                let lt = l.trim_start_matches([' ', '\t']);
                 if indent(l) < 4 && fence(lt).is_some_and(|(c, n)| c == fc && n >= fl) && lt.trim_start_matches(fc).trim().is_empty() {
                     break;
                 }
@@ -354,7 +354,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
             flush_para(&mut para, &mut out, depth);
             let mut inner: Vec<String> = Vec::new();
             while let Some(l) = lines.get(i) {
-                let lt = l.trim_start();
+                let lt = l.trim_start_matches([' ', '\t']);
                 if indent(l) < 4 && lt.starts_with('>') {
                     let s = &lt[1..];
                     inner.push(s.strip_prefix(' ').unwrap_or(s).to_string());
@@ -423,13 +423,13 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
 
 /// Parse a list starting at `lines[i]`; returns the index after it.
 fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>) -> usize {
-    let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start())) else { return i + 1 };
+    let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start_matches([' ', '\t']))) else { return i + 1 };
     while let Some(line) = lines.get(i) {
         let ind = indent(line);
         if ind >= 4 {
             break;
         }
-        let t = line.trim_start();
+        let t = line.trim_start_matches([' ', '\t']);
         let Some(m) = list_marker(t) else { break };
         if m.ordered != first.ordered || m.ch != first.ch {
             break;
@@ -448,9 +448,9 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
                 item.push(String::new());
             } else if indent(l) >= content_indent {
                 item.push(strip_indent(l, content_indent).to_string());
-            } else if item.last().is_some_and(|x| !is_blank(x)) && !interrupts(l) && list_marker(l.trim_start()).is_none() {
+            } else if item.last().is_some_and(|x| !is_blank(x)) && !interrupts(l) && list_marker(l.trim_start_matches([' ', '\t'])).is_none() {
                 // Lazy continuation of the item's paragraph.
-                item.push(l.trim_start().to_string());
+                item.push(l.trim_start_matches([' ', '\t']).to_string());
             } else {
                 break;
             }
@@ -507,9 +507,9 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
         }
         // Blank lines between items.
         while lines.get(i).is_some_and(|l| is_blank(l)) {
-            let next_is_item = lines
-                .get(i + 1)
-                .is_some_and(|l| indent(l) < 4 && list_marker(l.trim_start()).is_some_and(|m| m.ordered == first.ordered && m.ch == first.ch));
+            let next_is_item = lines.get(i + 1).is_some_and(|l| {
+                indent(l) < 4 && list_marker(l.trim_start_matches([' ', '\t'])).is_some_and(|m| m.ordered == first.ordered && m.ch == first.ch)
+            });
             if !next_is_item {
                 return i;
             }
@@ -1489,6 +1489,20 @@ mod tests {
         assert_eq!(escape_line_start("\tTabbed # text".to_string()), "   Tabbed # text");
         assert_eq!(escape_line_start("    # not a heading".to_string()), "   \\# not a heading");
         assert_eq!(escape_line_start(" \t1. not a list".to_string()), "   1\\. not a list");
+    }
+
+    #[test]
+    fn leading_unicode_whitespace_is_kept_and_does_not_start_blocks() {
+        let kinds_text = |md: &str| -> Vec<(Kind, bool, String)> {
+            parse(md).blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some((p.kind, p.list.is_some(), p.text())) } else { None }).collect()
+        };
+        assert_eq!(kinds_text("\u{3000}\u{3000}日本語の段落\n"), vec![(Kind::Normal, false, "\u{3000}\u{3000}日本語の段落".to_string())]);
+        for src in ["\u{a0}# not a heading", "\u{3000}1. not a list", "\u{a0}- x", "\u{a0}> not a quote"] {
+            let mut p = Para::default();
+            p.push_text(src, &Fmt::default());
+            let md = escape_line_start(inlines_md(&p.inlines));
+            assert_eq!(kinds_text(&md), vec![(Kind::Normal, false, src.to_string())], "{src:?} via {md:?}");
+        }
     }
 
     #[test]
