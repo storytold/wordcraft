@@ -1017,10 +1017,33 @@ impl Document {
     /// The body, then the text boxes, footnotes and endnotes it shows (nested ones too), in
     /// document order. Headers, footers, comments and stories nothing points at aren't included.
     pub fn counted_stories(&self) -> Vec<StoryRef> {
-        self.reachable(vec![StoryRef::Body], &|o| match o {
-            InlineObject::NoteRef { id, .. } => vec![(*id, &[PartKind::Footnote, PartKind::Endnote][..])],
-            o => o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(),
-        })
+        self.reachable(vec![StoryRef::Body], &notes_and_boxes)
+    }
+
+    /// The stories a reader sees, in reading order: `counted_stories`, then the headers and
+    /// footers the sections use, each followed by the notes and text boxes it shows. Stories
+    /// nothing points at any more (a removed header, a deleted note's text) and comment text
+    /// aren't included.
+    pub fn shown_stories(&self) -> Vec<StoryRef> {
+        let mut out = self.counted_stories();
+        let mut seen: std::collections::BTreeSet<StoryRef> = out.iter().copied().collect();
+        let mut roots = Vec::new();
+        let mut root_seen = std::collections::BTreeSet::new();
+        for (_, sec) in self.sections() {
+            for set in [&sec.headers, &sec.footers] {
+                for id in [set.default, set.first, set.even].into_iter().flatten() {
+                    if self.parts.get(&id).is_some_and(|p| matches!(p.kind, PartKind::Header | PartKind::Footer)) && root_seen.insert(id) {
+                        roots.push(StoryRef::Part(id));
+                    }
+                }
+            }
+        }
+        for st in self.reachable(roots, &notes_and_boxes) {
+            if seen.insert(st) {
+                out.push(st);
+            }
+        }
+        out
     }
 
     /// Drop the text box stories no box shows any more (a deleted or cut box's text), nested
@@ -1385,6 +1408,14 @@ impl PermRange {
 /// Words in `s` (tokens separated by whitespace that contain at least one alphanumeric char).
 pub fn count_words(s: &str) -> usize {
     s.split(|c: char| c.is_whitespace() || c == para::OBJ).filter(|w| w.chars().any(char::is_alphanumeric)).count()
+}
+
+/// The note and text box stories an object shows, for `Document::reachable`.
+fn notes_and_boxes(o: &InlineObject) -> Vec<(u32, &'static [PartKind])> {
+    match o {
+        InlineObject::NoteRef { id, .. } => vec![(*id, &[PartKind::Footnote, PartKind::Endnote][..])],
+        o => o.text_boxes().into_iter().map(|id| (id, &[PartKind::TextBox][..])).collect(),
+    }
 }
 
 fn walk(bl: &Blocks, prefix: &mut Vec<u32>, out: &mut Vec<Path>, depth: usize) {
