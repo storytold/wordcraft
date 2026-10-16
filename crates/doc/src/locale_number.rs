@@ -115,6 +115,7 @@ pub fn format_number(v: f64, lang: Option<&str>) -> String {
         return format!("{}", v as i64);
     }
     let s = format!("{v:.2}");
+    let s = if s == "-0.00" { "0.00".to_string() } else { s };
     if decimal_separator(lang) == ',' { s.replace('.', ",") } else { s }
 }
 
@@ -147,6 +148,7 @@ mod tests {
         assert_eq!(parse_number(".", pl), None);
         assert_eq!(format_number(5.75, pl), "5,75");
         assert_eq!(format_number(1350.0, pl), "1350");
+        assert_eq!(format_number(-0.001, pl), "0,00", "a rounded zero has no sign");
     }
 
     #[test]
@@ -161,6 +163,8 @@ mod tests {
         assert_eq!(parse_number("1.", en), Some(1.0));
         assert_eq!(parse_number("0,125", en), None, "never 125");
         assert_eq!(format_number(5.75, en), "5.75");
+        assert_eq!(format_number(-0.001, en), "0.00", "a rounded zero has no sign");
+        assert_eq!(format_number(-0.0, None), "0");
         assert_eq!(decimal_separator(Some("de-CH")), '.');
         assert_eq!(decimal_separator(Some("de-DE")), ',');
     }
