@@ -1291,7 +1291,7 @@ fn text_symbol(name: &str) -> Option<&'static str> {
         "{" => "{",
         "}" => "}",
         " " => " ",
-        "," | ";" | ":" | "enspace" | "thinspace" => " ",
+        "," | ";" | ":" | "enspace" | "thinspace" | "thickspace" => " ",
         "quad" => "\u{2003}",
         "qquad" => "\u{2003}\u{2003}",
         "-" | "/" | "@" | "!" | "noindent" | "indent" | "relax" | "protect" | "selectfont" | "nobreak" | "sloppy" | "fussy" | "centering"
@@ -1320,7 +1320,9 @@ fn text_symbol(name: &str) -> Option<&'static str> {
         "guillemotleft" | "guillemetleft" => "«",
         "guillemotright" | "guillemetright" => "»",
         "copyright" | "textcopyright" => "©",
-        "textregistered" => "®",
+        "textregistered" | "circledR" => "®",
+        "checkmark" => "✓",
+        "maltese" => "✠",
         "texttrademark" => "™",
         "S" | "textsection" => "§",
         "P" | "textparagraph" => "¶",
@@ -1331,6 +1333,11 @@ fn text_symbol(name: &str) -> Option<&'static str> {
         "textyen" => "¥",
         "textcent" => "¢",
         "textdegree" | "degree" => "°",
+        "textminus" => "−",
+        "textcelsius" => "℃",
+        "textperthousand" => "‰",
+        "textpertenthousand" => "‱",
+        "textrupee" => "₹",
         "textmu" => "µ",
         "texttimes" => "×",
         "textdiv" => "÷",
@@ -1689,21 +1696,30 @@ fn length_pt(s: &str) -> Option<f32> {
     (v.is_finite() && v > 0.0 && v < 10_000.0).then_some(v)
 }
 
-/// Column widths of a `tabular` column spec, when every column has one (`p{3cm}`).
-fn spec_widths(spec: &str) -> (usize, Vec<f32>) {
-    let (cols, widths) = spec_widths_at(spec, 0);
-    (cols.min(wordcraft_doc::table::MAX_COLS), if widths.len() == cols { widths } else { Vec::new() })
+/// Column widths and alignments of a `tabular` column spec.
+fn spec_cols(spec: &str) -> (usize, Vec<f32>, Vec<Option<Align>>) {
+    let (cols, widths, aligns) = spec_cols_at(spec, 0);
+    let max_cols = wordcraft_doc::table::MAX_COLS;
+    (cols.min(max_cols), if widths.len() == cols { widths } else { Vec::new() }, aligns)
 }
 
-/// [`spec_widths`] at nesting `depth` of `*{n}{…}` repeats. The column count saturates and the
-/// widths stop growing past [`wordcraft_doc::table::MAX_COLS`], so nested repeats can't overflow
+/// Column widths of a `tabular` column spec, when every column has one (`p{3cm}`).
+#[cfg(test)]
+fn spec_widths(spec: &str) -> (usize, Vec<f32>) {
+    let (cols, widths, _) = spec_cols(spec);
+    (cols, widths)
+}
+
+/// [`spec_cols`] at nesting `depth` of `*{n}{…}` repeats. The column count saturates and the
+/// widths/aligns stop growing past [`wordcraft_doc::table::MAX_COLS`], so nested repeats can't overflow
 /// or exhaust memory; the returned widths are empty unless every column has one.
-fn spec_widths_at(spec: &str, depth: usize) -> (usize, Vec<f32>) {
+fn spec_cols_at(spec: &str, depth: usize) -> (usize, Vec<f32>, Vec<Option<Align>>) {
     let max_cols = wordcraft_doc::table::MAX_COLS;
     let chars: Vec<char> = spec.chars().collect();
     let braces = closers(&chars, '{', '}');
     let mut cols = 0usize;
     let mut widths = Vec::new();
+    let mut aligns = Vec::new();
     let mut all = true;
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
@@ -1711,9 +1727,21 @@ fn spec_widths_at(spec: &str, depth: usize) -> (usize, Vec<f32>) {
             'l' | 'c' | 'r' | 'X' | 'S' | 'L' | 'C' | 'R' | 'J' => {
                 cols = cols.saturating_add(1);
                 all = false;
+                if aligns.len() < max_cols {
+                    let a = match c {
+                        'c' | 'C' => Some(Align::Center),
+                        'r' | 'R' | 'S' => Some(Align::Right),
+                        'J' => Some(Align::Justify),
+                        _ => Some(Align::Left),
+                    };
+                    aligns.push(a);
+                }
             }
             'p' | 'm' | 'b' => {
                 cols = cols.saturating_add(1);
+                if aligns.len() < max_cols {
+                    aligns.push(None);
+                }
                 match balanced(&chars, &braces, i + 1) {
                     Some((w, end)) => {
                         match length_pt(&w) {
@@ -1734,7 +1762,7 @@ fn spec_widths_at(spec: &str, depth: usize) -> (usize, Vec<f32>) {
                 {
                     if depth < MAX_NEST {
                         let n: usize = n.trim().parse().unwrap_or(1).min(64);
-                        let (c2, w2) = spec_widths_at(&inner, depth + 1);
+                        let (c2, w2, a2) = spec_cols_at(&inner, depth + 1);
                         cols = cols.saturating_add(c2.saturating_mul(n));
                         if w2.len() == c2 {
                             for _ in 0..n {
@@ -1745,6 +1773,12 @@ fn spec_widths_at(spec: &str, depth: usize) -> (usize, Vec<f32>) {
                             }
                         } else {
                             all = false;
+                        }
+                        for _ in 0..n {
+                            if aligns.len() >= max_cols {
+                                break;
+                            }
+                            aligns.extend(a2.iter().copied().take(max_cols - aligns.len()));
                         }
                     } else {
                         all = false;
@@ -1764,7 +1798,7 @@ fn spec_widths_at(spec: &str, depth: usize) -> (usize, Vec<f32>) {
         }
         i += 1;
     }
-    (cols, if all && widths.len() == cols { widths } else { Vec::new() })
+    (cols, if all && widths.len() == cols { widths } else { Vec::new() }, aligns)
 }
 
 /// Paragraph-level context from the enclosing environments.
@@ -2214,6 +2248,27 @@ impl<'a> Parser<'a> {
                 self.page_break = true;
             }
             "par" => self.flush(),
+            "centerline" => {
+                let toks = self.arg_tokens();
+                self.flush();
+                self.para.align = Some(Align::Center);
+                self.inline_with(toks, |_| {});
+                self.flush();
+            }
+            "leftline" => {
+                let toks = self.arg_tokens();
+                self.flush();
+                self.para.align = Some(Align::Left);
+                self.inline_with(toks, |_| {});
+                self.flush();
+            }
+            "rightline" => {
+                let toks = self.arg_tokens();
+                self.flush();
+                self.para.align = Some(Align::Right);
+                self.inline_with(toks, |_| {});
+                self.flush();
+            }
             "hrule" | "hrulefill" | "rule" => {
                 let _ = self.opt_arg();
                 let full = if name == "rule" {
@@ -2575,9 +2630,22 @@ fn source_text(toks: &[Tok]) -> String {
     s.trim().to_string()
 }
 
+fn parse_align_from_spec(spec: &str) -> Option<Align> {
+    for c in spec.chars() {
+        match c {
+            'c' | 'C' => return Some(Align::Center),
+            'r' | 'R' | 'S' => return Some(Align::Right),
+            'l' | 'L' | 'X' => return Some(Align::Left),
+            'J' => return Some(Align::Justify),
+            _ => {}
+        }
+    }
+    None
+}
+
 /// A `tabular` body as a table.
 fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
-    let (spec_cols, widths) = spec_widths(spec);
+    let (spec_cols, widths, aligns) = spec_cols(spec);
     // Split rows at `\\` and cells at `&`, outside braces and nested environments.
     let mut rows: Vec<Vec<&[Tok]>> = Vec::new();
     let mut row: Vec<&[Tok]> = Vec::new();
@@ -2620,6 +2688,7 @@ fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
         for cell_toks in r {
             let mut cell = Cell::default();
             let mut content = trim_cell(cell_toks);
+            let mut mc_align: Option<Align> = None;
             // `\multicolumn{n}{spec}{content}`, `\multirow{n}{width}{content}`.
             let mut sub = Parser::new(content, depth + 1);
             loop {
@@ -2628,7 +2697,8 @@ fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
                     Some(Tok::Cmd(c)) if c == "multicolumn" => {
                         sub.pos += 1;
                         cell.colspan = sub.arg_raw().trim().parse::<u32>().unwrap_or(1).clamp(1, 63);
-                        let _ = sub.arg_raw();
+                        let mcspec = sub.arg_raw();
+                        mc_align = parse_align_from_spec(&mcspec);
                         content = sub.arg_tokens();
                         sub = Parser::new(content, depth + 1);
                     }
@@ -2656,7 +2726,17 @@ fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
             }
             if !cell.covered && depth < MAX_NEST {
                 sub.run(None);
-                let (blocks, _) = sub.finish();
+                let (mut blocks, _) = sub.finish();
+                let col_align = mc_align.or_else(|| aligns.get(g).copied().flatten());
+                if let Some(a) = col_align {
+                    for b in &mut blocks {
+                        if let FBlock::Para(p) = b {
+                            if p.align.is_none() {
+                                p.align = Some(a);
+                            }
+                        }
+                    }
+                }
                 cell.blocks = blocks;
             }
             let span = cell.colspan as usize;
@@ -3074,5 +3154,40 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
         assert_eq!(bt.widths, vec![100.0, 200.0]);
         assert_eq!(bt.rows[1][0].colspan, 2);
+    }
+
+    #[test]
+    fn table_column_and_multicolumn_alignments() {
+        let src = r"\begin{tabular}{|l|c|r|}
+\hline
+Left & Center & Right \\
+\hline
+\multicolumn{2}{|c|}{Wide Center} & Right2 \\
+\hline
+\end{tabular}";
+        let flow = parse(src);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!() };
+        let align_of = |c: &Cell| c.blocks.iter().find_map(|b| if let FBlock::Para(p) = b { p.align } else { None });
+        assert_eq!(align_of(&t.rows[0][0]), Some(Align::Left));
+        assert_eq!(align_of(&t.rows[0][1]), Some(Align::Center));
+        assert_eq!(align_of(&t.rows[0][2]), Some(Align::Right));
+        assert_eq!(align_of(&t.rows[1][0]), Some(Align::Center));
+        assert_eq!(align_of(&t.rows[1][1]), Some(Align::Right));
+    }
+
+    #[test]
+    fn centerline_and_symbols() {
+        let src = r"\centerline{Centered Heading}
+\rightline{Right note}
+\checkmark \circledR \textminus \textcelsius \textrupee";
+        let doc = import(src.as_bytes());
+        let wordcraft_doc::Block::Para(p0) = &*doc.body[0] else { panic!() };
+        assert_eq!(p0.props.align, Some(Align::Center));
+        assert_eq!(p0.plain_text(), "Centered Heading");
+        let wordcraft_doc::Block::Para(p1) = &*doc.body[1] else { panic!() };
+        assert_eq!(p1.props.align, Some(Align::Right));
+        assert_eq!(p1.plain_text(), "Right note");
+        let wordcraft_doc::Block::Para(p2) = &*doc.body[2] else { panic!() };
+        assert_eq!(p2.plain_text(), "✓®−℃₹");
     }
 }
