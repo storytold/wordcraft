@@ -5781,6 +5781,39 @@ fn a_text_frame_in_a_cell_floats_beside_the_text() {
     assert!(frame.x > text.x + 200.0, "right-aligned in the cell: {} vs {}", frame.x, text.x);
 }
 
+/// Text frames in the body (a court form built from them, #2406) go where their frame puts them
+/// on the page; paragraphs with the same frame stack in it, and the text outside it flows as if
+/// the frame weren't there. WordCraft laid every framed paragraph out in line, one under the
+/// other down the left margin.
+#[test]
+fn body_text_frames_go_where_the_frame_puts_them() {
+    use wordcraft_doc::props::TextFrame;
+    let frame = TextFrame {
+        w: Some(150.0),
+        x: 300.0,
+        y: 400.0,
+        h_anchor: "page".into(),
+        v_anchor: "page".into(),
+        wrap: "around".into(),
+        ..Default::default()
+    };
+    let framed = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        wordcraft_doc::para_block(p)
+    };
+    let mut d = Document::new();
+    d.body =
+        vec![framed("Attorney 1"), framed("Attorney 2"), wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Body", Default::default()))];
+    let l = lay(&d);
+    let at = |b: usize| l.caret(&Pos::body(b, 0)).unwrap();
+    let (one, two, body) = (at(0), at(1), at(2));
+    assert!((one.x - 300.0).abs() < 1.0 && (one.top - 400.0).abs() < 1.0, "the frame's place on the page: ({}, {})", one.x, one.top);
+    assert!((two.x - one.x).abs() < 0.5 && two.top > one.top + 5.0, "the second paragraph under the first: ({}, {})", two.x, two.top);
+    assert!(two.top < one.top + 40.0, "in the same frame: {} vs {}", two.top, one.top);
+    assert!((body.top - 72.0).abs() < 1.0 && (body.x - 72.0).abs() < 1.0, "the frames take no room: ({}, {})", body.x, body.top);
+}
+
 /// Where a list paragraph's text starts when its style has indents of its own (measured in Word,
 /// `plan/word` R16): the list level's indents go on top of the most derived style that gives the
 /// list, so that style's own indent (and those of styles based on it) win, its base styles' don't
