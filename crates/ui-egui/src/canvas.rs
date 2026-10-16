@@ -75,6 +75,9 @@ pub struct CanvasState {
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
+    /// While the vertical scrollbar is dragged: the page at the top of the window (0-based),
+    /// which a tip beside the pointer names (#2551).
+    pub scrollbar_page: Option<usize>,
     /// Effective scale (screen points per document point).
     pub scale: f32,
     pub canvas_rect: Option<Rect>,
@@ -206,6 +209,7 @@ impl Default for CanvasState {
             last_shading: "FFF2CC".into(),
             open_url: None,
             page_rects: Vec::new(),
+            scrollbar_page: None,
             scale: PX_PER_PT,
             canvas_rect: None,
             focused: false,
@@ -1417,6 +1421,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         (resp, rects)
     });
     app.canvas.scroll_offset = out.state.offset;
+    scrollbar_page_tip(app, ui, out.id, &geo.rects, layout.pages.len());
     crate::ink::replay_bar(app, ui, out.inner_rect);
     app.canvas.scroll_max = (out.content_size - out.inner_rect.size()).max(egui::Vec2::ZERO);
     if app.session.view.read_mode {
@@ -2058,6 +2063,34 @@ pub fn nearest_page(rects: &[Rect], p: Pos2) -> Option<usize> {
         }
     }
     best.map(|(i, _)| i)
+}
+
+/// While the vertical scrollbar of the canvas scroll area `scroll` is dragged, a tip beside the
+/// pointer says which page is at the top of the window, as the status bar says it ("Page 15 of
+/// 42"): dragging through a long document, you see where you'll land (#2551). `rects` are the
+/// pages in content coordinates.
+fn scrollbar_page_tip(app: &mut WordApp, ui: &Ui, scroll: egui::Id, rects: &[Rect], pages: usize) {
+    // egui's scroll bars sense under the scroll area's id with the axis (1: vertical).
+    let dragged = ui.ctx().is_being_dragged(scroll.with(1usize));
+    app.canvas.scrollbar_page = (dragged && !rects.is_empty() && pages > 0).then(|| top_page(rects, app.canvas.scroll_offset.y).min(pages - 1));
+    let (Some(page), Some(at)) = (app.canvas.scrollbar_page, ui.ctx().pointer_latest_pos()) else { return };
+    let text = crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &(page + 1).to_string()), ("pages", &pages.to_string())]);
+    egui::Area::new(egui::Id::new("scrollbar_page_tip"))
+        .order(egui::Order::Tooltip)
+        .interactable(false)
+        .pivot(egui::Align2::RIGHT_CENTER)
+        .fixed_pos(at - vec2(16.0, 0.0))
+        .show(ui.ctx(), |ui| {
+            egui::Frame::popup(ui.style()).show(ui, |ui| {
+                ui.label(text);
+            });
+        });
+}
+
+/// The page whose rect (content coordinates) is at height `y`, or the first one below it: the
+/// page at the top of a window scrolled to `y`. The last page past the end.
+fn top_page(rects: &[Rect], y: f32) -> usize {
+    rects.iter().position(|r| r.max.y > y).unwrap_or(rects.len().saturating_sub(1))
 }
 
 /// Whether wheel input counts as being over the canvas. Another widget's drag (a scrollbar, say)
@@ -3322,6 +3355,72 @@ mod tests {
         multi_drag(&mut h, at, at, 2);
         let (s, e) = h.state().session.sel.ordered();
         assert_eq!((s, e), (Pos::body(0, 0), Pos::body(0, 6)));
+    }
+
+    /// #2551: dragging the vertical scrollbar shows the page at the top of the window beside the
+    /// pointer ("Page 7 of 10"), and the tip goes when the button is let go.
+    #[test]
+    fn dragging_the_scrollbar_names_the_page_at_the_top() {
+        use egui::accesskit::Role;
+        use egui::{Event, PointerButton};
+        use egui_kittest::kittest::Queryable;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        for _ in 0..9 {
+            a.run("text.insert", json!({"text": "Page text"})).unwrap();
+            a.run("layout.break", json!({"kind": "page"})).unwrap();
+        }
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        assert_eq!(h.state_mut().session.layout().pages.len(), 10);
+        let bar = h
+            .query_all_by_role(Role::ScrollBar)
+            .map(|n| n.rect())
+            .filter(|r| r.height() > r.width())
+            .max_by(|a, b| a.height().total_cmp(&b.height()))
+            .expect("the canvas's vertical scrollbar");
+        let button =
+            |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        let from = pos2(bar.center().x, bar.top() + 8.0);
+        h.event(Event::PointerMoved(from));
+        h.step();
+        assert_eq!(h.state().canvas.scrollbar_page, None, "no tip before a drag");
+        h.event(button(from, true));
+        h.step();
+        let to = pos2(from.x, bar.top() + bar.height() * 0.65);
+        for k in 1..=6 {
+            h.event(Event::PointerMoved(from + (to - from) * (k as f32 / 6.0)));
+            h.step();
+        }
+        let page = h.state().canvas.scrollbar_page.expect("a tip while the scrollbar is dragged");
+        assert!((4..10).contains(&page), "a page well down the document: {page}");
+        assert!(h.query_by_label(&format!("Page {} of 10", page + 1)).is_some(), "the tip names page {}", page + 1);
+        h.event(button(to, false));
+        h.step();
+        h.step();
+        assert_eq!(h.state().canvas.scrollbar_page, None, "the tip goes with the button");
+        assert!(h.query_by_label(&format!("Page {} of 10", page + 1)).is_none(), "and its text");
+    }
+
+    /// `top_page`: the page at a window's top, the one below in a gap, the last one past the end.
+    #[test]
+    fn the_page_at_the_top_of_the_window() {
+        let rects: Vec<Rect> = (0..3).map(|i| Rect::from_min_size(pos2(0.0, i as f32 * 110.0), vec2(80.0, 100.0))).collect();
+        assert_eq!(top_page(&rects, 0.0), 0);
+        assert_eq!(top_page(&rects, 99.0), 0);
+        assert_eq!(top_page(&rects, 105.0), 1, "in the gap: the page below");
+        assert_eq!(top_page(&rects, 250.0), 2);
+        assert_eq!(top_page(&rects, 1e6), 2, "past the end: the last page");
+        assert_eq!(top_page(&[], 0.0), 0);
     }
 
     /// #1014: Ctrl+drag on a shape leaves it and drops a copy; a plain drag moves it.
