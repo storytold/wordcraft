@@ -999,8 +999,8 @@ impl Reader<'_> {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
-        } else if gd.find("a:blip").is_some() {
-            self.read_pic(gd, rels, w, h, alt.clone(), float)?
+        } else if let Some(pic) = gd.child("pic:pic") {
+            self.read_pic(pic, rels, w, h, alt.clone(), float)?
         } else {
             let wsp = gd.find("wps:wsp")?;
             let mut obj = self.read_wsp(sc, wsp, rels, w, h, float);
