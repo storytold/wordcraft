@@ -2438,10 +2438,7 @@ fn a_nested_cell_cut_by_the_page_bottom_keeps_its_rest() {
     assert_eq!(Some(lines), total);
 }
 
-/// A row of a minimum ("at least") height taller than its text that splits across pages keeps
-/// its height over them: the continuation holds the rest of the row, not just the rest of the
-/// text (no public Word reference crosses a page with such a row; this keeps the earlier
-/// behaviour).
+/// A minimum taller than a page retains its aggregate height across fragments.
 #[test]
 fn a_split_at_least_row_keeps_its_height() {
     let mut d = Document::from_text("Filler");
@@ -2476,6 +2473,7 @@ fn split_row_rejects_a_hostile_cut() {
     };
     let line = |y: f32| Placed::Lines { story, path: path.clone(), para: para.clone(), l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal };
     let row = |height: f32, bottom: f32| RowLayout {
+        min_height: 0.0,
         height,
         items: vec![line(0.0), line(150.0)],
         bottom,
@@ -4548,6 +4546,7 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
     let fill = |y: f32, h: f32| Placed::Fill { rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h), color: wordcraft_doc::props::Rgb(200, 0, 0) };
     // The row's own shading (from its top) and a nested cell's shading starting below the cut.
     let row = RowLayout {
+        min_height: 0.0,
         height: 200.0,
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
@@ -7262,4 +7261,40 @@ fn row_nil_overrides_style() {
     t.rows[0].cells[0].props.borders = Some(Borders { right: Some(Border::single(2.0)), ..Default::default() });
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
+}
+
+/// Word retains an at-least row height on its continuation, even when few lines remain.
+#[test]
+fn split_row_retains_minimum() {
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    let mut d = Document::new();
+    d.last_section.page_h = 360.0;
+    d.last_section.margin_top = 36.0;
+    d.last_section.margin_bottom = 36.0;
+    let mut t = Table::new(2, 1, 400.0);
+    t.rows[0].props.height = Some(200.0);
+    t.rows[0].props.height_rule = HeightRule::AtLeast;
+    let mut p = wordcraft_doc::Paragraph::with_text(&["Line"; 35].join("\n"), Default::default());
+    p.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.widow_control = Some(false);
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    t.rows[1].props.height = Some(100.0);
+    t.rows[1].props.height_rule = HeightRule::AtLeast;
+    d.body = vec![std::sync::Arc::new(Block::Table(t))];
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 3, "the continuation keeps its minimum, leaving too little room for the next row");
+    let continuation = l.pages[1]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { rect, row: 0, .. } => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    // The default top border adds 0.5pt to the specified minimum.
+    assert!((continuation.h - 200.5).abs() < 0.05, "{continuation:?}");
+    let next = l.pages.iter().position(|page| page.items.iter().any(|it| matches!(it, Placed::Cell { row: 1, .. })));
+    assert_eq!(next, Some(2));
 }
