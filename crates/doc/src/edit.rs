@@ -512,6 +512,36 @@ impl Document {
         out
     }
 
+    /// The part of one table a selection running across its cells copies: the rectangle of cells
+    /// from `a` to `b`, with the grid cut to match, so the copy is still a table. `None` when the
+    /// two ends are not in cells of one table, or are in the same cell (the paragraph path copies
+    /// that). Word selects whole cells once a selection leaves one, and this follows it.
+    fn table_slice(&self, a: &Pos, b: &Pos) -> Option<Block> {
+        let common = a.path.0.iter().zip(&b.path.0).take_while(|(x, y)| x == y).count();
+        // The deepest table holding both ends: the row and the cell follow its path.
+        let at = (0..=common).rev().find(|&p| a.path.0.get(..p).is_some_and(|q| self.table(a.story, &Path(q.to_vec())).is_some()))?;
+        let t = self.table(a.story, &Path(a.path.0.get(..at)?.to_vec()))?;
+        let cell = |p: &Path| Some((*p.0.get(at)? as usize, *p.0.get(at + 1)? as usize));
+        let ((r0, c0), (r1, c1)) = (cell(&a.path)?, cell(&b.path)?);
+        if (r0, c0) == (r1, c1) {
+            return None;
+        }
+        let (rows, cols) = ((r0.min(r1), r0.max(r1)), (c0.min(c1), c0.max(c1)));
+        let mut out = t.clone();
+        out.grid = t.grid.get(cols.0..=cols.1.min(t.grid.len().saturating_sub(1)))?.to_vec();
+        out.rows = t
+            .rows
+            .get(rows.0..=rows.1.min(t.rows.len().saturating_sub(1)))?
+            .iter()
+            .map(|row| {
+                let mut row = row.clone();
+                row.cells = row.cells.get(cols.0..=cols.1.min(row.cells.len().saturating_sub(1))).map(<[_]>::to_vec).unwrap_or_default();
+                row
+            })
+            .collect();
+        Some(Block::Table(out))
+    }
+
     fn copy_blocks(&self, a: &Pos, b: &Pos) -> Vec<Block> {
         let (a, b) = order(a, b);
         let mut out = Vec::new();
@@ -538,6 +568,12 @@ impl Document {
                 }
             }
             return out;
+        }
+        // A selection running from one cell into another copies that part of the table, so the
+        // cells stay cells (#2398). Falling through would flatten them to loose paragraphs, and a
+        // paste then puts every cell on its own line in the first cell of the target row.
+        if let Some(t) = self.table_slice(&a, &b) {
+            return vec![t];
         }
         for p in self.paths_between(&a, &b) {
             if let Some(para) = self.para(a.story, &p) {

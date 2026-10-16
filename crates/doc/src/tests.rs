@@ -457,3 +457,22 @@ fn custom_props_set_get_remove() {
     assert!(!d.remove_custom_prop("other"));
     assert_eq!(d.custom_props.len(), 1);
 }
+
+/// #2398: a selection across a table row keeps the row a table, so the clipboard text is
+/// tab-separated and a spreadsheet pastes it into columns. Flattening it to paragraphs puts one
+/// cell per line, which lands every cell in the first cell of the target row instead.
+#[test]
+fn copying_across_a_table_row_keeps_its_cells_tab_separated() {
+    let mut d = Document::new();
+    let mut t = Table::new(1, 3, 300.0);
+    for (i, text) in ["Col 1", "Col 2", "Col 3"].iter().enumerate() {
+        t.rows[0].cells[i].blocks = vec![para_block(Paragraph::with_text(text, CharProps::default()))];
+    }
+    d.body = vec![Arc::new(Block::Table(t))];
+    // The start of the first cell to the end of the last: the two ends sit in different cells.
+    let a = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, 0]), off: 0 };
+    let b = Pos { story: StoryRef::Body, path: Path(vec![0, 0, 2, 0]), off: 5 };
+    let f = d.copy_range(&a, &b);
+    assert!(f.blocks.iter().any(|b| matches!(b, Block::Table(_))), "the copy is still a table, not loose paragraphs");
+    assert_eq!(f.clipboard_text(), "Col 1\tCol 2\tCol 3", "one row: tabs between the cells, and no trailing newline");
+}

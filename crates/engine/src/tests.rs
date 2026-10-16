@@ -7232,3 +7232,24 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// #2398: copying a table row puts tab-separated text and an HTML table on the clipboard, so a
+/// spreadsheet or another table pastes it into columns instead of stacking the cells in one.
+#[test]
+fn copying_a_table_row_offers_tsv_text_and_an_html_table() {
+    let mut s = s();
+    let mut table = wordcraft_doc::table::Table::new(1, 3, 300.0);
+    for (i, text) in ["Col 1", "Col 2", "Col 3"].iter().enumerate() {
+        table.rows[0].cells[i].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+    }
+    s.doc.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
+    let at = |cell: u32, off: usize| Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, 0, cell, 0]), off };
+    s.sel = crate::Selection { anchor: at(0, 0), focus: at(2, 5) };
+
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "Col 1\tCol 2\tCol 3", "cells are tab separated, so columns survive");
+    assert_eq!(r["text"], json!("Col 1\tCol 2\tCol 3"));
+    let html = r["html"].as_str().unwrap_or_default();
+    assert!(html.contains("<table"), "an HTML table, not loose paragraphs: {html}");
+    assert_eq!(html.matches("<td").count(), 3, "one cell each: {html}");
+}
