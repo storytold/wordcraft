@@ -219,8 +219,8 @@ pub fn specs() -> Vec<CommandSpec> {
             } else {
                 return Err(CmdError::Params("`path` or `data` required".into()));
             };
-            wordcraft_render::image_size(&bytes).ok_or_else(|| CmdError::Failed("not a supported image".into()))?;
-            let key = s.doc.add_media(bytes.clone(), super::insert::image_ext(&bytes));
+            let (_, _, ext) = super::insert::picture_size(&bytes)?;
+            let key = super::insert::add_picture_media(s, bytes, ext);
             with_obj(s, |o| {
                 if let InlineObject::Image { media, .. } = o {
                     *media = key.clone();
@@ -1036,6 +1036,9 @@ fn adjust(s: &mut Session, f: impl Fn(image::DynamicImage) -> image::DynamicImag
 /// Picture keeps working.
 fn adjust_media(s: &mut Session, base: &str, f: impl Fn(image::DynamicImage) -> image::DynamicImage) -> CmdResult {
     let bytes = s.doc.media.get(base).cloned().ok_or_else(|| CmdError::Failed("picture data missing".into()))?;
+    if wordcraft_svg::is_svg(&bytes) {
+        return Err(CmdError::Failed("This picture is an SVG; colour and correction edits work on bitmap pictures".into()));
+    }
     let img = image::load_from_memory(&bytes).map_err(|e| CmdError::Failed(format!("can't decode the picture: {e}")))?;
     if (img.width() as u64) * (img.height() as u64) > 80_000_000 {
         return Err(CmdError::Failed("picture is too large to edit".into()));

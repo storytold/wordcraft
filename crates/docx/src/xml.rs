@@ -55,6 +55,11 @@ pub const NAMESPACES: &[(&str, &str)] = &[
 pub const DECORATIVE_EXT: &str = "{C183D7F6-B498-43B3-948B-1728B52AA6E4}";
 pub const DECORATIVE_NS: &str = "http://schemas.microsoft.com/office/drawing/2017/decorative";
 
+/// The `a:ext` URI under which a picture's `a:blip` carries its SVG original ([MS-ODRAWXML]
+/// `asvg:svgBlip`), and that element's namespace. The blip's own relationship is a PNG fallback.
+pub const SVG_BLIP_EXT: &str = "{96DAC541-7B7A-43D3-8B79-37D633B846F1}";
+pub const SVG_BLIP_NS: &str = "http://schemas.microsoft.com/office/drawing/2016/SVG/main";
+
 /// Namespaces that only appear in non-body parts.
 const OTHER_NAMESPACES: &[(&str, &str)] = &[
     ("b", "http://schemas.openxmlformats.org/officeDocument/2006/bibliography"),
@@ -68,6 +73,7 @@ const OTHER_NAMESPACES: &[(&str, &str)] = &[
     ("ep", "http://schemas.openxmlformats.org/officeDocument/2006/extended-properties"),
     ("op", "http://schemas.openxmlformats.org/officeDocument/2006/custom-properties"),
     ("vt", "http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"),
+    ("asvg", SVG_BLIP_NS),
 ];
 
 /// ISO/IEC 29500 Strict namespaces map onto the transitional prefixes.

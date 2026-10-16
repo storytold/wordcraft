@@ -15,8 +15,11 @@ wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-metafile = { workspace = true }
 craft-pdf = { workspace = true }
+wordcraft-svg = { workspace = true }
+krilla-svg = { workspace = true }
 kurbo = { workspace = true }
 image = { workspace = true }
+gif = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 

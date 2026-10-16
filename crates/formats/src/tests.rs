@@ -749,3 +749,73 @@ fn hidden_drawings_are_left_out_of_exports() {
     // Two pictures, one hidden: one comes out.
     assert_eq!(crate::html::export(&d).matches("<img").count(), 1);
 }
+
+/// #1910: an SVG picture is written as PNG where the format can't hold SVG (RTF, ODT) and as
+/// SVG where it can (HTML).
+mod svg_pictures {
+    use super::*;
+
+    const SVG: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="20"><rect width="20" height="20" fill="#ff0000"/></svg>"##;
+
+    fn svg_doc() -> Document {
+        let mut d = Document::new();
+        let media = d.add_media(SVG.to_vec(), "svg");
+        let mut p = Paragraph::with_text("Logo: ", CharProps::default());
+        let n = p.len();
+        let obj = InlineObject::Image { media, w: 30.0, h: 15.0, alt: "logo".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+        p.insert_object(n, obj, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+        d
+    }
+
+    fn picture_media(d: &Document) -> Vec<u8> {
+        d.body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .flat_map(|p| &p.objects)
+            .find_map(|o| match o {
+                InlineObject::Image { media, .. } => d.media.get(media).map(|m| m.to_vec()),
+                _ => None,
+            })
+            .expect("a picture")
+    }
+
+    #[test]
+    fn rtf_gets_a_png() {
+        let rtf = String::from_utf8(export("rtf", &svg_doc()).unwrap().unwrap()).unwrap();
+        assert!(rtf.contains("\\pngblip"), "the SVG is written as a PNG");
+        let back = import("rtf", rtf.as_bytes()).unwrap().unwrap();
+        assert!(picture_media(&back).starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn odt_gets_a_png() {
+        let odt = export("odt", &svg_doc()).unwrap().unwrap();
+        let mut z = zip::ZipArchive::new(std::io::Cursor::new(&odt)).unwrap();
+        let names: Vec<String> = z.file_names().map(str::to_string).collect();
+        assert!(names.iter().any(|n| n.starts_with("Pictures/") && n.ends_with(".png")), "{names:?}");
+        assert!(!names.iter().any(|n| n.ends_with(".svg")), "{names:?}");
+        let mut manifest = String::new();
+        std::io::Read::read_to_string(&mut z.by_name("META-INF/manifest.xml").unwrap(), &mut manifest).unwrap();
+        assert!(!manifest.contains("image/svg+xml"));
+        let back = import("odt", &odt).unwrap().unwrap();
+        assert!(picture_media(&back).starts_with(b"\x89PNG"));
+    }
+
+    #[test]
+    fn html_keeps_the_svg() {
+        let html = String::from_utf8(export("html", &svg_doc()).unwrap().unwrap()).unwrap();
+        assert!(html.contains("src=\"data:image/svg+xml;base64,"), "the SVG is embedded as is");
+    }
+
+    #[test]
+    fn unreadable_svg_is_left_out_of_rtf_not_written_broken() {
+        let mut d = svg_doc();
+        for m in d.media.values_mut() {
+            *m = Arc::new(b"<svg".to_vec());
+        }
+        let rtf = String::from_utf8(export("rtf", &d).unwrap().unwrap()).unwrap();
+        assert!(!rtf.contains("\\pict"));
+        assert!(import("rtf", rtf.as_bytes()).unwrap().is_ok());
+    }
+}

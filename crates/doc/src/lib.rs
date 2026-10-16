@@ -679,6 +679,11 @@ pub struct Document {
     /// Embedded media (images) by key.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub media: BTreeMap<String, Arc<Vec<u8>>>,
+    /// SVG pictures' PNG fallbacks (#1910): SVG media key → the media key of the PNG stored with it
+    /// (Word's own, read from a file, or one made on an earlier save), written back as it is so
+    /// a save neither draws it again nor loses what only the PNG shows.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub svg_fallbacks: BTreeMap<String, String>,
     /// Source-format parts we keep verbatim for round-trip (e.g. custom XML), by part name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub passthrough: BTreeMap<String, Arc<Vec<u8>>>,
@@ -708,6 +713,7 @@ impl Document {
             footnote_separators: NoteSeparators::default(),
             endnote_separators: NoteSeparators::default(),
             media: BTreeMap::new(),
+            svg_fallbacks: BTreeMap::new(),
             passthrough: BTreeMap::new(),
         }
     }

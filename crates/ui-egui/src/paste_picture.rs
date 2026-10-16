@@ -33,7 +33,7 @@ pub const MAX_PIXELS: usize = 50_000_000;
 pub const MAX_FILE_BYTES: u64 = 200 << 20;
 /// Most picture files one paste inserts.
 const MAX_FILES: usize = 20;
-const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
+const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf", "svg"];
 
 /// PNG bytes for clipboard pixels, or why they can't be pasted.
 pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u8>, String> {
@@ -182,6 +182,8 @@ mod tests {
         let abs = if cfg!(windows) { r"C:\tmp\b.JPG" } else { "/tmp/b.JPG" };
         assert!(names_picture_files(&format!("file:///home/me/shot%201.png\n{abs}\n")));
         assert!(!names_picture_files("see /tmp/b.png") && !names_picture_files("notes.txt") && !names_picture_files(""));
+        // #1910: SVG pictures too.
+        assert!(names_picture_files("file:///home/me/logo.svg\nfile:///home/me/Icon.SVG"));
     }
 
     /// Hostile clipboard sizes are refused without inserting anything (or allocating for them).

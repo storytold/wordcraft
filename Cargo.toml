@@ -28,6 +28,7 @@ wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
 wordcraft-metafile = { path = "crates/metafile" }
+wordcraft-svg = { path = "crates/svg" }
 
 # foundation
 kurbo = { version = "0.13", features = ["serde"] }
@@ -53,6 +54,24 @@ wuff = "0.2.9"
 vello_cpu = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "c3487320b2d1de657b860b3c8abb44e1f2b32bd8", version = "=0.1.0", default-features = false, features = ["write"] }
+# SVG pictures (#1910): usvg parses (pure Rust, MIT OR Apache-2.0), resvg rasterises (tiny-skia),
+# krilla-svg draws the parsed tree into the PDF as vectors (the krilla 0.8 companion crate).
+# krilla-svg depends on usvg with its default features, so Cargo's feature unification turns on
+# usvg's system-font loading code anyway: `default-features = false` below does not keep it out.
+# What keeps system fonts from being scanned is `wordcraft-svg`: it hands usvg a font database it
+# fills itself, on demand, with the faces WordCraft documents draw with (wordcraft-fonts), and
+# never calls `load_system_fonts`.
+usvg = { version = "0.47", default-features = false, features = ["text"] }
+resvg = { version = "0.47", default-features = false, features = ["text", "raster-images"] }
+# The `<use>` links in an SVG are read with usvg's own parser for them (the version usvg 0.47 uses).
+svgtypes = "0.16"
+# Image sizes from their headers, for the SVG drawing budget (already built for usvg).
+imagesize = "0.14"
+# GIF decoding with the same options krilla embeds GIFs with (SVG pictures in PDF export).
+gif = "0.14"
+# The style sheets in an SVG are matched with usvg's own CSS parser (the version usvg 0.47 uses).
+simplecss = "0.2"
+krilla-svg = "0.8"
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.

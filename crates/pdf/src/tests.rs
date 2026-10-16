@@ -1018,6 +1018,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         cmaps: HashMap::new(),
         images: HashMap::new(),
         vectors: HashMap::new(),
+        svgs: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
@@ -1485,4 +1486,160 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let bytes = export_layout(&d, &lay, &PdfOptions::default()).unwrap();
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
+}
+
+/// #1910: an SVG picture is drawn into the PDF as vector paths, not as an image.
+#[test]
+fn svg_pictures_are_drawn_as_vector_paths() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect x="20" width="20" height="40" fill="#ff0000"/></svg>"##;
+    let mut d = Document::new();
+    let media = d.add_media(svg.to_vec(), "svg");
+    let mut p = Paragraph::with_text("Figure: ", CharProps::default());
+    let n = p.len();
+    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: "red".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+    p.insert_object(n, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("1 0 0 rg"), "the red rectangle is filled as a path");
+    assert!(!has_image(&raw), "no image XObject");
+    assert!(!raw.contains("0.8156"), "the grey placeholder box is not drawn");
+}
+
+/// A broken SVG picture is the grey box, and the export still succeeds.
+#[test]
+fn unreadable_svg_picture_is_the_grey_box() {
+    let mut d = Document::new();
+    let media = d.add_media(b"<svg xmlns=\"http://www.w3.org/2000/svg\"".to_vec(), "svg");
+    let mut p = Paragraph::new();
+    let obj = InlineObject::Image { media, w: 70.0, h: 70.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    assert!(String::from_utf8_lossy(&bytes).contains("0.8156"), "the grey placeholder box is drawn");
+}
+
+/// Whether a PDF holds an image XObject (written with or without a space).
+fn has_image(raw: &str) -> bool {
+    raw.contains("/Subtype/Image") || raw.contains("/Subtype /Image")
+}
+
+/// A document holding one SVG picture, `w` points wide, exported to PDF.
+fn pdf_with_svg(svg: &[u8], w: f32) -> String {
+    let mut d = Document::new();
+    let media = d.add_media(svg.to_vec(), "svg");
+    let mut p = Paragraph::new();
+    let obj = InlineObject::Image { media, w, h: w, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    p.insert_object(0, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+/// #1910 review 10 C-11: krilla-svg rasterises a filter with resvg; a filter inside it that
+/// floods a region a thousand times the picture would take terabytes. The picture goes in as a
+/// budgeted raster (or the grey box) instead, and the export finishes.
+#[test]
+fn svg_filters_past_the_budget_are_exported_as_a_raster() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><filter id="o"><feGaussianBlur stdDeviation="1"/></filter><filter id="i" filterUnits="userSpaceOnUse" x="-50000" y="-50000" width="100000" height="100000"><feFlood flood-color="red"/></filter></defs><g filter="url(#o)"><rect width="100" height="100" filter="url(#i)"/></g></svg>"##;
+    let raw = pdf_with_svg(svg, 75.0);
+    // Our raster: twice the picture's 75 points.
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "a raster of the picture or the grey box");
+}
+
+/// An ordinary picture with a blur filter stays vectors (krilla rasterises only the blurred group).
+#[test]
+fn svg_with_an_ordinary_filter_stays_vectors() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><filter id="b"><feGaussianBlur stdDeviation="2"/></filter><rect width="100" height="40" fill="#ff0000"/><circle cx="50" cy="70" r="20" fill="#0000ff" filter="url(#b)"/></svg>"##;
+    let raw = pdf_with_svg(svg, 300.0);
+    assert!(raw.contains("1 0 0 rg"), "the red rectangle is a path (a raster of the picture has none)");
+    assert!(!raw.contains("0.8156"), "no grey box");
+}
+
+/// A PNG whose header says `w` × `h` (its pixel data cut short), in an SVG as a `data:` URL.
+fn svg_with_png(w: u32, h: u32) -> Vec<u8> {
+    let mut png = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    png.extend_from_slice(&w.to_be_bytes());
+    png.extend_from_slice(&h.to_be_bytes());
+    png.extend_from_slice(&[8, 6, 0, 0, 0, 0, 0, 0, 0]);
+    png.extend_from_slice(b"\0\0\0\x01IDAT\0\0\0\0\0");
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut b64 = String::new();
+    for ch in png.chunks(3) {
+        let n = (ch[0] as u32) << 16 | (*ch.get(1).unwrap_or(&0) as u32) << 8 | *ch.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            b64.push(if i <= ch.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    format!(r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="40" fill="#ff0000"/><image width="100" height="100" href="data:image/png;base64,{b64}"/></svg>"##).into_bytes()
+}
+
+/// #1910 review 11 C-15: krilla decodes a raster image inside an SVG when it writes the PDF; one
+/// whose header says 30,000² would take 3.6 GB. The picture goes in as our budgeted raster.
+#[test]
+fn svg_with_a_huge_embedded_image_is_exported_as_a_raster() {
+    let raw = pdf_with_svg(&svg_with_png(30_000, 30_000), 75.0);
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "a raster of the picture or the grey box");
+}
+
+/// #1910 review 11 I-8: an SVG holding an image krilla can't decode doesn't fail the export.
+#[test]
+fn svg_with_a_broken_embedded_image_still_exports() {
+    let raw = pdf_with_svg(&svg_with_png(10, 10), 75.0);
+    assert!(raw.starts_with("%PDF"));
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "a raster of the picture or the grey box");
+}
+
+/// #1910 review 11 C-14: a filter whose layer is rotated thin, and a filter in a nested picture
+/// drawn larger, go in as a raster rather than make krilla allocate gigabytes.
+#[test]
+fn svg_filters_rotated_or_nested_are_exported_within_the_budget() {
+    let rotated = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><filter id="o" filterUnits="userSpaceOnUse" x="0" y="50" width="100" height="0.02"><feOffset/></filter><filter id="i" filterUnits="userSpaceOnUse" x="-500" y="-500" width="1000" height="1000"><feFlood flood-color="red"/></filter></defs><g transform="rotate(90 50 50)"><g filter="url(#o)"><rect width="100" height="100" filter="url(#i)"/></g></g></svg>"##;
+    let raw = pdf_with_svg(rotated, 75.0);
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "rotated: a raster of the picture or the grey box");
+    // Review 12 M-19: a 1 × 1 picture with a filter, nested and drawn 100 times larger.
+    let inner = br##"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><filter id="o" x="0" y="0" width="1" height="1"><feOffset/></filter><filter id="i" filterUnits="userSpaceOnUse" x="-500" y="-500" width="1000" height="1000"><feFlood flood-color="red"/></filter><g filter="url(#o)"><rect width="1" height="1" filter="url(#i)"/></g></svg>"##;
+    let nested = format!(
+        r#"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><image width="100" height="100" href="data:image/svg+xml;base64,{}"/></svg>"#,
+        b64(inner)
+    );
+    let raw = pdf_with_svg(nested.as_bytes(), 75.0);
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "nested: a raster of the picture or the grey box");
+    // Review 12 C-16: a filter group stretched one way under a rotation.
+    let stretched = br##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><defs><filter id="o" filterUnits="userSpaceOnUse" x="0" y="0" width="0.1" height="1000"><feOffset/></filter><filter id="i" filterUnits="userSpaceOnUse" x="0" y="0" width="0.5" height="5000"><feFlood flood-color="red"/></filter></defs><g transform="rotate(90 50 50)"><g transform="scale(1000 0.1)" filter="url(#o)"><rect width="0.1" height="1000" filter="url(#i)"/></g></g></svg>"##;
+    let raw = pdf_with_svg(stretched, 75.0);
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "stretched: a raster of the picture or the grey box");
+}
+
+/// #1910 review 12 I-9: krilla decodes a GIF with the gif crate's 50 MB limit; a 3700 × 3700 one
+/// is past it. The picture goes in as our raster (or the grey box) and the export succeeds.
+#[test]
+fn svg_with_a_big_gif_still_exports() {
+    let (w, h) = (3700u16, 3700u16);
+    let mut gif_bytes = Vec::new();
+    {
+        let mut enc = gif::Encoder::new(&mut gif_bytes, w, h, &[0, 0, 0, 255, 0, 0]).unwrap();
+        let pixels = vec![1u8; usize::from(w) * usize::from(h)];
+        let frame = gif::Frame { width: w, height: h, buffer: std::borrow::Cow::Borrowed(&pixels), ..Default::default() };
+        enc.write_frame(&frame).unwrap();
+    }
+    let svg = format!(
+        r##"<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100"><rect width="100" height="40" fill="#ff0000"/><image width="100" height="100" href="data:image/gif;base64,{}"/></svg>"##,
+        b64(&gif_bytes)
+    );
+    let raw = pdf_with_svg(svg.as_bytes(), 75.0);
+    assert!(raw.contains("/Width 150") || raw.contains("0.8156"), "a raster of the picture or the grey box");
+}
+
+/// Base64 of `data`.
+fn b64(data: &[u8]) -> String {
+    const T: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::new();
+    for ch in data.chunks(3) {
+        let n = (ch[0] as u32) << 16 | (*ch.get(1).unwrap_or(&0) as u32) << 8 | *ch.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            out.push(if i <= ch.len() { T[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
+        }
+    }
+    out
 }

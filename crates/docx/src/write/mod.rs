@@ -73,6 +73,12 @@ pub(crate) struct Writer<'d> {
     pub(crate) eq_number: u32,
     /// Media key → file name under `word/media/`.
     media_files: BTreeMap<String, String>,
+    /// SVG media key → file name of its PNG fallback under `word/media/` (#1910).
+    svg_fallback_files: BTreeMap<String, String>,
+    /// SVG media key → media key of the PNG fallback kept with it ([`Document::svg_fallbacks`]).
+    svg_kept_fallbacks: BTreeMap<String, String>,
+    /// PNG fallbacks made for the SVG pictures written: file name → bytes.
+    svg_fallbacks: BTreeMap<String, Option<Vec<u8>>>,
     bookmarks: HashMap<String, u32>,
     next_rev_id: u32,
     /// Move ranges open in the output: (revision, range `w:id`, destination?).
@@ -149,6 +155,9 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         eq_number: 0,
         doc,
         media_files: BTreeMap::new(),
+        svg_fallback_files: BTreeMap::new(),
+        svg_kept_fallbacks: BTreeMap::new(),
+        svg_fallbacks: BTreeMap::new(),
         bookmarks: HashMap::new(),
         next_rev_id: 0,
         open_moves: Vec::new(),
@@ -181,7 +190,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .collect(),
     };
     wr.assign_media();
-    wr.embeds.reserve_media(wr.media_files.values());
+    wr.embeds.reserve_media(wr.media_files.values().chain(wr.svg_fallback_files.values()));
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();
     let mut overrides: Vec<(String, String)> = Vec::new();
     let mut rels = PartRels::default();
@@ -433,6 +442,12 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             entries.push((format!("word/media/{file}"), bytes.to_vec()));
         }
     }
+    for (file, png) in &wr.svg_fallbacks {
+        if let Some(png) = png {
+            media_types.insert("png".into(), "image/png");
+            entries.push((format!("word/media/{file}"), png.clone()));
+        }
+    }
 
     wr.embeds.custom_xml_rels("D", &mut rels);
     wr.embeds.custom_xml_rels("P", &mut root);
@@ -611,6 +626,44 @@ impl Writer<'_> {
             used.insert(base.to_ascii_lowercase());
             self.media_files.insert(key.clone(), base);
         }
+        // An SVG picture is written with a PNG fallback, as Word writes it: name it now so no
+        // other part takes the name.
+        for (key, file) in &self.media_files {
+            // A PNG kept with the SVG (Word's own, or one made earlier) is written back as it is.
+            if let Some(png) = self.doc.svg_fallbacks.get(key).filter(|png| *png != key && self.media_files.contains_key(*png)) {
+                self.svg_kept_fallbacks.insert(key.clone(), png.clone());
+                continue;
+            }
+            let Some(stem) =
+                file.len().checked_sub(4).filter(|&i| file.get(i..).is_some_and(|e| e.eq_ignore_ascii_case(".svg"))).and_then(|i| file.get(..i))
+            else {
+                continue;
+            };
+            let mut name = format!("{stem}.png");
+            let mut i = 1;
+            while used.contains(&name.to_ascii_lowercase()) {
+                i += 1;
+                name = format!("{stem}_{i}.png");
+            }
+            used.insert(name.to_ascii_lowercase());
+            self.svg_fallback_files.insert(key.clone(), name);
+        }
+    }
+
+    /// The PNG fallback file of SVG media `key`: the one kept with it, else one rasterised once; None when the media isn't an
+    /// SVG or doesn't read (it is then written on its own).
+    fn svg_fallback(&mut self, key: &str) -> Option<String> {
+        if let Some(png) = self.svg_kept_fallbacks.get(key) {
+            let file = self.media_files.get(png)?.clone();
+            self.used_media.insert(png.clone());
+            return Some(file);
+        }
+        let file = self.svg_fallback_files.get(key)?.clone();
+        if !self.svg_fallbacks.contains_key(&file) {
+            let png = self.doc.media.get(key).and_then(|b| wordcraft_svg::fallback_png(b).ok());
+            self.svg_fallbacks.insert(file.clone(), png);
+        }
+        self.svg_fallbacks.get(&file)?.as_ref().map(|_| file)
     }
 
     fn next_docpr(&mut self) -> String {

@@ -188,6 +188,11 @@ impl Writer {
         let (data, blip) = match img.ext.as_str() {
             "png" => (img.data.to_vec(), "\\pngblip"),
             "jpeg" | "jpg" => (img.data.to_vec(), "\\jpegblip"),
+            // RTF has no SVG picture: a PNG of it (#1910), or nothing when it doesn't read.
+            "svg" => match wordcraft_svg::fallback_png(&img.data) {
+                Ok(png) => (png, "\\pngblip"),
+                Err(_) => return,
+            },
             _ => {
                 // Re-encode other formats as PNG, bounding the decode so a tiny file declaring
                 // huge dimensions can't exhaust memory on export.

@@ -31,7 +31,7 @@ pub enum FileDialogRequest {
 /// cancelled, or an error when no system dialog could be shown (the app then shows its own).
 pub type FileDialogAnswer = Result<Option<String>, String>;
 
-const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
+const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf", "svg"];
 const DOCUMENTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change

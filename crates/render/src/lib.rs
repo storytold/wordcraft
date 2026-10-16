@@ -167,6 +167,87 @@ fn vectors() -> &'static Mutex<MediaCache<Option<Arc<Vector>>>> {
     C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }))
 }
 
+fn svgs() -> &'static Mutex<MediaCache<Option<Arc<wordcraft_svg::Svg>>>> {
+    static C: std::sync::OnceLock<Mutex<MediaCache<Option<Arc<wordcraft_svg::Svg>>>>> = std::sync::OnceLock::new();
+    C.get_or_init(|| Mutex::new(MediaCache { map: HashMap::new(), bytes: 0 }))
+}
+
+/// The SVG picture for a media key, parsed once (#1910). None when the bytes are not an SVG (the
+/// other paths take them); an SVG that doesn't parse draws as the grey box.
+fn svg_for(doc: &Document, key: &str) -> Option<Option<Arc<wordcraft_svg::Svg>>> {
+    let bytes = doc.media.get(key)?;
+    if !wordcraft_svg::is_svg(bytes) {
+        return None;
+    }
+    if let Some(v) = lock(svgs()).get(key, bytes) {
+        return Some(v);
+    }
+    let v = match wordcraft_svg::parse(bytes) {
+        Ok(svg) => Some(Arc::new(svg)),
+        Err(e) => {
+            log::warn!("picture `{key}`: {e}");
+            None
+        }
+    };
+    // The parsed tree is a few times the size of its source text.
+    lock(svgs()).insert(key, bytes, v.clone(), bytes.len().saturating_mul(4));
+    Some(v)
+}
+
+/// Draws an SVG picture into `r` (page points), cropped by `crop` and faded by `alpha`: rasterised
+/// at device resolution for the part that is visible, so it is sharp at any zoom. A raster past
+/// the size cap is drawn at a lower resolution instead.
+fn draw_svg(ctx: &mut RenderContext, svg: &wordcraft_svg::Svg, r: &kurbo::Rect, crop: &[f32; 4], alpha: f32, view: Affine, visible: &kurbo::Rect) {
+    let [cl, ct, cr, cb] = crop.map(|v| if v.is_finite() { v.clamp(0.0, 0.95) as f64 } else { 0.0 });
+    let (fw, fh) = (r.width() / (1.0 - cl - cr).max(0.05), r.height() / (1.0 - ct - cb).max(0.05));
+    let (fx, fy) = (r.x0 - cl * fw, r.y0 - ct * fh);
+    let area = r.intersect(*visible);
+    if area.width() <= 0.0 || area.height() <= 0.0 {
+        return;
+    }
+    // Device pixels per point, lowered when the visible part would make too big a raster.
+    let mut s = 1.0 / device_pixel(view);
+    let px = area.width() * s * area.height() * s;
+    let cap = wordcraft_svg::MAX_RASTER_PIXELS as f64;
+    if px > cap {
+        s *= (cap / px).sqrt();
+    }
+    // The raster's corner on a device pixel (exact for an unturned, unscaled-down view).
+    let c = view.as_coeffs();
+    let (ex, ey) = if c[4].is_finite() && c[5].is_finite() { (c[4].rem_euclid(1.0), c[5].rem_euclid(1.0)) } else { (0.0, 0.0) };
+    let (ox, oy) = (((area.x0 * s + ex).floor() - ex) / s, ((area.y0 * s + ey).floor() - ey) / s);
+    let (w, h) = (((area.x1 - ox) * s).ceil().max(1.0), ((area.y1 - oy) * s).ceil().max(1.0));
+    if !(w.is_finite() && h.is_finite()) || w * h > cap {
+        return;
+    }
+    let (sw, sh) = svg.size_px();
+    let (kx, ky) = (s * fw / sw as f64, s * fh / sh as f64);
+    let t = [kx as f32, 0.0, 0.0, ky as f32, ((fx - ox) * s) as f32, ((fy - oy) * s) as f32];
+    let Some(raster) = svg.render(w as u32, h as u32, t) else { return };
+    let data: Vec<vello_cpu::color::PremulRgba8> =
+        raster.rgba.as_chunks::<4>().0.iter().map(|p| vello_cpu::color::PremulRgba8 { r: p[0], g: p[1], b: p[2], a: p[3] }).collect();
+    if raster.width > u16::MAX as u32 || raster.height > u16::MAX as u32 || data.len() != raster.width as usize * raster.height as usize {
+        return;
+    }
+    let pm = Arc::new(Pixmap::from_parts(data, raster.width as u16, raster.height as u16));
+    ctx.set_transform(view);
+    let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+    let faded = alpha < 1.0;
+    if faded {
+        ctx.push_opacity_layer(alpha);
+    }
+    ctx.set_paint(vello_cpu::Image {
+        image: vello_cpu::ImageSource::Pixmap(pm),
+        sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
+    });
+    ctx.set_paint_transform(Affine::translate((ox, oy)) * Affine::scale(1.0 / s));
+    ctx.fill_rect(&area);
+    ctx.reset_paint_transform();
+    if faded {
+        ctx.pop_layer();
+    }
+}
+
 /// Largest side (pixels) a document picture may decode to: what a `Pixmap` can hold (`u16`
 /// sides, which [`premul_pixmap`] enforces after decoding). Applying it as a decode limit rejects
 /// a small file that declares a bigger image at header time, before anything is allocated.
@@ -817,6 +898,10 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             }
             if let Some(v) = vector_for(doc, media) {
                 draw_vector(ctx, &v, &r, crop, *alpha, view);
+                return;
+            }
+            if let Some(Some(svg)) = svg_for(doc, media) {
+                draw_svg(ctx, &svg, &r, crop, *alpha, view, visible);
                 return;
             }
             let Some(pm) = pixmap_for(doc, media) else {
@@ -1708,3 +1793,5 @@ mod tests {
 mod cache_tests;
 #[cfg(test)]
 mod tests_color_glyphs;
+#[cfg(test)]
+mod tests_svg;

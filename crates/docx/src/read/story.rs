@@ -1141,7 +1141,24 @@ impl Reader<'_> {
     fn read_pic(&mut self, pic: &El, rels: &Rels, w: f32, h: f32, alt: String, mut float: Float) -> Option<InlineObject> {
         let blip = pic.find("a:blip")?;
         float.set_spin(xfrm_spin(pic.find("pic:spPr")));
-        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        // An SVG picture (Word 2016+): the SVG when it reads, else the blip's PNG fallback.
+        let svg = blip
+            .child("a:extLst")
+            .and_then(|l| l.els().find(|e| e.name == "a:ext" && e.attr("uri") == Some(crate::xml::SVG_BLIP_EXT)))
+            .and_then(|e| e.child("asvg:svgBlip"))
+            .and_then(|e| e.attr("r:embed"))
+            .and_then(|id| self.svg_media_for(rels, id));
+        let fallback = blip.attr("r:embed").and_then(|id| self.media_for(rels, id));
+        let media = match svg {
+            Some(m) => {
+                // Word's PNG is kept with the SVG and written back on save (#1910).
+                if let Some(png) = fallback.filter(|png| *png != m) {
+                    self.doc.svg_fallbacks.insert(m.clone(), png);
+                }
+                m
+            }
+            None => fallback?,
+        };
         let mut crop = [0.0f32; 4];
         if let Some(sr) = pic.find("a:srcRect") {
             for (i, n) in ["l", "t", "r", "b"].iter().enumerate() {

@@ -633,6 +633,23 @@ impl Reader<'_> {
         i
     }
 
+    /// [`Self::media_for`] for a relationship that must be a readable SVG picture; None (and
+    /// nothing loaded) otherwise.
+    pub fn svg_media_for(&mut self, rels: &Rels, id: &str) -> Option<String> {
+        let rel = rels.by_id(id)?;
+        if rel.external {
+            return None;
+        }
+        if !self.media_by_path.contains_key(&rel.target) {
+            let bytes = self.pkg.get(&rel.target)?;
+            if let Err(e) = wordcraft_svg::parse(bytes) {
+                log::warn!("SVG picture `{}` can't be read ({e}); its PNG fallback is used", rel.target);
+                return None;
+            }
+        }
+        self.media_for(rels, id)
+    }
+
     /// Media key for an image relationship (loads the bytes once).
     pub fn media_for(&mut self, rels: &Rels, id: &str) -> Option<String> {
         let rel = rels.by_id(id)?;

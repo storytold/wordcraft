@@ -7232,3 +7232,92 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// #1910: Insert › Picture takes SVG at its natural size (CSS pixels at 96 ppi), stored as SVG.
+#[test]
+fn insert_picture_takes_an_svg() {
+    let svg =
+        br##"<svg xmlns="http://www.w3.org/2000/svg" width="96" height="48" viewBox="0 0 2 1"><rect width="1" height="1" fill="#ff0000"/></svg>"##;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let r = run(&mut s, "insert.picture", json!({"data": crate::cmd::insert::base64_encode(svg)}));
+    assert_eq!((r["width"].as_f64(), r["height"].as_f64()), (Some(72.0), Some(36.0)), "{r}");
+    let key = r["media"].as_str().unwrap().to_string();
+    assert!(key.ends_with(".svg"), "{key}");
+    assert_eq!(s.doc.media.get(&key).map(|b| b.as_slice()), Some(svg.as_slice()));
+    // Picture edits that need pixels refuse an SVG instead of failing on it.
+    for (id, v) in
+        [("picture.color", json!({"mode": "grayscale"})), ("picture.compress", json!({})), ("picture.corrections", json!({"brightness": 20}))]
+    {
+        let err = s.run(id, &v).unwrap_err().to_string();
+        assert!(err.contains("This picture is an SVG"), "{id} on an SVG says why: {err}");
+    }
+    assert_eq!(s.doc.media.get(&key).map(|b| b.as_slice()), Some(svg.as_slice()), "the SVG is untouched");
+}
+
+/// #1910: Change Picture takes an SVG too.
+#[test]
+fn picture_change_takes_an_svg() {
+    let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>"##;
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.picture", json!({"data": crate::cmd::insert::base64_encode(&tiny_png())}));
+    run(&mut s, "picture.change", json!({"data": crate::cmd::insert::base64_encode(svg)}));
+    let mut media = String::new();
+    s.doc.objects_in_reading_order(&mut |o| {
+        if let wordcraft_doc::para::InlineObject::Image { media: m, .. } = o {
+            media = m.clone();
+        }
+    });
+    assert!(media.ends_with(".svg"), "{media}");
+}
+
+/// #1910: a malformed, hostile or oversized SVG is "not a supported image", never a panic.
+#[test]
+fn hostile_svg_pictures_are_refused() {
+    let deep = format!(r#"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">{}</svg>"#, "<g>".repeat(100_000));
+    let zero = br#"<svg xmlns="http://www.w3.org/2000/svg" width="0" height="0"/>"#.to_vec();
+    for bad in [b"<svg".to_vec(), b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1e40\" height=\"1\"><g".to_vec(), deep.into_bytes(), zero] {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let err = s.run("insert.picture", &json!({"data": crate::cmd::insert::base64_encode(&bad)})).unwrap_err();
+        assert!(err.to_string().contains("not a supported image"), "{err}");
+        assert!(s.doc.media.is_empty());
+    }
+}
+
+/// Review 2 N4: a pasted document's SVG pictures keep their PNG fallbacks (remapped to the new
+/// media keys); a fallback whose SVG isn't there isn't brought over.
+#[test]
+fn pasted_svg_pictures_keep_their_fallbacks() {
+    let mut src = wordcraft_doc::Document::new();
+    let svg = src.add_media(b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>".to_vec(), "svg");
+    let png = src.add_media(tiny_png(), "png");
+    src.svg_fallbacks.insert(svg.clone(), png.clone());
+    let orphan = src.add_media(vec![0x89, b'P', b'N', b'G', 1, 2, 3], "png");
+    src.svg_fallbacks.insert("gone.svg".into(), orphan);
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.doc.add_media(vec![1, 2, 3], "png");
+    crate::cmd::paste::adopt(&mut s, src);
+    let (new_svg, new_png) = s.doc.svg_fallbacks.iter().next().map(|(a, b)| (a.clone(), b.clone())).expect("the pairing is kept");
+    assert_eq!(s.doc.svg_fallbacks.len(), 1);
+    assert!(s.doc.media.get(&new_svg).is_some_and(|m| m.starts_with(b"<svg")));
+    assert_eq!(s.doc.media.get(&new_png).map(|m| m.to_vec()), Some(tiny_png()));
+    assert!(!s.doc.media.values().any(|m| m.as_slice() == [0x89, b'P', b'N', b'G', 1, 2, 3]), "the orphan fallback isn't added");
+}
+
+/// Review 3 #4: pasting an SVG the document already has keeps the document's own PNG fallback
+/// (and doesn't leave the pasted copy's fallback behind as an unused picture).
+#[test]
+fn pasting_a_known_svg_keeps_the_existing_fallback() {
+    let svg_bytes = b"<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"1\" height=\"1\"/>".to_vec();
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    let svg = s.doc.add_media(svg_bytes.clone(), "svg");
+    let png = s.doc.add_media(tiny_png(), "png");
+    s.doc.svg_fallbacks.insert(svg.clone(), png.clone());
+    let mut src = wordcraft_doc::Document::new();
+    let src_svg = src.add_media(svg_bytes, "svg");
+    let src_png = src.add_media(vec![0x89, b'P', b'N', b'G', 9, 9, 9], "png");
+    src.svg_fallbacks.insert(src_svg, src_png);
+    crate::cmd::paste::adopt(&mut s, src);
+    assert_eq!(s.doc.svg_fallbacks.get(&svg), Some(&png), "the document's fallback is kept");
+    assert_eq!(s.doc.svg_fallbacks.len(), 1);
+    assert!(!s.doc.media.values().any(|m| m.as_slice() == [0x89, b'P', b'N', b'G', 9, 9, 9]), "the pasted fallback isn't left unused");
+}
