@@ -6,6 +6,12 @@
 //! `BIBLIOGRAPHY` fields. The citation's text simply isn't in the queue, so every citation
 //! style is skipped the same way: "(Smith et al., 2020)", "[3]" or a superscript number.
 //!
+//! Each sentence is spoken in its own language: the run's language tag, or else the script of its
+//! letters (Cyrillic, Greek, Arabic, Hebrew, CJK, Thai…), so a Russian sentence gets a Russian voice
+//! where one is installed instead of being spelled out letter by letter. The system's own voice
+//! stays whenever it already speaks the language (English text on an English system keeps the
+//! voice the user chose), and without a voice for the language the default voice speaks.
+//!
 //! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak`
 //! / `spd-say` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current
 //! sentence, and moves on when it finishes. Commands only change the shared state and wake the
@@ -55,6 +61,8 @@ pub struct Utterance {
     pub text: String,
     pub start: Pos,
     pub end: Pos,
+    /// The language to speak it in (a BCP 47 tag), or `None` for the system's default voice.
+    pub lang: Option<String>,
 }
 
 impl Utterance {
@@ -130,10 +138,247 @@ pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: b
                 continue;
             }
             let (Some(first), Some(last)) = (map.get(a), map.get(b.saturating_sub(1))) else { continue };
-            out.push(Utterance { text: spoken, start: Pos::new(story, path.clone(), first.0), end: Pos::new(story, path.clone(), last.1) });
+            // The language of the sentence's first character, through styles and the defaults.
+            let run = para.props_of_char(first.0);
+            let explicit = doc.styles.resolve_char(para.props.style.as_deref(), run).lang;
+            let lang = speech_language(&spoken, explicit.as_deref(), run.lang_bidi.as_deref());
+            out.push(Utterance { text: spoken, start: Pos::new(story, path.clone(), first.0), end: Pos::new(story, path.clone(), last.1), lang });
         }
     }
     out
+}
+
+/// The language of `text` from its script, as a BCP 47 primary tag: Cyrillic is Russian (Ukrainian
+/// with one of its letters `іїєґ`), Greek, Arabic, Hebrew, Thai and Hangul map to `el`, `ar`, `he`, `th`
+/// and `ko`, kana to Japanese, Han letters alone to Chinese. `None` for Latin text (the script
+/// doesn't say which language) and text without letters. Mixed text goes to its largest non-Latin
+/// script once that script has a real share of the letters (a fifth), even when Latin letters
+/// outnumber it ("Я открыл Microsoft Word and PowerPoint"): the default voice would spell those
+/// letters out, while a Russian voice reads the English words well enough. Ties go to the script
+/// listed first.
+pub fn detect_language(text: &str) -> Option<&'static str> {
+    // Letters per script: Cyrillic, Greek, Arabic, Hebrew, Thai, Hangul, kana, Han, Latin and others.
+    let mut n = [0usize; 10];
+    let mut ukrainian = false;
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        let i = match c {
+            '\u{0400}'..='\u{052F}' | '\u{1C80}'..='\u{1C8F}' | '\u{2DE0}'..='\u{2DFF}' | '\u{A640}'..='\u{A69F}' => {
+                ukrainian |= matches!(c, 'і' | 'ї' | 'є' | 'ґ' | 'І' | 'Ї' | 'Є' | 'Ґ');
+                0
+            }
+            '\u{0370}'..='\u{03FF}' | '\u{1F00}'..='\u{1FFF}' => 1,
+            '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{08A0}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}' => 2,
+            '\u{0590}'..='\u{05FF}' | '\u{FB1D}'..='\u{FB4F}' => 3,
+            '\u{0E00}'..='\u{0E7F}' => 4,
+            '\u{1100}'..='\u{11FF}' | '\u{3130}'..='\u{318F}' | '\u{AC00}'..='\u{D7AF}' => 5,
+            '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' => 6,
+            '\u{3400}'..='\u{4DBF}' | '\u{4E00}'..='\u{9FFF}' | '\u{F900}'..='\u{FAFF}' | '\u{20000}'..='\u{2FFFF}' => 7,
+            _ => 8,
+        };
+        if let Some(k) = n.get_mut(i) {
+            *k += 1;
+        }
+    }
+    // Japanese text mixes kana and Han letters; any kana makes it Japanese.
+    if n[6] > 0 {
+        n[6] += n[7];
+        n[7] = 0;
+    }
+    // The first script with the most letters (`max_by_key` would keep the last of a tie).
+    let (best, count) = n.iter().take(8).copied().enumerate().fold((0, 0), |b, (i, k)| if k > b.1 { (i, k) } else { b });
+    let total: usize = n.iter().sum();
+    if count == 0 || count.saturating_mul(5) < total {
+        return None;
+    }
+    Some(match best {
+        0 if ukrainian => "uk",
+        0 => "ru",
+        1 => "el",
+        2 => "ar",
+        3 => "he",
+        4 => "th",
+        5 => "ko",
+        6 => "ja",
+        _ => "zh",
+    })
+}
+
+/// A language tag that is safe to hand to a speech program or put in a script: letters, digits
+/// and hyphens only, starting with a letter, at most 12 characters (a tag from a document is
+/// hostile input).
+fn plain_tag(tag: &str) -> Option<&str> {
+    let t = tag.trim();
+    (!t.is_empty() && t.len() <= 12 && t.starts_with(|c: char| c.is_ascii_alphabetic()) && t.chars().all(|c| c.is_ascii_alphanumeric() || c == '-'))
+        .then_some(t)
+}
+
+/// The script group a language is written in, for the languages [`detect_language`] can tell
+/// apart by script (the primary subtag in, the detected tag out).
+fn script_language(primary: &str) -> Option<&'static str> {
+    Some(match primary {
+        "ru" | "uk" | "be" | "bg" | "sr" | "mk" | "kk" | "ky" | "mn" | "tg" => "ru",
+        "el" => "el",
+        "ar" | "fa" | "ur" | "ps" | "ku" | "sd" | "ug" => "ar",
+        "he" | "yi" => "he",
+        "th" => "th",
+        "ko" => "ko",
+        "ja" => "ja",
+        "zh" => "zh",
+        _ => return None,
+    })
+}
+
+/// The language to speak `text` in: the document's `explicit` tag when it fits the text, else the
+/// language of its script, else `None` (the default voice). When the text is in a script
+/// [`detect_language`] recognises, a tag written in another script (the `en-US` Word writes on
+/// every run, on Cyrillic text) gives way to the script, or the voice would spell the letters out;
+/// right-to-left text tries the run's complex-script tag (`w:bidi`, e.g. `fa-IR`) first, and Han
+/// letters alone keep a Japanese or Korean tag. Latin text keeps any tag, as in Word, which reads
+/// text in its proofing language: English words in a run tagged `ru-RU` get the Russian voice.
+pub fn speech_language(text: &str, explicit: Option<&str>, bidi: Option<&str>) -> Option<String> {
+    let explicit = explicit.and_then(plain_tag);
+    let Some(d) = detect_language(text) else { return explicit.map(str::to_string) };
+    let fits = |tag: &&str| {
+        let primary = tag.split('-').next().unwrap_or("").to_ascii_lowercase();
+        let script = script_language(&primary);
+        script == script_language(d) || (d == "zh" && matches!(script, Some("ja" | "ko")))
+    };
+    let bidi = bidi.and_then(plain_tag).filter(|_| matches!(d, "ar" | "he"));
+    Some(bidi.into_iter().chain(explicit).find(fits).unwrap_or(d).to_string())
+}
+
+/// The primary language subtag of a plain tag, lowercased (`ru-RU` gives `ru`). `None` for tags
+/// without a two- or three-letter language, such as Word's `x-none`.
+fn primary_tag(tag: &str) -> Option<String> {
+    let t = plain_tag(tag)?;
+    t.split('-').next().filter(|p| (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic())).map(str::to_ascii_lowercase)
+}
+
+/// The language to ask the speech program for, or `None` to keep its default voice: only when
+/// `lang` isn't the language the default voice speaks (`default`, a primary subtag) already.
+#[cfg(any(not(target_os = "windows"), test))]
+fn voice_language(lang: Option<&str>, default: &str) -> Option<String> {
+    lang.and_then(primary_tag).filter(|p| !p.eq_ignore_ascii_case(default))
+}
+
+/// The arguments of `espeak-ng`/`espeak`: the speed, the voice for `lang` unless it's English
+/// (espeak's default voice), and `--stdin`.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn espeak_args(wpm: &str, lang: Option<&str>) -> Vec<String> {
+    let mut a = vec!["-s".to_string(), wpm.to_string()];
+    if let Some(p) = voice_language(lang, "en") {
+        a.push("-v".into());
+        a.push(p);
+    }
+    a.push("--stdin".into());
+    a
+}
+
+/// The voices in `say -v '?'`'s `listing`: each line is `Name   ll_RR   # sample sentence`, and
+/// names may contain spaces. Gives (name, lowercased `ll_rr` code) pairs.
+#[cfg(any(target_os = "macos", test))]
+fn mac_voices(listing: &str) -> impl Iterator<Item = (String, String)> + '_ {
+    listing.lines().filter_map(|line| {
+        let line = line.split('#').next().unwrap_or("");
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let at = words.iter().skip(1).position(|w| {
+            let mut p = w.split('_');
+            p.next().is_some_and(|l| (2..=3).contains(&l.len()) && l.chars().all(|c| c.is_ascii_lowercase()))
+                && p.next().is_some_and(|r| !r.is_empty())
+        })? + 1;
+        Some((words.get(..at)?.join(" "), words.get(at)?.to_ascii_lowercase()))
+    })
+}
+
+/// macOS's novelty voices (sound effects and singing), never chosen to read a document.
+#[cfg(any(target_os = "macos", test))]
+const MAC_NOVELTY_VOICES: &[&str] = &[
+    "Albert",
+    "Bad News",
+    "Bahh",
+    "Bells",
+    "Boing",
+    "Bubbles",
+    "Cellos",
+    "Deranged",
+    "Good News",
+    "Hysterical",
+    "Jester",
+    "Organ",
+    "Pipe Organ",
+    "Superstar",
+    "Trinoids",
+    "Whisper",
+    "Wobble",
+    "Zarvox",
+];
+
+/// The voice `say` should use for `lang`, or `None` to keep the system voice: `None` when the
+/// system voice already speaks the language (`default`, a primary subtag) or no voice does, else
+/// the first voice in `listing` for the language, one of the same region first, never a novelty voice.
+#[cfg(any(target_os = "macos", test))]
+fn mac_voice(lang: &str, listing: &str, default: &str) -> Option<String> {
+    let primary = voice_language(Some(lang), default)?;
+    let tag = plain_tag(lang)?.replace('-', "_").to_ascii_lowercase();
+    let mut first = None;
+    for (name, code) in mac_voices(listing) {
+        if code.split('_').next() != Some(primary.as_str()) || MAC_NOVELTY_VOICES.contains(&name.as_str()) {
+            continue;
+        }
+        if code == tag {
+            return Some(name);
+        }
+        first.get_or_insert(name);
+    }
+    first
+}
+
+/// The language (primary subtag) of the system voice: the `selected` voice's in `listing`, else
+/// the `locale`'s (`ru_RU`, `ru_RU.UTF-8`), else English.
+#[cfg(any(target_os = "macos", test))]
+fn mac_default_language(selected: Option<&str>, listing: &str, locale: Option<&str>) -> String {
+    let voice = selected
+        .and_then(|v| mac_voices(listing).find(|(name, _)| name == v.trim()))
+        .and_then(|(_, code)| code.split('_').next().map(str::to_string));
+    let locale = || locale.and_then(|l| l.split(['_', '-', '.', '@']).next()).and_then(primary_tag);
+    voice.or_else(locale).unwrap_or_else(|| "en".into())
+}
+
+/// The language of the voice `say` uses by default (asked once).
+#[cfg(target_os = "macos")]
+fn mac_default_voice_language() -> &'static str {
+    static LANG: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LANG.get_or_init(|| {
+        let read = |args: &[&str]| {
+            std::process::Command::new("defaults")
+                .args(args)
+                .output()
+                .ok()
+                .filter(|o| o.status.success())
+                .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        };
+        let voice = read(&["read", "com.apple.speech.voice.prefs", "SelectedVoiceName"]);
+        let locale = read(&["read", "-g", "AppleLocale"]).or_else(|| std::env::var("LANG").ok());
+        mac_default_language(voice.as_deref(), mac_voice_listing(), locale.as_deref())
+    })
+}
+
+/// Should `speak` say the sentence again with the default voice? When it gave the program a voice
+/// and the program then exited with a failure: espeak-ng does that, silently, for a voice it
+/// doesn't know, and a missing voice must never mean silence. `exited_ok` is `None` when the
+/// program didn't exit on its own (stopped, or never started).
+#[cfg(any(not(target_arch = "wasm32"), test))]
+fn retry_without_voice(gave_voice: bool, exited_ok: Option<bool>) -> bool {
+    gave_voice && exited_ok == Some(false)
+}
+
+/// The names `say` can voice, as `say -v '?'` lists them (asked once).
+#[cfg(target_os = "macos")]
+fn mac_voice_listing() -> &'static str {
+    static LISTING: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    LISTING.get_or_init(|| {
+        std::process::Command::new("say").args(["-v", "?"]).output().map(|o| String::from_utf8_lossy(&o.stdout).into_owned()).unwrap_or_default()
+    })
 }
 
 /// Sentence spans in `text` as char index ranges, without surrounding whitespace.
@@ -443,7 +688,7 @@ enum Spoken {
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
     loop {
-        let (text, generation, rate) = {
+        let (text, lang, generation, rate) = {
             let mut s = lock(m);
             while s.state == State::Paused {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
@@ -453,7 +698,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 return;
             }
             match s.queue.get(s.index) {
-                Some(u) => (u.text.clone(), s.generation, s.rate),
+                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate),
                 None => {
                     s.state = State::Stopped;
                     s.running = false;
@@ -463,7 +708,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
         };
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
-            Backend::System => speak(&text, rate, &changed),
+            Backend::System => speak(&text, lang.as_deref(), rate, &changed),
             Backend::Instant => Spoken::Done,
             Backend::Hold => {
                 let mut s = lock(m);
@@ -521,11 +766,23 @@ struct WindowsSpeech {
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32) -> WindowsSpeech {
+fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Option<&str>) -> WindowsSpeech {
     // SAPI rate: -10 (a third of normal speed) … 10 (three times).
     let r = ((rate.ln() / 3f32.ln()) * 10.0).round().clamp(-10.0, 10.0) as i64;
+    // The voice of the sentence's language, when one is installed (the default voice would spell
+    // out Cyrillic, Greek… letters one by one), but only when the user's default voice doesn't
+    // speak that language already, in any region. The tag is `primary_tag`-clean, so it can't end
+    // the quote.
+    let voice = lang.and_then(primary_tag).map_or_else(String::new, |p| {
+        format!(
+            "if ($s.Voice.Culture.TwoLetterISOLanguageName -ne '{p}') {{ $v = $s.GetInstalledVoices() | Where-Object {{ $_.Enabled -and $_.VoiceInfo.Culture.TwoLetterISOLanguageName -eq '{p}' }} | Select-Object -First 1; if ($v) {{ $s.SelectVoice($v.VoiceInfo.Name) }} }}; "
+        )
+    });
+    // The sentence arrives on stdin as UTF-8 bytes; `[Console]::In` would decode them with the
+    // console's code page (Cyrillic became `?` and the voice read single letters), so read the raw
+    // stream and decode it as UTF-8. The text itself is never part of the script.
     let script = format!(
-        "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = {r}; $s.Speak([Console]::In.ReadToEnd())"
+        "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = {r}; {voice}$m = New-Object System.IO.MemoryStream; [Console]::OpenStandardInput().CopyTo($m); $s.Speak([System.Text.Encoding]::UTF8.GetString($m.ToArray()))"
     );
     WindowsSpeech {
         program: windows_powershell(system_root),
@@ -536,50 +793,69 @@ fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32) -> Windows
     }
 }
 
-/// Speak one sentence with the system's speech program, stopping early when `changed()`.
+/// Speak one sentence with the system's speech program, stopping early when `changed()`. When
+/// the program fails with the sentence's voice, the default voice says it instead.
 #[cfg(not(target_arch = "wasm32"))]
-fn speak(text: &str, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
+fn speak(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
+    let (spoken, gave_voice, exited_ok) = speak_with(text, lang, rate, changed);
+    if retry_without_voice(gave_voice, exited_ok) {
+        return speak_with(text, None, rate, changed).0;
+    }
+    spoken
+}
+
+/// [`speak`] in `lang`'s voice once: how it ended, whether the program was given a voice, and
+/// whether it exited successfully (`None` when it didn't exit on its own).
+#[cfg(not(target_arch = "wasm32"))]
+fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> (Spoken, bool, Option<bool>) {
     use std::io::Write;
     use std::process::{Command, Stdio};
     let wpm = ((BASE_WPM * rate).round() as i64).to_string();
-    // The text goes in on stdin so it can never be taken for an option.
-    let mut tries: Vec<Command> = Vec::new();
+    // The text goes in on stdin so it can never be taken for an option. Each try is a program
+    // and whether it was given a voice.
+    let mut tries: Vec<(Command, bool)> = Vec::new();
     #[cfg(target_os = "macos")]
     {
         let mut c = Command::new("say");
         c.args(["-r", &wpm]);
-        tries.push(c);
+        let voice = lang.and_then(|l| mac_voice(l, mac_voice_listing(), mac_default_voice_language()));
+        if let Some(voice) = &voice {
+            c.args(["-v", voice.as_str()]);
+        }
+        tries.push((c, voice.is_some()));
     }
     #[cfg(target_os = "windows")]
     {
-        let w = windows_speech(std::env::var_os("SystemRoot"), rate);
+        let w = windows_speech(std::env::var_os("SystemRoot"), rate, lang);
         let mut c = Command::new(&w.program);
         c.args(&w.args);
         std::os::windows::process::CommandExt::creation_flags(&mut c, w.creation_flags);
-        tries.push(c);
+        tries.push((c, lang.and_then(primary_tag).is_some()));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
         for prog in ["espeak-ng", "espeak"] {
+            let args = espeak_args(&wpm, lang);
+            let voiced = args.iter().any(|a| a == "-v");
             let mut c = Command::new(prog);
-            c.args(["-s", &wpm, "--stdin"]);
-            tries.push(c);
+            c.args(args);
+            tries.push((c, voiced));
         }
     }
-    let _ = &wpm;
+    let _ = (&wpm, lang);
     let mut child = None;
     let mut last_err = String::from("no speech program on this system");
-    for mut c in tries {
+    for (mut c, voiced) in tries {
         match c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
             Ok(ch) => {
-                child = Some(ch);
+                child = Some((ch, voiced));
                 break;
             }
             Err(e) => last_err = e.to_string(),
         }
     }
-    let Some(mut child) = child else {
-        return Spoken::Failed(format!("Read Aloud couldn't start the speech program: {last_err}"));
+    let Some((mut child, voiced)) = child else {
+        return (Spoken::Failed(format!("Read Aloud couldn't start the speech program: {last_err}")), false, None);
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());
@@ -587,14 +863,14 @@ fn speak(text: &str, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
     }
     loop {
         match child.try_wait() {
-            Ok(Some(_)) => return Spoken::Done,
+            Ok(Some(status)) => return (Spoken::Done, voiced, Some(status.success())),
             Ok(None) => {}
-            Err(e) => return Spoken::Failed(e.to_string()),
+            Err(e) => return (Spoken::Failed(e.to_string()), voiced, None),
         }
         if changed() {
             let _ = child.kill();
             let _ = child.wait();
-            return Spoken::Interrupted;
+            return (Spoken::Interrupted, voiced, None);
         }
         std::thread::sleep(std::time::Duration::from_millis(30));
     }
@@ -625,12 +901,12 @@ mod tests {
         // The flags `speak` passes to `creation_flags` (std can't read them back from the
         // `Command`): Win32's CREATE_NO_WINDOW (0x0800_0000), or every sentence flashes a
         // console (#1122).
-        let w = windows_speech(Some("D:\\Win".into()), 1.0);
+        let w = windows_speech(Some("D:\\Win".into()), 1.0, None);
         assert_eq!(w.creation_flags, 0x0800_0000);
         assert_eq!(w.program, windows_powershell(Some("D:\\Win".into())));
         assert_eq!(w.args[..3], ["-NoProfile", "-NonInteractive", "-Command"]);
         assert!(w.args[3].contains("$s.Rate = 0;"), "{}", w.args[3]);
-        assert!(windows_speech(None, 3.0).args[3].contains("$s.Rate = 10;"));
+        assert!(windows_speech(None, 3.0, None).args[3].contains("$s.Rate = 10;"));
     }
 
     #[test]
@@ -739,5 +1015,173 @@ mod tests {
         r.skip(-1);
         r.play_pause();
         assert_eq!(r.state(), State::Stopped);
+    }
+    #[test]
+    fn languages_are_detected_from_the_script() {
+        for (text, tag) in [
+            ("Привет как твои дела?", "ru"),
+            ("Привіт, як справи? Їжак і ґанок", "uk"),
+            ("Γειά σου κόσμε", "el"),
+            ("مرحبا بالعالم", "ar"),
+            ("שלום עולם", "he"),
+            ("こんにちは、世界", "ja"),
+            ("你好，世界", "zh"),
+            ("안녕하세요 세계", "ko"),
+            ("สวัสดีชาวโลก", "th"),
+            ("Hello Привет мир как дела", "ru"),
+            ("Hello world and Привет", "ru"),
+        ] {
+            assert_eq!(detect_language(text), Some(tag), "{text}");
+        }
+        // Latin text, nothing to read, or only punctuation: no guess.
+        for text in ["Hello, world", "", "  ", "?!…", "123"] {
+            assert_eq!(detect_language(text), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn an_explicit_language_wins_over_detection() {
+        // The document says so (a Russian run, even of Latin letters).
+        assert_eq!(speech_language("Privet", Some("ru-RU"), None).as_deref(), Some("ru-RU"));
+        assert_eq!(speech_language("Привет", Some("uk-UA"), None).as_deref(), Some("uk-UA"));
+        assert_eq!(speech_language("Hallo Welt", Some("de-DE"), None).as_deref(), Some("de-DE"));
+        // The default English tag on Cyrillic text (Word writes it on every run): the script wins.
+        assert_eq!(speech_language("Привет", Some("en-US"), None).as_deref(), Some("ru"));
+        // Nothing to go on: the default voice.
+        assert_eq!(speech_language("Hello", None, None), None);
+        assert_eq!(speech_language("Привет", None, None).as_deref(), Some("ru"));
+        // A hostile tag is never passed on.
+        assert_eq!(speech_language("Hello", Some("en'; calc; '"), None), None);
+    }
+
+    #[test]
+    fn sentences_carry_the_run_language() {
+        let mut doc = Document::from_text("Привет как твои дела?\nPrivet.");
+        let s = sentences(&doc, &Pos::body(0, 0), None, true);
+        assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("ru"), Some("en-US")]);
+        if let wordcraft_doc::Block::Para(p) = Arc::make_mut(&mut doc.body[1]) {
+            for r in &mut p.runs {
+                r.props.lang = Some("ru-RU".into());
+            }
+        }
+        let s = sentences(&doc, &Pos::body(0, 0), None, true);
+        assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("ru"), Some("ru-RU")]);
+    }
+
+    #[test]
+    fn windows_script_reads_utf8_and_picks_the_voice() {
+        let w = windows_speech(None, 1.0, Some("ru"));
+        let script = &w.args[3];
+        assert!(script.contains("UTF8"), "{script}");
+        assert!(script.contains("GetInstalledVoices") && script.contains("SelectVoice"), "{script}");
+        assert!(script.contains("'ru'"), "{script}");
+        // The default voice when the language is unknown, and no voice code at all.
+        let d = windows_speech(None, 1.0, None);
+        assert!(d.args[3].contains("UTF8") && !d.args[3].contains("SelectVoice"), "{}", d.args[3]);
+        // The sentence is never in the script: it arrives on stdin.
+        assert!(!windows_speech(None, 1.0, Some("ru-RU")).args[3].contains("Привет"));
+        // A tag that isn't a plain language tag is dropped, not put in the script.
+        let h = windows_speech(None, 1.0, Some("ru'; Remove-Item x; '"));
+        assert!(!h.args[3].contains("Remove-Item"), "{}", h.args[3]);
+    }
+
+    #[test]
+    fn espeak_gets_the_language() {
+        assert_eq!(espeak_args("180", Some("ru-RU")), ["-s", "180", "-v", "ru", "--stdin"]);
+        assert_eq!(espeak_args("180", Some("uk")), ["-s", "180", "-v", "uk", "--stdin"]);
+        assert_eq!(espeak_args("180", None), ["-s", "180", "--stdin"]);
+        assert_eq!(espeak_args("180", Some("--evil")), ["-s", "180", "--stdin"]);
+    }
+
+    #[test]
+    fn english_text_keeps_the_default_voice() {
+        // Word writes `en-US` on almost every run: espeak's default voice is English already, so
+        // no `-v` (as before #1843), and Word's language-less `x-none` is no voice either.
+        assert_eq!(espeak_args("180", Some("en-US")), ["-s", "180", "--stdin"]);
+        assert_eq!(espeak_args("180", Some("en-GB")), ["-s", "180", "--stdin"]);
+        assert_eq!(espeak_args("180", Some("x-none")), ["-s", "180", "--stdin"]);
+        // Windows: the user's default voice stays when it already speaks the language, any region.
+        let script = &windows_speech(None, 1.0, Some("en-US")).args[3];
+        let guard = script.find("if ($s.Voice.Culture.TwoLetterISOLanguageName -ne 'en')");
+        let pick = script.find("GetInstalledVoices");
+        assert!(guard.is_some() && pick.is_some() && guard < pick, "{script}");
+    }
+
+    #[test]
+    fn macos_keeps_the_system_voice_for_its_language() {
+        // Current macOS lists its novelty voices first, in alphabetical order.
+        let list = "Albert              en_US    # Hello! My name is Albert.\n\
+                    Bad News            en_US    # The light you see at the end of the tunnel.\n\
+                    Bahh                en_US    # Do not pull the wool over my eyes.\n\
+                    Samantha            en_US    # Hello! My name is Samantha.\n\
+                    Milena              ru_RU    # Здравствуйте!\n";
+        // English text with an English system voice: no `-v`, so `say` keeps the user's voice.
+        assert_eq!(mac_voice("en-US", list, "en"), None);
+        assert_eq!(mac_voice("en", list, "en"), None);
+        // English text on a Russian system: an English voice, never a novelty one.
+        assert_eq!(mac_voice("en-US", list, "ru").as_deref(), Some("Samantha"));
+        assert_eq!(mac_voice("en-US", "Albert en_US # Hi\nBahh en_US # Hi\n", "ru"), None);
+        // The system voice's language: the chosen voice's, else the locale's, else English.
+        assert_eq!(mac_default_language(Some("Milena"), list, Some("en_US")), "ru");
+        assert_eq!(mac_default_language(Some("Gone"), list, Some("de_DE")), "de");
+        assert_eq!(mac_default_language(None, list, Some("ru_RU.UTF-8")), "ru");
+        assert_eq!(mac_default_language(None, list, Some("C")), "en");
+        assert_eq!(mac_default_language(None, "", None), "en");
+    }
+
+    #[test]
+    fn a_voice_the_program_lacks_falls_back_to_the_default() {
+        // espeak-ng exits with a failure, saying nothing, for a `-v` it doesn't know.
+        assert!(retry_without_voice(true, Some(false)));
+        // It spoke, it was given no voice, or it was stopped (or never exited on its own).
+        assert!(!retry_without_voice(true, Some(true)));
+        assert!(!retry_without_voice(false, Some(false)));
+        assert!(!retry_without_voice(true, None));
+    }
+
+    #[test]
+    fn right_to_left_text_uses_the_complex_script_tag() {
+        // Persian tagged `w:bidi="fa-IR"` on a `w:val="en-US"` run: Persian, not Arabic.
+        assert_eq!(speech_language("سلام دنیا", Some("en-US"), Some("fa-IR")).as_deref(), Some("fa-IR"));
+        assert_eq!(speech_language("שלום עולם", Some("en-US"), Some("he-IL")).as_deref(), Some("he-IL"));
+        // The complex-script tag is for complex-script text only.
+        assert_eq!(speech_language("Hello", Some("en-US"), Some("fa-IR")).as_deref(), Some("en-US"));
+        assert_eq!(speech_language("سلام", Some("en-US"), Some("he-IL")).as_deref(), Some("ar"));
+    }
+
+    #[test]
+    fn mixed_sentences_follow_the_other_script() {
+        // More English letters than Cyrillic ones: the English voice would spell the Russian out.
+        assert_eq!(detect_language("Я открыл Microsoft Word and PowerPoint"), Some("ru"));
+        // A single foreign word in an English sentence isn't a real share: the default voice.
+        assert_eq!(detect_language("The word дом means house"), None);
+        // Ties between scripts always go the same way, the first script in the list.
+        assert_eq!(detect_language("αβ дг"), Some("ru"));
+        assert_eq!(detect_language("дг αβ"), Some("ru"));
+    }
+
+    #[test]
+    fn han_letters_keep_a_japanese_or_korean_tag() {
+        assert_eq!(speech_language("東京都。", Some("ja-JP"), None).as_deref(), Some("ja-JP"));
+        assert_eq!(speech_language("東京都。", Some("ko-KR"), None).as_deref(), Some("ko-KR"));
+        assert_eq!(speech_language("東京都。", Some("en-US"), None).as_deref(), Some("zh"));
+    }
+
+    #[test]
+    fn macos_voice_matches_the_language() {
+        let list = "Alex                en_US    # Most people recognize me by my voice.\n\
+                    Eddy (Russian (Russia)) ru_RU    # Привет!\n\
+                    Milena              ru_RU    # Здравствуйте!\n\
+                    Samantha            en_US    # Hello!\n\
+                    Lesya               uk_UA    # Привіт!\n\
+                    Daniel              en_GB    # Hello!\n";
+        assert_eq!(mac_voice("ru", list, "en").as_deref(), Some("Eddy (Russian (Russia))"));
+        assert_eq!(mac_voice("ru-RU", list, "en").as_deref(), Some("Eddy (Russian (Russia))"));
+        assert_eq!(mac_voice("uk", list, "en").as_deref(), Some("Lesya"));
+        assert_eq!(mac_voice("en-GB", list, "ru").as_deref(), Some("Daniel"));
+        // No voice for the language, or nothing listed: the default voice.
+        assert_eq!(mac_voice("el", list, "en"), None);
+        assert_eq!(mac_voice("ru", "", "en"), None);
+        assert_eq!(mac_voice("ru", "garbage line\n\n  \n", "en"), None);
     }
 }
