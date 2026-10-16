@@ -144,12 +144,15 @@ impl Underline {
         }
     }
     pub fn from_ooxml(s: &str) -> Underline {
-        Underline::ALL.iter().copied().find(|u| u.ooxml() == s).unwrap_or(match s {
-            "thickDash" | "dashLong" | "dashedHeavy" | "dashLongHeavy" => Underline::Dash,
-            "dottedHeavy" => Underline::Dotted,
-            "wavyHeavy" => Underline::Wave,
-            "dashDotHeavy" => Underline::DotDash,
-            "dashDotDotHeavy" => Underline::DotDotDash,
+        let t = s.trim();
+        Underline::ALL.iter().copied().find(|u| u.ooxml().eq_ignore_ascii_case(t)).unwrap_or_else(|| match t.to_ascii_lowercase().as_str() {
+            "thickdash" | "dashlong" | "dashedheavy" | "dashlongheavy" => Underline::Dash,
+            "dottedheavy" => Underline::Dotted,
+            "wavyheavy" => Underline::Wave,
+            "dashdotheavy" => Underline::DotDash,
+            "dashdotdotheavy" => Underline::DotDotDash,
+            "wavydouble" | "doublewave" => Underline::DoubleWave,
+            "none" | "0" | "false" | "off" => Underline::None,
             _ => Underline::Single,
         })
     }
@@ -252,7 +255,18 @@ impl Highlight {
         }
     }
     pub fn from_ooxml(s: &str) -> Highlight {
-        Highlight::ALL.iter().copied().find(|h| h.ooxml() == s).unwrap_or(Highlight::None)
+        let t = s.trim();
+        if let Some(h) = Highlight::ALL.iter().copied().find(|h| h.ooxml().eq_ignore_ascii_case(t)) {
+            return h;
+        }
+        match t.to_ascii_lowercase().as_str() {
+            "brightgreen" => Highlight::BrightGreen,
+            "turquoise" => Highlight::Turquoise,
+            "pink" => Highlight::Pink,
+            "violet" => Highlight::Violet,
+            "teal" => Highlight::Teal,
+            _ => Highlight::None,
+        }
     }
     pub fn name(self) -> &'static str {
         match self {
@@ -598,15 +612,15 @@ impl BorderStyle {
         }
     }
     pub fn from_ooxml(s: &str) -> BorderStyle {
-        match s {
-            "nil" | "none" => BorderStyle::None,
+        match s.trim().to_ascii_lowercase().as_str() {
+            "nil" | "none" | "0" | "false" | "off" => BorderStyle::None,
             "double" => BorderStyle::Double,
             "dotted" => BorderStyle::Dotted,
-            "dashed" | "dashSmallGap" => BorderStyle::Dashed,
+            "dashed" | "dashsmallgap" => BorderStyle::Dashed,
             "thick" => BorderStyle::Thick,
             "triple" => BorderStyle::Triple,
-            "dotDash" | "dotDotDash" => BorderStyle::DotDash,
-            "wave" | "doubleWave" => BorderStyle::Wave,
+            "dotdash" | "dotdotdash" => BorderStyle::DotDash,
+            "wave" | "doublewave" => BorderStyle::Wave,
             _ => BorderStyle::Single,
         }
     }
@@ -1194,6 +1208,24 @@ mod tests {
         for h in Highlight::ALL {
             assert_eq!(Highlight::from_ooxml(h.ooxml()), h);
         }
+        assert_eq!(Underline::from_ooxml("  SINGLE  "), Underline::Single);
+        assert_eq!(Underline::from_ooxml("none"), Underline::None);
+        assert_eq!(Underline::from_ooxml("0"), Underline::None);
+        assert_eq!(Underline::from_ooxml("false"), Underline::None);
+        assert_eq!(Underline::from_ooxml("off"), Underline::None);
+        assert_eq!(Underline::from_ooxml("doubleWave"), Underline::DoubleWave);
+
+        assert_eq!(Highlight::from_ooxml("YELLOW"), Highlight::Yellow);
+        assert_eq!(Highlight::from_ooxml("  darkBlue  "), Highlight::DarkBlue);
+        assert_eq!(Highlight::from_ooxml("brightgreen"), Highlight::BrightGreen);
+        assert_eq!(Highlight::from_ooxml("turquoise"), Highlight::Turquoise);
+        assert_eq!(Highlight::from_ooxml("pink"), Highlight::Pink);
+
+        assert_eq!(BorderStyle::from_ooxml("DOUBLE"), BorderStyle::Double);
+        assert_eq!(BorderStyle::from_ooxml(" none "), BorderStyle::None);
+        assert_eq!(BorderStyle::from_ooxml("0"), BorderStyle::None);
+        assert_eq!(BorderStyle::from_ooxml("off"), BorderStyle::None);
+        assert_eq!(BorderStyle::from_ooxml("dashSmallGap"), BorderStyle::Dashed);
     }
 
     #[test]

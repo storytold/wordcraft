@@ -218,7 +218,7 @@ impl PropCtx {
                 "w:bdr" => c.border = Some(border(k)),
                 "w:shd" => c.shading = self.shd_fill(k),
                 "w:vertAlign" => {
-                    c.vert_align = k.attr("w:val").map(|v| match v {
+                    c.vert_align = k.attr("w:val").map(|v| match v.trim().to_ascii_lowercase().as_str() {
                         "superscript" => VertAlign::Superscript,
                         "subscript" => VertAlign::Subscript,
                         _ => VertAlign::Baseline,
@@ -353,18 +353,19 @@ impl PropCtx {
 }
 
 pub fn align(v: &str) -> Align {
-    match v {
+    match v.trim().to_ascii_lowercase().as_str() {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
-        "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "both" | "justify" | "lowkashida" | "mediumkashida" | "highkashida" => Align::Justify,
+        "distribute" | "thaidistribute" => Align::Distribute,
         _ => Align::Left,
     }
 }
 
 fn tab_stop(t: &El) -> Option<TabStop> {
     let pos = tw(t, "w:pos")?;
-    let align = match t.attr("w:val").unwrap_or("left") {
+    let val = t.attr("w:val").map(|v| v.trim().to_ascii_lowercase());
+    let align = match val.as_deref().unwrap_or("left") {
         "center" => TabAlign::Center,
         "right" | "end" => TabAlign::Right,
         "decimal" => TabAlign::Decimal,
@@ -372,11 +373,12 @@ fn tab_stop(t: &El) -> Option<TabStop> {
         "clear" => TabAlign::Clear,
         _ => TabAlign::Left,
     };
-    let leader = match t.attr("w:leader").unwrap_or("none") {
+    let leader_val = t.attr("w:leader").map(|v| v.trim().to_ascii_lowercase());
+    let leader = match leader_val.as_deref().unwrap_or("none") {
         "dot" => TabLeader::Dot,
         "hyphen" => TabLeader::Hyphen,
         "underscore" | "heavy" => TabLeader::Underscore,
-        "middleDot" => TabLeader::MiddleDot,
+        "middledot" => TabLeader::MiddleDot,
         _ => TabLeader::None,
     };
     Some(TabStop { pos, align, leader })
@@ -433,9 +435,9 @@ impl PropCtx {
             match k.name.as_str() {
                 "w:tblStyle" => t.style = k.attr("w:val").filter(|v| !v.is_empty()).map(|v| self.style_id(v)),
                 "w:tblW" => {
-                    let ty = k.attr("w:type").unwrap_or("dxa");
+                    let ty = k.attr("w:type").map(|v| v.trim().to_ascii_lowercase()).unwrap_or_else(|| "dxa".to_string());
                     let w = k.attr("w:w").unwrap_or("0");
-                    match ty {
+                    match ty.as_str() {
                         "pct" => {
                             t.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
                                 .map(|v| v.clamp(0.0, 1000.0))
@@ -449,14 +451,14 @@ impl PropCtx {
                 "w:tblInd" => t.indent = tw(k, "w:w"),
                 "w:tblBorders" => t.borders = Some(borders(k)),
                 "w:shd" => t.shading = self.shd_fill(k),
-                "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
+                "w:tblLayout" => t.fixed = k.attr("w:type").is_some_and(|v| v.trim().eq_ignore_ascii_case("fixed")),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
                 "w:tblCellMar" => t.cell_margins = Some(margins(k)),
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {
                     if let Some(f) = t.float.as_mut() {
-                        f.overlap = k.attr("w:val") != Some("never");
+                        f.overlap = !k.attr("w:val").is_some_and(|v| v.trim().eq_ignore_ascii_case("never"));
                     }
                 }
                 "w:tblCaption" => t.caption = k.attr("w:val").map(cap_alt),
@@ -528,7 +530,8 @@ pub fn trpr(e: &El) -> RowProps {
 
 /// `w:wBefore`/`w:wAfter` in points: only a width in twips (`dxa`) is kept.
 fn gap_width(k: &El) -> Option<f32> {
-    match k.attr("w:type") {
+    let ty = k.attr("w:type").map(|v| v.trim().to_ascii_lowercase());
+    match ty.as_deref() {
         None | Some("dxa") => tw(k, "w:w").filter(|v| *v >= 0.0).map(|v| v.min(crate::units::MAX_LEN_PT)),
         _ => None,
     }
@@ -540,19 +543,22 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
     let mut hcont = false;
     for k in e.els() {
         match k.name.as_str() {
-            "w:tcW" => match k.attr("w:type") {
-                None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
-                Some("pct") => {
-                    let w = k.attr("w:w").unwrap_or("0");
-                    c.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
-                        .map(|v| v.clamp(0.0, 100.0))
-                        .filter(|v| *v > 0.0);
+            "w:tcW" => {
+                let ty = k.attr("w:type").map(|v| v.trim().to_ascii_lowercase());
+                match ty.as_deref() {
+                    None | Some("dxa") => c.width = tw(k, "w:w").filter(|v| *v > 0.0),
+                    Some("pct") => {
+                        let w = k.attr("w:w").unwrap_or("0");
+                        c.width_pct = if let Some(p) = w.strip_suffix('%') { measure(p, 1.0) } else { measure(w, 50.0) }
+                            .map(|v| v.clamp(0.0, 100.0))
+                            .filter(|v| *v > 0.0);
+                    }
+                    _ => {}
                 }
-                _ => {}
-            },
+            }
             "w:gridSpan" => c.span = k.attr("w:val").and_then(u32_of).unwrap_or(1).clamp(1, 63),
-            "w:hMerge" => hcont = k.attr("w:val") != Some("restart"),
-            "w:vMerge" => c.vmerge = if k.attr("w:val") == Some("restart") { VMerge::Restart } else { VMerge::Continue },
+            "w:hMerge" => hcont = !k.attr("w:val").is_some_and(|v| v.trim().eq_ignore_ascii_case("restart")),
+            "w:vMerge" => c.vmerge = if k.attr("w:val").is_some_and(|v| v.trim().eq_ignore_ascii_case("restart")) { VMerge::Restart } else { VMerge::Continue },
             "w:tcBorders" => c.borders = Some(borders(k)),
             "w:shd" => c.shading = pc.shd_fill(k),
             "w:noWrap" => c.no_wrap = on_off(k),
@@ -560,10 +566,10 @@ pub fn tcpr(pc: &PropCtx, e: &El) -> (CellProps, bool) {
             "w:tcMar" => c.margins = Some(margins(k)),
             "w:textDirection" => {
                 c.text_direction = TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
-                c.text_direction_set = k.attr("w:val") == Some("lrTb");
+                c.text_direction_set = k.attr("w:val").is_some_and(|v| v.trim().eq_ignore_ascii_case("lrtb"));
             }
             "w:vAlign" => {
-                c.valign = Some(match k.attr("w:val") {
+                c.valign = Some(match k.attr("w:val").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                     Some("center") => VAlign::Center,
                     Some("bottom") => VAlign::Bottom,
                     _ => VAlign::Top,
@@ -598,11 +604,11 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 }
             }
             "w:type" => {
-                s.start = match k.attr("w:val") {
+                s.start = match k.attr("w:val").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                     Some("continuous") => SectionStart::Continuous,
-                    Some("evenPage") => SectionStart::EvenPage,
-                    Some("oddPage") => SectionStart::OddPage,
-                    Some("nextColumn") => SectionStart::NextColumn,
+                    Some("evenpage") => SectionStart::EvenPage,
+                    Some("oddpage") => SectionStart::OddPage,
+                    Some("nextcolumn") => SectionStart::NextColumn,
                     _ => SectionStart::NextPage,
                 }
             }
@@ -613,7 +619,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(h) = tw(k, "w:h").filter(|v| *v >= 36.0) {
                     s.page_h = h;
                 }
-                s.landscape = match k.attr("w:orient") {
+                s.landscape = match k.attr("w:orient").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                     Some("landscape") => true,
                     Some(_) => false,
                     None => s.page_w > s.page_h,
@@ -634,8 +640,8 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 if let Some(sp) = tw(k, "w:space") {
                     c.space = sp.max(0.0);
                 }
-                c.separator = k.attr("w:sep").is_some_and(|v| !matches!(v, "0" | "false" | "off"));
-                let equal = k.attr("w:equalWidth").is_none_or(|v| !matches!(v, "0" | "false" | "off"));
+                c.separator = k.attr("w:sep").is_some_and(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"));
+                let equal = k.attr("w:equalWidth").is_none_or(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"));
                 if !equal {
                     c.widths = k
                         .children("w:col")
@@ -655,7 +661,7 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
             "w:bidi" => s.rtl = on_off(k),
             "w:textDirection" => {
                 s.text_direction = wordcraft_doc::props::TextDirection::from_ooxml(k.attr("w:val").unwrap_or(""));
-                s.text_direction_set = k.attr("w:val") == Some("lrTb");
+                s.text_direction_set = k.attr("w:val").is_some_and(|v| v.trim().eq_ignore_ascii_case("lrtb"));
             }
             "w:pgNumType" => {
                 s.page_num_start = k.attr("w:start").and_then(u32_of);
@@ -740,5 +746,40 @@ fn table_float(e: &El) -> TableFloat {
         v_align: align("w:tblpYSpec"),
         dist: [dist("w:leftFromText"), dist("w:topFromText"), dist("w:rightFromText"), dist("w:bottomFromText")],
         overlap: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::props::{Align, TabAlign, TabLeader, VAlign, VMerge};
+
+    #[test]
+    fn test_align_case_insensitive() {
+        assert_eq!(align("center"), Align::Center);
+        assert_eq!(align("Center"), Align::Center);
+        assert_eq!(align("  RIGHT  "), Align::Right);
+        assert_eq!(align("Both"), Align::Justify);
+        assert_eq!(align("Justify"), Align::Justify);
+        assert_eq!(align("Distribute"), Align::Distribute);
+        assert_eq!(align("unknown"), Align::Left);
+    }
+
+    #[test]
+    fn test_tab_stop_case_insensitive() {
+        let el = crate::xml::parse(br#"<w:tab xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" w:pos="720" w:val="Center" w:leader="MiddleDot"/>"#).unwrap();
+        let tab = tab_stop(&el).unwrap();
+        assert_eq!(tab.align, TabAlign::Center);
+        assert_eq!(tab.leader, TabLeader::MiddleDot);
+    }
+
+    #[test]
+    fn test_tcpr_valign_and_merge_case_insensitive() {
+        let ctx = PropCtx::default();
+        let el = crate::xml::parse(br#"<w:tcPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:vAlign w:val="Center"/><w:vMerge w:val="Restart"/><w:hMerge w:val="Restart"/></w:tcPr>"#).unwrap();
+        let (props, hcont) = tcpr(&ctx, &el);
+        assert_eq!(props.valign, Some(VAlign::Center));
+        assert_eq!(props.vmerge, VMerge::Restart);
+        assert!(!hcont);
     }
 }
