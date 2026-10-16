@@ -586,14 +586,12 @@ impl Writer<'_> {
                         wordcraft_doc::graphic::GraphicKind::Diagram => format!("Diagram {docpr}"),
                         wordcraft_doc::graphic::GraphicKind::Ink => format!("Ink {docpr}"),
                     };
-                    let z = self.z;
                     self.graphic_frame(w, float, (*gw, *gh), &docpr, &name, alt, native.unwrap_or(&root));
                     if let Some(fallback) = fallback {
                         w.close("mc:Choice");
                         match picture {
                             Some(picture) => {
                                 // Both branches are one object: same id and stacking order.
-                                self.z = z;
                                 w.open("mc:Fallback", &[]);
                                 self.graphic_frame(w, float, (*gw, *gh), &docpr, &name, alt, picture);
                                 w.close("mc:Fallback");
@@ -1129,7 +1127,6 @@ impl Writer<'_> {
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
-            self.z += 1;
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
@@ -1139,7 +1136,7 @@ impl Writer<'_> {
                     ("distL", &d),
                     ("distR", &d),
                     ("simplePos", "0"),
-                    ("relativeHeight", &self.z.to_string()),
+                    ("relativeHeight", &float.z_order.to_string()),
                     ("behindDoc", behind),
                     ("locked", "0"),
                     ("layoutInCell", "1"),

@@ -173,6 +173,9 @@ impl FloatAlign {
 #[serde(default, rename_all = "camelCase")]
 pub struct Float {
     pub wrap: Wrap,
+    /// DrawingML relativeHeight: higher foreground objects paint above lower ones.
+    #[serde(skip_serializing_if = "is_zero_u32")]
+    pub z_order: u32,
     /// The sides text wraps on (Square, Tight and Through).
     #[serde(skip_serializing_if = "WrapText::is_both")]
     pub wrap_text: WrapText,
@@ -247,6 +250,10 @@ impl AltText {
 /// `s` cut to [`MAX_ALT_TEXT`] characters.
 pub fn cap_alt(s: &str) -> String {
     s.chars().take(MAX_ALT_TEXT).collect()
+}
+
+fn is_zero_u32(v: &u32) -> bool {
+    *v == 0
 }
 
 fn is_zero(v: &f32) -> bool {

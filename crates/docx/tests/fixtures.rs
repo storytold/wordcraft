@@ -2830,3 +2830,19 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+#[test]
+fn floating_z_order_round_trips() {
+    for height in ["0", "7", "4294967295"] {
+        let body = format!(
+            r#"<w:p><w:r><w:drawing><wp:anchor relativeHeight="{height}" behindDoc="0"><wp:extent cx="914400" cy="457200"/><wp:wrapNone/><wp:docPr id="1" name="Original stacking probe"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r></w:p>"#
+        );
+        let mut d = read_body(&body);
+        for _ in 0..2 {
+            let float = paras(&d)[0].objects[0].frame().unwrap().2;
+            assert_eq!(float.z_order, height.parse::<u32>().unwrap());
+            assert_eq!(float.wrap, Wrap::InFrontOfText);
+            d = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        }
+    }
+}
