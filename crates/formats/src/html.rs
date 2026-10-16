@@ -41,18 +41,19 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "lt" | "LT" => '<',
         "gt" | "GT" => '>',
         "quot" | "QUOT" => '"',
-        "apos" => '\'',
-        "nbsp" => '\u{00A0}',
+        "apos" | "APOS" => '\'',
+        "nbsp" | "NBSP" => '\u{00A0}',
         "ensp" => '\u{2002}',
         "emsp" => '\u{2003}',
         "thinsp" => '\u{2009}',
         "shy" => '\u{00AD}',
-        "copy" => '©',
-        "reg" => '®',
-        "trade" => '™',
+        "copy" | "COPY" => '©',
+        "reg" | "REG" => '®',
+        "trade" | "TRADE" => '™',
         "hellip" => '…',
         "mdash" => '—',
         "ndash" => '–',
+        "minus" => '−',
         "lsquo" => '‘',
         "rsquo" => '’',
         "sbquo" => '‚',
@@ -70,12 +71,28 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "frac12" => '½',
         "frac14" => '¼',
         "frac34" => '¾',
+        "frac13" => '⅓',
+        "frac23" => '⅔',
+        "frac18" => '⅛',
+        "frac38" => '⅜',
+        "frac58" => '⅝',
+        "frac78" => '⅞',
+        "sup1" => '¹',
+        "sup2" => '²',
+        "sup3" => '³',
+        "micro" => 'µ',
+        "permil" => '‰',
+        "prime" => '′',
+        "Prime" => '″',
+        "oline" => '‾',
+        "frasl" => '⁄',
         "sect" => '§',
         "para" => '¶',
-        "euro" => '€',
-        "pound" => '£',
-        "yen" => '¥',
-        "cent" => '¢',
+        "euro" | "EURO" => '€',
+        "pound" | "POUND" => '£',
+        "yen" | "YEN" => '¥',
+        "cent" | "CENT" => '¢',
+        "curren" => '¤',
         "dagger" => '†',
         "Dagger" => '‡',
         "larr" => '←',
@@ -83,10 +100,53 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "uarr" => '↑',
         "darr" => '↓',
         "harr" => '↔',
+        "lArr" => '⇐',
+        "rArr" => '⇒',
+        "uArr" => '⇑',
+        "dArr" => '⇓',
+        "hArr" => '⇔',
+        "crarr" => '↵',
+        "forall" => '∀',
+        "part" => '∂',
+        "exist" => '∃',
+        "empty" => '∅',
+        "nabla" => '∇',
+        "isin" => '∈',
+        "notin" => '∉',
+        "ni" => '∋',
+        "prod" => '∏',
+        "sum" => '∑',
+        "radic" => '√',
+        "prop" => '∝',
+        "ang" => '∠',
+        "and" => '∧',
+        "or" => '∨',
+        "cap" => '∩',
+        "cup" => '∪',
+        "int" => '∫',
+        "there4" => '∴',
+        "sim" => '∼',
+        "cong" => '≅',
+        "asymp" | "approx" => '≈',
+        "ne" => '≠',
+        "equiv" => '≡',
         "le" => '≤',
         "ge" => '≥',
-        "ne" => '≠',
+        "sub" => '⊂',
+        "sup" => '⊃',
+        "nsub" => '⊄',
+        "sube" => '⊆',
+        "supe" => '⊇',
+        "oplus" => '⊕',
+        "otimes" => '⊗',
+        "perp" => '⊥',
+        "sdot" => '⋅',
         "infin" => '∞',
+        "loz" => '◊',
+        "spades" => '♠',
+        "clubs" => '♣',
+        "hearts" => '♥',
+        "diams" => '♦',
         "check" => '✓',
         "iexcl" => '¡',
         "iquest" => '¿',
@@ -100,13 +160,44 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "eacute" => 'é',
         "egrave" => 'è',
         "ecirc" => 'ê',
+        "euml" => 'ë',
         "Eacute" => 'É',
+        "Egrave" => 'È',
+        "Ecirc" => 'Ê',
+        "Euml" => 'Ë',
         "aacute" => 'á',
         "agrave" => 'à',
         "acirc" => 'â',
+        "atilde" => 'ã',
+        "Agrave" => 'À',
+        "Aacute" => 'Á',
+        "Acirc" => 'Â',
+        "Atilde" => 'Ã',
         "iacute" => 'í',
+        "igrave" => 'ì',
+        "icirc" => 'î',
+        "iuml" => 'ï',
+        "Iacute" => 'Í',
+        "Igrave" => 'Ì',
+        "Icirc" => 'Î',
+        "Iuml" => 'Ï',
         "oacute" => 'ó',
+        "ograve" => 'ò',
+        "ocirc" => 'ô',
+        "otilde" => 'õ',
+        "Oacute" => 'Ó',
+        "Ograve" => 'Ò',
+        "Ocirc" => 'Ô',
+        "Otilde" => 'Õ',
         "uacute" => 'ú',
+        "ugrave" => 'ù',
+        "ucirc" => 'û',
+        "Uacute" => 'Ú',
+        "Ugrave" => 'Ù',
+        "Ucirc" => 'Û',
+        "yacute" => 'ý',
+        "yuml" => 'ÿ',
+        "Yacute" => 'Ý',
         "ntilde" => 'ñ',
         "Ntilde" => 'Ñ',
         "ccedil" => 'ç',
@@ -121,11 +212,36 @@ pub fn decode_entity(name: &str) -> Option<String> {
         "beta" => 'β',
         "gamma" => 'γ',
         "delta" => 'δ',
-        "pi" => 'π',
-        "sigma" => 'σ',
+        "epsilon" => 'ε',
+        "zeta" => 'ζ',
+        "eta" => 'η',
+        "theta" => 'θ',
+        "iota" => 'ι',
+        "kappa" => 'κ',
+        "lambda" => 'λ',
         "mu" => 'μ',
-        "Omega" => 'Ω',
+        "nu" => 'ν',
+        "xi" => 'ξ',
+        "pi" => 'π',
+        "rho" => 'ρ',
+        "sigma" => 'σ',
+        "tau" => 'τ',
+        "upsilon" => 'υ',
+        "phi" => 'φ',
+        "chi" => 'χ',
+        "psi" => 'ψ',
         "omega" => 'ω',
+        "Gamma" => 'Γ',
+        "Delta" => 'Δ',
+        "Theta" => 'Θ',
+        "Lambda" => 'Λ',
+        "Xi" => 'Ξ',
+        "Pi" => 'Π',
+        "Sigma" => 'Σ',
+        "Upsilon" => 'Υ',
+        "Phi" => 'Φ',
+        "Psi" => 'Ψ',
+        "Omega" => 'Ω',
         "zwj" => '\u{200D}',
         "zwnj" => '\u{200C}',
         _ => return None,
@@ -347,6 +463,7 @@ struct El {
     align: Option<Align>,
     preserve: bool,
     page_break: bool,
+    page_break_after: bool,
     /// Li: a paragraph of this item was already emitted.
     used: bool,
 }
@@ -389,6 +506,8 @@ struct Builder<'r> {
     para: Option<Para>,
     /// The current paragraph continues a list item (joins the previous paragraph).
     para_cont: bool,
+    /// Pending page break from preceding elements with page-break-after or unconsumed break.
+    pending_page_break: bool,
     /// Whether the current paragraph's first / last text was read with preserved white space
     /// (CSS `white-space: pre…`): those edge spaces are kept when the paragraph ends.
     pre_lead: Option<bool>,
@@ -507,7 +626,7 @@ fn css_len_pt(v: &str) -> Option<f32> {
 }
 
 /// Apply a `style` attribute to formatting / block properties.
-fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut bool, page_break: &mut bool) {
+fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut bool, page_break: &mut bool, page_break_after: &mut bool) {
     for decl in css.split(';').take(64) {
         let Some((k, v)) = decl.split_once(':') else { continue };
         let k = k.trim().to_ascii_lowercase();
@@ -566,6 +685,7 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
             }
             "white-space" => *preserve = lv.starts_with("pre"),
             "page-break-before" | "break-before" => *page_break = lv == "always" || lv == "page",
+            "page-break-after" | "break-after" => *page_break_after = lv == "always" || lv == "page",
             _ => {}
         }
     }
@@ -585,6 +705,7 @@ impl<'r> Builder<'r> {
             stack: Vec::new(),
             para: None,
             para_cont: false,
+            pending_page_break: false,
             pre_lead: None,
             pre_tail: false,
             meta: Meta::default(),
@@ -654,7 +775,8 @@ impl<'r> Builder<'r> {
             } else {
                 self.para_cont = false;
             }
-            p.page_break = self.stack.iter().rev().take_while(|e| e.kind != ElKind::Cell).any(|e| e.page_break);
+            let pb_before = self.stack.iter_mut().rev().take_while(|e| e.kind != ElKind::Cell).any(|e| std::mem::take(&mut e.page_break));
+            p.page_break = pb_before || std::mem::take(&mut self.pending_page_break);
             self.para = Some(p);
         }
         self.para.get_or_insert_with(Para::default)
@@ -804,6 +926,9 @@ impl<'r> Builder<'r> {
     }
 
     fn close(&mut self, e: &El) {
+        if e.page_break_after || e.page_break {
+            self.pending_page_break = true;
+        }
         if e.kind != ElKind::Inline {
             self.flush();
         }
@@ -953,6 +1078,11 @@ impl<'r> Builder<'r> {
                 self.container().push(FBlock::Para(Para::new(Kind::Rule)));
                 return;
             }
+            "wbr" => {
+                let f = self.fmt();
+                self.start_para().push_text("\u{200B}", &f);
+                return;
+            }
             "img" => {
                 let alt = attr(attrs, "alt").unwrap_or("").to_string();
                 let dim = |k: &str| attr(attrs, k).and_then(|v| v.trim().trim_end_matches("px").trim().parse::<f32>().ok()).map(|p| p * 0.75);
@@ -1002,6 +1132,7 @@ impl<'r> Builder<'r> {
         let mut align = None;
         let mut preserve = self.preserve();
         let mut page_break = false;
+        let mut page_break_after = false;
         match name {
             // A header cell is bold, as in browsers and Word, unless its own CSS says otherwise.
             "b" | "strong" | "th" => fmt.bold = true,
@@ -1050,7 +1181,7 @@ impl<'r> Builder<'r> {
             align = Some(Align::Center);
         }
         if let Some(st) = attr(attrs, "style") {
-            apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break);
+            apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
         }
         if kind == ElKind::Pre {
             preserve = true;
@@ -1094,7 +1225,7 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, used: false });
+        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, page_break_after, used: false });
     }
 
     fn end(&mut self, name: &str) {
@@ -1784,5 +1915,29 @@ mod tests {
     #[test]
     fn entities() {
         assert_eq!(unescape("a &lt;b&gt; &#65;&#x42; &bogus; &"), "a <b> AB &bogus; &");
+        assert_eq!(unescape("&minus; &COPY; &EURO; &TRADE; &frac12; &frac34;"), "− © € ™ ½ ¾");
+        assert_eq!(unescape("&theta; &lambda; &Delta; &nabla; &sum; &radic; &ne; &le; &ge; &hearts;"), "θ λ Δ ∇ ∑ √ ≠ ≤ ≥ ♥");
+    }
+
+    #[test]
+    fn wbr_word_break_opportunity() {
+        let f = parse("<p>Super<wbr>cali<wbr>fragilistic</p>");
+        let Some(FBlock::Para(p)) = f.blocks.first() else { panic!("expected para") };
+        assert_eq!(p.text(), "Super\u{200B}cali\u{200B}fragilistic");
+    }
+
+    #[test]
+    fn page_break_after_and_before() {
+        let f = parse("<p style='page-break-after: always'>First</p><p>Second</p>");
+        let paras: Vec<_> = f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+        assert_eq!(paras.len(), 2);
+        assert!(!paras[0].page_break);
+        assert!(paras[1].page_break);
+
+        let f2 = parse("<div style='break-after: page'><p>Part 1</p></div><p>Part 2</p>");
+        let paras2: Vec<_> = f2.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+        assert_eq!(paras2.len(), 2);
+        assert!(!paras2[0].page_break);
+        assert!(paras2[1].page_break);
     }
 }
