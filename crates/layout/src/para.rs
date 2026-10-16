@@ -1767,13 +1767,29 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     resolve_tab(pl, &mut pending_tab, &mut xs, c0, x, &mut x);
                     let stop = next_tab(x, &rp.tabs, default_tab, hanging_at);
                     xs.push(x);
-                    if stop.pos > right_edge + 0.01 && j > c0 && stop.align == TabAlign::Left {
+                    // A tab whose text doesn't fit moves to the next line with it (Word), where it
+                    // starts again from the indent: the break is before the tab. Not when only
+                    // markers precede it (that would leave an empty line), nor at the first line's
+                    // hanging-indent stop (a label such as "[1]" keeps its tab).
+                    let content = (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker));
+                    let at_hanging = first && hanging_at.is_some_and(|h| (stop.pos - h).abs() < 0.01);
+                    let past = stop.pos > right_edge + 0.01 && j > c0 && stop.align == TabAlign::Left;
+                    // shortcut: a custom stop past the right indent keeps its tab on the line (Word sends
+                    // the text after it past the margin); upgrade when that overflow is drawn.
+                    let custom_past = past && rp.tabs.iter().any(|t| (t.pos - stop.pos).abs() < 0.01);
+                    let tab_break = if content && !at_hanging && !custom_past {
+                        last_plain = Some((j - 1, x));
+                        j - 1
+                    } else {
+                        j
+                    };
+                    if past {
                         // Tab past the right indent wraps (Word moves it to the next line).
                         if let Some(c) = pl.clusters.get_mut(j) {
                             c.adv = 0.0;
                         }
                         x = right_edge.max(x);
-                        last_break = Some(j);
+                        last_break = Some(tab_break);
                         j += 1;
                         continue;
                     }
@@ -1789,13 +1805,17 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                             x += w;
                         }
                         _ => {
+                            // A tab laid out again after a wrap keeps no width from the line before.
+                            if let Some(c) = pl.clusters.get_mut(j) {
+                                c.adv = 0.0;
+                            }
                             pending_tab = Some((j, stop, x));
                             if stop.leader != TabLeader::None {
                                 leaders.push((j, stop.leader));
                             }
                         }
                     }
-                    last_break = Some(j);
+                    last_break = Some(tab_break);
                     j += 1;
                     continue;
                 }
@@ -1833,6 +1853,11 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     last_break = Some(pj);
                 }
                 if let Some(bk) = last_break.filter(|bk| *bk >= c0) {
+                    // A centre/right tab after the break goes to the next line: nothing to finish here.
+                    if pending_tab.is_some_and(|(tj, _, _)| tj > bk) {
+                        pending_tab = None;
+                    }
+                    leaders.retain(|(k, _)| *k <= bk);
                     xs.truncate(bk + 1 - c0);
                     j = bk + 1;
                     // Recompute x for the kept clusters.

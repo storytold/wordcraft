@@ -1744,6 +1744,110 @@ fn empty_center_tab_then_right_tab() {
     assert!((end - (72.0 + 468.0)).abs() < 1.0, "{end}");
 }
 
+/// A tab whose text doesn't fit moves to the next line with that text (Word), where it starts
+/// again from the indent and takes the first stop. Word's reference for docxide-pdf's
+/// `leading-tab-two-tabs` (#2531): the first tab stays on line 1, the second goes to line 2 and
+/// centres the text on the centre stop; it used to start line 2 at the margin.
+#[test]
+fn a_tab_that_wraps_moves_to_the_next_line_with_its_text() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let mut d = Document::from_text("\t\tGreetings, public");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_first = Some(26.95);
+        p.tabs = Some(vec![
+            TabStop { pos: 250.9, align: TabAlign::Center, leader: Default::default() },
+            TabStop { pos: 431.25, align: TabAlign::Left, leader: Default::default() },
+        ])
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (line1, start, end) = (l.caret(&Pos::body(0, 0)).unwrap(), l.caret(&Pos::body(0, 2)).unwrap(), l.caret(&Pos::body(0, 19)).unwrap());
+    assert!(start.top > line1.top + 1.0, "the text wraps to line 2: {} vs {}", start.top, line1.top);
+    assert!((end.top - start.top).abs() < 0.5, "the text stays on one line");
+    let mid = (start.x + end.x) / 2.0;
+    assert!((mid - (72.0 + 250.9)).abs() < 0.5, "centred on the centre stop: {} .. {}", start.x, end.x);
+}
+
+/// Mid-line too: Word for Mac 16.114 puts "PrefixPrefixPrefixPrefix" (past the first stop) on
+/// line 1, and the tab and "Synthetic greeting" (which don't fit after the second stop) on line 2,
+/// where the tab lands on the first stop: the greeting starts at 72 + 108 pt.
+#[test]
+fn a_mid_line_tab_that_wraps_takes_the_first_stop() {
+    use wordcraft_doc::props::{TabAlign, TabStop};
+    let mut d = Document::from_text("PrefixPrefixPrefixPrefix\tSynthetic greeting\nNext");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_right = Some(468.0 - 451.3);
+        p.tabs = Some(vec![
+            TabStop { pos: 108.0, align: TabAlign::Left, leader: Default::default() },
+            TabStop { pos: 431.25, align: TabAlign::Left, leader: Default::default() },
+        ])
+    })
+    .unwrap();
+    let l = lay(&d);
+    // The caret before the prefix's last letter: at its end it would be at line 2's start.
+    let (prefix, greeting, next) = (l.caret(&Pos::body(0, 23)).unwrap(), l.caret(&Pos::body(0, 25)).unwrap(), l.caret(&Pos::body(1, 0)).unwrap());
+    assert!(prefix.x > 72.0 + 108.0, "the prefix passes the first stop: {}", prefix.x);
+    assert!(greeting.top > prefix.top + 1.0, "the greeting wraps to line 2");
+    assert!((greeting.x - 180.0).abs() < 0.5, "the greeting starts at the first stop: {}", greeting.x);
+    assert!(next.top > greeting.top + 1.0 && (next.x - 72.0).abs() < 0.01, "the next paragraph starts at the margin");
+}
+
+/// The first paragraph's lines: where each starts (character offset) and its tab leaders.
+fn tab_lines(d: &Document) -> Vec<(usize, usize)> {
+    let l = lay(d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    para.lines.iter().map(|l| (para.clusters.get(l.c0).map_or(usize::MAX, |c| c.start), l.leaders.len())).collect()
+}
+
+/// A leading tab has nothing to move with: the line breaks after it, and a word that fits a
+/// line but not after the tab goes whole to the next line instead of being split.
+#[test]
+fn a_word_after_a_leading_tab_is_not_split() {
+    let mut d = Document::from_text("\tWonderful");
+    let l = lay(&d);
+    let w = l.caret(&Pos::body(0, 10)).unwrap().x - l.caret(&Pos::body(0, 1)).unwrap().x;
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - (w + 10.0))).unwrap();
+    assert_eq!(tab_lines(&d).iter().map(|l| l.0).collect::<Vec<_>>(), vec![0, 1]);
+}
+
+/// On a hanging indent's first line the tab after the label ("[1]") stays with the label.
+#[test]
+fn a_hanging_indent_tab_stays_with_its_label() {
+    let mut d = Document::from_text(&format!("[1]\t{}", "x".repeat(120)));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.indent_left = Some(36.0);
+        p.indent_first = Some(-36.0);
+    })
+    .unwrap();
+    assert_eq!(tab_lines(&d).get(1).map(|l| l.0), Some(4));
+}
+
+/// #1839: a TOC entry whose title fits but whose page number doesn't. The tab moves to the next
+/// line with the number: its leader fills that line and the number ends at the right stop, also
+/// when the title already ends past the stop (the tab's next stop is past the right indent).
+#[test]
+fn a_toc_page_number_that_does_not_fit_moves_with_its_leader() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let probe = lay(&Document::from_text("Heading\t63"));
+    let title = probe.caret(&Pos::body(0, 7)).unwrap().x - 72.0;
+    let num = probe.caret(&Pos::body(0, 10)).unwrap().x - probe.caret(&Pos::body(0, 8)).unwrap().x;
+    let width = title + num / 4.0;
+    for stop in [width, title - 10.0] {
+        let mut d = Document::from_text("Heading\t63");
+        d.settings.default_tab = 720.0;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.indent_right = Some(468.0 - width);
+            p.tabs = Some(vec![TabStop { pos: stop, align: TabAlign::Right, leader: TabLeader::Dot }]);
+        })
+        .unwrap();
+        assert_eq!(tab_lines(&d), vec![(0, 0), (7, 1)], "stop {stop}");
+        let l = lay(&d);
+        let (head, end) = (l.caret(&Pos::body(0, 0)).unwrap(), l.caret(&Pos::body(0, 10)).unwrap());
+        assert!(end.top > head.top + 1.0, "the number is on line 2");
+        assert!((end.x - (72.0 + stop)).abs() < 0.5, "the number ends at the stop {stop}: {}", end.x);
+    }
+}
+
 #[test]
 fn footnotes_sit_at_page_bottom() {
     let mut d = Document::from_text(&"Body text line.\n".repeat(30));
