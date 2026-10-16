@@ -89,6 +89,14 @@ pub fn shape_outline(kind: ShapeKind, w: f32, h: f32, corner: Option<u32>) -> Op
             }
             pts
         }
+        ShapeKind::Hexagon
+        | ShapeKind::Octagon
+        | ShapeKind::Pentagon
+        | ShapeKind::Parallelogram
+        | ShapeKind::Trapezoid
+        | ShapeKind::Plus
+        | ShapeKind::Chevron
+        | ShapeKind::Decagon => return crate::preset::polygon(kind, w, h),
         ShapeKind::Triangle => vec![(0.5, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::RightTriangle => vec![(0.0, 0.0), (1.0, 1.0), (0.0, 1.0)],
         ShapeKind::Diamond => vec![(0.5, 0.0), (1.0, 0.5), (0.5, 1.0), (0.0, 0.5)],
@@ -225,6 +233,14 @@ mod tests {
             ShapeKind::Arrow,
             ShapeKind::Star,
             ShapeKind::Heart,
+            ShapeKind::Hexagon,
+            ShapeKind::Octagon,
+            ShapeKind::Pentagon,
+            ShapeKind::Parallelogram,
+            ShapeKind::Trapezoid,
+            ShapeKind::Plus,
+            ShapeKind::Chevron,
+            ShapeKind::Decagon,
         ] {
             for (w, h) in [(100.0, 50.0), (0.0, 0.0), (f32::NAN, 10.0)] {
                 for corner in [None, Some(0), Some(3_565), Some(u32::MAX)] {

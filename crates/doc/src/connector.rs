@@ -1,5 +1,5 @@
 //! Connectors and the shape properties beyond fill and outline: a shape's drawing id, its text
-//! warp, a rounded rectangle's corner, and a connector's ends.
+//! warp, a rounded rectangle's corner, a picture fill, and a connector's ends.
 //!
 //! A connector (DrawingML `straightConnector1`, `bentConnector3`, `curvedConnector3`) is a line
 //! from its frame's top-left to its bottom-right corner (flips swap the corners). Each end may be
@@ -38,6 +38,11 @@ pub struct ShapeExtra {
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corner: Option<u32>,
+    /// A picture fill (Shape Fill › Picture, DrawingML's `a:blipFill`): the `Document::media`
+    /// key of the picture stretched over the shape's box and clipped to its outline, in place
+    /// of the colour fill.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picture: Option<String>,
 }
 
 fn is_zero(v: &u32) -> bool {
@@ -103,8 +108,54 @@ pub fn sites(kind: ShapeKind, w: f32, h: f32) -> Vec<(f32, f32)> {
         // The corners, the legs' midpoints and the hypotenuse's.
         ShapeKind::RightTriangle => vec![(0.0, 0.0), (0.0, cy), (0.0, h), (cx, h), (w, h), (cx, cy)],
         ShapeKind::Line | ShapeKind::StraightConnector | ShapeKind::ElbowConnector | ShapeKind::CurvedConnector => vec![(0.0, 0.0), (w, h)],
+        // The corners, in the order of the presets' connection lists: a hexagon's and an
+        // octagon's from the right side round through the bottom, a pentagon's from its top.
+        ShapeKind::Hexagon | ShapeKind::Octagon | ShapeKind::Pentagon => {
+            let pts = crate::preset::polygon(kind, w, h).unwrap_or_default();
+            let at = |i: usize| pts.get(i).map(|(x, y)| (x * w, y * h));
+            let order: &[usize] = match kind {
+                ShapeKind::Hexagon => &[3, 4, 5, 0, 1, 2],
+                ShapeKind::Octagon => &[3, 4, 5, 6, 7, 0, 1, 2],
+                _ => &[1, 0, 4, 3, 2],
+            };
+            order.iter().filter_map(|i| at(*i)).collect()
+        }
+        // The other polygons: top, left, bottom and right, where the lines through the middle
+        // meet the outline.
+        ShapeKind::Parallelogram | ShapeKind::Trapezoid | ShapeKind::Plus | ShapeKind::Chevron | ShapeKind::Decagon => {
+            let pts: Vec<(f32, f32)> = crate::preset::polygon(kind, w, h).unwrap_or_default().iter().map(|(x, y)| (x * w, y * h)).collect();
+            let (top, bottom) = crossings(&pts, cx, true);
+            let (left, right) = crossings(&pts, cy, false);
+            vec![(cx, top), (left, cy), (cx, bottom), (right, cy)]
+        }
         _ => vec![(cx, 0.0), (0.0, cy), (cx, h), (w, cy)],
     }
+}
+
+/// Where the line `x = at` (`vertical`) or `y = at` crosses the closed polygon `pts`: the least
+/// and greatest crossing along the line (0 and 0 when it misses).
+fn crossings(pts: &[(f32, f32)], at: f32, vertical: bool) -> (f32, f32) {
+    let (mut lo, mut hi) = (f32::INFINITY, f32::NEG_INFINITY);
+    for (i, a) in pts.iter().enumerate() {
+        let Some(b) = pts.get((i + 1) % pts.len()) else { continue };
+        // (along the line, across it) for each end.
+        let ((a_on, a_across), (b_on, b_across)) = if vertical { ((a.1, a.0), (b.1, b.0)) } else { ((a.0, a.1), (b.0, b.1)) };
+        let (lo_x, hi_x) = (a_across.min(b_across), a_across.max(b_across));
+        if at < lo_x || at > hi_x {
+            continue;
+        }
+        let v = if (b_across - a_across).abs() < 1e-6 {
+            // The edge lies on the line: both its ends cross it.
+            lo = lo.min(a_on.min(b_on));
+            hi = hi.max(a_on.max(b_on));
+            continue;
+        } else {
+            a_on + (b_on - a_on) * (at - a_across) / (b_across - a_across)
+        };
+        lo = lo.min(v);
+        hi = hi.max(v);
+    }
+    if lo.is_finite() && hi.is_finite() { (lo, hi) } else { (0.0, 0.0) }
 }
 
 /// Site `site` of a `kind` shape with frame `rect` (x, y, w, h) on the page, turned and flipped by
@@ -290,5 +341,51 @@ mod tests {
             extra.start = Some(ConnEnd { id: 7, site: 99 });
         }
         assert!(!reroute_group(&mut kids));
+    }
+
+    /// #1534 review: the polygonal presets' connection sites lie on their outlines; a hexagon,
+    /// octagon and pentagon have their DrawingML sites (the corners, from the right or top).
+    #[test]
+    fn polygon_presets_have_sites_on_their_outline() {
+        let on_outline = |kind: ShapeKind, (x, y): (f32, f32)| {
+            let pts = crate::preset::polygon(kind, 100.0, 60.0).unwrap();
+            let n = pts.len();
+            (0..n).any(|i| {
+                let ((ax, ay), (bx, by)) = (pts[i], pts[(i + 1) % n]);
+                let (ax, ay, bx, by) = (ax * 100.0, ay * 60.0, bx * 100.0, by * 60.0);
+                let len = (bx - ax).hypot(by - ay);
+                let cross = ((bx - ax) * (y - ay) - (by - ay) * (x - ax)).abs();
+                let within = (x - ax) * (x - bx) <= 0.01 && (y - ay) * (y - by) <= 0.01;
+                within && cross / len.max(1e-6) < 0.01
+            })
+        };
+        for kind in [
+            ShapeKind::Hexagon,
+            ShapeKind::Octagon,
+            ShapeKind::Pentagon,
+            ShapeKind::Parallelogram,
+            ShapeKind::Trapezoid,
+            ShapeKind::Plus,
+            ShapeKind::Chevron,
+            ShapeKind::Decagon,
+        ] {
+            let s = sites(kind, 100.0, 60.0);
+            assert!(s.len() >= 4, "{kind:?}");
+            for p in &s {
+                assert!(on_outline(kind, *p), "{kind:?}: {p:?} is off the outline");
+            }
+        }
+        // A hexagon's six corners, from the right one round through the bottom.
+        let hex = sites(ShapeKind::Hexagon, 100.0, 60.0);
+        assert_eq!(hex.len(), 6);
+        assert_eq!(hex[0], (100.0, 30.0));
+        assert!(site_point(ShapeKind::Hexagon, [0.0, 0.0, 100.0, 60.0], Default::default(), 5).is_some(), "a glued site 5 resolves");
+        assert_eq!(sites(ShapeKind::Octagon, 100.0, 60.0).len(), 8);
+        assert_eq!(sites(ShapeKind::Pentagon, 100.0, 60.0)[0], (50.0, 0.0));
+        // Junk sizes don't panic.
+        for kind in [ShapeKind::Hexagon, ShapeKind::Plus] {
+            let _ = sites(kind, f32::NAN, -5.0);
+            let _ = sites(kind, 0.0, 0.0);
+        }
     }
 }

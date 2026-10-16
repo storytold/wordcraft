@@ -42,6 +42,14 @@ pub(crate) fn preset_kind(prst: &str) -> ShapeKind {
         }
         "star4" | "star5" | "star6" | "star7" | "star8" | "star10" | "star12" | "star16" | "star24" | "star32" => ShapeKind::Star,
         "heart" => ShapeKind::Heart,
+        "hexagon" => ShapeKind::Hexagon,
+        "octagon" => ShapeKind::Octagon,
+        "pentagon" => ShapeKind::Pentagon,
+        "parallelogram" => ShapeKind::Parallelogram,
+        "trapezoid" => ShapeKind::Trapezoid,
+        "plus" => ShapeKind::Plus,
+        "chevron" => ShapeKind::Chevron,
+        "decagon" => ShapeKind::Decagon,
         _ => ShapeKind::Rectangle,
     }
 }
@@ -63,11 +71,18 @@ pub(crate) fn vml_preset_kind(spt: u32) -> Option<ShapeKind> {
         4 => "diamond",
         5 => "triangle",
         6 => "rtTriangle",
+        7 => "parallelogram",
+        // Not 8: the legacy trapezoid is drawn the other way up from DrawingML's.
+        9 => "hexagon",
+        10 => "octagon",
+        11 => "plus",
         12 => "star5",
         13 => "rightArrow",
         21 => "plaque",
         23 => "donut",
         33 => "bentConnector2",
+        55 => "chevron",
+        56 => "pentagon",
         34 => "bentConnector3",
         35 => "bentConnector4",
         36 => "bentConnector5",
@@ -246,6 +261,8 @@ mod tests {
         assert_eq!(vml_preset_kind(62), Some(ShapeKind::RoundedRectangle));
         assert_eq!(vml_preset_kind(34), Some(ShapeKind::ElbowConnector));
         assert_eq!(vml_preset_kind(84), Some(ShapeKind::Rectangle));
+        assert_eq!(vml_preset_kind(9), Some(ShapeKind::Hexagon));
+        assert_eq!(vml_preset_kind(55), Some(ShapeKind::Chevron));
         // No preset geometry: freeform, WordArt text, picture frame, host control, out of range.
         for spt in [0, 24, 31, 136, 175, 75, 201, 203, u32::MAX] {
             assert_eq!(vml_preset_kind(spt), None, "{spt}");

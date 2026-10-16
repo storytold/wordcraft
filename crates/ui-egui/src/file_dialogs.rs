@@ -52,6 +52,8 @@ pub(crate) enum AfterPick {
     OpenDocument,
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
+    /// Fill the selected shape with the picked picture (Shape Fill › Picture).
+    FillPicture,
     /// Save the document there, then carry on.
     SaveAs(AfterSave),
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
@@ -194,6 +196,10 @@ impl WordApp {
                 };
                 self.insert_or_change_picture(json!({"path": path}))
             }
+            AfterPick::FillPicture => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                self.run("shape.fill", json!({"picture": {"path": path}}))
+            }
             AfterPick::Font => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.run("font.add", json!({"path": path}))
@@ -307,6 +313,16 @@ impl WordApp {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
+    }
+
+    /// Shape Fill › Picture: pick the picture to fill the selected shape with. The browser has no
+    /// paths to hand the command, so it isn't offered there yet.
+    pub(crate) fn pick_fill_picture(&mut self) {
+        if self.services.open_async.is_some() {
+            self.status(tl!("Picture fills aren't available in the browser yet."));
+            return;
+        }
+        let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::FillPicture);
     }
 
     /// Pick a font file to add (Add Font…; web: it arrives through the inbox).

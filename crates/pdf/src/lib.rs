@@ -581,6 +581,18 @@ fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Option<Path> {
             pb.move_to(cx, y0);
             pb.line_to(cx, y1);
         }
+        ShapeKind::Hexagon
+        | ShapeKind::Octagon
+        | ShapeKind::Pentagon
+        | ShapeKind::Parallelogram
+        | ShapeKind::Trapezoid
+        | ShapeKind::Plus
+        | ShapeKind::Chevron
+        | ShapeKind::Decagon => {
+            let unit = wordcraft_doc::preset::polygon(kind, r.w, r.h).unwrap_or_default();
+            let pts: Vec<(f32, f32)> = unit.iter().map(|(x, y)| (x0 + x * r.w, y0 + y * r.h)).collect();
+            poly(&mut pb, &pts)
+        }
         ShapeKind::Triangle => poly(&mut pb, &[(cx, y0), (x1, y1), (x0, y1)]),
         ShapeKind::RightTriangle => poly(&mut pb, &[(x0, y0), (x1, y1), (x0, y1)]),
         ShapeKind::Diamond => poly(&mut pb, &[(cx, y0), (x1, cy), (cx, y1), (x0, cy)]),
@@ -958,6 +970,25 @@ impl Exporter<'_> {
                 }
                 s.set_fill(None);
                 s.set_stroke(None);
+            }
+            Draw::ShapePicture { rect, kind, corner, media, clip, effects, stroke_width } => {
+                // The filled shape's shadow and glow, under the picture.
+                let fx = effects.sanitized();
+                if !fx.is_empty() && clip.is_empty() {
+                    shape_effects(s, *kind, *corner, rect, &fx, true, stroke_width.is_some(), stroke_width.unwrap_or(0.0));
+                }
+                // The picture stretched over the box, inside the outline (or a freeform's paths) only.
+                let clip = if clip.is_empty() {
+                    shape_path(*kind, rect, *corner)
+                } else {
+                    let mut pb = PathBuilder::new();
+                    append_path(&mut pb, &wordcraft_layout::display::seg_path(clip));
+                    pb.finish()
+                };
+                let Some(clip) = clip else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                self.picture(s, rect, media, &[0.0; 4], 1.0);
+                s.pop();
             }
             Draw::Ink { pts, color, width, alpha } => {
                 let mut pb = PathBuilder::new();

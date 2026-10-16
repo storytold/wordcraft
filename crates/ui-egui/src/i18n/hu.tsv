@@ -315,6 +315,16 @@
 	Heading {n}	Címsor {n}
 	Headings	Címsorok
 	Heart	Szív
+	Hexagon	Hatszög
+	Octagon	Nyolcszög
+	Regular Pentagon	Szabályos ötszög
+	Decagon	Tízszög
+	Parallelogram	Paralelogramma
+	Trapezoid	Trapéz
+	Cross	Kereszt
+	Chevron	Szarufa
+	Picture…	Kép…
+	Picture fills aren't available in the browser yet.	A képkitöltés a böngészőben még nem érhető el.
 	Help	Súgó
 	Hidden	Rejtett
 	Highlight Merge Fields	Egyesítési mezők kiemelése

@@ -1486,3 +1486,140 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// #1534: a hexagon filled with a picture draws the picture (an image XObject) clipped to its
+/// outline; without the picture there is none. The new presets all have paths.
+#[test]
+fn picture_filled_shapes_draw_their_picture() {
+    use wordcraft_doc::para::ShapeKind;
+    let r = Rect::new(0.0, 0.0, 10.0, 10.0);
+    for k in [
+        ShapeKind::Hexagon,
+        ShapeKind::Octagon,
+        ShapeKind::Pentagon,
+        ShapeKind::Parallelogram,
+        ShapeKind::Trapezoid,
+        ShapeKind::Plus,
+        ShapeKind::Chevron,
+        ShapeKind::Decagon,
+    ] {
+        assert!(shape_path(k, &r, None).is_some(), "{k:?}");
+        assert!(shape_path(k, &Rect::new(0.0, 0.0, f32::NAN, 1.0), None).is_none(), "{k:?}");
+    }
+    let pdf = |picture: bool| {
+        let mut d = Document::new();
+        let key = picture.then(|| d.add_media(png(), "png"));
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Hexagon,
+            w: 120.0,
+            h: 80.0,
+            fill: None,
+            stroke: Some(wordcraft_doc::Rgb(0, 0, 0)),
+            stroke_width: 1.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: wordcraft_doc::connector::ShapeExtra { picture: key, ..Default::default() },
+        };
+        let mut p = Paragraph::with_text("x", CharProps::default());
+        p.insert_object(1, shape, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+        String::from_utf8_lossy(&export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap()).into_owned()
+    };
+    let image = |raw: String| raw.contains("/Subtype /Image") || raw.contains("/Subtype/Image");
+    assert!(image(pdf(true)), "the picture fill is an image");
+    assert!(!image(pdf(false)), "no picture, no image");
+}
+
+/// What a page draws, in order: `F` a filled path, `S` a stroked one, `I` an image.
+fn draw_order(bytes: &[u8]) -> String {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use hayro_syntax::Pdf;
+    struct Rec(String);
+    impl Device<'_> for Rec {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, mode: &PathDrawMode) {
+            self.0.push(if matches!(mode, PathDrawMode::Stroke(_)) { 'S' } else { 'F' });
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {
+            self.0.push('I');
+        }
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = Pdf::new(bytes.to_vec()).expect("parse");
+    let cache = InterpreterCache::new();
+    let page = pdf.pages().iter().next().expect("a page");
+    let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+    let mut rec = Rec(String::new());
+    interpret_page(page, &mut ctx, &mut rec);
+    rec.0
+}
+
+/// A document holding one shape `kind` (with `freeform` geometry and `effects`) filled with a
+/// picture and outlined, as a PDF.
+fn picture_filled_pdf(
+    kind: wordcraft_doc::para::ShapeKind,
+    freeform: Option<wordcraft_doc::freeform::Freeform>,
+    effects: wordcraft_doc::effects::ShapeEffects,
+) -> Vec<u8> {
+    let mut d = Document::new();
+    let key = d.add_media(png(), "png");
+    let shape = InlineObject::Shape {
+        kind,
+        w: 120.0,
+        h: 80.0,
+        fill: None,
+        stroke: Some(wordcraft_doc::Rgb(0, 0, 0)),
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+        freeform: freeform.map(Arc::new),
+        effects,
+        extra: wordcraft_doc::connector::ShapeExtra { picture: Some(key), ..Default::default() },
+    };
+    let mut p = Paragraph::new();
+    p.insert_object(0, shape, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    export(&d, &PdfOptions::default()).unwrap()
+}
+
+/// #1534 review: a freeform (`a:custGeom`) shape filled with a picture draws the picture, then
+/// its path's outline.
+#[test]
+fn picture_filled_freeforms_draw_their_picture() {
+    use wordcraft_doc::freeform::{FreePath, Freeform};
+    let tri = Freeform {
+        w: 120.0,
+        h: 80.0,
+        paths: vec![FreePath { pts: vec![[0.0, 0.0], [120.0, 0.0], [0.0, 80.0]], closed: true }],
+        ..Default::default()
+    };
+    let order = draw_order(&picture_filled_pdf(wordcraft_doc::para::ShapeKind::Freeform, Some(tri), Default::default()));
+    assert_eq!(order, "IS", "the picture, then the outline");
+}
+
+/// #1534 review: a picture-filled shape's shadow and glow are filled silhouettes drawn before
+/// (under) the picture; only the outline is drawn over it.
+#[test]
+fn picture_fill_effects_sit_under_the_picture() {
+    use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+    let effects = ShapeEffects {
+        shadow: Some(Shadow { color: wordcraft_doc::Rgb(0, 0, 0), transparency: 0.0, blur: 0.0, distance: 10.0, angle: 90.0, rot_with_shape: false }),
+        glow: Some(Glow { color: wordcraft_doc::Rgb(0xC0, 0x50, 0x10), size: 4.0, transparency: 0.0 }),
+        soft_edge: None,
+    };
+    let order = draw_order(&picture_filled_pdf(wordcraft_doc::para::ShapeKind::Hexagon, None, effects));
+    let (before, after) = order.split_once('I').unwrap_or_else(|| panic!("no picture: {order}"));
+    assert!(!before.is_empty() && before.chars().all(|c| c == 'F'), "filled shadow and glow bands under the picture: {order}");
+    assert_eq!(after, "S", "only the outline over the picture: {order}");
+}

@@ -298,6 +298,16 @@ pub enum ShapeKind {
     Arrow,
     Star,
     Heart,
+    /// Polygonal presets (DrawingML's `hexagon`, `octagon`, regular `pentagon`,
+    /// `parallelogram`, `trapezoid`, `plus`, `chevron`, `decagon`): see [`crate::preset`].
+    Hexagon,
+    Octagon,
+    Pentagon,
+    Parallelogram,
+    Trapezoid,
+    Plus,
+    Chevron,
+    Decagon,
     /// A text box (rectangle with a text story).
     TextBox,
     /// A shape drawn point by point, such as ink (its geometry is the shape's `freeform`).

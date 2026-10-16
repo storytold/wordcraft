@@ -317,6 +317,16 @@
 	Heading {n}	Заголовок {n}
 	Headings	Заголовки
 	Heart	Сердце
+	Hexagon	Шестиугольник
+	Octagon	Восьмиугольник
+	Regular Pentagon	Правильный пятиугольник
+	Decagon	Десятиугольник
+	Parallelogram	Параллелограмм
+	Trapezoid	Трапеция
+	Cross	Крест
+	Chevron	Шеврон
+	Picture…	Рисунок…
+	Picture fills aren't available in the browser yet.	Заливка рисунком пока недоступна в браузере.
 	Help	Справка
 	Hidden	Скрытый
 	Highlight Merge Fields	Выделить поля слияния

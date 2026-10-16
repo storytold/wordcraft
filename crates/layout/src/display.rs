@@ -82,6 +82,21 @@ pub enum Draw {
         /// A rounded rectangle's corner ([`wordcraft_doc::connector::ShapeExtra::corner`]).
         corner: Option<u32>,
     },
+    /// A shape's picture fill: picture `media` stretched over `rect` and clipped to the `kind`
+    /// outline (`corner`: a rounded rectangle's), or to a freeform's closed paths `clip` when
+    /// there are some. The shape's shadow and glow (`effects`, cast by the filled shape, grown
+    /// by half the outline's `stroke_width` when it has one) are drawn first, under the
+    /// picture. It comes just before the shape's [`Draw::Shape`] or paths, which draw the
+    /// outline over it.
+    ShapePicture {
+        rect: Rect,
+        kind: ShapeKind,
+        corner: Option<u32>,
+        media: String,
+        clip: Vec<PathSeg>,
+        effects: wordcraft_doc::effects::ShapeEffects,
+        stroke_width: Option<f32>,
+    },
     /// An ink stroke: a line through `pts` (page points) with round ends and joins, `width`
     /// wide, in `color` at opacity `alpha`.
     Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
@@ -1353,6 +1368,16 @@ fn shape_draws(
         return;
     }
     let Some(f) = freeform.filter(|_| kind == ShapeKind::Freeform) else {
+        // A picture fill casts the shape's effects itself, under the picture.
+        let effects = match &extra.picture {
+            Some(media) => {
+                let stroke_width = stroke.map(|_| stroke_width);
+                let (corner, media, clip) = (extra.corner, media.clone(), Vec::new());
+                out.push(Draw::ShapePicture { rect, kind, corner, media, clip, effects, stroke_width });
+                Default::default()
+            }
+            None => effects,
+        };
         out.push(Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner: extra.corner });
         return;
     };
@@ -1360,6 +1385,20 @@ fn shape_draws(
         return;
     }
     let width = if stroke_width.is_finite() { stroke_width.clamp(0.0, 200.0) } else { 0.75 };
+    // A picture fill inside the closed paths, under their outlines.
+    if let Some(media) = extra.picture.as_ref().filter(|_| !f.is_ink()) {
+        let mut clip = Vec::new();
+        for (pts, _) in f.placed(rect.x, rect.y, rect.w, rect.h).into_iter().filter(|(_, closed)| *closed) {
+            for (i, [x, y]) in pts.iter().enumerate() {
+                clip.push(if i == 0 { PathSeg::Move(*x, *y) } else { PathSeg::Line(*x, *y) });
+            }
+            clip.push(PathSeg::Close);
+        }
+        if !clip.is_empty() {
+            let effects = Default::default();
+            out.push(Draw::ShapePicture { rect, kind, corner: None, media: media.clone(), clip, effects, stroke_width: None });
+        }
+    }
     for (pts, closed) in f.placed(rect.x, rect.y, rect.w, rect.h) {
         if f.is_ink() || (!closed && fill.is_none()) {
             if let Some(color) = stroke {

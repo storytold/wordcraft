@@ -893,6 +893,28 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 }
             }
         }
+        Draw::ShapePicture { rect, kind, corner, media, clip, effects, stroke_width } => {
+            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
+            if !r.is_finite() || r.width() <= 0.0 || r.height() <= 0.0 {
+                return;
+            }
+            ctx.set_transform(view);
+            // The filled shape's shadow and glow, under the picture.
+            let fx = effects.sanitized();
+            if !fx.is_empty() && clip.is_empty() {
+                shadow_and_glow(ctx, *kind, r, *corner, &fx, true, stroke_width.is_some(), stroke_width.unwrap_or(0.0), opts);
+            }
+            if !r.overlaps(*visible) {
+                return;
+            }
+            // The picture stretched over the box, inside the outline (or a freeform's paths) only.
+            let outline = if clip.is_empty() { shape_path(*kind, r, *corner) } else { wordcraft_layout::display::seg_path(clip) };
+            ctx.set_transform(view);
+            ctx.push_clip_layer(&outline);
+            let image = Draw::Image { rect: *rect, media: media.clone(), crop: [0.0; 4], alpha: 1.0, alt: String::new() };
+            draw(ctx, doc, &image, view, visible, opts);
+            ctx.pop_layer();
+        }
         Draw::Ink { pts, color: c, width, alpha } => {
             let Some(path) = ink_path(pts) else { return };
             if !path.bounding_box().inflate(*width as f64, *width as f64).overlaps(*visible) {
@@ -911,34 +933,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let fx = effects.sanitized();
             let can_fill = *kind != ShapeKind::Line && fill.is_some();
             if !fx.is_empty() && (can_fill || stroke.is_some()) {
-                let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
-                // The shape's silhouette grown by `g` points and moved by `d`, in the current paint.
-                let silhouette = |ctx: &mut RenderContext, g: f32, d: kurbo::Vec2| {
-                    let g = g as f64;
-                    if can_fill {
-                        let grow = g + if stroke.is_some() { sw / 2.0 } else { 0.0 };
-                        let rr = r.inflate(grow, grow) + d;
-                        if rr.width() > 0.0 && rr.height() > 0.0 {
-                            ctx.fill_path(&shape_path(*kind, rr, *corner));
-                        }
-                    } else if sw + 2.0 * g > 0.05 {
-                        ctx.set_stroke(kurbo::Stroke::new(sw + 2.0 * g));
-                        ctx.stroke_path(&shape_path(*kind, r + d, *corner));
-                    }
-                };
-                if let Some(sh) = fx.shadow {
-                    let (dx, dy) = sh.offset();
-                    for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
-                        ctx.set_paint(color(opts.ink(sh.color), a));
-                        silhouette(ctx, g, kurbo::Vec2::new(dx as f64, dy as f64));
-                    }
-                }
-                if let Some(gl) = fx.glow {
-                    for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
-                        ctx.set_paint(color(opts.ink(gl.color), a));
-                        silhouette(ctx, g, kurbo::Vec2::ZERO);
-                    }
-                }
+                shadow_and_glow(ctx, *kind, r, *corner, &fx, can_fill, stroke.is_some(), *stroke_width, opts);
             }
             // Soft edges: the fill fades out toward the outline (which fades with it).
             if let (Some(rad), Some(f), true) = (fx.soft_edge, fill, can_fill) {
@@ -988,6 +983,51 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             for it in items {
                 draw(ctx, doc, it, view * m, &local, opts);
             }
+        }
+    }
+}
+
+/// A shape's shadow and glow, behind it (`ctx`'s transform already set): bands of its silhouette,
+/// the shape filled when it is (`filled`, grown by half the outline when `stroked`), else its
+/// outline widened.
+#[allow(clippy::too_many_arguments)]
+fn shadow_and_glow(
+    ctx: &mut RenderContext,
+    kind: ShapeKind,
+    r: kurbo::Rect,
+    corner: Option<u32>,
+    fx: &wordcraft_doc::effects::ShapeEffects,
+    filled: bool,
+    stroked: bool,
+    stroke_width: f32,
+    opts: &RenderOptions,
+) {
+    let sw = if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) as f64 } else { 0.75 };
+    // The shape's silhouette grown by `g` points and moved by `d`, in the current paint.
+    let silhouette = |ctx: &mut RenderContext, g: f32, d: kurbo::Vec2| {
+        let g = g as f64;
+        if filled {
+            let grow = g + if stroked { sw / 2.0 } else { 0.0 };
+            let rr = r.inflate(grow, grow) + d;
+            if rr.width() > 0.0 && rr.height() > 0.0 {
+                ctx.fill_path(&shape_path(kind, rr, corner));
+            }
+        } else if sw + 2.0 * g > 0.05 {
+            ctx.set_stroke(kurbo::Stroke::new(sw + 2.0 * g));
+            ctx.stroke_path(&shape_path(kind, r + d, corner));
+        }
+    };
+    if let Some(sh) = fx.shadow {
+        let (dx, dy) = sh.offset();
+        for (g, a) in wordcraft_doc::effects::bands(-sh.blur / 2.0, sh.blur / 2.0, sh.opacity()) {
+            ctx.set_paint(color(opts.ink(sh.color), a));
+            silhouette(ctx, g, kurbo::Vec2::new(dx as f64, dy as f64));
+        }
+    }
+    if let Some(gl) = fx.glow {
+        for (g, a) in wordcraft_doc::effects::bands(0.0, gl.size, gl.opacity()) {
+            ctx.set_paint(color(opts.ink(gl.color), a));
+            silhouette(ctx, g, kurbo::Vec2::ZERO);
         }
     }
 }
@@ -1045,6 +1085,18 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
             p.move_to((cx, r.y0));
             p.line_to((cx, r.y1));
             p
+        }
+        ShapeKind::Hexagon
+        | ShapeKind::Octagon
+        | ShapeKind::Pentagon
+        | ShapeKind::Parallelogram
+        | ShapeKind::Trapezoid
+        | ShapeKind::Plus
+        | ShapeKind::Chevron
+        | ShapeKind::Decagon => {
+            let unit = wordcraft_doc::preset::polygon(kind, r.width() as f32, r.height() as f32).unwrap_or_default();
+            let pts: Vec<(f64, f64)> = unit.iter().map(|(x, y)| (r.x0 + f64::from(*x) * r.width(), r.y0 + f64::from(*y) * r.height())).collect();
+            poly(&pts)
         }
         ShapeKind::Triangle => poly(&[(cx, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),
         ShapeKind::RightTriangle => poly(&[(r.x0, r.y0), (r.x1, r.y1), (r.x0, r.y1)]),
@@ -1641,6 +1693,123 @@ mod tests {
         ] {
             assert!(elements.windows(2).any(|w| w == pair), "missing spoke {pair:?}");
         }
+    }
+
+    /// #1534: a hexagon filled with a picture paints the picture inside its outline, and nothing
+    /// at its box's corner, outside the hexagon; turned, the same. The new presets have paths.
+    #[test]
+    fn picture_fills_are_clipped_to_the_outline() {
+        use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+        let r = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0);
+        for k in [
+            ShapeKind::Hexagon,
+            ShapeKind::Octagon,
+            ShapeKind::Pentagon,
+            ShapeKind::Parallelogram,
+            ShapeKind::Trapezoid,
+            ShapeKind::Plus,
+            ShapeKind::Chevron,
+            ShapeKind::Decagon,
+        ] {
+            assert!(!shape_path(k, r, None).elements().is_empty(), "{k:?}");
+            assert!(!shape_path(k, kurbo::Rect::new(0.0, 0.0, 0.0, 0.0), None).elements().is_empty(), "{k:?}");
+        }
+        let green = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(green).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let rendered = |rot: f32| {
+            let mut d = Document::new();
+            let key = d.add_media(png.clone(), "png");
+            let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, rot, ..Default::default() };
+            let shape = wordcraft_doc::para::InlineObject::Shape {
+                kind: ShapeKind::Hexagon,
+                w: 200.0,
+                h: 200.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 0.0,
+                float,
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: wordcraft_doc::connector::ShapeExtra { picture: Some(key), ..Default::default() },
+            };
+            let mut p = wordcraft_doc::Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            d.body = vec![wordcraft_doc::para_block(p)];
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
+        };
+        for rot in [0.0, 180.0] {
+            let img = rendered(rot);
+            assert_eq!(img.pixel(200, 200), [0, 200, 0, 255], "the picture fills the middle, turned {rot}");
+            assert_eq!(img.pixel(103, 103), [255, 255, 255, 255], "the box's corner is outside the hexagon, turned {rot}");
+            assert_eq!(img.pixel(297, 297), [255, 255, 255, 255], "the far corner too, turned {rot}");
+        }
+    }
+
+    /// A green picture filling a shape laid out at (100, 100) on the page: `kind`, 200 × 200,
+    /// with `freeform` geometry, `effects` and a 1 pt black outline.
+    fn picture_filled(
+        kind: wordcraft_doc::para::ShapeKind,
+        freeform: Option<wordcraft_doc::freeform::Freeform>,
+        effects: wordcraft_doc::effects::ShapeEffects,
+    ) -> Rendered {
+        use wordcraft_doc::para::{Anchor, Float, Wrap};
+        let green = image::RgbaImage::from_pixel(8, 8, image::Rgba([0, 200, 0, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(green).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut d = Document::new();
+        let key = d.add_media(png, "png");
+        let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() };
+        let shape = wordcraft_doc::para::InlineObject::Shape {
+            kind,
+            w: 200.0,
+            h: 200.0,
+            fill: None,
+            stroke: Some(Rgb::BLACK),
+            stroke_width: 1.0,
+            float,
+            story: None,
+            freeform: freeform.map(std::sync::Arc::new),
+            effects,
+            extra: wordcraft_doc::connector::ShapeExtra { picture: Some(key), ..Default::default() },
+        };
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, shape, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        render_page(&d, &l.pages[0], 1.0, &RenderOptions::default())
+    }
+
+    /// #1534 review: a freeform (`a:custGeom`) shape filled with a picture shows the picture
+    /// inside its path, and not outside it.
+    #[test]
+    fn picture_fills_follow_a_freeforms_path() {
+        use wordcraft_doc::freeform::{FreePath, Freeform};
+        // A triangle: the top-left half of its frame.
+        let tri = Freeform {
+            w: 200.0,
+            h: 200.0,
+            paths: vec![FreePath { pts: vec![[0.0, 0.0], [200.0, 0.0], [0.0, 200.0]], closed: true }],
+            ..Default::default()
+        };
+        let img = picture_filled(ShapeKind::Freeform, Some(tri), Default::default());
+        assert_eq!(img.pixel(140, 140), [0, 200, 0, 255], "inside the path");
+        assert_eq!(img.pixel(260, 260), [255, 255, 255, 255], "outside the path, inside the frame");
+    }
+
+    /// #1534 review: a picture-filled shape's shadow lies under the picture, cast by the whole
+    /// shape (not by its outline only).
+    #[test]
+    fn picture_fill_shadows_sit_under_the_picture() {
+        use wordcraft_doc::effects::{Shadow, ShapeEffects};
+        // Straight down 10 pt, solid black, sharp.
+        let shadow = Shadow { color: Rgb::BLACK, transparency: 0.0, blur: 0.0, distance: 10.0, angle: 90.0, rot_with_shape: false };
+        let img = picture_filled(ShapeKind::Hexagon, None, ShapeEffects { shadow: Some(shadow), ..Default::default() });
+        assert_eq!(img.pixel(200, 110), [0, 200, 0, 255], "the picture, not the outline's shadow, 10 pt below the top edge");
+        assert_eq!(img.pixel(200, 200), [0, 200, 0, 255], "the middle");
+        assert!(img.pixel(200, 305)[0] < 60, "the shadow shows below the shape: {:?}", img.pixel(200, 305));
     }
 
     /// A rounded rectangle laid out and rendered: its corner pixel is painted when the corner is

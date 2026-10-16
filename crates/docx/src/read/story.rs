@@ -999,7 +999,8 @@ impl Reader<'_> {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
-        } else if gd.find("a:blip").is_some() {
+        } else if gd.find("a:blip").is_some() && gd.child("wps:wsp").is_none() {
+            // A picture (a shape's picture fill has an `a:blip` too).
             self.read_pic(gd, rels, w, h, alt.clone(), float)?
         } else {
             let wsp = gd.find("wps:wsp")?;
@@ -1353,6 +1354,15 @@ impl Reader<'_> {
             self.glued.extend(extra.start.iter().chain(extra.end.iter()).map(|e| e.id));
         }
         extra.warp = wsp.child("wps:bodyPr").and_then(|b| b.child("a:prstTxWarp")).and_then(text_warp);
+        // A picture fill (ECMA-376 §20.1.8.14), stretched over the box; a tiled one (`a:tile`)
+        // is stretched too. A picture that isn't in the package is no fill.
+        if !kind.is_open() {
+            extra.picture = sppr
+                .and_then(|s| s.child("a:blipFill"))
+                .and_then(|f| f.child("a:blip"))
+                .and_then(|b| b.attr("r:embed"))
+                .and_then(|id| self.media_for(rels, id));
+        }
         // A freeform: its custom geometry (#743: in a group too).
         let freeform = sppr.and_then(|s| super::freeform::cust_geom(s, w, h)).map(|mut f| {
             f.alpha = super::freeform::line_alpha(ln);
