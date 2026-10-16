@@ -13,13 +13,18 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
     if t.is_empty() || t.len() > 40 {
         return None;
     }
-    let split = t.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+' || c == 'e' || c == 'E')).unwrap_or(t.len());
-    let (num, unit) = t.split_at(split);
+    const UNITS: &[&str] = &["emu", "pt", "in", "cm", "mm", "pc", "pi", "px"];
+    let (num, unit) = if let Some(u) = UNITS.iter().find(|&&u| t.to_ascii_lowercase().ends_with(u)) {
+        let (n, _) = t.split_at(t.len() - u.len());
+        (n.trim(), *u)
+    } else {
+        (t, "")
+    };
     let v: f64 = num.parse().ok()?;
     if !v.is_finite() {
         return None;
     }
-    let pt = match unit.trim() {
+    let pt = match unit {
         "" => v / per_pt as f64,
         "pt" => v,
         "in" => v * 72.0,
@@ -60,7 +65,10 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => {
+            let s = v.trim();
+            s != "0" && !s.eq_ignore_ascii_case("false") && !s.eq_ignore_ascii_case("off")
+        }
     }
 }
 
@@ -97,8 +105,30 @@ mod tests {
         assert_eq!(measure("nan", 20.0), None);
         assert_eq!(measure("1e400", 20.0), None);
         assert_eq!(measure("99999999999999", 20.0), Some(MAX_LEN_PT));
-        assert_eq!(measure("x", 20.0), None);
+        assert_eq!(measure("12700emu", 20.0), Some(1.0));
+        assert_eq!(measure("12700EMU", 20.0), Some(1.0));
+        assert_eq!(measure("12PT", 2.0), Some(12.0));
+        assert_eq!(measure("1IN", 20.0), Some(72.0));
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
+    }
+
+    #[test]
+    fn test_on_off_casing() {
+        let el_on = El { attrs: vec![("w:val".into(), "on".into())], ..Default::default() };
+        let el_off_lower = El { attrs: vec![("w:val".into(), "off".into())], ..Default::default() };
+        let el_off_mixed = El { attrs: vec![("w:val".into(), "Off".into())], ..Default::default() };
+        let el_off_upper = El { attrs: vec![("w:val".into(), "OFF".into())], ..Default::default() };
+        let el_false_upper = El { attrs: vec![("w:val".into(), "FALSE".into())], ..Default::default() };
+        let el_zero = El { attrs: vec![("w:val".into(), "0".into())], ..Default::default() };
+        let el_none = El::default();
+
+        assert!(on_off(&el_on));
+        assert!(on_off(&el_none));
+        assert!(!on_off(&el_off_lower));
+        assert!(!on_off(&el_off_mixed));
+        assert!(!on_off(&el_off_upper));
+        assert!(!on_off(&el_false_upper));
+        assert!(!on_off(&el_zero));
     }
 }
