@@ -127,7 +127,7 @@ pub fn specs() -> Vec<CommandSpec> {
             with_table(s, |t| set_column_widths(t, &cells, w))
         })
         .params(
-            r#"{"width": pt} (every column the selection covers, the caret cell's without one; the table's preferred width is cleared so the columns get exactly this)"#,
+            r#"{"width": pt} (every column the selection covers, the caret cell's without one; the columns' total becomes the table's own width, as in Word, so the columns get exactly this)"#,
         )),
         t(CommandSpec::new("table.rowHeight", "Table Row Height", "Table Layout › Cell Size", |s, v| {
             let h = p::req_f32(v, "height")?.clamp(1.0, 1584.0);
@@ -259,8 +259,9 @@ pub(crate) fn sync_cell_widths(t: &mut Table) {
     }
 }
 
-/// Set the width of the grid column cell `c` of row `r` starts in. The table's preferred width
-/// goes, so the layout doesn't scale the column back.
+/// Set the width of the grid column cell `c` of row `r` starts in. The columns' total becomes the
+/// table's own width, as in Word, so the layout neither scales the column back nor fits a widened
+/// table into the text column.
 /// Give every grid column the `cells` (row, cell) pairs touch the width `w`.
 fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32) {
     let mut cols: Vec<usize> = cells.iter().map(|&(r, c)| t.grid_col(r, c)).collect();
@@ -274,7 +275,7 @@ fn set_column_widths(t: &mut Table, cells: &[(usize, usize)], w: f32) {
         }
     }
     if any {
-        t.props.width = None;
+        t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
         t.props.width_pct = None;
         sync_cell_widths(t);
     }
@@ -284,7 +285,7 @@ fn set_column_width(t: &mut Table, r: usize, c: usize, w: f32) {
     let g = t.grid_col(r, c);
     if let Some(x) = t.grid.get_mut(g) {
         *x = w;
-        t.props.width = None;
+        t.props.width = Some(t.grid.iter().filter(|w| w.is_finite()).sum());
         t.props.width_pct = None;
         sync_cell_widths(t);
     }

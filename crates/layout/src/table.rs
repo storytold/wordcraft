@@ -373,7 +373,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         grid.iter_mut().for_each(|w| *w *= k);
         total = tw;
     }
-    if total > avail * 1.5 && !t.props.fixed {
+    // An autofit table whose width comes from its columns (no `w:tblW` of its own) is squeezed
+    // into its room when they add up to more; the preferred widths are kept for `autofit` to
+    // share the room out by. A table that sets its own width keeps it, past the margin and even
+    // past the page (Word, observed with synthetic documents: 1.1 to 2 times the text area).
+    let mut preferred = None;
+    if total > avail * 1.02 && !t.props.fixed && target.is_none() {
+        preferred = Some(grid.clone());
         let k = avail / total.max(1.0);
         grid.iter_mut().for_each(|w| *w *= k);
         total = avail;
@@ -384,7 +390,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let content = column_content(ctx, t, style.as_ref(), depth);
         ctx.eq_count = eq_count;
         if let Some(content) = content {
-            autofit(&mut grid, &content, t, avail);
+            autofit(&mut grid, &content, t, avail, preferred.as_deref(), target);
             // Never wider than the room it had, however long an unbreakable word.
             let fitted: f32 = grid.iter().sum();
             let cap = avail.max(total);
@@ -1176,27 +1182,56 @@ fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
     grid.copy_from_slice(&widths);
 }
 
+/// Whether no cell of `t` asks for a width: Word then sizes the columns by their content and
+/// ignores the grid, whatever the table's own width (generators write a placeholder grid).
+fn no_cell_widths(t: &Table) -> bool {
+    t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.width.is_none() && c.props.width_pct.is_none()))
+}
+
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
-/// - With no preferred width anywhere (the table's and every cell's automatic) the columns come
-///   from their content alone: each its widest line if they all fit in `avail`, else shared out
-///   between narrowest and widest in proportion to how much each can give.
+/// - With no cell asking for a width the columns come from their content alone, into `room`
+///   (the table's own width, `target`, else the text area): each its widest line if they fit,
+///   else shared out between narrowest and widest in proportion to how much each can give. A
+///   table with a width of its own and room to spare is stretched to it, every column in
+///   proportion to its widest line (measured on Word: 102.8, 217.0 and 131.5 pt laid out, 102.7,
+///   216.7 and 131.5 drawn). Without a width of its own the table stays as narrow as its content.
+/// - A table whose `preferred` widths are wider than the room (a template library writes cells
+///   of 6000 and 24000 twips on an A4 page) is squeezed the way Word does it: every column gets
+///   its longest word, and the room left is shared in proportion to how far each preferred
+///   width exceeds that, so a column of short labels keeps most of its lines whole while one of
+///   running text wraps. (Measured against Word: 116 pt predicted, 116 pt drawn.)
 /// - Otherwise the grid stands, but no column is narrower than its longest word: the columns with
 ///   room to spare give up the difference.
-fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
+fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32, preferred: Option<&[f32]>, target: Option<f32>) {
     if grid.len() != content.len() || !avail.is_finite() {
         return;
     }
-    if is_automatic(t) {
+    let target = target.filter(|w| w.is_finite() && *w > 0.0);
+    if no_cell_widths(t) {
+        let room = target.unwrap_or(avail);
         let (lo, hi) = content.iter().fold((0.0f32, 0.0f32), |(l, h), c| (l + c.0, h + c.1.max(c.0)));
-        let k = if hi <= avail {
-            1.0
-        } else if lo >= avail || hi - lo < 0.01 {
-            0.0
-        } else {
-            (avail - lo) / (hi - lo)
-        };
+        if hi <= room {
+            let stretch = if target.is_some() && hi > 0.01 { room / hi } else { 1.0 };
+            for (w, c) in grid.iter_mut().zip(content) {
+                *w = (c.1.max(c.0) * stretch).max(4.0);
+            }
+            return;
+        }
+        let k = if lo >= room || hi - lo < 0.01 { 0.0 } else { (room - lo) / (hi - lo) };
         for (w, c) in grid.iter_mut().zip(content) {
             *w = (c.0 + (c.1.max(c.0) - c.0) * k).max(4.0);
+        }
+        return;
+    }
+    if let Some(pref) = preferred.filter(|p| p.len() == grid.len()) {
+        let mins: Vec<f32> = content.iter().map(|c| if c.0.is_finite() { c.0.max(4.0) } else { 4.0 }).collect();
+        let lo: f32 = mins.iter().sum();
+        let room = (avail - lo).max(0.0);
+        let give: Vec<f32> = pref.iter().zip(&mins).map(|(p, m)| if p.is_finite() { (p - m).max(0.0) } else { 0.0 }).collect();
+        let total_give: f32 = give.iter().sum();
+        let even = 1.0 / grid.len().max(1) as f32;
+        for ((w, m), g) in grid.iter_mut().zip(&mins).zip(&give) {
+            *w = m + room * if total_give > 0.01 { g / total_give } else { even };
         }
         return;
     }

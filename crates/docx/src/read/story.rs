@@ -1609,11 +1609,49 @@ impl Reader<'_> {
             return None;
         }
         if table.grid.is_empty() {
-            let cols = table.cols().clamp(1, MAX_COLS);
-            table.grid = vec![72.0; cols];
+            table.grid = grid_from_cells(&table);
         }
         Some(table)
     }
+}
+
+/// The column grid of a table without `w:tblGrid` (a file written by a template library), the
+/// way Word rebuilds it on opening: each column as wide as the widest preferred width
+/// (`w:tcW` in twips) among the cells that occupy it alone, a spanning cell's width shared out
+/// among its columns that no cell sets, and an inch for a column no cell sizes at all.
+fn grid_from_cells(table: &Table) -> Vec<f32> {
+    let cols = table.cols().clamp(1, MAX_COLS);
+    let mut grid: Vec<Option<f32>> = vec![None; cols];
+    let mut spanning = Vec::new();
+    for row in &table.rows {
+        let mut g = 0usize;
+        for cell in &row.cells {
+            let span = cell.span();
+            if let Some(w) = cell.props.width.filter(|w| w.is_finite() && *w > 0.0) {
+                if span == 1 {
+                    if let Some(slot) = grid.get_mut(g) {
+                        *slot = Some(slot.map_or(w, |cur| cur.max(w)));
+                    }
+                } else {
+                    spanning.push((g, span, w));
+                }
+            }
+            g += span;
+        }
+    }
+    for (g, span, w) in spanning {
+        let Some(cs) = grid.get_mut(g..(g + span).min(cols)) else { continue };
+        let known: f32 = cs.iter().flatten().sum();
+        let unknown = cs.iter().filter(|c| c.is_none()).count();
+        if unknown == 0 {
+            continue;
+        }
+        let each = ((w - known) / unknown as f32).max(4.0);
+        for c in cs.iter_mut().filter(|c| c.is_none()) {
+            *c = Some(each);
+        }
+    }
+    grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(4.0, crate::units::MAX_LEN_PT)).collect()
 }
 
 /// Gather `name` children (rows, cells), looking through `w:sdt`/`w:customXml` wrappers; each
