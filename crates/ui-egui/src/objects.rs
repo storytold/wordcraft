@@ -211,6 +211,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
             app.canvas.obj_drag = Some(d);
         } else {
             drop(app, &d);
+            // Double-click a shape (the press that began this click already selected it).
+            if resp.double_clicked() && !d.drag.moved && d.drag.grab == Grab::Move {
+                edit_text(app, &d.object);
+            }
         }
         return true;
     }
@@ -241,6 +245,10 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     }
     let grabbed = grab_at(app, layout, pages, scale, at).or_else(|| pressed.then(|| behind_drag_at(app, layout, pages, scale, at)).flatten());
     let Some((object, grab)) = grabbed else { return false };
+    if resp.double_clicked() && grab == Grab::Move {
+        edit_text(app, &object);
+        return true;
+    }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
     let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
     // Ctrl on the object that is already selected starts a copy-drag instead.
@@ -637,6 +645,12 @@ pub fn key(app: &mut WordApp, key: egui::Key, m: egui::Modifiers) -> bool {
     };
     // Inline objects move with the text: arrows move the caret as usual.
     app.run("arrange.nudge", json!({"dx": dx, "dy": dy})).is_ok()
+}
+
+/// Double-click on a shape or text box: the caret goes into its text. Lines, connectors, pictures
+/// and charts have none, so nothing happens to them.
+fn edit_text(app: &mut WordApp, object: &ObjectHit) {
+    let _ = app.run("shape.editText", json!({"pos": object.pos()}));
 }
 
 /// With a text box selected, put the caret at the end of its text (typing goes there).
