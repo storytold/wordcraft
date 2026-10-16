@@ -24,6 +24,9 @@ commands:
   ci              fmt --check, clippy -D warnings, test, assets, layers, wasm (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
+  bench [--pages N] [--keys K]
+                  large-document benchmark (#554): a synthetic N-page book (default 500) timed for
+                  open, layout, keystrokes, rendering, save and PDF export; release build, nice 19
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the Word feature-parity summary in docs/parity-checklist.md
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
@@ -42,6 +45,7 @@ fn main() -> ExitCode {
         Some("wasm") => cmd_wasm(),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("bench") => cmd_bench(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
         Some("ico") => ico::run(&rest),
@@ -205,6 +209,21 @@ fn cmd_ci() -> Result<(), String> {
 }
 
 const PNGSUITE_URL: &str = "http://www.schaik.com/pngsuite/PngSuite-2017jul19.tgz";
+
+/// `cargo xtask bench`: run the large-document benchmark example in release mode at low priority
+/// (the machine may be shared), passing the size options through.
+fn cmd_bench(args: &[&str]) -> Result<(), String> {
+    let mut c = if cfg!(unix) {
+        let mut c = Command::new("nice");
+        c.args(["-n", "19"]).arg(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+        c.current_dir(root());
+        c
+    } else {
+        cargo()
+    };
+    c.args(["run", "--release", "-p", "wordcraft-engine", "--example", "large_doc_bench", "--"]).args(args);
+    run(c, "cargo run --release --example large_doc_bench")
+}
 
 fn cmd_corpus(download: bool) -> Result<(), String> {
     let corpus = root().join("corpus");

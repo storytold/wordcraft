@@ -207,6 +207,203 @@ pub fn report() -> Document {
     d
 }
 
+/// Words for [`large_document`]'s generated prose (our own list).
+const WORDS: &[&str] = &[
+    "the", "studio", "of", "a", "and", "light", "paper", "press", "river", "measure", "quiet", "build", "harbor", "to", "in", "with", "garden",
+    "window", "ink", "season", "careful", "small", "table", "every", "morning", "letter", "colour", "wood", "stone", "is", "maker", "shared",
+    "evening", "thread", "for", "carries", "north", "slowly", "against", "simple", "between", "patient", "kiln", "glaze", "drawing", "notebook",
+    "bright", "under", "map", "lantern", "bridge", "orchard", "copper", "weaving", "from", "over",
+];
+
+/// A deterministic run of `n` words (`seed` picks which) forming sentences.
+fn prose(seed: &mut u64, n: usize) -> String {
+    let mut s = String::new();
+    let mut in_sentence = 0;
+    for i in 0..n {
+        *seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let w = WORDS.get(((*seed >> 33) as usize) % WORDS.len()).copied().unwrap_or("word");
+        if in_sentence == 0 {
+            let mut c = w.chars();
+            if let Some(f) = c.next() {
+                s.extend(f.to_uppercase());
+                s.push_str(c.as_str());
+            }
+        } else {
+            s.push_str(w);
+        }
+        in_sentence += 1;
+        if in_sentence > 8 + (*seed >> 60) as usize || i + 1 == n {
+            s.push('.');
+            in_sentence = 0;
+        }
+        if i + 1 < n {
+            s.push(' ');
+        }
+    }
+    s
+}
+
+/// A `w` × `h` PNG with a gradient of its own (`k` varies the colours), so each picture in
+/// [`large_document`] is distinct media that has to be decoded on its own.
+fn picture_png(k: u32, w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbImage::from_fn(w, h, |x, y| {
+        image::Rgb([((x * 255) / w.max(1)) as u8, ((y * 255) / h.max(1)) as u8, (k.wrapping_mul(37) % 256) as u8])
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    match img.write_to(&mut out, image::ImageFormat::Png) {
+        Ok(()) => out.into_inner(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// A large synthetic book of about `pages` pages (#554): chapters with headings, long
+/// paragraphs, a picture every few pages (some floating with square wrapping), tables,
+/// footnotes, fields (a TOC, PAGE/NUMPAGES in the footer, cross-page REF-like fields) and
+/// numbered lists. Deterministic; for benchmarks and performance tests. Sizes are clamped
+/// (1..=5000 pages).
+pub fn large_document(pages: usize) -> Document {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    let pages = pages.clamp(1, 5000);
+    let mut d = Document::new();
+    d.core.title = "A Long Synthetic Book".into();
+    d.core.creator = "WordCraft".into();
+    let mut seed = 0x5eed_u64;
+    let mut b: Vec<Block> = Vec::new();
+    b.push(Block::Para(styled("A Long Synthetic Book", "Title")));
+    let mut toc = Paragraph::new();
+    let _ = toc.insert_object(
+        0,
+        InlineObject::Field {
+            instr: "TOC \\o \"1-2\" \\h".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &CharProps::default(),
+    );
+    b.push(Block::Para(toc));
+    let mut num = d.numbering.clone();
+    let steps = num.add_list(ListKind::Numbered);
+    d.numbering = num;
+    // About 3.5 paragraphs of ~110 words fill a page; pictures every 2.5 pages, tables every 5.
+    let paras = pages.saturating_mul(3);
+    let (pictures, tables) = (pages * 2 / 5, pages / 5);
+    let (mut pic, mut tab) = (0usize, 0usize);
+    let chapter_len = 60;
+    for i in 0..paras {
+        if i % chapter_len == 0 {
+            let ch = i / chapter_len + 1;
+            b.push(Block::Para(styled(&format!("Chapter {ch}: {}", prose(&mut seed, 4).trim_end_matches('.')), "Heading1")));
+        } else if i % 15 == 0 {
+            b.push(Block::Para(styled(prose(&mut seed, 5).trim_end_matches('.'), "Heading2")));
+        }
+        let mut p = para(&prose(&mut seed, 90 + (i * 7) % 50));
+        if i % 6 == 3 {
+            // A footnote.
+            let id = d.add_part(PartKind::Footnote, Vec::new());
+            let mut n = Paragraph::new().styled("FootnoteText");
+            let refp = CharProps { style: Some("FootnoteReference".into()), ..Default::default() };
+            let _ = n.insert_object(0, InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() }, &refp);
+            add(&mut n, &format!(" {}", prose(&mut seed, 25)), CharProps::default());
+            let _ = d.set_story(wordcraft_doc::StoryRef::Part(id), vec![para_block(n)]);
+            let at = p.len();
+            let _ = p.insert_object(at, InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Footnote, id, custom: String::new() }, &refp);
+        }
+        if i % 10 == 7 {
+            add(&mut p, " Today is ", CharProps::default());
+            let at = p.len();
+            let _ = p.insert_object(
+                at,
+                InlineObject::Field {
+                    instr: "DATE \\@ \"MMMM d, yyyy\"".into(),
+                    result: "May 1, 2026".into(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: String::new(),
+                },
+                &CharProps::default(),
+            );
+            add(&mut p, ".", CharProps::default());
+        }
+        if i % 4 == 1 {
+            add(&mut p, &format!(" {}", prose(&mut seed, 12)), bold());
+        }
+        b.push(Block::Para(p));
+        if i % 25 == 12 {
+            for _ in 0..4 {
+                let mut l = para(&prose(&mut seed, 14)).styled("ListParagraph");
+                l.props.numbering = Some(NumRef { num: steps, level: 0 });
+                b.push(Block::Para(l));
+            }
+        }
+        if pic < pictures && i * pictures / paras.max(1) >= pic {
+            let media = d.add_media(picture_png(pic as u32, 320 + (pic as u32 % 5) * 40, 240), "png");
+            let floating = pic % 4 == 1;
+            let float = if floating {
+                Float {
+                    wrap: Wrap::Square,
+                    h_rel: Anchor::Column,
+                    v_rel: Anchor::Paragraph,
+                    h_align: Some(FloatAlign::End),
+                    dist: 9.0,
+                    ..Default::default()
+                }
+            } else {
+                Float::default()
+            };
+            let (w, h) = if floating { (180.0, 135.0) } else { (360.0, 240.0) };
+            let mut fig = if floating { para(&prose(&mut seed, 60)) } else { Paragraph::new() };
+            let _ = fig.insert_object(
+                0,
+                InlineObject::Image { media, w, h, alt: format!("Figure {}", pic + 1), float, crop: [0.0; 4], ole: None },
+                &CharProps::default(),
+            );
+            b.push(Block::Para(fig));
+            b.push(Block::Para(styled(&format!("Figure {}: {}", pic + 1, prose(&mut seed, 8)), "Caption")));
+            pic += 1;
+        }
+        if tab < tables && i * tables / paras.max(1) >= tab && i % 3 == 2 {
+            let (rows, cols) = (6 + tab % 6, 4);
+            let mut t = Table::new(rows, cols, 468.0);
+            for (r, row) in t.rows.iter_mut().enumerate() {
+                for cell in row.cells.iter_mut() {
+                    cell.blocks = vec![para_block(para(&prose(&mut seed, if r == 0 { 2 } else { 3 + r % 5 })))];
+                }
+            }
+            if let Some(r) = t.rows.first_mut() {
+                r.props.header = true;
+            }
+            b.push(Block::Table(t));
+            tab += 1;
+        }
+    }
+    d.body = b.into_iter().map(std::sync::Arc::new).collect();
+    let mut f = Paragraph::new().styled("Footer");
+    f.props.align = Some(Align::Center);
+    add(&mut f, "Page ", CharProps::default());
+    let at = f.len();
+    let _ = f.insert_object(
+        at,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    );
+    add(&mut f, " of ", CharProps::default());
+    let at = f.len();
+    let _ = f.insert_object(
+        at,
+        InlineObject::Field { instr: "NUMPAGES".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    );
+    let fid = d.add_part(PartKind::Footer, vec![para_block(f)]);
+    d.last_section.footers.default = Some(fid);
+    let hid = d.add_part(PartKind::Header, vec![para_block(styled("A Long Synthetic Book", "Header"))]);
+    d.last_section.headers.default = Some(hid);
+    d
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
