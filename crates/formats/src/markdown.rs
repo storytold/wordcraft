@@ -863,7 +863,9 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                     push_text(&mut nodes, inner, &f);
                     i += inner.len() + 2;
                     text_start = i;
-                } else if matches!(lower.trim_end_matches('/').trim(), "br") {
+                } else {
+                    let tag_name = lower.split_whitespace().next().unwrap_or("").trim_end_matches('/');
+                    if matches!(lower.trim_end_matches('/').trim(), "br") {
                     flush!();
                     push_text(&mut nodes, "\n", base);
                     i += inner.len() + 2;
@@ -875,8 +877,37 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                     }
                     i += inner.len() + 2 + 4;
                     text_start = i;
+                } else if (lower.starts_with("a ") || lower.starts_with("a/")) && inner.trim_end().ends_with('/') {
+                    flush!();
+                    if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
+                        nodes.push(Node::Inl(Inline::Anchor(name)));
+                    }
+                    i += inner.len() + 2;
+                    text_start = i;
+                } else if matches!(tag_name, "sup" | "sub" | "u") && depth < MAX_NEST {
+                    let close_tag = format!("</{tag_name}>");
+                    let after_tag = &rest[inner.len() + 1..];
+                    if let Some(close_pos) = after_tag.to_ascii_lowercase().find(&close_tag) {
+                        flush!();
+                        let content = &after_tag[..close_pos];
+                        let mut f = base.clone();
+                        match tag_name {
+                            "sup" => f.sup = true,
+                            "sub" => f.sub = true,
+                            "u" => f.underline = true,
+                            _ => {}
+                        }
+                        for x in parse_inlines(content, &f, depth + 1) {
+                            nodes.push(Node::Inl(x));
+                        }
+                        i += 1 + inner.len() + 1 + close_pos + close_tag.len();
+                        text_start = i;
+                    } else {
+                        i += 1;
+                    }
                 } else {
                     i += 1;
+                }
                 }
             }
             b'&' => {
@@ -1219,7 +1250,17 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
                 out.push_str(&code_span(&text));
             }
         } else {
-            out.push_str(&escape(&text).replace('\n', "\\\n").replace('\t', "    "));
+            let mut s = escape(&text).replace('\n', "\\\n").replace('\t', "    ");
+            if f.underline {
+                s = format!("<u>{s}</u>");
+            }
+            if f.sub {
+                s = format!("<sub>{s}</sub>");
+            }
+            if f.sup {
+                s = format!("<sup>{s}</sup>");
+            }
+            out.push_str(&s);
         }
     }
     close_all(&mut out, &mut stack);
@@ -1679,5 +1720,23 @@ mod tests {
         let FBlock::Table(back_table2) = &back_flow2.blocks[0] else { panic!() };
         assert_eq!(back_table2.rows[1][0].text(), "a`b|c");
         assert_eq!(back_table2.rows[1][1].text(), "CRITICAL_DISTINCTIVE_INFO");
+    }
+
+    #[test]
+    fn test_html_tags_sup_sub_u_and_self_closing_anchors() {
+        let md = "Water is H<sub>2</sub>O and Einstein said E = mc<sup>2</sup> and this is <u>underlined</u> with <a id=\"sec1\"/> anchor.";
+        let flow = parse(md);
+        let FBlock::Para(p) = &flow.blocks[0] else { panic!() };
+        assert_eq!(p.text(), "Water is H2O and Einstein said E = mc2 and this is underlined with  anchor.");
+        assert!(matches!(&p.inlines[1], Inline::Text(t, f) if t == "2" && f.sub));
+        assert!(matches!(&p.inlines[3], Inline::Text(t, f) if t == "2" && f.sup));
+        assert!(matches!(&p.inlines[5], Inline::Text(t, f) if t == "underlined" && f.underline));
+        assert!(matches!(&p.inlines[7], Inline::Anchor(a) if a == "sec1"));
+
+        let doc = import(md);
+        let exported = export(&doc);
+        assert!(exported.contains("<sub>2</sub>"), "Export: {exported}");
+        assert!(exported.contains("<sup>2</sup>"), "Export: {exported}");
+        assert!(exported.contains("<u>underlined</u>"), "Export: {exported}");
     }
 }
