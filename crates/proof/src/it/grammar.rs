@@ -208,8 +208,8 @@ fn spaces(text: &str, v: &mut Vec<Issue>) {
     }
 }
 
-fn sentence_capitals(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
-    let mut after_end = true;
+fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: &mut Vec<Issue>) {
+    let mut after_end = capital_first;
     for (a, b) in ws {
         let Some(w) = text.get(*a..*b) else { continue };
         if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
@@ -327,11 +327,17 @@ fn un_apostrophe(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
 
 /// Grammar issues in a paragraph of Italian text, in order.
 pub fn check(text: &str) -> Vec<Issue> {
+    check_with(text, true)
+}
+
+/// [`check`] where `capital_first` says whether the text's first word must start a sentence with a capital
+/// (false for a list item, which may be a fragment).
+pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
     let ws: Vec<(usize, usize)> = words(text);
     let mut v = Vec::new();
     repeated_words(text, &ws, &mut v);
     spaces(text, &mut v);
-    sentence_capitals(text, &ws, &mut v);
+    sentence_capitals(text, &ws, capital_first, &mut v);
     doubled_punctuation(text, &mut v);
     po(text, &ws, &mut v);
     qual_e(text, &ws, &mut v);

@@ -5450,10 +5450,46 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
     assert_eq!(flagged, ["żeka", "beautifull"]);
     // The layout and the Review commands report the same issues.
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true);
+    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true, false);
     assert_eq!(issues.iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect::<Vec<_>>(), para.issues);
     assert_eq!(issues[0].lang, wordcraft_proof::ProofLang::Pl);
     assert_eq!(issues[1].lang, wordcraft_proof::ProofLang::En);
+}
+
+/// A list item may be a fragment: the drawn squiggles skip its first word's missing capital, a
+/// plain paragraph's keep it (#1741). The list comes from the paragraph's own numbering or its
+/// style's; a paragraph that switches the style's list off (`num: 0`) is plain again.
+#[test]
+fn list_item_first_word_gets_no_capital_squiggle() {
+    use wordcraft_doc::props::NumRef;
+    let opts = LayoutOptions { proofing: true, ..LayoutOptions::default() };
+    let grammar_squiggles = |d: &Document| -> usize {
+        let l = layout(d, &mut LayoutCache::new(), &opts);
+        l.pages[0].items.iter().map(|i| if let Placed::Lines { para, .. } = i { para.issues.iter().filter(|x| x.2).count() } else { 0 }).sum()
+    };
+    let mut d = Document::from_text("item one");
+    let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+    assert_eq!(grammar_squiggles(&d), 1, "plain paragraph");
+    // Direct numbering.
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(NumRef { num: id, level: 0 })).unwrap();
+    assert_eq!(grammar_squiggles(&d), 0, "own numbering");
+    // Numbering from the paragraph style.
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.numbering = None;
+        p.style = Some("Bullets".into());
+    })
+    .unwrap();
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "Bullets".into(),
+        name: "Bullets".into(),
+        kind: wordcraft_doc::StyleKind::Paragraph,
+        para: ParaProps { numbering: Some(NumRef { num: id, level: 0 }), ..Default::default() },
+        ..Default::default()
+    });
+    assert_eq!(grammar_squiggles(&d), 0, "style numbering");
+    // `num: 0` over the style's list.
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(NumRef { num: 0, level: 0 })).unwrap();
+    assert_eq!(grammar_squiggles(&d), 1, "list switched off");
 }
 
 /// Text in a language WordCraft can't proof gets no spelling marks, and "Do not check spelling

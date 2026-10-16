@@ -78,15 +78,15 @@ mod checker_tests {
     fn vietnamese_paragraphs_under_english_get_no_marks() {
         let text = "Hôm nay tôi đi học, trời rất đẹp và mát mẻ.";
         let spans = [(0..text.len(), ProofLang::En)];
-        assert!(check_text_with(text, &spans, &Options::default(), true).is_empty());
+        assert!(check_text_with(text, &spans, &Options::default(), true, false).is_empty());
         // No language at all (the document default) behaves the same.
-        assert!(check_text_with(text, &[], &Options::default(), true).is_empty());
+        assert!(check_text_with(text, &[], &Options::default(), true, false).is_empty());
     }
 
     #[test]
     fn english_keeps_its_marks_and_skips_vietnamese_names() {
         let text = "We met Nguyễn yesterdy at the office.";
-        let issues = check_text_with(text, &[(0..text.len(), ProofLang::En)], &Options::default(), false);
+        let issues = check_text_with(text, &[(0..text.len(), ProofLang::En)], &Options::default(), false, false);
         let flagged: Vec<&str> = issues.iter().filter_map(|i| text.get(i.start..i.end)).collect();
         assert_eq!(flagged, ["yesterdy"]);
     }

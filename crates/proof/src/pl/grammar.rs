@@ -245,11 +245,17 @@ fn is_consonant(c: char) -> bool {
 
 /// Grammar issues in a paragraph of Polish text, in order.
 pub fn check(text: &str) -> Vec<Issue> {
+    check_with(text, true)
+}
+
+/// [`check`] where `capital_first` says whether the text's first word must start a sentence with a capital
+/// (false for a list item, which may be a fragment).
+pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
     let ws: Vec<(usize, usize)> = words(text);
     let mut v = Vec::new();
     repeated_words(text, &ws, &mut v);
     spaces(text, &mut v);
-    sentence_capitals(text, &ws, &mut v);
+    sentence_capitals(text, &ws, capital_first, &mut v);
     missing_commas(text, &ws, &mut v);
     we_ze(text, &ws, &mut v);
     doubled_punctuation(text, &mut v);
@@ -330,14 +336,14 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| OPENING.contains(&c))
 }
 
-fn sentence_capitals(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
+fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: &mut Vec<Issue>) {
     // List items (`– jabłka,`) may start in lower case.
     let list_item = text.trim_end().ends_with([',', ';']);
     for (k, &(a, b)) in ws.iter().enumerate() {
         let Some(w) = text.get(a..b) else { continue };
         let starts = if k == 0 {
             let before = text.get(..a).unwrap_or("");
-            !list_item && before.chars().all(|c| c.is_whitespace() || OPENING.contains(&c))
+            capital_first && !list_item && before.chars().all(|c| c.is_whitespace() || OPENING.contains(&c))
         } else {
             let Some(&(pa, pb)) = ws.get(k - 1) else { continue };
             ends_sentence(text.get(pb..a).unwrap_or(""), text.get(pa..pb).unwrap_or(""))

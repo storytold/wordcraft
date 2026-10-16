@@ -441,11 +441,17 @@ fn capitalize(w: &str) -> String {
 
 /// Grammar issues in a paragraph of Russian text, in order.
 pub fn check(text: &str) -> Vec<Issue> {
+    check_with(text, true)
+}
+
+/// [`check`] where `capital_first` says whether the text's first word must start a sentence with a capital
+/// (false for a list item, which may be a fragment).
+pub fn check_with(text: &str, capital_first: bool) -> Vec<Issue> {
     let ws: Vec<(usize, usize)> = words(text);
     let mut v = Vec::new();
     repeated_words(text, &ws, &mut v);
     spaces(text, &mut v);
-    sentence_capitals(text, &ws, &mut v);
+    sentence_capitals(text, &ws, capital_first, &mut v);
     missing_commas(text, &ws, &mut v);
     doubled_punctuation(text, &mut v);
     v.sort_by_key(|i| (i.start, i.end));
@@ -525,9 +531,9 @@ fn ends_sentence(gap: &str, prev: &str) -> bool {
     rest.starts_with(char::is_whitespace) && rest.trim_start().chars().all(|c| OPENING.contains(&c))
 }
 
-fn sentence_capitals(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
+fn sentence_capitals(text: &str, ws: &[(usize, usize)], capital_first: bool, v: &mut Vec<Issue>) {
     // List items (`– яблоки,`) may start in lower case.
-    let list_item = text.trim_end().ends_with([',', ';']);
+    let list_item = !capital_first || text.trim_end().ends_with([',', ';']);
     for (k, &(a, b)) in ws.iter().enumerate() {
         let Some(w) = text.get(a..b) else { continue };
         let starts = if k == 0 {

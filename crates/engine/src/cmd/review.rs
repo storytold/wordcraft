@@ -837,7 +837,7 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
 fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
     let Some(p) = s.doc.para(story, path) else { return Vec::new() };
     let runs = wordcraft_layout::para::proof_runs(&s.doc, p, None);
-    wordcraft_layout::para::paragraph_issues(p, &runs, &s.prefs.spelling(), true)
+    wordcraft_layout::para::paragraph_issues(p, &runs, &s.prefs.spelling(), true, wordcraft_layout::para::is_list_item(&s.doc, p))
         .into_iter()
         .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
         .collect()

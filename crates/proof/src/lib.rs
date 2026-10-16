@@ -642,14 +642,21 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
 /// ([`pl::grammar`]), the Portuguese ones ([`pt::grammar`]), the Italian ones ([`it::grammar`]),
 /// the Turkish ones ([`tr::grammar`]), Czech generic checks ([`cs::grammar`]), or none for a language WordCraft doesn't proof.
 pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
+    grammar_in(text, lang, true)
+}
+
+/// [`check_grammar_in`] where `capital_first` says whether the first word must be capitalized
+/// (false for a list item).
+fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
     match lang {
-        ProofLang::En => check_grammar(text),
-        ProofLang::Pl => pl::grammar::check(text),
-        ProofLang::Hr => hr::grammar::check(text),
-        ProofLang::Pt => pt::grammar::check(text),
-        ProofLang::It => it::grammar::check(text),
-        ProofLang::Tr => tr::grammar::check(text),
-        ProofLang::Ru => ru::grammar::check(text),
+        ProofLang::En => grammar_en(text, capital_first),
+        ProofLang::Pl => pl::grammar::check_with(text, capital_first),
+        ProofLang::Hr => hr::grammar::check_with(text, capital_first),
+        ProofLang::Pt => pt::grammar::check_with(text, capital_first),
+        ProofLang::It => it::grammar::check_with(text, capital_first),
+        ProofLang::Tr => tr::grammar::check_with(text, capital_first),
+        ProofLang::Ru => ru::grammar::check_with(text, capital_first),
+        // Czech has no sentence-capital rule, so a list item needs no exception.
         ProofLang::Cs => cs::grammar::check(text),
         ProofLang::Bg | ProofLang::Other => Vec::new(),
     }
@@ -662,12 +669,15 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
 /// inside that language's spans: an English quotation in a Polish paragraph gets English
 /// spelling and is never told a Polish rule.
 pub fn check_text(text: &str, spans: &[(Range<usize>, ProofLang)]) -> Vec<Issue> {
-    check_text_with(text, spans, &Options::default(), true)
+    check_text_with(text, spans, &Options::default(), true, false)
 }
 
 /// [`check_text`] with the File › Options › Proofing choices: what spelling skips, and whether
 /// grammar is checked at all.
-pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool) -> Vec<Issue> {
+///
+/// `list_item` marks a list paragraph: items are often fragments, so the English rule asking for
+/// a capital on the paragraph's first word is off for it (later sentences are still checked).
+pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &Options, grammar: bool, list_item: bool) -> Vec<Issue> {
     // Sorted, empty ones dropped, neighbours of one language merged.
     let mut sorted: Vec<&(Range<usize>, ProofLang)> = spans.iter().filter(|(r, _)| r.start < r.end).collect();
     sorted.sort_by_key(|s| s.0.start);
@@ -711,7 +721,8 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
     langs.sort();
     langs.dedup();
     for lang in langs {
-        v.extend(check_grammar_in(text, lang).into_iter().filter(|i| lang_at(i.start) == lang));
+        let found = grammar_in(text, lang, !list_item);
+        v.extend(found.into_iter().filter(|i| lang_at(i.start) == lang));
     }
     v.sort_by_key(|i| (i.start, i.end));
     v
@@ -719,6 +730,12 @@ pub fn check_text_with(text: &str, spans: &[(Range<usize>, ProofLang)], opts: &O
 
 /// Grammar issues in a paragraph of English text.
 pub fn check_grammar(text: &str) -> Vec<Issue> {
+    grammar_en(text, true)
+}
+
+/// The English rules; `capital_first` is whether the text's first word must start a sentence
+/// with a capital (false for a list item, which may be a fragment).
+fn grammar_en(text: &str, capital_first: bool) -> Vec<Issue> {
     let mut v = Vec::new();
     let ws = words(text);
     for pair in ws.windows(2) {
@@ -791,7 +808,7 @@ pub fn check_grammar(text: &str) -> Vec<Issue> {
         });
     }
     // Sentence start capital.
-    let mut after_end = true;
+    let mut after_end = capital_first;
     for (a, b) in &ws {
         let Some(w) = text.get(*a..*b) else { continue };
         if after_end && w.chars().next().is_some_and(char::is_lowercase) && w.chars().all(char::is_alphabetic) {
@@ -876,6 +893,36 @@ mod tests {
             ]
         );
         assert!(is_correct_in("chrząszcz", ProofLang::Pl) && !is_correct_in("chrzonszcz", ProofLang::Pl));
+    }
+
+    /// #1741: a list item may be a fragment, so its first word needs no capital in any language
+    /// with the rule; a plain paragraph's does, and later sentences in the item are still checked.
+    #[test]
+    fn list_item_first_word_needs_no_capital() {
+        let grammar = |t: &str, lang: ProofLang, list: bool| -> Vec<String> {
+            check_text_with(t, &[(0..t.len(), lang)], &Options::default(), true, list)
+                .into_iter()
+                .filter(|i| i.kind == IssueKind::Grammar)
+                .filter_map(|i| t.get(i.start..i.end).map(str::to_string))
+                .collect()
+        };
+        for (lang, text) in [
+            (ProofLang::En, "item one"),
+            (ProofLang::Pl, "jabłka i gruszki"),
+            (ProofLang::Hr, "jabuke i kruške"),
+            (ProofLang::It, "mele e pere"),
+            (ProofLang::Tr, "elma ve armut"),
+            (ProofLang::Pt, "maçãs e peras"),
+            (ProofLang::Ru, "яблоки и груши"),
+        ] {
+            let first = text.split(' ').next().unwrap();
+            assert!(grammar(text, lang, true).is_empty(), "{lang:?} list item: {:?}", grammar(text, lang, true));
+            assert_eq!(grammar(text, lang, false), [first], "{lang:?} plain paragraph");
+        }
+        assert_eq!(grammar("hello world.", ProofLang::En, false), ["hello"]);
+        // Later sentences in a list item are still checked.
+        assert_eq!(grammar("item one. then two", ProofLang::En, true), ["then"]);
+        assert_eq!(grammar("elma ve armut. sonra kiraz", ProofLang::Tr, true), ["sonra"]);
     }
 
     #[test]
