@@ -6120,6 +6120,44 @@ fn text_after_a_column_break_takes_the_new_column_s_width() {
     assert!(wide_lines <= 3, "broken for the 348 pt column, not the 67 pt one: {lines:?}");
 }
 
+/// Unequal columns (#2382): a paragraph that fills a narrow column and overflows into a wide one
+/// (without a column break) breaks its remaining lines for the column they land in. Word 2024's
+/// Left and Right preset column layouts (a narrow and a wide column) showed it: the overflowing
+/// text ran down the wide column a word or two wide, and the two next to each other (till it
+/// reached the page edge).
+#[test]
+fn text_overflowing_into_an_unequal_column_takes_its_width() {
+    // Like Word's "Left" preset: a 120 pt column, then a 280 pt one.
+    let text = "Cras vitae aliquam leo. Integer quam ex, fringilla non ante quis, pharetra iaculis tortor. Vestibulum vel consequat augue, a dignissim massa. Vestibulum condimentum maximus urna, ac luctus quam consectetur et. Quisque convallis leo sem, id malesuada sem finibus elementum. Nam id nulla ac neque scelerisque volutpat sit amet sed ipsum. Donec hendrerit lacus ut felis porta, sed ultricies sapien tristique. Nullam eget dignissim lacus. Pellentesque habitant morbi tristique senectus et netus et malesuada fames ac turpis egestas. In quis enim eu nunc dignissim accumsan et bibendum turpis. Vivamus volutpat, libero id scelerisque commodo, nulla massa tempus velit, quis ultricies ex eros sed sapien. Proin dapibus tortor varius porttitor tincidunt. Curabitur ullamcorper magna sed lectus luctus, vel bibendum mauris semper.";
+    let items = |widths: Vec<(f32, f32)>| {
+        let mut d = Document::from_text(text);
+        d.last_section.columns = wordcraft_doc::section::Columns { count: 2, space: 36.0, separator: false, widths };
+        WIDTH_RELAYS.with(|c| c.set(0));
+        let l = lay(&d);
+        let lines: Vec<(f32, f32)> = l.pages[0]
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { path, para, l0, l1, x, .. } if path.0 == [0] => {
+                    let right = (*l0..*l1).filter_map(|li| para.lines.get(li)).map(|line| x + line.end_x()).fold(f32::MIN, f32::max);
+                    Some((*x, right))
+                }
+                _ => None,
+            })
+            .collect();
+        (lines, WIDTH_RELAYS.with(|c| c.get()))
+    };
+    let (lines, relays) = items(vec![(120.0, 36.0), (280.0, 0.0)]);
+    let (narrow, wide) = (lines.first().copied().unwrap(), lines.last().copied().unwrap());
+    assert!(wide.0 > narrow.0, "the second column is right of the first: {lines:?}");
+    assert!(narrow.1 <= narrow.0 + 120.0 + 0.5, "the first column's lines stay in it: {lines:?}");
+    assert!(wide.1 > wide.0 + 160.0, "the overflowing lines are broken for the 280 pt column, not the 120 pt one: {lines:?}");
+    assert!(relays >= 1, "a width relay happened");
+    // Equal columns are unaffected (nothing is laid out twice).
+    let (_, relays) = items(vec![]);
+    assert_eq!(relays, 0, "no width relay for equal columns");
+}
+
 /// Space before at the top of a page, measured in Word for Windows (32 cases): a paragraph that
 /// ends with a page break keeps its mark with the break (nothing of it, not even its space after,
 /// goes to the new page) and the next paragraph gets no space before there; a paragraph that starts with a page break starts on

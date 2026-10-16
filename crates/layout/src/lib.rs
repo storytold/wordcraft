@@ -3056,11 +3056,17 @@ fn again<T>(ctx: &mut Ctx, eq_start: u32, f: impl FnOnce(&mut Ctx) -> T) -> T {
 /// columns and pages it runs onto (#1374).
 const MAX_WRAP_RELAYS: usize = 64;
 
+/// How many times one body paragraph's lines are broken again for the width of a later column
+/// it overflows into (#2382).
+const MAX_WIDTH_RELAYS: usize = 64;
+
 #[cfg(test)]
 thread_local! {
     /// How many wrap relays (#1374) the layouts on this thread made: tests check none happen
     /// without something new to wrap around.
     static WRAP_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many width relays (#2382) the layouts on this thread made.
+    static WIDTH_RELAYS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The wrap areas for a paragraph laid out against `rel` (relative to its top) whose lines from the
@@ -3077,6 +3083,32 @@ fn continued_exclusions(rel: &[para::Exclusion], excl: &[WrapArea], x0: f32, y: 
         .filter(|e| e.bottom > t && e.right > -width && e.left < 2.0 * width)
         .map(|e| if e.top < t && e.contour.is_none() { para::Exclusion { top: t, ..e } } else { e });
     before.chain(here).collect()
+}
+
+/// The line a paragraph laid out again for another column width continues the text from `resume`
+/// on at, and the layout to place it from: the line starting exactly there, or, when the new
+/// width cuts that text mid-line, the line holding it as its tail (a natural column overflow cuts
+/// a line at the new width's break, unlike a column break, which is a break of its own). `None`
+/// when the tail cut is not supported (a bidirectional line), leaving the lines as they are.
+fn resume_relaid(relaid: &Arc<ParaLayout>, resume: usize) -> Option<(usize, Arc<ParaLayout>)> {
+    if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
+        return Some((k, relaid.clone()));
+    }
+    let k = relaid.lines.iter().position(|l| l.start < resume && resume < l.stop)?;
+    let line = relaid.lines.get(k)?;
+    // Right-to-left lines carry per-cluster visual boxes this tail cut does not reorder.
+    if !line.vis.is_empty() {
+        return None;
+    }
+    let jc = (line.c0..line.c1).find(|&k| relaid.clusters.get(k).is_some_and(|c| c.start == resume))?;
+    let base = *line.xs.get(jc - line.c0)?;
+    // The tail continues on a fresh line of its own, at the paragraph's continuation indent.
+    let (indent, shift) = (relaid.rp.indent_left, relaid.rp.indent_left - base);
+    let mut pl = (**relaid).clone();
+    let xs = line.xs.get(jc - line.c0..)?.iter().map(|x| x + shift).collect();
+    let leaders = line.leaders.iter().filter(|(k, _)| *k >= jc).cloned().collect();
+    pl.lines[k] = para::Line { start: resume, c0: jc, xs, leaders, left: indent, right: line.right, ..line.clone() };
+    Some((k, Arc::new(pl)))
 }
 
 /// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`), then take it back.
@@ -3109,6 +3141,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut page_relays = 0usize;
     // How many times its lines were broken again for the wrap areas of a later column (#1374).
     let mut wrap_relays = 0usize;
+    // How many times its lines were broken again for the width of a later column (#2382).
+    let mut width_relays = 0usize;
     // The anchor paragraph's top (above its space before) the floats were placed from.
     let mut anchor_y = pb.y;
     let spot = |pb: &PageBuilder| (pb.pages.len(), pb.col);
@@ -3196,6 +3230,32 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut after_on_page: Option<f32> = None;
     let mut l0 = 0;
     while l0 < n {
+        // The lines going into a column of another width are broken again for that column
+        // (#2382): a paragraph overflowing a narrow column into a wide one (or the other way)
+        // keeps the column it started in its width otherwise, and its lines run a word or two
+        // wide of the column they are in. Like the lines after a column break (#934), which are
+        // broken again for the column they land in.
+        if l0 > 0
+            && !pb.web
+            && width_relays < MAX_WIDTH_RELAYS
+            && (pb.col_w() - laid_width).abs() > 0.5
+            && let Some((resume, t)) = pl.lines.get(l0).map(|l| (l.start, l.top))
+        {
+            width_relays += 1;
+            ctx.fields.page = laid_page;
+            #[cfg(test)]
+            WIDTH_RELAYS.with(|c| c.set(c.get() + 1));
+            let width_now = pb.col_w();
+            let here = continued_exclusions(&rel, &pb.excl, pb.col_x(), pb.y, t, width_now);
+            let relaid =
+                with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, width_now, None, &here, label.clone())));
+            if let Some((k, relaid)) = resume_relaid(&relaid, resume) {
+                (pl, rel) = (relaid, here);
+                laid_width = width_now;
+                n = pl.lines.len();
+                l0 = k;
+            }
+        }
         // The lines going into a new column (or page) were broken around the wrap areas where the
         // paragraph started: break them again around this column's (the lines before stay as they
         // were, and so do the paragraph's own floating objects), when they differ (#1374).
