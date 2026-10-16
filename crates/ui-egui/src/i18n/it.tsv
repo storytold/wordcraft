@@ -2641,3 +2641,19 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# Paper sizes, Go To, bookmarks and print labels the Croatian, Swedish and Vietnamese catalogs added
+	B4 (JIS)   10.12" × 14.33"	B4 (JIS)   10,12" × 14,33"
+	B5 (JIS)   7.17" × 10.12"	B5 (JIS)   7,17" × 10,12"
+	Executive   7.25" × 10.50"	Executive   7,25" × 10,50"
+	Legal   8.50" × 14.00"	Legal   8,50" × 14,00"
+	Letter   8.50" × 11.00"	Letter   8,50" × 11,00"
+	Statement   5.50" × 8.50"	Statement   5,50" × 8,50"
+	Tabloid   11.00" × 17.00"	Tabloid   11,00" × 17,00"
+	Envelope #10   4.12" × 9.50"	Busta n. 10   4,12" × 9,50"
+	Envelope DL   4.33" × 8.66"	Busta DL   4,33" × 8,66"
+	Enter bookmark name:	Inserisci il nome del segnalibro:
+	This document has no bookmarks.	Questo documento non ha segnalibri.
+	Find “{text}” in the document	Trova “{text}” nel documento
+	Type a page number, or +2 / -1.	Digita un numero di pagina, oppure +2 / -1.
+	Wait for the print job to finish submitting before closing.	Attendi che l'invio del lavoro di stampa sia terminato prima di chiudere.
+template	Letter	Lettera
