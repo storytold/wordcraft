@@ -103,13 +103,23 @@ fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
     t.props.cell_margins.or(style.and_then(|s| s.parts.cell_margins)).unwrap_or(DEFAULT_MARGINS)
 }
 
+fn row_margins(row: &wordcraft_doc::Row, defaults: [f32; 4]) -> [f32; 4] {
+    let Some(props) = row.props.exceptions.as_ref() else { return defaults };
+    props
+        .cell_margins
+        .unwrap_or_else(|| props.partial_cell_margins.map_or(defaults, |sides| std::array::from_fn(|i| sides[i].unwrap_or(defaults[i]))))
+}
+
 /// The margins (top, left, bottom, right; points) of cell `cell` of row `row`: its own, else the
-/// table's defaults. The layout uses the left and right ones as they are (the app's ruler
+/// row's exceptions, else the table's defaults. The layout uses the left and right ones as they are (the app's ruler
 /// measures a cell's indents from them) but gives every cell in a row the row's largest top and
 /// bottom margins.
 pub fn cell_margins(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: usize) -> [f32; 4] {
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
-    t.rows.get(row).and_then(|r| r.cells.get(cell)).and_then(|c| c.props.margins).unwrap_or_else(|| default_margins(t, style.as_ref()))
+    let defaults = default_margins(t, style.as_ref());
+    let Some(row) = t.rows.get(row) else { return defaults };
+    let defaults = row_margins(row, defaults);
+    row.cells.get(cell).and_then(|c| c.props.margins).unwrap_or(defaults)
 }
 
 /// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
@@ -178,6 +188,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
     let mut spanned: Vec<(usize, usize, f32, f32)> = Vec::new();
     let mut budget = MEASURE_BUDGET;
     'rows: for (ri, row) in t.rows.iter().enumerate() {
+        let margins_def = row_margins(row, margins_def);
         let mut g = 0usize;
         for cell in &row.cells {
             let span = cell.span();
@@ -284,7 +295,9 @@ pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
 }
 
 fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
-    t.rows.first().and_then(|r| r.cells.first()).and_then(|c| c.props.margins).unwrap_or(def)[1]
+    let Some(row) = t.rows.first() else { return def[1] };
+    let def = row_margins(row, def);
+    row.cells.first().and_then(|c| c.props.margins).unwrap_or(def)[1]
 }
 
 /// What a table style gives the cells in one set of parts: shading, vertical alignment and each
@@ -455,6 +468,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
+        let margins_def = row_margins(row, margins_def);
         let mut g = 0usize;
         let mut cells = Vec::with_capacity(row.cells.len());
         let mut rh = 0.0f32;
@@ -1045,6 +1059,7 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
     let mut spanning = Vec::new();
     let mut any = false;
     for (ri, row) in t.rows.iter().enumerate() {
+        let margins_def = row_margins(row, margins_def);
         let mut g = 0usize;
         for cell in &row.cells {
             let span = cell.span();

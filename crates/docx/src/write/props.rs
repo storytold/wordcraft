@@ -367,9 +367,15 @@ pub fn ppr_inner(w: &mut W, p: &ParaProps, framed: bool, num_change: Option<&Cha
 }
 
 pub fn margins(w: &mut W, tag: &str, m: &[f32; 4]) {
+    margin_sides(w, tag, &m.map(Some));
+}
+
+fn margin_sides(w: &mut W, tag: &str, m: &[Option<f32>; 4]) {
     w.open(tag, &[]);
-    for (name, v) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
-        w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
+    for (name, value) in ["w:top", "w:left", "w:bottom", "w:right"].iter().zip(m.iter()) {
+        if let Some(v) = value {
+            w.empty(name, &[("w:w", &twips(v.clamp(0.0, 1584.0))), ("w:type", "dxa")]);
+        }
     }
     w.close(tag);
 }
@@ -450,6 +456,8 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
+    } else if let Some(m) = &t.partial_cell_margins {
+        margin_sides(w, "w:tblCellMar", m);
     }
     let look = look_attrs(&t.look);
     let refs: Vec<(&str, &str)> = look.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -505,6 +513,8 @@ fn tblprex(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
+    } else if let Some(m) = &t.partial_cell_margins {
+        margin_sides(w, "w:tblCellMar", m);
     }
     w.close("w:tblPrEx");
 }

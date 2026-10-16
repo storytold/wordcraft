@@ -54,3 +54,25 @@ fn an_empty_row_exception_element_is_kept() {
     let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
     assert!(xml.contains("<w:tblPrEx></w:tblPrEx>") || xml.contains("<w:tblPrEx/>"), "{xml}");
 }
+
+#[test]
+fn row_margin_sides_round_trip() {
+    for bottom in ["", r#"<w:bottom w:w="0" w:type="dxa"/>"#] {
+        let ex =
+            format!(r#"<w:tblPrEx><w:tblCellMar><w:top w:w="60" w:type="dxa"/><w:left w:w="0" w:type="dxa"/>{bottom}</w:tblCellMar></w:tblPrEx>"#);
+        let body = format!(
+            r#"<w:tbl><w:tblPr><w:tblCellMar><w:bottom w:w="160" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tblGrid><w:gridCol w:w="2000"/></w:tblGrid>{}</w:tbl><w:p/>"#,
+            row(&ex, "Original margin control")
+        );
+        let mut doc = wordcraft_docx::read(&docx(&body)).unwrap();
+        for _ in 0..2 {
+            let out = wordcraft_docx::write(&doc).unwrap();
+            let xml = document_xml(&out);
+            let ex = xml.split("<w:tblPrEx>").nth(1).unwrap().split("</w:tblPrEx>").next().unwrap();
+            assert_eq!(ex.contains("<w:bottom"), !bottom.is_empty(), "{ex}");
+            assert!(!ex.contains("<w:right"), "{ex}");
+            assert!(ex.contains(r#"<w:left w:w="0""#), "explicit zero must survive: {ex}");
+            doc = wordcraft_docx::read(&out).unwrap();
+        }
+    }
+}
