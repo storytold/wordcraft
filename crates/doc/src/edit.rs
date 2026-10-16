@@ -485,6 +485,63 @@ impl Document {
         Fragment { blocks, parts }
     }
 
+    /// The text Copy puts on the clipboard for `a..b`, whose copy is `f`: [`Fragment::clipboard_text`]
+    /// with the list label and what follows it (`1.` and a tab, `•` and a tab) before each list
+    /// paragraph, as Word's plain-text copy has them (#2015). A paragraph gets its label when its
+    /// start is copied and some of it with it: not one copied from its middle, nor one the
+    /// selection only reaches the start of; a selection inside one paragraph only when it is all
+    /// of it. Lists are counted from the top of the body, as the page numbers them. Paragraphs in
+    /// tables, headers and notes keep their text without labels.
+    pub fn copy_text(&self, f: &Fragment, a: &Pos, b: &Pos) -> String {
+        let (a, b) = order(a, b);
+        if a.story != crate::StoryRef::Body || a.path.0.len() != 1 || b.path.0.len() != 1 {
+            return f.clipboard_text();
+        }
+        let (first, last) = (a.path.last(), b.path.last());
+        let whole_one = first != last || (a.off == 0 && self.para(a.story, &a.path).is_some_and(|p| b.off >= p.len()));
+        let labels = self.body_list_labels();
+        let mut labelled = f.clone();
+        let mut any = false;
+        for (k, blk) in labelled.blocks.iter_mut().enumerate() {
+            let i = first.saturating_add(k);
+            let start_copied = if i == first { a.off == 0 } else { true };
+            let reached = !(i == last && b.off == 0 && i != first);
+            let (Block::Para(p), Some(Some((label, level)))) = (blk, labels.get(i)) else { continue };
+            if !(start_copied && reached && whole_one) {
+                continue;
+            }
+            let after = match level.suffix {
+                crate::numbering::LevelSuffix::Tab => "\t",
+                crate::numbering::LevelSuffix::Space => " ",
+                crate::numbering::LevelSuffix::Nothing => "",
+            };
+            // In the level's own font, so a Symbol-font bullet reads as its Unicode character.
+            any |= p.insert_text(0, &format!("{label}{after}"), &level.chr).is_ok();
+        }
+        if any { labelled.clipboard_text() } else { f.clipboard_text() }
+    }
+
+    /// The list label (and its level) each top-level body block shows, `None` for a table or a
+    /// paragraph without one, counted in reading order with the paragraphs in tables, as layout
+    /// counts them.
+    fn body_list_labels(&self) -> Vec<Option<(String, crate::numbering::Level)>> {
+        let mut counters = crate::numbering::Counters::default();
+        let mut out = Vec::with_capacity(self.body.len());
+        for b in &self.body {
+            let top = matches!(&**b, Block::Para(_));
+            let mut label = None;
+            each_para(b, 0, &mut |p| {
+                let n = p.props.numbering.or_else(|| self.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
+                let l = n.and_then(|n| counters.next_label(&self.numbering, n.num, n.level));
+                if top {
+                    label = l;
+                }
+            });
+            out.push(label);
+        }
+        out
+    }
+
     /// The whole body as a fragment (with its text boxes), to insert into another document.
     pub fn body_fragment(&self) -> Fragment {
         let blocks: Vec<Block> = self.body.iter().map(|b| (**b).clone()).collect();

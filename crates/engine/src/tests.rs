@@ -977,6 +977,67 @@ fn copying_symbol_font_text_puts_the_unicode_symbols_on_the_clipboard() {
     assert_eq!(text(&s), "ok J\u{F0FC}ok J\u{F0FC}");
 }
 
+/// A session holding "Intro", a numbered list (Item 1, Item 2) and a bulleted one (Point A,
+/// Point B).
+fn session_with_lists() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Intro\nItem 1\nItem 2\nPoint A\nPoint B"}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(1, 0), "focus": Pos::body(2, 6)}));
+    run(&mut s, "para.numbering", json!({}));
+    run(&mut s, "select.range", json!({"anchor": Pos::body(3, 0), "focus": Pos::body(4, 7)}));
+    run(&mut s, "para.bullets", json!({}));
+    s
+}
+
+/// #2015: Copy puts each list paragraph's number or bullet, and the tab after it, in the
+/// clipboard's text, as Word's plain-text copy has them. Pasting that copy back here still pastes
+/// our own copy: the lists, not their labels typed out as text.
+#[test]
+fn copying_a_list_puts_its_numbers_and_bullets_on_the_clipboard() {
+    let mut s = session_with_lists();
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "Intro\n1.\tItem 1\n2.\tItem 2\n•\tPoint A\n•\tPoint B");
+
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    let clip = s.clipboard_text.clone();
+    run(&mut s, "edit.paste", json!({"text": clip}));
+    assert!(!text(&s).contains('\t') && !text(&s).contains('•'), "{}", text(&s));
+    let numbered = |s: &Session, i: usize| s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(i)).and_then(|p| p.props.numbering).is_some();
+    assert!(numbered(&s, 6) && numbered(&s, 7), "the pasted items are list items");
+
+    // A bullet stored as a Symbol-font character (as Word documents have them) reads as •.
+    let mut s = session_with_lists();
+    let num = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(3)).and_then(|p| p.props.numbering).map(|n| n.num).unwrap();
+    let abs = s.doc.numbering.num(num).map(|n| n.abstract_id).unwrap();
+    let level = s.doc.numbering.abstracts.iter_mut().find(|a| a.id == abs).and_then(|a| a.levels.first_mut()).unwrap();
+    level.text = "\u{F0B7}".into();
+    level.chr.font = Some("Symbol".into());
+    run(&mut s, "select.range", json!({"anchor": Pos::body(3, 0), "focus": Pos::body(4, 7)}));
+    run(&mut s, "edit.copy", json!({}));
+    assert_eq!(s.clipboard_text, "•\tPoint A\n•\tPoint B");
+}
+
+/// #2015: a list paragraph gets its label only when its start is copied with some of it: not one
+/// copied from its middle, nor one the selection only reaches; inside one paragraph only when it
+/// is all of it.
+#[test]
+fn copied_list_labels_follow_what_the_selection_covers() {
+    let mut s = session_with_lists();
+    let copy = |s: &mut Session, a: Pos, b: Pos| {
+        run(s, "select.range", json!({"anchor": a, "focus": b}));
+        run(s, "edit.copy", json!({}));
+        s.clipboard_text.clone()
+    };
+    assert_eq!(copy(&mut s, Pos::body(1, 2), Pos::body(2, 6)), "em 1\n2.\tItem 2", "from the middle of an item");
+    assert_eq!(copy(&mut s, Pos::body(1, 1), Pos::body(1, 4)), "tem", "inside one item");
+    assert_eq!(copy(&mut s, Pos::body(1, 0), Pos::body(1, 6)), "1.\tItem 1", "all of one item");
+    let up_to_next = copy(&mut s, Pos::body(1, 0), Pos::body(3, 0));
+    assert!(up_to_next.starts_with("1.\tItem 1\n2.\tItem 2") && !up_to_next.contains('•'), "{up_to_next:?}");
+    assert_eq!(copy(&mut s, Pos::body(0, 0), Pos::body(0, 5)), "Intro", "no list, no label");
+}
+
 fn bold_at(s: &Session, block: usize, off: usize) -> bool {
     let pos = Pos { story: StoryRef::Body, path: wordcraft_doc::Path::top(block), off };
     s.doc.para_at(&pos).and_then(|p| p.props_of_char(off).bold).unwrap_or(false)
