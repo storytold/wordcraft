@@ -15,6 +15,7 @@ agent control. This page is the summary; the assessment is
 ## Headline numbers (2026-10-10)
 
 | Number | Value | Kind |
+| --- | --- | --- |
 | 2026-10-12 | Table formulas: cell references and ranges (`=B2+B3`, `=SUM(B2:C3)`), arithmetic and comparisons, IF, AND, OR, NOT, TRUE, FALSE, DEFINED and the `\#` number format; ABOVE and LEFT sum the run of numbers next to the cell as Word does; an unknown function or a syntax error is an error instead of a sum; Update Field (F9) recalculates formula fields |
 | Ribbon/menu catalog coverage | **487 / 502 (97.0%)** | measured (`cargo xtask parity` → [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
 | **Feature breadth** (weighted, incl. dialog options, styles, languages beyond the ribbon) | **~80%** | estimated |
