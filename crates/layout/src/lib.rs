@@ -2025,11 +2025,18 @@ fn layout_pass(
         mirror: false,
         table_keys: Vec::new(),
     };
-    let sections = doc.sections();
+    // 2 pages per sheet and Book fold lay each page out on half the sheet (#1836): the sections
+    // are laid out with the page size, and the pages carry it on to the renderer and the PDF.
+    let multiple = doc.settings.multiple_pages();
+    let sheet_sections = doc.sections();
+    let half_sections: Vec<SectionProps> =
+        if multiple.halves_page() { sheet_sections.iter().map(|(_, s)| s.for_multiple_pages(multiple)).collect() } else { Vec::new() };
+    let sections: Vec<(usize, &SectionProps)> =
+        if multiple.halves_page() { sheet_sections.iter().zip(&half_sections).map(|((end, _), s)| (*end, s)).collect() } else { sheet_sections };
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
     let read = opts.view == ViewMode::Read;
     let reflow = web || read;
-    ctx.mirror = doc.settings.mirror_margins && !reflow;
+    ctx.mirror = doc.settings.mirrors() && !reflow;
     ctx.quiet_marks = sections
         .windows(2)
         .filter(|w| w[1].1.start == SectionStart::Continuous)
@@ -2185,7 +2192,7 @@ fn layout_pass(
                 pb.take_back_break_page();
             }
             let s = &doc.settings;
-            let (filler, restart) = section_side(start, restart, pb.number, pb.pages.len(), s.even_odd_headers, s.mirror_margins);
+            let (filler, restart) = section_side(start, restart, pb.number, pb.pages.len(), s.even_odd_headers, s.mirrors());
             // The blank page that puts the section on the right side ends the previous section.
             if filler
                 && !web
@@ -2310,7 +2317,7 @@ fn layout_pass(
             ctx.fields.bookmark_pages = Arc::new(marks);
         }
         headers_footers(&mut ctx, &mut pages, &sections);
-        if doc.settings.mirror_margins {
+        if doc.settings.mirrors() {
             mirror_even_pages(&mut pages, &sections);
         }
     }

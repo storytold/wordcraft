@@ -1298,13 +1298,14 @@ impl Writer<'_> {
                 }
             }
         }
-        sectpr_body(w, s);
+        let mode = self.doc.settings.multiple_pages();
+        sectpr_body(w, s, mode);
         // The properties before a tracked change come last (§17.13.5.32).
         if let Some(ch) = &s.fmt_change {
             let a = self.change_attrs(ch.rev);
             open_change(w, "w:sectPrChange", &a);
             w.open("w:sectPr", &[]);
-            sectpr_body(w, &ch.old);
+            sectpr_body(w, &ch.old, mode);
             w.close("w:sectPr");
             w.close("w:sectPrChange");
         }
@@ -1312,8 +1313,10 @@ impl Writer<'_> {
     }
 }
 
-/// `w:sectPr` content after the header and footer references.
-fn sectpr_body(w: &mut W, s: &SectionProps) {
+/// `w:sectPr` content after the header and footer references. Under 2 pages per sheet or Book
+/// fold (`mode`) `w:pgSz` holds the half page, as Word for Mac 16.113.4 writes it (user-checked),
+/// with `w:orient` still saying how the sheet is turned.
+fn sectpr_body(w: &mut W, s: &SectionProps, mode: wordcraft_doc::section::MultiplePages) {
     {
         // The section's own note options come before `w:type` (ECMA-376 §17.6.17).
         for (tag, pr) in [("w:footnotePr", &s.footnote_pr), ("w:endnotePr", &s.endnote_pr)] {
@@ -1331,7 +1334,8 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             SectionStart::NextColumn => "nextColumn",
         };
         w.val("w:type", start);
-        let (pw, ph) = (s.page_w.clamp(36.0, crate::units::MAX_LEN_PT), s.page_h.clamp(36.0, crate::units::MAX_LEN_PT));
+        let (pw, ph) = mode.page_size(s.page_w, s.page_h, s.landscape);
+        let (pw, ph) = (pw.clamp(36.0, crate::units::MAX_LEN_PT), ph.clamp(36.0, crate::units::MAX_LEN_PT));
         if s.landscape {
             w.empty("w:pgSz", &[("w:w", &twips(pw)), ("w:h", &twips(ph)), ("w:orient", "landscape")]);
         } else {

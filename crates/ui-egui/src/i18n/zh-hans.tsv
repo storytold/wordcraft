@@ -2245,3 +2245,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	多页:
+	2 pages per sheet	每张 2 页
+	Book fold	书籍折页
+	Sheets per booklet:	每册纸张数:
+	Normal	普通

@@ -214,6 +214,7 @@ Design|Page Background|Watermark|design.watermark
 Design|Page Background|Page Color|design.pageColor
 Design|Page Background|Page Borders|design.pageBorders
 Layout|Page Setup|Margins|layout.margins
+Layout|Page Setup|Multiple Pages|layout.multiplePages
 Layout|Page Setup|Orientation|layout.orientation
 Layout|Page Setup|Size|layout.size
 Layout|Page Setup|Columns|layout.columns

@@ -2628,3 +2628,8 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Több oldal:
+	2 pages per sheet	2 oldal laponként
+	Book fold	Füzet
+	Sheets per booklet:	Lapok száma füzetenként:

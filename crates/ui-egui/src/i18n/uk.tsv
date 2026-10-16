@@ -2245,3 +2245,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Кілька сторінок:
+	2 pages per sheet	2 сторінки на аркуші
+	Book fold	Брошура
+	Sheets per booklet:	Аркушів у брошурі:
+	Normal	Звичайний

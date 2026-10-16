@@ -2247,3 +2247,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Више страница:
+	2 pages per sheet	2 странице по листу
+	Book fold	Књижица
+	Sheets per booklet:	Листова по књижици:
+	Normal	Нормално

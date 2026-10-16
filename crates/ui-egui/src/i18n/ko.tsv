@@ -2488,3 +2488,9 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	여러 페이지:
+	2 pages per sheet	시트당 2페이지
+	Book fold	책 접기
+	Sheets per booklet:	소책자당 시트 수:
+	Mirror margins	대칭 여백

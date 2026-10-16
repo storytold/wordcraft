@@ -301,7 +301,7 @@ fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Result<(), CmdE
 fn apply_table_line(s: &mut Session, at: &Pos, cols: &[usize]) -> Result<(), CmdError> {
     let total = cols.iter().sum::<usize>().max(1) as f32;
     let block = at.path.0.first().copied().unwrap_or(0) as usize;
-    let width = s.doc.sections().get(s.doc.section_index_of(block)).map(|(_, sp)| sp.text_width()).unwrap_or(468.0).max(36.0);
+    let width = s.doc.laid_out_sections().get(s.doc.section_index_of(block)).map(|(_, sp)| sp.text_width()).unwrap_or(468.0).max(36.0);
     let mut t = Table::new(1, cols.len(), width);
     for (i, d) in cols.iter().enumerate() {
         let w = (width * *d as f32 / total).max(6.0);

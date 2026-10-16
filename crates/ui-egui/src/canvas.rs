@@ -2398,7 +2398,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
     let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { return };
     let scale = page_screen_scale(*pr, page, scale);
-    let sect = app.session.doc.sections().get(page.section).map(|(_, s)| (*s).clone()).unwrap_or_default();
+    let section = page.section;
     // Horizontal.
     let hp = ui.painter_at(h);
     let x0 = pr.min.x;
@@ -2435,7 +2435,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
         (MarginEdge::Left, Rect::from_min_max(pos2(le - 10.0, bar.min.y), pos2(le + 3.0, bar.max.y))),
         (MarginEdge::Right, Rect::from_min_max(pos2(re - 3.0, bar.min.y), pos2(re + 10.0, bar.max.y))),
     ] {
-        margin_handle(app, ui, edge, zone, |p| (p.x - x0) / scale, &sect);
+        margin_handle(app, ui, edge, zone, |p| (p.x - x0) / scale, section);
     }
     // Indent markers for the caret's paragraph (relative to its column, or in a table to the
     // cell's text).
@@ -2527,7 +2527,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     vp.rect_filled(Rect::from_min_max(pos2(vbar.min.x, te), pos2(vbar.max.x, be)), 0.0, t.ruler);
     for (edge, ey) in [(MarginEdge::Top, te), (MarginEdge::Bottom, be)] {
         let zone = Rect::from_min_max(pos2(vbar.min.x, ey - 4.0), pos2(vbar.max.x, ey + 4.0));
-        margin_handle(app, ui, edge, zone, |p| (p.y - y0) / scale, &sect);
+        margin_handle(app, ui, edge, zone, |p| (p.y - y0) / scale, section);
     }
     let origin = page.body.y;
     let mut k = -((origin / unit).ceil() as i32) * div;
@@ -2657,6 +2657,18 @@ impl MarginEdge {
     }
 }
 
+/// The section `i` as the rulers show and drag it: its laid-out page, which is half the sheet
+/// under 2 pages per sheet and Book fold (#1836).
+fn ruler_sect(doc: &wordcraft_doc::Document, i: usize) -> wordcraft_doc::section::SectionProps {
+    doc.laid_out_sections().into_iter().nth(i).map(|(_, s)| s).unwrap_or_default()
+}
+
+/// The margin a drag of `edge` to `at` points sets in section `section`, measured on the laid-out
+/// page (what the ruler shows): the call `margin_handle` makes.
+fn ruler_drag_margin(doc: &wordcraft_doc::Document, section: usize, edge: MarginEdge, at: f32) -> f32 {
+    dragged_margin(edge, at, &ruler_sect(doc, section))
+}
+
 /// The least text width (or height) a margin drag leaves: one inch, in points.
 const MIN_TEXT: f32 = 72.0;
 
@@ -2678,7 +2690,7 @@ pub(crate) fn dragged_margin(edge: MarginEdge, at: f32, s: &wordcraft_doc::secti
 
 /// A draggable margin edge on a ruler: `to_pt` turns the pointer into points from the page's
 /// left (or top) edge. A whole drag is one undo step, through `layout.margins`.
-fn margin_handle(app: &mut WordApp, ui: &Ui, edge: MarginEdge, zone: Rect, to_pt: impl Fn(Pos2) -> f32, sect: &wordcraft_doc::section::SectionProps) {
+fn margin_handle(app: &mut WordApp, ui: &Ui, edge: MarginEdge, zone: Rect, to_pt: impl Fn(Pos2) -> f32, section: usize) {
     let cursor =
         if matches!(edge, MarginEdge::Left | MarginEdge::Right) { egui::CursorIcon::ResizeHorizontal } else { egui::CursorIcon::ResizeVertical };
     let r = ui.interact(zone, ui.id().with(("ruler_margin", edge)), Sense::drag()).on_hover_cursor(cursor);
@@ -2686,7 +2698,7 @@ fn margin_handle(app: &mut WordApp, ui: &Ui, edge: MarginEdge, zone: Rect, to_pt
     if r.dragged()
         && let Some(pp) = r.interact_pointer_pos()
     {
-        let v = dragged_margin(edge, to_pt(pp), sect);
+        let v = ruler_drag_margin(&app.session.doc, section, edge, to_pt(pp));
         if !r.drag_started() {
             app.session.join_next_undo();
         }
@@ -3221,6 +3233,20 @@ mod tests {
         assert!(after.page_w - after.margin_left - after.margin_right - after.gutter >= MIN_TEXT - 0.01);
         assert!(app.session.undo());
         assert_eq!(wordcraft_engine::cmd::page::sect(&app.session).margin_left, sect.margin_left);
+
+        // #1836 review: under Book fold and 2 pages per sheet the ruler measures the half page, so
+        // the right and bottom handles move.
+        for (mode, edge) in [("bookFold", MarginEdge::Right), ("twoPerSheet", MarginEdge::Bottom)] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            app.run("layout.multiplePages", json!({"mode": mode})).unwrap();
+            let page = app.session.layout().pages[0].clone();
+            let far = if edge == MarginEdge::Right { page.w } else { page.h };
+            let v = ruler_drag_margin(&app.session.doc, page.section, edge, far - 36.0);
+            assert_eq!(v, 36.0, "{mode}");
+            let mut params = json!({});
+            params[if edge == MarginEdge::Right { "right" } else { "bottom" }] = json!(v);
+            app.run("layout.margins", params).unwrap();
+        }
     }
 
     /// Show revisions in balloons: a document whose only revision is a deletion gets the markup

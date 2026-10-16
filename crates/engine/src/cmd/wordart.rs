@@ -275,7 +275,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let size = 36.0;
     let props = CharProps { size: Some(size), bold: Some(true), text_effects: Some(Box::new(fx)), ..Default::default() };
     // A box the text fits on one line in (with the box's margins); a bent one is taller.
-    let col = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    let col = s.doc.laid_out_sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let w = (text_width(s, &text, size, true) + 24.0).clamp(72.0, col.max(72.0));
     let mut h = size * 1.35 + 7.2;
     if let Some(wp) = &warp {

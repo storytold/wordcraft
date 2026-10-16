@@ -1709,6 +1709,158 @@ fn page_setup_and_breaks() {
     assert!(s.doc.settings.mirror_margins);
 }
 
+/// #1836: Page Setup › Multiple pages is one command: Normal, Mirror margins, 2 pages per sheet,
+/// Book fold (with sheets per booklet and direction). Undo restores it; junk is refused.
+#[test]
+fn multiple_pages_command_sets_each_mode_and_undoes() {
+    use wordcraft_doc::section::MultiplePages as M;
+    let mut s = s();
+    for (id, mode) in [("mirror", M::Mirror), ("twoPerSheet", M::TwoPerSheet), ("bookFold", M::BookFold), ("normal", M::Normal)] {
+        run(&mut s, "layout.multiplePages", json!({"mode": id}));
+        assert_eq!(s.doc.settings.multiple_pages(), mode, "{id}");
+    }
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold", "sheets": 4, "reverse": true}));
+    assert_eq!((s.doc.settings.book_fold_sheets, s.doc.settings.book_fold_reverse), (4, true));
+    assert!(s.doc.last_section.landscape, "a booklet is printed on a landscape sheet");
+    // Half the paper's short side by its long side (Word for Mac, user-checked: 4.25 x 11 in).
+    let p = &s.layout().pages[0];
+    assert_eq!((p.w, p.h), (s.doc.last_section.page_h / 2.0, s.doc.last_section.page_w));
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold", "sheets": 99999}));
+    assert_eq!(s.doc.settings.book_fold_sheets, 40);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.settings.book_fold_sheets, 4);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(s.doc.settings.multiple_pages(), M::Normal);
+    // `layout.margins` with `mirror` keeps working beside it.
+    run(&mut s, "layout.margins", json!({"mirror": true}));
+    assert_eq!(s.doc.settings.multiple_pages(), M::Mirror);
+    for bad in [json!({}), json!({"mode": "diagonal"}), json!({"mode": 3}), json!({"mode": "bookFold", "sheets": -1})] {
+        assert!(s.run("layout.multiplePages", &bad).is_err(), "{bad}");
+    }
+    // Margins that fit the sheet but not the half page are refused (the sheet is still landscape
+    // from Book fold, so its pages are 396 pt wide).
+    run(&mut s, "layout.multiplePages", json!({"mode": "twoPerSheet"}));
+    assert!(s.doc.last_section.landscape);
+    assert!(s.run("layout.margins", &json!({"left": 200.0, "right": 200.0})).is_err());
+}
+
+/// #1836 review: under Book fold new tables and pictures are sized to the half page's text
+/// column, not the sheet's.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn book_fold_sizes_new_content_to_the_half_page() {
+    let mut s = s();
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold"}));
+    let body_w = s.layout().pages[0].body.w;
+    assert!(body_w < 300.0, "{body_w}");
+    let table_w = |s: &Session| {
+        s.doc.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.iter().sum::<f32>()) } else { None }).unwrap()
+    };
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    assert!(table_w(&s) <= body_w + 0.5, "table {} on a {body_w} pt column", table_w(&s));
+    run(&mut s, "table.autofit", json!({"mode": "window"}));
+    assert!(table_w(&s) <= body_w + 0.5, "autofit {} on a {body_w} pt column", table_w(&s));
+    let mut s2 = self::s();
+    run(&mut s2, "layout.multiplePages", json!({"mode": "bookFold"}));
+    let png = crate::cmd::insert::base64_encode(&tiny_png());
+    let r = run(&mut s2, "insert.picture", json!({"data": png, "width": 2000.0}));
+    assert!(r["width"].as_f64().unwrap() as f32 <= body_w + 0.5, "picture {r} on a {body_w} pt column");
+    run(&mut s2, "insert.chart", json!({"type": "column", "width": 2000.0}));
+    let mut chart_w = 0.0f32;
+    s2.doc.objects_in_reading_order(&mut |o| {
+        if let wordcraft_doc::para::InlineObject::Graphic { w, .. } = o {
+            chart_w = chart_w.max(*w);
+        }
+    });
+    assert!(chart_w > 0.0 && chart_w <= body_w + 0.5, "chart {chart_w} on a {body_w} pt column");
+}
+
+/// #1836 review: Book fold is document-wide, so it turns every section landscape and checks that
+/// every section's margins fit the half page; if one doesn't, nothing changes.
+#[test]
+fn book_fold_applies_to_every_section() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    assert_eq!(s.doc.sections().len(), 2);
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold"}));
+    assert!(s.doc.sections().iter().all(|(_, x)| x.landscape), "every section is landscape");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.doc.sections().iter().all(|(_, x)| !x.landscape));
+    // The first section's margins don't fit a half page once turned: refused, nothing changes.
+    let first = s.doc.sections()[0].0;
+    s.doc.section_mut(first).margin_top = 200.0;
+    s.doc.section_mut(first).margin_bottom = 200.0;
+    assert!(s.run("layout.multiplePages", &json!({"mode": "bookFold"})).is_err());
+    assert!(s.run("layout.multiplePages", &json!({"mode": "twoPerSheet"})).is_err(), "400 pt on a 396 pt high page");
+    assert!(s.doc.sections().iter().all(|(_, x)| !x.landscape));
+    assert_eq!(s.doc.settings.multiple_pages(), wordcraft_doc::section::MultiplePages::Normal);
+}
+
+/// #1836 review: `layout.orientation` keeps a booklet landscape (Word greys Orientation out for
+/// Book fold), and under 2 pages per sheet it refuses a turn the margins don't fit.
+#[test]
+fn orientation_respects_multiple_pages() {
+    let mut s = s();
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold"}));
+    assert!(s.run("layout.orientation", &json!({"value": "portrait"})).is_err());
+    assert!(s.doc.last_section.landscape);
+    run(&mut s, "layout.orientation", json!({"value": "landscape"}));
+    run(&mut s, "layout.multiplePages", json!({"mode": "normal"}));
+    run(&mut s, "layout.orientation", json!({"value": "portrait"}));
+    run(&mut s, "layout.margins", json!({"left": 150.0, "right": 150.0}));
+    run(&mut s, "layout.multiplePages", json!({"mode": "twoPerSheet"}));
+    // A landscape sheet holds two 396 x 612 pt pages side by side (Word for Mac, user-checked):
+    // the left/right margins, turned into top/bottom, fit their 612 pt height.
+    run(&mut s, "layout.orientation", json!({"value": "landscape"}));
+    assert_eq!(s.layout().pages[0].w, 396.0);
+    run(&mut s, "layout.orientation", json!({"value": "portrait"}));
+    run(&mut s, "layout.margins", json!({"top": 150.0, "bottom": 150.0, "left": 72.0, "right": 72.0, "gutter": 80.0}));
+    // Landscape turns top/bottom into left/right: 300 pt plus an 80 pt gutter on a 396 pt wide page.
+    assert!(s.run("layout.orientation", &json!({"value": "landscape"})).is_err());
+    assert!(!s.doc.last_section.landscape);
+}
+
+/// #1836 review: `layout.pageSetup {section}` applies the Multiple pages checks too.
+#[test]
+fn page_setup_section_respects_multiple_pages() {
+    let mut s = s();
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold"}));
+    let mut portrait = s.doc.last_section.clone();
+    portrait.set_landscape(false);
+    assert!(s.run("layout.pageSetup", &json!({"section": portrait})).is_err(), "portrait under Book fold");
+    let mut wide = s.doc.last_section.clone();
+    wide.margin_left = 300.0;
+    assert!(s.run("layout.pageSetup", &json!({"section": wide})).is_err(), "margins beyond the half page");
+    assert!(s.doc.last_section.landscape);
+    let mut ok = s.doc.last_section.clone();
+    ok.margin_left = 36.0;
+    run(&mut s, "layout.pageSetup", json!({"section": ok}));
+}
+
+/// #1836 review: under 2 pages per sheet or Book fold the Mirrored preset or `mirror: true` picks
+/// Mirror margins (as Word's gallery does); `mirror: false` can't unmirror a booklet.
+#[test]
+fn mirrored_margins_leave_two_per_sheet_and_book_fold() {
+    use wordcraft_doc::section::MultiplePages as M;
+    let mut s = s();
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold"}));
+    run(&mut s, "layout.margins", json!({"preset": "mirrored"}));
+    assert_eq!(s.doc.settings.multiple_pages(), M::Mirror);
+    run(&mut s, "layout.multiplePages", json!({"mode": "twoPerSheet"}));
+    run(&mut s, "layout.margins", json!({"mirror": false}));
+    assert_eq!(s.doc.settings.multiple_pages(), M::TwoPerSheet, "already not mirrored");
+    run(&mut s, "layout.margins", json!({"mirror": true}));
+    assert_eq!(s.doc.settings.multiple_pages(), M::Mirror);
+    run(&mut s, "layout.multiplePages", json!({"mode": "bookFold"}));
+    assert!(s.run("layout.margins", &json!({"mirror": false})).is_err());
+    assert_eq!(s.doc.settings.multiple_pages(), M::BookFold);
+    // Other presets keep the mode.
+    run(&mut s, "layout.margins", json!({"preset": "narrow"}));
+    assert_eq!(s.doc.settings.multiple_pages(), M::BookFold);
+}
+
 /// #1433: a custom page size (More Paper Sizes…) sets the section in its orientation, and
 /// out-of-range sizes clamp to Word's 0.1"–22" instead of failing or reaching the layout.
 #[test]

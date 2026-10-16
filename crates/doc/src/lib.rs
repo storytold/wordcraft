@@ -452,6 +452,18 @@ pub struct Settings {
     pub default_tab: f32,
     pub even_odd_headers: bool,
     pub mirror_margins: bool,
+    /// Two pages share one sheet, its long side halved (`w:printTwoOnOne`).
+    pub two_per_sheet: bool,
+    /// Pages are printed as a booklet, folded in the middle of the sheet (`w:bookFoldPrinting`).
+    pub book_fold: bool,
+    /// Book fold printed right to left (`w:bookFoldRevPrinting`).
+    pub book_fold_reverse: bool,
+    /// Sheets per booklet (`w:bookFoldPrintingSheets`); 0 = all in one booklet.
+    pub book_fold_sheets: u16,
+    /// Page Setup's Gutter position is Top (`w:gutterAtTop`). Only kept for Normal pages: the
+    /// other Multiple pages modes fix the gutter's position (and 2 pages per sheet on a portrait
+    /// sheet writes it, as Word does). Not laid out yet.
+    pub gutter_at_top: bool,
     pub auto_hyphenation: bool,
     /// Hyphenation zone (`w:hyphenationZone`), points: a line is hyphenated only when breaking
     /// it at a word boundary would leave more than this empty at its end.
@@ -610,6 +622,39 @@ pub const THEME_COLORS: [Rgb; 12] = [
     Rgb(0x96, 0x60, 0x7D),
 ];
 
+/// Most sheets per booklet Word offers (`w:bookFoldPrintingSheets`).
+pub const MAX_BOOKLET_SHEETS: u16 = 40;
+
+impl Settings {
+    /// Page Setup's "Multiple pages" choice these settings amount to (book fold wins over two
+    /// per sheet, which wins over mirrored margins).
+    pub fn multiple_pages(&self) -> section::MultiplePages {
+        use section::MultiplePages as M;
+        if self.book_fold {
+            M::BookFold
+        } else if self.two_per_sheet {
+            M::TwoPerSheet
+        } else if self.mirror_margins {
+            M::Mirror
+        } else {
+            M::Normal
+        }
+    }
+
+    /// Choose the "Multiple pages" mode; the booklet's sheet count and direction are kept.
+    pub fn set_multiple_pages(&mut self, mode: section::MultiplePages) {
+        use section::MultiplePages as M;
+        self.mirror_margins = mode == M::Mirror;
+        self.two_per_sheet = mode == M::TwoPerSheet;
+        self.book_fold = mode == M::BookFold;
+    }
+
+    /// Margins mirror on facing pages (inside/outside): mirrored margins, or a booklet.
+    pub fn mirrors(&self) -> bool {
+        self.mirror_margins || self.book_fold
+    }
+}
+
 impl Default for Settings {
     fn default() -> Self {
         Settings {
@@ -617,6 +662,11 @@ impl Default for Settings {
             default_tab: 36.0,
             even_odd_headers: false,
             mirror_margins: false,
+            two_per_sheet: false,
+            book_fold: false,
+            book_fold_reverse: false,
+            book_fold_sheets: 0,
+            gutter_at_top: false,
             auto_hyphenation: false,
             hyphenation_zone: DEFAULT_HYPHENATION_ZONE,
             hyphenate_caps: true,
@@ -932,6 +982,14 @@ impl Document {
         }
         v.push((self.body.len().saturating_sub(1), &self.last_section));
         v
+    }
+
+    /// [`Document::sections`] as laid out: under 2 pages per sheet or Book fold each section's
+    /// paper becomes the half-sheet page (see [`SectionProps::for_multiple_pages`]). Use this to
+    /// size content to the page (#1836).
+    pub fn laid_out_sections(&self) -> Vec<(usize, SectionProps)> {
+        let mode = self.settings.multiple_pages();
+        self.sections().into_iter().map(|(e, s)| (e, s.for_multiple_pages(mode))).collect()
     }
 
     /// The footnote (`endnote` false) or endnote options in effect in section `sect`: its own,

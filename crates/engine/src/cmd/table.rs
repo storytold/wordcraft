@@ -217,7 +217,7 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
     let mode = p::str(v, "mode").unwrap_or("window");
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
-    let tw = super::page::sect(s).text_width();
+    let tw = super::page::laid_out_sect(s).text_width();
     match mode {
         "fixed" => with_table(s, |t| t.props.fixed = true),
         "contents" => {
@@ -1117,7 +1117,7 @@ fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     if cols > 63 {
         return Err(CmdError::Failed("a table can have at most 63 columns".into()));
     }
-    let width = super::page::sect(s).text_width();
+    let width = super::page::laid_out_sect(s).text_width();
     let mut t = Table::new(lines.len().max(1), cols, width);
     for (r, l) in lines.iter().enumerate() {
         for (c, txt) in l.split(sep).enumerate() {
@@ -1167,7 +1167,7 @@ fn quick_table(s: &mut Session, v: &Value) -> CmdResult {
         ],
     };
     let cols = data.iter().map(Vec::len).max().unwrap_or(1);
-    let width = super::page::sect(s).text_width();
+    let width = super::page::laid_out_sect(s).text_width();
     let mut t = Table::new(data.len(), cols, width);
     t.props.style = Some(if kind == "calendar" { "GridTable1Light" } else { "GridTable4AccentBlue" }.into());
     for (r, row) in data.iter().enumerate() {

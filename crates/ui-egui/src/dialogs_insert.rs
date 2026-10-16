@@ -137,7 +137,7 @@ impl ColumnsForm {
             cols: Vec::new(),
             separator: c.separator,
             apply: if sections { "section" } else { "document" }.into(),
-            text_width: sp.text_width() / k,
+            text_width: wordcraft_engine::cmd::page::laid_out_sect(&app.session).text_width() / k,
             sections,
         };
         if c.widths.len() == count as usize && count > 1 {

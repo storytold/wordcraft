@@ -2624,3 +2624,8 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Více stránek:
+	2 pages per sheet	2 stránky na list
+	Book fold	Brožura
+	Sheets per booklet:	Listů v brožuře:

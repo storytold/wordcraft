@@ -2233,3 +2233,9 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	複数ページの設定:
+	2 pages per sheet	1 枚に 2 ページ
+	Book fold	冊子
+	Sheets per booklet:	1 冊あたりのシート数:
+	Normal	標準

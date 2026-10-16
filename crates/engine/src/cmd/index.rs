@@ -321,8 +321,8 @@ pub fn rebuild(s: &mut Session, i: usize, leader: Option<TabLeader>) -> Result<(
         }
     }
     // Entries are laid out in the index's columns.
-    let sects = s.doc.sections();
-    let sect = sects.get(s.doc.section_index_of(i + 1)).map(|(_, x)| (*x).clone()).unwrap_or_default();
+    let sects = s.doc.laid_out_sections();
+    let sect = sects.get(s.doc.section_index_of(i + 1)).map(|(_, x)| x.clone()).unwrap_or_default();
     let space = old_sect.as_ref().map_or(sect.columns.space, |x| x.columns.space);
     let col_w = (sect.text_width() - space * (cols as f32 - 1.0)) / cols as f32;
     let n = lines.len();

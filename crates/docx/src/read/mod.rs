@@ -1097,6 +1097,17 @@ impl Reader<'_> {
                 }
                 "m:mathPr" => s.math = Some(math::read_math_pr(k)),
                 "w:mirrorMargins" => s.mirror_margins = on_off(k),
+                "w:printTwoOnOne" => s.two_per_sheet = on_off(k),
+                "w:bookFoldPrinting" => s.book_fold = on_off(k),
+                "w:bookFoldRevPrinting" => s.book_fold_reverse = on_off(k),
+                "w:bookFoldPrintingSheets" => {
+                    // Word offers 1–40 sheets per booklet (0: all); anything else clamps.
+                    if let Some(v) = k.attr("w:val").map(str::trim) {
+                        let huge = !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit());
+                        let n = v.parse::<u64>().unwrap_or(if huge { u64::MAX } else { 0 });
+                        s.book_fold_sheets = n.min(wordcraft_doc::MAX_BOOKLET_SHEETS as u64) as u16;
+                    }
+                }
                 "w:autoHyphenation" => s.auto_hyphenation = on_off(k),
                 "w:doNotHyphenateCaps" => s.hyphenate_caps = !on_off(k),
                 "w:hyphenationZone" => {
@@ -1132,8 +1143,14 @@ impl Reader<'_> {
                     };
                     s.zoom = Some(Zoom { percent, fit }).filter(|z| z.percent != 100 || z.fit.is_some());
                 }
+                "w:gutterAtTop" => s.gutter_at_top = on_off(k),
                 _ => {}
             }
+        }
+        // Every Multiple pages mode but Normal fixes the gutter's position (Word greys it out, and
+        // writes `w:gutterAtTop` itself for 2 pages per sheet on a portrait sheet).
+        if s.multiple_pages() != wordcraft_doc::section::MultiplePages::Normal {
+            s.gutter_at_top = false;
         }
         Ok(())
     }

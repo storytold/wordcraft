@@ -165,7 +165,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     }
     spec.data_labels = p::bool(v, "dataLabels").unwrap_or(false);
     // Fitted to the text width, as Word sizes a new chart.
-    let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0).max(36.0);
+    let max_w = s.doc.laid_out_sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0).max(36.0);
     let w = p::f32(v, "width").unwrap_or(DEFAULT_W).clamp(36.0, 2000.0).min(max_w);
     let h = p::f32(v, "height").unwrap_or(DEFAULT_H).clamp(36.0, 2000.0);
     let graphic = chart_graphic(spec, &s.doc.settings.theme_colors, w, h);

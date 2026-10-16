@@ -2622,3 +2622,8 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Wiele stron:
+	2 pages per sheet	2 strony na arkusz
+	Book fold	Broszura
+	Sheets per booklet:	Arkuszy w broszurze:

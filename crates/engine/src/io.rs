@@ -212,7 +212,7 @@ fn read_bytes(name: &str, bytes: &[u8], password: Option<&str>, page: &wordcraft
 
 /// The narrowest text width of the document's sections, points: what a picture must fit.
 pub(crate) fn text_width(doc: &Document) -> f32 {
-    doc.sections().iter().map(|(_, sp)| sp.text_width()).fold(f32::INFINITY, f32::min).clamp(36.0, 4000.0)
+    doc.laid_out_sections().iter().map(|(_, sp)| sp.text_width()).fold(f32::INFINITY, f32::min).clamp(36.0, 4000.0)
 }
 
 /// Shrink inline pictures wider than `max_w` to it, keeping their proportions. Layout keeps a

@@ -2641,3 +2641,8 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Più pagine:
+	2 pages per sheet	2 pagine per foglio
+	Book fold	Libro
+	Sheets per booklet:	Fogli per libretto:

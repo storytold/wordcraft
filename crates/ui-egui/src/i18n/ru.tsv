@@ -2630,3 +2630,8 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# Page Setup › Multiple pages (#1836)
+	Multiple pages:	Несколько страниц:
+	2 pages per sheet	2 страницы на листе
+	Book fold	Брошюра
+	Sheets per booklet:	Листов в брошюре:

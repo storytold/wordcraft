@@ -153,7 +153,7 @@ fn insert_block_at_caret(s: &mut Session, block: Block) -> Result<Path, CmdError
 fn table(s: &mut Session, v: &Value) -> CmdResult {
     let rows = p::u64(v, "rows").unwrap_or(2).clamp(1, 1000) as usize;
     let cols = p::u64(v, "cols").unwrap_or(2).clamp(1, 63) as usize;
-    let width = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    let width = s.doc.laid_out_sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let mut t = Table::new(rows, cols, width);
     if let Some(st) = p::str(v, "style") {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
@@ -255,7 +255,7 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     };
     let key = s.doc.add_media(bytes, ext);
     // Fitted to the text width.
-    let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
+    let max_w = s.doc.laid_out_sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let (mut w, mut h) = (natural_w, natural_h);
     if let Some(want) = width {
         let k = want.max(4.0) / w.max(1.0);

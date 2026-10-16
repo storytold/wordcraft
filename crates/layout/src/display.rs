@@ -492,7 +492,7 @@ fn change_bars(doc: &Document, page: &Page, m: &MarkupOptions, alpha: f32, out: 
     // Outside: the left margin, or the outer one of a right-hand page with mirrored margins.
     let right = match m.changed_lines {
         ChangeBar::Right => true,
-        ChangeBar::Outside => doc.settings.mirror_margins && page.number % 2 == 1,
+        ChangeBar::Outside => doc.settings.mirrors() && page.number % 2 == 1,
         _ => false,
     };
     let bx = if right { page.body.right() + 9.0 } else { page.body.x - 9.0 };

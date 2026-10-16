@@ -12,7 +12,7 @@ use wordcraft_doc::table::{Cell, MAX_COLS, MAX_ROWS, Row, Table};
 use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKind, Run, para_block};
 
 use super::Reader;
-use super::props::{sectpr, tcpr, trpr};
+use super::props::{sectpr, sheet_from_page, tcpr, trpr};
 use super::shape_style::{preset_kind, shape_paint, vml_color, vml_preset_kind};
 use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
@@ -417,10 +417,19 @@ impl Reader<'_> {
     }
 
     pub fn read_section(&mut self, s: &El, rels: &Rels) -> wordcraft_doc::SectionProps {
+        let mode = self.doc.settings.multiple_pages();
         let (mut sp, refs) = sectpr(s);
+        sheet_from_page(&mut sp, s, mode);
         // §17.13.5.32: the section's properties before a tracked change (no header references).
         if let Some(ch) = s.child("w:sectPrChange") {
-            let old = ch.child("w:sectPr").map(|o| sectpr(o).0).unwrap_or_default();
+            let old = ch
+                .child("w:sectPr")
+                .map(|o| {
+                    let mut old = sectpr(o).0;
+                    sheet_from_page(&mut old, o, mode);
+                    old
+                })
+                .unwrap_or_default();
             sp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
         }
         for r in refs {
