@@ -340,7 +340,33 @@ fn toc_range(s: &Session) -> Option<(usize, usize)> {
 /// offers Update Field for the whole table.
 pub fn caret_in_toc(s: &Session) -> bool {
     let at = &s.sel.focus;
-    at.story == StoryRef::Body && at.path.depth() == 0 && toc_range(s).is_some_and(|(start, end)| (start..=end).contains(&at.path.last()))
+    if at.story != StoryRef::Body || at.path.depth() != 0 {
+        return false;
+    }
+    if toc_range(s).is_some_and(|(start, end)| (start..=end).contains(&at.path.last())) {
+        return true;
+    }
+    // A saved or imported TOC is a range field spanning its entries until Update Table turns it
+    // into the engine's TOC (#2182, a save and reopen; not the flow in the report). Only the
+    // range Update Table would convert counts, so the menu never refreshes a different TOC.
+    s.doc.field_ranges(StoryRef::Body).into_iter().find(|r| convertible_toc_range(s, r)).is_some_and(|r| {
+        // The caret at the field's own marker (offset 0 of the first entry) and at the end of
+        // the last entry belong to the range as well.
+        (r.start.path.last()..=r.end.path.last()).contains(&at.path.last())
+    })
+}
+
+/// The range field `range_toc_to_field` converts: an unlocked, top-level TOC (not a table of
+/// figures) when the body has no engine TOC yet.
+fn convertible_toc_range(s: &Session, r: &wordcraft_doc::FieldRange) -> bool {
+    let field = FieldCode::parse(&r.instr);
+    toc_range(s).is_none()
+        && field.name == "TOC"
+        && !field.has('c')
+        && r.depth == 0
+        && !r.locked
+        && r.start.path.depth() == 0
+        && r.end.path.depth() == 0
 }
 
 /// A TOC imported as a range field (`FieldStart`…`FieldEnd`: one without a TOC heading, or with
@@ -353,16 +379,7 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
     if toc_range(s).is_some() {
         return Ok(());
     }
-    let is_toc = |instr: &str| {
-        let field = FieldCode::parse(instr);
-        field.name == "TOC" && !field.has('c')
-    };
-    let Some(r) = s
-        .doc
-        .field_ranges(StoryRef::Body)
-        .into_iter()
-        .find(|r| r.depth == 0 && !r.locked && is_toc(&r.instr) && r.start.path.depth() == 0 && r.end.path.depth() == 0)
-    else {
+    let Some(r) = s.doc.field_ranges(StoryRef::Body).into_iter().find(|r| convertible_toc_range(s, r)) else {
         return Ok(());
     };
     let Some(after_end) = r.end.off.checked_add(OBJ.len_utf8()) else { return Ok(()) };
@@ -376,7 +393,13 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
     if at.path.depth() == 0
         && i > 0
         && s.doc.para_at(&at).is_some_and(|p| p.is_empty())
-        && s.doc.body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading"))
+        // The paragraph before may also be the empty one the writer leaves where the engine's TOC
+        // field was (the field is saved opening in the first entry), so the next save and update
+        // doesn't add a blank line each time (#2182). A blank line the user typed right above a
+        // range TOC is reused the same way, so deleting it later deletes the TOC field.
+        && s.doc.body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| {
+            p.props.style.as_deref() == Some("TOCHeading") || (p.is_empty() && p.objects.is_empty() && p.section.is_none())
+        })
     {
         s.doc.remove_block(StoryRef::Body, &at.path)?;
         let heading = Path::top(i - 1);

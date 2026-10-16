@@ -2391,6 +2391,85 @@ fn imported_range_toc_is_refreshed_in_place() {
     }
 }
 
+/// #2182 (the save and reopen gap, not the flow in the report, which #1197 fixed): after a save
+/// and reopen a TOC is a range field opening in its first entry. The context menu offers Update
+/// Field wherever the caret is in it, including the field's own marker (offset 0 of the first
+/// entry) and the end of the last entry; and repeated update, save and reopen adds no blank line.
+#[test]
+fn toc_menu_offers_update_field_after_save_and_reopen() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    // What the canvas context menu checks before offering Update Field.
+    let offered = |s: &Session| !crate::cmd::fields::selected(s).is_empty() || crate::cmd::references::caret_in_toc(s);
+    let mut d = wordcraft_doc::Document::from_text("Before.\nOld entry\t9\nAlpha\nBeta");
+    {
+        let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
+            .unwrap();
+    }
+    let mut s = Session::new(d);
+    for (i, style) in [(2, "Heading 1"), (3, "Heading 2")] {
+        run(&mut s, "caret.set", json!({"pos": Pos::body(i, 0)}));
+        run(&mut s, "styles.apply", json!({"style": style}));
+    }
+    let check = |s: &mut Session, what: &str| {
+        let entries: Vec<usize> = (0..s.doc.body.len())
+            .filter(|i| {
+                s.doc.body.get(*i).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC")))
+            })
+            .collect();
+        assert!(!entries.is_empty(), "{what}: no TOC paragraphs: {}", text(s));
+        for (k, i) in entries.iter().enumerate() {
+            let len = s.doc.body.get(*i).and_then(|b| b.as_para()).map_or(0, |p| p.len());
+            // The leftover empty field paragraph before the range (first block) has no menu (minor).
+            if k == 0 && len == 0 {
+                continue;
+            }
+            for off in 0..=len {
+                s.sel = crate::Selection::caret(Pos::body(*i, off));
+                assert!(offered(s), "{what}: no Update Field at block {i} offset {off}: {}", text(s));
+            }
+        }
+    };
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    s = Session::new(wordcraft_docx::read(&bytes).unwrap());
+    let mut blocks = None;
+    for round in 0..3 {
+        run(&mut s, "references.updateToc", json!({}));
+        check(&mut s, &format!("after update {round}"));
+        // No extra blank line per cycle.
+        assert!(blocks.is_none_or(|n| n == s.doc.body.len()), "after update {round}: the document grew: {}", text(&s));
+        blocks = Some(s.doc.body.len());
+        let bytes = wordcraft_docx::write(&s.doc).unwrap();
+        s = Session::new(wordcraft_docx::read(&bytes).unwrap());
+        check(&mut s, &format!("after reopen {round}"));
+    }
+}
+
+/// #2182: with two TOCs only the one Update Table would refresh is offered Update Field; the other
+/// range TOC doesn't claim the menu, so it never refreshes a different table.
+#[test]
+fn toc_menu_targets_the_toc_update_table_refreshes() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    let mut d = wordcraft_doc::Document::from_text("One\nTwo\nHead\nFirst\nSecond\nTail");
+    for (para, instr) in [(0, r#"TOC \o "1-2""#), (3, r#"TOC \o "1-3""#)] {
+        let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(para)).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: instr.into(), locked: false, dirty: false }, &CharProps::default()).unwrap();
+    }
+    let mut s = Session::new(d);
+    let at = |s: &mut Session, block: usize| {
+        s.sel = crate::Selection::caret(Pos::body(block, 1));
+        crate::cmd::references::caret_in_toc(s)
+    };
+    assert!(at(&mut s, 0), "the first TOC is the one Update Table converts");
+    assert!(!at(&mut s, 3), "the second range TOC is not offered the menu item");
+}
+
 /// Updating a TOC field that had a non-empty result (placeholder from an external generator, #878)
 /// clears the old result so the exported DOCX nests entries inside the field rather than leaving
 /// them after the field's end marker.

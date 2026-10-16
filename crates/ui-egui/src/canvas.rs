@@ -3829,6 +3829,59 @@ mod tests {
         assert_eq!(text.matches("Fresh heading").count(), 2, "the new heading is listed in the table: {text}");
     }
 
+    /// #2182: after Update Field has refreshed a table of contents once, the context menu on it
+    /// still offers Update Field, so a later heading change can be brought in again.
+    #[test]
+    fn context_menu_on_a_toc_still_offers_update_field_after_an_update() {
+        use egui_kittest::kittest::Queryable;
+        use wordcraft_doc::{Block, Paragraph, Path, props::CharProps};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_engine::sample::report()), Default::default());
+        a.run("caret.docStart", json!({})).unwrap();
+        a.run("references.toc", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for round in 0..2 {
+            let name = format!("Fresh heading {round}");
+            let end = h.state().session.doc.body.len();
+            let heading = Paragraph::with_text(&name, CharProps::default()).styled("Heading1");
+            h.state_mut().session.doc.insert_block(StoryRef::Body, &Path::top(end), Block::Para(heading)).unwrap();
+            h.state_mut().session.relayout();
+            for _ in 0..6 {
+                h.step();
+            }
+            let entry = h
+                .state()
+                .session
+                .doc
+                .body
+                .iter()
+                .position(|b| b.as_para().is_some_and(|p| p.props.style.as_deref() == Some("TOC1")))
+                .expect("a TOC entry");
+            let c = h.state_mut().session.layout().caret(&Pos::body(entry, 2)).expect("the entry is laid out");
+            let at = page_to_screen(h.state_mut(), c.page, c.x + 1.0, c.top + c.height / 2.0).expect("on screen");
+            h.event(egui::Event::PointerMoved(at));
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+                h.step();
+            }
+            h.step();
+            assert!(h.query_all_by_label_contains("Paste").next().is_some(), "round {round}: the context menu is open");
+            assert!(h.query_by_label_contains("Update Field").is_some(), "round {round}: Update Field is offered");
+            h.get_by_label_contains("Update Field").click();
+            for _ in 0..3 {
+                h.step();
+            }
+            let text = h.state().session.doc.plain_text(StoryRef::Body);
+            assert_eq!(text.matches(&name).count(), 2, "round {round}: the new heading is listed: {text}");
+        }
+    }
+
     /// #996: on macOS a Control-click is the right-click (the trackpad's and the one-button
     /// mouse's way to it), so it opens the same menu and leaves the caret where the menu needs it.
     #[cfg(target_os = "macos")]
