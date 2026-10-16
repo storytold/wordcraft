@@ -1196,7 +1196,28 @@ fn handle(s: &mut Session, p: Pushed) -> bool {
     }
 }
 
-/// `collab/snapshot`: the room's whole state, and the document as `.docx` when asked (not in an
+/// The formats `collab/snapshot {file: true, format}` writes: Word's packages, ODT and RTF.
+pub const SNAPSHOT_FORMATS: &[&str] = &["docx", "docm", "dotx", "dotm", "odt", "rtf"];
+
+/// The format a snapshot's file is written in: `format` (an extension, with or without the dot,
+/// any case) when it is one of [`SNAPSHOT_FORMATS`], else `docx`.
+pub fn snapshot_format(format: Option<&str>) -> &'static str {
+    let f = format.map(|f| f.trim().trim_start_matches('.').to_ascii_lowercase()).unwrap_or_default();
+    SNAPSHOT_FORMATS.iter().copied().find(|x| *x == f).unwrap_or("docx")
+}
+
+/// `base` named for `format`: kept when it already has that extension, its document extension
+/// replaced (`Report.odt` → `Report.docx`), or the extension added.
+pub fn file_name_as(base: &str, format: &str) -> String {
+    const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "ott", "rtf", "txt", "md", "html", "htm", "xml", "json"];
+    match base.rsplit_once('.') {
+        Some((stem, ext)) if ext.eq_ignore_ascii_case(format) && !stem.is_empty() => base.to_string(),
+        Some((stem, ext)) if !stem.is_empty() && DOC_EXTS.iter().any(|e| ext.eq_ignore_ascii_case(e)) => format!("{stem}.{format}"),
+        _ => format!("{base}.{format}"),
+    }
+}
+
+/// `collab/snapshot`: the room's whole state, and the document as a file when asked (not in an
 /// encrypted room: the transport would see the content).
 fn snapshot(s: &mut Session, plugin: &str, params: &Json) -> Result<Json, wordcraft_plugin::HostError> {
     let err = |m: String| wordcraft_plugin::HostError { code: -32000, message: m, data: Json::Null };
@@ -1218,10 +1239,14 @@ fn snapshot(s: &mut Session, plugin: &str, params: &Json) -> Result<Json, wordcr
                 out["fileRefused"] = json!("the room is encrypted: the document stays with the people in it");
             } else {
                 let base = s.file_name.clone().or_else(|| r.replica.title()).filter(|t| !t.trim().is_empty()).unwrap_or_else(|| "Document".into());
-                let name = if base.to_ascii_lowercase().ends_with(".docx") { base } else { format!("{base}.docx") };
+                // The format the transport asks for (the file's own, e.g. `.odt`), when WordCraft
+                // writes it; `.docx` otherwise (craft-live then saves a copy beside the file).
+                let format = snapshot_format(params.get("format").and_then(Json::as_str));
+                let name = file_name_as(&base, format);
                 let bytes = crate::io::save_bytes(&name, &s.doc).map_err(err)?;
                 out["file"] = json!(wordcraft_collab::b64_encode(&bytes));
                 out["name"] = json!(name);
+                out["format"] = json!(format);
             }
         }
         Ok(out)

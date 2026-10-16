@@ -32,6 +32,9 @@ impl WordApp {
         if matches!(id, "edit.undo" | "edit.redo") && self.session.md_source.is_some() {
             return crate::md_source::undo(self, id == "edit.redo");
         }
+        if let Some(r) = self.host_command(id) {
+            return r;
+        }
         // Comment text still being typed is written first, so a save or export has it and a
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
@@ -120,6 +123,9 @@ impl WordApp {
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);
+        }
+        if let Some(r) = self.host_command(id) {
+            return r;
         }
         if let Some(r) = self.ui_command(id, &params) {
             return r;
@@ -541,6 +547,19 @@ impl WordApp {
     }
 
     /// Commands that live in the UI layer.
+    /// Save and Close when the page embedding the app owns the document ([`crate::Services::host`]):
+    /// handed to it, never asking about unsaved changes (the live room keeps every edit).
+    fn host_command(&mut self, id: &str) -> Option<Result<Value, String>> {
+        let request = match id {
+            "file.save" => crate::HostRequest::Save,
+            "file.close" => crate::HostRequest::Close,
+            _ => return None,
+        };
+        let host = self.services.host.as_ref()?;
+        host(request);
+        Some(Ok(json!({"host": if request == crate::HostRequest::Save { "save" } else { "close" }})))
+    }
+
     pub(crate) fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {

@@ -7827,11 +7827,15 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",
+ "wasm-bindgen-test",
  "web-sys",
+ "wordcraft-collab",
  "wordcraft-doc",
  "wordcraft-engine",
  "wordcraft-fonts",
+ "wordcraft-plugin",
  "wordcraft-ui-egui",
+ "yrs",
 ]
 
 [[package]]

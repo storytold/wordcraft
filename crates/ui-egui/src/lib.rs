@@ -121,7 +121,7 @@ mod state;
 use app::control_click_as_secondary;
 pub(crate) use app::works_without_document;
 pub use clock::now_ms;
-pub use services::{HostSaveFn, Inbox, Services};
+pub use services::{HostRequest, HostSaveFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
 
 /// Web: a save the browser's picker hasn't finished ([`async_saves`]).

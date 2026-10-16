@@ -1,6 +1,6 @@
 # Live sessions (co-editing)
 
-> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-16 · **Change:** minor (document chat, protocol 2.1; previously major: created: plugin protocol 2 in WordCraft, schema 1) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-15 · **Last updated:** 2026-10-16 · **Change:** minor (craft-live mode: the web build edits Nextcloud files live; previously minor: document chat, protocol 2.1; previously major: created: plugin protocol 2 in WordCraft, schema 1) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Several people edit one document at the same time, each in their own WordCraft, and see each
 other's carets, selections and edits as they happen. This is WordCraft's equivalent of Word's
@@ -181,8 +181,12 @@ they stay with their text.
   `snapshot: true` and the answer to `collab/snapshot` use the method name `collab/snapshot`.
   After 10 messages that don't decrypt, the status bar asks "Wrong room key?".
 - **`collab/snapshot`** is answered with the whole state (encrypted when keyed) and, with
-  `file: true`, the document as `.docx` bytes, except in an encrypted room: there WordCraft
-  answers `fileRefused` instead, so the plaintext never reaches the transport.
+  `file: true`, the document as file bytes (`file`, with `name` and `format`), except in an
+  encrypted room: there WordCraft answers `fileRefused` instead, so the plaintext never reaches
+  the transport. `format` (an extension, e.g. `odt`; craft-live's nextcloud-live add-in passes
+  the Nextcloud file's own) picks the format when WordCraft writes it: `docx`, `docm`, `dotx`,
+  `dotm`, `odt` or `rtf`. Anything else, or none, gives `.docx`; the name is the document's with
+  that extension (`Notes.odt` → `Notes.docx`).
 - **Offline.** When the transport reports `offline` or exits, editing goes on; an exited
   transport is started again after 3 s and the room rejoins with `sync1`, which merges both
   sides' edits.
@@ -196,6 +200,79 @@ they stay with their text.
 - **Limits.** An update is at most 16 MiB before base64 (a larger local change is announced with
   `sync1` so peers fetch it; a larger remote one is refused), awareness 64 KiB, one room per
   document.
+
+## In Nextcloud Office (craft-live)
+
+[craft-live](https://github.com/sirmmo/craft-live) is a WOPI editor that Nextcloud Office uses in
+place of Collabora Online. It opens documents in **WordCraft's web build**, inside Nextcloud's
+page, with live co-editing; the desktop app joins the same rooms through craft-live's
+nextcloud-live transport add-in. The web build implements craft-live's embed contract (its
+`docs/design.md` §9), the same in GridCraft and DeckCraft. The code is
+`apps/wordcraft-web/src/live.rs` (the protocol, without I/O, tested natively) and
+`apps/wordcraft-web/src/web/live_io.rs` (the browser's WebSocket, `fetch` and `postMessage`).
+
+**Starting.** craft-live frames the build as
+`index.html#craft-live=1&ws=…&room=…&token=…&user=…&role=…&seed=…&file=…&name=…&format=…&api=…&lang=…`.
+With that fragment the app posts `craft-live:hello` to the page around it (the shell, same
+origin) as soon as it runs, and takes `craft-live:config` when the fragment can't be used. It
+starts on the document, not on File › Home, with no leave-page prompt (the room keeps every
+edit), in Nextcloud's language when WordCraft has it (`lang`, `pt_BR` → `pt-br`).
+
+**Seeding and joining.** The document is read-only ("Joining…") until it's there.
+
+- `seed=1` (the first editor): the file is fetched (`file`, `Authorization: Bearer <token>`),
+  opened as File › Open does (a 0-byte file is a new, empty document) and shared with
+  `collab.share` semantics (one transaction, origin `seed`), then the WebSocket connects.
+- `seed=0`: the app joins and waits for the room's document (the first sync step 2; while the
+  room is being seeded craft-live holds the joiner's sync step 1).
+- `welcome` refusing a seed (the lease went to someone else, or the room already has a
+  document) turns it into a join: merging a second seed would duplicate the content. `reseed`
+  (the seeder left first) asks `POST <api>/prepare`; with `{seed: true}` the app loads the file
+  and seeds on a new connection.
+
+**The room.** `<ws>?token=<token>`, binary frames in lib0 encoding (protocol 2, Appendix B):
+`0/0` sync step 1, `0/1` sync step 2, `0/2` update, `1` awareness, `2/0` permission denied,
+`100` craft-live's control messages (JSON). The engine's room is joined through the transport id
+`craft-live`, served in memory, so its `collab/sync1|sync2|update|awareness` map one to one onto
+frames: one update per committed command, awareness (selection, chat typing) at most 20 a
+second. The app sends `hello {clientId, can: ["upload"]}` when the socket opens, and holds every
+other frame until `welcome`. Control messages:
+
+| Message | What WordCraft does |
+|---|---|
+| `welcome` | The session starts: queued frames go, the Share button's dot turns green |
+| `peers` | The people for the shell (`craft-live:peers`, with yourself, `self: true`) and the session popover; the circles in the title bar come from awareness |
+| `save {id, url, name, format}` | The engine writes the file (`collab/snapshot {file: true, format}`: the file's own format when WordCraft writes it, else `.docx`, which craft-live puts in a copy beside the file) and it's uploaded: `PUT <url>` with the bearer token and `X-Craft-File-Name`. A failed upload answers `saveResult {id, ok: false, error}`. Editing goes on meanwhile |
+| `saved`, `saveFailed`, `modified`, `seeded` | The status bar ("Saved to Nextcloud"), `craft-live:modified` and, after a save the person asked for, `craft-live:saved {success}`. A room with every edit saved marks the document saved |
+| `notice` | The status bar; warnings and errors stay in the session's status. After a save that went to a copy, Save sends `saveNow {force: true}` (writes over the file) |
+| `expired` (close 4401) | "The editing session expired. Close the document and open it again from Nextcloud." No reconnection |
+| close 4403 | craft-live refused the connection: an error (the shell shows it when the document never opened) |
+| any other close | Offline (red dot; editing goes on), then reconnect after 1, 2, 4, 8, 16 and then every 30 s; the sync exchange merges both sides |
+
+**In the interface.** File › Save (Ctrl+S, the Quick Access Toolbar, Backstage) asks the room to
+save into Nextcloud (`saveNow`); Save As still downloads a copy. File › Close (Ctrl+W), a
+**Close** button at the right end of the title bar and Close in the session popover (in place of
+Leave Live Session) send `craft-live:close`: the shell tells Nextcloud (`UI_Close`) and the app
+leaves the room (`bye`). `role=view` is read-only (Save says "This document is view only"). The
+people circles, the session popover and the chat panel work as in any live session.
+
+**To the shell** (`postMessage`, `targetOrigin` = our origin): `craft-live:hello`, `loaded` (the
+document is shown), `modified {modified}`, `saved {success}`, `peers {peers}`, `close`, `error
+{message}` (it can't be opened: the file didn't load or the connection was refused). **From the
+shell** (only from the parent window, only same-origin): `config`, `save` (Nextcloud asked: the
+shell already told the server; the status bar says "Saving to Nextcloud…"), `close` (leave the
+room), `getPeers`; `host` (Nextcloud's other PostMessages) is ignored.
+
+**Building it for craft-live.** `trunk build --release` in `apps/wordcraft-web` (or
+`packaging/web/package.sh`); point craft-live's `[apps] wordcraft` at the output folder
+(`dist/web`), which it serves as `/apps/wordcraft/` (see `packaging/web/README.md`).
+
+**Not verified yet** (needs a real browser and a Nextcloud with craft-live): the WebSocket,
+`fetch` and `postMessage` glue in a browser (compiled for wasm, not run); Nextcloud's own
+reactions to the shell's messages (craft-live's §12). The protocol is tested natively against a
+stand-in room, and end to end against the craft-live server and its fake Nextcloud with the
+browser's I/O played by tokio (seeding, joining, typing both ways, chat, Save and autosave
+through WOPI PutFile, `.odt` saved as `.odt`, a viewer, closing, reconnecting).
 
 ## Document chat
 
@@ -295,6 +372,17 @@ the other formats (RTF, ODT, HTML, `.doc`…) don't carry the chat.
   transcripts in the conformance replay, and `crates/ui-egui/tests/chat_panel.rs` (the button,
   the panel, Enter and Shift+Enter, the menu and its confirmation, the unread count, the mention
   flash, who's typing).
+- `apps/wordcraft-web/src/live/tests.rs` (craft-live mode): the lib0 framing and hostile frames,
+  the fragment and `craft-live:config`, and the whole client against a stand-in for craft-live's
+  room (a plain Yjs document): seeding and joining, a joiner read-only until the seed arrives,
+  edits meeting, Save uploading the file in its own format (`.odt`; `.doc` brings a `.docx`),
+  a seeder leaving (`reseed`), a seed the room doesn't want becoming a join, reconnecting with
+  backoff and merging offline edits, expiry and refusal, a viewer, closing, the shell's requests,
+  hostile control messages. `apps/wordcraft-web/tests/live_wasm.rs` runs the framing and a seeding
+  session compiled for wasm (wasm-bindgen-test, in Node: `cargo test --target
+  wasm32-unknown-unknown -p wordcraft-web --test live_wasm --no-run`, then
+  `wasm-bindgen-test-runner` on the built `.wasm`).
+- `crates/engine/tests/collab_snapshot.rs`: `collab/snapshot`'s `format` hint and the names.
 - `crates/ui-egui/tests/live_session.rs`: the Share button without and with a transport, the
   Share dialog, a session through a fake transport with the state on Share and people's circles
   in the title bar, the session popover's Copy Invitation and Leave.
@@ -308,7 +396,10 @@ the other formats (RTF, ODT, HTML, `.doc`…) don't carry the chat.
   same moment can see one new revision labelled with the other's name until the next change.
 - Comment text parts no comment refers to aren't shared.
 - Typing inside an equation shares the whole equation object (last writer wins).
-- The web build has no add-ins; it will speak the y-websocket binding natively.
+- The web build has no add-ins: it joins rooms only through craft-live (the y-websocket binding,
+  natively). A plain y-websocket server without craft-live's control messages isn't supported yet.
+- Inside craft-live, File › New and Open replace the Nextcloud document (the session ends);
+  other files open from Nextcloud.
 - yrs garbage collection is off (it crashed with the undo manager in GridCraft's fuzzer): deleted
   content stays in the document's history.
 
@@ -316,5 +407,6 @@ the other formats (RTF, ODT, HTML, `.doc`…) don't carry the chat.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-16 | minor | craft-live mode: the web build edits Nextcloud files live (craft-live's embed contract: the fragment and `craft-live:*` messages, seeding and joining, the y-websocket binding with control messages, saving by upload, reconnecting); `collab/snapshot` takes a `format` hint; Save and Close belong to Nextcloud inside craft-live |
 | 2026-10-16 | minor | Document chat (craft-collab `docs/chat.md`, protocol 2.1): the shared `chat`/`chatMeta`, the `chat.*` commands and `view.chat`, the DOCX part `/craft/chat.json`, the panel and the title bar's chat button with its unread count |
 | 2026-10-15 | major | Created: plugin protocol 2 (2.0.1) in WordCraft: push channel, rooms, schema 1 (Yjs XML stories, text with formatting attributes, tables, story and comment maps, per-client id blocks), encryption, per-user undo, awareness with relative positions, recovery; Share and the session's people in the title bar |
