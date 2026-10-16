@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::colors::{Remember, Target};
 use crate::options::MeasureExt;
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, combo, font_combo, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, combo, font_combo, group, menu_button, small, small_toggle, split};
 use crate::{WordApp, icons};
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
@@ -239,6 +239,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         t.on_accent,
                     );
                     ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
+                    crate::widgets::describe_button(&resp, share, ui.is_enabled(), None);
                     if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                     }
@@ -275,35 +276,58 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             })
                             .collect();
                         let fits = fit_tabs(&widths, ui.available_width(), MORE_TABS_W + 2.0);
-                        for ((tab, custom), _) in tabs.iter().zip(&fits).filter(|(_, fits)| **fits) {
-                            let (tab, custom) = (tab.as_str(), *custom);
-                            let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
-                            // A custom tab's name is the user's own text: shown as typed.
-                            let shown = if custom { tab } else { tl!(tab) };
-                            let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
-                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
-                            if app.ui.keytips == crate::keytips::Phase::Tabs {
-                                crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
+                        // The tabs are a tab list to screen readers (#1012).
+                        ui.scope(|ui| {
+                            ui.ctx().accesskit_node_builder(ui.unique_id(), |n| n.set_role(egui::accesskit::Role::TabList));
+                            for ((tab, custom), _) in tabs.iter().zip(&fits).filter(|(_, fits)| **fits) {
+                                let (tab, custom) = (tab.as_str(), *custom);
+                                let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
+                                // A custom tab's name is the user's own text: shown as typed.
+                                let shown = if custom { tab } else { tl!(tab) };
+                                let w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(shown.to_string(), medium(12.5), t.text).size().x) + 18.0;
+                                let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                                if app.ui.keytips == crate::keytips::Phase::Tabs {
+                                    crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
+                                }
+                                let active = app.ui.tab == tab && !app.ui.backstage;
+                                resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::SelectableLabel, true, shown));
+                                let keytips = app.ui.keytips == crate::keytips::Phase::Tabs;
+                                ui.ctx().accesskit_node_builder(resp.id, |n| {
+                                    n.set_role(egui::accesskit::Role::Tab);
+                                    n.set_selected(active);
+                                    let letter = crate::keytips::tab_letter(tab);
+                                    if keytips && !letter.is_empty() {
+                                        n.set_access_key(letter);
+                                    }
+                                });
+                                // Alt or F10 puts the keyboard on the active tab.
+                                if active {
+                                    crate::keytips::take_focus(ui.ctx(), &resp, crate::keytips::Phase::Tabs);
+                                }
+                                if resp.hovered() && !active {
+                                    ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                                }
+                                let color = if contextual || active { t.accent_text } else { t.text };
+                                ui.painter().text(
+                                    r.center(),
+                                    Align2::CENTER_CENTER,
+                                    shown,
+                                    if active { semibold(12.5) } else { medium(12.5) },
+                                    color,
+                                );
+                                if active {
+                                    let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
+                                    ui.painter().rect_filled(u, 2.0, t.accent);
+                                }
+                                if resp.clicked() {
+                                    let _ = app.run("ui.tab", json!({"tab": tab}));
+                                }
+                                if resp.double_clicked() && tab != "File" {
+                                    let _ = app.run("ui.collapseRibbon", json!({}));
+                                }
+                                resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
                             }
-                            let active = app.ui.tab == tab && !app.ui.backstage;
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, shown));
-                            if resp.hovered() && !active {
-                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
-                            }
-                            let color = if contextual || active { t.accent_text } else { t.text };
-                            ui.painter().text(r.center(), Align2::CENTER_CENTER, shown, if active { semibold(12.5) } else { medium(12.5) }, color);
-                            if active {
-                                let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                ui.painter().rect_filled(u, 2.0, t.accent);
-                            }
-                            if resp.clicked() {
-                                let _ = app.run("ui.tab", json!({"tab": tab}));
-                            }
-                            if resp.double_clicked() && tab != "File" {
-                                let _ = app.run("ui.collapseRibbon", json!({}));
-                            }
-                            resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
-                        }
+                        });
                         let left_out: Vec<(&str, &str)> = tabs
                             .iter()
                             .zip(&labels)
@@ -317,6 +341,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
                             ui.painter().text(r.center(), Align2::CENTER_CENTER, "»", medium(12.5), t.text);
+                            crate::widgets::describe_button(&resp, tl!("More Tabs"), true, None);
+                            crate::widgets::opens_menu(&resp);
                             egui::Popup::menu(&resp).show(|ui| {
                                 for (tab, shown) in left_out {
                                     if ui.selectable_label(false, shown).clicked() {
@@ -346,6 +372,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 ui.disable();
             }
             let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
+            // Only a right-click target: nothing for a screen reader to name.
+            ui.ctx().accesskit_node_builder(bg.id, |n| n.set_hidden());
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
@@ -357,29 +385,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
                         _ => {}
                     }
-                    match app.ui.tab.as_str() {
-                        "Home" => home(app, ui),
-                        "Insert" => insert(app, ui),
-                        "Draw" => draw(app, ui),
-                        "Design" => design(app, ui),
-                        "Layout" => layout(app, ui),
-                        "References" => references(app, ui),
-                        "Mailings" => mailings(app, ui),
-                        "Review" => review(app, ui),
-                        "View" => view(app, ui),
-                        "Developer" => developer(app, ui),
-                        "Zotero" => zotero(app, ui),
-                        "Help" => help(app, ui),
-                        "Table Design" => table_design(app, ui),
-                        "Table Layout" => table_layout(app, ui),
-                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
-                        "Picture Format" => picture_format(app, ui),
-                        "Shape Format" => shape_format(app, ui),
-                        "SmartArt Design" => smart_art_design(app, ui),
-                        "Outlining" => outlining(app, ui),
-                        "Chart Design" => chart_design(app, ui),
-                        _ => home(app, ui),
-                    }
+                    tab_content(app, ui);
                     if let Some(e) = entry {
                         custom_groups(app, ui, &e.groups);
                     }
@@ -410,6 +416,33 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 state.store(ui.ctx(), scroll.id);
             }
         });
+}
+
+/// The active tab's groups (built-in and contextual tabs; custom groups are added after).
+fn tab_content(app: &mut WordApp, ui: &mut Ui) {
+    match app.ui.tab.as_str() {
+        "Home" => home(app, ui),
+        "Insert" => insert(app, ui),
+        "Draw" => draw(app, ui),
+        "Design" => design(app, ui),
+        "Layout" => layout(app, ui),
+        "References" => references(app, ui),
+        "Mailings" => mailings(app, ui),
+        "Review" => review(app, ui),
+        "View" => view(app, ui),
+        "Developer" => developer(app, ui),
+        "Zotero" => zotero(app, ui),
+        "Help" => help(app, ui),
+        "Table Design" => table_design(app, ui),
+        "Table Layout" => table_layout(app, ui),
+        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
+        "Picture Format" => picture_format(app, ui),
+        "Shape Format" => shape_format(app, ui),
+        "SmartArt Design" => smart_art_design(app, ui),
+        "Outlining" => outlining(app, ui),
+        "Chart Design" => chart_design(app, ui),
+        _ => home(app, ui),
+    }
 }
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
@@ -453,6 +486,7 @@ fn two_lines(label: &str) -> String {
 /// A chevron over a ribbon edge that is also a button; `true` on the frame it is clicked.
 fn edge_cue(ui: &mut Ui, rect: Rect, glyph: &str, hint: &str, t: &Tokens) -> bool {
     let resp = ui.interact(rect, ui.id().with(glyph), Sense::click()).on_hover_text(hint);
+    crate::widgets::describe_button(&resp, hint, true, None);
     let ink = if resp.hovered() { t.text } else { t.text_dim };
     ui.painter().rect_filled(rect, 0.0, t.ribbon);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, egui::FontId::proportional(18.0), ink);
@@ -754,7 +788,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "cut", Some("Cut"), "Cut", "edit.cut", json!({}), false);
             small(ui, app, "copy", Some("Copy"), "Copy", "edit.copy", json!({}), false);
             let active = app.session.painter.is_some();
-            small(ui, app, "painter", Some("Format"), "Format Painter", "edit.formatPainter", json!({}), active);
+            small_toggle(ui, app, "painter", Some("Format"), "Format Painter", "edit.formatPainter", json!({}), active);
         });
     });
     group(ui, "Font", Some("format.fontDialog"), app, |ui, app| {
@@ -801,9 +835,9 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
-                small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
-                small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
-                split(ui, app, "underline", "Underline", "format.underline", json!({}), flag("underline"), None, |ui, app| {
+                small_toggle(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
+                small_toggle(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
+                split(ui, app, "underline", "Underline", "format.underline", json!({}), Some(flag("underline")), None, |ui, app| {
                     for (l, s) in [
                         ("Single", "single"),
                         ("Double", "double"),
@@ -817,10 +851,10 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                         mi(ui, app, l, "format.underline", json!({"style": s}));
                     }
                 });
-                small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
-                small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
-                small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
-                small(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
+                small_toggle(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
+                small_toggle(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
+                small_toggle(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
+                small_toggle(ui, app, "charborder", None, "Character Border", "format.border", json!({}), flag("border"));
                 small(ui, app, "enclose", None, "Enclose Characters", "format.enclose", json!({}), false);
                 ui.add_space(4.0);
                 menu_button(ui, app, "effects", None, "Text Effects and Typography", false, "", |ui, app| {
@@ -839,13 +873,14 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Double Strikethrough", "format.doubleStrikethrough", json!({}));
                 });
                 let hl = app.canvas.last_highlight.clone();
-                split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
+                split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), None, None, |ui, app| {
                     let grid = wordcraft_doc::props::Highlight::ALL;
                     egui::Grid::new("hl").spacing(vec2(3.0, 3.0)).show(ui, |ui| {
                         for (i, h) in grid.iter().enumerate().skip(1) {
                             let c = h.rgb().unwrap_or(wordcraft_doc::Rgb::WHITE);
                             let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
                             ui.painter().rect_filled(r, 2.0, egui::Color32::from_rgb(c.0, c.1, c.2));
+                            crate::widgets::describe_button(&resp, h.name(), true, None);
                             if resp.on_hover_text(h.name()).clicked() {
                                 app.canvas.last_highlight = h.ooxml().to_string();
                                 let _ = app.run("format.highlight", json!({"color": h.ooxml()}));
@@ -860,7 +895,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 });
                 let fc = app.canvas.last_font_color.clone();
                 let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-                split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), false, sw, |ui, app| {
+                split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), None, sw, |ui, app| {
                     mi(ui, app, "Automatic", "format.color", json!({"color": "auto"}));
                     let theme = app.session.doc.settings.theme_colors.clone();
                     crate::colors::menu(ui, app, &theme, Target::cmd("format.color").remember(Remember::FontColor));
@@ -876,7 +911,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
         let lists = wordcraft_engine::cmd::para::list_buttons(&app.session.doc, rp.as_ref().and_then(|r| r.numbering));
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), lists.bullets, None, |ui, app| {
+                split(ui, app, "bullets", "Bullets", "para.bullets", json!({}), Some(lists.bullets), None, |ui, app| {
                     ui.label(egui::RichText::new(tl!("Bullet Library")).small().weak());
                     ui.horizontal(|ui| {
                         for c in ["•", "○", "▪", "◆", "➢", "✓", "–"] {
@@ -897,7 +932,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     });
                     mi(ui, app, "None", "para.bullets", json!({"off": true}));
                 });
-                split(ui, app, "numbering", "Numbering", "para.numbering", json!({}), lists.numbering, None, |ui, app| {
+                split(ui, app, "numbering", "Numbering", "para.numbering", json!({}), Some(lists.numbering), None, |ui, app| {
                     for (l, k) in [
                         ("1. 2. 3.", "numbered"),
                         ("1) 2) 3)", "numberedParen"),
@@ -912,7 +947,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Restart at 1", "para.restartNumbering", json!({}));
                     mi(ui, app, "None", "para.numbering", json!({"off": true}));
                 });
-                split(ui, app, "multilevel", "Multilevel List", "para.multilevel", json!({}), lists.multilevel, None, |ui, app| {
+                split(ui, app, "multilevel", "Multilevel List", "para.multilevel", json!({}), Some(lists.multilevel), None, |ui, app| {
                     mi(ui, app, "1. 1.1. 1.1.1.", "para.multilevel", json!({"kind": "legal"}));
                     mi(ui, app, "I. A. 1. a.", "para.multilevel", json!({"kind": "outline"}));
                     ui.separator();
@@ -928,18 +963,18 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 ui.add_space(4.0);
                 small(ui, app, "sort", None, "Sort", "para.sort", json!({}), false);
                 let marks = app.session.view.marks;
-                small(ui, app, "pilcrow", None, "Show/Hide ¶", "view.marks", json!({}), marks);
+                small_toggle(ui, app, "pilcrow", None, "Show/Hide ¶", "view.marks", json!({}), marks);
             });
             ui.add_space(3.0);
             crate::widgets::row(ui, |ui| {
                 use wordcraft_doc::Align as A;
-                small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
-                small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
-                small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
-                small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+                small_toggle(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
+                small_toggle(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
+                small_toggle(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
+                small_toggle(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
                 ui.add_space(4.0);
-                small(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
-                small(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);
+                small_toggle(ui, app, "textLtr", None, "Left-to-Right Text Direction", "para.ltr", json!({}), !rtl);
+                small_toggle(ui, app, "textRtl", None, "Right-to-Left Text Direction", "para.rtl", json!({}), rtl);
                 ui.add_space(4.0);
                 menu_button(ui, app, "lineSpacing", None, "Line and Paragraph Spacing", false, "para.lineSpacing", |ui, app| {
                     for v in [1.0, 1.15, 1.5, 2.0, 2.5, 3.0] {
@@ -950,12 +985,12 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Remove Space After Paragraph", "para.removeSpaceAfter", json!({}));
                     mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
                 });
-                split(ui, app, "shading", "Shading", "para.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
+                split(ui, app, "shading", "Shading", "para.shading", json!({"color": app.canvas.last_shading.clone()}), None, None, |ui, app| {
                     mi(ui, app, "No Color", "para.shading", json!({"color": null}));
                     let theme = app.session.doc.settings.theme_colors.clone();
                     crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
                 });
-                split(ui, app, "borders", "Borders", "para.borders", json!({"kind": "bottom"}), false, None, |ui, app| {
+                split(ui, app, "borders", "Borders", "para.borders", json!({"kind": "bottom"}), None, None, |ui, app| {
                     for (l, k) in [
                         ("Bottom Border", "bottom"),
                         ("Top Border", "top"),
@@ -1190,7 +1225,7 @@ fn draw(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             let sw = Some(crate::theme::c32(set.color));
-            split(ui, app, "fontcolor", "Color", pen_command(tool), json!({}), false, sw, |ui, app| {
+            split(ui, app, "fontcolor", "Color", pen_command(tool), json!({}), None, sw, |ui, app| {
                 let theme = app.session.doc.settings.theme_colors.clone();
                 // With ink lasso-selected the colour goes to the selection, else to the pen.
                 let cmd = if lasso_on { "draw.lassoColor" } else { pen_command(tool) };
@@ -1268,7 +1303,9 @@ fn gallery_pen(ui: &mut Ui, app: &mut WordApp, i: usize, pen: wordcraft_engine::
         InkTool::Highlighter => "Highlighter",
     });
     let size = crate::i18n::fmt(tl!("{n} pt"), &[("n", &pen.width.to_string())]);
-    let resp = resp.on_hover_text(format!("{kind}: {size}, #{}", pen.color.hex()));
+    let name = format!("{kind}: {size}, #{}", pen.color.hex());
+    crate::widgets::describe_button(&resp, &name, true, Some(active));
+    let resp = resp.on_hover_text(name);
     if resp.clicked() {
         let _ = app.run(pen_command(pen.kind), json!({"color": pen.color.hex(), "width": pen.width}));
     }
@@ -1457,36 +1494,47 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
         let spaced = |ui: &mut Ui, text: egui::RichText| {
             ui.horizontal(|ui| {
                 ui.add_space(8.0);
-                ui.label(text);
-            });
+                ui.label(text)
+            })
+            .inner
         };
+        // Each field is named by its column and row ("Indent Left:") for screen readers.
+        use crate::widgets::labelled_by;
         egui::Grid::new("layout_para").spacing(vec2(4.0, 1.5)).min_row_height(FIELD.y).show(ui, |ui| {
-            ui.label(egui::RichText::new(tl!("Indent")).small().strong());
+            let indent = ui.label(egui::RichText::new(tl!("Indent")).small().strong());
             ui.label("");
-            spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong());
+            let spacing = spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
             // Indents in the File › Options unit.
             let u = crate::options::unit();
             let k = u.pt_per_unit();
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
-            ui.label(egui::RichText::new(tl!("Left:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            let label = ui.label(egui::RichText::new(tl!("Left:")).small());
+            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+            labelled_by(&field, &[&indent, &label]);
+            if field.changed() {
                 let _ = app.run("para.indents", json!({"left": l * k}));
             }
-            spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            let label = spaced(ui, egui::RichText::new(tl!("Before:")).small());
+            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+            labelled_by(&field, &[&spacing, &label]);
+            if field.changed() {
                 let _ = app.run("para.spacing", json!({"before": b}));
             }
             ui.end_row();
             let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
-            ui.label(egui::RichText::new(tl!("Right:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            let label = ui.label(egui::RichText::new(tl!("Right:")).small());
+            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+            labelled_by(&field, &[&indent, &label]);
+            if field.changed() {
                 let _ = app.run("para.indents", json!({"right": r * k}));
             }
-            spaced(ui, egui::RichText::new(tl!("After:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            let label = spaced(ui, egui::RichText::new(tl!("After:")).small());
+            let field = ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt"))));
+            labelled_by(&field, &[&spacing, &label]);
+            if field.changed() {
                 let _ = app.run("para.spacing", json!({"after": a}));
             }
             ui.end_row();
@@ -1554,9 +1602,10 @@ fn rotate_menu(ui: &mut Ui, app: &mut WordApp, label: Option<&str>) {
 /// Size › Rotation: the selected object's exact angle (a drag of the field is one undo step).
 fn rotation_field(ui: &mut Ui, app: &mut WordApp) {
     let deg0 = wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(_, _, f)| f.spin().deg)).unwrap_or(0.0);
-    ui.label(egui::RichText::new(tl!("Rotation:")).small());
+    let label = ui.label(egui::RichText::new(tl!("Rotation:")).small());
     let mut deg = deg0;
     let r = ui.add(egui::DragValue::new(&mut deg).speed(1.0).range(-360.0..=360.0).max_decimals(1).suffix("°"));
+    crate::widgets::labelled_by(&r, &[&label]);
     if r.changed() {
         if r.dragged() && !r.drag_started() {
             app.session.join_next_undo();
@@ -1773,12 +1822,12 @@ fn review(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "nextComment", Some("Next"), "Next Comment", "review.nextComment", json!({}), false);
         });
         let shown = app.session.view.comments_pane;
-        big(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), false);
+        crate::widgets::big_toggle_with(ui, app, "showComments", "Show\nComments", "view.commentsPane", json!({"value": !shown}), shown);
     });
     group(ui, "Tracking", Some("review.trackingOptions"), app, |ui, app| {
         let on = app.session.doc.settings.track_changes;
-        let r = big(ui, app, "trackChanges", if on { "Track\nChanges ✓" } else { "Track\nChanges" }, "review.trackChanges", json!({}), false);
-        let _ = r;
+        // Drawn pressed while on, and a toggle to screen readers (#1012 review).
+        big_toggle(ui, app, "trackChanges", "Track\nChanges", "review.trackChanges", on);
         stack(ui, |ui| {
             menu_button(
                 ui,
@@ -1855,7 +1904,7 @@ fn developer(app: &mut WordApp, ui: &mut Ui) {
             }
         });
         stack(ui, |ui| {
-            small(ui, app, "designMode", Some("Design Mode"), "Design Mode", "developer.designMode", json!({}), design);
+            small_toggle(ui, app, "designMode", Some("Design Mode"), "Design Mode", "developer.designMode", json!({}), design);
             small(ui, app, "properties", Some("Properties"), "Properties", "developer.properties", json!({}), false);
         });
     });
@@ -1912,9 +1961,9 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
             small(ui, app, "zoomOut", Some("Zoom Out"), "Zoom Out", "view.zoomOut", json!({}), false);
         });
         stack(ui, |ui| {
-            small(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
-            small(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
-            small(ui, app, "pageWidth", Some("Page Width"), "Page Width", "view.pageWidth", json!({}), v.fit == "pageWidth");
+            small_toggle(ui, app, "onePage", Some("One Page"), "One Page", "view.onePage", json!({}), v.fit == "onePage");
+            small_toggle(ui, app, "multiplePages", Some("Multiple Pages"), "Multiple Pages", "view.multiplePages", json!({}), v.multi_page);
+            small_toggle(ui, app, "pageWidth", Some("Page Width"), "Page Width", "view.pageWidth", json!({}), v.fit == "pageWidth");
         });
     });
     group(ui, "Dark Mode", None, app, |ui, app| {
@@ -2024,7 +2073,7 @@ fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
             let idx = current.map_or(json!({}), |i| json!({"index": i}));
             small(ui, app, "promote", Some("Promote"), "Promote", "smartArt.promote", idx.clone(), false);
             small(ui, app, "demote", Some("Demote"), "Demote", "smartArt.demote", idx, false);
-            small(ui, app, "textPane", Some("Text Pane"), "Text Pane", "smartArt.textPane", json!({}), app.session.view.smart_art_pane);
+            small_toggle(ui, app, "textPane", Some("Text Pane"), "Text Pane", "smartArt.textPane", json!({}), app.session.view.smart_art_pane);
         });
     });
     group(ui, "Layouts", None, app, |ui, app| {
@@ -2042,6 +2091,7 @@ fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
                 };
                 ui.painter().rect(r, 3.0, fill, Stroke::new(1.0, if on { t.accent } else { t.border }), egui::StrokeKind::Inside);
                 crate::dialogs_smart_art::preview(ui.painter(), r.shrink(2.0), layout, g.colors, &theme, t.text_dim);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, tl!(layout.label())));
                 if resp.on_hover_text(tl!(layout.label())).clicked() && !on {
                     let _ = app.run("smartArt.layout", json!({"layout": layout.id()}));
                 }
@@ -2108,9 +2158,10 @@ fn chart_design(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             for (label, key, v0) in [("H:", "height", h0), ("W:", "width", w0)] {
                 crate::widgets::row(ui, |ui| {
-                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let label = ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(36.0..=2000.0).suffix(" pt"));
+                    crate::widgets::labelled_by(&r, &[&label]);
                     if r.changed() {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -2196,9 +2247,10 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
                 for (label, key, v0) in [("W:", "width", w0), ("H:", "height", h0)] {
-                    ui.label(egui::RichText::new(tl!(label)).small());
+                    let label = ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(4.0..=2000.0).suffix(" pt"));
+                    crate::widgets::labelled_by(&r, &[&label]);
                     if r.changed() {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -2240,7 +2292,7 @@ fn shape_text_group(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "textBoxUnlink", Some("Break Link"), "Break Link", "shape.breakLink", json!({}), false);
             } else {
                 let waiting = app.canvas.link_from.is_some();
-                small(ui, app, "textBoxLink", Some("Create Link"), "Create Link", "ui.linkTextBox", json!({}), waiting);
+                small_toggle(ui, app, "textBoxLink", Some("Create Link"), "Create Link", "ui.linkTextBox", json!({}), waiting);
             }
         });
     });
@@ -2324,6 +2376,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             let key = egui::Id::new(("picture_transparency", media, off));
             let mut v = ui.data(|d| d.get_temp::<f64>(key)).unwrap_or(0.0);
             let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(0.0..=100.0).suffix("%"));
+            r.ctx.accesskit_node_builder(r.id, |n| n.set_label(tl!("Picture transparency")));
             if r.changed() {
                 ui.data_mut(|d| d.insert_temp(key, v));
                 if r.dragged() && !r.drag_started() {
@@ -2373,18 +2426,20 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
         // `picture.size` locks the aspect ratio unless told otherwise, so one dimension suffices.
         stack(ui, |ui| {
             crate::widgets::row(ui, |ui| {
-                ui.label(egui::RichText::new(tl!("W:")).small());
+                let label = ui.label(egui::RichText::new(tl!("W:")).small());
                 let mut w = w0;
                 let r = ui.add(egui::DragValue::new(&mut w).speed(1.0).range(4.0..=2000.0).suffix(format!(" {}", tl!("pt"))));
+                crate::widgets::labelled_by(&r, &[&label]);
                 if r.changed() {
                     if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
                     }
                     let _ = app.run("picture.size", json!({"width": w}));
                 }
-                ui.label(egui::RichText::new(tl!("H:")).small());
+                let label = ui.label(egui::RichText::new(tl!("H:")).small());
                 let mut h = h0;
                 let r = ui.add(egui::DragValue::new(&mut h).speed(1.0).range(4.0..=2000.0).suffix(format!(" {}", tl!("pt"))));
+                crate::widgets::labelled_by(&r, &[&label]);
                 if r.changed() {
                     if r.dragged() && !r.drag_started() {
                         app.session.join_next_undo();
@@ -2396,11 +2451,12 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
                 let cropping = crate::crop::active(app).is_some();
-                small(ui, app, "crop", Some("Crop"), "Crop", "ui.crop", json!({}), cropping);
+                small_toggle(ui, app, "crop", Some("Crop"), "Crop", "ui.crop", json!({}), cropping);
                 for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
-                    ui.label(egui::RichText::new(tl!(side)).small());
+                    let label = ui.label(egui::RichText::new(tl!(side)).small());
                     let mut v = crop0[i] * 100.0;
                     let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=45.0).suffix("%"));
+                    crate::widgets::labelled_by(&r, &[&label]);
                     if r.changed() {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -2416,12 +2472,13 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
-                ui.label(egui::RichText::new(tl!("Alt:")).small());
+                let label = ui.label(egui::RichText::new(tl!("Alt:")).small());
                 // Frame-local buffers lose keystrokes; keep the draft in egui temp memory keyed
                 // by picture (same pattern as the comment editor in panes.rs).
                 let key = egui::Id::new(("picture_alt", media.clone(), off));
                 let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
                 let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
+                crate::widgets::labelled_by(&r, &[&label]);
                 if r.changed() {
                     ui.data_mut(|d| d.insert_temp(key, alt.clone()));
                 }
@@ -2477,7 +2534,9 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         egui::ScrollArea::horizontal().max_width(420.0).show(ui, |ui| {
             ui.horizontal(|ui| {
                 for (_, id, name) in styles {
-                    if crate::previews::table_style_tile(ui, app, &id).on_hover_text(name).clicked() {
+                    let tile = crate::previews::table_style_tile(ui, app, &id);
+                    crate::widgets::describe_button(&tile, &name, ui.is_enabled(), None);
+                    if tile.on_hover_text(name).clicked() {
                         let _ = app.run("table.style", json!({"style": id}));
                     }
                 }
@@ -2510,7 +2569,7 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
                     ui.close();
                 }
             });
-            split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
+            split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), None, None, |ui, app| {
                 mi(ui, app, "No Color", "table.shading", json!({"color": null}));
                 let theme = app.session.doc.settings.theme_colors.clone();
                 crate::colors::menu(ui, app, &theme, Target::cmd("table.shading").remember(Remember::Shading));
@@ -2571,9 +2630,10 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
     let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
         let mut out = None;
         crate::widgets::row(ui, |ui| {
-            ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
+            let label = ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
             let mut v = pt / k;
             let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2));
+            crate::widgets::labelled_by(&r, &[&label]);
             if r.changed() {
                 out = Some((v * k, r.dragged() && !r.drag_started()));
             }
@@ -2607,7 +2667,7 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "Select Table", "table.selectTable", json!({}));
             });
             let g = app.session.view.table_gridlines;
-            small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
+            small_toggle(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
         });
     });
@@ -2986,5 +3046,228 @@ mod tests {
         assert_eq!(resolve_tab("Picture Format", &["Home"]), "Home");
         assert_eq!(resolve_tab("Table Design", &["Home"]), "Home");
         assert_eq!(resolve_tab("Home", &["Home"]), "Home");
+    }
+
+    /// #1012: what a screen reader is told about the clickable things in `h`, as
+    /// `role "name"` lines, for the ones with no name or no real role.
+    fn unnamed_controls(h: &egui_kittest::Harness<'_, WordApp>, place: &str, within: impl Fn(Rect) -> bool) -> Vec<String> {
+        use egui::accesskit::{Action, Role};
+        use egui_kittest::kittest::{By, NodeT, Queryable};
+        h.query_all(By::new().predicate(|n| n.data().supports_action(Action::Click) && !n.is_hidden()))
+            .filter(|n| within(n.rect()))
+            .filter_map(|n| {
+                let node = n.accesskit_node();
+                let role = node.role();
+                // Static text (selectable, so clickable) isn't a control; a scroll bar is
+                // announced by its role.
+                let label = node.label().unwrap_or_default();
+                let unnamed = label.trim().is_empty() && !matches!(role, Role::ScrollBar | Role::Label);
+                (unnamed || matches!(role, Role::Unknown | Role::GenericContainer)).then(|| format!("{place}: {role:?} {label:?} at {:?}", n.rect()))
+            })
+            .collect()
+    }
+
+    /// One ribbon tab's groups, with the interface fonts installed.
+    fn tab_only(ui: &mut Ui, app: &mut WordApp) {
+        let ctx = ui.ctx().clone();
+        app.logic(&ctx);
+        // Fonts installed by `logic` take effect on the next frame.
+        if app.fonts_frames < 2 {
+            app.fonts_frames += 1;
+            return;
+        }
+        ui.horizontal_top(|ui| tab_content(app, ui));
+    }
+
+    /// #1012: every control on every built-in and contextual tab tells a screen reader its name
+    /// and what it is; a command that can't run says so, toggles say whether they're on, and
+    /// menu and split buttons say they open a menu.
+    #[test]
+    fn every_ribbon_control_has_a_name_role_and_state() {
+        use egui::accesskit::{HasPopup, Role, Toggled};
+        use egui_kittest::kittest::{By, NodeT, Queryable};
+        let tabs = TABS.iter().filter(|t| **t != "File").chain(wordcraft_engine::ribbon::CONTEXTUAL_TABS.iter()).chain(["Outlining"].iter());
+        let mut missing = Vec::new();
+        for tab in tabs {
+            let mut app = WordApp::new(Session::new(wordcraft_engine::sample::sample_document()), crate::Services::default());
+            if *tab == "Equation" {
+                app.run("insert.equation", json!({})).unwrap();
+            }
+            app.ui.tab = (*tab).to_string();
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+            h.run_steps(4);
+            missing.extend(unnamed_controls(&h, tab, |_| true));
+        }
+        assert!(missing.is_empty(), "ribbon controls a screen reader can't name: {missing:#?}");
+
+        // Outside a table, Merge Cells can't run, and says so.
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        app.ui.tab = "Table Layout".into();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+        h.run_steps(4);
+        assert!(h.get_by_label(tl!("Merge Cells")).accesskit_node().is_disabled(), "Merge Cells is disabled outside a table");
+
+        // Bold on, Italic off: both are toggles; Cut is a plain button.
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        app.run("select.all", json!({})).unwrap();
+        app.run("format.bold", json!({})).unwrap();
+        app.run("para.bullets", json!({})).unwrap();
+        app.ui.tab = "Home".into();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+        h.run_steps(4);
+        let toggled = |h: &egui_kittest::Harness<'_, WordApp>, name: &str| -> Option<Toggled> {
+            let nodes: Vec<Option<Toggled>> = h.query_all(By::new().role(Role::Button).label(name)).map(|n| n.accesskit_node().toggled()).collect();
+            *nodes.first().unwrap_or_else(|| panic!("{name} button"))
+        };
+        assert_eq!(toggled(&h, tl!("Bold")), Some(Toggled::True));
+        assert_eq!(toggled(&h, tl!("Italic")), Some(Toggled::False));
+        assert_eq!(toggled(&h, tl!("Cut")), None, "Cut is not a toggle");
+        // Underline and Bullets are split buttons: the button toggles, the arrow opens a menu.
+        let underline: Vec<_> = h.query_all(By::new().role(Role::Button).label(tl!("Underline"))).map(|n| n.accesskit_node()).collect();
+        assert!(underline.iter().any(|n| n.toggled() == Some(Toggled::False)), "Underline toggles");
+        assert!(underline.iter().any(|n| n.has_popup() == Some(HasPopup::Menu)), "Underline's arrow opens a menu");
+        let bullets: Vec<_> = h.query_all(By::new().role(Role::Button).label(tl!("Bullets"))).map(|n| n.accesskit_node()).collect();
+        assert!(bullets.iter().any(|n| n.toggled() == Some(Toggled::True)), "Bullets are on");
+        let paste: Vec<_> = h.query_all(By::new().role(Role::Button).label_contains(tl!("Paste"))).map(|n| n.accesskit_node()).collect();
+        assert!(paste.iter().any(|n| n.has_popup() == Some(HasPopup::Menu)), "Paste opens a menu");
+
+        // Review: Track Changes and Show Comments say whether they're on (#1012 review).
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        app.run("review.trackChanges", json!({"value": true})).unwrap();
+        app.run("view.commentsPane", json!({"value": true})).unwrap();
+        app.ui.tab = "Review".into();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+        h.run_steps(4);
+        assert_eq!(toggled(&h, tl!("Track Changes")), Some(Toggled::True), "Track Changes is on");
+        assert_eq!(toggled(&h, tl!("Show Comments")), Some(Toggled::True), "Show Comments is on");
+        h.state_mut().run("review.trackChanges", json!({"value": false})).unwrap();
+        h.run_steps(2);
+        assert_eq!(toggled(&h, tl!("Track Changes")), Some(Toggled::False), "Track Changes is off");
+
+        // Design: the style-set tiles are read by their display names, not their ids.
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        app.ui.tab = "Design".into();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(4000.0, 200.0)).build_ui_state(tab_only, app);
+        h.run_steps(4);
+        for (id, label) in crate::previews::STYLE_SET_LABELS {
+            assert!(h.query(By::new().role(Role::Button).label(id)).is_none(), "{id}: not read out by its id");
+            assert!(h.query(By::new().role(Role::Button).label(tl!(label))).is_some(), "{label}: a style-set tile");
+        }
+    }
+
+    fn app_harness(app: WordApp) -> egui_kittest::Harness<'static, WordApp> {
+        egui_kittest::Harness::builder().with_size(vec2(1600.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        )
+    }
+
+    /// #1012: the tab strip is a tab list: each tab is a Tab named as shown, and exactly one,
+    /// the active one, is selected. The Quick Access Toolbar's buttons are named too.
+    #[test]
+    fn ribbon_tabs_are_a_tab_list_with_one_selected() {
+        use egui::accesskit::{HasPopup, Role};
+        use egui_kittest::kittest::{By, NodeT, Queryable};
+        let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+        h.run_steps(3);
+        let selected = |h: &egui_kittest::Harness<'_, WordApp>| -> Vec<String> {
+            h.query_all(By::new().role(Role::Tab))
+                .filter(|n| n.accesskit_node().is_selected() == Some(true))
+                .filter_map(|n| n.accesskit_node().label())
+                .collect()
+        };
+        let tabs: Vec<_> = h.query_all(By::new().role(Role::Tab)).collect();
+        assert!(tabs.len() >= 10, "every tab is a Tab: {}", tabs.len());
+        for tab in &tabs {
+            let node = tab.accesskit_node();
+            assert!(!node.label().unwrap_or_default().is_empty(), "named");
+            assert_eq!(node.parent().map(|p| p.role()), Some(Role::TabList), "inside a tab list");
+            assert!(node.toggled().is_none(), "a tab is selected, not pressed");
+        }
+        assert_eq!(selected(&h), [tl!("Home")]);
+        // The title bar and the tab strip, above the Home tab's bottom edge: all named.
+        let strip_bottom = h.get(By::new().role(Role::Tab).label(tl!("Home"))).rect().bottom();
+        let chrome = unnamed_controls(&h, "title bar and tabs", |r| r.bottom() <= strip_bottom + 0.5);
+        assert!(chrome.is_empty(), "unnamed title bar or tab strip controls: {chrome:#?}");
+        h.get(By::new().role(Role::Tab).label(tl!("Insert"))).click();
+        h.run_steps(2);
+        assert_eq!(selected(&h), [tl!("Insert")]);
+
+        // Quick Access Toolbar: Save is named; Undo has nothing to undo and says so.
+        assert!(h.query(By::new().role(Role::Button).label(tl!("Save"))).is_some(), "Save button named");
+        let undo: Vec<_> = h.query_all(By::new().role(Role::Button).label_contains(tl!("Undo"))).map(|n| n.accesskit_node()).collect();
+        assert!(!undo.is_empty() && undo.iter().all(|n| n.is_disabled()), "Undo is disabled on a fresh document");
+        let more = h.get(By::new().role(Role::Button).label(tl!("Customize Quick Access Toolbar")));
+        assert_eq!(more.accesskit_node().has_popup(), Some(HasPopup::Menu));
+    }
+
+    /// #1012: keytips move the keyboard focus a screen reader follows, and expose their letters
+    /// as access keys: F10 focuses the active tab, H the first Home command, Escape steps back a
+    /// level, and leaving keytips gives the keyboard back to the document.
+    #[test]
+    fn keytips_move_focus_and_expose_their_letters() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{By, NodeT, Queryable};
+        let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+        h.run_steps(3);
+        let focused = |h: &egui_kittest::Harness<'_, WordApp>| -> (Role, String, Option<String>) {
+            let n = h.query(By::new().predicate(|n| n.is_focused())).expect("something has the keyboard focus");
+            let node = n.accesskit_node();
+            (node.role(), node.label().unwrap_or_default(), node.data().access_key().map(str::to_string))
+        };
+        assert_eq!(focused(&h).0, Role::Document, "the page starts with the keyboard");
+
+        h.key_press(egui::Key::F10);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs);
+        assert_eq!(focused(&h), (Role::Tab, tl!("Home").to_string(), Some("H".to_string())), "F10 focuses the active tab");
+        let insert = h.get(By::new().role(Role::Tab).label(tl!("Insert")));
+        assert_eq!(insert.accesskit_node().data().access_key(), Some("N"), "tabs expose their letters");
+        let save = h.get(By::new().role(Role::Button).label(tl!("Save")));
+        assert_eq!(save.accesskit_node().data().access_key(), Some("1"), "toolbar buttons expose their numbers");
+
+        h.key_press(egui::Key::H);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Commands);
+        let first_letter = crate::keytips::letter_for(h.state(), 0);
+        let (role, name, key) = focused(&h);
+        assert_eq!(role, Role::Button);
+        assert!(name.starts_with(tl!("Paste")), "the first Home command has the focus: {name}");
+        assert_eq!(key, Some(first_letter), "and exposes its keytip");
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Tabs, "Escape steps back to the tabs");
+        assert_eq!(focused(&h).0, Role::Tab);
+        assert_eq!(focused(&h).1, tl!("Home"));
+
+        h.key_press(egui::Key::Escape);
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
+        assert_eq!(focused(&h).0, Role::Document, "leaving keytips gives the page the keyboard back");
+        assert!(h.query(By::new().role(Role::Tab).predicate(|n| n.data().access_key().is_some())).is_none(), "no letters once keytips are off");
+    }
+
+    /// #1012: keytips that end because the window lost focus give the keyboard back to the page,
+    /// so typing works when the window comes back.
+    #[test]
+    fn keytips_cut_short_give_the_page_the_keyboard_back() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{By, Queryable};
+        let mut h = app_harness(WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default()));
+        h.run_steps(3);
+        h.key_press(egui::Key::F10);
+        h.run_steps(3);
+        assert!(h.query(By::new().role(Role::Tab).predicate(|n| n.is_focused())).is_some(), "the active tab has the focus");
+        h.input_mut().focused = false;
+        h.run_steps(2);
+        h.input_mut().focused = true;
+        h.run_steps(3);
+        assert_eq!(h.state().ui.keytips, crate::keytips::Phase::Off);
+        assert!(h.query(By::new().role(Role::Document).predicate(|n| n.is_focused())).is_some(), "the page has the keyboard again");
     }
 }

@@ -2628,3 +2628,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	More Tabs	További lapok
+	Picture transparency	Kép átlátszósága
+	Previous Styles	Előző stílusok
+	Next Styles	Következő stílusok
+	Style set: {name}	Stíluskészlet: {name}
+	Basic	Alap
+	Lined	Vonalas
+	Shaded	Árnyékolt
+	Casual	Laza
+	Minimalist	Minimalista

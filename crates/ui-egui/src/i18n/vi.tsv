@@ -2672,3 +2672,13 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+	More Tabs	Thêm tab
+	Picture transparency	Độ trong suốt của ảnh
+	Previous Styles	Kiểu trước
+	Next Styles	Kiểu tiếp theo
+	Style set: {name}	Bộ kiểu: {name}
+	Basic	Cơ bản
+	Lined	Có đường kẻ
+	Shaded	Tô bóng
+	Casual	Thoải mái
+	Minimalist	Tối giản

@@ -2630,3 +2630,13 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	More Tabs	Другие вкладки
+	Picture transparency	Прозрачность рисунка
+	Previous Styles	Предыдущие стили
+	Next Styles	Следующие стили
+	Style set: {name}	Набор стилей: {name}
+	Basic	Простой
+	Lined	С линиями
+	Shaded	Затенённый
+	Casual	Неформальный
+	Minimalist	Минималистичный

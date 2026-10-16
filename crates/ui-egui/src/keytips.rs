@@ -20,6 +20,65 @@ pub fn letters_id() -> egui::Id {
 pub fn rects_id() -> egui::Id {
     egui::Id::new("wc_keytips_rects")
 }
+/// The phase whose first control still has to take the keyboard focus (#1012).
+fn focus_pending_id() -> egui::Id {
+    egui::Id::new("wc_keytips_focus_pending")
+}
+/// The ribbon control keytips gave the keyboard focus to.
+fn focused_id() -> egui::Id {
+    egui::Id::new("wc_keytips_focused")
+}
+
+/// Keytips move the keyboard focus (what screen readers follow) as they go (#1012): Alt or F10
+/// focuses the active tab, choosing a tab its first command. `resp` takes the focus when keytips
+/// are waiting to focus a control of `phase`.
+pub fn take_focus(ctx: &egui::Context, resp: &egui::Response, phase: Phase) {
+    // While keytips hold the focus here, Tab and the arrows are theirs: egui reads them before
+    // the keytips do and would otherwise move the focus to some other widget, which keeps it
+    // once keytips give the keyboard back to the page (#1012 review).
+    if keytip_focus(ctx) == Some(resp.id) {
+        let lock = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
+        ctx.memory_mut(|m| m.set_focus_lock_filter(resp.id, lock));
+    }
+    if ctx.data(|d| d.get_temp::<Phase>(focus_pending_id())) != Some(phase) {
+        return;
+    }
+    resp.request_focus();
+    ctx.data_mut(|d| {
+        d.remove::<Phase>(focus_pending_id());
+        d.insert_temp(focused_id(), resp.id);
+    });
+}
+
+/// The ribbon control keytips focused, while it keeps the focus.
+fn keytip_focus(ctx: &egui::Context) -> Option<egui::Id> {
+    let id = ctx.data(|d| d.get_temp::<egui::Id>(focused_id()))?;
+    ctx.memory(|m| m.has_focus(id)).then_some(id)
+}
+
+/// Keytips ended: the document gets the keyboard back, unless something else (a dialog, the
+/// Backstage, a text field) took it meanwhile.
+fn release_focus(app: &mut WordApp, ctx: &egui::Context) {
+    ctx.data_mut(|d| d.remove::<Phase>(focus_pending_id()));
+    let Some(id) = ctx.data_mut(|d| {
+        let id = d.get_temp::<egui::Id>(focused_id());
+        d.remove::<egui::Id>(focused_id());
+        id
+    }) else {
+        return;
+    };
+    if !ctx.memory(|m| m.has_focus(id) || m.focused().is_none()) {
+        return;
+    }
+    if app.dialog.is_some() || app.ui.backstage {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+        return;
+    }
+    app.canvas.want_focus = true;
+    if let Some(canvas) = app.canvas.widget_id {
+        ctx.memory_mut(|m| m.request_focus(canvas));
+    }
+}
 
 /// A bare Alt press (either Alt key) arms or cancels keytips.
 fn is_alt(key: egui::Key) -> bool {
@@ -519,8 +578,9 @@ pub fn control_count(tab: &str) -> usize {
 pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
     if app.ui.keytips != Phase::Off {
         match key {
+            // Escape steps back a level: from a tab's commands to the tabs, then out.
             egui::Key::Escape => {
-                app.ui.keytips = Phase::Off;
+                app.ui.keytips = if app.ui.keytips == Phase::Commands { Phase::Tabs } else { Phase::Off };
             }
             k if is_alt(k) => {
                 app.ui.keytips = if app.ui.keytips == Phase::Tabs { Phase::Off } else { Phase::Tabs };
@@ -635,9 +695,12 @@ use crate::keys;
 
 /// Keytips are suppressed while the Backstage or a modal dialog is open, or while a text field
 /// (not the canvas) has focus; the canvas lets Alt open keytips and `canvas_events` swallows
-/// typing while they show.
+/// typing while they show. The ribbon control keytips focused themselves doesn't count.
 pub fn suppressed(app: &WordApp, ctx: &egui::Context) -> bool {
-    !app.ui.keytips_enabled || app.ui.backstage || app.dialog.is_some() || (ctx.egui_wants_keyboard_input() && !app.canvas.focused)
+    !app.ui.keytips_enabled
+        || app.ui.backstage
+        || app.dialog.is_some()
+        || (ctx.egui_wants_keyboard_input() && !app.canvas.focused && keytip_focus(ctx).is_none())
 }
 
 /// Native backends report Alt through both key and modifier events, in either order. Track
@@ -666,6 +729,9 @@ fn alt_transition(app: &mut WordApp, pressed: bool, modifiers: egui::Modifiers) 
 /// characters there and hijacking it would swallow the next letter.
 pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
     if suppressed(app, ctx) || !ctx.input(|i| i.focused) {
+        // A ribbon control keytips focused hands the keyboard back to the page (the window
+        // lost focus, say), or typing would go nowhere when it comes back.
+        release_focus(app, ctx);
         app.ui.keytips = Phase::Off;
         app.ui.keytip_prefix.clear();
         app.ui.alt_pressed = false;
@@ -674,9 +740,12 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
         ctx.data_mut(|d| {
             d.insert_temp(phase_id(), Phase::Off);
             d.remove::<Vec<(Rect, String)>>(rects_id());
+            d.remove::<Phase>(focus_pending_id());
+            d.remove::<egui::Id>(focused_id());
         });
         return;
     }
+    let before = app.ui.keytips;
     // On macOS Option+key types accents, so Alt must never arm keytips there.
     const ALT_ARMS: bool = !cfg!(target_os = "macos");
     let events: Vec<egui::Event> = ctx.input(|i| i.events.clone());
@@ -743,6 +812,14 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
     }
     if app.ui.keytips == Phase::Off {
         app.ui.keytip_prefix.clear();
+    }
+    // The keyboard focus follows the keytips (#1012).
+    match app.ui.keytips {
+        now if now == before => {}
+        Phase::Off => release_focus(app, ctx),
+        now => ctx.data_mut(|d| {
+            d.insert_temp(focus_pending_id(), now);
+        }),
     }
     // Publish the state the ribbon widgets read to place their badges, and clear last frame's.
     ctx.data_mut(|d| {
@@ -1186,5 +1263,41 @@ mod tests {
         assert!(handle_key(&mut a, egui::Key::Q));
         assert_eq!(a.ui.keytips, Phase::Off);
         assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::Commands { .. })), "{:?}", a.dialog.as_ref().map(|d| d.name()));
+    }
+
+    /// #1012 review: choosing a tab focuses its first command, but never a text field (a combo's
+    /// box would start editing): the first button after it takes the focus.
+    #[test]
+    fn commands_focus_skips_a_text_field() {
+        use egui_kittest::kittest::{By, Queryable};
+        let mut h = egui_kittest::Harness::builder().build_ui_state(
+            |ui, app: &mut WordApp| {
+                if app.fonts_frames < 2 {
+                    if app.fonts_frames == 0 {
+                        crate::theme::install_fonts(ui.ctx());
+                    }
+                    app.fonts_frames += 1;
+                    return;
+                }
+                ui.ctx().data_mut(|d| {
+                    d.insert_temp(phase_id(), Phase::Commands);
+                    d.insert_temp(tab_id(), "Home".to_string());
+                    d.insert_temp(letters_id().with("Home"), vec!["V".to_string(), "X".to_string()]);
+                    d.insert_temp(rects_id(), Vec::<(Rect, String)>::new());
+                });
+                // A combo whose name matches Home's first control, then Cut.
+                let _ = crate::widgets::combo(ui, "Paste", 100.0, "", &[], None);
+                crate::widgets::small(ui, app, "cut", None, "Cut", "edit.cut", serde_json::json!({}), false);
+            },
+            app(),
+        );
+        h.run_steps(3);
+        h.ctx.data_mut(|d| d.insert_temp(focus_pending_id(), Phase::Commands));
+        h.run_steps(2);
+        assert!(h.query(By::new().role(egui::accesskit::Role::TextInput).predicate(|n| n.is_focused())).is_none(), "the box isn't editing");
+        assert!(
+            h.query(By::new().role(egui::accesskit::Role::Button).label("Cut").predicate(|n| n.is_focused())).is_some(),
+            "the first button has the focus"
+        );
     }
 }

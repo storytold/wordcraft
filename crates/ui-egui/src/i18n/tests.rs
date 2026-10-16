@@ -1551,3 +1551,20 @@ fn bundled_interface_fonts_cover_vietnamese_letters() {
     }
     assert!(!lang("vi").uses_cjk());
 }
+
+/// #1012: the names screen readers hear for drawn ribbon controls are translated too (the
+/// pseudo-language audit only sees drawn text).
+#[test]
+fn screen_reader_names_are_translated() {
+    let names = ["More Tabs", "Picture transparency", "Previous Styles", "Next Styles", "Style set: {name}"];
+    let sets = crate::previews::STYLE_SET_LABELS.iter().map(|(_, label)| *label);
+    let mut missing = Vec::new();
+    for l in Lang::all().filter(|l| *l != Lang::EN) {
+        for s in names.iter().copied().chain(sets.clone()) {
+            if !has(l, s) {
+                missing.push(format!("{}: {s:?}", l.code()));
+            }
+        }
+    }
+    assert!(missing.is_empty(), "untranslated: {missing:#?}");
+}

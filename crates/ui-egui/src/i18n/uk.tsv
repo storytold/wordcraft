@@ -2245,3 +2245,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+	More Tabs	Інші вкладки
+	Picture transparency	Прозорість рисунка
+	Previous Styles	Попередні стилі
+	Next Styles	Наступні стилі
+	Style set: {name}	Набір стилів: {name}
+	Basic	Базовий
+	Lined	З лініями
+	Shaded	Затінений
+	Casual	Невимушений
+	Minimalist	Мінімалістичний

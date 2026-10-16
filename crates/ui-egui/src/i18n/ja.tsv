@@ -2233,3 +2233,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+	More Tabs	その他のタブ
+	Picture transparency	画像の透明度
+	Previous Styles	前のスタイル
+	Next Styles	次のスタイル
+	Style set: {name}	スタイル セット: {name}
+	Basic	ベーシック
+	Lined	罫線付き
+	Shaded	網かけ
+	Casual	カジュアル
+	Minimalist	ミニマル

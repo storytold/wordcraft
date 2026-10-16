@@ -241,28 +241,28 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
     });
 
     row(ui, app, &|ui, app| {
-        widgets::small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
-        widgets::small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
-        widgets::small(ui, app, "underline", None, "Underline", "format.underline", json!({}), flag("underline"));
-        widgets::small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
+        widgets::small_toggle(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
+        widgets::small_toggle(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
+        widgets::small_toggle(ui, app, "underline", None, "Underline", "format.underline", json!({}), flag("underline"));
+        widgets::small_toggle(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
         sep(ui, t);
 
         let hl = app.canvas.last_highlight.clone();
-        widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
+        widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), None, None, |ui, app| {
             highlight_menu(ui, app);
         });
         let fc = app.canvas.last_font_color.clone();
         let sw = wordcraft_doc::Rgb::parse(&fc).map(crate::theme::c32);
-        widgets::split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), false, sw, |ui, app| {
+        widgets::split(ui, app, "fontcolor", "Font Color", "format.color", json!({"color": fc}), None, sw, |ui, app| {
             font_color_menu(ui, app);
         });
         sep(ui, t);
 
         use wordcraft_doc::Align as A;
-        widgets::small(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
-        widgets::small(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
-        widgets::small(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
-        widgets::small(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
+        widgets::small_toggle(ui, app, "alignLeft", None, "Align Left", "para.alignLeft", json!({}), align == A::Left);
+        widgets::small_toggle(ui, app, "alignCenter", None, "Center", "para.alignCenter", json!({}), align == A::Center);
+        widgets::small_toggle(ui, app, "alignRight", None, "Align Right", "para.alignRight", json!({}), align == A::Right);
+        widgets::small_toggle(ui, app, "justify", None, "Justify", "para.justify", json!({}), align == A::Justify);
     });
 }
 

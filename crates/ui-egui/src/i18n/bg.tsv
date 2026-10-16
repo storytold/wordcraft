@@ -2621,3 +2621,13 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	More Tabs	Още раздели
+	Picture transparency	Прозрачност на картината
+	Previous Styles	Предишни стилове
+	Next Styles	Следващи стилове
+	Style set: {name}	Набор стилове: {name}
+	Basic	Основен
+	Lined	С линии
+	Shaded	Засенчен
+	Casual	Неофициален
+	Minimalist	Минималистичен
