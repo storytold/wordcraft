@@ -2641,3 +2641,5 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+	Spike	Raccoglitore
+	Insert Spike	Inserisci raccoglitore

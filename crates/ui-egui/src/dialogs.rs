@@ -3810,7 +3810,9 @@ mod tests {
             ("tr", "İTALİK", "İtalik   —   Giriş › Yazı Tipi"),
             ("tr", "içindekiler", "İçindekiler Tablosu   —   Başvurular › İçindekiler Tablosu"),
             ("tr", "YAZI TİPİ", "İtalik   —   Giriş › Yazı Tipi"),
-            ("tr", "INSERT", "Tablo   —   Ekle › Tablolar"),
+            // Dozens of commands match a lone INSERT and the box shows 14, in registry order: the
+            // witness is an early one; Table is checked below, past the box's limit.
+            ("tr", "INSERT", "Bölünemez Boşluk   —   Ekle › Semboller"),
             ("tr", "INSERT.TABLE", "Tablo   —   Ekle › Tablolar"),
             ("tr", "FORMAT.ITALIC", "İtalik   —   Giriş › Yazı Tipi"),
             ("tr", "TABLE OF CONTENTS", "İçindekiler Tablosu   —   Başvurular › İçindekiler Tablosu"),
@@ -3829,6 +3831,9 @@ mod tests {
             assert_eq!(crate::i18n::lowercase("Iİıi"), if language == "tr" { "ıiıi" } else { "ii\u{307}ıi" });
         }
         assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), before, "search does not change the document");
+        crate::i18n::set_current(crate::i18n::Lang::from_pref("tr"));
+        let reg = h.state().session.registry.clone();
+        assert!(command_matches(reg.get("insert.table").unwrap(), "INSERT"), "tr: INSERT finds Table");
         crate::i18n::set_current(crate::i18n::Lang::EN);
     }
 

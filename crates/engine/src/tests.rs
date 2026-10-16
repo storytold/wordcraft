@@ -163,6 +163,11 @@ fn word_default_shortcuts_resolve() {
         assert_eq!(id("Alt+F1"), Some("fields.next"));
     }
     assert_eq!(id("Mod+PageUp"), Some("edit.findPrevious"));
+    // The Spike: Word's Ctrl+F3 and Ctrl+Shift+F3 (⌘F3 and ⌘⇧F3 in Word for Mac).
+    assert_eq!(id("Mod+F3"), Some("edit.spike"));
+    assert_eq!(id("Mod+Shift+F3"), Some("edit.insertSpike"));
+    assert_eq!(id("F3"), Some("edit.findNext"));
+    assert_eq!(id("Shift+F3"), Some("format.changeCase"));
     assert_eq!(id("F12"), Some("file.saveAs"));
     assert_eq!(id("Mod+Alt+M"), Some("review.newComment"));
     assert_eq!(id("Mod+H"), Some("edit.findReplace"));
@@ -1287,6 +1292,102 @@ fn clipboard_pane_collects_copies_and_pastes_one_undoably() {
     run(&mut s, "edit.clearClipboard", json!({}));
     assert!(s.clip_history.is_empty());
     assert!(s.run("edit.pasteClipboardItem", &json!({"index": 0})).is_err());
+}
+
+fn spiked(s: &Session) -> Option<String> {
+    s.building_blocks.get("Spike").map(|f| f.plain_text())
+}
+
+#[test]
+fn spike_collects_cuts_and_insert_spike_pastes_them_and_empties_it() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha beta gamma.\n"));
+    run(&mut s, "select.text", json!({"text": "beta"}));
+    run(&mut s, "edit.copy", json!({}));
+    run(&mut s, "select.text", json!({"text": "Alpha"}));
+    run(&mut s, "edit.spike", json!({}));
+    run(&mut s, "select.text", json!({"text": "gamma"}));
+    run(&mut s, "edit.spike", json!({}));
+    assert_eq!(text(&s), " beta .\n", "Ctrl+F3 cuts");
+    assert_eq!(spiked(&s).as_deref(), Some("Alpha\ngamma\n"), "each piece is followed by a paragraph mark");
+    assert_eq!((s.clipboard_text.as_str(), s.clip_history.len()), ("beta", 1), "the clipboard is left alone");
+    // Ctrl+Shift+F3 on the empty last paragraph: everything, in the order it was collected.
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.insertSpike", json!({}));
+    assert_eq!(text(&s), " beta .\nAlpha\ngamma\n");
+    assert_eq!(spiked(&s), None, "Ctrl+Shift+F3 empties the Spike");
+    assert!(matches!(s.run("edit.insertSpike", &json!({})), Err(crate::CmdError::Disabled(_))));
+}
+
+#[test]
+fn spike_keeps_character_formatting() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Bold plain\n"));
+    run(&mut s, "select.text", json!({"text": "Bold"}));
+    run(&mut s, "format.bold", json!({}));
+    run(&mut s, "edit.spike", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "edit.insertSpike", json!({}));
+    assert_eq!(text(&s), " plain\nBold\n");
+    let p = s.doc.para_at(&Pos::body(1, 0)).unwrap();
+    assert_eq!(p.props_of_char(0).bold, Some(true));
+}
+
+#[test]
+fn spike_and_insert_spike_are_one_undo_step_each() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("one two\n"));
+    run(&mut s, "select.text", json!({"text": "one"}));
+    run(&mut s, "edit.spike", json!({}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "one two\n");
+    assert_eq!(spiked(&s).as_deref(), Some("one\n"), "like Cut and the clipboard, undo leaves the Spike as it is");
+    run(&mut s, "caret.docEnd", json!({}));
+    let before = text(&s);
+    run(&mut s, "edit.insertSpike", json!({}));
+    assert_eq!(text(&s), "one two\none\n");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), before);
+}
+
+#[test]
+fn spike_needs_a_selection() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("one two"));
+    let r = s.run("edit.spike", &json!({}));
+    assert!(matches!(r, Err(crate::CmdError::Disabled(_))), "{r:?}");
+    assert_eq!(spiked(&s), None);
+    assert_eq!(text(&s), "one two");
+}
+
+#[test]
+fn autotext_inserts_the_spike_without_emptying_it() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Alpha beta\n"));
+    run(&mut s, "select.text", json!({"text": "Alpha"}));
+    run(&mut s, "edit.spike", json!({}));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.autoText", json!({"insert": "Spike"}));
+    run(&mut s, "insert.autoText", json!({"insert": "Spike"}));
+    assert_eq!(text(&s), " beta\nAlpha\nAlpha\n");
+    assert_eq!(spiked(&s).as_deref(), Some("Alpha\n"));
+}
+
+#[test]
+fn spike_outside_the_editable_regions_changes_nothing() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Locked intro.\nFill in here.\n"));
+    run(&mut s, "select.text", json!({"text": "Fill in here."}));
+    run(&mut s, "review.restrict", json!({"exception": "add"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    // Collected inside the exception: allowed.
+    run(&mut s, "select.text", json!({"text": "here"}));
+    run(&mut s, "edit.spike", json!({}));
+    assert_eq!(spiked(&s).as_deref(), Some("here\n"));
+    // Outside it: refused, and neither the document nor the Spike changes.
+    let before = text(&s);
+    run(&mut s, "select.text", json!({"text": "intro"}));
+    assert!(s.run("edit.spike", &json!({})).is_err());
+    assert_eq!(text(&s), before);
+    assert_eq!(spiked(&s).as_deref(), Some("here\n"));
+    // Inserting outside it: refused, and the Spike keeps what it holds.
+    assert!(s.run("edit.insertSpike", &json!({})).is_err());
+    assert_eq!(text(&s), before);
+    assert_eq!(spiked(&s).as_deref(), Some("here\n"));
 }
 
 #[test]

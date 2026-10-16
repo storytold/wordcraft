@@ -2245,3 +2245,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+	Spike	Накопичувач
+	Insert Spike	Вставити з накопичувача

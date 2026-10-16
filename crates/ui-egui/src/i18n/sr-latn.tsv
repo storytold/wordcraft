@@ -2243,3 +2243,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+	Spike	Sakupljač
+	Insert Spike	Umetni iz sakupljača

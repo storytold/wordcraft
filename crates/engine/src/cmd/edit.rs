@@ -61,6 +61,18 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
         CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
+        // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
+        // Parts and AutoText insert it without emptying it, as in Word.
+        CommandSpec::new("edit.spike", "Spike", "Editing", spike).key("Mod+F3").when(has_sel),
+        CommandSpec::new("edit.insertSpike", "Insert Spike", "Editing", insert_spike).key("Mod+Shift+F3").when(|s| {
+            if s.math.is_some() {
+                Some("leave the equation first")
+            } else if s.building_blocks.contains_key(SPIKE) {
+                None
+            } else {
+                Some("the Spike is empty")
+            }
+        }),
         CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
@@ -184,6 +196,34 @@ fn cut(s: &mut Session, v: &Value) -> CmdResult {
     }
     super::controls::restore_placeholder(s)?;
     Ok(r)
+}
+
+/// The AutoText entry the Spike collects into.
+const SPIKE: &str = "Spike";
+
+/// Ctrl+F3: cut the selection to the end of the Spike. The clipboard is left alone.
+fn spike(s: &mut Session, _: &Value) -> CmdResult {
+    let (a, b) = s.sel.ordered();
+    // Column selection collapses the selection before the command runs.
+    if a == b {
+        return Err(CmdError::Disabled("edit.spike: nothing is selected".into()));
+    }
+    let piece = s.doc.copy_range(&a, &b);
+    if piece.blocks.is_empty() {
+        return Err(CmdError::Disabled("edit.spike: this selection can't be collected".into()));
+    }
+    delete_selection(s)?;
+    super::controls::restore_placeholder(s)?;
+    s.building_blocks.entry(SPIKE.to_string()).or_default().append_piece(piece);
+    sel_result(s)
+}
+
+/// Ctrl+Shift+F3: insert everything the Spike collected, in order, and empty it.
+fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
+    let frag = s.building_blocks.get(SPIKE).cloned().ok_or_else(|| CmdError::Disabled("edit.insertSpike: the Spike is empty".into()))?;
+    super::paste::insert(s, frag)?;
+    s.building_blocks.remove(SPIKE);
+    sel_result(s)
 }
 
 /// Paste keeps the source formatting: our own copy while the system clipboard still holds it,

@@ -2599,3 +2599,5 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+	Spike	Acumulador
+	Insert Spike	Insertar acumulador

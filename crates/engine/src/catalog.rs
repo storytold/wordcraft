@@ -482,6 +482,8 @@ Editing|Keyboard|Move Paragraph Down|para.moveDown
 Editing|Keyboard|Promote|para.promote
 Editing|Keyboard|Demote|para.demote
 Editing|Keyboard|Toggle Unicode Character|text.toggleUnicode
+Editing|Keyboard|Spike|edit.spike
+Editing|Keyboard|Insert Spike|edit.insertSpike
 Editing|Navigation|Word Left|caret.wordLeft
 Editing|Navigation|Word Right|caret.wordRight
 Editing|Navigation|Line Start|caret.home

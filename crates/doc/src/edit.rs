@@ -45,6 +45,51 @@ impl Fragment {
     pub fn clipboard_text(&self) -> String {
         self.to_document().shown_text(crate::StoryRef::Body)
     }
+    /// Add `piece` at the end, followed by a paragraph mark unless it already ends with one: how
+    /// Word's Spike collects what it cuts. The piece's text box stories get ids after this
+    /// fragment's, so pieces copied from different documents (or after an id was freed and reused)
+    /// never share one.
+    pub fn append_piece(&mut self, mut piece: Fragment) {
+        let Some(last) = piece.blocks.last() else { return };
+        let ends_with_mark = piece.blocks.len() >= 2 && matches!(last, Block::Para(p) if p.is_empty());
+        if !ends_with_mark {
+            let mut mark = Paragraph::new();
+            if let Block::Para(p) = last {
+                mark.props = p.props.clone();
+            }
+            piece.blocks.push(Block::Para(mark));
+        }
+        let next = self.parts.keys().next_back().map_or(1, |k| k.saturating_add(1));
+        let ids: BTreeMap<u32, u32> = piece.parts.keys().zip(next..=u32::MAX).map(|(old, new)| (*old, new)).collect();
+        let renumber = |b: &mut Block| {
+            each_para_mut(b, 0, &mut |p| {
+                let mut changed = false;
+                for o in p.objects.iter_mut() {
+                    for slot in o.text_box_slots() {
+                        if let Some(new) = slot.and_then(|old| ids.get(&old)) {
+                            *slot = Some(*new);
+                            changed = true;
+                        }
+                    }
+                }
+                if changed {
+                    p.touch();
+                }
+            })
+        };
+        piece.blocks.iter_mut().for_each(renumber);
+        for (old, mut part) in std::mem::take(&mut piece.parts) {
+            part.blocks.iter_mut().map(Arc::make_mut).for_each(renumber);
+            if let Some(new) = ids.get(&old) {
+                self.parts.insert(*new, part);
+            }
+        }
+        // The empty paragraph after the last mark is where the next piece starts.
+        if self.blocks.len() >= 2 && matches!(self.blocks.last(), Some(Block::Para(p)) if p.is_empty()) {
+            self.blocks.pop();
+        }
+        self.blocks.append(&mut piece.blocks);
+    }
     pub fn from_text(s: &str) -> Fragment {
         let lines: Vec<&str> = s.split('\n').collect();
         Fragment {
@@ -912,6 +957,42 @@ mod tests {
         assert_eq!(d.para(StoryRef::Body, &Path::top(0)).unwrap().text, "be");
         assert!(d.container(StoryRef::Body, &Path(vec![1, 0, 0, 0])).is_some());
         assert_eq!(Path(vec![1, 0, 1, 0]).cell(), Some((Path::top(1), 0, 1)));
+    }
+
+    fn para(text: &str) -> Block {
+        Block::Para(Paragraph::with_text(text, CharProps::default()))
+    }
+
+    #[test]
+    fn appended_pieces_are_each_followed_by_one_paragraph_mark() {
+        let mut spike = Fragment::default();
+        spike.append_piece(Fragment { blocks: vec![para("a")], ..Default::default() });
+        spike.append_piece(Fragment { blocks: vec![para("b")], ..Default::default() });
+        assert_eq!(spike.plain_text(), "a\nb\n");
+        // A piece that already ends with its paragraph mark gets no second one.
+        let mut spike = Fragment::default();
+        spike.append_piece(Fragment { blocks: vec![para("a"), para("")], ..Default::default() });
+        assert_eq!(spike.plain_text(), "a\n");
+        spike.append_piece(Fragment { blocks: vec![para("b"), para("c")], ..Default::default() });
+        assert_eq!(spike.plain_text(), "a\nb\nc\n");
+    }
+
+    #[test]
+    fn appended_pieces_keep_their_own_text_boxes() {
+        // Two documents give their first text box the same id.
+        let mut one = doc(&["x"]);
+        let id1 = text_box(&mut one, &Pos::body(0, 1), "One");
+        let mut two = doc(&["y"]);
+        let id2 = text_box(&mut two, &Pos::body(0, 1), "Two");
+        assert_eq!(id1, id2);
+        let mut spike = Fragment::default();
+        spike.append_piece(one.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3)));
+        spike.append_piece(two.copy_range(&Pos::body(0, 0), &Pos::body(0, 1 + 3)));
+        let mut dst = doc(&[""]);
+        dst.insert_fragment(&Pos::body(0, 0), &spike).unwrap();
+        let texts: Vec<String> =
+            [0, 1].iter().flat_map(|i| boxes_in(&dst, &Path::top(*i))).map(|b| dst.plain_text(StoryRef::Part(b.unwrap()))).collect();
+        assert_eq!(texts, ["One", "Two"]);
     }
 
     #[test]

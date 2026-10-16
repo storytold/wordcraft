@@ -2245,3 +2245,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	Spike	图文场
+	Insert Spike	插入图文场

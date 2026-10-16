@@ -1173,6 +1173,8 @@ impl Session {
         }
         // Restrict Editing: refused outright, or allowed as long as it only edits the exceptions.
         let guard = if spec.mutates { crate::cmd::protect::check_before(self, id, params)? } else { false };
+        // Quick Parts aren't part of the document, so a refused edit puts them back itself (the Spike).
+        let blocks_before = guard.then(|| self.building_blocks.clone());
         if spec.mutates && self.doc.settings.protection.as_deref() == Some("trackedChanges") {
             self.doc.settings.track_changes = true;
         }
@@ -1295,6 +1297,9 @@ impl Session {
                     // The steps the command pushed out are back, so they no longer count as gone.
                     self.undo_evicted = ev;
                     self.column = c;
+                }
+                if let Some(b) = blocks_before {
+                    self.building_blocks = b;
                 }
                 self.status = e.to_string();
             }
