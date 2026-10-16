@@ -3238,20 +3238,24 @@ fn picture(w: f32, h: f32, float: wordcraft_doc::para::Float) -> InlineObject {
 }
 
 #[test]
-fn line_spacing_does_not_scale_pictures() {
+fn picture_auto_spacing_leading() {
     use wordcraft_doc::props::LineSpacing;
-    let mut d = Document::from_text("");
-    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
-        p.props.line_spacing = Some(LineSpacing::Multiple(1.15));
-        p.insert_object(0, picture(144.0, 144.0, Default::default()), &Default::default()).unwrap();
+    // Word Mac: single, 1.15 and double spacing add only the font's extra leading.
+    for multiple in [1.0, 1.15, 2.0] {
+        let mut d = Document::from_text("");
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Multiple(multiple));
+        let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+        p.insert_object(0, picture(144.0, 144.0, Default::default()), &chr).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let line = &para.lines[0];
+        let style = &para.styles[para.clusters[0].style as usize];
+        let natural = style.ascent + style.descent;
+        let expected = (144.0 + natural * (multiple - 1.0)).max(natural * multiple);
+        assert!((line.height - expected).abs() < 0.01, "{multiple}: {} vs {expected}", line.height);
+        assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
     }
-    let l = lay(&d);
-    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
-    let line = &para.lines[0];
-    let desc = para.styles[0].descent;
-    // Word: the picture plus the font's descent, not (picture + descent) x 1.15.
-    assert!((line.height - (144.0 + desc)).abs() < 0.01, "line {} for a 144pt picture (descent {desc})", line.height);
-    assert!((line.baseline - line.top - 144.0).abs() < 0.01, "the picture stands on the baseline");
 }
 
 #[test]
