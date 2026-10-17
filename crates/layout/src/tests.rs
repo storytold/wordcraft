@@ -449,13 +449,27 @@ fn deleted_soft_hyphen_is_no_hyphenation_point_without_markup() {
     assert_eq!(hyphens(true), 0);
 }
 
+/// The right indent that leaves a column where "xx ab-" and "abcdef" fit but "xx abcdef" does not.
+/// Measured from a layout, halfway between the two, as a fixed width does that with some fonts only.
+fn xx_abcdef_indent() -> f32 {
+    let width = |text: &str| {
+        let l = lay(&Document::from_text(text));
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+        let xs = &para.lines[0].xs;
+        xs.last().unwrap() - xs.first().unwrap()
+    };
+    let (fits, too_wide) = (width("xx ab-").max(width("abcdef")), width("xx abcdef"));
+    assert!(fits < too_wide, "{fits} {too_wide}");
+    468.0 - (fits + too_wide) / 2.0
+}
+
 #[test]
 fn deleted_text_adds_no_line_break_opportunity_without_markup() {
     // "xx ab\u{ad}cdef" in a column where "xx ab-" and "abcdef" fit but "xx abcdef" does not; only
     // the soft hyphen (5..7) is track-deleted.
     let mut d = Document::from_text("xx ab\u{ad}cdef");
     d.format_range(&Pos::body(0, 5), &Pos::body(0, 7), &|c| c.del = Some(0)).unwrap();
-    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(xx_abcdef_indent())).unwrap();
     let line_starts = |hide_deleted: bool| {
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
@@ -488,11 +502,12 @@ fn hidden_soft_hyphen_is_no_hyphenation_point_when_hidden_text_is_not_shown() {
 fn hidden_text_adds_no_line_break_opportunity_when_not_shown() {
     // "xx ab" + hidden soft hyphen or space + "cdef", in a column where "xx ab-" and "abcdef" fit
     // but "xx abcdef" does not. Measured in Word (hidden text not printed): "xx" / "abcdef" both times.
+    let indent = xx_abcdef_indent();
     for hidden in ["\u{ad}", " "] {
         let mut d = Document::from_text(&format!("xx ab{hidden}cdef"));
         let end = 5 + hidden.len();
         d.format_range(&Pos::body(0, 5), &Pos::body(0, end), &|c| c.hidden = Some(true)).unwrap();
-        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(indent)).unwrap();
         let line_starts = |show_hidden: bool| {
             let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { show_hidden, ..Default::default() });
             let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
@@ -3830,9 +3845,20 @@ fn a_floating_table_ignores_a_paragraphs_empty_lines() {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
 
-    let mut doc = Document::from_text(&[""; 9].join("\n"));
-    doc.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Visible\n\n\n", Default::default())));
-    doc.body.extend((0..14).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())));
+    let doc_with = |empty_after: usize| {
+        let mut doc = Document::from_text(&[""; 9].join("\n"));
+        doc.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Visible\n\n\n", Default::default())));
+        doc.body.extend((0..empty_after).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())));
+        doc
+    };
+    // Empty paragraphs down the page, leaving two of them free: the table doesn't fit below the
+    // text before it. How many fit follows the installed fonts' line height (#2069), so count them.
+    let fit = lay(&doc_with(60)).pages[0]
+        .items
+        .iter()
+        .filter(|item| matches!(item, Placed::Lines { path, .. } if path.0.first().is_some_and(|block| *block >= 10)))
+        .count();
+    let mut doc = doc_with(fit - 2);
     let mut table = Table::new(12, 1, 300.0);
     for (i, row) in table.rows.iter_mut().enumerate() {
         row.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Approval {i}"), Default::default()))];
@@ -4445,19 +4471,31 @@ fn an_inherited_footer_sizes_its_percentage_table_by_its_own_section() {
 
 #[test]
 fn a_row_with_less_room_than_its_minimum_height_moves_on_whole() {
-    use wordcraft_doc::props::HeightRule;
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
     // Measured in Word: with 49 pt left on the page, a row of eight lines splits, but the same row
     // with an at-least height of 63.6 pt goes to the next page whole.
     let first_row_line_page = |min: Option<f32>| {
-        let lines: Vec<String> = (1..=200).map(|i| format!("Filler {i}")).collect();
-        let one_page = lay(&Document::from_text(&lines.join("\n"))).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
         let mut t = Table::new(1, 1, 400.0);
         t.rows[0].props.height = min;
         t.rows[0].props.height_rule = HeightRule::AtLeast;
         t.rows[0].cells[0].blocks =
             (1..=8).map(|k| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row line {k}"), Default::default()))).collect();
-        // Fill the page, leaving two filler paragraphs' room (less than 63.6 pt) for the row.
-        let mut d = Document::from_text(&lines[..one_page - 2].join("\n"));
+        // Fill the page, leaving those 49 pt for the row: 25 lines of an exact height. Lines of the
+        // default font's height leave a room that changes with the installed fonts (#2069).
+        let mut d = Document::from_text("");
+        let filler = ParaProps {
+            line_spacing: Some(LineSpacing::Exactly((d.last_section.text_height() - 49.0) / 25.0)),
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            ..Default::default()
+        };
+        d.body = (1..=25)
+            .map(|i| {
+                let mut p = wordcraft_doc::Paragraph::with_text(&format!("Filler {i}"), Default::default());
+                p.props = filler.clone();
+                wordcraft_doc::para_block(p)
+            })
+            .collect();
         let end = d.body.len();
         d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Table(t)).unwrap();
         let l = lay(&d);
@@ -4948,14 +4986,14 @@ fn tight_wrap_follows_an_ellipse() {
         assert!(right <= a + 1.5 || left >= b - 1.5, "line {top}..{bottom} at {left}..{right} runs into {a}..{b}: {tight:?}");
     }
     // Lines near the ellipse's top and bottom start at the curve, well inside its frame; beside
-    // the middle they don't. Measured against each line's own contour edge, so the check holds
-    // whatever line height the test machine's fonts give.
-    let line = |pred: &dyn Fn(f32) -> bool| *tight.iter().find(|l| pred(l.0) && l.2 > 60.0).unwrap();
-    for (what, l) in [("first line", line(&|top| top < 1.0)), ("near the bottom", line(&|top| top > 140.0 && top < 160.0))] {
+    // the middle they don't. Measured against each line's own contour edge, and on the line across
+    // a given height, so the check holds whatever line height the test machine's fonts give.
+    let line = |y: f32| *tight.iter().find(|l| l.0 <= y && y < l.1 && l.2 > 60.0).unwrap_or_else(|| panic!("no line across {y} in {tight:?}"));
+    for (what, l) in [("first line", line(1.0)), ("near the bottom", line(150.0))] {
         let edge = contour(l.0, l.1).1;
         assert!(l.2 <= edge + 3.0 && l.2 < 169.0 - 10.0, "{what} hugs the curve at {edge}: {l:?} in {tight:?}");
     }
-    assert!(line(&|top| top > 65.0 && top < 80.0).2 >= 160.0, "beside the widest part: {tight:?}");
+    assert!(line(80.0).2 >= 160.0, "beside the widest part: {tight:?}");
     // A convex shape has no gaps for Through to use: it wraps as Tight.
     assert_eq!(through, tight);
 }

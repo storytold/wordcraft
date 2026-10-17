@@ -478,12 +478,18 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
     // A three-line paragraph with room for two at the bottom of a page can't leave a widow (two
     // and one) nor an orphan (one and two): Word moves it whole. A four-line one splits two and
     // two. Sweep the paragraph down the page a point at a time and check every split.
+    // How many "word " fit on a line depends on the fonts: measure it, and leave the last line half full.
+    // The shift is space before the filler line just above the paragraph. Before the first filler
+    // line it only moved the page breaks, so the paragraph jumped a whole filler line at a time.
+    let l = lay(&Document::from_text(&"word ".repeat(100)));
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    let per_line = para.lines[0].stop.div_ceil(5);
     let mut split4 = false;
-    for (want, words) in [(3usize, 45usize), (4, 55)] {
+    for (want, words) in [(3usize, 2 * per_line + per_line / 2), (4, 3 * per_line + per_line / 2)] {
         for (fill, shift) in (30usize..60).flat_map(|f| (0..15).step_by(2).map(move |s| (f, s))) {
             let filler = "Filler line.\n".repeat(fill);
             let mut d = Document::from_text(&format!("{filler}{}\nAfter.", "word ".repeat(words)));
-            d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+            d.format_paragraphs(&Pos::body(fill - 1, 0), &Pos::body(fill - 1, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
             let l = lay(&d);
             let pieces: Vec<(usize, usize)> = l
                 .pages
