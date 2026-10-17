@@ -72,6 +72,11 @@ base64 = "0.22"
 getrandom = "0.3"
 zeroize = "1"
 
+# time
+# The local time zone's UTC offset for Insert ▸ Date & Time and DATE/TIME fields (#1707): chrono
+# (MIT OR Apache-2.0), `clock` only, native targets only (the web asks the browser's Date).
+chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
+
 # ui
 egui = "0.36"
 egui_extras = { version = "0.36", default-features = false }
