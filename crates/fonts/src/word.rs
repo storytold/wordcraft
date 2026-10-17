@@ -25,6 +25,18 @@ pub struct Resolved {
 /// metric-compatible come first (Carlito ↔ Calibri, Caladea ↔ Cambria, Liberation ↔ Arial /
 /// Times New Roman / Courier New), then common system fonts, then our bundled families.
 fn substitutes(family: &str) -> &'static [&'static str] {
+    substitutes_by_name(family).0
+}
+
+/// Does `family` have substitutes of its own, picked by its name (a metric-compatible clone such
+/// as Liberation Serif for Times New Roman, or the same design under another name), rather than
+/// the generic lists any unknown font gets?
+pub fn has_named_substitutes(family: &str) -> bool {
+    substitutes_by_name(charset_base_family(family)).1
+}
+
+/// [`substitutes`], and whether they were chosen for this family by name.
+fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
     const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
@@ -68,20 +80,21 @@ fn substitutes(family: &str) -> &'static [&'static str] {
     ];
     let f = family.to_ascii_lowercase();
     if is_hebrew(&f) {
-        return HEBREW;
+        return (HEBREW, true);
     }
     if is_persian_naskh(&f) {
-        return NASKH;
+        return (NASKH, true);
     }
     if is_persian_sans(&f) {
-        return ARABIC_SANS;
+        return (ARABIC_SANS, true);
     }
     match f.as_str() {
-        "palatino linotype" | "book antiqua" | "palatino" => PALATINO,
-        "arial" | "helvetica" | "arial nova" => ARIAL,
-        "times new roman" | "times" => TIMES,
-        "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => MONO,
-        "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => SYMBOL,
+        "palatino linotype" | "book antiqua" | "palatino" => (PALATINO, true),
+        "arial" | "helvetica" | "arial nova" => (ARIAL, true),
+        "times new roman" | "times" => (TIMES, true),
+        "courier new" | "courier" | "consolas" | "lucida console" | "cascadia code" | "cascadia mono" => (MONO, true),
+        "symbol" | "wingdings" | "wingdings 2" | "wingdings 3" | "segoe ui symbol" | "webdings" => (SYMBOL, true),
+        // Serif faces with no open clone of their own: the generic serif list, as for any font.
         "cambria"
         | "cambria math"
         | "georgia"
@@ -93,10 +106,10 @@ fn substitutes(family: &str) -> &'static [&'static str] {
         | "bookman old style"
         | "sitka text"
         | "sitka"
-        | "aptos serif" => SERIF,
-        _ if f.contains("mono") || f.contains("code") => MONO,
-        _ if f.contains("serif") && !f.contains("sans") => SERIF,
-        _ => SANS,
+        | "aptos serif" => (SERIF, false),
+        _ if f.contains("mono") || f.contains("code") => (MONO, false),
+        _ if f.contains("serif") && !f.contains("sans") => (SERIF, false),
+        _ => (SANS, false),
     }
 }
 
@@ -362,5 +375,14 @@ mod tests {
         }
         // Generic names with "Hebrew" in them also get Hebrew substitutions
         assert!(substitutes("SomeFont Hebrew").contains(&"Noto Sans Hebrew"));
+    }
+    #[test]
+    fn fonts_with_a_clone_have_named_substitutes() {
+        for f in ["Times New Roman", "Times New Roman Cyr", "Arial", "Courier New", "Palatino Linotype", "Symbol"] {
+            assert!(has_named_substitutes(f), "{f}");
+        }
+        for f in ["No Such Brand Font", "Cambria", "Georgia", "Brand Serif"] {
+            assert!(!has_named_substitutes(f), "{f}");
+        }
     }
 }

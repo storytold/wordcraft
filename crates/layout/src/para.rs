@@ -671,10 +671,14 @@ fn east_asian(c: char) -> bool {
 const MISSING_ROMAN_FONT: &str = "Cambria";
 
 /// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
+/// A font with substitutes of its own keeps them: Times New Roman is roman in every font table,
+/// and where it isn't installed Liberation Serif has its metrics; Word never meets it missing.
 fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
+    use wordcraft_fonts::word::{charset_base_family, has_named_substitutes};
     let db = wordcraft_fonts::FontDb::global();
     let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman && !db.has_family(font) && !db.has_family(wordcraft_fonts::word::charset_base_family(font)) { MISSING_ROMAN_FONT } else { font }
+    let missing = !db.has_family(font) && !db.has_family(charset_base_family(font));
+    if roman && missing && !has_named_substitutes(font) { MISSING_ROMAN_FONT } else { font }
 }
 
 impl<'a> Builder<'a> {

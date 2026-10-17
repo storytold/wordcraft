@@ -751,6 +751,20 @@ fn a_missing_roman_font_is_drawn_as_word_draws_it() {
 }
 
 #[test]
+fn a_missing_roman_font_with_its_own_substitute_keeps_it() {
+    // Times New Roman is roman in every font table. Where it isn't installed it keeps its metric
+    // clone (Liberation Serif), not Cambria: Word, which always has it, never draws it missing.
+    let mut d = Document::from_text("Serif");
+    d.settings.roman_fonts = vec!["Times New Roman".into()];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some("Times New Roman".into());
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+    let first = para.clusters.first().expect("a cluster");
+    assert_eq!(para.styles[first.style as usize].face, wordcraft_fonts::word::resolve("Times New Roman", false, false).face);
+}
+
+#[test]
 fn an_empty_section_mark_stays_on_a_full_page() {
     use wordcraft_doc::section::SectionProps;
     // Measured in Word: a page filled to the bottom, then an empty paragraph carrying a next-page
