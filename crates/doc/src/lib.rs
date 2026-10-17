@@ -448,6 +448,10 @@ pub struct CoreProps {
 #[serde(default, rename_all = "camelCase")]
 pub struct Settings {
     pub track_changes: bool,
+    /// Record a tracked cut and paste of a sentence or paragraph as a move (Track moves); off
+    /// when the file has `w:doNotTrackMoves` (ECMA-376 §17.15.1.29), and then it is an
+    /// ordinary deletion and insertion.
+    pub track_moves: bool,
     /// Default tab stop interval, points.
     pub default_tab: f32,
     pub even_odd_headers: bool,
@@ -614,6 +618,7 @@ impl Default for Settings {
     fn default() -> Self {
         Settings {
             track_changes: false,
+            track_moves: true,
             default_tab: 36.0,
             even_odd_headers: false,
             mirror_margins: false,

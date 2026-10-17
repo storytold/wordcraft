@@ -361,6 +361,11 @@ pub struct TrackForm {
     /// Hex, empty = automatic.
     pub changed_lines_color: String,
     pub track_formatting: bool,
+    pub move_from_mark: String,
+    /// Hex, empty = by author.
+    pub move_from_color: String,
+    pub move_to_mark: String,
+    pub move_to_color: String,
 }
 
 impl TrackForm {
@@ -383,6 +388,10 @@ impl TrackForm {
             changed_lines: s("changedLines"),
             changed_lines_color: c("changedLinesColor"),
             track_formatting: b("trackFormatting"),
+            move_from_mark: s("moveFromMark"),
+            move_from_color: c("moveFromColor"),
+            move_to_mark: s("moveToMark"),
+            move_to_color: c("moveToColor"),
         }
     }
 
@@ -403,6 +412,10 @@ impl TrackForm {
             "changedLines": self.changed_lines,
             "changedLinesColor": or(&self.changed_lines_color, "auto"),
             "trackFormatting": self.track_formatting,
+            "moveFromMark": self.move_from_mark,
+            "moveFromColor": or(&self.move_from_color, "byAuthor"),
+            "moveToMark": self.move_to_mark,
+            "moveToColor": or(&self.move_to_color, "byAuthor"),
         })
     }
 }
@@ -451,6 +464,44 @@ fn color(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_lab
     });
 }
 
+/// How insertions (and moved text where it went) can be marked: (value, label).
+const INSERT_MARKS: &[(&str, &str)] = &[
+    ("underline", "Underline"),
+    ("doubleUnderline", "Double Underline"),
+    ("bold", "Bold"),
+    ("italic", "Italic"),
+    ("strikethrough", "Strikethrough"),
+    ("colorOnly", "Color only"),
+    ("none", "None"),
+];
+
+/// How deletions (and the place moved text was taken from) can be marked, in Word for Mac's
+/// order: (value, label).
+const DELETE_MARKS: &[(&str, &str)] = &[
+    ("none", "(none)"),
+    ("colorOnly", "Color only"),
+    ("bold", "Bold"),
+    ("italic", "Italic"),
+    ("underline", "Underline"),
+    ("doubleUnderline", "Double Underline"),
+    ("strikethrough", "Strikethrough"),
+    ("hidden", "Hidden"),
+    ("caret", "^"),
+    ("hash", "#"),
+    ("doubleStrikethrough", "Double Strikethrough"),
+];
+
+/// How moved text is marked where it went, in Word for Mac's order: (value, label).
+const MOVE_TO_MARKS: &[(&str, &str)] = &[
+    ("none", "(none)"),
+    ("colorOnly", "Color only"),
+    ("bold", "Bold"),
+    ("italic", "Italic"),
+    ("underline", "Underline"),
+    ("doubleUnderline", "Double Underline"),
+    ("strikethrough", "Strikethrough"),
+];
+
 /// Track Changes Options. Returns true to close.
 pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool {
     let theme = app.session.doc.settings.theme_colors.clone();
@@ -482,37 +533,11 @@ pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool 
     heading(ui, "Advanced");
     egui::Grid::new("tco_advanced").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Insertions:"));
-        choice(
-            ui,
-            "tco_ins",
-            &mut f.insert_mark,
-            &[
-                ("underline", "Underline"),
-                ("doubleUnderline", "Double Underline"),
-                ("bold", "Bold"),
-                ("italic", "Italic"),
-                ("strikethrough", "Strikethrough"),
-                ("colorOnly", "Color only"),
-                ("none", "None"),
-            ],
-        );
+        choice(ui, "tco_ins", &mut f.insert_mark, INSERT_MARKS);
         color(ui, &theme, &mut f.insert_color, "By author", None);
         ui.end_row();
         ui.label(tl!("Deletions:"));
-        choice(
-            ui,
-            "tco_del",
-            &mut f.delete_mark,
-            &[
-                ("strikethrough", "Strikethrough"),
-                ("doubleStrikethrough", "Double Strikethrough"),
-                ("hidden", "Hidden"),
-                ("caret", "^"),
-                ("hash", "#"),
-                ("underline", "Underline"),
-                ("colorOnly", "Color only"),
-            ],
-        );
+        choice(ui, "tco_del", &mut f.delete_mark, DELETE_MARKS);
         color(ui, &theme, &mut f.delete_color, "By author", None);
         ui.end_row();
         ui.label(tl!("Changed lines:"));
@@ -523,6 +548,17 @@ pub fn track_options(app: &mut WordApp, ui: &mut Ui, f: &mut TrackForm) -> bool 
             &[("outside", "Outside border"), ("left", "Left border"), ("right", "Right border"), ("none", "None")],
         );
         color(ui, &theme, &mut f.changed_lines_color, "Automatic", Some(wordcraft_layout::display::CHANGE_BAR));
+        ui.end_row();
+    });
+    heading(ui, "Moves");
+    egui::Grid::new("tco_moves").num_columns(3).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.label(tl!("Moved from:"));
+        choice(ui, "tco_move_from", &mut f.move_from_mark, DELETE_MARKS);
+        ui.push_id("tco_move_from_color", |ui| color(ui, &theme, &mut f.move_from_color, "By author", None));
+        ui.end_row();
+        ui.label(tl!("Moved to:"));
+        choice(ui, "tco_move_to", &mut f.move_to_mark, MOVE_TO_MARKS);
+        ui.push_id("tco_move_to_color", |ui| color(ui, &theme, &mut f.move_to_color, "By author", None));
         ui.end_row();
     });
     ui.add_space(4.0);
@@ -598,5 +634,64 @@ mod tests {
         let mut b = app();
         b.apply_prefs(saved);
         assert_eq!(b.session.prefs.markup.changed_lines, wordcraft_layout::display::ChangeBar::Right);
+    }
+
+    /// Gap #5: the Moves rows (Moved from / Moved to: mark and colour) start at green double
+    /// strikethrough and double underline, and OK applies them. There is no Track moves
+    /// checkbox (as in Word for Mac), so OK leaves the document's setting alone.
+    #[test]
+    fn track_changes_options_moves_rows_apply_marks_and_colours() {
+        use wordcraft_layout::display::{DeleteMark, InsertMark, MOVE_COLOR};
+        let mut a = app();
+        a.session.run("review.trackingOptions", &json!({"trackMoves": false})).unwrap();
+        a.run("review.trackingOptions", json!({})).unwrap();
+        let Some(Dialog::TrackOptions { form }) = &mut a.dialog else { panic!("dialog") };
+        assert_eq!(
+            (form.move_from_mark.as_str(), form.move_from_color.clone(), form.move_to_mark.as_str(), form.move_to_color.clone()),
+            ("doubleStrikethrough", MOVE_COLOR.hex(), "doubleUnderline", MOVE_COLOR.hex())
+        );
+        form.move_from_mark = "strikethrough".into();
+        form.move_from_color = "FF0000".into();
+        form.move_to_mark = "bold".into();
+        form.move_to_color = String::new();
+        let params = form.params();
+        assert!(params.get("trackMoves").is_none(), "{params}");
+        a.dialog = None;
+        a.run("review.trackingOptions", params).unwrap();
+        let m = &a.session.prefs.markup;
+        assert_eq!((m.move_from_mark, m.move_from_color), (DeleteMark::Strikethrough, Some(wordcraft_doc::Rgb(0xFF, 0, 0))));
+        assert_eq!((m.move_to_mark, m.move_to_color), (InsertMark::Bold, None), "empty = by author");
+        assert!(!a.session.doc.settings.track_moves, "the document setting is untouched");
+    }
+
+    /// Gap #5, Word for Mac 16.113.4 (2026-10-15): the Deletions and Moved from lists, and the
+    /// Moved to list, in Word's order; every choice is one `review.trackingOptions` takes.
+    #[test]
+    fn track_changes_options_mark_lists_follow_word() {
+        use wordcraft_layout::display::{DeleteMark, InsertMark};
+        let values = |l: &[(&str, &str)]| l.iter().map(|(v, _)| v.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            values(super::DELETE_MARKS),
+            [
+                "none",
+                "colorOnly",
+                "bold",
+                "italic",
+                "underline",
+                "doubleUnderline",
+                "strikethrough",
+                "hidden",
+                "caret",
+                "hash",
+                "doubleStrikethrough"
+            ]
+        );
+        assert_eq!(values(super::MOVE_TO_MARKS), ["none", "colorOnly", "bold", "italic", "underline", "doubleUnderline", "strikethrough"]);
+        assert!(super::DELETE_MARKS.iter().all(|(v, _)| DeleteMark::parse(v).is_some()));
+        assert!(super::MOVE_TO_MARKS.iter().chain(super::INSERT_MARKS).all(|(v, _)| InsertMark::parse(v).is_some()));
+        let mut a = app();
+        for (v, _) in super::DELETE_MARKS {
+            a.run("review.trackingOptions", json!({"deleteMark": v, "moveFromMark": v})).unwrap();
+        }
     }
 }

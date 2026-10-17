@@ -21,6 +21,7 @@ const OWNED: &[&str] = &[
     "w:attachedTemplate",
     "w:linkStyles",
     "w:trackRevisions",
+    "w:doNotTrackMoves",
     "w:documentProtection",
     "w:defaultTabStop",
     "w:autoHyphenation",

@@ -390,7 +390,7 @@ pub struct Session {
     document_id: u64,
     cache: LayoutCache,
     /// (revision, width, read height, view, read line spacing, layout, proofing, outline,
-    /// (deletions left out, body deletions in balloons), numeral display).
+    /// (deletions left out, deletions marked Hidden, body deletions in balloons), numeral display).
     #[allow(clippy::type_complexity)]
     layout: Option<(
         u64,
@@ -401,7 +401,7 @@ pub struct Session {
         Arc<DocLayout>,
         bool,
         Option<wordcraft_layout::outline::OutlineView>,
-        (bool, bool),
+        (bool, wordcraft_layout::HideDeleted, bool),
         NumeralMode,
     )>,
     /// Picture edits: edited media key → original media key (Reset Picture).
@@ -770,8 +770,8 @@ impl Session {
         let spacing = if self.view.read_mode { self.view.read_line_spacing.map(f32::to_bits) } else { None };
         // Deletions in balloons depend on the view (the Comments pane, Read Mode, side by side), so
         // a view change that moves them in or out of the text lays it out again.
-        let hide_deleted = !self.view.show_markup || self.prefs.markup.hides_deletions();
-        let deleted = (hide_deleted, self.revisions_in_balloons());
+        let hide_deleted = !self.view.show_markup;
+        let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
         if let Some((r, w, h, m, sp, l, pf, o, hd, n)) = &self.layout
             && *r == self.rev
@@ -793,7 +793,8 @@ impl Session {
             read_line_spacing: spacing.map(f32::from_bits),
             show_hidden: self.view.marks || self.prefs.marks.hidden,
             hide_deleted,
-            deletions_in_balloons: deleted.1,
+            hide_marked: deleted.1,
+            deletions_in_balloons: deleted.2,
             proofing: self.view.proofing,
             numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
             comment_balloons: false,

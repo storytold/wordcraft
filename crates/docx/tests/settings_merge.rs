@@ -133,3 +133,33 @@ fn settings_written_by_wordcraft_keep_no_original() {
     assert!(!back.passthrough.contains_key("wordcraft:settings.orig"), "{:?}", back.passthrough.keys());
     assert_eq!(text(&save(&back), "word/settings.xml"), text(&save(&doc), "word/settings.xml"));
 }
+
+/// Gap #5: `w:doNotTrackMoves` (ECMA-376 §17.15.1.29) turns Track moves off; it is read, written
+/// back right after `w:trackRevisions` (in a merged part and a generated one), and left out
+/// while moves are tracked.
+#[test]
+fn do_not_track_moves_round_trips() {
+    let original = SETTINGS.replace("<w:trackRevisions/>", "<w:trackRevisions/><w:doNotTrackMoves/>");
+    let mut doc = wordcraft_docx::read(&with_settings(&original)).unwrap();
+    assert!(!doc.settings.track_moves);
+    let s = text(&save(&doc), "word/settings.xml");
+    assert_eq!(s.matches("<w:doNotTrackMoves/>").count(), 1, "{s}");
+    assert!(pos(&s, "<w:trackRevisions/>") < pos(&s, "<w:doNotTrackMoves/>") && pos(&s, "<w:doNotTrackMoves/>") < pos(&s, "<w:defaultTabStop"));
+    assert!(s.contains("ClauseSet"), "a merged part: {s}");
+    doc.settings.track_moves = true;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(!s.contains("doNotTrackMoves"), "{s}");
+
+    // `w:val="false"` keeps moves tracked.
+    let off = SETTINGS.replace("<w:trackRevisions/>", r#"<w:trackRevisions/><w:doNotTrackMoves w:val="false"/>"#);
+    assert!(wordcraft_docx::read(&with_settings(&off)).unwrap().settings.track_moves);
+
+    // A document of our own: absent by default, written when off, and read back.
+    let mut doc = wordcraft_doc::Document::new();
+    assert!(doc.settings.track_moves);
+    assert!(!text(&save(&doc), "word/settings.xml").contains("doNotTrackMoves"));
+    doc.settings.track_moves = false;
+    let s = text(&save(&doc), "word/settings.xml");
+    assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
+    assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
+}

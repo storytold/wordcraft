@@ -191,7 +191,7 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 fields: &fields,
                 show_hidden: false,
                 field_codes: false,
-                hide_deleted: false,
+                hide_deleted: Default::default(),
                 table: text.as_ref(),
                 proofing: None,
                 // Measurement uses a fixed environment (like show_hidden/proofing above).

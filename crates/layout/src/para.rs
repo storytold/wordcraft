@@ -389,8 +389,9 @@ pub struct ParaEnv<'a> {
     pub show_hidden: bool,
     /// Show field codes instead of results ([`crate::LayoutOptions::field_codes`]).
     pub field_codes: bool,
-    /// Leave tracked deletions out, like hidden text (the final, "No Markup" text).
-    pub hide_deleted: bool,
+    /// Which tracked deletions to leave out, like hidden text (all of them in the final, "No
+    /// Markup" text).
+    pub hide_deleted: crate::HideDeleted,
     /// The table style's formatting for text in this paragraph's cell (`None` outside tables).
     pub table: Option<&'a CellText>,
     /// Check spelling (and grammar, as the options say) for squiggles; `None` = no squiggles.
@@ -1192,8 +1193,8 @@ impl Builder<'_> {
 
 /// Whether text with this formatting is left out of the layout: hidden text unless it is shown, and
 /// tracked deletions in the final text. It takes no room, draws nothing and is no place to break.
-pub(crate) fn left_out(rc: &ResolvedChar, show_hidden: bool, hide_deleted: bool) -> bool {
-    (rc.hidden && !show_hidden) || (rc.del.is_some() && hide_deleted)
+pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hide_deleted: crate::HideDeleted) -> bool {
+    (rc.hidden && !show_hidden) || hide_deleted.hides(doc, rc.del)
 }
 
 /// Lay out one paragraph.
@@ -1262,7 +1263,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         let rc = resolve(props);
         runs.push(ProofRun::of(range.clone(), &rc));
         let Some(text) = p.text.get(range.clone()) else { continue };
-        if left_out(&rc, b.env.show_hidden, b.env.hide_deleted) {
+        if left_out(doc, &rc, b.env.show_hidden, b.env.hide_deleted) {
             match left.last_mut() {
                 Some(last) if last.end == range.start => last.end = range.end,
                 _ => left.push(range.clone()),
@@ -1271,7 +1272,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             let g = b.glyphs.len() as u32;
             // Word still prints the note of a hidden reference mark (and numbers it); a deleted
             // reference is gone from the final text, note and all.
-            let keeps_notes = !(rc.del.is_some() && b.env.hide_deleted);
+            let keeps_notes = !b.env.hide_deleted.hides(doc, rc.del);
             for (i, c) in text.char_indices() {
                 let mut note = None;
                 if c == OBJ {
@@ -1580,6 +1581,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
+    // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted
+    // paragraph in the final text, or moved-away text marked Hidden) is gone: it takes no room.
+    let gone = env.hide_deleted.hides(doc, mark_rc.del) && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
     for k in pl.hyph_after.clone() {
         if let Some(c) = pl.clusters.get_mut(k as usize) {
@@ -1587,7 +1591,27 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         }
     }
     break_lines(&mut pl, env, mark_style, env.label.as_ref().map(|(_, l)| l));
+    if gone {
+        collapse(&mut pl);
+    }
     pl
+}
+
+/// Lays a paragraph out as nothing: no height, no spacing, no label, its lines (kept for the
+/// caret and hit testing) all at its top with no height.
+fn collapse(pl: &mut ParaLayout) {
+    for l in &mut pl.lines {
+        l.top = 0.0;
+        l.height = 0.0;
+        l.baseline = 0.0;
+    }
+    pl.height = 0.0;
+    pl.rp.space_before = 0.0;
+    pl.rp.space_after = 0.0;
+    pl.label = None;
+    // Its shading and borders would be drawn across the page at no height.
+    pl.rp.shading = None;
+    pl.rp.borders = None;
 }
 
 /// Next tab stop after `x` (column coordinates): explicit stops, the hanging-indent implicit stop,
@@ -2716,7 +2740,7 @@ mod label_spacing_tests {
             width: 100.0,
             label: Some(("•".into(), level.clone())),
             show_hidden: false,
-            hide_deleted: false,
+            hide_deleted: Default::default(),
             table: None,
             proofing: None,
             field_codes: false,

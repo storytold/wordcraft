@@ -3130,7 +3130,7 @@ fn footnotes_inside_text_boxes_are_numbered_and_placed() {
     let b = l.caret(&d.start_of(StoryRef::Part(after))).unwrap();
     assert_eq!((a.page, b.page), (0, 0));
     assert!(a.top > 600.0 && a.top < b.top, "{a:?} {b:?}");
-    let nums = note_numbers(&d, false);
+    let nums = note_numbers(&d, HideDeleted::default());
     assert_eq!((nums.get(&in_box), nums.get(&after)), (Some(&1), Some(&2)));
 }
 
@@ -4062,9 +4062,9 @@ fn objects_left_out_through_the_table_style_formatting() {
     p.insert_object(1, rect_shape(10.0, 10.0, Default::default()), &Default::default()).unwrap();
     let d = Document::from_text("");
     let hidden = wordcraft_doc::CharProps { hidden: Some(true), ..Default::default() };
-    assert!(!left_out_objects(&d, &p, None, false, false)(0));
-    assert!(left_out_objects(&d, &p, Some(&hidden), false, false)(0));
-    assert!(!left_out_objects(&d, &p, Some(&hidden), true, false)(0), "hidden text shown");
+    assert!(!left_out_objects(&d, &p, None, false, HideDeleted::default())(0));
+    assert!(left_out_objects(&d, &p, Some(&hidden), false, HideDeleted::default())(0));
+    assert!(!left_out_objects(&d, &p, Some(&hidden), true, HideDeleted::default())(0), "hidden text shown");
 }
 
 #[test]
@@ -5385,7 +5385,7 @@ fn footnotes_restart_on_each_page_and_section() {
     d.settings.footnote_pr = NoteProps::default();
     d.para_mut(StoryRef::Body, &Path::top(49)).unwrap().section = Some(Box::new(SectionProps::default()));
     d.last_section.footnote_pr = NoteProps { num_restart: Some(NoteRestart::EachSect), num_start: Some(5), ..Default::default() };
-    let nums = note_numbers(&d, false);
+    let nums = note_numbers(&d, HideDeleted::default());
     assert_eq!((nums[&a], nums[&b], nums[&c]), (1, 2, 5));
 }
 
@@ -7234,6 +7234,46 @@ fn justified_multi_column_pages_stay_at_the_top() {
         para_boxes(&lay(&d))
     };
     assert_eq!(last(PageVAlign::Justify), last(PageVAlign::Top));
+}
+
+/// Gap #5 review: a paragraph deleted whole (text and mark) takes no room in the final text, and
+/// neither does moved-away text marked Hidden; the paragraph after it sits where it would without
+/// it, and a deletion that isn't left out keeps its line.
+#[test]
+fn a_paragraph_left_out_whole_takes_no_room() {
+    let mut d = Document::from_text("One\nGone\nThree");
+    d.format_range(&Pos::body(1, 0), &Pos::body(2, 0), &|c| c.del = Some(0)).unwrap();
+    let three_top =
+        |d: &Document, opts: &LayoutOptions, block: usize| layout(d, &mut LayoutCache::new(), opts).caret(&Pos::body(block, 0)).unwrap().top;
+    let without = three_top(&Document::from_text("One\nThree"), &LayoutOptions::default(), 1);
+    let fin = LayoutOptions { hide_deleted: true, ..Default::default() };
+    assert!((three_top(&d, &fin, 2) - without).abs() < 0.01, "no blank line in the final text");
+    assert!(three_top(&d, &LayoutOptions::default(), 2) > without + 1.0, "with markup it keeps its line");
+    // Only moved-away text hidden: an ordinary deletion keeps its line.
+    let moves = LayoutOptions { hide_marked: HideDeleted { plain: false, moved_from: true }, ..Default::default() };
+    assert!(three_top(&d, &moves, 2) > without + 1.0);
+    let plain = LayoutOptions { hide_marked: HideDeleted { plain: true, moved_from: false }, ..Default::default() };
+    assert!((three_top(&d, &plain, 2) - without).abs() < 0.01);
+}
+
+/// Gap #5 review: a paragraph left out whole draws no shading and no borders (they would be
+/// lines across the page at its zero height).
+#[test]
+fn a_paragraph_left_out_whole_draws_no_borders_or_shading() {
+    let mut d = Document::from_text("One\nGone\nThree");
+    let line = Some(Border::single(1.0));
+    d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| {
+        p.borders = Some(Borders { top: line, left: line, bottom: line, right: line, ..Borders::default() });
+        p.shading = Some(wordcraft_doc::Rgb(0xEE, 0xEE, 0xEE));
+    })
+    .unwrap();
+    d.format_range(&Pos::body(1, 0), &Pos::body(2, 0), &|c| c.del = Some(0)).unwrap();
+    let decorations = |hide_deleted: bool| {
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { hide_deleted, ..Default::default() });
+        l.pages[0].items.iter().filter(|i| matches!(i, Placed::Fill { .. } | Placed::Rule { .. })).count()
+    };
+    assert_eq!(decorations(false), 5, "shading and four borders with markup");
+    assert_eq!(decorations(true), 0, "none in the final text");
 }
 
 #[test]

@@ -53,7 +53,7 @@ fn in_use(s: &Session, rev: u32) -> bool {
 /// done) when it isn't such a cut.
 pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
     let (a, b) = s.sel.ordered();
-    if !s.doc.settings.track_changes || a == b || a.story != b.story || !move_sized(&s.clipboard_text) {
+    if !s.doc.settings.track_changes || !s.doc.settings.track_moves || a == b || a.story != b.story || !move_sized(&s.clipboard_text) {
         return Ok(false);
     }
     s.doc.revisions.push(Revision::new(RevisionKind::Delete, s.author.clone(), now_iso()));
@@ -71,7 +71,7 @@ pub fn cut_tracked(s: &mut Session) -> Result<bool, CmdError> {
 /// returns the revision for the pasted text (the destination). `None` = an ordinary insertion.
 pub fn take_paste(s: &mut Session, frag: &Fragment) -> Option<u32> {
     let m = s.pending_move.take()?;
-    if m.author != s.author || frag.plain_text() != m.text || !in_use(s, m.rev) {
+    if !s.doc.settings.track_moves || m.author != s.author || frag.plain_text() != m.text || !in_use(s, m.rev) {
         return None;
     }
     let src = s.doc.revisions.get(m.rev as usize).filter(|r| r.kind == RevisionKind::Delete && r.move_name.is_none())?;
@@ -238,6 +238,25 @@ mod tests {
         s.run("edit.paste", &json!({})).unwrap();
         let k: Vec<String> = kinds(&mut s).into_iter().map(|(k, _)| k).collect();
         assert_eq!(k, ["delete", "insert"]);
+    }
+
+    /// Gap #5: with Track moves off (`w:doNotTrackMoves`), a tracked cut and paste of a
+    /// paragraph is an ordinary deletion and insertion, with no move names.
+    #[test]
+    fn with_track_moves_off_a_cut_and_paste_is_a_deletion_and_an_insertion() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "First one.\nSecond one.\nThird one."})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("review.trackingOptions", &json!({"trackMoves": false})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}})).unwrap();
+        s.run("edit.cut", &json!({})).unwrap();
+        s.run("caret.set", &json!({"pos": {"block": 0, "off": 0}})).unwrap();
+        s.run("edit.paste", &json!({})).unwrap();
+        assert_eq!(texts(&s), ["Second one.", "First one.", "Second one.", "Third one."]);
+        assert!(s.doc.revisions.iter().all(|r| r.move_name.is_none()), "{:?}", s.doc.revisions);
+        let k = kinds(&mut s);
+        assert!(k.iter().all(|(k, m)| (k == "insert" || k == "delete") && m.is_null()), "{k:?}");
+        assert!(k.iter().any(|(k, _)| k == "insert") && k.iter().any(|(k, _)| k == "delete"), "{k:?}");
     }
 
     #[test]
