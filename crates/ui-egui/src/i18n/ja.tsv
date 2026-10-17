@@ -2233,3 +2233,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+	Format Selection	選択の書式
+	Current Selection	現在の選択
+	Axis	軸
+	Axis Titles	軸タイトル
+	Axis Labels	軸ラベル
+	Tick labels	目盛りラベル
+	Axis line	軸線
+	Format Axis	軸の書式
+	Format Axis…	軸の書式…
+	Format Series	系列の書式
+	Format Series…	系列の書式…
+	Minimum	最小値
+	Maximum	最大値
+	No fill	塗りつぶしなし
+	Markers	マーカー
+	Smooth lines	滑らかな線
+	Series	系列
+	Data labels	データラベル
+	Fill:	塗りつぶし:
+	Major gridlines	主グリッド線
+	Maximum:	最大値:
+	Minimum:	最小値:
+	Number format:	番号書式:
+	Width (pt):	幅 (pt):
+	accent	アクセント
+	auto	自動
+	linked	リンク
+	“{text}” isn't a colour (RRGGBB).	「{text}」は色（RRGGBB）ではありません。
+	“{text}” isn't a number.	「{text}」は数値ではありません。
+	“{text}” isn't a width in points.	「{text}」はポイントでの幅ではありません。

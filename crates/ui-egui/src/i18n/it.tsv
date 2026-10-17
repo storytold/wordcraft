@@ -2641,3 +2641,31 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+	Format Selection	Formatta la selezione
+	Current Selection	Selezione corrente
+	Axis	Asse
+	Axis Titles	Titoli degli assi
+	Axis Labels	Etichette degli assi
+	Tick labels	Etichette delle graduazioni
+	Axis line	Linea dell'asse
+	Format Axis	Formatta l'asse
+	Format Axis…	Formatta l'asse…
+	Format Series	Formatta la serie
+	Format Series…	Formatta la serie…
+	No fill	Nessun riempimento
+	Markers	Marcatori
+	Smooth lines	Linee smussate
+	Series	Serie
+	Data labels	Etichette dati
+	Fill:	Riempimento:
+	Major gridlines	Linee griglia principali
+	Maximum:	Massimo:
+	Minimum:	Minimo:
+	Number format:	Formato numero:
+	Width (pt):	Larghezza (pt):
+	accent	accento
+	auto	auto
+	linked	collegato
+	“{text}” isn't a colour (RRGGBB).	“{text}” non è un colore (RRGGBB).
+	“{text}” isn't a number.	“{text}” non è un numero.
+	“{text}” isn't a width in points.	“{text}” non è una larghezza in punti.

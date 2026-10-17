@@ -2243,3 +2243,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+	Format Selection	Oblikovanje izbora
+	Current Selection	Trenutni izbor
+	Axis	Osa
+	Axis Titles	Naslovi ose
+	Axis Labels	Oznake ose
+	Tick labels	Oznake podele
+	Axis line	Linija ose
+	Format Axis	Oblikuj osu
+	Format Axis…	Oblikuj osu…
+	Format Series	Oblikuj seriju
+	Format Series…	Oblikuj seriju…
+	Minimum	Najmanji
+	Maximum	Najveći
+	No fill	Bez popune
+	Markers	Markeri
+	Smooth lines	Glatke linije
+	Series	Serija
+	Data labels	Oznake podataka
+	Fill:	Popuna:
+	Major gridlines	Glavne mrežne linije
+	Maximum:	Najveći:
+	Minimum:	Najmanji:
+	Number format:	Format broja:
+	Width (pt):	Širina (tačk.):
+	accent	akcent
+	auto	auto
+	linked	povezano
+	“{text}” isn't a colour (RRGGBB).	„{text}” nije boja (RRGGBB).
+	“{text}” isn't a number.	„{text}” nije broj.
+	“{text}” isn't a width in points.	„{text}” nije širina u tačkama.

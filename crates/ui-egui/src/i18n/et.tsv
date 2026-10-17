@@ -2267,3 +2267,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	Kitsas
 	Medium	Keskmine
+	Format Selection	Valiku vormindamine
+	Current Selection	Valitud objekt
+	Axis	Telg
+	Axis Titles	Telje pealkirjad
+	Axis Labels	Telje sildid
+	Tick labels	Jaotiste sildid
+	Axis line	Teljejoon
+	Format Axis	Telje vormindamine
+	Format Axis…	Telje vormindamine…
+	Format Series	Sarja vormindamine
+	Format Series…	Sarja vormindamine…
+	Minimum	Miinimum
+	Maximum	Maksimum
+	No fill	Täius pole
+	Markers	Markerid
+	Smooth lines	Siled jooned
+	Series	Seria
+	Data labels	Andmed
+	Fill:	Täius:
+	Major gridlines	Peamised joonestusjooned
+	Maximum:	Maksimum:
+	Minimum:	Miinimum:
+	Number format:	Arvunaformaat:
+	Width (pt):	Laius (pt):
+	accent	aktsent
+	auto	automaatne
+	linked	seotud
+	“{text}” isn't a colour (RRGGBB).	„{text}” pole värv (RRGGBB).
+	“{text}” isn't a number.	„{text}” ei ole arv.
+	“{text}” isn't a width in points.	„{text}” ei ole laius punktides.

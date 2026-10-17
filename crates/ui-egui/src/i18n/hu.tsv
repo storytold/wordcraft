@@ -2628,3 +2628,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	Format Selection	Kiválasztás formázása
+	Current Selection	Aktuális kiválasztás
+	Axis	Tengely
+	Axis Titles	Tengelycímek
+	Axis Labels	Tengelyfeliratok
+	Tick labels	Beosztásfeliratok
+	Axis line	Tengelyvonal
+	Format Axis	Tengely formázása
+	Format Axis…	Tengely formázása…
+	Format Series	Adatsor formázása
+	Format Series…	Adatsor formázása…
+	No fill	Kitöltés nélkül
+	Markers	Jelölőjegyek
+	Smooth lines	Simított vonalak
+	Series	Adatsor
+	Data labels	Adatfeliratok
+	Fill:	Kitöltés:
+	Major gridlines	Fő rácsvonalak
+	Maximum:	Maximum:
+	Minimum:	Minimum:
+	Number format:	Sorszámformátum:
+	Width (pt):	Vastagság (pont):
+	accent	kiemelés
+	auto	auto
+	linked	összefűzve
+	“{text}” isn't a colour (RRGGBB).	„{text}” nem szín (RRGGBB).
+	“{text}” isn't a number.	„{text}” nem szám.
+	“{text}” isn't a width in points.	„{text}” nem pontokban megadott vastagság.

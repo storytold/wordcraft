@@ -2599,3 +2599,31 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+	Format Selection	Formato de la selección
+	Current Selection	Selección actual
+	Axis	Eje
+	Axis Titles	Títulos del eje
+	Axis Labels	Etiquetas del eje
+	Tick labels	Etiquetas de gradación
+	Axis line	Línea del eje
+	Format Axis	Formato del eje
+	Format Axis…	Formato del eje…
+	Format Series	Formato de la serie
+	Format Series…	Formato de la serie…
+	No fill	Sin relleno
+	Markers	Marcadores
+	Smooth lines	Líneas suavizadas
+	Series	Serie
+	Data labels	Etiquetas de datos
+	Fill:	Relleno:
+	Major gridlines	Líneas de la cuadrícula principales
+	Maximum:	Máximo:
+	Minimum:	Mínimo:
+	Number format:	Formato de número:
+	Width (pt):	Anchura (pt):
+	accent	acento
+	auto	automático
+	linked	vinculado
+	“{text}” isn't a colour (RRGGBB).	«{text}» no es un color (RRGGBB).
+	“{text}” isn't a number.	«{text}» no es un número.
+	“{text}” isn't a width in points.	«{text}» no es una anchura en puntos.

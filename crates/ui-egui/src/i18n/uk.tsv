@@ -2245,3 +2245,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+	Format Selection	Формат виділення
+	Current Selection	Поточне виділення
+	Axis	Вісь
+	Axis Titles	Заголовки осей
+	Axis Labels	Підписи осей
+	Tick labels	Підписи поділок
+	Axis line	Линія осі
+	Format Axis	Формат осі
+	Format Axis…	Формат осі…
+	Format Series	Формат серії
+	Format Series…	Формат серії…
+	Minimum	Мінімум
+	Maximum	Максимум
+	No fill	Без заповнення
+	Markers	Маркери
+	Smooth lines	Згладжені лінії
+	Series	Серія
+	Data labels	Підписи даних
+	Fill:	Заповнення:
+	Major gridlines	Основні лінії сітки
+	Maximum:	Максимум:
+	Minimum:	Мінімум:
+	Number format:	Формат чисел:
+	Width (pt):	Ширина (пт):
+	accent	акцент
+	auto	авто
+	linked	пов'язано
+	“{text}” isn't a colour (RRGGBB).	«{text}» — не колір (RRGGBB).
+	“{text}” isn't a number.	«{text}» — не число.
+	“{text}” isn't a width in points.	«{text}» — не ширина в пунктах.

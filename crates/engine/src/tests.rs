@@ -4356,6 +4356,81 @@ fn hostile_chart_data_is_capped() {
 }
 
 #[test]
+fn chart_axis_and_series_formatting_round_trips() {
+    use wordcraft_doc::chart::ChartType;
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "line"}));
+    run(
+        &mut s,
+        "chart.axis",
+        json!({"side": "value", "title": "Revenue", "min": 0, "max": 10, "format": "#,##0.00", "gridlines": true, "labels": false, "line": true}),
+    );
+    run(&mut s, "chart.axis", json!({"side": "category", "title": "Quarter", "labels": true}));
+    run(&mut s, "chart.series", json!({"index": 1, "fill": "FF8000", "line": 2.5, "markers": true, "smooth": true, "labels": true, "format": "0%"}));
+    run(&mut s, "chart.series", json!({"index": 0, "fill": "none", "line": "none"}));
+    let c = first_chart(&s.doc).unwrap();
+    assert_eq!(
+        (c.val_axis.title.as_deref(), c.val_axis.min, c.val_axis.max, c.val_axis.fmt.as_deref()),
+        (Some("Revenue"), Some(0.0), Some(10.0), Some("#,##0.00"))
+    );
+    assert!(c.val_axis.gridlines && !c.val_axis.labels && c.val_axis.line, "the value axis as set");
+    assert_eq!(c.cat_axis.title.as_deref(), Some("Quarter"), "the category axis title");
+    let s1 = &c.series[1];
+    assert_eq!(
+        (s1.fill.as_ref().map(|c| c.hex()).as_deref(), s1.line_w, s1.markers, s1.smooth, s1.labels, s1.fmt.as_deref()),
+        (Some("FF8000"), Some(2.5), Some(true), true, Some(true), Some("0%"))
+    );
+    assert!(c.series[0].no_fill && c.series[0].no_line, "series 0 without fill and line");
+    // The chart reads back as the same model.
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    assert_eq!(first_chart(&back), Some(c), "axes and series formatting round-trip");
+    assert!(first_chart(&back).is_some_and(|c| c.kind == ChartType::Line), "still a line chart");
+}
+
+#[test]
+fn chart_formatting_is_one_undo_step_each() {
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    let before = first_chart(&s.doc).unwrap();
+    run(&mut s, "chart.axis", json!({"side": "value", "title": "T", "min": 1, "max": 5}));
+    run(&mut s, "chart.series", json!({"index": 0, "smooth": true}));
+    assert!(first_chart(&s.doc).unwrap().series[0].smooth, "series 0 is smooth");
+    run(&mut s, "edit.undo", json!({}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!(!c.series[0].smooth && c.val_axis.title.is_some(), "undo takes the series back");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(first_chart(&s.doc).unwrap(), before, "undo takes the axis back");
+}
+
+#[test]
+fn hostile_chart_formatting_params_are_safe() {
+    use wordcraft_doc::chart::MAX_FMT;
+    let mut s = s();
+    run(&mut s, "insert.chart", json!({"type": "column"}));
+    assert!(s.run("chart.axis", &json!({"side": "z"})).is_err(), "an unknown side is refused");
+    // Impossible bounds drop; hostile texts are cleaned; hostile numbers are skipped.
+    run(&mut s, "chart.axis", json!({"min": 8, "max": 2}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!((c.val_axis.min, c.val_axis.max) == (None, None), "an impossible pair of bounds drops both");
+    run(&mut s, "chart.axis", json!({"min": "NaN", "max": 1e308, "title": "\u{0}".repeat(5000), "format": "x".repeat(5000)}));
+    let c = first_chart(&s.doc).unwrap();
+    assert!((c.val_axis.min, c.val_axis.max) == (None, Some(1e308)), "a string bound is skipped");
+    assert_eq!(c.val_axis.title, None, "a title of only control characters is no title");
+    assert!(c.val_axis.fmt.as_deref().is_some_and(|f| f.chars().count() <= MAX_FMT), "the format code is cut");
+    for bad in [json!({"index": 999}), json!({"fill": "zzz"}), json!({"line": "red"})] {
+        assert!(s.run("chart.series", &bad).is_err(), "{bad} must be refused");
+    }
+    // A width over the cap clamps; a negative one goes to the thinnest line.
+    run(&mut s, "chart.series", json!({"index": 0, "line": 1000}));
+    assert_eq!(first_chart(&s.doc).unwrap().series[0].line_w, Some(20.0), "the width clamps");
+    run(&mut s, "chart.series", json!({"index": 0, "line": -3}));
+    assert_eq!(first_chart(&s.doc).unwrap().series[0].line_w, Some(0.0), "a negative width clamps to 0");
+    let _ = s.layout();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    assert_eq!(first_chart(&back), first_chart(&s.doc), "the capped chart reads back");
+}
+
+#[test]
 fn accessibility_reports_a_chart_without_alt_text() {
     use std::sync::Arc;
     use wordcraft_doc::para::InlineObject;

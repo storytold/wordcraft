@@ -2234,3 +2234,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	Format Selection	選取項目格式
+	Current Selection	目前選取項目
+	Axis	座標軸
+	Axis Titles	軸標題
+	Axis Labels	軸標籤
+	Tick labels	刻度標籤
+	Axis line	座標軸線
+	Format Axis	格式化座標軸
+	Format Axis…	格式化座標軸…
+	Format Series	格式化資料系列
+	Format Series…	格式化資料系列…
+	Minimum	最小值
+	Maximum	最大值
+	No fill	無填滿
+	Markers	標記
+	Smooth lines	平滑線
+	Series	系列
+	Data labels	資料標籤
+	Fill:	填滿:
+	Major gridlines	主要格線
+	Maximum:	最大值:
+	Minimum:	最小值:
+	Number format:	數字格式:
+	Width (pt):	寬度 (pt):
+	accent	主題色
+	auto	自動
+	linked	連結
+	“{text}” isn't a colour (RRGGBB).	「{text}」不是顏色（RRGGBB）。
+	“{text}” isn't a number.	「{text}」不是數字。
+	“{text}” isn't a width in points.	「{text}」不是以磅為單位的寬度。

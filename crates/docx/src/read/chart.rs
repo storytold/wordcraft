@@ -177,24 +177,37 @@ enum Pos {
 
 /// One value axis (or category axis) as the file states it.
 #[derive(Default)]
-struct Axis {
-    deleted: bool,
-    grid: bool,
-    line: bool,
+pub(crate) struct Axis {
+    pub(crate) deleted: bool,
+    pub(crate) grid: bool,
+    pub(crate) line: bool,
     /// `c:crossBetween val="midCat"`: categories sit on the tick marks, not between them.
     mid: bool,
-    min: Option<f64>,
-    max: Option<f64>,
+    pub(crate) min: Option<f64>,
+    pub(crate) max: Option<f64>,
     /// Number format of the tick labels, when not linked to the source data.
-    fmt: Option<String>,
+    pub(crate) fmt: Option<String>,
+    /// The axis title, when the file gives it one.
+    pub(crate) title: Option<String>,
+    /// Tick labels, as `c:tickLblPos` says (`none` hides them; a file that says nothing shows
+    /// them, as Word does).
+    pub(crate) labels: bool,
 }
 
 struct Series {
     name: String,
     color: Option<Rgb>,
-    line_w: f32,
+    /// Fixed line width in points, `None`: the chart's default.
+    line_w: Option<f32>,
     /// Whether the series is drawn as a line (scatter series without one get markers).
     line: bool,
+    /// The series' own fill: `Some` colour, `None` colour with `no_fill` set, else the chart's
+    /// accent for the series.
+    no_fill: bool,
+    /// Markers on the series' points, when the file says.
+    markers: Option<bool>,
+    /// Draw the series' line as a smooth curve (`c:smooth`).
+    smooth: bool,
     values: Vec<Option<f64>>,
     /// Scatter x values (index + 1 when the file has none).
     xs: Vec<Option<f64>>,
@@ -375,7 +388,7 @@ fn to_percent(series: &mut [Series], n: usize) {
 }
 
 /// The category axis (scatter: the horizontal value axis) and the value axis of a plot area.
-fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
+pub(crate) fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
     let vals_ax: Vec<&El> = plot.children("c:valAx").collect();
     let horiz_pos = |a: &&El| matches!(a.child("c:axPos").and_then(|p| p.attr("val")), Some("b" | "t"));
     let (val_el, x_el) = if scatter {
@@ -432,8 +445,14 @@ impl Series {
         let ln = sp.and_then(|p| p.child("a:ln"));
         let marker = ser.child("c:marker").and_then(|m| m.child("c:spPr")).and_then(|p| fill_colour(p, theme));
         let color = sp.and_then(|p| fill_colour(p, theme)).or_else(|| ln.and_then(|l| fill_colour(l, theme))).or(marker);
-        let line_w = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).map_or(LINE_W, |w| w.clamp(0.0, 20.0));
+        let no_fill = sp.and_then(|p| p.child("a:noFill")).is_some();
+        let line_w = ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).map(|w| w.clamp(0.0, 20.0));
         let line = ln.is_none_or(|l| l.child("a:noFill").is_none());
+        // `c:marker/c:symbol`: which symbol each point gets (`none` for no markers). Scatter
+        // series show markers unless the file says not; line series only when it says so.
+        let symbol = ser.child("c:marker").and_then(|m| m.child("c:symbol")).and_then(|s| s.attr("val")).map(str::to_string);
+        let markers = symbol.map(|s| s != "none").or_else(|| scatter.then_some(true));
+        let smooth = ser.child("c:smooth").and_then(|s| s.attr("val")).is_some_and(truthy);
         let (values, fmt) = numbers(ser.child(if scatter { "c:yVal" } else { "c:val" }), cap);
         let (mut xs, x_fmt) = if scatter { numbers(ser.child("c:xVal"), cap) } else { (Vec::new(), None) };
         if scatter && xs.is_empty() {
@@ -448,7 +467,7 @@ impl Series {
             }
         }
         let labels = show_values(ser.child("c:dLbls"));
-        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
+        Series { name, color, line_w, line, no_fill, markers, smooth, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
     }
 }
 
@@ -511,7 +530,7 @@ fn pts(cache: &El, cap: usize) -> Vec<Option<String>> {
 }
 
 fn axis(a: Option<&El>) -> Axis {
-    let Some(a) = a else { return Axis { deleted: true, ..Default::default() } };
+    let Some(a) = a else { return Axis { deleted: true, labels: true, line: true, ..Default::default() } };
     let scaling = a.child("c:scaling");
     let num =
         |n: &str| scaling.and_then(|s| s.child(n)).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
@@ -523,6 +542,8 @@ fn axis(a: Option<&El>) -> Axis {
         min: num("c:min"),
         max: num("c:max"),
         fmt: a.child("c:numFmt").filter(|f| f.attr("sourceLinked") != Some("1")).and_then(|f| f.attr("formatCode")).map(str::to_string),
+        title: a.child("c:title").and_then(title_text),
+        labels: a.child("c:tickLblPos").and_then(|p| p.attr("val")) != Some("none"),
     }
 }
 
@@ -1016,8 +1037,13 @@ fn widest(items: &[String], size: f32) -> f32 {
     items.iter().map(|s| text_w(s, size)).fold(0.0, f32::max)
 }
 
+/// Text in `rect`; `angle` degrees clockwise turns it about the rect's centre (axis titles).
 fn text(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, align: TextAlign, bold: bool) {
-    out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color: TEXT, bold, align, font: None });
+    text_angle(out, rect, s, size, align, bold, 0.0);
+}
+
+fn text_angle(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, align: TextAlign, bold: bool, angle: f32) {
+    out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color: TEXT, bold, align, font: None, angle });
 }
 
 /// Text centred on `cx` with its top at `y`.
@@ -1269,21 +1295,23 @@ struct Margins {
 }
 
 /// The margins the axis labels need around the plot in `area`. Category labels under a column
-/// chart wrap to the band; labels that still don't fit show every k-th category.
+/// chart wrap to the band; labels that still don't fit show every k-th category. Hidden tick
+/// labels take no room; an axis title adds one line on its side.
 fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let fs = c.text_size;
     let lh = fs * LINE;
     let scatter = c.kind == Kind::Scatter;
     let (cat_on, val_on) = (!c.cat.deleted, !c.val.deleted);
+    let (cat_labels, val_labels) = (cat_on && c.cat.labels, val_on && c.val.labels);
     let left = if c.horizontal {
-        if cat_on { widest(&c.cats, fs).min(area.w * 0.4) + GAP } else { 0.0 }
-    } else if val_on {
+        if cat_labels { widest(&c.cats, fs).min(area.w * 0.4) + GAP } else { 0.0 }
+    } else if val_labels {
         ax.vticks.iter().map(|(_, s)| text_w(s, fs)).fold(0.0, f32::max) + GAP
     } else {
         0.0
-    };
+    } + title_left(c, cat_on, val_on, lh);
     let band_w = (area.w - left).max(1.0) / c.n as f32;
-    let wrapped: Vec<Vec<String>> = if cat_on && !scatter {
+    let wrapped: Vec<Vec<String>> = if cat_labels && !scatter {
         let width = if c.horizontal { left - GAP } else { band_w };
         c.cats.iter().map(|s| wrap(s, width, fs)).collect()
     } else {
@@ -1292,15 +1320,29 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let widest_line = wrapped.iter().flatten().map(|s| text_w(s, fs)).fold(0.0, f32::max);
     let skip = ((widest_line / band_w).ceil() as usize).max(1);
     let label_lines = wrapped.iter().map(Vec::len).max().unwrap_or(1) as f32;
-    let bottom = if cat_on && !c.horizontal {
+    let bottom = (if cat_labels && !c.horizontal {
         if scatter { lh + GAP } else { label_lines * lh + GAP }
-    } else if c.horizontal && val_on {
+    } else if c.horizontal && val_labels {
         lh + GAP
     } else {
         0.0
-    };
-    let top = if !c.horizontal && val_on { lh / 2.0 } else { 0.0 };
+    }) + title_bottom(c, cat_on, val_on, lh);
+    let top = if !c.horizontal && val_labels { lh / 2.0 } else { 0.0 };
     Margins { left, top, bottom, wrapped, skip }
+}
+
+/// Room for the vertical axis title on the plot's left: one line when the axis that sits there
+/// (the value axis for columns, the category axis for bars) has a title.
+fn title_left(c: &Chart, cat_on: bool, val_on: bool, lh: f32) -> f32 {
+    let side = if c.horizontal { cat_on && c.cat.title.is_some() } else { val_on && c.val.title.is_some() };
+    if side { lh } else { 0.0 }
+}
+
+/// Room for the horizontal axis title under the plot: one line when the axis that sits there
+/// (the category axis for columns, the value axis for bars) has a title.
+fn title_bottom(c: &Chart, cat_on: bool, val_on: bool, lh: f32) -> f32 {
+    let side = if c.horizontal { val_on && c.val.title.is_some() } else { cat_on && c.cat.title.is_some() };
+    if side { lh } else { 0.0 }
 }
 
 /// A bar, column, line, area or scatter chart in `area`: gridlines, series, axes, then labels.
@@ -1318,6 +1360,9 @@ fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     if c.val.grid {
         draw_grid(out, &g, &ax.vticks);
     }
+    if c.cat.grid {
+        draw_cat_grid(out, &g, &ax.xticks, c.kind == Kind::Scatter);
+    }
     let mut labels = Vec::new();
     match c.kind {
         Kind::Bar => bars(out, c, &g, &mut labels),
@@ -1328,11 +1373,35 @@ fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     }
     draw_axes(out, c, &g);
     draw_data_labels(out, &labels, c.text_size, g.horiz && c.kind == Kind::Bar);
-    if !c.val.deleted {
-        draw_value_labels(out, c, &g, &ax.vticks, Rect { w: m.left, ..area });
+    if !c.val.deleted && c.val.labels {
+        let room = title_left(c, !c.cat.deleted, true, c.text_size * LINE);
+        draw_value_labels(out, c, &g, &ax.vticks, Rect { x: area.x + room, w: m.left - room, ..area });
     }
-    if !c.cat.deleted {
+    if !c.cat.deleted && c.cat.labels {
         draw_category_labels(out, c, &g, &ax.xticks, &m, area);
+    }
+    draw_axis_titles(out, c, &g, area);
+}
+
+/// The axis titles, one line: the title of the vertical axis (the value axis for columns, the
+/// category axis for bars) is rotated 90° on the plot's left; the horizontal axis's title sits
+/// under the plot.
+fn draw_axis_titles(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, area: Rect) {
+    let lh = c.text_size * LINE;
+    // The axis drawn along the plot's left (the value axis for columns, the category axis for
+    // bars) gets its title rotated there; the other axis's title sits under the plot.
+    let (left, bottom) = if c.horizontal { (&c.cat, &c.val) } else { (&c.val, &c.cat) };
+    if !left.deleted
+        && let Some(t) = &left.title
+    {
+        let t = clip_text(t, g.plot.h, c.text_size);
+        text_angle(out, Rect { x: area.x, y: g.plot.y, w: lh, h: g.plot.h }, &t, c.text_size, TextAlign::Center, false, 90.0);
+    }
+    if !bottom.deleted
+        && let Some(t) = &bottom.title
+    {
+        let t = clip_text(t, g.plot.w, c.text_size);
+        text_angle(out, Rect { x: g.plot.x, y: area.bottom() - lh, w: g.plot.w, h: lh }, &t, c.text_size, TextAlign::Center, false, 0.0);
     }
 }
 
@@ -1342,6 +1411,24 @@ fn draw_grid(out: &mut Vec<GraphicItem>, g: &Frame, ticks: &[(f64, String)]) {
     for (t, _) in ticks {
         let p = g.val(*t);
         let segs = if g.horiz { seg(p, plot.y, p, plot.bottom()) } else { seg(plot.x, p, plot.right(), p) };
+        stroke(out, segs, GRID, 0.75);
+    }
+}
+
+/// Gridlines along the category axis: across the plot at each category's centre, at the x ticks
+/// of a scatter chart.
+fn draw_cat_grid(out: &mut Vec<GraphicItem>, g: &Frame, xticks: &[(f64, String)], scatter: bool) {
+    let plot = g.plot;
+    if scatter {
+        for (t, _) in xticks {
+            let p = g.scat_x(*t);
+            stroke(out, seg(p, plot.y, p, plot.bottom()), GRID, 0.75);
+        }
+        return;
+    }
+    for i in 0..g.n {
+        let p = g.band_start(i) + g.band() / 2.0;
+        let segs = if g.horiz { seg(plot.x, p, plot.right(), p) } else { seg(p, plot.y, p, plot.bottom()) };
         stroke(out, segs, GRID, 0.75);
     }
 }
@@ -1479,7 +1566,9 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
             let (p0, p1) = (g.val(v0), g.val(v1));
             let (p0, p1) = (p0.min(p1), p0.max(p1));
             let segs = if g.horiz { rect_segs(p0, a, p1, a + thick) } else { rect_segs(a, p0, a + thick, p1) };
-            fill(out, segs, c.point_colour(j, i));
+            if !s.no_fill {
+                fill(out, segs, c.point_colour(j, i));
+            }
             if let Some(text) = label_of(s, i) {
                 let mid = a + thick / 2.0;
                 let (x, y) = match (g.horiz, stacked) {
@@ -1522,8 +1611,62 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                 labels.push(DataLabel { x: *x, y: *y, text, inside: false });
             }
         }
-        stroke(out, runs(pts.into_iter()), c.series_colour(j), s.line_w);
+        if s.line {
+            stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), s.line_w.unwrap_or(LINE_W));
+        }
+        if s.markers == Some(true) {
+            markers(out, pts.iter().flatten().copied(), c.series_colour(j));
+        }
     }
+}
+
+/// A series' points as small circles (`colour`), for lines and scatter charts.
+fn markers(out: &mut Vec<GraphicItem>, pts: impl Iterator<Item = (f32, f32)>, colour: Rgb) {
+    const MARKER: f32 = 6.0;
+    for (x, y) in pts {
+        let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
+        out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(colour), stroke: None, stroke_width: 0.0 });
+    }
+}
+
+/// A polyline through `pts`, a smooth curve (Catmull-Rom pieces) when `smooth` and there are at
+/// least three points in a row; gaps (`None`) end a run.
+fn curve(pts: impl Iterator<Item = Option<(f32, f32)>>, smooth: bool) -> Vec<PathSeg> {
+    if !smooth {
+        return runs(pts);
+    }
+    let pts: Vec<Option<(f32, f32)>> = pts.collect();
+    let mut segs = Vec::new();
+    let mut i = 0;
+    while i < pts.len() {
+        let Some(first) = pts[i] else {
+            i += 1;
+            continue;
+        };
+        // Collect one run of points.
+        let mut run = vec![first];
+        while let Some(p) = pts.get(i + 1).copied().flatten() {
+            run.push(p);
+            i += 1;
+        }
+        i += 1;
+        if run.len() < 3 {
+            segs.extend(runs(run.into_iter().map(Some)));
+            continue;
+        }
+        segs.push(PathSeg::Move(run[0].0, run[0].1));
+        for k in 0..run.len() - 1 {
+            // Catmull-Rom: tangent at p1 from p0 to p2 (ends mirror their own tangent).
+            let p0 = run[k.max(1) - 1];
+            let p1 = run[k];
+            let p2 = run[k + 1];
+            let p3 = run.get(k + 2).copied().unwrap_or(p2);
+            let c1 = (p1.0 + (p2.0 - p0.0) / 6.0, p1.1 + (p2.1 - p0.1) / 6.0);
+            let c2 = (p2.0 - (p3.0 - p1.0) / 6.0, p2.1 - (p3.1 - p1.1) / 6.0);
+            segs.push(PathSeg::Cubic(c1.0, c1.1, c2.0, c2.1, p2.0, p2.1));
+        }
+    }
+    segs
 }
 
 fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
@@ -1552,7 +1695,7 @@ fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
     }
 }
 
-/// Scatter series as lines, or as small markers when the series has no line.
+/// Scatter series as lines, and as small markers when the series asks for them.
 fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
     const MARKER: f32 = 6.0;
     for (j, s) in c.series.iter().enumerate() {
@@ -1570,12 +1713,13 @@ fn draw_scatter(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut V
             }
         }
         if s.line {
-            stroke(out, runs(pts.iter().copied()), c.series_colour(j), s.line_w);
-            continue;
+            stroke(out, curve(pts.iter().copied(), s.smooth), c.series_colour(j), s.line_w.unwrap_or(LINE_W));
         }
-        for (x, y) in pts.iter().flatten() {
-            let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
-            out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.series_colour(j)), stroke: None, stroke_width: 0.0 });
+        if s.markers != Some(false) {
+            for (x, y) in pts.iter().flatten() {
+                let rect = [x - MARKER / 2.0, y - MARKER / 2.0, MARKER, MARKER];
+                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(c.series_colour(j)), stroke: None, stroke_width: 0.0 });
+            }
         }
     }
 }
@@ -1659,7 +1803,7 @@ fn draw_data_labels(out: &mut Vec<GraphicItem>, labels: &[DataLabel], fs: f32, b
             (Rect { x: l.x - w / 2.0, y: l.y - lh, w, h: lh }, TextAlign::Center)
         };
         let color = if l.inside { Rgb::WHITE } else { TEXT };
-        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None });
+        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None, angle: 0.0 });
     }
 }
 

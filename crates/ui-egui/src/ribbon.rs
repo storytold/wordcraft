@@ -2070,10 +2070,20 @@ fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-/// Chart Design: the selected chart's elements (title, legend, data labels), its data and type,
-/// and its size.
+/// Chart Design: the selected chart's elements (title, legend, data labels), its axes, its
+/// series, its data and type, and its size.
 fn chart_design(app: &mut WordApp, ui: &mut Ui) {
     let Some(chart) = wordcraft_engine::cmd::chart::selected_chart(&app.session) else { return };
+    group(ui, "Current Selection", None, app, |ui, app| {
+        // Word's Format Axis / Format Series open on the chart's value axis and first series; the
+        // commands reach the others with `side` and `index`, so scripts get the same dialogs.
+        menu_button(ui, app, "axis", Some("Axis"), "Axis", true, "chart.axis", |ui, app| {
+            mi(ui, app, "Format Axis…", "ui.dialog", json!({"name": "formatAxis"}));
+        });
+        menu_button(ui, app, "series", Some("Series"), "Series", true, "chart.series", |ui, app| {
+            mi(ui, app, "Format Series…", "ui.dialog", json!({"name": "formatSeries"}));
+        });
+    });
     group(ui, "Chart Layouts", None, app, |ui, app| {
         menu_button(ui, app, "chartTitle", Some("Chart Title"), "Chart Title", true, "", |ui, app| {
             mi_check(ui, app, "None", chart.title.is_none(), "chart.title", json!({"text": null}));

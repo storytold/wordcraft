@@ -2672,3 +2672,31 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+	Format Selection	Định dạng vùng chọn
+	Current Selection	Lựa chọn hiện tại
+	Axis	Trục
+	Axis Titles	Tiêu đề trục
+	Axis Labels	Nhãn trục
+	Tick labels	Nhãn vạch chia
+	Axis line	Đường trục
+	Format Axis	Định dạng trục
+	Format Axis…	Định dạng trục…
+	Format Series	Định dạng chuỗi
+	Format Series…	Định dạng chuỗi…
+	No fill	Không tô
+	Markers	Dấu mốc
+	Smooth lines	Đường làm trơn
+	Series	Chuỗi
+	Data labels	Nhãn dữ liệu
+	Fill:	Tô:
+	Major gridlines	Đường lưới chính
+	Maximum:	Giá trị lớn nhất:
+	Minimum:	Giá trị nhỏ nhất:
+	Number format:	Định dạng số:
+	Width (pt):	Độ rộng (pt):
+	accent	màu nhấn
+	auto	tự động
+	linked	đã liên kết
+	“{text}” isn't a colour (RRGGBB).	“{text}” không phải là màu (RRGGBB).
+	“{text}” isn't a number.	“{text}” không phải là số.
+	“{text}” isn't a width in points.	“{text}” không phải là chiều rộng tính bằng pt.
