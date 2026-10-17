@@ -1339,6 +1339,37 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+#[test]
+fn delete_row_on_a_merge_start_promotes_the_cell_below() {
+    use wordcraft_doc::props::VMerge;
+    let vm = |s: &Session, r: usize| {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        t.rows[r].cells[0].props.vmerge
+    };
+    // Merge of two rows: the cell below becomes an ordinary cell.
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.up", json!({"extend": true}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "caret.up", json!({}));
+    run(&mut s, "table.deleteRow", json!({}));
+    assert_eq!(vm(&s, 0), VMerge::None, "first row's cell continues a merge that no longer exists");
+    // Merge of three rows: the cell below restarts the merge.
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    run(&mut s, "insert.table", json!({"rows": 4, "cols": 2}));
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.up", json!({"extend": true}));
+    run(&mut s, "caret.up", json!({"extend": true}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "caret.up", json!({}));
+    run(&mut s, "caret.up", json!({}));
+    run(&mut s, "table.deleteRow", json!({}));
+    assert_eq!(vm(&s, 0), VMerge::Restart);
+    assert_eq!(vm(&s, 1), VMerge::Continue);
+}
+
 fn cells(s: &Session) -> Option<((usize, usize), (usize, usize))> {
     s.cell_range().map(|x| (x.rows, x.cols))
 }

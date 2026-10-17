@@ -127,9 +127,27 @@ impl Table {
     }
 
     pub fn delete_row(&mut self, r: usize) {
-        if r < self.rows.len() {
-            self.rows.remove(r);
+        if r >= self.rows.len() {
+            return;
         }
+        // A vertical merge that starts in this row now starts in the row below.
+        let starts: Vec<usize> = (0..self.rows.get(r).map_or(0, |row| row.cells.len()))
+            .filter(|&c| self.rows.get(r).and_then(|row| row.cells.get(c)).is_some_and(|x| x.props.vmerge == VMerge::Restart))
+            .map(|c| self.grid_col(r, c))
+            .collect();
+        for g in starts {
+            let continues = |t: &Self, row: usize| {
+                t.cell_at_grid(row, g).and_then(|i| t.rows.get(row)?.cells.get(i)).is_some_and(|x| x.props.vmerge == VMerge::Continue)
+            };
+            if !continues(self, r + 1) {
+                continue;
+            }
+            let more = continues(self, r + 2);
+            if let Some(c) = self.cell_at_grid(r + 1, g).and_then(|i| self.rows.get_mut(r + 1)?.cells.get_mut(i)) {
+                c.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
+        self.rows.remove(r);
     }
 
     /// Insert a grid column at grid index `g` (cells spanning it widen instead).
