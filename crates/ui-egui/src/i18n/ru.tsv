@@ -2630,3 +2630,10 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	nothing is selected	ничего не выделено
+	select a picture or shape first	сначала выделите рисунок или фигуру
+	select recipients first	сначала выберите получателей
+	select two or more pictures or shapes first (Shift+click)	выделите два или больше рисунков или фигур (Shift+щелчок)
+	text boxes can't go inside a text box	надпись нельзя поместить внутрь надписи
+	the cursor isn't in a table	курсор не в таблице
+	{name} options	{name}: параметры

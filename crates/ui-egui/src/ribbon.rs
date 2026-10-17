@@ -6,7 +6,7 @@ use serde_json::{Value, json};
 use crate::colors::{Remember, Target};
 use crate::options::MeasureExt;
 use crate::theme::{Tokens, medium, regular, semibold};
-use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, combo, font_combo, group, menu_button, small, split};
+use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, group, menu_button, small, split};
 use crate::{WordApp, icons};
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
@@ -764,7 +764,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                 let font = app.previews.font_shown(&font);
                 let fams = app.previews.families();
                 let prev = app.previews.font_preview_fn();
-                if let Some(f) = font_combo(ui, "font", 150.0, &font, &fams, Some(&*prev)) {
+                if let Some(f) = crate::widgets::font_combo_hint(ui, "font", 150.0, &font, &fams, Some(&*prev), tl!("Font")) {
                     let _ = if f == crate::widgets::ADD_FONT {
                         app.run("font.add", json!({}))
                     } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
@@ -781,7 +781,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     .unwrap_or_default();
                 let sizes: Vec<String> =
                     wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-                if let Some(v) = combo(ui, "size", 52.0, &size, &sizes, None)
+                if let Some(v) = crate::widgets::combo_hint(ui, "size", 52.0, &size, &sizes, None, tl!("Font Size"))
                     && let Ok(x) = v.trim().parse::<f64>()
                 {
                     let _ = app.run("format.size", json!({"size": x}));
@@ -1955,7 +1955,7 @@ fn outlining(app: &mut WordApp, ui: &mut Ui) {
                 small(ui, app, "outlineTop", None, "Promote to Heading 1", "outline.promoteToHeading1", json!({}), false);
                 small(ui, app, "outlinePromote", None, "Promote", "outline.promote", json!({}), false);
                 let levels: Vec<String> = (1..=BODY).map(name).collect();
-                if let Some(v) = combo(ui, "outlineLevel", 100.0, &name(level), &levels, None)
+                if let Some(v) = crate::widgets::combo_hint(ui, "outlineLevel", 100.0, &name(level), &levels, None, tl!("Outline Level"))
                     && let Some(i) = levels.iter().position(|x| *x == v)
                 {
                     let l = if i + 1 >= usize::from(BODY) { json!("body") } else { json!(i + 1) };
@@ -1975,7 +1975,7 @@ fn outlining(app: &mut WordApp, ui: &mut Ui) {
                 let mut shown: Vec<String> = vec![tl!("All Levels").to_string()];
                 shown.extend((1..BODY).map(name));
                 let current = shown.get(usize::from(o.show_level)).cloned().unwrap_or_default();
-                if let Some(v) = combo(ui, "outlineShowLevel", 90.0, &current, &shown, None)
+                if let Some(v) = crate::widgets::combo_hint(ui, "outlineShowLevel", 90.0, &current, &shown, None, tl!("Show Level"))
                     && let Some(i) = shown.iter().position(|x| *x == v)
                 {
                     let l = if i == 0 { json!("all") } else { json!(i) };

@@ -2624,3 +2624,10 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+	nothing is selected	nic není vybráno
+	select a picture or shape first	nejdřív vyberte obrázek nebo tvar
+	select recipients first	nejdřív vyberte příjemce
+	select two or more pictures or shapes first (Shift+click)	vyberte dva nebo více obrázků či tvarů (Shift+klepnutí)
+	text boxes can't go inside a text box	textové pole nelze vložit do textového pole
+	the cursor isn't in a table	kurzor není v tabulce
+	{name} options	Možnosti: {name}

@@ -2632,3 +2632,10 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	nothing is selected	ništa nije odabrano
+	select a picture or shape first	najprije odaberite sliku ili oblik
+	select recipients first	najprije odaberite primatelje
+	select two or more pictures or shapes first (Shift+click)	odaberite dvije ili više slika ili oblika (Shift+klik)
+	text boxes can't go inside a text box	tekstni okviri ne mogu biti unutar tekstnog okvira
+	the cursor isn't in a table	kursor nije u tablici
+	{name} options	Mogućnosti: {name}

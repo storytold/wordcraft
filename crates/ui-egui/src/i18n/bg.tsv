@@ -2621,3 +2621,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	nothing is selected	нищо не е избрано
+	select a picture or shape first	първо изберете картина или фигура
+	select recipients first	първо изберете получатели
+	select two or more pictures or shapes first (Shift+click)	изберете две или повече картини или фигури (Shift+щракване)
+	text boxes can't go inside a text box	текстови полета не могат да са в текстово поле
+	the cursor isn't in a table	курсорът не е в таблица
+	{name} options	{name}: опции

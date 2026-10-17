@@ -2628,3 +2628,10 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	nothing is selected	nincs kijelölve semmi
+	select a picture or shape first	előbb jelöljön ki egy képet vagy alakzatot
+	select recipients first	előbb válasszon címzetteket
+	select two or more pictures or shapes first (Shift+click)	jelöljön ki két vagy több képet vagy alakzatot (Shift+kattintás)
+	text boxes can't go inside a text box	szövegdoboz nem kerülhet szövegdobozba
+	the cursor isn't in a table	a kurzor nem táblázatban van
+	{name} options	{name} beállításai

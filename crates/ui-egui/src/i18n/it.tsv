@@ -2641,3 +2641,10 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+	nothing is selected	nessuna selezione
+	select a picture or shape first	seleziona prima un'immagine o una forma
+	select recipients first	seleziona prima i destinatari
+	select two or more pictures or shapes first (Shift+click)	seleziona due o più immagini o forme (Maiusc+clic)
+	text boxes can't go inside a text box	le caselle di testo non possono stare in una casella di testo
+	the cursor isn't in a table	il cursore non è in una tabella
+	{name} options	Opzioni di {name}

@@ -2629,3 +2629,10 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	nothing is selected	hiçbir şey seçili değil
+	select a picture or shape first	önce bir resim veya şekil seçin
+	select recipients first	önce alıcıları seçin
+	select two or more pictures or shapes first (Shift+click)	iki veya daha fazla resim ya da şekil seçin (Shift+tıklama)
+	text boxes can't go inside a text box	metin kutuları bir metin kutusunun içine konamaz
+	the cursor isn't in a table	imleç bir tabloda değil
+	{name} options	{name} seçenekleri

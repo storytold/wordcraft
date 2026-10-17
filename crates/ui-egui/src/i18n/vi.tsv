@@ -2672,3 +2672,10 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+	nothing is selected	chưa chọn gì
+	select a picture or shape first	hãy chọn một hình ảnh hoặc hình dạng trước
+	select recipients first	hãy chọn người nhận trước
+	select two or more pictures or shapes first (Shift+click)	chọn hai hoặc nhiều hình ảnh hoặc hình dạng (Shift+nhấp)
+	text boxes can't go inside a text box	không thể đặt hộp văn bản vào trong hộp văn bản
+	the cursor isn't in a table	con trỏ không nằm trong bảng
+	{name} options	Tùy chọn của {name}
