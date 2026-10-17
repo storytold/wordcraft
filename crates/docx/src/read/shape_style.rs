@@ -145,6 +145,30 @@ pub(crate) fn shape_paint(sppr: Option<&El>, style: Option<&El>, theme: &[Rgb]) 
     ShapePaint { fill, stroke, stroke_width }
 }
 
+/// Explicit DrawingML dash stops override the solid default.
+pub(crate) fn line_dash(ln: Option<&El>) -> wordcraft_doc::line_dash::LineDash {
+    use wordcraft_doc::line_dash::{LineDash, MAX_DASH_STOPS};
+    let Some(ln) = ln else { return LineDash::Solid };
+    if let Some(custom) = ln.child("a:custDash") {
+        let stops: Vec<_> =
+            custom.children("a:ds").take(MAX_DASH_STOPS).filter_map(|e| Some((dash_ratio(e.attr("d")?)?, dash_ratio(e.attr("sp")?)?))).collect();
+        return if stops.is_empty() { LineDash::Solid } else { LineDash::Custom(stops) };
+    }
+    ln.child("a:prstDash").and_then(|e| e.attr("val")).map(LineDash::from_ooxml).unwrap_or_default()
+}
+
+/// Strict OOXML may spell percentages with a percent sign instead of integer units.
+fn dash_ratio(value: &str) -> Option<u32> {
+    const PERCENT_UNITS: f64 = 1000.0;
+    let value = value.trim();
+    let Some(percent) = value.strip_suffix('%') else { return value.parse().ok() };
+    let units = percent.parse::<f64>().ok()? * PERCENT_UNITS;
+    if !units.is_finite() || !(0.0..=f64::from(u32::MAX)).contains(&units) {
+        return None;
+    }
+    Some(units.round() as u32)
+}
+
 /// A VML colour (`strokecolor`, `fillcolor`): `#rrggbb` or `#rgb` (Word follows it with the
 /// theme slot, as in `#4472c4 [3204]`), or a colour name.
 pub(crate) fn vml_color(v: &str) -> Option<Rgb> {

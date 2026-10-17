@@ -849,7 +849,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.pop_layer();
             }
         }
-        Draw::Path { segs, fill, stroke, stroke_width } => {
+        Draw::Path { segs, fill, stroke, stroke_width, dash } => {
             let path = wordcraft_layout::display::seg_path(segs);
             if path.elements().is_empty() {
                 return;
@@ -863,7 +863,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 // Width 0 (or none) is a hairline.
                 let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
                 ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(kurbo::Stroke::new(w as f64));
+                ctx.set_stroke(kurbo::Stroke::new(w as f64).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
                 ctx.stroke_path(&path);
             }
         }
@@ -904,7 +904,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
             ctx.stroke_path(&path);
         }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner } => {
+        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r, *corner);
             ctx.set_transform(view);
@@ -958,7 +958,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             }
             if let Some(s) = stroke {
                 ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(kurbo::Stroke::new(stroke_width.max(0.25) as f64));
+                ctx.set_stroke(kurbo::Stroke::new(stroke_width.max(0.25) as f64).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
                 ctx.stroke_path(&path);
             }
         }
@@ -1174,6 +1174,7 @@ mod tests {
             stroke_width: 0.0,
             effects: Default::default(),
             corner: None,
+            dash: Vec::new(),
         };
         let at = |x: f32, y: f32| {
             let mut bg = [255.0; 3];
@@ -1628,6 +1629,72 @@ mod tests {
         {
             assert!(!shape_path(k, r, None).elements().is_empty());
         }
+    }
+
+    #[test]
+    fn dashed_outline_has_gaps() {
+        use wordcraft_doc::{
+            connector::ShapeExtra,
+            line_dash::LineDash,
+            para::{Anchor, Float, InlineObject, Wrap},
+        };
+        let image = |dash| {
+            let shape = InlineObject::Shape {
+                kind: ShapeKind::Rectangle,
+                w: 70.0,
+                h: 28.0,
+                fill: None,
+                stroke: Some(Rgb(192, 0, 0)),
+                stroke_width: 1.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { dash, ..Default::default() },
+            };
+            let mut p = wordcraft_doc::Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![wordcraft_doc::para_block(p)];
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            render_page(&d, &l.pages[0], 4.0, &RenderOptions::default())
+        };
+        let solid = image(LineDash::Solid);
+        let dashed = image(LineDash::Dash);
+        assert!(solid.pixel(422, 400)[1] < 80);
+        assert_eq!(dashed.pixel(422, 400), [255, 255, 255, 255]);
+        assert!(dashed.pixel(406, 400)[1] < 80);
+    }
+
+    #[test]
+    fn zero_width_connector_dashes() {
+        use wordcraft_doc::{
+            connector::ShapeExtra,
+            line_dash::LineDash,
+            para::{Anchor, Float, InlineObject, Wrap},
+        };
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::ElbowConnector,
+            w: 70.0,
+            h: 28.0,
+            fill: None,
+            stroke: Some(Rgb(192, 0, 0)),
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: ShapeExtra { dash: LineDash::Dash, ..Default::default() },
+        };
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.insert_object(0, shape, &Default::default()).unwrap();
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let image = render_page(&d, &l.pages[0], 8.0, &RenderOptions::default());
+        // A 0.75 pt stroke has a 3 pt dash followed by a 2.25 pt gap.
+        assert!(image.pixel(812, 800)[1] < 80, "inside the first dash");
+        assert_eq!(image.pixel(832, 800), [255, 255, 255, 255], "inside the first gap");
     }
 
     #[test]

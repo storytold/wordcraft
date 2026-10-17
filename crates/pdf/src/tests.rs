@@ -1486,3 +1486,75 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+#[test]
+fn shape_dash_arrays_export() {
+    use wordcraft_doc::{
+        connector::ShapeExtra,
+        line_dash::LineDash,
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::StraightConnector] {
+        for dash in [LineDash::Dash, LineDash::Custom(vec![(400_000, 300_000)]), LineDash::Solid] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 70.0,
+                h: 28.0,
+                fill: None,
+                stroke: Some(wordcraft_doc::props::Rgb(192, 0, 0)),
+                stroke_width: 1.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { dash: dash.clone(), ..Default::default() },
+            };
+            let mut p = Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![para_block(p)];
+            let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            assert_eq!(raw.contains("[4 3]0 d"), !dash.is_solid(), "dash array for {kind:?}");
+        }
+    }
+}
+
+#[test]
+fn zero_width_connector_dashes() {
+    use wordcraft_doc::{
+        connector::ShapeExtra,
+        line_dash::LineDash,
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector, ShapeKind::Freeform] {
+        let shape = InlineObject::Shape {
+            kind,
+            w: 70.0,
+            h: 28.0,
+            fill: None,
+            stroke: Some(wordcraft_doc::props::Rgb(192, 0, 0)),
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+            story: None,
+            freeform: (kind == ShapeKind::Freeform).then(|| {
+                std::sync::Arc::new(wordcraft_doc::freeform::Freeform {
+                    w: 70.0,
+                    h: 28.0,
+                    paths: vec![wordcraft_doc::freeform::FreePath { pts: vec![[0.0, 0.0], [70.0, 0.0], [70.0, 28.0]], closed: true }],
+                    ..Default::default()
+                })
+            }),
+            effects: Default::default(),
+            extra: ShapeExtra { dash: LineDash::Dash, ..Default::default() },
+        };
+        let mut p = Paragraph::new();
+        p.insert_object(0, shape, &Default::default()).unwrap();
+        let mut d = Document::new();
+        d.body = vec![para_block(p)];
+        let bytes = export(&d, &PdfOptions { compress: false, tagged: false, ..Default::default() }).unwrap();
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.contains("0.75 w"), "effective width for {kind:?}");
+        assert!(raw.contains("[3 2.25]0 d"), "stroke-relative dash array for {kind:?}");
+    }
+}

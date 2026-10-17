@@ -2830,3 +2830,30 @@ fn row_table_borders_round_trip() {
     let again = wordcraft_docx::read(&saved).unwrap();
     assert_eq!(d.body, again.body);
 }
+
+#[test]
+fn shape_dashes_import_and_save() {
+    use wordcraft_doc::line_dash::LineDash;
+    for (xml, expected) in [
+        (r#"<a:prstDash val="dash"/>"#, LineDash::Dash),
+        (r#"<a:prstDash val="sysDashDot"/>"#, LineDash::SystemDashDot),
+        (
+            r#"<a:custDash><a:ds d="400000" sp="300000"/><a:ds d="100000" sp="300000"/></a:custDash>"#,
+            LineDash::Custom(vec![(400_000, 300_000), (100_000, 300_000)]),
+        ),
+        (r#"<a:custDash><a:ds d="400%" sp="300%"/></a:custDash>"#, LineDash::Custom(vec![(400_000, 300_000)])),
+        (r#"<a:custDash><a:ds d="NaN%" sp="-1"/></a:custDash>"#, LineDash::Solid),
+        (r#"<a:prstDash val="solid"/>"#, LineDash::Solid),
+        ("", LineDash::Solid),
+    ] {
+        let sppr = format!(r#"<a:prstGeom prst="rect"/><a:noFill/><a:ln w="12700"><a:solidFill><a:srgbClr val="C00000"/></a:solidFill>{xml}</a:ln>"#);
+        let body = anchored_wsp("Annotation", 889000, 355600, &sppr, "", "<wps:cNvSpPr/>");
+        let d = read_body(&format!("<w:p>{body}</w:p>"));
+        let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        for doc in [&d, &saved] {
+            let InlineObject::Shape { w, h, stroke, stroke_width, extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+            assert_eq!(extra.dash, expected);
+            assert_eq!((*w, *h, *stroke, *stroke_width), (70.0, 28.0, Some(Rgb(192, 0, 0)), 1.0));
+        }
+    }
+}
