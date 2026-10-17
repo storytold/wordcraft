@@ -9,7 +9,7 @@ use wordcraft_doc::{Block, Blocks, Paragraph, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::para::{CellText, ClKind, ParaLayout};
-use crate::{BoxContext, BoxLayout, Ctx, Placed, layout_box};
+use crate::{BoxContext, BoxLayout, Ctx, Placed, fit_box, layout_box};
 
 /// Largest preferred table width, as a share of the text column, that a file can ask for.
 const MAX_WIDTH_SHARE: f32 = 10.0;
@@ -623,6 +623,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             while rows.get(end + 1).is_some_and(|r| r.iter().any(|c| c.g == g && c.vmerge == VMerge::Continue)) {
                 end += 1;
             }
+            // Exact rows clip a merged cell's overflow instead of moving the following content.
+            if t.rows
+                .get(ri..=end)
+                .is_some_and(|rows| rows.iter().all(|row| row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)))
+            {
+                continue;
+            }
             let have: f32 = heights.get(ri..=end).map(|s| s.iter().sum()).unwrap_or(0.0);
             if h > have
                 && let Some(last) = heights.get_mut(end)
@@ -711,6 +718,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 for it in &mut cell_items {
                     it.turn(tn.turn, ox, oy);
                 }
+            }
+            if exact && c.vmerge == VMerge::Restart && c.h > span_h + 0.01 {
+                // The fixed merge must also bound nested fills and border rules.
+                cell_items = fit_box(cell_items, span_h - c.margins[2]);
             }
             for mut it in cell_items {
                 it.translate(0.0, dy);
