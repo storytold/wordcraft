@@ -1,6 +1,6 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
@@ -141,27 +141,29 @@ impl Remote {
         Ok(req.to_string())
     }
 
-    fn roundtrip(&mut self, line: &str) -> std::io::Result<String> {
+    /// Send one line and read the reply line. A failure before the whole line (with its newline)
+    /// reached the socket is [`Failure::NotSent`]: the app cannot have run it. Any failure after
+    /// that is [`Failure::Unknown`]: the app may have run the request and lost the reply.
+    fn roundtrip(&mut self, line: &str) -> Result<String, Failure> {
         let Some((reader, writer)) = self.conn.as_mut() else {
-            return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"));
+            return Err(Failure::NotSent(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected")));
         };
-        writer.write_all(line.as_bytes())?;
-        writer.write_all(b"\n")?;
-        writer.flush()?;
-        let mut reply = String::new();
-        if reader.read_line(&mut reply)? == 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
-        }
-        Ok(reply)
+        let mut out = Vec::with_capacity(line.len() + 1);
+        out.extend_from_slice(line.as_bytes());
+        out.push(b'\n');
+        writer.write_all(&out).and_then(|()| writer.flush()).map_err(Failure::NotSent)?;
+        let reply = read_bounded_line(reader, MAX_REPLY).map_err(Failure::Unknown)?;
+        String::from_utf8(reply).map_err(|_| Failure::Unknown(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply is not UTF-8")))
     }
 
-    /// One request and its reply, with one retry on a new connection (the app may have
-    /// restarted; a new connection also reads the key again).
+    /// One request and its reply. A request that was not sent, or one that only reads, is tried
+    /// once more on a new connection (the app may have restarted; a new connection also reads
+    /// the key again). A mutation whose outcome is unknown is never sent again: it may have run.
     fn exchange(&mut self, id: u64, method: &str, params: &Value) -> Result<Value, String> {
         let unreachable = |addr: &str, e: std::io::Error| format!("WordCraft app at {addr} is not reachable: {e}");
         let mut first = true;
         let reply = loop {
-            let tried = if self.conn.is_some() { Ok(()) } else { self.reconnect() };
+            let tried = if self.conn.is_some() { Ok(()) } else { self.reconnect().map_err(Failure::NotSent) };
             let result = match tried {
                 Ok(()) => {
                     let line = self.request_line(id, method, params)?;
@@ -171,10 +173,18 @@ impl Remote {
             };
             match result {
                 Ok(r) => break r,
-                Err(e) => {
+                Err(f) => {
                     self.conn = None;
+                    if let Failure::Unknown(e) = &f
+                        && !is_read_only(method)
+                    {
+                        return Err(format!(
+                            "outcome unknown: the connection to the WordCraft app at {} failed after `{method}` was sent ({e}); it may have been executed, so it is not sent again. Inspect the document to check",
+                            self.addr
+                        ));
+                    }
                     if !first {
-                        return Err(unreachable(&self.addr, e));
+                        return Err(unreachable(&self.addr, f.into_error()));
                     }
                     first = false;
                 }
@@ -182,6 +192,44 @@ impl Remote {
         };
         serde_json::from_str(reply.trim()).map_err(|e| format!("bad reply from app: {e}"))
     }
+}
+
+/// Why a round trip failed.
+enum Failure {
+    /// Before the whole request reached the socket: the app did not run it.
+    NotSent(std::io::Error),
+    /// After the request was sent: the app may have run it.
+    Unknown(std::io::Error),
+}
+
+impl Failure {
+    fn into_error(self) -> std::io::Error {
+        match self {
+            Self::NotSent(e) | Self::Unknown(e) => e,
+        }
+    }
+}
+
+/// Longest reply line accepted from the app (screenshots and renders come as base64).
+const MAX_REPLY: usize = 128 << 20;
+
+/// Methods that only read: sending them twice does no harm.
+fn is_read_only(method: &str) -> bool {
+    matches!(method, "document.inspect" | "engine.commands" | "ui.inspect" | "ui.parity" | "ui.render" | "ui.screenshot")
+}
+
+/// One line (with its newline) of at most `max` bytes. An end of stream before any byte, or a
+/// longer line, is an error.
+fn read_bounded_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Vec<u8>> {
+    let mut buf = Vec::new();
+    let n = Read::take(&mut *r, max as u64 + 1).read_until(b'\n', &mut buf)?;
+    if n == 0 {
+        return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
+    }
+    if buf.len() > max && !buf.ends_with(b"\n") {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("reply line longer than {max} bytes")));
+    }
+    Ok(buf)
 }
 
 impl Backend for Remote {
@@ -381,5 +429,46 @@ mod tests {
         let e = r.call("document.inspect", json!({})).unwrap_err();
         assert!(e.contains("not a loopback address") && e.contains("not sent"), "{e}");
         assert!(seen.recv_timeout(WAIT).unwrap().get("key").is_none());
+    }
+
+    #[test]
+    fn a_mutation_with_a_lost_reply_is_not_sent_again() {
+        // The app runs the request, then the connection drops without a reply.
+        let (port, seen) = fake_app(|_| None);
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
+        assert!(e.contains("outcome unknown"), "{e}");
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["method"], "engine.execute");
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(seen.try_recv().is_err(), "the mutation was sent a second time");
+    }
+
+    #[test]
+    fn a_read_with_a_lost_reply_is_sent_again() {
+        let n = Arc::new(AtomicUsize::new(0));
+        let (port, seen) =
+            fake_app(move |_| if n.fetch_add(1, Ordering::SeqCst) == 0 { None } else { Some((json!({"ok": true, "result": 3}), false)) });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(3));
+        assert_eq!(seen.try_iter().count(), 2);
+    }
+
+    #[test]
+    fn a_mutation_not_sent_goes_out_on_a_new_connection() {
+        let (port, seen) = fake_app(|_| Some((json!({"ok": true, "result": 1}), false)));
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        r.conn = None;
+        assert_eq!(r.call("engine.execute", json!({"command": "file.new"})).unwrap(), json!(1));
+        assert_eq!(seen.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn a_reply_line_is_bounded() {
+        let mut ok = std::io::Cursor::new(b"abc\nrest".to_vec());
+        assert_eq!(read_bounded_line(&mut ok, 8).unwrap(), b"abc\n");
+        let mut long = std::io::Cursor::new(vec![b'x'; 100]);
+        assert!(read_bounded_line(&mut long, 8).is_err());
+        let mut empty = std::io::Cursor::new(Vec::new());
+        assert!(read_bounded_line(&mut empty, 8).is_err());
     }
 }
