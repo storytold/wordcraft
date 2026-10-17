@@ -53,6 +53,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "dialog": app.dialog.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
         "window": [r.width(), r.height()],
         "canvasRect": app.canvas.canvas_rect.map(|c| [c.left(), c.top(), c.width(), c.height()]),
+        "scroll": [app.canvas.scroll_offset.x, app.canvas.scroll_offset.y],
         "pages": app.canvas.page_rects.iter().map(|r| [r.left(), r.top(), r.width(), r.height()]).collect::<Vec<_>>(),
         "scale": app.canvas.scale,
         "caret": caret,
@@ -61,7 +62,13 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "focused": app.canvas.focused,
         "title": app.title_stem(),
         "dirty": app.session.dirty,
-        "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
+        "perf": {
+            "frameMs": app.frame_ms,
+            "renderMs": app.canvas.render_ms,
+            "layoutMs": app.session.layout().ms,
+            "pageRenders": app.canvas.full_renders,
+            "bandRenders": app.canvas.partial_renders,
+        },
     })
 }
 

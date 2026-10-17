@@ -7,6 +7,11 @@
 //! A frame's time is the CPU time of `WordApp::logic` + `ui` for that frame (layout, page
 //! rasterisation, widgets). What the user sees adds the wait for the next frame and the
 //! presentation on screen (up to one display refresh).
+//!
+//! Typing is measured with the caret scrolled into view and the view settled first (the pages a
+//! scroll passes draw for the first time, which is what navigating costs, not a keystroke), and
+//! separates `raster_ms` — the page rasters drawn for the key, whole pages or changed bands
+//! (#1109) — from the rest of the canvas work. `page_rasters` and `band_rasters` count them.
 
 use std::time::Instant;
 
@@ -15,6 +20,15 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::{Services, WordApp};
 
 static READY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// The view's settling state: the page-raster counters and the scroll offset, in hundredths of a
+/// point.
+fn settling(h: &mut egui_kittest::Harness<'_, WordApp>) -> (u64, u64, i64, i64) {
+    let ctx = h.ctx.clone();
+    let seen = wordcraft_ui_egui::control::inspect(h.state_mut(), &ctx);
+    let scroll = |axis: usize| (seen["scroll"][axis].as_f64().unwrap_or(0.0) * 100.0) as i64;
+    (h.state().canvas.full_renders, h.state().canvas.partial_renders, scroll(0), scroll(1))
+}
 
 fn step(h: &mut egui_kittest::Harness<'_, WordApp>) -> f64 {
     let mut raw = std::mem::take(h.input_mut());
@@ -65,21 +79,42 @@ fn main() {
     let typing = |h: &mut egui_kittest::Harness<'_, WordApp>, pos: serde_json::Value| -> serde_json::Value {
         h.state_mut().session.run("caret.set", &json!({"pos": pos})).ok();
         h.state_mut().canvas.want_focus = true;
-        for _ in 0..3 {
+        // Bring the caret into view before timing keys, and let the view settle: the pages
+        // scrolled over on the way are drawn for the first time, which is what navigating a
+        // document costs, not a keystroke. (Setting the selection alone does not scroll — the app
+        // follows the caret on the next edit — so the scroll is asked for here each frame.)
+        let mut quiet = 0;
+        for _ in 0..900 {
+            h.state_mut().canvas.scroll_to_caret = true;
+            let before = settling(h);
             step(h);
+            let after = settling(h);
+            quiet = if before == after { quiet + 1 } else { 0 };
+            if quiet >= 30 {
+                break;
+            }
         }
         let mut frames = Vec::new();
-        let (mut lay, mut ren) = (Vec::new(), Vec::new());
+        let (mut lay, mut ren, mut ras, mut full, mut band) = (Vec::new(), Vec::new(), Vec::new(), 0, 0);
         for _ in 0..40 {
+            let (pages, bands) = (h.state().canvas.full_renders, h.state().canvas.partial_renders);
             h.input_mut().events.push(egui::Event::Text("a".into()));
-            frames.push(step(h));
+            let a = step(h);
+            let raster = h.state().canvas.raster_ms;
             // the frame after (relayout of a long paragraph may finish there)
-            frames.push(step(h));
+            let b = step(h);
+            frames.push(a);
+            frames.push(b);
             lay.push(h.state_mut().session.layout().ms);
             ren.push(h.state().canvas.render_ms);
+            // Rasterising the page (or band), summed over both frames: what the keystroke costs
+            // the CPU to draw, apart from the rest of the canvas work.
+            ras.push(raster + h.state().canvas.raster_ms);
+            full += h.state().canvas.full_renders - pages;
+            band += h.state().canvas.partial_renders - bands;
         }
         let typed = frames.chunks(2).map(|c| c[0] + c[1]).collect::<Vec<_>>();
-        json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay), "render_ms": stats(&ren)})
+        json!({"frame_with_key_ms": stats(&frames.iter().step_by(2).copied().collect::<Vec<_>>()), "two_frames_ms": stats(&typed), "layout_ms": stats(&lay), "render_ms": stats(&ren), "raster_ms": stats(&ras), "page_rasters": full, "band_rasters": band})
     };
     let mid = h.state().session.doc.body.get(doc_block).and_then(|b| b.as_para()).map(|p| p.len() / 2).unwrap_or(0);
     // a char boundary at or before the middle
@@ -122,7 +157,14 @@ fn main() {
         h.state_mut().session.run("view.zoom", &json!({"value": z})).ok();
         let a = step(&mut h);
         let b = step(&mut h);
-        zoom.push(json!({"zoom": z, "frame_ms": (a * 10.0).round() / 10.0, "next_ms": (b * 10.0).round() / 10.0}));
+        zoom.push(json!({
+            "zoom": z,
+            "frame_ms": (a * 10.0).round() / 10.0,
+            "next_ms": (b * 10.0).round() / 10.0,
+            "raster_ms": (h.state().canvas.raster_ms * 10.0).round() / 10.0,
+            "render_ms": (h.state().canvas.render_ms * 10.0).round() / 10.0,
+            "rasters": h.state().canvas.full_renders + h.state().canvas.partial_renders,
+        }));
     }
     out["zoom"] = json!(zoom);
     let mut tabs = Vec::new();

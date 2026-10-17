@@ -34,11 +34,17 @@ const EDGE_MAX_DT: f32 = 0.1;
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
 pub struct CanvasState {
-    textures: HashMap<usize, (u64, TextureHandle)>,
-    /// Visible full-resolution tiles of pages too tall for one GPU texture.
-    tiles: HashMap<(usize, usize), (u64, TextureHandle)>,
+    /// One raster per page, and what it was made from (see [`PageTex`]).
+    textures: HashMap<usize, PageTex>,
+    /// Visible full-resolution tiles of pages too tall for one GPU texture, and what they were
+    /// made from (see [`TileTex`]).
+    tiles: HashMap<(usize, usize), TileTex>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
     pub(crate) page_keys: PageKeys,
+    /// Page rasters drawn since the canvas was made: whole pages, and bands of changed pages
+    /// (#1109). Reported by the control channel's `perf` and the responsiveness probe.
+    pub partial_renders: u64,
+    pub full_renders: u64,
     /// Whether the document has tracked formatting changes, moves and deletions, by document
     /// revision: finding out walks every paragraph, too slow for every frame (#811).
     markup_facts: std::cell::Cell<Option<((u64, u64), [bool; 3])>>,
@@ -83,6 +89,10 @@ pub struct CanvasState {
     /// it (`WordApp::refocus_after_chrome_click`).
     pub(crate) widget_id: Option<egui::Id>,
     pub render_ms: f64,
+    /// Time spent rasterising pages and bands in this frame, milliseconds: what a keystroke's
+    /// page re-render costs, apart from the rest of the canvas work (painting, chrome, hit
+    /// testing). Reported by the control channel's `perf` and the responsiveness probe.
+    pub raster_ms: f64,
     pub ime_preedit: String,
     /// Document faces added to the interface fonts so the input method's composition (#565) and a
     /// file name in the window caption can be drawn.
@@ -186,6 +196,8 @@ impl Default for CanvasState {
             textures: HashMap::new(),
             tiles: HashMap::new(),
             page_keys: PageKeys::default(),
+            partial_renders: 0,
+            full_renders: 0,
             markup_facts: std::cell::Cell::new(None),
             scroll_to_caret: true,
             nav_to_caret: false,
@@ -211,6 +223,7 @@ impl Default for CanvasState {
             focused: false,
             widget_id: None,
             render_ms: 0.0,
+            raster_ms: 0.0,
             ime_preedit: String::new(),
             ime_faces: Vec::new(),
             want_focus: true,
@@ -623,73 +636,334 @@ fn view_key(app: &WordApp, dim_body: bool) -> u64 {
     h.finish()
 }
 
-/// Fingerprint of a page's laid-out content. A layout never changes once made, so this is
-/// taken once per page and layout ([`PageKeys`]), not every frame.
-fn page_content_key(page: &Page) -> u64 {
+/// Fingerprint of what one placed item draws: everything about it that changes a pixel of the
+/// page raster. `None` for the items that draw nothing themselves (`Cell` and `Object` are there
+/// for hit testing, handles and wrapping), which no raster can show.
+fn item_fingerprint(it: &Placed) -> Option<u64> {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
-    for list in [&page.items, &page.header, &page.footer] {
-        list.len().hash(&mut h);
-        for it in list.iter() {
-            match it {
-                Placed::Lines { para, l0, l1, x, y, turn, .. } => {
-                    (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
+    match it {
+        Placed::Lines { para, l0, l1, x, y, turn, .. } => {
+            (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
+        }
+        Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
+        Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
+        Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
+        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra } => {
+            format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
+            freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
+        }
+        Placed::Graphic { rect, graphic, spin, .. } => {
+            (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
+            format!("{spin:?}").hash(&mut h)
+        }
+        Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
+        Placed::Cell { .. } | Placed::Object { .. } => return None,
+    }
+    Some(h.finish())
+}
+
+/// One drawn item of a page as its texture remembers it ([`PageBands`]): what it draws and the
+/// vertical band of the page, in points, its ink can land in.
+#[derive(Clone, Copy, PartialEq)]
+struct ItemBand {
+    id: u64,
+    top: f32,
+    bottom: f32,
+}
+
+/// How far, in points, a re-rendered band reaches past the changed items' own geometry: an
+/// outline, a shadow, an italic's overhang or a glyph drawn past its line's extent all land a
+/// little outside the box that laid them out, and the renderer's own culling works from the
+/// raster it is handed ([`PageBands::changed_rows`]).
+const BAND_PAD_PT: f32 = 32.0;
+/// Share of a page's raster rows a changed band may cover before the page is drawn whole
+/// instead: a band that big saves nothing.
+const BAND_MAX_PAGE_PCT: usize = 75;
+
+/// What a page's texture holds, for re-rendering only the bands an edit changed (#1109): the
+/// page size, and one band per drawn item in page order. Built from the same walk that
+/// fingerprints a page's content — once per page and layout, never once a frame (#811).
+#[derive(Default)]
+pub(crate) struct PageBands {
+    w: f32,
+    h: f32,
+    items: Vec<ItemBand>,
+}
+
+impl PageBands {
+    /// Snapshot a page's drawn items and the bands of the page they can ink.
+    fn of(page: &Page) -> PageBands {
+        // A text story (a text box's own lines) is drawn through its box's frame: a warped box's
+        // letters are stretched across the frame, so the frame's band is the one that changes
+        // when its text does.
+        let mut frames: HashMap<u32, (f32, f32)> = HashMap::new();
+        for it in page.items.iter().chain(&page.header).chain(&page.footer) {
+            if let Placed::Object { text_box: Some(id), rect, spin, .. } = it {
+                frames.insert(*id, frame_band(*rect, *spin));
+            }
+        }
+        let mut items = Vec::with_capacity(page.items.len() + page.header.len() + page.footer.len());
+        for it in page.items.iter().chain(&page.header).chain(&page.footer) {
+            let Some(id) = item_fingerprint(it) else { continue };
+            let (mut top, mut bottom) = item_band(it, page.h);
+            if let Placed::Lines { story: StoryRef::Part(story), .. } = it
+                && let Some((f_top, f_bottom)) = frames.get(story)
+            {
+                top = top.min(*f_top);
+                bottom = bottom.max(*f_bottom);
+            }
+            items.push(ItemBand { id, top, bottom });
+        }
+        PageBands { w: page.w, h: page.h, items }
+    }
+
+    /// Fingerprint of a page's laid-out content. A layout never changes once made, so this is
+    /// taken once per page and layout ([`PageKeys`]), not every frame.
+    fn content(&self) -> u64 {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (self.w.to_bits(), self.h.to_bits(), self.items.len()).hash(&mut h);
+        for b in &self.items {
+            b.id.hash(&mut h);
+        }
+        h.finish()
+    }
+
+    /// The raster rows of a texture rendered from `self` that no longer match `new`: the union of
+    /// the old and new bands of every item that changed, padded and snapped out to whole pixel
+    /// rows. `Some(0..0)` means the fingerprints differ but no item did (a hash collision, a
+    /// `Cell` or `Object` change): nothing has to be drawn.
+    ///
+    /// `None` when the whole page must be drawn again: another page size, another raster scale, a
+    /// hostile extent that can't be trusted to the pixel, or a change covering most of the page.
+    fn changed_rows(&self, new: &PageBands, scale_px: f32, rows: usize) -> Option<std::ops::Range<usize>> {
+        if !(scale_px.is_finite() && scale_px > 0.0) || rows == 0 || self.w != new.w || self.h != new.h {
+            return None;
+        }
+        let (mut top, mut bottom) = (f32::INFINITY, f32::NEG_INFINITY);
+        for i in 0..self.items.len().max(new.items.len()) {
+            let (a, b) = (self.items.get(i), new.items.get(i));
+            if a == b {
+                continue;
+            }
+            for band in [a, b].into_iter().flatten() {
+                // A NaN or infinite extent is a hostile document, not something to crop to a row.
+                if !(band.top.is_finite() && band.bottom.is_finite()) {
+                    return None;
                 }
-                Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
-                Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
-                Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
-                Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra } => {
-                    format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
-                    freeform.as_ref().map(|f| std::sync::Arc::as_ptr(f) as usize).hash(&mut h);
-                }
-                Placed::Graphic { rect, graphic, spin, .. } => {
-                    (std::sync::Arc::as_ptr(graphic) as usize, rect.x.to_bits(), rect.y.to_bits(), rect.w.to_bits(), rect.h.to_bits()).hash(&mut h);
-                    format!("{spin:?}").hash(&mut h)
-                }
-                Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
-                Placed::Cell { .. } | Placed::Object { .. } => {}
+                top = top.min(band.top);
+                bottom = bottom.max(band.bottom);
+            }
+        }
+        if top > bottom {
+            return Some(0..0);
+        }
+        let to_px = |v: f32| ((v as f64) * (scale_px as f64)).clamp(0.0, rows as f64);
+        let first = to_px(top - BAND_PAD_PT).floor() as usize;
+        let last = to_px(bottom + BAND_PAD_PT).ceil() as usize;
+        if last <= first {
+            return Some(0..0);
+        }
+        if (last - first) * 100 >= rows * BAND_MAX_PAGE_PCT {
+            return None;
+        }
+        Some(first..last)
+    }
+}
+
+/// The vertical band of the page (top, bottom) a frame's ink can land in, in points. A spun
+/// frame's ink lands anywhere inside the circle that holds its corners, whatever its angle.
+fn frame_band(rect: wordcraft_geom::Rect, spin: wordcraft_geom::Spin) -> (f32, f32) {
+    if spin.is_identity() {
+        return (rect.y, rect.y + rect.h);
+    }
+    let r = (rect.w * rect.w + rect.h * rect.h).max(0.0).sqrt() / 2.0;
+    let cy = rect.y + rect.h / 2.0;
+    (cy - r, cy + r)
+}
+
+/// The vertical band of the page (top, bottom) an item's ink can land in, in points: its frame
+/// grown by what the renderer grows it by (an outline stroke, a shadow, a glow). A measure that
+/// isn't there falls back to the whole page, which only costs a band re-render that draws it all
+/// ([`PageBands::changed_rows`] draws the page whole for a hostile band anyway).
+fn item_band(it: &Placed, page_h: f32) -> (f32, f32) {
+    let whole = (0.0, page_h);
+    match it {
+        Placed::Lines { para, l0, l1, y, turn, .. } => {
+            if turn.is_turned() {
+                return it.turned_bounds().map_or(whole, |r| (r.y, r.y + r.h));
+            }
+            let (Some(first), Some(last)) = (para.lines.get(*l0), l1.checked_sub(1).and_then(|l| para.lines.get(l))) else {
+                return whole;
+            };
+            (*y, *y + (last.top + last.height - first.top))
+        }
+        Placed::Fill { rect, .. } => (rect.y, rect.y + rect.h),
+        Placed::Image { rect, spin, .. } | Placed::Graphic { rect, spin, .. } => frame_band(*rect, *spin),
+        Placed::Shape { rect, spin, stroke_width, effects, .. } => {
+            let (top, bottom) = frame_band(*rect, *spin);
+            let stroke = if stroke_width.is_finite() { stroke_width.abs().clamp(0.25, 200.0) / 2.0 } else { 100.0 };
+            let [_, e_top, _, e_bottom] = effects.extent();
+            (top - stroke - e_top, bottom + stroke + e_bottom)
+        }
+        Placed::Rule { y0, y1, border, .. } => {
+            // A double border draws two lines offset from the rule, each half the width across.
+            let w = if border.width.is_finite() { border.width.abs().clamp(0.25, 200.0) } else { 200.0 };
+            (y0.min(*y1) - w * 1.5, y0.max(*y1) + w * 1.5)
+        }
+        Placed::Clip { rect, spin, .. } => frame_band(*rect, *spin),
+        Placed::Cell { .. } | Placed::Object { .. } => whole,
+    }
+}
+
+/// What a page texture needs after its page's layout changed ([`PageTex::update_for`]).
+enum PageUpdate {
+    /// The texture already shows the page: its fingerprint moved on its own (a hash collision, a
+    /// `Cell` or `Object` change), which draws no pixel.
+    Nothing,
+    /// Redraw these rows of the texture and leave the rest of the page as it is.
+    Rows(std::ops::Range<usize>),
+    /// Draw the page whole.
+    Full,
+}
+
+/// One page's raster and what it was made from. An edit usually changes a few lines of one page;
+/// keeping the item bands the raster was drawn from lets the canvas re-render just those rows
+/// (#1109) instead of the whole page.
+struct PageTex {
+    /// Layout fingerprint of the raster: its content, the view options and the raster scale.
+    content: u64,
+    view: u64,
+    scale_px: f32,
+    /// The item bands of the layout the raster was drawn from.
+    bands: std::sync::Arc<PageBands>,
+    tex: TextureHandle,
+}
+
+impl PageTex {
+    /// Whether the texture already shows this layout.
+    fn holds(&self, view: u64, scale_px: f32, content: u64) -> bool {
+        self.content == content && self.view == view && self.scale_px.to_bits() == scale_px.to_bits()
+    }
+
+    /// Record that the texture now shows this layout.
+    fn retag(&mut self, content: u64, view: u64, scale_px: f32, bands: std::sync::Arc<PageBands>) {
+        self.content = content;
+        self.view = view;
+        self.scale_px = scale_px;
+        self.bands = bands;
+    }
+
+    /// What to draw for a page that now fingerprints as `view`, `scale_px` and `content`.
+    /// Conservative by design: anything that can't be trusted to a band — another scale or view,
+    /// another page size, a hostile extent, a change covering most of the page — draws the page
+    /// whole. Stale pixels are never worth the milliseconds.
+    fn update_for(&self, view: u64, scale_px: f32, content: u64, bands: &PageBands) -> PageUpdate {
+        if self.holds(view, scale_px, content) {
+            return PageUpdate::Nothing;
+        }
+        if self.view != view || self.scale_px.to_bits() != scale_px.to_bits() {
+            return PageUpdate::Full;
+        }
+        match self.bands.changed_rows(bands, scale_px, self.tex.size()[1]) {
+            Some(rows) if rows.is_empty() => PageUpdate::Nothing,
+            Some(rows) => PageUpdate::Rows(rows),
+            None => PageUpdate::Full,
+        }
+    }
+}
+
+/// One tile of a page too tall for a single GPU texture, and what it was made from: the page's
+/// layout fingerprint, the rows of the page's raster it shows, and the item bands of the layout
+/// it was drawn from. A keystroke redraws the rows of the tile it changed (#1109).
+struct TileTex {
+    content: u64,
+    view: u64,
+    scale_px: f32,
+    /// Rows of the page's raster this tile shows.
+    start_px: usize,
+    rows: usize,
+    bands: std::sync::Arc<PageBands>,
+    tex: TextureHandle,
+}
+
+impl TileTex {
+    /// Whether the tile already shows this layout, at this place in the page's raster.
+    fn holds(&self, view: u64, scale_px: f32, content: u64, start_px: usize, rows: usize) -> bool {
+        self.content == content
+            && self.view == view
+            && self.scale_px.to_bits() == scale_px.to_bits()
+            && self.start_px == start_px
+            && self.rows == rows
+    }
+
+    /// Record that the tile now shows this layout.
+    fn retag(&mut self, view: u64, scale_px: f32, content: u64, start_px: usize, rows: usize, bands: std::sync::Arc<PageBands>) {
+        self.content = content;
+        self.view = view;
+        self.scale_px = scale_px;
+        self.start_px = start_px;
+        self.rows = rows;
+        self.bands = bands;
+    }
+
+    /// What to draw in this tile now that its page fingerprints as `view`, `scale_px` and
+    /// `content`. A band's rows are rows of the *page's* raster, which the caller clips to this
+    /// tile; `total_px` is the whole page's raster height.
+    fn update_for(&self, view: u64, scale_px: f32, content: u64, start_px: usize, rows: usize, total_px: usize, bands: &PageBands) -> PageUpdate {
+        if self.holds(view, scale_px, content, start_px, rows) {
+            return PageUpdate::Nothing;
+        }
+        // Another view, scale or tile height: the tile's place in the page's raster moved, so its
+        // raster is another size: draw it whole.
+        if self.view != view || self.scale_px.to_bits() != scale_px.to_bits() {
+            return PageUpdate::Full;
+        }
+        match self.bands.changed_rows(bands, scale_px, total_px) {
+            None => PageUpdate::Full,
+            Some(changed) if changed.is_empty() => PageUpdate::Nothing,
+            Some(changed) => {
+                // Clip the changed band to this tile: an edit on another part of the tall page
+                // leaves the tile alone.
+                let first = changed.start.max(start_px);
+                let last = changed.end.min(start_px + rows);
+                if last > first { PageUpdate::Rows(first..last) } else { PageUpdate::Nothing }
             }
         }
     }
-    h.finish()
 }
 
-/// The content fingerprints of one layout's pages, taken when a page is first needed (#811).
-/// Hashing every item of every page each frame cost tens of milliseconds a frame in a long
-/// table (thousands of cell borders per page), idle or scrolling.
+/// The content fingerprints and band snapshots of one layout's pages, taken when a page is first
+/// needed (#811). Hashing every item of every page each frame cost tens of milliseconds a frame
+/// in a long table (thousands of cell borders per page), idle or scrolling.
 #[derive(Default)]
 pub(crate) struct PageKeys {
     /// The layout these are for; held so its address can't be reused by another one.
     layout: Option<std::sync::Arc<DocLayout>>,
-    keys: Vec<Option<u64>>,
-    /// Pages fingerprinted since the layout last changed.
+    /// Each page's content fingerprint and item bands, taken once per layout.
+    pages: Vec<Option<(u64, std::sync::Arc<PageBands>)>>,
+    /// Pages snapshotted since the layout last changed.
     pub(crate) hashed: usize,
 }
 
 impl PageKeys {
-    fn content(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> u64 {
+    /// Page `i`'s content fingerprint and item bands, taken once per layout.
+    fn snapshot(&mut self, layout: &std::sync::Arc<DocLayout>, i: usize) -> (u64, std::sync::Arc<PageBands>) {
         if !self.layout.as_ref().is_some_and(|l| std::sync::Arc::ptr_eq(l, layout)) {
             self.layout = Some(layout.clone());
-            self.keys = vec![None; layout.pages.len()];
+            self.pages = vec![None; layout.pages.len()];
             self.hashed = 0;
         }
-        if let Some(Some(k)) = self.keys.get(i) {
-            return *k;
+        if let Some(Some(page)) = self.pages.get(i) {
+            return page.clone();
         }
-        let k = layout.pages.get(i).map_or(0, page_content_key);
-        if let Some(slot) = self.keys.get_mut(i) {
-            *slot = Some(k);
+        let bands = std::sync::Arc::new(layout.pages.get(i).map_or_else(PageBands::default, PageBands::of));
+        let page = (bands.content(), bands);
+        if let Some(slot) = self.pages.get_mut(i) {
+            *slot = Some(page.clone());
             self.hashed += 1;
         }
-        k
+        page
     }
-}
-
-/// The texture cache key of page `i`: its content, the view, and the raster scale.
-fn page_key(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, i: usize, view: u64, scale_px: f32) -> u64 {
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    (view, scale_px.to_bits(), app.canvas.page_keys.content(layout, i)).hash(&mut h);
-    h.finish()
 }
 
 fn to_screen(origin: Pos2, page_rect: Rect, scale: f32, x: f32, y: f32) -> Pos2 {
@@ -1046,6 +1320,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
         let mut visible_tile_keys = HashSet::new();
         let mut rendered = 0;
+        app.canvas.raster_ms = 0.0;
         let t0 = crate::now_ms();
         let mut rects = Vec::with_capacity(geo.rects.len());
         let content_origin = ui.min_rect().min;
@@ -1065,33 +1340,91 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let visible = band_of(sr).intersects(ui.clip_rect().expand(200.0));
             // Only pages on screen or with a texture need their key (#811).
             let cached = !tiled && app.canvas.textures.contains_key(&i);
-            let key =
-                if visible || cached { page_key(app, &layout, i, view, scale_px) ^ if tiled { (tile_height_px as u64) << 32 } else { 0 } } else { 0 };
-            let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|(k, _)| *k == key);
+            let snapshot = (visible || cached).then(|| app.canvas.page_keys.snapshot(&layout, i));
+            let (content, bands) = match snapshot {
+                Some((content, bands)) => (content, Some(bands)),
+                None => (0, None),
+            };
+            let mut fresh = cached && app.canvas.textures.get(&i).is_some_and(|e| e.holds(view, scale_px, content));
             // Render before placing the page: a page re-rendered in this frame (a zoom step, an
             // edit) then sits on the pixel grid in this frame too, rather than a frame later.
             if visible && !tiled && !fresh && (rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-                let opts = page_render_options(app, dim_body);
-                let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
-                let ci = page_image(&img);
-                match app.canvas.textures.get_mut(&i) {
-                    Some((k, tex)) => {
-                        tex.set(ci, egui::TextureOptions::LINEAR);
-                        *k = key;
+                // An edit changes a few lines of one page: redraw those rows alone (#1109).
+                let update = match (app.canvas.textures.get(&i), bands.as_ref()) {
+                    (Some(entry), Some(new)) => entry.update_for(view, scale_px, content, new),
+                    _ => PageUpdate::Full,
+                };
+                let mut drawn = false;
+                if let PageUpdate::Rows(rows) = update {
+                    let (w, h) = app.canvas.textures.get(&i).map_or((1, 1), |e| {
+                        let s = e.tex.size();
+                        (s[0], s[1])
+                    });
+                    let band_rows = rows.end.saturating_sub(rows.start);
+                    if band_rows > 0 && rows.end <= h {
+                        let opts = page_render_options(app, dim_body);
+                        // Band `rows` of the page, at the same scale and origin as the whole page
+                        // (`- 0.01` keeps the ceil() from reaching a row too far, as the tiling
+                        // path does).
+                        let y = rows.start as f32 / scale_px;
+                        let t_raster = crate::now_ms();
+                        let img = wordcraft_render::render_area(
+                            &app.session.doc,
+                            page,
+                            0.0,
+                            y,
+                            page.w,
+                            (band_rows as f32 - 0.01).max(0.01) / scale_px,
+                            scale_px,
+                            &opts,
+                        );
+                        app.canvas.raster_ms += crate::now_ms() - t_raster;
+                        if img.width as usize == w && img.height as usize == band_rows {
+                            let ci = page_image(&img);
+                            if let Some(entry) = app.canvas.textures.get_mut(&i) {
+                                entry.tex.set_partial([0, rows.start], ci, egui::TextureOptions::LINEAR);
+                                entry.retag(content, view, scale_px, bands.clone().unwrap_or_default());
+                            }
+                            app.canvas.partial_renders += 1;
+                            rendered += 1;
+                            drawn = true;
+                        }
                     }
-                    None => {
-                        let tex = ui.ctx().load_texture(format!("page{i}"), ci, egui::TextureOptions::LINEAR);
-                        app.canvas.textures.insert(i, (key, tex));
+                } else if let PageUpdate::Nothing = update {
+                    // The page's fingerprint moved but nothing it draws did (a `Cell` or `Object`
+                    // change): keep the raster and record the new layout.
+                    if let Some(entry) = app.canvas.textures.get_mut(&i) {
+                        entry.retag(content, view, scale_px, bands.clone().unwrap_or_default());
                     }
+                    drawn = true;
                 }
-                rendered += 1;
+                if !drawn {
+                    let opts = page_render_options(app, dim_body);
+                    let t_raster = crate::now_ms();
+                    let img = wordcraft_render::render_page(&app.session.doc, page, scale_px, &opts);
+                    app.canvas.raster_ms += crate::now_ms() - t_raster;
+                    let ci = page_image(&img);
+                    match app.canvas.textures.get_mut(&i) {
+                        Some(entry) => {
+                            entry.tex.set(ci, egui::TextureOptions::LINEAR);
+                            entry.retag(content, view, scale_px, bands.clone().unwrap_or_default());
+                        }
+                        None => {
+                            let tex = ui.ctx().load_texture(format!("page{i}"), ci, egui::TextureOptions::LINEAR);
+                            let bands = bands.clone().unwrap_or_default();
+                            app.canvas.textures.insert(i, PageTex { content, view, scale_px, bands, tex });
+                        }
+                    }
+                    app.canvas.full_renders += 1;
+                    rendered += 1;
+                }
                 fresh = true;
             } else if visible && !tiled && !fresh {
                 ui.ctx().request_repaint();
             }
             let current_scale = geo.scale * ppp;
             let visual_sr = if fresh && (scale_px - current_scale).abs() <= 0.0001_f32.max(current_scale.abs() * 0.0001) {
-                app.canvas.textures.get(&i).map_or(sr, |(_, tex)| texel_aligned_rect(sr, tex.size_vec2(), ppp))
+                app.canvas.textures.get(&i).map_or(sr, |e| texel_aligned_rect(sr, e.tex.size_vec2(), ppp))
             } else {
                 sr
             };
@@ -1123,45 +1456,99 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                     let id = (i, tile);
                     visible_tile_keys.insert(id);
-                    let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
+                    let fresh = app.canvas.tiles.get(&id).is_some_and(|t| t.holds(view, scale_px, content, start_px, height_px));
                     if !fresh && rendered < 4 {
-                        // The tiny subtraction avoids a 1px overshoot from round-tripping f32
-                        // pixels through page points and render_area's ceil() conversion.
-                        let img = wordcraft_render::render_area(
-                            &app.session.doc,
-                            page,
-                            0.0,
-                            start_px as f32 / scale_px,
-                            page.w,
-                            (height_px as f32 - 0.01).max(0.01) / scale_px,
-                            scale_px,
-                            &page_render_options(app, dim_body),
-                        );
-                        let ci = page_image(&img);
-                        match app.canvas.tiles.get_mut(&id) {
-                            Some((k, tex)) => {
-                                tex.set(ci, egui::TextureOptions::LINEAR);
-                                *k = key;
+                        // An edit changes a few lines of one page: redraw the rows of this tile
+                        // they ink (#1109). A zoom step, another view, another tile height or a
+                        // change covering the tile draws it whole.
+                        let update = match (app.canvas.tiles.get(&id), bands.as_ref()) {
+                            (Some(entry), Some(new)) => entry.update_for(view, scale_px, content, start_px, height_px, total_px, new),
+                            // No tile yet: draw it whole.
+                            _ => PageUpdate::Full,
+                        };
+                        let mut drawn = false;
+                        if let PageUpdate::Rows(rows) = update {
+                            let band_rows = rows.end.saturating_sub(rows.start);
+                            let tex_w = app.canvas.tiles.get(&id).map_or(0, |t| t.tex.size()[0]);
+                            // The tiny subtraction avoids a 1px overshoot from round-tripping f32
+                            // pixels through page points and render_area's ceil() conversion.
+                            let t_raster = crate::now_ms();
+                            let img = wordcraft_render::render_area(
+                                &app.session.doc,
+                                page,
+                                0.0,
+                                rows.start as f32 / scale_px,
+                                page.w,
+                                (band_rows as f32 - 0.01).max(0.01) / scale_px,
+                                scale_px,
+                                &page_render_options(app, dim_body),
+                            );
+                            app.canvas.raster_ms += crate::now_ms() - t_raster;
+                            if band_rows > 0 && rows.end <= start_px + height_px && img.width as usize == tex_w && img.height as usize == band_rows {
+                                let ci = page_image(&img);
+                                match app.canvas.tiles.get_mut(&id) {
+                                    Some(entry) => {
+                                        entry.tex.set_partial([0, rows.start - start_px], ci, egui::TextureOptions::LINEAR);
+                                        entry.retag(view, scale_px, content, start_px, height_px, bands.clone().unwrap_or_default());
+                                    }
+                                    None => {
+                                        let tex = ui.ctx().load_texture(format!("page{i}-tile{tile}"), ci, egui::TextureOptions::LINEAR);
+                                        let bands = bands.clone().unwrap_or_default();
+                                        app.canvas.tiles.insert(id, TileTex { content, view, scale_px, start_px, rows: height_px, bands, tex });
+                                    }
+                                }
+                                app.canvas.partial_renders += 1;
+                                rendered += 1;
+                                drawn = true;
                             }
-                            None => {
-                                let tex = ui.ctx().load_texture(format!("page{i}-tile{tile}"), ci, egui::TextureOptions::LINEAR);
-                                app.canvas.tiles.insert(id, (key, tex));
+                        } else if let PageUpdate::Nothing = update {
+                            // Nothing this tile shows changed: keep its raster where it lies.
+                            if let Some(entry) = app.canvas.tiles.get_mut(&id) {
+                                entry.retag(view, scale_px, content, start_px, height_px, bands.clone().unwrap_or_default());
                             }
+                            drawn = true;
                         }
-                        rendered += 1;
+                        if !drawn {
+                            let t_raster = crate::now_ms();
+                            let img = wordcraft_render::render_area(
+                                &app.session.doc,
+                                page,
+                                0.0,
+                                start_px as f32 / scale_px,
+                                page.w,
+                                (height_px as f32 - 0.01).max(0.01) / scale_px,
+                                scale_px,
+                                &page_render_options(app, dim_body),
+                            );
+                            app.canvas.raster_ms += crate::now_ms() - t_raster;
+                            let ci = page_image(&img);
+                            match app.canvas.tiles.get_mut(&id) {
+                                Some(entry) => {
+                                    entry.tex.set(ci, egui::TextureOptions::LINEAR);
+                                    entry.retag(view, scale_px, content, start_px, height_px, bands.clone().unwrap_or_default());
+                                }
+                                None => {
+                                    let tex = ui.ctx().load_texture(format!("page{i}-tile{tile}"), ci, egui::TextureOptions::LINEAR);
+                                    let bands = bands.clone().unwrap_or_default();
+                                    app.canvas.tiles.insert(id, TileTex { content, view, scale_px, start_px, rows: height_px, bands, tex });
+                                }
+                            }
+                            app.canvas.full_renders += 1;
+                            rendered += 1;
+                        }
                     } else if !fresh {
                         ui.ctx().request_repaint();
                     }
-                    if let Some((_, tex)) = app.canvas.tiles.get(&id) {
+                    if let Some(entry) = app.canvas.tiles.get(&id) {
                         let rect = Rect::from_min_size(
                             pos2(base.x, base.y + start_px as f32 * screen_per_raster_px),
-                            vec2(tex.size_vec2().x * screen_per_raster_px, height_px as f32 * screen_per_raster_px),
+                            vec2(entry.tex.size_vec2().x * screen_per_raster_px, height_px as f32 * screen_per_raster_px),
                         );
-                        painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                        painter.image(entry.tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                     }
                 }
-            } else if let Some((_, tex)) = app.canvas.textures.get(&i) {
-                painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+            } else if let Some(entry) = app.canvas.textures.get(&i) {
+                painter.image(entry.tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
             let page_scale = page_screen_scale(visual_sr, page, geo.scale);
             // Header/footer editing chrome.
@@ -3088,6 +3475,271 @@ mod tests {
             let ours = page_image(&img);
             assert_eq!(ours.size, [img.width as usize, img.height as usize]);
             assert!(ours.pixels == by_straight_alpha(&img).pixels, "a page pixel changed");
+        }
+    }
+
+    /// One page band entry for the band-math tests: item `id` inking `top..bottom` points.
+    fn item(id: u64, top: f32, bottom: f32) -> ItemBand {
+        ItemBand { id, top, bottom }
+    }
+
+    fn bands(w: f32, h: f32, items: Vec<ItemBand>) -> PageBands {
+        PageBands { w, h, items }
+    }
+
+    /// #1109: an edit re-renders the rows its changed lines ink, plus a pad, and nothing else.
+    #[test]
+    fn a_changed_line_redraws_its_old_and_new_band_with_the_pad() {
+        let a = bands(612.0, 792.0, vec![item(1, 300.0, 312.0)]);
+        let b = bands(612.0, 792.0, vec![item(2, 300.0, 324.0)]);
+        // 300 - 32 = 268 pt and 324 + 32 = 356 pt, at 2 px a point.
+        assert_eq!(a.changed_rows(&b, 2.0, 1584), Some(536..712));
+        assert_eq!(b.changed_rows(&a, 2.0, 1584), Some(536..712), "the same band whichever way round");
+        // A line that moved up leaves its old ink behind unless the old band is redrawn too.
+        let c = bands(612.0, 792.0, vec![item(3, 600.0, 612.0)]);
+        assert_eq!(a.changed_rows(&c, 2.0, 1584), Some(536..1288));
+    }
+
+    #[test]
+    fn an_unchanged_page_has_no_rows_to_redraw() {
+        let a = bands(612.0, 792.0, vec![item(1, 72.0, 100.0), item(2, 200.0, 220.0)]);
+        let b = bands(612.0, 792.0, vec![item(1, 72.0, 100.0), item(2, 200.0, 220.0)]);
+        assert_eq!(a.changed_rows(&b, 2.0, 1584), Some(0..0));
+        // An item added at the end of the page counts as changed, an empty page as nothing.
+        let empty = bands(612.0, 792.0, Vec::new());
+        assert_eq!(empty.changed_rows(&empty, 2.0, 1584), Some(0..0));
+        assert!(empty.changed_rows(&a, 2.0, 1584).is_some_and(|r| !r.is_empty()), "a first item is a change");
+    }
+
+    #[test]
+    fn a_removed_item_redraws_the_band_it_used_to_ink() {
+        // The last paragraph of a page was deleted: its ink has to go, and it is not in the new
+        // layout to be drawn over again.
+        let a = bands(100.0, 400.0, vec![item(1, 10.0, 20.0), item(7, 300.0, 320.0)]);
+        let b = bands(100.0, 400.0, vec![item(1, 10.0, 20.0)]);
+        assert_eq!(a.changed_rows(&b, 2.0, 800), Some(536..704));
+        assert_eq!(b.changed_rows(&a, 2.0, 800), Some(536..704), "and the same when it comes back");
+    }
+
+    #[test]
+    fn band_rows_snap_out_to_whole_pixels() {
+        // Floored at the top and ceiled at the bottom: a partly changed pixel row is redrawn.
+        let a = bands(100.0, 1000.0, vec![item(1, 10.3, 12.1)]);
+        let b = bands(100.0, 1000.0, vec![item(2, 10.3, 12.1)]);
+        let rows = a.changed_rows(&b, 3.0, 3000).unwrap();
+        assert_eq!(rows.start, 0, "the pad reaches past the top of this page");
+        assert_eq!(rows.end, ((12.1 + BAND_PAD_PT) * 3.0).ceil() as usize);
+        // A band lower down keeps its floored top.
+        let a = bands(100.0, 1000.0, vec![item(1, 410.3, 412.1)]);
+        let b = bands(100.0, 1000.0, vec![item(2, 410.3, 412.1)]);
+        let rows = a.changed_rows(&b, 3.0, 3000).unwrap();
+        assert_eq!(rows.start, ((410.3 - BAND_PAD_PT) * 3.0).floor() as usize);
+        assert_eq!(rows.end, ((412.1 + BAND_PAD_PT) * 3.0).ceil() as usize);
+    }
+
+    #[test]
+    fn band_rows_are_clamped_to_the_raster() {
+        // An extent far off the page (a shape anchored a thousand pages away) never asks for rows
+        // that are not there.
+        let rows = 20_000;
+        let a = bands(100.0, 10_000.0, vec![item(1, -1.0e9, 5.0)]);
+        let b = bands(100.0, 10_000.0, vec![item(2, -1.0e9, 5.0)]);
+        assert_eq!(a.changed_rows(&b, 2.0, rows), Some(0..74));
+        let a = bands(100.0, 10_000.0, vec![item(1, 9_990.0, 1.0e9)]);
+        let b = bands(100.0, 10_000.0, vec![item(2, 9_990.0, 1.0e9)]);
+        assert_eq!(a.changed_rows(&b, 2.0, rows), Some(19_916..rows));
+    }
+
+    #[test]
+    fn a_hostile_extent_draws_the_page_whole() {
+        // Nothing about such a page can be trusted to a band, so it is drawn whole.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let a = bands(100.0, 400.0, vec![item(1, 100.0, 120.0)]);
+            let b = bands(100.0, 400.0, vec![item(2, 100.0, bad)]);
+            assert!(a.changed_rows(&b, 2.0, 800).is_none(), "{bad}");
+            assert!(b.changed_rows(&a, 2.0, 800).is_none(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn another_page_size_another_scale_or_a_big_change_draws_the_page_whole() {
+        let a = bands(612.0, 792.0, vec![item(1, 100.0, 120.0)]);
+        let grown = bands(612.0, 793.0, vec![item(2, 100.0, 120.0)]);
+        let shrunk = bands(612.0, 791.0, vec![item(2, 100.0, 120.0)]);
+        assert!(a.changed_rows(&grown, 2.0, 1584).is_none(), "the page grew");
+        assert!(a.changed_rows(&shrunk, 2.0, 1584).is_none(), "the page shrank");
+        for bad in [0.0, -1.0, f32::NAN, f32::INFINITY] {
+            assert!(a.changed_rows(&grown, bad, 1584).is_none(), "{bad} px a point");
+        }
+        assert!(a.changed_rows(&grown, 2.0, 0).is_none(), "no raster to draw into");
+        // Two thirds of the page changed: a band that big saves nothing.
+        let top = bands(100.0, 400.0, vec![item(1, 0.0, 130.0)]);
+        let bottom = bands(100.0, 400.0, vec![item(2, 270.0, 400.0)]);
+        assert!(top.changed_rows(&bottom, 2.0, 800).is_none());
+        // A fifth of it does: a band.
+        let top = bands(100.0, 400.0, vec![item(1, 0.0, 50.0)]);
+        let bottom = bands(100.0, 400.0, vec![item(2, 0.0, 50.0)]);
+        assert_eq!(top.changed_rows(&bottom, 2.0, 800), Some(0..164));
+    }
+
+    /// The items that draw nothing (`Cell`, `Object`) are there for hit testing and handles: a
+    /// page that only changed one of those draws no pixel.
+    #[test]
+    fn items_that_draw_nothing_never_reach_a_band() {
+        let cell = |y: f32| Placed::Cell {
+            rect: wordcraft_geom::Rect::new(10.0, y, 90.0, 20.0),
+            covered: false,
+            table: Default::default(),
+            row: 0,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: false,
+        };
+        let page = Page { w: 612.0, h: 792.0, items: vec![cell(100.0)], ..Default::default() };
+        let other = Page { w: 612.0, h: 792.0, items: vec![cell(300.0)], ..Default::default() };
+        let (a, b) = (PageBands::of(&page), PageBands::of(&other));
+        assert!(a.items.is_empty() && b.items.is_empty());
+        assert_eq!(a.content(), b.content());
+        assert_eq!(a.changed_rows(&b, 2.0, 1584), Some(0..0));
+    }
+
+    /// Every drawn item of a real page inks somewhere inside the band `PageBands::of` recorded for
+    /// it, so a re-render of a changed line can't leave its neighbours' ink out.
+    #[test]
+    fn a_real_pages_bands_hold_their_items_geometry() {
+        let mut s = wordcraft_engine::Session::new(wordcraft_engine::sample::sample_document());
+        let layout = s.layout();
+        let page = &layout.pages[0];
+        let h = page.h;
+        let snapshot = PageBands::of(page);
+        assert!(!snapshot.items.is_empty(), "a body-text page has drawn items");
+        assert_eq!(snapshot.content(), PageBands::of(page).content(), "the fingerprint holds still");
+        assert_ne!(snapshot.content(), 0);
+        let mut drawn = 0;
+        for it in page.items.iter().chain(&page.header).chain(&page.footer) {
+            if item_fingerprint(it).is_none() {
+                continue;
+            }
+            let (top, bottom) = item_band(it, h);
+            let band = snapshot.items.get(drawn).expect("one band per drawn item");
+            assert!(band.top <= top && band.bottom >= bottom, "{it:?}: {top}..{bottom} outside {}..{}", band.top, band.bottom);
+            assert!(band.top <= band.bottom && band.top.is_finite() && band.bottom.is_finite());
+            assert!(band.top >= -BAND_PAD_PT && band.bottom <= h + BAND_PAD_PT, "{it:?}: {}..{}", band.top, band.bottom);
+            drawn += 1;
+        }
+        assert_eq!(drawn, snapshot.items.len());
+        assert_eq!(snapshot.changed_rows(&snapshot, 2.0, (h * 2.0) as usize), Some(0..0));
+    }
+
+    /// How a band re-render of `rows` at `row0` of a page's raster disagrees with the whole-page
+    /// render's pixels there: the largest channel difference and the number of differing pixels.
+    fn band_mismatch(
+        doc: &wordcraft_doc::Document,
+        page: &Page,
+        row0: usize,
+        rows: usize,
+        scale: f32,
+        opts: &wordcraft_render::RenderOptions,
+        whole: &wordcraft_render::Rendered,
+    ) -> (i32, usize) {
+        let img = wordcraft_render::render_area(doc, page, 0.0, row0 as f32 / scale, page.w, (rows as f32 - 0.01).max(0.01) / scale, scale, opts);
+        let w = whole.width as usize;
+        assert_eq!((img.width as usize, img.height as usize), (w, rows), "the band raster is the page's width and the band's height");
+        let (mut max, mut differing) = (0i32, 0usize);
+        for y in 0..rows {
+            for x in 0..w {
+                let full = &whole.pixels[((row0 + y) * w + x) * 4..((row0 + y) * w + x) * 4 + 4];
+                let band = &img.pixels[(y * w + x) * 4..(y * w + x) * 4 + 4];
+                if full == band {
+                    continue;
+                }
+                differing += 1;
+                for c in 0..4 {
+                    max = max.max((full[c] as i32 - band[c] as i32).abs());
+                }
+            }
+        }
+        (max, differing)
+    }
+
+    /// #1109: a band re-render must give the pixels the whole-page render gives in the rows it
+    /// covers, or a keystroke would leave stale ink or a hole behind. vello_cpu's coverage
+    /// rounding moves by one level on a handful of pixels when the raster origin does (a band
+    /// starts at another row), so one level is allowed; anything structural — a lost glyph, a
+    /// line's ink still or no longer there — is far bigger than that.
+    #[test]
+    fn a_band_re_render_matches_the_whole_page_row_for_row() {
+        let mut pages = 0;
+        for doc in [wordcraft_engine::sample::sample_document(), crate::tests_perf::big_table_doc(600, 4)] {
+            let mut s = wordcraft_engine::Session::new(doc);
+            let layout = s.layout();
+            let (scale, opts) = (2.0, screen_render_options());
+            for page in layout.pages.iter().take(4) {
+                let whole = wordcraft_render::render_page(&s.doc, page, scale, &opts);
+                assert!(whole.width > 10 && whole.height > 400);
+                for (row0, rows) in [(0usize, 33usize), (137, 91), (whole.height as usize - 64, 64)] {
+                    let (max, differing) = band_mismatch(&s.doc, page, row0, rows, scale, &opts, &whole);
+                    assert!(max <= 1, "a band at row {row0} of page {} differs by {max} levels over {differing} pixels", page.number);
+                    assert!(
+                        differing * 1000 <= rows * whole.width as usize,
+                        "a band at row {row0} of page {} differs in {differing} pixels",
+                        page.number
+                    );
+                }
+                pages += 1;
+            }
+        }
+        assert!(pages >= 5, "bands were checked on several pages: {pages}");
+    }
+
+    /// A harness painting `doc` with the canvas focused for typing, stepped until its first
+    /// pages are on screen.
+    fn canvas_harness(doc: wordcraft_doc::Document) -> egui_kittest::Harness<'static, WordApp> {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        a.canvas.want_focus = true;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        h
+    }
+
+    /// #1109: a keystroke in a paragraph or a table cell re-renders the band its lines ink and
+    /// updates the page's own texture where it lies — no whole-page raster, no new upload.
+    #[test]
+    fn a_keystroke_redraws_a_band_of_the_page_not_the_whole_page() {
+        let para =
+            wordcraft_doc::Document::from_text("Some text in a paragraph long enough to hold a few lines and leave the rest of the page alone.");
+        for (doc, caret) in [
+            (para, json!({"story": "body", "path": [0], "off": 10})),
+            (crate::tests_perf::big_table_doc(600, 4), json!({"story": "body", "path": [1, 0, 0, 0], "off": 0})),
+        ] {
+            let mut h = canvas_harness(doc);
+            h.state_mut().session.run("caret.set", &caret).ok();
+            for _ in 0..3 {
+                h.step();
+            }
+            let page_h = h.state_mut().session.layout().pages.first().map_or(1.0, |p| p.h);
+            let before = std::sync::Arc::clone(&h.state().canvas.textures.get(&0).expect("page 0 is on screen").bands);
+            let (full, band) = (h.state().canvas.full_renders, h.state().canvas.partial_renders);
+            assert!(full > 0, "the page was laid out and drawn");
+            let tex = h.state().canvas.textures.get(&0).map(|e| e.tex.id());
+            let rows = h.state().canvas.textures.get(&0).map_or(0, |e| e.tex.size()[1]);
+            h.event(egui::Event::Text("x".into()));
+            h.step();
+            assert_eq!(h.state().canvas.full_renders, full, "the keystroke drew no whole page");
+            assert_eq!(h.state().canvas.partial_renders, band + 1, "the keystroke redrew one band");
+            assert_eq!(h.state().canvas.textures.get(&0).map(|e| e.tex.id()), tex, "the page's own texture was updated in place");
+            let after = std::sync::Arc::clone(&h.state().canvas.textures.get(&0).expect("still there").bands);
+            let changed = before.changed_rows(&after, rows as f32 / page_h, rows).expect("a band, not the whole page");
+            assert!(!changed.is_empty() && changed.len() * 4 < rows, "the keystroke redrew {changed:?} of {rows} rows");
         }
     }
 
