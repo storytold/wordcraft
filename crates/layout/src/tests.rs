@@ -7263,3 +7263,127 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+fn absolute_footer(text: &str, height: f32) -> Document {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::TableFloat;
+    let para = |text| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()));
+    let mut table = Table::new(1, 1, 468.0);
+    table.props.float = Some(TableFloat { y: 650.0, h_rel: Anchor::Page, v_rel: Anchor::Page, ..Default::default() });
+    table.rows[0].props.height = Some(height);
+    table.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+    table.rows[0].cells[0].blocks = vec![para(text)];
+    let mut doc = Document::from_text("Body");
+    let id = doc.add_part(wordcraft_doc::PartKind::Footer, vec![para("Footer label"), Arc::new(Block::Table(table)), para("")]);
+    doc.last_section.footers.default = Some(id);
+    doc
+}
+
+#[test]
+fn footer_absolute_height() {
+    let mut base = absolute_footer("", 20.0);
+    let id = base.last_section.footers.default.unwrap();
+    base.parts.get_mut(&id).unwrap().blocks.remove(1);
+    let footer_y = |doc: &Document| {
+        lay(doc).pages[0]
+            .footer
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { path, y, .. } if *path == Path::top(0) => Some(*y),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let expected = footer_y(&base);
+    // Native original controls keep this anchor with both empty and text-bearing floats.
+    for text in ["", "Decoration"] {
+        for height in [20.0, 60.0, 100.0] {
+            let doc = absolute_footer(text, height);
+            let actual = footer_y(&doc);
+            assert!((actual - expected).abs() < 0.01, "{text:?}, height {height}: {actual}, expected {expected}");
+            let layout = lay(&doc);
+            let top = layout.pages[0]
+                .footer
+                .iter()
+                .find_map(|item| match item {
+                    Placed::Cell { table, rect, .. } if *table == Path::top(1) => Some(rect.y),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((top - 650.0).abs() < 0.01, "absolute position must survive: {top}");
+        }
+    }
+}
+
+#[test]
+fn footer_float_wraps_body() {
+    use wordcraft_doc::props::LineSpacing;
+    const FLOAT_TOP: f32 = 100.0;
+    const FLOAT_RIGHT: f32 = 468.0;
+    for text in ["", "Decoration"] {
+        for height in [20.0, 60.0, 100.0] {
+            let mut doc = absolute_footer(text, height);
+            let id = doc.last_section.footers.default.unwrap();
+            let Block::Table(table) = Arc::make_mut(&mut doc.parts.get_mut(&id).unwrap().blocks[1]) else { panic!("table") };
+            table.props.float.as_mut().unwrap().y = FLOAT_TOP;
+            table.props.float.as_mut().unwrap().x = 0.0;
+            doc.body = (0..17)
+                .map(|i| {
+                    let mut p =
+                        wordcraft_doc::Paragraph::with_text(&format!("Body row {i:02}: original footer wrapping control."), Default::default());
+                    p.props = ParaProps {
+                        space_before: Some(0.0),
+                        space_after: Some(0.0),
+                        line_spacing: Some(LineSpacing::Exactly(24.0)),
+                        ..Default::default()
+                    };
+                    wordcraft_doc::para_block(p)
+                })
+                .collect();
+            let layout = lay(&doc);
+            assert_eq!(layout.pages.len(), 1, "a page float must not cap every body's bottom");
+            for i in 0..17 {
+                let lines = line_boxes(&layout, 0, i, doc.last_section.margin_left);
+                assert!(!lines.is_empty(), "body row {i} vanished");
+                for &(left, top, right, bottom) in &lines {
+                    if bottom > FLOAT_TOP + 0.01 && top < FLOAT_TOP + height - 0.01 {
+                        assert!(left >= FLOAT_RIGHT - 0.01 || right <= 0.01, "body crosses footer table: {lines:?}");
+                    }
+                }
+            }
+            let after = layout.caret(&Pos::body(16, 0)).unwrap();
+            assert!((after.x - doc.last_section.margin_left).abs() < 0.01, "body must return below the float");
+            assert!(after.top > FLOAT_TOP + height);
+        }
+    }
+}
+
+#[test]
+fn footer_table_wrap_bounds() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+    const FLOAT_TOP: f32 = 100.0;
+    const ROW_HEIGHT: f32 = 40.0;
+    const TABLE_WIDTH: f32 = 468.0;
+    let mut doc = Document::from_text(&format!("Anchor\n{}", "Original body words ".repeat(60)));
+    for block in &mut doc.body {
+        let Block::Para(p) = Arc::make_mut(block) else { panic!("paragraph") };
+        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(24.0)), ..Default::default() };
+    }
+    let mut table = Table::new(2, 2, TABLE_WIDTH);
+    table.props.cell_margins = Some([0.0; 4]);
+    table.props.float = Some(TableFloat { y: FLOAT_TOP, h_rel: Anchor::Page, v_rel: Anchor::Page, ..Default::default() });
+    for row in &mut table.rows {
+        row.props.height = Some(ROW_HEIGHT);
+        row.props.height_rule = HeightRule::AtLeast;
+    }
+    table.rows[1].cells.truncate(1);
+    table.rows[1].props.grid_after = 1;
+    let id = doc.add_part(wordcraft_doc::PartKind::Footer, vec![Arc::new(Block::Table(table))]);
+    doc.last_section.footers.default = Some(id);
+    let layout = lay(&doc);
+    let lines = line_boxes(&layout, 0, 1, doc.last_section.margin_left);
+    let beside: Vec<_> = lines.iter().filter(|(_, top, _, bottom)| *bottom > FLOAT_TOP + ROW_HEIGHT && *top < FLOAT_TOP + ROW_HEIGHT * 2.0).collect();
+    assert!(!beside.is_empty());
+    assert!(beside.iter().all(|(left, _, _, _)| *left >= TABLE_WIDTH - 0.01), "omitted cells must not open a hole in table wrapping: {beside:?}");
+}

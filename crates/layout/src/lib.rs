@@ -661,6 +661,7 @@ struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     table_keys: Vec<(para::CellText, u64)>,
+    footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
 }
 
 impl Ctx<'_> {
@@ -1019,6 +1020,7 @@ fn layout_box(
     let mut excl: Vec<WrapArea> = Vec::new();
     // Areas of the box's floating tables, which other floating tables may have to avoid.
     let mut float_tables: Vec<Rect> = Vec::new();
+    let mut page_table_wraps = Vec::new();
     let mut y = 0.0f32;
     let mut prev_after = 0.0f32;
     let mut prev_after_auto = false;
@@ -1128,6 +1130,14 @@ fn layout_box(
                 if depth > 8 {
                     continue;
                 }
+                // Page tables do not contribute to the footer text's intrinsic height.
+                if frame.is_none()
+                    && !in_cell
+                    && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Footer))
+                    && t.props.float.is_some_and(|f| f.v_rel == Anchor::Page)
+                {
+                    continue;
+                }
                 let tl = table::layout_table(ctx, story, t, &path, width, depth + 1);
                 let (tx, ty) = match t.props.float {
                     // A floating table stands at its own position and takes no room; the text
@@ -1137,6 +1147,9 @@ fn layout_box(
                         let (r, area) = box_float_table_rect(frame, width, y, &tl, &f, legacy, &float_tables);
                         excl.push((area, false, None, WrapText::BothSides));
                         float_tables.push(area);
+                        if f.v_rel == Anchor::Page {
+                            page_table_wraps.push((area, false, None, WrapText::BothSides));
+                        }
                         (r.x, r.y)
                     }
                     // A table in the text flow starts below the floating objects in its way.
@@ -1161,7 +1174,7 @@ fn layout_box(
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0) }
+    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -1216,6 +1229,7 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 struct BoxLayout {
     items: Vec<Placed>,
+    page_table_wraps: Vec<WrapArea>,
     height: f32,
     floats_bottom: f32,
     last_top: f32,
@@ -2024,6 +2038,7 @@ fn layout_pass(
         quiet_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        footer_wraps: HashMap::new(),
     };
     let sections = doc.sections();
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
@@ -2886,9 +2901,77 @@ fn anchor_floats(
             }
         }
     }
-    let rel = rel_exclusions(&pb.excl, col_x, y0);
+    let rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
     let pl = ctx.para_labelled(p, width, None, &rel, label.clone());
     (rects, pl, rel)
+}
+
+/// Footer page tables wrap only the intersecting body lines, which resume below them.
+fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
+    if pb.web || ctx.opts.view == ViewMode::Read {
+        return Vec::new();
+    }
+    let Some(page) = pb.pages.last() else { return Vec::new() };
+    let first = pb.pages.iter().rev().nth(1).is_none_or(|prev| prev.section != page.section);
+    let key = (page.section, page.number, first);
+    if let Some(areas) = ctx.footer_wraps.get(&key) {
+        return areas.clone();
+    }
+    ctx.footer_wraps.insert(key, Vec::new());
+    let doc = ctx.doc;
+    let sections = doc.sections();
+    let Some((_, sect)) = sections.get(page.section) else { return Vec::new() };
+    if sect.text_direction.is_turned() {
+        return Vec::new();
+    }
+    let set = linked(&sections, page.section, |s| s.footers);
+    let id = if sect.title_page && first {
+        set.first
+    } else if doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
+        set.even.or(set.default)
+    } else {
+        set.default
+    };
+    let Some(id) = id else { return Vec::new() };
+    let Some(part) = doc.parts.get(&id) else { return Vec::new() };
+    let blocks = part.blocks.clone();
+    let x = sect.margin_left + sect.gutter;
+    let base = defining_width(&sections, page.section, |s| s.footers, Some(id));
+    let counters = std::mem::take(&mut ctx.counters);
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let fields = ctx.fields.clone();
+    let grid = std::mem::take(&mut ctx.grid);
+    let track = std::mem::replace(&mut ctx.track_totals, false);
+    ctx.fields.page = page.number;
+    let areas = again(ctx, 0, |ctx| {
+        with_pct_base(ctx, base, |ctx| {
+            let story = StoryRef::Part(id);
+            let h = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, None).height;
+            let y = sect.page_h - sect.footer - h;
+            let frame = PageFrame { sect, origin: (x, y), number: page.number, mirror: ctx.mirror };
+            let mut areas = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).page_table_wraps;
+            for (rect, ..) in &mut areas {
+                rect.x += x;
+                rect.y += y;
+            }
+            areas
+        })
+    });
+    ctx.counters = counters;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.fields = fields;
+    ctx.grid = grid;
+    ctx.track_totals = track;
+    ctx.footer_wraps.insert(key, areas.clone());
+    areas
+}
+
+fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
+    let mut areas = footer_table_wraps(ctx, pb);
+    areas.extend_from_slice(&pb.excl);
+    areas
 }
 
 /// Where a paragraph's floating objects are positioned from, when they aren't placed already:
@@ -3204,7 +3287,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             && wrap_relays < MAX_WRAP_RELAYS
             && let Some((resume, t)) = pl.lines.get(l0).map(|l| (l.start, l.top))
         {
-            let here = continued_exclusions(&rel, &pb.excl, pb.col_x(), pb.y, t, laid_width);
+            let here = continued_exclusions(&rel, &body_wraps(ctx, pb), pb.col_x(), pb.y, t, laid_width);
             if here != rel {
                 wrap_relays += 1;
                 ctx.fields.page = laid_page;
@@ -3667,7 +3750,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
     // A table in the text flow starts below the floating objects in its way.
-    below_floats(pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
+    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
     // Header rows are re-placed on every page a table spills onto, so a table with many header
     // rows that each spill onto their own page is O(header rows × pages) placed items — a few KB
@@ -3894,8 +3977,8 @@ fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32, mirror: 
 
 /// Move `pb.y` below the floating objects in the way of something spanning `x0..x1` that
 /// starts there (a table in the text flow doesn't wrap around them).
-fn below_floats(pb: &mut PageBuilder, x0: f32, x1: f32) {
-    pb.y = below(&pb.excl, pb.y, x0, x1);
+fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32) {
+    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1);
 }
 
 /// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1` that
