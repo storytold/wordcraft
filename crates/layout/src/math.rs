@@ -219,15 +219,7 @@ pub fn layout_equation(
         _ if display => cx.wrapped(nodes, st, avail, props),
         _ => cx.arg(nodes, st, 0),
     };
-    let mut slots = b.slots;
-    let em = base;
-    for s in &mut slots {
-        if s.a <= 0.0 && s.d <= 0.0 {
-            s.a = em * 0.75;
-            s.d = em * 0.25;
-        }
-    }
-    MathLayout { width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items, slots }
+    cx.finish(b, st)
 }
 
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
@@ -457,6 +449,20 @@ fn wide_accent(c: char) -> bool {
 }
 
 impl Ctx {
+    fn finish(&self, b: Bx, st: St) -> MathLayout {
+        let mut slots = b.slots;
+        let em = self.base;
+        for s in &mut slots {
+            if s.a <= 0.0 && s.d <= 0.0 {
+                s.a = em * 0.75;
+                s.d = em * 0.25;
+            }
+        }
+        // Use only a supplied font metric; keep fallback-font line metrics unchanged.
+        let leading = self.t.as_ref().map_or(0.0, |t| t.get(C::MathLeading) * self.size(st) / self.upem).max(0.0);
+        MathLayout { width: b.w.max(0.0), ascent: (b.a + leading).max(0.0), descent: b.d.max(0.0), items: b.items, slots }
+    }
+
     fn scale(&self, level: u8) -> f32 {
         let (s1, s2) = match &self.t {
             Some(t) => (t.script_percent, t.script_script_percent),
@@ -2091,6 +2097,58 @@ mod tests {
         let plus_w = lay("+", false).width;
         assert!(spaced.width > tight.width + plus_w + 2.0, "medium spaces around +");
         assert!(unary.width < lay("b", false).width + plus_w + 1.0, "no space after a unary minus");
+    }
+
+    #[test]
+    fn math_leading_is_not_ink() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+        let face = FaceRef::of(&font);
+        for units in [None, Some(0i16), Some(200), Some(-200)] {
+            let table = units.map(|value| {
+                // Original minimal MATH header and constants, with no glyph-specific data.
+                let mut bytes = vec![0u8; 22];
+                bytes[0..2].copy_from_slice(&1u16.to_be_bytes());
+                bytes[4..6].copy_from_slice(&10u16.to_be_bytes());
+                bytes[18..20].copy_from_slice(&value.to_be_bytes());
+                Arc::new(wordcraft_fonts::math::parse(&bytes).unwrap())
+            });
+            for display in [false, true] {
+                for size in [9.0, 14.0, 20.0] {
+                    let cx = Ctx {
+                        face,
+                        t: table.clone(),
+                        upem: face.upem as f32,
+                        base: size,
+                        color: Rgb::BLACK,
+                        text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+                        nodes: 0,
+                        path: Vec::new(),
+                        node_stack: Vec::new(),
+                    };
+                    let st = St { level: 0, display, cramped: false, upright: false };
+                    let mut ink = cx.glyph_id(face.glyph_for('a'), size, Rgb::BLACK);
+                    ink.items.push(MItem::Rect { x: 0.0, y: 0.0, w: ink.w, h: 0.5, color: Rgb::BLACK });
+                    let before = ink.clone();
+                    let result = cx.finish(ink, st);
+                    let leading = f32::from(units.unwrap_or(0).max(0)) * size / cx.upem;
+                    assert!((result.ascent - before.a - leading).abs() < 0.001, "reserve only the font's nonnegative leading");
+                    assert_eq!(result.descent, before.d);
+                    assert_eq!(result.width, before.w);
+                    for (actual, expected) in result.items.iter().zip(&before.items) {
+                        match (actual, expected) {
+                            (MItem::Glyphs { glyphs: a, size: sa, .. }, MItem::Glyphs { glyphs: b, size: sb, .. }) => assert_eq!((sa, a), (sb, b)),
+                            (MItem::Rect { x, y, w, h, .. }, MItem::Rect { x: bx, y: by, w: bw, h: bh, .. }) => {
+                                assert_eq!((x, y, w, h), (bx, by, bw, bh));
+                            }
+                            _ => panic!("drawing item changed"),
+                        }
+                    }
+                    assert_eq!(result.items.len(), before.items.len());
+                }
+            }
+        }
     }
 
     #[test]
