@@ -36,7 +36,7 @@ pub fn para_jc(para: &El) -> MathJc {
     }
 }
 
-/// The settings part's `m:mathPr`: how display equations wrap.
+/// The settings part's `m:mathPr`: equation sizing and wrapping.
 pub fn read_math_pr(e: &El) -> MathProps {
     let mut m = MathProps::default();
     let pr = Some(e);
@@ -53,6 +53,7 @@ pub fn read_math_pr(e: &El) -> MathProps {
     if let Some(v) = e.child("m:wrapIndent").and_then(|c| crate::units::tw(c, "m:val")).filter(|v| v.is_finite() && *v >= 0.0) {
         m.wrap_indent = v.min(1584.0);
     }
+    m.small_frac = prop(pr, "m:smallFrac", false);
     m.wrap_right = prop(pr, "m:wrapRight", false);
     m
 }
@@ -332,6 +333,15 @@ mod tests {
             r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{inner}</m:oMath>"#
         );
         crate::xml::parse(x.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn small_fraction_setting() {
+        for (xml, expected) in [("", false), ("<m:smallFrac/>", true), ("<m:smallFrac m:val=\"0\"/>", false), ("<m:smallFrac m:val=\"1\"/>", true)] {
+            let input = format!(r#"<m:mathPr xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math">{xml}</m:mathPr>"#);
+            let e = crate::xml::parse(input.as_bytes()).unwrap();
+            assert_eq!(read_math_pr(&e).small_frac, expected, "{xml}");
+        }
     }
 
     #[test]
