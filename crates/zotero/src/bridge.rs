@@ -6,6 +6,7 @@
 //! to the document-order list of Zotero fields, updated as fields are inserted and removed.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::edit::Fragment;
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{LineSpacing, TabAlign, TabLeader, TabStop};
@@ -590,7 +591,7 @@ fn remove_empty_note(s: &mut Session, f: &ZField) -> Option<Pos> {
 
 fn ensure_bib_style(s: &mut Session) {
     if s.doc.styles.get(BIB_STYLE).is_none() {
-        s.doc.styles.upsert(Style {
+        Arc::make_mut(&mut s.doc.styles).upsert(Style {
             id: BIB_STYLE.into(),
             name: BIB_STYLE.into(),
             kind: StyleKind::Paragraph,
@@ -618,7 +619,7 @@ fn set_bibliography_style(s: &mut Session, c: &Call) -> Result<(), String> {
         _ => Vec::new(),
     };
     ensure_bib_style(s);
-    let st = s.doc.styles.get_mut(BIB_STYLE).ok_or("the bibliography style is missing")?;
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(BIB_STYLE).ok_or("the bibliography style is missing")?;
     st.para.indent_left = Some(twips(body));
     st.para.indent_first = Some(twips(first));
     st.para.line_spacing = Some(if line > 0 { LineSpacing::Multiple((line as f32 / 240.0).clamp(0.5, 5.0)) } else { LineSpacing::Multiple(1.0) });

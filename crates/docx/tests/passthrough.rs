@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{Read, Write};
+use std::sync::Arc;
 
 const W: &str = "http://schemas.openxmlformats.org/wordprocessingml/2006/main";
 const R_NS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
@@ -257,7 +258,7 @@ fn comment_references_use_the_documents_annotation_reference_style() {
     assert!(!body.contains(r#"w:val="CommentReference""#), "{body}");
     // A document without that style keeps the English id.
     let mut doc = wordcraft_doc::Document::new();
-    doc.styles.styles.retain(|s| !s.name.eq_ignore_ascii_case("annotation reference"));
+    Arc::make_mut(&mut doc.styles).styles.retain(|s| !s.name.eq_ignore_ascii_case("annotation reference"));
     let rebuilt = wordcraft_docx::read(&comments_package(true)).unwrap();
     doc.body = rebuilt.body.clone();
     doc.parts = rebuilt.parts.clone();
@@ -299,7 +300,7 @@ fn list_identities_survive_and_a_copied_definition_gets_none() {
     // A copy of the definition (as the engine makes when restarting a list) doesn't reuse the nsid.
     let mut copy = doc.numbering.abstracts[0].clone();
     copy.id = 7;
-    doc.numbering.abstracts.push(copy);
+    Arc::make_mut(&mut doc.numbering).abstracts.push(copy);
     let n = text(&save(&doc), "word/numbering.xml");
     assert_eq!(n.matches("1F2E3D4C").count(), 1, "{n}");
 }

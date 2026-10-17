@@ -38,8 +38,8 @@ fn sample() -> Document {
     p.insert_text(n, ".", &CharProps::default()).unwrap();
     blocks.push(para_block(p));
     blocks.push(para_block(Paragraph::with_text("Second Level", CharProps::default()).styled("Heading2")));
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     for (t, nm, lvl) in [("first bullet", bul, 0u8), ("second bullet", bul, 0), ("nested bullet", bul, 1)] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
         q.props.numbering = Some(wordcraft_doc::props::NumRef { num: nm, level: lvl });
@@ -166,8 +166,8 @@ fn check_round_trip(ext: &str, rich: bool) {
 /// Two bullets directly followed by two numbered items.
 fn bullets_then_numbers() -> Document {
     let mut d = Document::new();
-    let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let mut blocks = Vec::new();
     for (t, nm) in [("dot one", bul), ("dot two", bul), ("num one", num), ("num two", num)] {
         let mut q = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
@@ -198,7 +198,7 @@ fn numbered_list_after_bullets_keeps_its_kind() {
 fn markdown_list_items_that_start_like_blocks_keep_their_text() {
     for text in ["---", "--", "1. Intro", "# Agenda", "ordinary item"] {
         let mut d = Document::new();
-        let bul = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let bul = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
         let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
         p.props.numbering = Some(wordcraft_doc::props::NumRef { num: bul, level: 0 });
         d.body = vec![para_block(p)];

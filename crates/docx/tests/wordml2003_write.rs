@@ -32,7 +32,7 @@ fn sample() -> Document {
     d.core.title = "Garden <notes> & more".into();
     d.core.creator = "Ada".into();
     let key = d.add_media(tiny_png(), "png");
-    let num = d.numbering.add_list(ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let head = d.add_part(PartKind::Header, vec![para_block(Paragraph::with_text("Head", CharProps::default()))]);
     let foot = d.add_part(PartKind::Footnote, vec![para_block(Paragraph::with_text("Sown in May.", CharProps::default()))]);
     let com = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Too short?", CharProps::default()))]);

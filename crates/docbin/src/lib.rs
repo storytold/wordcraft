@@ -25,6 +25,7 @@ mod stsh;
 mod table;
 
 use std::io::{Read, Seek};
+use std::sync::Arc;
 
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::para::NoteKind;
@@ -153,9 +154,9 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
         doc.core = core;
     }
     doc.body.clear();
-    doc.styles = fmt::stylesheet(&raw_styles, &fonts);
-    doc.numbering = list::parse(&table, &fib, &fonts);
-    let sheet: StyleSheet = doc.styles.clone();
+    doc.styles = Arc::new(fmt::stylesheet(&raw_styles, &fonts));
+    doc.numbering = Arc::new(list::parse(&table, &fib, &fonts));
+    let sheet: StyleSheet = StyleSheet::clone(&doc.styles);
     let sects = sections::parse(&word, &table, &fib);
     let stories = sections::header_stories(&table, &fib);
     // Subdocument layout in the CP space: main document, footnotes, headers, comments,

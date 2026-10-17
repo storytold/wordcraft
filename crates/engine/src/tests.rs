@@ -4,6 +4,7 @@ use wordcraft_proof::cs::install_dictionary;
 mod czech_test_dict;
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::BorderStyle;
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -2547,7 +2548,7 @@ fn toc_page_numbers_reach_the_right_margin() {
     let long = "A deliberately long section title that does not fit on one line of the table of contents and wraps onto a second line";
     let mut d = wordcraft_doc::Document::from_text(&format!("Contents\n\nNo entries.\n\nShort\n{long}\nTop\nAppendix"));
     {
-        let toc2 = d.styles.get_mut("TOC2").unwrap();
+        let toc2 = Arc::make_mut(&mut d.styles).get_mut("TOC2").unwrap();
         toc2.para.tabs = Some(vec![
             TabStop { pos: 77.0, align: TabAlign::Left, leader: TabLeader::None },
             TabStop { pos: 467.2, align: TabAlign::Right, leader: TabLeader::Dot },
@@ -2640,7 +2641,7 @@ fn toc_entries_carry_heading_numbers() {
         run(&mut s, "para.heading1", json!({}));
         run(&mut s, "text.newParagraph", json!({}));
     }
-    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     for b in s.doc.body.iter_mut() {
         if let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b)
             && p.props.style.as_deref() == Some("Heading1")
@@ -2781,10 +2782,10 @@ fn commands_after_the_largest_ids_take_free_ones() {
         s.doc.parts.insert(id, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Comment, blocks, ..Default::default() });
         s.doc.comments.insert(id, wordcraft_doc::Comment { part: id, ..Default::default() });
     }
-    s.doc.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-    s.doc.numbering.abstracts[0].id = u32::MAX;
-    s.doc.numbering.nums[0].id = u32::MAX;
-    s.doc.numbering.nums[0].abstract_id = u32::MAX;
+    Arc::make_mut(&mut s.doc.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+    Arc::make_mut(&mut s.doc.numbering).abstracts[0].id = u32::MAX;
+    Arc::make_mut(&mut s.doc.numbering).nums[0].id = u32::MAX;
+    Arc::make_mut(&mut s.doc.numbering).nums[0].abstract_id = u32::MAX;
     let before = s.doc.clone();
     assert_eq!(run(&mut s, "review.newComment", json!({"text": "new"})), json!({"id": 1, "story": 1}));
     assert_eq!(run(&mut s, "review.reply", json!({"id": 0, "text": "re"})), json!({"id": 2}));
@@ -2881,7 +2882,7 @@ fn word_count_includes_text_boxes_by_default() {
 #[test]
 fn word_count_includes_numbered_list_labels_in_words_but_not_characters() {
     let mut d = wordcraft_doc::Document::new();
-    let num_id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     let mut p = wordcraft_doc::Paragraph::with_text("Apple", wordcraft_doc::CharProps::default());
     p.props.numbering = Some(wordcraft_doc::props::NumRef { num: num_id, level: 0 });
     d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Para(p))];
@@ -3484,6 +3485,34 @@ fn modify_style_takes_hex_colours_like_format_color() {
     }
     modify(&mut s, json!({"Rgb": "1B1611"})).unwrap();
     assert_eq!(color(&s), Some(TextColor::Rgb(Rgb(0x1B, 0x16, 0x11))), "the hex string also reads inside {{\"Rgb\": …}}");
+}
+
+#[test]
+fn undo_steps_share_the_style_sheet_and_lists_until_a_command_changes_them() {
+    // Every undo step copied the whole style sheet and list definitions: kilobytes a style, so
+    // typing into a document with hundreds of styles cost megabytes a step.
+    let mut s = Session::new(wordcraft_doc::Document::from_text("One two three."));
+    for _ in 0..5 {
+        run(&mut s, "text.insert", json!({"text": "word "}));
+        run(&mut s, "caret.left", json!({}));
+    }
+    assert_eq!(s.undo_labels().len(), 5, "five undo steps");
+    assert!(Arc::strong_count(&s.doc.styles) >= 6, "the document and each step hold one style sheet");
+    assert!(Arc::strong_count(&s.doc.numbering) >= 6, "and one set of list definitions");
+    // A command that changes a style copies the sheet once; undo puts the shared one back.
+    let sheet = Arc::clone(&s.doc.styles);
+    run(&mut s, "styles.modify", json!({"style": "Normal", "chr": {"bold": true}}));
+    assert!(!Arc::ptr_eq(&sheet, &s.doc.styles));
+    assert_ne!(*sheet, *s.doc.styles, "the change is in the new copy only");
+    run(&mut s, "edit.undo", json!({}));
+    assert!(Arc::ptr_eq(&sheet, &s.doc.styles), "undo restores the step's own sheet");
+    // Lists likewise.
+    let lists = Arc::clone(&s.doc.numbering);
+    run(&mut s, "para.numbering", json!({}));
+    assert!(!Arc::ptr_eq(&lists, &s.doc.numbering));
+    assert!(s.doc.numbering.nums.len() > lists.nums.len());
+    run(&mut s, "edit.undo", json!({}));
+    assert!(Arc::ptr_eq(&lists, &s.doc.numbering));
 }
 
 /// #865: the other colours in CharProps and ParaProps (`underlineColor`, `shading`, a border's
@@ -4613,7 +4642,7 @@ fn deleting_a_table_style_from_manage_styles_uses_table_style_deletion() {
     assert_eq!((r["deleted"][0].as_str(), r["restyled"].as_u64()), (Some("Base"), Some(1)));
     assert_eq!(s.doc.table(StoryRef::Body, &tp).unwrap().props.style.as_deref(), Some("TableGrid"));
     assert_eq!(s.doc.styles.table_style("Child").unwrap().parts.header_fill, Some(Rgb(0xC0, 0, 0)), "the child keeps its look");
-    for st in s.doc.styles.styles.iter_mut() {
+    for st in Arc::make_mut(&mut s.doc.styles).styles.iter_mut() {
         st.builtin = false;
     }
     assert!(s.run("styles.delete", &json!({"style": "Table Grid"})).is_err());
@@ -4758,7 +4787,7 @@ fn delete_table_style_falls_back_and_undoes() {
 fn builtin_table_styles_marked_custom_in_a_docx_cant_be_deleted() {
     let mut s = s();
     run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
-    for st in s.doc.styles.styles.iter_mut() {
+    for st in Arc::make_mut(&mut s.doc.styles).styles.iter_mut() {
         st.builtin = false;
     }
     for name in ["Table Grid", "Normal Table", "TableGrid"] {
@@ -5266,7 +5295,7 @@ fn list_buttons_follow_the_paragraphs_own_level() {
     // A bulleted list whose second level is numbered: at level 2 the paragraph is numbered.
     let num = s.doc.para_at(&s.sel.focus).unwrap().props.numbering.unwrap().num;
     let numbered = wordcraft_doc::numbering::Level { text: "%2.".into(), ..Default::default() };
-    s.doc.numbering.nums.iter_mut().find(|n| n.id == num).unwrap().level_overrides.push((1, numbered));
+    Arc::make_mut(&mut s.doc.numbering).nums.iter_mut().find(|n| n.id == num).unwrap().level_overrides.push((1, numbered));
     run(&mut s, "para.listLevel", json!({"level": 1}));
     assert_eq!(state(&s), ListButtons { bullets: false, numbering: true, multilevel: false });
     run(&mut s, "para.numbering", json!({}));
@@ -6233,7 +6262,7 @@ fn ordinals_and_untagged_text_sort_and_sum_as_numbers() {
 
     let mut s = s();
     s.set_editing_language(Some("pl-PL"));
-    s.doc.styles.default_chr.lang = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     run(&mut s, "insert.table", json!({"rows": 3, "cols": 1}));
     run(&mut s, "text.insert", json!({"text": "3,50"}));
     run(&mut s, "text.tab", json!({}));
@@ -6724,8 +6753,14 @@ fn inspect_document_hidden_text_in_every_story_and_from_styles() {
     run(&mut s, "insert.footer", json!({"text": "f"}));
     s.sel = crate::Selection::caret(Pos::body(0, 0));
     let hidden = CharProps { hidden: Some(true), ..Default::default() };
-    s.doc.styles.upsert(Style { id: "HideC".into(), name: "Hide C".into(), kind: StyleKind::Character, chr: hidden.clone(), ..Default::default() });
-    s.doc.styles.upsert(Style {
+    Arc::make_mut(&mut s.doc.styles).upsert(Style {
+        id: "HideC".into(),
+        name: "Hide C".into(),
+        kind: StyleKind::Character,
+        chr: hidden.clone(),
+        ..Default::default()
+    });
+    Arc::make_mut(&mut s.doc.styles).upsert(Style {
         id: "HideP".into(),
         name: "Hide P".into(),
         kind: StyleKind::Paragraph,
@@ -6836,7 +6871,7 @@ fn inspect_document_removes_text_hidden_by_document_defaults() {
     use wordcraft_doc::props::CharProps;
     use wordcraft_doc::{Paragraph, para_block};
     let mut s = s();
-    s.doc.styles.default_chr.hidden = Some(true);
+    Arc::make_mut(&mut s.doc.styles).default_chr.hidden = Some(true);
     s.doc.body = vec![
         para_block(Paragraph::with_text("hide-default", CharProps::default())),
         para_block(Paragraph::with_text("keep-default", CharProps { hidden: Some(false), ..Default::default() })),
@@ -6879,7 +6914,7 @@ fn inspect_document_keeps_content_control_markers() {
 fn inspect_document_lists_tables_whose_style_hides_text() {
     use wordcraft_doc::styles::{Style, StyleKind, TableStyleParts};
     let mut s = s();
-    s.doc.styles.upsert(Style {
+    Arc::make_mut(&mut s.doc.styles).upsert(Style {
         id: "HideHeader".into(),
         name: "Hide Header".into(),
         kind: StyleKind::Table,

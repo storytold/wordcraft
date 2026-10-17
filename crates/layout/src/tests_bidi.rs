@@ -3,6 +3,7 @@
 
 use super::*;
 use crate::para::{bidi_levels, visual_order};
+use std::sync::Arc;
 use wordcraft_doc::props::{Align, ParaProps};
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -214,7 +215,7 @@ fn rtl_indents_and_alignment_are_measured_from_the_right() {
 #[test]
 fn rtl_list_label_sits_on_the_right() {
     let mut d = doc_of(&[("مورد اول", true), ("مورد دوم", true)]);
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p: &mut ParaProps| {
         p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })
     })
@@ -526,7 +527,7 @@ fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
     // margin. In Word the label stays attached to the start of the text, in both directions.
     for (rtl, text) in [(false, "alpha beta"), (true, "مورد اول")] {
         let mut d = doc_of(&[(text, rtl), (text, rtl), (text, rtl), (text, rtl)]);
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(3, 1), &|p: &mut ParaProps| {
             p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })
         })

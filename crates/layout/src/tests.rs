@@ -85,7 +85,7 @@ fn contextual_gap(after: f32, before: f32, first: bool, second: bool, different_
     use wordcraft_doc::props::LineSpacing;
     let mut d = Document::new();
     for id in ["SpacingA", "SpacingB"] {
-        d.styles.upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
+        Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style { id: id.into(), name: id.into(), ..Default::default() });
     }
     let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(12.0), ..Default::default() };
     let props = ParaProps {
@@ -161,7 +161,7 @@ fn contextual_spacing_removes_every_gap_in_a_four_paragraph_run() {
     use wordcraft_doc::props::LineSpacing;
     for table in [false, true] {
         let mut doc = Document::new();
-        doc.styles.upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
+        Arc::make_mut(&mut doc.styles).upsert(wordcraft_doc::Style { id: "SpacingA".into(), name: "SpacingA".into(), ..Default::default() });
         let paragraphs = ["One", "Two", "Three", "Four"]
             .into_iter()
             .map(|text| {
@@ -210,7 +210,7 @@ fn contextual_automatic_lists_do_not_subtract_the_gap_twice() {
     use wordcraft_doc::props::{LineSpacing, NumRef};
     for table in [false, true] {
         let mut doc = Document::new();
-        let num = doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Arc::make_mut(&mut doc.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let paragraphs = ["First", "Second", "Third"]
             .into_iter()
             .map(|text| {
@@ -882,7 +882,7 @@ fn right_tab_aligns_text_end() {
 #[test]
 fn lists_get_labels_and_indent() {
     let mut d = Document::from_text("one\ntwo\nthree");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 5), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     let l = lay(&d);
     let labels: Vec<String> = l.pages[0]
@@ -900,7 +900,7 @@ fn break_only_list_has_no_label() {
     use wordcraft_doc::ListKind;
     for kind in [ListKind::Numbered, ListKind::Bullet] {
         let mut d = Document::from_text("First\n\u{000C}\nLast\n\nAfter");
-        let id = d.numbering.add_list(kind);
+        let id = Arc::make_mut(&mut d.numbering).add_list(kind);
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(4, 5), &|p| {
             p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
         })
@@ -930,7 +930,7 @@ fn a_numbered_heading_opening_with_a_page_break_takes_its_number_along() {
     // "Before", then a numbered paragraph whose text opens with a page break: Word draws its
     // number on the next page with the text, not alone at the bottom of the first.
     let mut d = Document::from_text("Before\n\u{000C}Heading");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 1), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
     let l = lay(&d);
     let label_pages: Vec<usize> = l
@@ -950,8 +950,8 @@ fn russian_letter_list_labels_draw_cyrillic() {
     // russianLower labelled items 1, 2, 3 instead of а), б), в).
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::from_text("один\nдва\nтри");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.format = NumFormat::RussianLower;
             l.text = "%1)".into();
@@ -981,8 +981,8 @@ fn chinese_counting_list_labels_and_their_font_runs() {
     // Issue #534: a "一、" list showed digits, drawn with glyph ids of another font.
     use wordcraft_doc::section::NumFormat;
     let mut d = Document::from_text("甲\n乙\n丙");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.format = NumFormat::ChineseCounting;
             l.text = "%1、".into();
@@ -1014,7 +1014,7 @@ fn chinese_counting_list_labels_and_their_font_runs() {
     let got = labels(&d);
     assert_eq!(got.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), ["一、", "二、", "三、"]);
     // A decimal label next to a CJK comma mixes faces when the Latin face lacks the comma.
-    for a in &mut d.numbering.abstracts {
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.format = NumFormat::Decimal;
         }
@@ -1029,8 +1029,8 @@ fn chinese_counting_list_labels_and_their_font_runs() {
 fn symbol_font_bullet_without_the_font_draws_a_bullet() {
     // Word's default bullet: U+F0B7 in Symbol.
     let mut d = Document::from_text("one");
-    let id = d.numbering.add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
-    for a in &mut d.numbering.abstracts {
+    let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
+    for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
         if let Some(l) = a.levels.first_mut() {
             l.chr.font = Some("Symbol".into());
         }
@@ -2054,7 +2054,7 @@ fn hidden_float_leaves_no_wrap_area_when_hidden_text_is_not_shown() {
     // resolved formatting says so). Measured in Word: not printed, and the text runs full width.
     let text = "Words flow around the picture here. ".repeat(30);
     let mut d = Document::from_text(&text);
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Secret".into(),
         name: "Secret".into(),
         kind: wordcraft_doc::StyleKind::Character,
@@ -2723,7 +2723,7 @@ fn table_style_paragraph_props_beat_document_defaults() {
 #[test]
 fn paragraph_style_and_direct_formatting_beat_table_style() {
     let mut d = styled_table_doc(Some("TableGrid"), 3);
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "Spaced".into(),
         name: "Spaced".into(),
         based_on: Some("Normal".into()),
@@ -2749,7 +2749,7 @@ fn paragraph_style_and_direct_formatting_beat_table_style() {
     assert_eq!(cell_para(&l, 1, 0).rp.space_after, 3.0, "direct formatting");
     assert_eq!(cell_para(&l, 2, 0).rp.space_after, 0.0, "table style");
     // Normal setting its own spacing wins too, even where it equals nothing in the defaults.
-    if let Some(n) = d.styles.get_mut("Normal") {
+    if let Some(n) = Arc::make_mut(&mut d.styles).get_mut("Normal") {
         n.para.space_after = Some(10.0);
     }
     assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
@@ -2762,7 +2762,7 @@ fn derived_table_style_merges_its_base() {
     use wordcraft_doc::styles::TableStyleParts;
     let red = wordcraft_doc::Rgb(0xC0, 0, 0);
     let mut d = styled_table_doc(Some("RedGrid"), 3);
-    d.styles.upsert(wordcraft_doc::Style {
+    Arc::make_mut(&mut d.styles).upsert(wordcraft_doc::Style {
         id: "RedGrid".into(),
         name: "Red Grid".into(),
         kind: wordcraft_doc::StyleKind::Table,
@@ -3293,8 +3293,8 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
     use wordcraft_doc::props::{LineSpacing, NumRef};
     for spacing in [LineSpacing::Multiple(1.25), LineSpacing::AtLeast(12.0)] {
         let mut d = Document::from_text("");
-        let id = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
-        d.numbering.abstracts[0].levels[0].chr.size = Some(24.0);
+        let id = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Bullet);
+        Arc::make_mut(&mut d.numbering).abstracts[0].levels[0].chr.size = Some(24.0);
         let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
         p.props.line_spacing = Some(spacing);
         p.props.numbering = Some(NumRef { num: id, level: 0 });
@@ -3732,7 +3732,7 @@ fn labels(l: &DocLayout) -> Vec<String> {
 }
 
 fn numbered(d: &mut Document, texts: &[&str], props: ParaProps) -> Vec<wordcraft_doc::Paragraph> {
-    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
     texts
         .iter()
         .map(|t| {
@@ -5470,11 +5470,11 @@ fn unproofed_languages_and_no_proof_runs_are_not_marked() {
     let text = "Nous écrivons beaucoup aujourd'hui.";
     let mut d = Document::from_text(text);
     assert!(issues(&d) > 0, "French words are English misspellings in an English document");
-    d.styles.default_chr.lang = Some("fr-FR".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("fr-FR".into());
     assert_eq!(issues(&d), 0, "no French dictionary: no marks");
-    d.styles.default_chr.lang = Some("pl-PL".into());
+    Arc::make_mut(&mut d.styles).default_chr.lang = Some("pl-PL".into());
     let mut pl = Document::from_text("Płynie żeka.");
-    pl.styles.default_chr.lang = Some("pl-PL".into());
+    Arc::make_mut(&mut pl.styles).default_chr.lang = Some("pl-PL".into());
     assert_eq!(issues(&pl), 1);
     pl.format_range(&Pos::body(0, 0), &Pos::body(0, "Płynie żeka.".len()), &|c| c.no_proof = Some(true)).unwrap();
     assert_eq!(issues(&pl), 0);
@@ -5678,8 +5678,8 @@ fn spaces_and_tabs_do_not_make_a_line_taller() {
 fn a_list_label_adds_ascent_but_not_descent() {
     let first_line = |label_size: Option<f32>| {
         let mut d = Document::new();
-        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-        for a in &mut d.numbering.abstracts {
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        for a in &mut Arc::make_mut(&mut d.numbering).abstracts {
             for l in &mut a.levels {
                 l.chr.size = label_size;
             }
@@ -5793,7 +5793,7 @@ fn list_indents_and_style_indents_combine_like_word() {
     use wordcraft_doc::styles::{Style, StyleKind};
     let text_x = |style: &str, own: ParaProps| {
         let mut d = Document::new();
-        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let style_of = |id: &str, based: Option<&str>, para: ParaProps| Style {
             id: id.into(),
             name: id.into(),
@@ -5805,11 +5805,11 @@ fn list_indents_and_style_indents_combine_like_word() {
         let list = ParaProps { numbering: Some(NumRef { num, level: 0 }), ..Default::default() };
         let ind = ParaProps { indent_left: Some(64.8), ..Default::default() };
         // List and indent in one style; list in the base, indent in the derived one; the reverse.
-        d.styles.upsert(style_of("Both", None, ParaProps { indent_left: Some(64.8), ..list.clone() }));
-        d.styles.upsert(style_of("ListBase", None, list.clone()));
-        d.styles.upsert(style_of("IndentOnList", Some("ListBase"), ind.clone()));
-        d.styles.upsert(style_of("IndentBase", None, ind));
-        d.styles.upsert(style_of("ListOnIndent", Some("IndentBase"), list.clone()));
+        Arc::make_mut(&mut d.styles).upsert(style_of("Both", None, ParaProps { indent_left: Some(64.8), ..list.clone() }));
+        Arc::make_mut(&mut d.styles).upsert(style_of("ListBase", None, list.clone()));
+        Arc::make_mut(&mut d.styles).upsert(style_of("IndentOnList", Some("ListBase"), ind.clone()));
+        Arc::make_mut(&mut d.styles).upsert(style_of("IndentBase", None, ind));
+        Arc::make_mut(&mut d.styles).upsert(style_of("ListOnIndent", Some("IndentBase"), list.clone()));
         let own =
             ParaProps { style: Some(style.into()), numbering: own.numbering.map(|n| NumRef { num: if n.num == 0 { 0 } else { num }, ..n }), ..own };
         let mut p = wordcraft_doc::Paragraph::with_text("Text", Default::default());
@@ -6225,7 +6225,7 @@ fn kerning_follows_kerning_for_fonts_like_word() {
     // A new document kerns from 1 pt, like Word's Normal template.
     assert!((width(None) - width(Some(1.0))).abs() < 0.01, "new documents kern");
     let mut d = Document::new();
-    d.styles.default_chr.kern = None;
+    Arc::make_mut(&mut d.styles).default_chr.kern = None;
     assert!(d.styles.resolve_char(None, &Default::default()).kern == 0.0, "no Kerning for fonts: not kerned");
 }
 
@@ -6330,8 +6330,8 @@ fn automatic_spacing_drops_between_list_items() {
     let plain = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
     let tops = |items: [ParaProps; 3], in_cell: bool| {
         let mut d = Document::new();
-        let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
-        let other = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+        let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
+        let other = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
         let fix = |p: ParaProps| ParaProps {
             numbering: p.numbering.map(|n| NumRef {
                 num: match n.num {
@@ -6796,7 +6796,7 @@ fn space_after_stays_clear_before_a_numbered_paragraph_without_a_label() {
     use wordcraft_doc::props::NumRef;
     space_after_clear_with(
         |d, t| {
-            let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+            let num = Arc::make_mut(&mut d.numbering).add_list(wordcraft_doc::ListKind::Numbered);
             let p = para_props(d, t);
             p.numbering = Some(NumRef { num, level: 0 });
             p.space_after_auto = Some(true);

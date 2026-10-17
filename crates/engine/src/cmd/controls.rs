@@ -7,6 +7,7 @@
 //! typing and deleting commands.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::control::{ContentControl, ControlKind, ControlLock, ControlRange, ListItem, MAX_CONTROL_TEXT, MAX_LIST_ITEMS};
 use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{CharProps, Rgb, TextColor};
@@ -145,7 +146,7 @@ pub fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
 /// The placeholder style, added to the document when it hasn't one.
 fn ensure_placeholder_style(s: &mut Session) {
     if s.doc.styles.get(PLACEHOLDER_STYLE).is_none() {
-        s.doc.styles.styles.push(Style {
+        Arc::make_mut(&mut s.doc.styles).styles.push(Style {
             id: PLACEHOLDER_STYLE.into(),
             name: "Placeholder Text".into(),
             kind: StyleKind::Character,
