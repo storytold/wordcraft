@@ -4986,6 +4986,38 @@ fn colour_commands_take_any_custom_hex() {
     assert_eq!(s.doc.settings.page_color, wordcraft_doc::Rgb::parse("123ABC"));
 }
 
+/// #2738: Home › Underline › Underline Color sets the underline's own colour and leaves its style
+/// alone; `auto` drops it again. One undo step each, kept through a DOCX round trip, and junk is
+/// a params error that changes nothing.
+#[test]
+fn underline_color_sets_and_clears_the_underlines_own_colour() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Lanterns"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "format.underline", json!({"style": "wave"}));
+    assert_eq!(run(&mut s, "format.state", json!({})).get("underlineColor"), Some(&json!("auto")));
+    let style = |s: &Session| s.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap().runs[0].props.underline;
+    let wave = style(&s);
+    for (given, want) in [("C00000", "C00000"), ("#1b5e20", "1B5E20")] {
+        run(&mut s, "format.underlineColor", json!({"color": given}));
+        assert_eq!(run(&mut s, "format.state", json!({})).get("underlineColor"), Some(&json!(want)));
+        assert_eq!(style(&s), wave, "the style is kept");
+    }
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let para = back.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap();
+    assert_eq!(para.runs[0].props.underline_color, wordcraft_doc::Rgb::parse("1B5E20"));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(run(&mut s, "format.state", json!({})).get("underlineColor"), Some(&json!("C00000")));
+    run(&mut s, "format.underlineColor", json!({"color": "auto"}));
+    assert_eq!(run(&mut s, "format.state", json!({})).get("underlineColor"), Some(&json!("auto")));
+    assert_eq!(style(&s), wave);
+    let doc = s.doc.clone();
+    for junk in [json!({}), json!({"color": "purple"}), json!({"color": 12}), json!({"color": null}), json!({"color": "#12"})] {
+        assert!(s.run("format.underlineColor", &junk).is_err(), "{junk}");
+    }
+    assert_eq!(s.doc, doc);
+}
+
 /// A document whose content is another format than its extension says opens by what it holds,
 /// as in Word: RTF saved as `.doc` (accounting systems and report generators save their documents
 /// that way), a `.docx` package renamed `.doc`, and RTF renamed `.docx`.

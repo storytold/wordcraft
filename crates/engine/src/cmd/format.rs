@@ -102,6 +102,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("format.growFont1", "Grow Font 1 Point", "Home › Font", |s, _| nudge_size(s, 1.0)).key("Mod+]"),
         CommandSpec::new("format.shrinkFont1", "Shrink Font 1 Point", "Home › Font", |s, _| nudge_size(s, -1.0)).key("Mod+["),
         CommandSpec::new("format.color", "Font Color", "Home › Font", color).params(r#"{"color": "RRGGBB" | "auto"}"#),
+        CommandSpec::new("format.underlineColor", "Underline Color", "Home › Font › Underline", underline_color)
+            .params(r#"{"color": "RRGGBB" | "auto"} (the underline's own colour; "auto" follows the text colour)"#),
         CommandSpec::new("format.highlight", "Text Highlight Color", "Home › Font", highlight)
             .params(
                 r#"{"color": "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"}"#,
@@ -364,6 +366,17 @@ fn color(s: &mut Session, v: &Value) -> CmdResult {
     let c = p::req_str(v, "color")?;
     let tc = TextColor::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))?;
     apply(s, &|x| x.color = Some(tc))
+}
+
+/// `format.underlineColor`: the underline's own colour (`w:u w:color`), or `auto` to drop it so the
+/// underline follows the text colour again. The underline style is left as it is.
+fn underline_color(s: &mut Session, v: &Value) -> CmdResult {
+    let c = p::req_str(v, "color")?;
+    let rgb = match TextColor::parse(c).ok_or_else(|| CmdError::Params("color must be RRGGBB or auto".into()))? {
+        TextColor::Auto => None,
+        TextColor::Rgb(rgb) => Some(rgb),
+    };
+    apply(s, &|x| x.underline_color = rgb)
 }
 
 fn highlight(s: &mut Session, v: &Value) -> CmdResult {
@@ -677,6 +690,7 @@ pub fn state(s: &Session) -> Value {
         "bold": all.iter().all(|r| r.bold),
         "italic": all.iter().all(|r| r.italic),
         "underline": all.iter().all(|r| r.underline != Underline::None),
+        "underlineColor": same(&|r| json!(r.underline_color.map_or_else(|| "auto".to_string(), |c| c.hex()))),
         "strike": all.iter().all(|r| r.strike),
         "border": all.iter().all(|r| r.border.is_some()),
         "subscript": all.iter().all(|r| r.vert_align == VertAlign::Subscript),

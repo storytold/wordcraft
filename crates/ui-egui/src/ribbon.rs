@@ -485,6 +485,100 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
     mi(ui, app, crate::dialogs::PAPER_LABELS.more, "ui.dialog", json!({"name": "pageSetup"}));
 }
 
+/// The underline styles Home › Underline offers as line samples: (`format.underline` style, name).
+const UNDERLINE_STYLES: [(&str, &str); 8] = [
+    ("single", "Single"),
+    ("double", "Double"),
+    ("thick", "Thick"),
+    ("dotted", "Dotted"),
+    ("dash", "Dashed"),
+    ("dotDash", "Dot-dash"),
+    ("dotDotDash", "Dot-dot-dash"),
+    ("wave", "Wave"),
+];
+
+/// Home › Font › Underline's drop-down (#2738): a sample of each line, Words only, None, More
+/// Underlines… (the Font dialog) and Underline Color.
+fn underline_menu(ui: &mut Ui, app: &mut WordApp) {
+    for (style, name) in UNDERLINE_STYLES {
+        underline_item(ui, app, style, name);
+    }
+    mi(ui, app, "Words only", "format.wordUnderline", json!({}));
+    // Not `mi`: Ctrl+U beside None would read as its shortcut, but Ctrl+U toggles a single underline.
+    let enabled = crate::widgets::enabled(app, "format.underline");
+    if ui.add_enabled(enabled, egui::Button::new(tl!("None")).min_size(vec2(200.0, 0.0))).clicked() {
+        crate::widgets::run_from_ribbon(app, "format.underline", json!({"value": false}));
+        ui.close();
+    }
+    ui.separator();
+    mi(ui, app, "More Underlines…", "format.fontDialog", json!({}));
+    ui.menu_button(tl!("Underline Color"), |ui| {
+        mi(ui, app, "Automatic", "format.underlineColor", json!({"color": "auto"}));
+        let theme = app.session.doc.settings.theme_colors.clone();
+        crate::colors::menu(ui, app, &theme, Target::cmd("format.underlineColor"));
+    });
+}
+
+/// A menu entry drawn as a sample of its underline; its name is the tooltip and what assistive
+/// technology reads.
+fn underline_item(ui: &mut Ui, app: &mut WordApp, style: &str, name: &str) {
+    let enabled = crate::widgets::enabled(app, "format.underline");
+    let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(vec2(200.0, 22.0)));
+    let label = tl!(name);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { t.text } else { t.text_disabled };
+    paint_underline(ui.painter(), resp.rect.shrink2(vec2(10.0, 0.0)), style, color);
+    if resp.on_hover_text(label).clicked() {
+        crate::widgets::run_from_ribbon(app, "format.underline", json!({"style": style}));
+        ui.close();
+    }
+}
+
+/// A line in `style` across `r` at its middle: our own drawing of each underline kind.
+fn paint_underline(p: &egui::Painter, r: Rect, style: &str, color: egui::Color32) {
+    let y = r.center().y.round() + 0.5;
+    let (x0, x1) = (r.left(), r.right());
+    let line = |y: f32, w: f32| {
+        p.line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(w, color));
+    };
+    // Repeats a pattern of (length, gap) pairs along the line; a length of 0 is a dot.
+    let pattern = |pat: &[(f32, f32)]| {
+        let mut x = x0;
+        'run: loop {
+            for &(len, gap) in pat {
+                if x >= x1 {
+                    break 'run;
+                }
+                if len == 0.0 {
+                    p.circle_filled(pos2(x + 0.75, y), 0.75, color);
+                    x += 1.5 + gap;
+                } else {
+                    p.line_segment([pos2(x, y), pos2((x + len).min(x1), y)], Stroke::new(1.0, color));
+                    x += len + gap;
+                }
+            }
+        }
+    };
+    match style {
+        "double" => {
+            line(y - 1.5, 1.0);
+            line(y + 1.5, 1.0);
+        }
+        "thick" => line(y, 2.5),
+        "dotted" => pattern(&[(0.0, 2.0)]),
+        "dash" => pattern(&[(6.0, 4.0)]),
+        "dotDash" => pattern(&[(6.0, 3.0), (0.0, 3.0)]),
+        "dotDotDash" => pattern(&[(6.0, 3.0), (0.0, 2.5), (0.0, 3.0)]),
+        "wave" => {
+            let pts: Vec<_> =
+                (0..=((x1 - x0) as usize)).map(|i| pos2(x0 + i as f32, y + 1.6 * (i as f32 * std::f32::consts::TAU / 6.0).sin())).collect();
+            p.add(egui::Shape::line(pts, Stroke::new(1.0, color)));
+        }
+        _ => line(y, 1.0),
+    }
+}
+
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     mi_text(ui, app, tl!(label), id, params);
 }
@@ -803,20 +897,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
             crate::widgets::row(ui, |ui| {
                 small(ui, app, "bold", None, "Bold", "format.bold", json!({}), flag("bold"));
                 small(ui, app, "italic", None, "Italic", "format.italic", json!({}), flag("italic"));
-                split(ui, app, "underline", "Underline", "format.underline", json!({}), flag("underline"), None, |ui, app| {
-                    for (l, s) in [
-                        ("Single", "single"),
-                        ("Double", "double"),
-                        ("Thick", "thick"),
-                        ("Dotted", "dotted"),
-                        ("Dashed", "dash"),
-                        ("Dot-dash", "dotDash"),
-                        ("Wave", "wave"),
-                        ("Words only", "words"),
-                    ] {
-                        mi(ui, app, l, "format.underline", json!({"style": s}));
-                    }
-                });
+                split(ui, app, "underline", "Underline", "format.underline", json!({}), flag("underline"), None, underline_menu);
                 small(ui, app, "strike", None, "Strikethrough", "format.strikethrough", json!({}), flag("strike"));
                 small(ui, app, "subscript", None, "Subscript", "format.subscript", json!({}), flag("subscript"));
                 small(ui, app, "superscript", None, "Superscript", "format.superscript", json!({}), flag("superscript"));
@@ -2708,6 +2789,45 @@ mod tests {
         assert!((gallery.width() - crate::previews::STYLE_SET_GALLERY_W).abs() < 0.01);
         assert!(used.right() <= gallery.right() + 0.01, "{used:?} {gallery:?}");
         assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
+    }
+
+    /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
+    /// technology, tooltips) that applies its own style; Words only, None and Underline Color ›
+    /// Automatic do what they say.
+    #[test]
+    fn underline_menu_entries_apply_their_style() {
+        use egui_kittest::kittest::Queryable;
+        use wordcraft_doc::props::Underline;
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        a.run("select.all", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 700.0)).build_ui_state(|ui, app: &mut WordApp| underline_menu(ui, app), a);
+        h.run_steps(2);
+        let run =
+            |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap().runs[0].props.clone();
+        for (_, name) in UNDERLINE_STYLES {
+            assert!(h.query_by_label(name).is_some(), "{name} is a named entry");
+        }
+        // Entries made with `mi` carry their shortcut text in their label (Words only: Ctrl+Shift+W).
+        for (name, want) in
+            [("Double", Underline::Double), ("Dot-dot-dash", Underline::DotDotDash), ("Wave", Underline::Wave), ("Words only", Underline::Words)]
+        {
+            h.get_by_label_contains(name).click();
+            h.run_steps(2);
+            assert_eq!(run(&h).underline, Some(want), "{name}");
+        }
+        h.get_by_label("None").click();
+        h.run_steps(2);
+        assert_eq!(run(&h).underline, Some(Underline::None));
+        h.state_mut().run("format.underlineColor", json!({"color": "C00000"})).unwrap();
+        assert_eq!(run(&h).underline_color, wordcraft_doc::Rgb::parse("C00000"));
+        // The submenu opens on a click once the pointer is on it.
+        h.get_by_label("Underline Color").hover();
+        h.run();
+        h.get_by_label("Underline Color").click();
+        h.run();
+        h.get_by_label_contains("Automatic").click();
+        h.run_steps(2);
+        assert_eq!(run(&h).underline_color, None);
     }
 
     /// #658: menu buttons grey out (and don't open) while the command their menu is about is
