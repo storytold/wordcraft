@@ -129,12 +129,13 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 4. Stability sweep of the open crash, hang and write-failure issues; autosave soak test (20–30 h).
 5. Pagination fidelity: column balancing, footnote continuation, compat options, comparison
    harness; an Aptos-metric font decision (30–50 h + owner).
-6. Formatting revisions and content controls (12–18 h); native printing (6–10 h); dialog depth
+6. Formatting revisions and content controls (8–12 h); native printing (6–10 h); dialog depth
    (20–30 h).
 
 ## Progress log
 
 | Date | What landed |
+| 2026-10-17 | Tracked style-definition changes (#2697): Modify Style and Update Style to Match Selection record the style as it was while Track Changes is on (`w:stylePrChange`), the Reviewing Pane lists them at the start of the document, accepting keeps the new definition and rejecting restores the old one; the change, its old style and revision round-trip through DOCX |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
 | 2026-10-12 | Fields keep `w:dirty` through DOCX saves (#877): a begin marker flagged by a generator that couldn't compute a result (pandoc-style TOC placeholders) keeps the flag on open/save — as a buffered field or a range field — so Word still refreshes it on open; computing a result (Update Field, Update Table) clears it, like Word's F9 |

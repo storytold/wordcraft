@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use crate::props::{
-    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor, Underline,
-    VAlign,
+    Align, Border, BorderStyle, Borders, CharProps, LineSpacing, ParaProps, PropChange, Rgb, TabAlign, TabLeader, TabStop, TableLook, TextColor,
+    Underline, VAlign,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, Default)]
@@ -46,6 +46,10 @@ pub struct Style {
     /// (`w:locked`).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub locked: bool,
+    /// A tracked change of the style definition (`w:stylePrChange`, ECMA-376 §17.13.5.25):
+    /// the style as it was before the change, and the revision that made it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fmt_change: Option<Box<PropChange<Style>>>,
     /// The default style of its kind (`w:default`), whatever its id: localized documents call
     /// the default character, table and list styles something other than the English ids.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -377,6 +381,11 @@ impl TableStyleParts {
 }
 
 impl Style {
+    /// The style definition without its tracked change record (`w:stylePrChange`).
+    pub fn formatting(&self) -> Style {
+        Style { fmt_change: None, ..self.clone() }
+    }
+
     /// Table style part `p` as this style alone sets it (the whole table's text formatting and
     /// paragraph alignment are the style's own).
     pub fn table_part(&self, p: TablePart) -> PartFormat {
