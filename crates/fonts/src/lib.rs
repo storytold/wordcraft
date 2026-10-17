@@ -24,7 +24,9 @@ pub use kurbo::BezPath;
 pub use script::{fallback_rank, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
-pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, ui_needs_system_cjk, ui_uncovered_cjk};
+pub use ui_fallback::{
+    SystemUiFont, is_arabic, is_cjk, system_arabic_ui_font, system_cjk_ui_font, system_cjk_ui_font_for, ui_needs_system_cjk, ui_uncovered_cjk,
+};
 
 /// A font from the optional craft-fonts build input (https://github.com/storytold/craft-fonts;
 /// empty unless built with `CRAFT_FONTS_DIR`, see `build.rs`).
@@ -68,6 +70,14 @@ pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
 /// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.
 pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
+}
+
+/// The craft-fonts Arabic-script interface faces (`"Arab"`), Regular style only (the UI fakes no
+/// bold). The interface's Latin faces have no Arabic letters, so without one of these (or an
+/// installed Arabic font, [`system_arabic_ui_font`]) the Arabic catalog draws as boxes. Empty
+/// without craft-fonts.
+pub fn ui_arabic_fonts() -> Vec<&'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Arab") && f.style == "Regular").collect()
 }
 
 /// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,

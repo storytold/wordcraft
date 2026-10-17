@@ -103,7 +103,7 @@ Weights and evidence per area: [docs/target-app-parity.md](docs/target-app-parit
 | Simplified Chinese | zh-hans | partial | ~95% |
 | Spanish | es | partial | ~95% |
 | Hindi | hi | none | 0% |
-| Arabic | ar | none (document shaping and bidi work; no mirrored UI) | 0% |
+| Arabic | ar | partial (interface catalog, labels in display order; no mirrored UI; native review pending) | ~100% (2,616 entries) |
 | French | fr | partial (interface) | ~95% |
 | Portuguese | pt-br (pt-PT none) | partial | ~95% |
 | Indonesian | id | none | 0% |
@@ -135,6 +135,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 | Date | What landed |
+| 2026-10-17 | Arabic (`ar`) interface: 2,616 catalog entries (every key of every catalog), `ar-*` system locales; the interface gets an Arabic font (craft-fonts face, else Segoe UI / SF Arabic / Noto Sans Arabic / DejaVu Sans) instead of boxes; right-to-left labels drawn in display order through the Unicode Bidirectional Algorithm (`i18n::bidi`, ported from PhotoCraft) with placeholder-safe `fmt`; AI-assisted, native-speaker review pending; no mirrored interface, no Arabic proofing. Detail: [docs/localization-ar.md](docs/localization-ar.md) |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
 | 2026-10-12 | Fields keep `w:dirty` through DOCX saves (#877): a begin marker flagged by a generator that couldn't compute a result (pandoc-style TOC placeholders) keeps the flag on open/save — as a buffered field or a range field — so Word still refreshes it on open; computing a result (Update Field, Update Table) clears it, like Word's F9 |

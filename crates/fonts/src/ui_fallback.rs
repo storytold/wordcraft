@@ -153,6 +153,48 @@ pub fn system_cjk_ui_font_for(hans: bool, korean: bool, needed: &[char]) -> Opti
     find_ui_font(&with_asset_data(crate::system_font_dirs()), &candidates(hans, korean), needed, hans)
 }
 
+/// Is `c` an Arabic-script letter, mark or digit (Arabic, Arabic Supplement, Extended-A/B and the
+/// presentation forms)? The interface's Latin faces have none of them.
+pub fn is_arabic(c: char) -> bool {
+    matches!(c, '\u{0600}'..='\u{06FF}' | '\u{0750}'..='\u{077F}' | '\u{0870}'..='\u{08FF}' | '\u{FB50}'..='\u{FDFF}' | '\u{FE70}'..='\u{FEFF}')
+}
+
+/// Installed fonts with Arabic letters, by platform, in preference order (interface sans faces
+/// first). Paths as in [`candidates`]: a bare name is looked for in every system font folder.
+fn arabic_candidates() -> &'static [&'static str] {
+    if cfg!(windows) {
+        &["segoeui.ttf", "tahoma.ttf", "arial.ttf"]
+    } else if cfg!(target_os = "macos") {
+        &[
+            "/System/Library/Fonts/SFArabic.ttf",
+            "/System/Library/Fonts/GeezaPro.ttc",
+            "/System/Library/Fonts/Supplemental/GeezaPro.ttc",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+        ]
+    } else {
+        &[
+            "truetype/noto/NotoSansArabic-Regular.ttf",
+            "noto/NotoSansArabic-Regular.ttf",
+            "google-noto/NotoSansArabic-Regular.ttf",
+            "google-noto-sans-arabic-fonts/NotoSansArabic-Regular.ttf",
+            "truetype/noto/NotoSansArabicUI-Regular.ttf",
+            "truetype/noto/NotoNaskhArabic-Regular.ttf",
+            "truetype/dejavu/DejaVuSans.ttf",
+            "dejavu/DejaVuSans.ttf",
+            "dejavu-sans-fonts/DejaVuSans.ttf",
+        ]
+    }
+}
+
+/// The installed font with Arabic letters that best covers `needed` (empty: a typical Arabic
+/// letter), for the Arabic interface catalog and the language list's «العربية» when the build has
+/// no craft-fonts Arabic face. Never panics on damaged files.
+pub fn system_arabic_ui_font(needed: &[char]) -> Option<SystemUiFont> {
+    let probe = ['ب'];
+    let needed = if needed.is_empty() { &probe[..] } else { needed.get(..MAX_NEEDED).unwrap_or(needed) };
+    find_ui_font(&with_asset_data(crate::system_font_dirs()), arabic_candidates(), needed, false)
+}
+
 /// `dirs` and, for each macOS font asset folder among them (`com_apple_MobileAsset_Font<N>`),
 /// the `AssetData` folder of every `<hash>.asset` in it: macOS ships PingFang there, e.g.
 /// `/System/Library/AssetsV2/com_apple_MobileAsset_Font7/<hash>.asset/AssetData/PingFang.ttc`

@@ -513,8 +513,36 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
     }
     #[cfg(target_arch = "wasm32")]
     let _ = system_cjk;
+    // Arabic: the Latin faces have no Arabic letters, so the Arabic catalog and «العربية» in the
+    // language list would draw as boxes. The craft-fonts Arabic face when the build has one, else
+    // an installed Arabic font (Segoe UI or Tahoma on Windows, SF Arabic or Geeza Pro on macOS,
+    // Noto Sans Arabic or DejaVu Sans elsewhere).
+    let arabic = wordcraft_fonts::ui_arabic_fonts();
+    for f in &arabic {
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    if arabic.is_empty()
+        && let Some(f) = system_arabic_font()
+    {
+        let mut data = FontData::from_static(&f.bytes);
+        data.index = f.index;
+        add_cjk(&mut fonts, format!("system {}", f.family), data);
+    }
     // Symbols and emoji fall back to egui's defaults (kept in the families).
     fonts
+}
+
+/// The installed Arabic interface font, chosen once for the Arabic catalog's letters.
+#[cfg(not(target_arch = "wasm32"))]
+fn system_arabic_font() -> Option<&'static wordcraft_fonts::SystemUiFont> {
+    static AR: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
+    AR.get_or_init(|| {
+        let needed: std::collections::BTreeSet<char> =
+            include_str!("i18n/ar.tsv").chars().chain("العربية".chars()).filter(|c| wordcraft_fonts::is_arabic(*c)).collect();
+        wordcraft_fonts::system_arabic_ui_font(&needed.into_iter().collect::<Vec<_>>())
+    })
+    .as_ref()
 }
 
 /// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:

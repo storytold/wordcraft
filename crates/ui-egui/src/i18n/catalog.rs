@@ -139,4 +139,15 @@ impl Catalog {
     pub fn in_context(&self, context: &str, s: &str) -> Option<&str> {
         self.contextual.get(&(context.to_string(), s.to_string())).map(String::as_str).or_else(|| self.plain(s))
     }
+
+    /// The same catalog with every translation passed through `shown` (a right-to-left language's
+    /// display order, see `bidi`). Templates with `{name}` placeholders stay as written: `fmt`
+    /// puts them in display order once they are filled.
+    pub fn mapped(&self, shown: impl Fn(&str) -> String) -> Catalog {
+        let map = |t: &String| if t.contains('{') { t.clone() } else { shown(t) };
+        Catalog {
+            plain: self.plain.iter().map(|(k, v)| (k.clone(), map(v))).collect(),
+            contextual: self.contextual.iter().map(|(k, v)| (k.clone(), map(v))).collect(),
+        }
+    }
 }

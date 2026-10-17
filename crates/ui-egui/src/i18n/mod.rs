@@ -25,6 +25,7 @@
 //! - [`location`]: a ribbon location such as `Home › Font`, segment by segment.
 //! - [`fmt`]: fill `{name}` placeholders after a lookup; translators may reorder them.
 
+pub mod bidi;
 mod catalog;
 
 use std::cell::Cell;
@@ -52,7 +53,7 @@ pub struct LangInfo {
 }
 
 /// The registry. English first: it is the fallback and the source language.
-pub static LANGUAGES: [LangInfo; 23] = [
+pub static LANGUAGES: [LangInfo; 24] = [
     LangInfo { code: "en", name: "English", source: "", prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // Simplified Chinese; `zh`, `zh-CN`, `zh-SG` and `zh-Hans-*` resolve here (see `candidates`).
     LangInfo {
@@ -165,6 +166,10 @@ pub static LANGUAGES: [LangInfo; 23] = [
     LangInfo { code: "sv", name: "Svenska", source: include_str!("sv.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
     // Croatian; `hr`, `hr-HR` and `hr_HR.UTF-8` resolve here.
     LangInfo { code: "hr", name: "Hrvatski", source: include_str!("hr.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
+    // Arabic (Modern Standard); `ar`, `ar-SA`, `ar-EG`, `ar_SA.UTF-8` and other regions resolve
+    // here. Labels are drawn in display order (`bidi`); the interface itself is not mirrored yet
+    // (docs/localization-ar.md). No Arabic proofing: new documents keep the default language.
+    LangInfo { code: "ar", name: "العربية", source: include_str!("ar.tsv"), prefer_hans: false, editing_lang: None, catalog: OnceLock::new() },
 ];
 
 impl LangInfo {
@@ -176,6 +181,25 @@ impl LangInfo {
             }
             catalog
         })
+    }
+
+    /// Is the language written right to left (Arabic, Hebrew, Persian, Urdu)?
+    fn rtl(&self) -> bool {
+        matches!(self.code, "ar" | "he" | "fa" | "ur")
+    }
+
+    /// The catalog as the interface draws it: for a right-to-left language every translation in
+    /// display order ([`bidi::display`]), built once; the catalog itself otherwise. Lookups that
+    /// compare or store text ([`has`], tests) keep using [`LangInfo::catalog`].
+    fn shown(&self) -> &Catalog {
+        static SHOWN: [OnceLock<Catalog>; LANGUAGES.len()] = [const { OnceLock::new() }; LANGUAGES.len()];
+        if !self.rtl() {
+            return self.catalog();
+        }
+        let Some(slot) = LANGUAGES.iter().position(|l| std::ptr::eq(l, self)).and_then(|i| SHOWN.get(i)) else {
+            return self.catalog();
+        };
+        slot.get_or_init(|| self.catalog().mapped(|t| bidi::display(t).into_owned()))
     }
 }
 
@@ -258,6 +282,16 @@ impl Lang {
 
     fn catalog(self) -> &'static Catalog {
         self.0.catalog()
+    }
+
+    /// The catalog in display order (see [`LangInfo::shown`]).
+    fn shown(self) -> &'static Catalog {
+        self.0.shown()
+    }
+
+    /// Is the interface language written right to left?
+    pub fn is_rtl(self) -> bool {
+        self.0.rtl()
     }
 }
 
@@ -372,7 +406,7 @@ pub fn trc<'a>(lang: Lang, context: &str, s: &'a str) -> &'a str {
     if pseudo::on() {
         return pseudo::mark(s);
     }
-    lang.catalog().in_context(context, s).unwrap_or(s)
+    lang.shown().in_context(context, s).unwrap_or(s)
 }
 
 /// Lowercase translated interface labels and UI search queries in the current language.
@@ -394,12 +428,19 @@ pub fn lowercase(s: &str) -> String {
     out
 }
 
-/// `s` in `lang`; strings without a translation come back unchanged.
+/// `s` in `lang` as the interface draws it (a right-to-left language in display order, see
+/// [`bidi`]); strings without a translation come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
     #[cfg(test)]
     if pseudo::on() {
         return pseudo::mark(s);
     }
+    lang.shown().plain(s).unwrap_or(s)
+}
+
+/// `s` in `lang` in reading (logical) order, for text that is compared or stored rather than
+/// drawn. The same as [`tr`] for left-to-right languages.
+pub fn tr_logical(lang: Lang, s: &str) -> &str {
     lang.catalog().plain(s).unwrap_or(s)
 }
 
@@ -430,6 +471,12 @@ pub fn builtin_style_name(name: &str) -> String {
 
 /// A ribbon location (`Home › Font`) in the current language, segment by segment.
 pub fn location(loc: &str) -> String {
+    if current().is_rtl() {
+        // Read right to left: the first segment at the right, the separator pointing left.
+        let mut segments: Vec<&str> = loc.split(" › ").map(t).collect();
+        segments.reverse();
+        return segments.join(" ‹ ");
+    }
     loc.split(" › ").map(t).collect::<Vec<_>>().join(" › ")
 }
 
@@ -444,28 +491,38 @@ pub fn prefixed(prefix: &str, rest: &str) -> String {
 
 /// Fill `{name}` placeholders in one pass. Unknown placeholders stay as written, and inserted
 /// values are never read as templates again, so a file name containing `{n}` stays intact.
+///
+/// A right-to-left template (its translation has Arabic or Hebrew letters) comes back in display
+/// order ([`bidi::display_template`]): its own words are reordered, and each value moves as one
+/// piece, so numbers, paths and labels that are already in display order stay as they are.
 pub fn fmt(template: &str, args: &[(&str, &str)]) -> String {
-    let mut out = String::with_capacity(template.len());
+    // (is a filled value, text), in logical order.
+    let mut pieces: Vec<(bool, &str)> = Vec::new();
     let mut rest = template;
+    let mut whole = true;
     while let Some((before, after_open)) = rest.split_once('{') {
-        out.push_str(before);
+        pieces.push((false, before));
         let Some((name, after_close)) = after_open.split_once('}') else {
-            out.push('{');
-            out.push_str(after_open);
-            return out;
+            pieces.push((false, "{"));
+            pieces.push((false, after_open));
+            rest = "";
+            whole = false;
+            break;
         };
         match args.iter().find(|(key, _)| *key == name) {
-            Some((_, value)) => out.push_str(value),
-            None => {
-                out.push('{');
-                out.push_str(name);
-                out.push('}');
-            }
+            Some((_, value)) => pieces.push((true, value)),
+            // An unknown placeholder stays as written (`{name}`), moved as one piece.
+            None => pieces.push((true, rest.get(before.len()..before.len() + name.len() + 2).unwrap_or_default())),
         }
         rest = after_close;
     }
-    out.push_str(rest);
-    out
+    if whole {
+        pieces.push((false, rest));
+    }
+    if bidi::has_rtl(template) {
+        return bidi::display_template(&pieces);
+    }
+    pieces.iter().map(|(_, text)| *text).collect()
 }
 
 #[cfg(test)]
