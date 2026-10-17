@@ -7263,3 +7263,40 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+#[test]
+fn header_table_collision() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, TableFloat};
+
+    for (overlap, expected) in [(false, 140.0), (true, 100.0)] {
+        let mut doc = Document::new();
+        doc.settings.compat_mode = 15;
+        let table = |y, height| {
+            let mut t = Table::new(1, 2, 300.0);
+            t.props.cell_margins = Some([0.0; 4]);
+            t.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y, overlap, ..Default::default() });
+            t.rows[0].props.height = Some(height);
+            t.rows[0].props.height_rule = HeightRule::Exact;
+            t
+        };
+        let id = doc.add_part(wordcraft_doc::PartKind::Header, vec![Arc::new(Block::Table(table(60.0, 80.0)))]);
+        doc.last_section.headers.default = Some(id);
+        doc.body = vec![Arc::new(Block::Table(table(100.0, 48.0)))];
+        let laid = lay(&doc);
+        assert_eq!(laid.pages.len(), 1);
+        for page in &laid.pages {
+            let top = |items: &[Placed]| {
+                items
+                    .iter()
+                    .filter_map(|it| match it {
+                        Placed::Cell { rect, .. } => Some(rect.y),
+                        _ => None,
+                    })
+                    .fold(f32::MAX, f32::min)
+            };
+            assert!((top(&page.header) - 60.0).abs() < 0.01);
+            assert!((top(&page.items) - expected).abs() < 0.01, "overlap={overlap}: body top {} expected {expected}", top(&page.items));
+        }
+    }
+}
