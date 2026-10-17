@@ -144,7 +144,8 @@ fn open_binary_doc(bytes: &[u8], password: Option<&str>) -> Result<(Document, bo
 }
 
 /// [`open_bytes`] for a file that may be password-protected: a Word document encrypted with a
-/// password ([MS-OFFCRYPTO] agile encryption, or the Word 97-2003 schemes) is decrypted with
+/// password ([MS-OFFCRYPTO] agile or Standard encryption, under any Word extension, or the
+/// Word 97-2003 schemes) is decrypted with
 /// `password` first. Also says
 /// whether the file was encrypted. Without the password needed the error satisfies
 /// [`needs_password`]; with a wrong one, [`wrong_password`].

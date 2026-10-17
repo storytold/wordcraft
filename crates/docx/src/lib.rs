@@ -23,8 +23,8 @@ mod xml;
 
 pub use chart_spec::{chart_items, chart_xml};
 pub use crypt::{
-    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_with_spin_count,
-    is_encrypted, protection_hash,
+    DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_standard_for_tests,
+    encrypt_with_spin_count, is_encrypted, protection_hash,
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
 pub use fonts::embedded_fonts;

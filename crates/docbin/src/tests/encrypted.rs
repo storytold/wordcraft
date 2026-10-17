@@ -199,6 +199,9 @@ fn unsupported_variants_say_so() {
         let (h, k) = capi_header("pw", 128, hflags);
         let e = read_with_password(&rc4_file_with(h, &*k), Some("pw")).unwrap_err();
         assert!(matches!(e, DocbinError::Encryption(_)), "{e:?}");
+        if hflags & 0x20 != 0 {
+            assert!(e.to_string().contains("only defined for the newer encrypted-package format"), "{e}");
+        }
     }
     let (mut h, k) = rc4_header("pw");
     h[0] = 9;

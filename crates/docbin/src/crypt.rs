@@ -292,8 +292,13 @@ impl Cipher {
         if hflags & H_EXTERNAL != 0 {
             return Err(unsupported("the document uses an external encryption provider"));
         }
+        // [MS-OFFCRYPTO] defines AES only for the encrypted packages of Word 2007 and later
+        // (which open through the .docx reader whatever their extension); a Word 97-2003 file
+        // may only use XOR, RC4 or RC4 CryptoAPI, so there is no public scheme to follow here.
         if hflags & H_AES != 0 {
-            return Err(unsupported("AES-encrypted .doc files are not supported"));
+            return Err(unsupported(
+                "this Word 97-2003 file claims AES encryption, which is only defined for the newer encrypted-package format; it can't be opened",
+            ));
         }
         if hflags & H_CRYPTO_API == 0 {
             return Err(unsupported("unknown encryption header"));
