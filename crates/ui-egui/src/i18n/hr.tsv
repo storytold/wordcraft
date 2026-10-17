@@ -2632,3 +2632,7 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Stil crte
+	Line Weight	Debljina crte
+	Pen Color	Boja olovke

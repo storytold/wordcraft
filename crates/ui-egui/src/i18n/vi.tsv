@@ -2672,3 +2672,7 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Kiểu đường kẻ
+	Line Weight	Độ dày đường kẻ
+	Pen Color	Màu bút

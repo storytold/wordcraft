@@ -2245,3 +2245,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Table Design › Borders: the border pen (#1740)
+	Line Style	线型
+	Line Weight	线条粗细
+	Pen Color	笔颜色

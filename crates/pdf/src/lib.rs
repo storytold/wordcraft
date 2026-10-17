@@ -7,7 +7,7 @@
 //!   mapping taken from the paragraph text, so text is selectable, searchable and extractable.
 //!   Synthetic bold (fill + stroke) and italic (skew) follow the renderer.
 //! - **Graphics:** fills (highlight, shading, cell fills), rules and underlines (solid, dotted,
-//!   dashed, double, wave), shapes, pictures (decoded with `image`; JPEG passed through, the rest
+//!   dashed, dot-dash, double, triple, wave), shapes, pictures (decoded with `image`; JPEG passed through, the rest
 //!   embedded losslessly; WMF and EMF drawn as vector paths and embedded bitmaps) with cropping and
 //!   opacity, the page colour and the watermark.
 //! - **Interactive:** link annotations for hyperlinked runs (URLs and internal `#bookmark`
@@ -1141,27 +1141,37 @@ impl Exporter<'_> {
                 s.set_stroke(Some(stroke(w, Some(StrokeDash { array: vec![w * 4.0, w * 2.0], offset: 0.0 }), LineCap::Butt)));
                 seg(s, 0.0, 0.0);
             }
-            LineStyle::Double => {
-                // Two thinner lines either side of the centre line.
+            LineStyle::DotDash => {
+                s.set_stroke(Some(stroke(w, Some(StrokeDash { array: vec![w * 4.0, w * 2.0, w, w * 2.0], offset: 0.0 }), LineCap::Butt)));
+                seg(s, 0.0, 0.0);
+            }
+            LineStyle::Double | LineStyle::Triple => {
+                // Parallel lines either side of the centre line, as the screen draws them.
                 let (dx, dy) = (x1 - x0, y1 - y0);
                 let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
-                s.set_stroke(Some(stroke(w * 0.6, None, LineCap::Butt)));
-                seg(s, nx, ny);
-                seg(s, -nx, -ny);
+                let (nx, ny) = (-dy / len, dx / len);
+                for (off, line_w) in style.parallel_lines(w) {
+                    s.set_stroke(Some(stroke(line_w, None, LineCap::Butt)));
+                    seg(s, nx * off, ny * off);
+                }
             }
             LineStyle::Wave => {
-                let (a, b) = (x0.min(x1), x0.max(x1));
-                let amp = (w * 1.2).max(0.8);
+                // Along the line in any direction: `t` runs along it, the swing across it.
+                let (dx, dy) = (x1 - x0, y1 - y0);
+                let len = (dx * dx + dy * dy).sqrt();
+                let (ux, uy) = if len > 1e-3 { (dx / len, dy / len) } else { (1.0, 0.0) };
+                let at = |t: f32, off: f32| (x0 + ux * t - uy * off, y0 + uy * t + ux * off);
+                let amp = LineStyle::wave_amplitude(w);
                 let step = amp * 2.0;
                 let mut pb = PathBuilder::new();
-                pb.move_to(a, y0);
-                let mut x = a;
-                let mut up = true;
-                while x < b && x - a < 20_000.0 {
-                    let nx = (x + step).min(b);
-                    pb.quad_to((x + nx) / 2.0, if up { y0 - amp } else { y0 + amp }, nx, y0);
-                    x = nx;
+                pb.move_to(x0, y0);
+                let (mut t, mut up) = (0.0f32, true);
+                while t < len && t < 20_000.0 {
+                    let nt = (t + step).min(len);
+                    let (cx, cy) = at((t + nt) / 2.0, if up { -amp } else { amp });
+                    let (ex, ey) = at(nt, 0.0);
+                    pb.quad_to(cx, cy, ex, ey);
+                    t = nt;
                     up = !up;
                 }
                 s.set_stroke(Some(stroke(w * 0.8, None, LineCap::Round)));

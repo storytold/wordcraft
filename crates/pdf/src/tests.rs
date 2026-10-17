@@ -1486,3 +1486,27 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// #1740: a triple table border is three stroked paths in the PDF and a double one two; a wave on
+/// a vertical side is drawn (it used to come out empty); a dot-dash side is one path.
+#[test]
+fn triple_and_double_borders_are_drawn_as_their_lines() {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders};
+    let doc = |borders: Borders| {
+        let mut t = Table::new(1, 1, 400.0);
+        t.props.style = None;
+        t.props.borders = Some(borders);
+        let mut d = Document::new();
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new())];
+        d
+    };
+    let line = |style| Some(Border { style, width: 2.25, color: None, space: 0.0 });
+    let paths = |b: Borders| count_glyphs_and_paths(&export(&doc(b), &PdfOptions { tagged: false, ..Default::default() }).unwrap()).1;
+    let top = |style| Borders { top: line(style), ..Default::default() };
+    let single = paths(top(BorderStyle::Single));
+    assert_eq!(paths(top(BorderStyle::Double)), single + 1);
+    assert_eq!(paths(top(BorderStyle::Triple)), single + 2);
+    assert_eq!(paths(top(BorderStyle::DotDash)), single);
+    let sides = |style| Borders { left: line(style), right: line(style), ..Default::default() };
+    assert_eq!(paths(sides(BorderStyle::Wave)), paths(sides(BorderStyle::Single)), "a vertical wave is one path per side");
+}

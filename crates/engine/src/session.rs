@@ -368,6 +368,9 @@ pub struct Session {
     pub initials: String,
     /// Format painter: copied formatting waiting to be applied (and whether it stays on).
     pub painter: Option<(CharProps, wordcraft_doc::props::ParaProps, bool)>,
+    /// Table Design › Borders: the line style, weight and colour the Borders menu and the
+    /// Border Painter draw with (#1740). Per session, as in Word.
+    pub table_pen: crate::cmd::table::TablePen,
     /// Last message for the status bar / agents.
     pub status: String,
     /// Headers/footers `insert.createHeader`/`insert.createFooter` made for a page that had none
@@ -611,6 +614,7 @@ impl Session {
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
+            table_pen: Default::default(),
             status: String::new(),
             new_header_parts: Vec::new(),
             history: Vec::new(),
@@ -1103,6 +1107,8 @@ impl Session {
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
+            // The table border pen, like the format painter: a tool setting, not an edit.
+            table_pen: _,
         } = self;
         let head = if history.len() + SNAPSHOT_HEAD > MAX_UNDO { history.iter().take(SNAPSHOT_HEAD).cloned().collect() } else { Vec::new() };
         EditSnapshot {

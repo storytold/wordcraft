@@ -572,11 +572,16 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"top"?, "left"?, "bottom"?, "right"? (pt)}"#),
         CommandSpec::new("table.borderPainter", "Border Painter", "Table Design › Borders", |s, v| {
-            s.run(
-                "table.borders",
-                &json!({"kind": p::str(v, "kind").unwrap_or("all"), "width": p::f32(v, "width").unwrap_or(0.5), "color": p::str(v, "color")}),
-            )
-        }),
+            // One click restyles the whole table unless the call says otherwise.
+            let mut p = if v.is_object() { v.clone() } else { json!({}) };
+            if p.get("applyTo").is_none_or(Value::is_null) {
+                p["applyTo"] = json!("table");
+            }
+            s.run("table.borders", &p)
+        })
+        .params(
+            r#"{"kind"?: side (default all), "style"?, "width"?, "color"?, "applyTo"?: "table|cells" (default table)} (as table.borders, drawing the pen's line unless given; one click restyles the whole table, where Word's Border Painter paints one border per click)"#,
+        ),
         CommandSpec::new("para.setNumberingValue", "Set Numbering Value", "Home › Paragraph › Numbering", |s, v| {
             let value = p::u64(v, "value").unwrap_or(1).clamp(0, 100_000) as u32;
             let f = s.sel.focus.clone();

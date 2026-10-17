@@ -1668,18 +1668,362 @@ fn table_border_presets_mask_the_sides_they_clear() {
     // Style default: a full 2x2 grid — 3 vertical + 3 horizontal lines.
     let (vx, hy) = rule_pos(&mut s);
     assert_eq!((vx.len(), hy.len()), (3, 3), "baseline grid: {vx:?} {hy:?}");
-    run(&mut s, "table.borders", json!({"kind": "outside"}));
+    run(&mut s, "table.borders", json!({"kind": "outside", "applyTo": "table"}));
     let (vx, hy) = rule_pos(&mut s);
     assert_eq!((vx.len(), hy.len()), (2, 2), "outside keeps only the frame: {vx:?} {hy:?}");
     let b = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap();
     assert!(b.between.is_some_and(|x| x.style == BorderStyle::None));
     assert!(b.inside_v.is_some_and(|x| x.style == BorderStyle::None));
-    run(&mut s, "table.borders", json!({"kind": "inside"}));
+    run(&mut s, "table.borders", json!({"kind": "inside", "applyTo": "table"}));
     let (vx, hy) = rule_pos(&mut s);
     assert_eq!((vx.len(), hy.len()), (1, 1), "inside keeps only the inner rules: {vx:?} {hy:?}");
     let b = s.doc.body.iter().find_map(|x| x.as_table()).unwrap().props.borders.unwrap();
     for side in [b.top, b.bottom, b.left, b.right] {
         assert!(side.is_some_and(|x| x.style == BorderStyle::None));
+    }
+}
+
+/// #1740: with the whole table selected, `table.borders` takes a line style and the inside
+/// sides at table level; cell-level borders are cleared as before; junk is refused and changes
+/// nothing.
+#[test]
+fn table_border_styles_go_to_the_chosen_sides() {
+    use crate::layout::display::{DisplayOptions, Draw, Stroke, page_display};
+    use wordcraft_doc::props::{Border, Borders, Rgb};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+    // The middle cell's own lines, all inside the table, which these table-level changes cover.
+    s.doc.table_mut(StoryRef::Body, &tp).unwrap().rows[1].cells[1].props.borders = Some(Borders::box_(Border::single(3.0)));
+    for (kind, extra) in [
+        ("top", json!({"style": "double", "width": 1.5, "color": "C00000"})),
+        ("bottom", json!({"style": "triple", "width": 2.25})),
+        ("insideH", json!({"style": "dashed"})),
+        ("insideV", json!({"style": "dotDash"})),
+    ] {
+        run(&mut s, "table.selectTable", json!({}));
+        let mut v = extra;
+        v["kind"] = json!(kind);
+        run(&mut s, "table.borders", v);
+    }
+    let t = s.doc.table(StoryRef::Body, &tp).unwrap();
+    let b = t.props.borders.unwrap();
+    assert_eq!(b.top, Some(Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0xC0, 0, 0)), space: 0.0 }));
+    assert_eq!(b.bottom.map(|x| (x.style, x.width, x.color)), Some((BorderStyle::Triple, 2.25, None)));
+    assert_eq!(b.between.map(|x| (x.style, x.width)), Some((BorderStyle::Dashed, 0.5)));
+    assert_eq!(b.inside_v.map(|x| x.style), Some(BorderStyle::DotDash));
+    assert!(b.left.is_none() && b.right.is_none(), "the other sides are left alone: {b:?}");
+    assert!(t.rows.iter().flat_map(|r| &r.cells).all(|c| c.props.borders.is_none()), "cell borders are cleared");
+    // The page draws each style as its own stroke.
+    let l = s.layout();
+    let items = page_display(&s.doc, &l.pages[0], &DisplayOptions::default());
+    let strokes: Vec<_> = items.iter().filter_map(|i| if let Draw::Line { stroke, .. } = i { Some(*stroke) } else { None }).collect();
+    for st in [Stroke::Double, Stroke::Triple, Stroke::Dashed, Stroke::DotDash] {
+        assert!(strokes.contains(&st), "{st:?} in {strokes:?}");
+    }
+    for junk in [
+        json!({"kind": "top", "style": "zigzag"}),
+        json!({"kind": "diagonal"}),
+        json!({"kind": 5}),
+        json!({"kind": "top", "color": 5}),
+        json!({"kind": "top", "style": 3}),
+        json!({"kind": "top", "width": "2"}),
+        json!({"kind": "top", "applyTo": "page"}),
+    ] {
+        assert!(matches!(s.run("table.borders", &junk), Err(crate::CmdError::Params(_))), "{junk}");
+    }
+    assert_eq!(s.doc.table(StoryRef::Body, &tp).unwrap().props.borders, Some(b));
+}
+
+/// The cell-level borders of a table's cells, by row.
+fn cell_borders(s: &Session) -> Vec<Vec<Option<wordcraft_doc::props::Borders>>> {
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    t.rows.iter().map(|r| r.cells.iter().map(|c| c.props.borders).collect()).collect()
+}
+
+/// #1740: the issue's use case. With a row selected, Bottom Border draws the pen under that row
+/// only, as cell borders on both sides of the line (DOCX `w:tcBorders`); the table's own borders
+/// stay. The last row's Top Border marks only the line above it; with the caret in one cell, a
+/// side goes on that cell and the neighbour across it.
+#[test]
+fn table_borders_on_selected_cells_mark_only_their_lines() {
+    use crate::layout::display::{DisplayOptions, Draw, Stroke, page_display};
+    use wordcraft_doc::props::Border;
+    let double = Border { style: BorderStyle::Double, width: 1.5, color: None, space: 0.0 };
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    run(&mut s, "table.borderStyle", json!({"value": "double"}));
+    run(&mut s, "table.borderWidth", json!({"value": 1.5}));
+    run(&mut s, "table.selectRow", json!({}));
+    run(&mut s, "table.borders", json!({"kind": "bottom"}));
+    let cb = cell_borders(&s);
+    for (c, ((first, second), third)) in cb[0].iter().zip(&cb[1]).zip(&cb[2]).enumerate() {
+        assert_eq!(first.and_then(|b| b.bottom), Some(double), "row 1 cell {c}");
+        assert_eq!(second.and_then(|b| b.top), Some(double), "row 2 cell {c} shares the line");
+        assert!(first.is_some_and(|b| b.top.is_none() && b.left.is_none() && b.right.is_none()), "{first:?}");
+        assert!(third.is_none(), "row 3 is untouched");
+    }
+    assert!(s.doc.body.iter().find_map(|b| b.as_table()).unwrap().props.borders.is_none(), "the table's borders stay");
+    // Only the line under row 1 is double, drawn by both rows and nothing else on it.
+    let doubles = |s: &mut Session| {
+        let l = s.layout();
+        let items = page_display(&s.doc, &l.pages[0], &DisplayOptions::default());
+        let mut ys: Vec<f32> = items
+            .iter()
+            .filter_map(|i| match i {
+                Draw::Line { y0, y1, stroke: Stroke::Double, .. } if (y0 - y1).abs() < 0.01 => Some((y0 * 10.0).round() / 10.0),
+                _ => None,
+            })
+            .collect();
+        ys.dedup();
+        let solid_on = |y: f32| {
+            items.iter().any(|i| matches!(i, Draw::Line { y0, y1, stroke: Stroke::Solid, .. } if (y0 - y).abs() < 0.2 && (y1 - y).abs() < 0.2))
+        };
+        (ys.clone(), ys.iter().any(|y| solid_on(*y)))
+    };
+    let (ys, fight) = doubles(&mut s);
+    assert_eq!(ys.len(), 1, "one double line: {ys:?}");
+    assert!(!fight, "no single line on the double one");
+    // The last row's Top Border: only the line above it.
+    let mut last_row = s.sel.focus.path.cell().unwrap().0.0;
+    last_row.extend([2, 0, 0]);
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(last_row), off: 0 });
+    run(&mut s, "table.selectRow", json!({}));
+    run(&mut s, "table.borders", json!({"kind": "top", "style": "triple", "width": 2.25}));
+    let cb = cell_borders(&s);
+    for (second, third) in cb[1].iter().zip(&cb[2]) {
+        assert_eq!(third.and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Triple));
+        assert_eq!(second.and_then(|b| b.bottom).map(|b| b.style), Some(BorderStyle::Triple));
+        assert!(third.is_some_and(|b| b.bottom.is_none()));
+    }
+    // The caret in one cell: Right Border on it and its neighbour's left; Inside on one cell is nothing.
+    let mut s2 = crate::tests::s();
+    run(&mut s2, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s2, "table.borders", json!({"kind": "right", "style": "dashed"}));
+    let cb = cell_borders(&s2);
+    assert_eq!(cb[0][0].and_then(|b| b.right).map(|b| b.style), Some(BorderStyle::Dashed));
+    assert_eq!(cb[0][1].and_then(|b| b.left).map(|b| b.style), Some(BorderStyle::Dashed));
+    assert!(cb[1].iter().all(Option::is_none));
+    run(&mut s2, "table.borders", json!({"kind": "inside"}));
+    assert_eq!(cell_borders(&s2), cb, "no inside lines in one cell");
+    // Saved as cell borders and read back.
+    let bytes = wordcraft_docx::write(&s.doc).unwrap();
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    let t = back.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.rows[0].cells[1].props.borders.and_then(|b| b.bottom), Some(double));
+    assert_eq!(t.rows[2].cells[1].props.borders.and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Triple));
+}
+
+/// A caret in cell (`r`, `c`) of the body's first table.
+fn caret_in_cell(s: &mut Session, r: u32, c: u32) {
+    let mut path = s.doc.body.iter().position(|b| b.as_table().is_some()).map(|i| vec![i as u32]).unwrap();
+    path.extend([r, c, 0]);
+    s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(path), off: 0 });
+}
+
+/// The horizontal lines on page 1: (y, x0, x1, stroke).
+fn h_lines(s: &mut Session) -> Vec<(f32, f32, f32, crate::layout::display::Stroke)> {
+    use crate::layout::display::{DisplayOptions, Draw, page_display};
+    let l = s.layout();
+    page_display(&s.doc, &l.pages[0], &DisplayOptions::default())
+        .into_iter()
+        .filter_map(|i| match i {
+            Draw::Line { x0, y0, x1, y1, stroke, .. } if (y0 - y1).abs() < 0.01 => Some((y0, x0.min(x1), x0.max(x1), stroke)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// #1740 review: in the issue's own case with a merged cell below (the second row's first cell
+/// spans two columns), Bottom Border on the first row puts the line on the merged cell too, and
+/// no single line is drawn in the double's gap.
+#[test]
+fn bottom_border_over_a_merged_cell_is_one_line() {
+    use crate::layout::display::Stroke;
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+    s.doc.table_mut(StoryRef::Body, &tp).unwrap().merge(1, 1, 0, 1);
+    caret_in_cell(&mut s, 0, 0);
+    run(&mut s, "table.selectRow", json!({}));
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "double", "width": 1.5}));
+    let cb = cell_borders(&s);
+    assert!(cb[0].iter().all(|b| b.and_then(|b| b.bottom).map(|b| b.style) == Some(BorderStyle::Double)), "{:?}", cb[0]);
+    assert!(cb[1].iter().all(|b| b.and_then(|b| b.top).map(|b| b.style) == Some(BorderStyle::Double)), "the merged cell too: {:?}", cb[1]);
+    let lines = h_lines(&mut s);
+    let y = lines.iter().find(|l| l.3 == Stroke::Double).map(|l| l.0).unwrap();
+    assert!(lines.iter().filter(|l| (l.0 - y).abs() < 0.01).all(|l| l.3 == Stroke::Double), "{lines:?}");
+}
+
+/// #1740 review: the caret in a cell merged down takes the whole merged cell: its sides run down
+/// every row it spans and its bottom is the merge's last row's.
+#[test]
+fn borders_on_a_vertically_merged_cell_cover_all_its_rows() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+    s.doc.table_mut(StoryRef::Body, &tp).unwrap().merge(0, 1, 0, 0);
+    caret_in_cell(&mut s, 0, 0);
+    run(&mut s, "table.borders", json!({"kind": "left", "style": "dashed"}));
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "double"}));
+    let cb = cell_borders(&s);
+    let style = |b: Option<wordcraft_doc::props::Border>| b.map(|b| b.style);
+    assert_eq!(style(cb[0][0].and_then(|b| b.left)), Some(BorderStyle::Dashed));
+    assert_eq!(style(cb[1][0].and_then(|b| b.left)), Some(BorderStyle::Dashed), "the continued cell's side too");
+    assert_eq!(style(cb[1][0].and_then(|b| b.bottom)), Some(BorderStyle::Double), "the bottom is the last row's");
+    assert_eq!(style(cb[2][0].and_then(|b| b.top)), Some(BorderStyle::Double));
+    assert!(cb[0][0].and_then(|b| b.bottom).is_none(), "nothing inside the merged cell");
+    assert!(h_lines(&mut s).iter().any(|l| l.3 == crate::layout::display::Stroke::Double), "the bottom is drawn");
+}
+
+/// #1740 review: a selection from the paragraph above into the second row takes whole rows from
+/// the table's top down to that row, for borders and shading alike; reaching the last row it is
+/// the whole table.
+#[test]
+fn a_selection_from_outside_takes_whole_rows() {
+    use wordcraft_doc::props::Rgb;
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Intro"));
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 2}));
+    let start = s.doc.start_of(StoryRef::Body);
+    caret_in_cell(&mut s, 1, 0);
+    s.sel = crate::Selection { anchor: start.clone(), focus: s.sel.focus.clone() };
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "double"}));
+    let cb = cell_borders(&s);
+    assert!(cb[1].iter().all(|b| b.and_then(|b| b.bottom).map(|b| b.style) == Some(BorderStyle::Double)), "{cb:?}");
+    assert!(cb[0].iter().all(|b| b.and_then(|b| b.bottom).is_none()), "row 1's bottom is inside the selection");
+    run(&mut s, "table.shading", json!({"color": "FFF2CC"}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    let shaded: Vec<bool> = t.rows.iter().map(|r| r.cells.iter().all(|c| c.props.shading == Some(Rgb(0xFF, 0xF2, 0xCC)))).collect();
+    assert_eq!(shaded, [true, true, false]);
+    caret_in_cell(&mut s, 2, 1);
+    s.sel = crate::Selection { anchor: start, focus: s.sel.focus.clone() };
+    run(&mut s, "table.borders", json!({"kind": "top", "style": "thick", "width": 3.0}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.borders.and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Thick), "the whole table");
+}
+
+/// #1740 review: the issue's flow. A double line under the header row stays when the whole table
+/// then gets a thick top or outside border; the cells' own lines go only on the sides covered.
+#[test]
+fn whole_table_borders_keep_the_cells_own_lines_elsewhere() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 3, "cols": 3}));
+    run(&mut s, "table.selectRow", json!({}));
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "double", "width": 1.5}));
+    run(&mut s, "table.borders", json!({"kind": "top", "style": "dashed"}));
+    for kind in ["top", "outside"] {
+        run(&mut s, "table.selectTable", json!({}));
+        run(&mut s, "table.borders", json!({"kind": kind, "style": "thick", "width": 3.0}));
+        let cb = cell_borders(&s);
+        assert!(cb[0].iter().all(|b| b.and_then(|b| b.bottom).map(|b| b.style) == Some(BorderStyle::Double)), "{kind}: {:?}", cb[0]);
+        assert!(cb[1].iter().all(|b| b.and_then(|b| b.top).map(|b| b.style) == Some(BorderStyle::Double)), "{kind}: {:?}", cb[1]);
+        assert!(cb[0].iter().all(|b| b.and_then(|b| b.top).is_none()), "{kind}: the table's top replaces the row's own");
+    }
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!(t.props.borders.and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Thick));
+    // Inside Horizontal on the whole table takes the header's own line away; All takes everything.
+    run(&mut s, "table.selectTable", json!({}));
+    run(&mut s, "table.borders", json!({"kind": "insideH", "style": "single"}));
+    assert!(cell_borders(&s).iter().flatten().all(Option::is_none), "{:?}", cell_borders(&s));
+}
+
+/// #1740 review: Outside on a column whose top cell is merged across two columns draws no line
+/// between the selected cells, only on the stretch facing the unselected cell.
+#[test]
+fn outside_on_a_partly_selected_merged_cell_stays_outside() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+    s.doc.table_mut(StoryRef::Body, &tp).unwrap().merge(0, 0, 0, 1);
+    caret_in_cell(&mut s, 1, 1);
+    run(&mut s, "table.selectColumn", json!({}));
+    run(&mut s, "table.borders", json!({"kind": "outside", "style": "double"}));
+    let cb = cell_borders(&s);
+    assert!(cb[0][0].and_then(|b| b.bottom).is_none(), "the merged cell's bottom faces a selected cell too: {:?}", cb[0][0]);
+    assert!(cb[1][1].and_then(|b| b.top).is_none(), "no line between the selected cells: {:?}", cb[1][1]);
+    assert_eq!(cb[1][0].and_then(|b| b.top).map(|b| b.style), Some(BorderStyle::Double), "the stretch facing the unselected cell");
+}
+
+/// #1740: Line Style, Line Weight and Pen Color set the pen; the Borders menu and the Border
+/// Painter draw with it unless a call says otherwise; setting the pen is not an undo step.
+#[test]
+fn table_pen_commands_set_the_line_the_borders_menu_draws() {
+    use wordcraft_doc::props::{Border, Rgb};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let tp = s.sel.focus.path.cell().unwrap().0;
+    let borders = |s: &Session| s.doc.table(StoryRef::Body, &tp).unwrap().props.borders.unwrap_or_default();
+    assert_eq!(run(&mut s, "table.borderStyle", json!({})), json!({"style": "single", "width": 0.5, "color": null}));
+    run(&mut s, "table.borderStyle", json!({"value": "double"}));
+    run(&mut s, "table.borderWidth", json!({"value": 1.5}));
+    let r = run(&mut s, "table.borderColor", json!({"color": "0070C0"}));
+    assert_eq!(r, json!({"style": "double", "width": 1.5, "color": "0070C0"}));
+    assert_eq!(s.table_pen.params("top"), json!({"kind": "top", "style": "double", "width": 1.5, "color": "0070C0"}));
+    run(&mut s, "table.borders", json!({"kind": "top", "applyTo": "table"}));
+    let blue = Border { style: BorderStyle::Double, width: 1.5, color: Some(Rgb(0, 0x70, 0xC0)), space: 0.0 };
+    assert_eq!(borders(&s).top, Some(blue));
+    // The Border Painter restyles the whole table with the pen, the caret in one cell or not,
+    // and a null applyTo is no applyTo.
+    run(&mut s, "table.borderPainter", json!({"applyTo": null}));
+    let b = borders(&s);
+    assert!([b.top, b.bottom, b.left, b.right, b.between, b.inside_v].iter().all(|x| *x == Some(blue)), "{b:?}");
+    // What a call says wins over the pen; null and "auto" are the automatic colour; the pen is unchanged.
+    run(&mut s, "table.borders", json!({"kind": "bottom", "style": "dashed", "width": 0.75, "color": null, "applyTo": "table"}));
+    assert_eq!(borders(&s).bottom, Some(Border { style: BorderStyle::Dashed, width: 0.75, color: None, space: 0.0 }));
+    assert_eq!(s.table_pen.color, Some(Rgb(0, 0x70, 0xC0)));
+    run(&mut s, "table.borderColor", json!({"color": "Auto"}));
+    assert_eq!(s.table_pen.color, None);
+    assert_eq!(run(&mut s, "table.borderWidth", json!({"value": 99}))["width"], 6.0);
+    // No Border as a pen erases.
+    run(&mut s, "table.borderStyle", json!({"value": "none"}));
+    run(&mut s, "table.borders", json!({"kind": "left", "applyTo": "table"}));
+    assert_eq!(borders(&s).left, Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }));
+    // Junk is refused, wrong types included, and leaves the pen alone.
+    for (id, junk) in [
+        ("table.borderStyle", json!({"value": "zigzag"})),
+        ("table.borderStyle", json!({"value": 5})),
+        ("table.borderWidth", json!({"value": "2"})),
+        ("table.borderColor", json!({"color": "not a colour"})),
+        ("table.borderColor", json!({"color": 7})),
+    ] {
+        assert!(matches!(s.run(id, &junk), Err(crate::CmdError::Params(_))), "{id} {junk}");
+    }
+    assert_eq!(s.table_pen, crate::cmd::table::TablePen { style: BorderStyle::None, width: 6.0, color: None });
+    // Undo takes back the last border, not the pen.
+    run(&mut s, "table.borderStyle", json!({"value": "wave"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(borders(&s).left, Some(blue));
+    assert_eq!(s.table_pen.style, BorderStyle::Wave);
+}
+
+/// #1740: the border commands with junk params and the caret in a table (the registry-wide fuzz
+/// runs them outside one, where they are disabled), on one cell and on the whole table.
+#[test]
+fn table_border_commands_take_junk_in_a_table() {
+    let junk = [
+        json!(null),
+        json!([]),
+        json!({"kind": [], "style": {}, "width": "x", "color": [1], "applyTo": 3}),
+        json!({"kind": "all", "width": -1e308, "value": 1e308}),
+        json!({"kind": "insideV", "width": 1e-30, "value": -1e308, "color": "auto"}),
+        json!({"value": f64::MAX, "color": "FFFFFFFFFF"}),
+    ];
+    for id in ["table.borders", "table.borderPainter", "table.borderStyle", "table.borderWidth", "table.borderColor"] {
+        for select in [None, Some("table.selectRow"), Some("table.selectTable")] {
+            for j in &junk {
+                let mut s = s();
+                run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+                run(&mut s, "table.split", json!({"columns": 2}));
+                if let Some(sel) = select {
+                    run(&mut s, sel, json!({}));
+                }
+                let _ = s.run(id, j);
+                assert!(s.table_pen.width.is_finite() && (0.25..=6.0).contains(&s.table_pen.width), "{id} {j}");
+                s.clamp_selection();
+                let _ = s.layout();
+            }
+        }
     }
 }
 

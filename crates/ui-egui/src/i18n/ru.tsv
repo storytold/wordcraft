@@ -2630,3 +2630,7 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Стиль линии
+	Line Weight	Толщина линии
+	Pen Color	Цвет пера

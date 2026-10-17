@@ -340,9 +340,14 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Macros", "tools.macros"),
         ],
         "Help" => vec![d("Help", "about"), c("Community Discord", "ui.discord"), d("Commands", "commands")],
-        "Table Design" => {
-            vec![m("Shading", "table.shading"), m("Borders", "table.borders"), c("Border Painter", "table.borderPainter")]
-        }
+        "Table Design" => vec![
+            m("Shading", "table.shading"),
+            m("Line Style", "table.borderStyle"),
+            m("Line Weight", "table.borderWidth"),
+            m("Pen Color", "table.borderColor"),
+            m("Borders", "table.borders"),
+            c("Border Painter", "table.borderPainter"),
+        ],
         "Table Layout" => vec![
             m("Select", "table.selectCell"),
             c("View Gridlines", "table.viewGridlines"),

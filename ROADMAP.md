@@ -135,6 +135,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 ## Progress log
 
 | Date | What landed |
+| 2026-10-17 | Home › Borders uses the table border command for a caret in a cell or selected cells (#2710, on #2204), keeping its Bottom Border default and one undo step; explicit paragraph borders and text-only selections within one cell keep their existing behavior |
+| 2026-10-15 | Table border line styles (#1740): Table Design › Borders has Line Style, Line Weight and Pen Color menus that set a pen. The Borders menu draws it on the selected cells, so a double line can go under the header row only, and on the table when all of it is selected, keeping the cells' own lines on the sides it doesn't cover; Left, Right, Inside Horizontal and Inside Vertical sides added. Border Painter restyles the whole table in one click. For scripts too, `table.borders` now acts on the caret's cell or the selected cells by default; `"applyTo": "table"` gives the old whole-table behaviour. Triple and dot-dash borders draw as themselves on screen and in PDF, shared cell edges follow ECMA-376, and View Gridlines no longer draws over borders |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
 | 2026-10-12 | Fields keep `w:dirty` through DOCX saves (#877): a begin marker flagged by a generator that couldn't compute a result (pandoc-style TOC placeholders) keeps the flag on open/save — as a buffered field or a range field — so Word still refreshes it on open; computing a result (Update Field, Update Table) clears it, like Word's F9 |
@@ -403,6 +405,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-15 | trivial | Progress log: table border line styles and the Borders pen (#1740) |
 | 2026-10-14 | trivial | Progress log: row table border exceptions |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |

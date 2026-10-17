@@ -162,7 +162,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"color": "RRGGBB" | null}"#),
         CommandSpec::new("para.borders", "Borders", "Home › Paragraph", borders).params(
-            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`"#,
+            r#"{"kind": "bottom|top|left|right|none|all|outside|inside|horizontalLine", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: Sides} where Sides = {"top"|"left"|"bottom"|"right"|"between": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null}: exactly these sides (others off), instead of `kind`. Quick kinds apply to the caret cell or selected cells in a table; `horizontalLine`, `sides`, and text-only selections within one cell apply to paragraphs"#,
         ),
         CommandSpec::new("para.sort", "Sort", "Home › Paragraph", sort).params(r#"{"descending"?: bool}"#),
         CommandSpec::new("para.keepNext", "Keep with Next", "Home › Paragraph › Line and Page Breaks", |s, v| tog(s, v, |p| p.keep_next, |p, b| p.keep_next = Some(b)))
@@ -836,6 +836,17 @@ fn borders(s: &mut Session, v: &Value) -> CmdResult {
         return fmt(s, &|p| p.borders = Some(b));
     }
     let kind = p::str(v, "kind").unwrap_or("bottom");
+    let cell = s.sel.focus.path.cell();
+    let cells_selected = s.cell_range().is_some() || s.sel.anchor.story != s.sel.focus.story || s.sel.anchor.path.cell() != cell;
+    if kind != "horizontalLine" && cell.is_some() && (s.sel.is_collapsed() || cells_selected) {
+        // Reuse Table Design's cell scoping, but let the outer para.borders command own
+        // undo, revision recording and macros. A nested Session::run would record it twice.
+        let run = s.registry.get("table.borders").ok_or_else(|| CmdError::Unknown("table.borders".into()))?.run;
+        let mut params = v.as_object().cloned().unwrap_or_default();
+        // Home defaults to Bottom Border; table.borders defaults to All Borders.
+        params.insert("kind".into(), Value::String(kind.into()));
+        return run(s, &Value::Object(params));
+    }
     let width = p::f32(v, "width").unwrap_or(0.5).clamp(0.25, 6.0);
     let color = p::str(v, "color").and_then(Rgb::parse);
     let style = p::str(v, "style").map(BorderStyle::from_ooxml).unwrap_or(BorderStyle::Single);
@@ -1258,3 +1269,7 @@ pub fn list_buttons(doc: &wordcraft_doc::Document, numbering: Option<NumRef>) ->
     let multilevel = (0..9u8).any(joined);
     ListButtons { bullets, numbering: !bullets, multilevel }
 }
+
+#[cfg(test)]
+#[path = "para_borders_tests.rs"]
+mod borders_tests;

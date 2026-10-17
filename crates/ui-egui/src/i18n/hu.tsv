@@ -2628,3 +2628,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Vonalstílus
+	Line Weight	Vonalvastagság
+	Pen Color	Tollszín

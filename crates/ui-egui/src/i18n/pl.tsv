@@ -2622,3 +2622,7 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Styl linii
+	Line Weight	Grubość linii
+	Pen Color	Kolor pióra

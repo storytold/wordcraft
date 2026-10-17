@@ -8,6 +8,7 @@ use crate::options::MeasureExt;
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::widgets::{CONTENT_H, LABEL_H, big, big_toggle, combo, font_combo, group, menu_button, small, split};
 use crate::{WordApp, icons};
+use wordcraft_doc::props::BorderStyle;
 
 pub const TABS: [&str; 13] = wordcraft_engine::ribbon::TABS;
 
@@ -2518,20 +2519,134 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
         });
     });
     group(ui, "Borders", None, app, |ui, app| {
-        menu_button(ui, app, "borders", Some("Borders"), "Borders", true, "table.borders", |ui, app| {
-            for (l, k) in [
-                ("All Borders", "all"),
-                ("Outside Borders", "outside"),
-                ("Inside Borders", "inside"),
-                ("No Border", "none"),
-                ("Top Border", "top"),
-                ("Bottom Border", "bottom"),
-            ] {
-                mi(ui, app, l, "table.borders", json!({"kind": k}));
-            }
+        // Line Style, Line Weight and Pen Color set the pen; the Borders menu and the Border
+        // Painter draw with it (#1740).
+        let pen = app.session.table_pen;
+        stack(ui, |ui| {
+            menu_button(ui, app, "lineStyle", Some("Line Style"), "Line Style", false, "table.borderStyle", |ui, app| {
+                for (style, label) in std::iter::once((BorderStyle::None, "No Border")).chain(crate::dialogs_table_style::LINE_STYLES) {
+                    mi_sample(ui, app, tl!(label), pen.style == style, "table.borderStyle", json!({"value": style.name()}), |p, r, c| {
+                        line_sample(p, r, style, 1.0, c);
+                    });
+                }
+            });
+            menu_button(ui, app, "lineWeight", Some("Line Weight"), "Line Weight", false, "table.borderWidth", |ui, app| {
+                for w in wordcraft_engine::cmd::table::BORDER_WIDTHS {
+                    mi_sample(ui, app, &weight_label(w), (pen.width - w).abs() < 0.01, "table.borderWidth", json!({"value": w}), |p, r, c| {
+                        line_sample(p, r, BorderStyle::Single, (w * 1.4).clamp(1.0, 8.0), c);
+                    });
+                }
+            });
+            menu_button(ui, app, "penColor", Some("Pen Color"), "Pen Color", false, "table.borderColor", |ui, app| {
+                mi_check(ui, app, "Automatic", pen.color.is_none(), "table.borderColor", json!({"color": null}));
+                let theme = app.session.doc.settings.theme_colors.clone();
+                crate::colors::menu(ui, app, &theme, Target::cmd("table.borderColor"));
+            });
         });
-        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", json!({}), false);
+        // Each entry carries the pen, so a recorded macro step draws the same line when played.
+        menu_button(ui, app, "borders", Some("Borders"), "Borders", true, "table.borders", |ui, app| {
+            for (l, k) in BORDER_SIDES {
+                mi(ui, app, l, "table.borders", pen.params(k));
+            }
+            ui.separator();
+            let drawing = app.canvas.table_tool == Some(crate::table_pen::TableTool::Draw);
+            mi_check(ui, app, "Draw Table", drawing, "table.draw", json!({}));
+            let gridlines = app.session.view.table_gridlines;
+            mi_check(ui, app, "View Gridlines", gridlines, "table.viewGridlines", json!({}));
+        });
+        big(ui, app, "borderPainter", "Border\nPainter", "table.borderPainter", pen.params("all"), false);
     });
+}
+
+/// The Borders menu's sides in Word's order: label and the `table.borders` kind.
+pub(crate) const BORDER_SIDES: [(&str, &str); 10] = [
+    ("All Borders", "all"),
+    ("Outside Borders", "outside"),
+    ("Inside Borders", "inside"),
+    ("No Border", "none"),
+    ("Top Border", "top"),
+    ("Bottom Border", "bottom"),
+    ("Left Border", "left"),
+    ("Right Border", "right"),
+    ("Inside Horizontal Border", "insideH"),
+    ("Inside Vertical Border", "insideV"),
+];
+
+/// A line weight as Word's menu writes it: ¼ pt, 1½ pt, 6 pt.
+pub(crate) fn weight_label(w: f32) -> String {
+    let w = if w.is_finite() { w.clamp(0.0, 100.0) } else { 0.0 };
+    let whole = w.trunc() as u32;
+    let frac = match ((w - w.trunc()) * 4.0).round() as u32 {
+        1 => "¼",
+        2 => "½",
+        3 => "¾",
+        _ => "",
+    };
+    let n = if whole == 0 && !frac.is_empty() { frac.to_string() } else { format!("{whole}{frac}") };
+    crate::i18n::fmt(tl!("{n} pt"), &[("n", &n)])
+}
+
+/// A short line in `style`, `width` pixels thick, as the Line Style and Line Weight menus show
+/// it (nothing for No Border).
+pub(crate) fn line_sample(p: &egui::Painter, r: Rect, style: BorderStyle, width: f32, c: egui::Color32) {
+    let y = r.center().y;
+    let (x0, x1) = (r.min.x, r.max.x);
+    let seg = |dy: f32, w: f32| {
+        p.line_segment([pos2(x0, y + dy), pos2(x1, y + dy)], Stroke::new(w, c));
+    };
+    let dashes = |dash: &[f32], gap: &[f32]| {
+        p.extend(egui::Shape::dashed_line_with_offset(&[pos2(x0, y), pos2(x1, y)], Stroke::new(width, c), dash, gap, 0.0));
+    };
+    match style {
+        BorderStyle::None => {}
+        BorderStyle::Single => seg(0.0, width),
+        BorderStyle::Thick => seg(0.0, width * 2.5),
+        BorderStyle::Double => {
+            seg(-1.5, width);
+            seg(1.5, width);
+        }
+        BorderStyle::Triple => {
+            seg(-2.5, width);
+            seg(0.0, width);
+            seg(2.5, width);
+        }
+        BorderStyle::Dotted => dashes(&[1.5], &[2.0]),
+        BorderStyle::Dashed => dashes(&[6.0], &[3.0]),
+        BorderStyle::DotDash => dashes(&[6.0, 1.5], &[3.0, 3.0]),
+        BorderStyle::Wave => {
+            let n = ((x1 - x0) / 3.0).max(2.0) as usize;
+            let pts: Vec<egui::Pos2> = (0..=n).map(|i| pos2(x0 + (x1 - x0) * i as f32 / n as f32, y + if i % 2 == 0 { -1.5 } else { 1.5 })).collect();
+            p.add(egui::Shape::line(pts, Stroke::new(width, c)));
+        }
+    }
+}
+
+/// A menu item with a drawn sample before its (already translated) text; `checked` marks the
+/// current choice.
+fn mi_sample(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    text: &str,
+    checked: bool,
+    id: &str,
+    params: Value,
+    sample: impl FnOnce(&egui::Painter, Rect, egui::Color32),
+) {
+    let t = Tokens::get(ui.ctx());
+    let enabled = crate::widgets::enabled(app, id);
+    let (r, resp) = ui.allocate_exact_size(vec2(220.0, 22.0), Sense::click());
+    crate::widgets::bg(ui, r, &resp, checked, &t);
+    let c = if enabled { t.text } else { t.text_disabled };
+    if checked {
+        ui.painter().text(pos2(r.min.x + 6.0, r.center().y), Align2::LEFT_CENTER, "✓", regular(12.0), c);
+    }
+    sample(ui.painter(), Rect::from_min_size(pos2(r.min.x + 22.0, r.min.y + 3.0), vec2(60.0, 16.0)), c);
+    ui.painter().text(pos2(r.min.x + 92.0, r.center().y), Align2::LEFT_CENTER, text, egui::TextStyle::Button.resolve(ui.style()), c);
+    resp.widget_info(|| egui::WidgetInfo { selected: Some(checked), ..egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text) });
+    if enabled && resp.clicked() {
+        crate::widgets::run_from_ribbon(app, id, params);
+        ui.close();
+    }
 }
 
 /// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show
@@ -2986,5 +3101,71 @@ mod tests {
         assert_eq!(resolve_tab("Picture Format", &["Home"]), "Home");
         assert_eq!(resolve_tab("Table Design", &["Home"]), "Home");
         assert_eq!(resolve_tab("Home", &["Home"]), "Home");
+    }
+
+    /// #1740: Table Design › Borders has Line Style, Line Weight and Pen Color menus whose
+    /// choices set the pen (the current one reported as toggled), and the Borders menu's sides
+    /// draw with it on the caret's cell. A recorded macro keeps the line it drew.
+    #[test]
+    fn border_pen_menus_set_the_pen_and_the_borders_menu_draws_with_it() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        use wordcraft_doc::props::Border;
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.table", json!({"rows": 3, "cols": 3})).unwrap();
+        a.run("table.borderColor", json!({"color": "C00000"})).unwrap();
+        a.run("ui.tab", json!({"tab": "Table Design"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let open = |h: &mut egui_kittest::Harness<'_, WordApp>, menu: &str| {
+            h.get_by_role_and_label(egui::accesskit::Role::Button, menu).click();
+            h.run_steps(4);
+        };
+        let pick = |h: &mut egui_kittest::Harness<'_, WordApp>, menu: &str, item: &str| {
+            open(h, menu);
+            // Checked items carry the mark in their label; plain items a trailing space.
+            h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().is_some_and(|l| l.trim_start_matches('✓').trim() == item)).click();
+            h.run_steps(4);
+        };
+        pick(&mut h, "Line Style", "Triple");
+        assert_eq!(h.state().session.table_pen.style, BorderStyle::Triple);
+        open(&mut h, "Line Style");
+        let toggled = |l: &str| {
+            h.get_by(|n| n.role() == egui::accesskit::Role::Button && n.label().as_deref() == Some(l)).accesskit_node().toggled()
+                == Some(egui::accesskit::Toggled::True)
+        };
+        assert!(toggled("Triple") && !toggled("Double"), "the current style is reported to screen readers");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(4);
+        pick(&mut h, "Line Weight", "1½ pt");
+        assert_eq!(h.state().session.table_pen.width, 1.5);
+        pick(&mut h, "Pen Color", "Automatic");
+        assert_eq!(h.state().session.table_pen.color, None);
+        h.state_mut().run("tools.recordMacro", json!({"name": "Rule"})).unwrap();
+        pick(&mut h, "Borders", "Bottom Border");
+        h.state_mut().run("tools.recordMacro", json!({})).unwrap();
+        let triple = Border { style: BorderStyle::Triple, width: 1.5, color: None, space: 0.0 };
+        let s = &h.state().session;
+        let (tp, r, c) = s.sel.focus.path.cell().unwrap();
+        let t = s.doc.table(s.sel.focus.story, &tp).unwrap();
+        assert_eq!((r, c), (0, 0));
+        assert_eq!(t.rows[0].cells[0].props.borders.and_then(|b| b.bottom), Some(triple));
+        assert_eq!(t.rows[1].cells[0].props.borders.and_then(|b| b.top), Some(triple), "the cell below shares the line");
+        assert!(t.rows[0].cells[1].props.borders.is_none() && t.props.borders.is_none(), "nothing else changes");
+        let steps = s.macros.get("Rule").cloned().unwrap_or_default();
+        assert_eq!(steps, [("table.borders".to_string(), json!({"kind": "bottom", "style": "triple", "width": 1.5, "color": null}))]);
+    }
+
+    /// #1740: the Line Weight menu writes Word's fractions.
+    #[test]
+    fn line_weights_are_written_as_fractions() {
+        let labels: Vec<String> = wordcraft_engine::cmd::table::BORDER_WIDTHS.iter().map(|w| weight_label(*w)).collect();
+        assert_eq!(labels, ["¼ pt", "½ pt", "¾ pt", "1 pt", "1½ pt", "2¼ pt", "3 pt", "4½ pt", "6 pt"]);
     }
 }

@@ -7263,3 +7263,168 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+/// #1740: a triple table border is its own stroke, so the renderers draw three lines; double and
+/// dashed borders keep theirs.
+#[test]
+fn triple_table_border_is_a_triple_stroke() {
+    let mut d = Document::from_text("x");
+    let mut t = Table::new(2, 2, 400.0);
+    let line = |style| Border { style, width: 2.25, color: None, space: 0.0 };
+    t.props.borders = Some(Borders {
+        top: Some(line(BorderStyle::Triple)),
+        bottom: Some(line(BorderStyle::Double)),
+        between: Some(line(BorderStyle::Dashed)),
+        ..Default::default()
+    });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let strokes: Vec<_> = items.iter().filter_map(|i| if let display::Draw::Line { stroke, .. } = i { Some(*stroke) } else { None }).collect();
+    for s in [display::Stroke::Triple, display::Stroke::Double, display::Stroke::Dashed] {
+        assert!(strokes.contains(&s), "{s:?} in {strokes:?}");
+    }
+}
+
+/// #1740: a border a cell sets itself on an edge it shares beats the table's border there, and
+/// both cells draw it, so no table line shows through a double one.
+#[test]
+fn a_cell_border_beats_the_table_border_on_a_shared_edge() {
+    let mut d = Document::from_text("x");
+    let mut t = Table::new(2, 2, 400.0);
+    t.props.style = None;
+    t.props.borders = Some(Borders::all(Border::single(0.5)));
+    let double = Border { style: BorderStyle::Double, width: 1.5, color: None, space: 0.0 };
+    t.rows[0].cells[0].props.borders = Some(Borders { bottom: Some(double), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let lines: Vec<(f32, f32, f32, display::Stroke)> = items
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::Line { x0, y0, x1, y1, stroke, .. } if (y0 - y1).abs() < 0.01 => Some((*y0, x0.min(*x1), x0.max(*x1), *stroke)),
+            _ => None,
+        })
+        .collect();
+    let y = lines.iter().find(|l| l.3 == display::Stroke::Double).map(|l| l.0).expect("a double line");
+    let on_y: Vec<_> = lines.iter().filter(|l| (l.0 - y).abs() < 0.01).collect();
+    // The first column's stretch is only double lines; the second keeps the table's single one.
+    let mid = on_y.iter().filter(|l| l.3 == display::Stroke::Double).map(|l| l.2).fold(f32::MIN, f32::max);
+    assert!(on_y.iter().filter(|l| l.3 == display::Stroke::Double).count() >= 2, "both cells draw it: {on_y:?}");
+    assert!(on_y.iter().all(|l| l.3 == display::Stroke::Double || l.1 >= mid - 3.0), "no single line under the double: {on_y:?}");
+    assert!(on_y.iter().any(|l| l.3 == display::Stroke::Solid), "the second column keeps its line: {on_y:?}");
+}
+
+/// #1740: two cells' own borders on one edge (ECMA-376 §17.4.66): no line gives way to a line,
+/// the heavier wins (width times the style's number), then the earlier style, then the darker
+/// colour, then the upper or left cell's.
+#[test]
+fn conflicting_cell_borders_resolve_like_the_spec() {
+    use crate::table::shared_edge;
+    use wordcraft_doc::props::Rgb;
+    let line = |style, width: f32, color: Option<Rgb>| Border { style, width, color, space: 0.0 };
+    let nil = line(BorderStyle::None, 0.0, None);
+    let single = line(BorderStyle::Single, 0.5, None);
+    assert_eq!(shared_edge(Some(nil), Some(single)), Some(single));
+    assert_eq!(shared_edge(Some(single), Some(nil)), Some(single));
+    // The second cell's own "no line" stays on its side (the layout lets only visible lines cross).
+    assert_eq!(shared_edge(None, Some(nil)), Some(nil));
+    assert_eq!(shared_edge(None, None), None);
+    // 3 pt single (24 × 1) beats ½ pt double (4 × 3); ½ pt triple (4 × 8) beats 3 pt single.
+    let thick_single = line(BorderStyle::Single, 3.0, None);
+    assert_eq!(shared_edge(Some(line(BorderStyle::Double, 0.5, None)), Some(thick_single)), Some(thick_single));
+    let thin_triple = line(BorderStyle::Triple, 0.5, None);
+    assert_eq!(shared_edge(Some(thick_single), Some(thin_triple)), Some(thin_triple));
+    // Equal weight (12): 1½ pt single against ½ pt double; single is earlier in the list.
+    let a = line(BorderStyle::Single, 1.5, None);
+    assert_eq!(shared_edge(Some(line(BorderStyle::Double, 0.5, None)), Some(a)), Some(a));
+    // Same style and width: the darker colour, then the first.
+    let red = line(BorderStyle::Single, 0.5, Some(Rgb(0xC0, 0, 0)));
+    let navy = line(BorderStyle::Single, 0.5, Some(Rgb(0, 0, 0x80)));
+    assert_eq!(shared_edge(Some(red), Some(navy)), Some(navy));
+    assert_eq!(shared_edge(Some(red), Some(red)), Some(red));
+    // Equal R + B + 2G (128): then B + 2G decides, then G.
+    let magenta = line(BorderStyle::Single, 0.5, Some(Rgb(64, 0, 64)));
+    let olive = line(BorderStyle::Single, 0.5, Some(Rgb(64, 32, 0)));
+    assert_eq!(shared_edge(Some(olive), Some(magenta)), Some(magenta), "B + 2G: 64 against 64, then G: 0 beats 32");
+    let teal = line(BorderStyle::Single, 0.5, Some(Rgb(0, 32, 64)));
+    assert_eq!(shared_edge(Some(teal), Some(olive)), Some(olive), "B + 2G: 128 against 64");
+}
+
+/// #1740 review: a cell's own "no line" on an edge doesn't reach across it. With an inside line
+/// from the table and the first row's cell saying no bottom line, the second row's cell still
+/// draws the line it inherits, as before.
+#[test]
+fn a_one_sided_no_line_keeps_the_neighbours_inherited_line() {
+    let mut d = Document::from_text("x");
+    let mut t = Table::new(2, 1, 400.0);
+    t.props.style = None;
+    t.props.borders = Some(Borders { between: Some(Border::single(0.5)), ..Default::default() });
+    t.rows[0].cells[0].props.borders =
+        Some(Borders { bottom: Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 }), ..Default::default() });
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let horizontal = l_rules(&d).into_iter().filter(|r| (r.1 - r.3).abs() < 0.01).count();
+    assert_eq!(horizontal, 1, "the line between the rows is drawn once, by the second row");
+}
+
+/// The page's rules: (x0, y0, x1, y1).
+fn l_rules(d: &Document) -> Vec<(f32, f32, f32, f32)> {
+    lay(d).pages[0]
+        .items
+        .iter()
+        .filter_map(|it| if let Placed::Rule { x0, y0, x1, y1, .. } = it { Some((*x0, *y0, *x1, *y1)) } else { None })
+        .collect()
+}
+
+/// #1740 review: a merged cell under two cells that draw their own double line doesn't draw its
+/// inherited single line through it; it keeps the single line where no own line is drawn.
+#[test]
+fn a_merged_cell_skips_its_inherited_line_under_its_neighbours_own() {
+    let mut d = Document::from_text("x");
+    let mut t = Table::new(3, 3, 450.0);
+    t.merge(1, 1, 0, 1);
+    let double = Border { style: BorderStyle::Double, width: 1.5, color: None, space: 0.0 };
+    for c in 0..2 {
+        t.rows[0].cells[c].props.borders = Some(Borders { bottom: Some(double), ..Default::default() });
+    }
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let lines: Vec<(f32, f32, f32, display::Stroke)> = items
+        .iter()
+        .filter_map(|i| match i {
+            display::Draw::Line { x0, y0, x1, y1, stroke, .. } if (y0 - y1).abs() < 0.01 => Some((*y0, x0.min(*x1), x0.max(*x1), *stroke)),
+            _ => None,
+        })
+        .collect();
+    let y = lines.iter().find(|l| l.3 == display::Stroke::Double).map(|l| l.0).expect("a double line");
+    let double_end = lines.iter().filter(|l| l.3 == display::Stroke::Double).map(|l| l.2).fold(f32::MIN, f32::max);
+    let singles: Vec<_> = lines.iter().filter(|l| (l.0 - y).abs() < 0.01 && l.3 == display::Stroke::Solid).collect();
+    assert!(!singles.is_empty(), "the third column keeps its line");
+    assert!(singles.iter().all(|l| l.1 >= double_end - 3.0), "no single line under the double: {singles:?}");
+}
+
+/// #1740: the drawn reach of a stroke: a triple is wider than a double of the same width, both
+/// grow with the width, and table corners run on by it.
+#[test]
+fn multi_line_strokes_scale_with_their_width() {
+    use display::Stroke;
+    assert!(Stroke::Triple.half_span(1.0) > Stroke::Double.half_span(1.0));
+    assert!(Stroke::Triple.half_span(1.0) > Stroke::Triple.half_span(0.5));
+    let ink = |s: Stroke, w: f32| s.parallel_lines(w).map(|(_, line)| line).sum::<f32>();
+    assert!(ink(Stroke::Triple, 1.0) > ink(Stroke::Double, 1.0), "a triple is darker than a double");
+    assert_eq!(Stroke::Triple.parallel_lines(1.0).count(), 3);
+    assert_eq!(Stroke::Solid.half_span(1.0), 0.5);
+    // A triple frame: the top edge runs on past the triple left edge's outer line.
+    let mut d = Document::from_text("x");
+    let mut t = Table::new(1, 1, 400.0);
+    t.props.style = None;
+    t.props.borders = Some(Borders::box_(Border { style: BorderStyle::Triple, width: 2.0, color: None, space: 0.0 }));
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let rules =
+        || l.pages[0].items.iter().filter_map(|it| if let Placed::Rule { x0, y0, x1, y1, .. } = it { Some((*x0, *y0, *x1, *y1)) } else { None });
+    let left_x = rules().filter(|r| (r.0 - r.2).abs() < 0.01).map(|r| r.0).fold(f32::MAX, f32::min);
+    let top_start = rules().filter(|r| (r.1 - r.3).abs() < 0.01).map(|r| r.0.min(r.2)).fold(f32::MAX, f32::min);
+    assert!((left_x - top_start - Stroke::Triple.half_span(2.0)).abs() < 0.01, "{left_x} {top_start}");
+}

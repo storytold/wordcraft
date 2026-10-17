@@ -2245,3 +2245,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Estilo da linha
+	Line Weight	Espessura da linha
+	Pen Color	Cor da caneta

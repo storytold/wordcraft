@@ -761,6 +761,60 @@ fn gridline_cells(page: &Page) -> impl Iterator<Item = wordcraft_geom::Rect> + '
     })
 }
 
+/// The pieces of cell edges View Gridlines draws on a page, in document points: each edge of
+/// [`gridline_cells`] less the parts a visible border line already covers, as Word shows
+/// gridlines only where a cell has no border (#1740).
+fn gridline_edges(page: &Page) -> Vec<[(f32, f32); 2]> {
+    // Border lines bucketed by their position (quarter points): horizontal by y, vertical by x.
+    let key = |v: f32| (v * 4.0).round() as i64;
+    let (mut across, mut down): (HashMap<i64, Vec<(f32, f32, f32)>>, HashMap<i64, Vec<(f32, f32, f32)>>) = Default::default();
+    for it in page.items.iter().chain(&page.header).chain(&page.footer) {
+        if let Placed::Rule { x0, y0, x1, y1, border } = it
+            && border.is_visible()
+        {
+            if (y0 - y1).abs() < 0.05 {
+                across.entry(key(*y0)).or_default().push((*y0, x0.min(*x1), x0.max(*x1)));
+            } else if (x0 - x1).abs() < 0.05 {
+                down.entry(key(*x0)).or_default().push((*x0, y0.min(*y1), y0.max(*y1)));
+            }
+        }
+    }
+    let covering = |lines: &HashMap<i64, Vec<(f32, f32, f32)>>, at: f32| -> Vec<(f32, f32)> {
+        (key(at) - 1..=key(at) + 1).filter_map(|k| lines.get(&k)).flatten().filter(|l| (l.0 - at).abs() < 0.3).map(|l| (l.1, l.2)).collect()
+    };
+    let mut out = Vec::new();
+    for r in gridline_cells(page) {
+        for y in [r.y, r.bottom()] {
+            out.extend(uncovered(r.x, r.right(), covering(&across, y)).into_iter().map(|(a, b)| [(a, y), (b, y)]));
+        }
+        for x in [r.x, r.right()] {
+            out.extend(uncovered(r.y, r.bottom(), covering(&down, x)).into_iter().map(|(a, b)| [(x, a), (x, b)]));
+        }
+    }
+    out
+}
+
+/// The parts of `a..b` that none of the intervals in `cover` overlaps.
+fn uncovered(a: f32, b: f32, mut cover: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    cover.retain(|(s, e)| *e > a && *s < b);
+    cover.sort_by(|x, y| x.0.total_cmp(&y.0));
+    let mut out = Vec::new();
+    let mut at = a;
+    for (s, e) in cover {
+        if s > at + 0.05 {
+            out.push((at, s.min(b)));
+        }
+        at = at.max(e);
+        if at >= b {
+            return out;
+        }
+    }
+    if at < b - 0.05 {
+        out.push((at, b));
+    }
+    out
+}
+
 /// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
 /// ECMA-376's 1/8 inch when it doesn't say), doubled until the lines are at least
 /// [`DRAWING_GRID_MIN_PX`] apart on screen.
@@ -1206,14 +1260,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     painter.line_segment([pos2(x0, sy), pos2(x1, sy)], stroke);
                 }
             }
-            // Table Layout › View Gridlines: table cell outlines (on screen only).
+            // Table Layout › View Gridlines: cell edges without a border (on screen only).
             if app.session.view.table_gridlines {
-                for rect in gridline_cells(page) {
-                    let r = Rect::from_min_size(
-                        pos2(visual_sr.min.x + rect.x * page_scale, visual_sr.min.y + rect.y * page_scale),
-                        vec2(rect.w * page_scale, rect.h * page_scale),
-                    );
-                    painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
+                let at = |(x, y): (f32, f32)| pos2(visual_sr.min.x + x * page_scale, visual_sr.min.y + y * page_scale);
+                for [a, b] in gridline_edges(page) {
+                    painter.line_segment([at(a), at(b)], Stroke::new(0.5, t.blue.linear_multiply(0.6)));
                 }
             }
         }
@@ -4363,6 +4414,41 @@ mod tests {
         };
         let ys: Vec<f32> = gridline_cells(&page).map(|r| r.y).collect();
         assert_eq!(ys, [100.0, 10.0, 200.0]);
+    }
+
+    /// #1740: gridlines show only where a cell edge has no visible border, so they never draw
+    /// through a dashed or double border; an edge partly bordered keeps the rest.
+    #[test]
+    fn table_gridlines_skip_bordered_edges() {
+        use wordcraft_doc::props::{Border, BorderStyle};
+        let cell = Placed::Cell {
+            rect: wordcraft_geom::Rect::new(100.0, 100.0, 50.0, 20.0),
+            covered: false,
+            table: Default::default(),
+            row: 0,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: false,
+        };
+        let line = |x0, y0, x1, y1, style| Placed::Rule { x0, y0, x1, y1, border: Border { style, width: 1.0, color: None, space: 0.0 } };
+        let page = Page {
+            items: vec![
+                cell,
+                // The top edge is bordered past its corners, the left edge half way down, and the
+                // bottom has a line with no width (no border).
+                line(99.0, 100.0, 151.0, 100.0, BorderStyle::Dashed),
+                line(100.0, 100.0, 100.0, 110.0, BorderStyle::Double),
+                line(100.0, 120.0, 150.0, 120.0, BorderStyle::None),
+            ],
+            ..Default::default()
+        };
+        let mut edges = gridline_edges(&page);
+        edges.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(
+            edges,
+            vec![[(100.0, 110.0), (100.0, 120.0)], [(100.0, 120.0), (150.0, 120.0)], [(150.0, 100.0), (150.0, 120.0)]],
+            "the top is all border; the left keeps its lower half; the bottom and right show"
+        );
     }
 
     #[test]

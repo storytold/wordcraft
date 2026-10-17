@@ -2641,3 +2641,7 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Stile linea
+	Line Weight	Spessore linea
+	Pen Color	Colore penna

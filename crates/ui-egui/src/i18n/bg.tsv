@@ -2621,3 +2621,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Стил на линията
+	Line Weight	Дебелина на линията
+	Pen Color	Цвят на писалката

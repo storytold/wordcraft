@@ -2247,3 +2247,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+# Table Design › Borders: the border pen (#1740)
+	Line Style	Стил линије
+	Line Weight	Дебљина линије
+	Pen Color	Боја оловке

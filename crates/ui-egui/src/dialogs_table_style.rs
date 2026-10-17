@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, TableLook, Underline, VAlign};
 use wordcraft_doc::styles::{PartFormat, PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{CharProps, Rgb, TextColor};
+use wordcraft_engine::cmd::table::BORDER_WIDTHS as WIDTHS;
 use wordcraft_engine::cmd::table_style::CELL_ALIGNS;
 
 use crate::WordApp;
@@ -601,8 +602,9 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
     ok || cancel
 }
 
-/// The border styles the pen offers (the Borders and Shading dialog's list).
-const LINE_STYLES: [(BorderStyle, &str); 8] = [
+/// The border styles the pen offers (the Borders and Shading dialog's list; the ribbon's Line
+/// Style menu adds No Border in front).
+pub(crate) const LINE_STYLES: [(BorderStyle, &str); 8] = [
     (BorderStyle::Single, "Single"),
     (BorderStyle::Dotted, "Dotted"),
     (BorderStyle::Dashed, "Dashed"),
@@ -612,8 +614,6 @@ const LINE_STYLES: [(BorderStyle, &str); 8] = [
     (BorderStyle::Thick, "Thick"),
     (BorderStyle::Wave, "Wave"),
 ];
-
-const WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
 
 /// The dialog for `name` (`newTableStyle` / `modifyTableStyle`), `None` when there's no table
 /// style to modify.
