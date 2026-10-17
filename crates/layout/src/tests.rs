@@ -5590,7 +5590,7 @@ fn footer_page_total_needs_one_body_pass() {
     d.last_section.footers.default = Some(id);
     let first = |d: &Document| {
         let totals = Totals::first_guess(d.sections().len());
-        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true)
+        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, (&EarlyFloats::new(), true))
     };
     assert!(matches!(first(&d), Pass::Done(l) if l.pages.len() == 3), "the footer's total asked for another pass");
     // The same field in the body is only known once every page is laid out.
@@ -7262,4 +7262,94 @@ fn row_nil_overrides_style() {
     t.rows[0].cells[0].props.borders = Some(Borders { right: Some(Border::single(2.0)), ..Default::default() });
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
+}
+
+/// #2048: a picture anchored in a later paragraph but placed higher up the page (fixed on the
+/// page, or moved up from its paragraph) keeps the text of the paragraphs above its anchor clear
+/// too, as in Word, not just its own paragraph's.
+#[test]
+fn a_float_placed_above_its_anchor_wraps_the_paragraphs_before_it() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let text = "Earlier text flows beside the picture placed above its anchor. ".repeat(3);
+    for (v_rel, y) in [(Anchor::Page, 72.0), (Anchor::Paragraph, -200.0)] {
+        let mut d = Document::from_text(&format!("{text}\n{text}\n{text}\n\nThe anchor paragraph."));
+        let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel, x: 0.0, y, dist: 9.0, ..Default::default() };
+        d.insert_object(&Pos::body(4, 0), rect_shape(150.0, 260.0, f), &Default::default()).unwrap();
+        let l = lay(&d);
+        let r = shapes(&l.pages[0].items)[0];
+        assert!(r.y < 150.0, "{v_rel:?}: the picture is above its anchor: {r:?}");
+        let mut checked = 0;
+        for it in &l.pages[0].items {
+            let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y: top, .. } = it else { continue };
+            for ln in &para.lines[*l0..*l1] {
+                let (lt, lb) = (top + ln.top, top + ln.top + ln.height);
+                if lb > r.y + 0.5 && lt < r.bottom() - 0.5 && ln.c1 > ln.c0 {
+                    checked += 1;
+                    assert!(x + ln.left >= r.right() - 0.5, "{v_rel:?}: paragraph {path:?}, line at {lt}, runs under the picture {r:?}");
+                }
+            }
+        }
+        assert!(checked >= 6, "{v_rel:?}: {checked} lines beside the picture");
+    }
+}
+
+/// The first line of body text running under a shape on any page of `l`, and how many shapes.
+fn text_under_shapes(l: &DocLayout) -> (Option<String>, usize) {
+    let mut seen = 0;
+    for (pi, page) in l.pages.iter().enumerate() {
+        for r in shapes(&page.items) {
+            seen += 1;
+            for it in &page.items {
+                let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y: top, .. } = it else { continue };
+                for ln in &para.lines[*l0..*l1] {
+                    let (lt, lb) = (top + ln.top, top + ln.top + ln.height);
+                    if lb > r.y + 0.5 && lt < r.bottom() - 0.5 && ln.c1 > ln.c0 && x + ln.left < r.right() - 0.5 {
+                        return (Some(format!("page {pi}: paragraph {path:?}, line at {lt}, runs under the picture {r:?}")), seen);
+                    }
+                }
+            }
+        }
+    }
+    (None, seen)
+}
+
+/// A square-wrapped 150 x 260 picture fixed on the page at `y`, anchored in the last paragraph
+/// (at `anchor`) after paragraphs of `text`.
+fn picture_above_anchor(text: &str, anchor: usize, y: f32) -> Document {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text(&format!("{}The anchor paragraph.", format!("{text}\n").repeat(anchor)));
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Page, x: 0.0, y, dist: 9.0, ..Default::default() };
+    d.insert_object(&Pos::body(anchor, 0), rect_shape(150.0, 260.0, f), &Default::default()).unwrap();
+    d
+}
+
+/// Wrapping the text above around this picture pushes its anchor paragraph onto the next page.
+fn early_float_across_pages() -> Document {
+    picture_above_anchor(&"Earlier text must stay clear of the anchored picture while pagination moves its paragraph. ".repeat(4), 7, 72.0)
+}
+
+/// #2048 (review): when wrapping the text above around a float pushes its anchor paragraph onto
+/// the next page, the layout still settles with no text under the float on any page, rather
+/// than handing back a pass laid out for a placement the float no longer has.
+#[test]
+fn early_float_wrap_stays_valid_across_page_boundaries() {
+    let (under, n) = text_under_shapes(&lay(&early_float_across_pages()));
+    assert_eq!(under, None);
+    assert_eq!(n, 1, "the picture is placed once");
+}
+
+/// #2048 (review): a pass with no passes left for floats above their anchors (here none known
+/// from the page's start) still keeps them clear of the text laid out before them: the float
+/// moves down to its paragraph rather than over that text.
+#[test]
+fn last_rewrap_pass_keeps_early_floats_clear_of_text() {
+    let one_page = picture_above_anchor(&"Earlier text flows beside the picture placed above its anchor. ".repeat(3), 4, 72.0);
+    for d in [one_page, early_float_across_pages()] {
+        let totals = Totals::first_guess(d.sections().len());
+        let pass = layout_pass(&d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, false, (&EarlyFloats::new(), false));
+        let Pass::Done(l) = pass else { panic!("a last pass is done") };
+        let (under, n) = text_under_shapes(&l);
+        assert_eq!(under, None);
+        assert_eq!(n, 1);
+    }
 }
