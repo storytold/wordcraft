@@ -1598,6 +1598,18 @@
 	Sat:	Küllastus:
 	Lum:	Heledus:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Kontrolli õigekirja ja grammatikat LanguageTooliga
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Saadab lõikude teksti allpool märgitud LanguageTooli serverisse. Väljas olekus kasutatakse WordCrafti sisseehitatud kontrollijat ja midagi ei lahku sellest arvutist.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Oma LanguageTooli serveri kasutamiseks sisestage selle aadress, näiteks http://localhost:8081.
+	Username:	Kasutajanimi:
+	API key:	API-võti:
+	Detect automatically	Tuvasta automaatselt
+	Each paragraph's proofing language	Iga lõigu õigekirjakeel
+	Language:	Keel:
+	Paragraphs checked: {count}	Kontrollitud lõike: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTooli kontroll vajab töölauarakendust; brauseriversioon ei saa veel teksti kontrollserverisse saata.
 	Right-to-Left Table	Paremalt vasakule tabel
 	Right-to-Left Section	Paremalt vasakule jaotis
 	Table direction:	Tabeli suund:

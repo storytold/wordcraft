@@ -1831,6 +1831,18 @@ preview	Title	Örnek
 	Sat:	Doygunluk:
 	Lum:	Parlaklık:
 	Hex:	Onaltılık:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Yazım ve dil bilgisini LanguageTool ile denetle
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Paragraflarınızın metnini aşağıdaki LanguageTool sunucusuna gönderir. Kapalıyken WordCraft'ın yerleşik denetleyicisi kullanılır ve hiçbir şey bu bilgisayardan çıkmaz.
+	Server:	Sunucu:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Kendi LanguageTool sunucunuzu kullanmak için adresini girin, örneğin http://localhost:8081.
+	Username:	Kullanıcı adı:
+	API key:	API anahtarı:
+	Detect automatically	Otomatik algıla
+	Each paragraph's proofing language	Her paragrafın yazım denetimi dili
+	Language:	Dil:
+	Paragraphs checked: {count}	Denetlenen paragraf: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTool denetimi masaüstü uygulamasını gerektirir; tarayıcı sürümü henüz bir denetim sunucusuna metin gönderemez.
 	Accessibility Pane	Erişilebilirlik Bölmesi
 	Alt Text Pane	Alternatif Metin Bölmesi
 	Alt\nText	Alternatif\nMetin

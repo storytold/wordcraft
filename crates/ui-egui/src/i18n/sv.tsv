@@ -2647,3 +2647,14 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	API key:	API-nyckel:
+	Check spelling and grammar with LanguageTool	Kontrollera stavning och grammatik med LanguageTool
+	Detect automatically	Identifiera automatiskt
+	Each paragraph's proofing language	Varje styckes språkkontrollspråk
+	Language:	Språk:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Kontroll med LanguageTool kräver skrivbordsappen; webbversionen kan ännu inte skicka text till en kontrollserver.
+	Paragraphs checked: {count}	Kontrollerade stycken: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Skickar texten i dina stycken till LanguageTool-servern nedan. När det är av används WordCrafts inbyggda kontroll och inget lämnar den här datorn.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Ange adressen till din egen LanguageTool-server, till exempel http://localhost:8081.
+	Username:	Användarnamn:
