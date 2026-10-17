@@ -923,8 +923,8 @@ pub fn update_fields(s: &mut Session) -> Result<(), CmdError> {
 /// date the template was last saved (#1672).
 ///
 /// Only those two. `CREATEDATE`, `SAVEDATE` and `PRINTDATE` record when something happened and
-/// are not "now"; `REF`, `PAGEREF`, `TOC` and citations are refreshed on an explicit update
-/// (`fields.updateAll`) and not on open, again as Word does. A field carrying `w:fldLock` keeps
+/// are not "now". Local `REF`/`PAGEREF` results refresh in temporary print/export copies;
+/// TOCs and citations require an explicit update. A field carrying `w:fldLock` keeps
 /// its stored result, which is what the lock is for.
 pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(doc.parts.keys().copied().map(StoryRef::Part)).collect();

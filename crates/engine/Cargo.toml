@@ -39,3 +39,9 @@ getrandom = { workspace = true }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
+
+# Parse successful print exports with the same interpreter as wordcraft-pdf tests.
+hayro-syntax = "0.7.2"
+hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"] }
+hayro-cmap = "0.1"
+kurbo = { workspace = true }

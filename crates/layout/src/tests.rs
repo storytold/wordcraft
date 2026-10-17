@@ -7263,3 +7263,122 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+#[derive(Clone, Copy)]
+enum RefText {
+    Plain,
+    Field,
+}
+
+fn ref_wrap_doc(text: &str, kind: RefText) -> Document {
+    let cp = wordcraft_doc::CharProps {
+        font: Some("Arial".into()),
+        size: Some(8.0),
+        bold: Some(true),
+        italic: Some(true),
+        color: Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(20, 40, 60))),
+        ..Default::default()
+    };
+    let mut p = wordcraft_doc::Paragraph::new();
+    match kind {
+        RefText::Plain => {
+            p.insert_text(0, text, &cp).unwrap();
+        }
+        RefText::Field => p
+            .insert_object(
+                0,
+                InlineObject::Field { instr: "REF Sample".into(), result: text.into(), locked: true, dirty: true, code: false, form: String::new() },
+                &cp,
+            )
+            .unwrap(),
+    }
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(10.0));
+    let mut d = Document::new();
+    d.last_section.page_w = 90.0;
+    d.last_section.page_h = 80.0;
+    d.last_section.margin_left = 20.0;
+    d.last_section.margin_right = 20.0;
+    d.last_section.margin_top = 20.0;
+    d.last_section.margin_bottom = 20.0;
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d
+}
+
+fn ref_drawn_words(d: &Document, l: &DocLayout) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| display::page_display(d, p, &display::DisplayOptions::default()))
+        .filter_map(|draw| match draw {
+            display::Draw::Glyphs { text, .. } => Some(text),
+            _ => None,
+        })
+        .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
+#[test]
+fn ref_result_wraps_like_text() {
+    let plain = ref_wrap_doc("Original sample", RefText::Plain);
+    let field = ref_wrap_doc("Original sample", RefText::Field);
+    let a = lay(&plain);
+    let b = lay(&field);
+    let lines = |l: &DocLayout| {
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { l0, l1, .. } => Some(l1 - l0),
+                _ => None,
+            })
+            .sum::<usize>()
+    };
+    assert_eq!(lines(&a), 2);
+    assert_eq!(lines(&b), lines(&a));
+    assert_eq!(ref_drawn_words(&field, &b), ref_drawn_words(&plain, &a));
+    for page in &b.pages {
+        for it in &page.items {
+            if let Placed::Lines { para, .. } = it {
+                for c in &para.clusters {
+                    if c.g0 == c.g1 {
+                        continue;
+                    }
+                    let rc = &para.styles[c.style as usize].rc;
+                    assert!(rc.bold && rc.italic);
+                    assert_eq!(rc.size, 8.0);
+                    assert_eq!(rc.color, wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(20, 40, 60)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ref_wrap_crosses_pages_once() {
+    let text = "Alpha Beta ".repeat(40);
+    let plain = ref_wrap_doc(&text, RefText::Plain);
+    let field = ref_wrap_doc(&text, RefText::Field);
+    let a = lay(&plain);
+    let b = lay(&field);
+    assert!(a.pages.len() > 1);
+    assert_eq!(b.pages.len(), a.pages.len());
+    assert_eq!(ref_drawn_words(&field, &b), ref_drawn_words(&plain, &a));
+}
+
+#[test]
+fn ref_caret_spans_wrapped_field() {
+    let mut d = ref_wrap_doc("Original sample", RefText::Field);
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_text(0, "X ", &Default::default()).unwrap();
+    let l = lay(&d);
+    let before = l.caret(&Pos::body(0, 0)).unwrap();
+    let start = l.caret(&Pos::body(0, 2)).unwrap();
+    let end = l.caret(&Pos::body(0, 5)).unwrap();
+    assert_eq!(start.top, before.top);
+    assert!(end.top > start.top);
+
+    let d = ref_wrap_doc(&"Alpha Beta ".repeat(40), RefText::Field);
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(0, 0)).unwrap().page, 0);
+    assert_eq!(l.caret(&Pos::body(0, 3)).unwrap().page, l.pages.len() - 1);
+}

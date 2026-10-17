@@ -14,6 +14,7 @@ mod io_ext;
 pub mod keymap;
 pub mod math_gallery;
 pub mod print;
+mod print_fields;
 pub mod recovery;
 pub mod ribbon;
 pub mod sample;
