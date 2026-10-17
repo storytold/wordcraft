@@ -42,6 +42,20 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// The (opening, closing) double and single quotes for text in language `tag`: German „…“ and
+/// ‚…‘; Swiss and Liechtenstein German «…» and ‹…›; everything else English “…” and ‘…’.
+fn quote_pairs(tag: Option<&str>) -> ((&'static str, &'static str), (&'static str, &'static str)) {
+    if !super::tools::is_german(tag) {
+        return (("\u{201C}", "\u{201D}"), ("\u{2018}", "\u{2019}"));
+    }
+    let region = tag.unwrap_or("").split(['-', '_']).nth(1).unwrap_or("");
+    if region.eq_ignore_ascii_case("CH") || region.eq_ignore_ascii_case("LI") {
+        (("\u{00AB}", "\u{00BB}"), ("\u{2039}", "\u{203A}"))
+    } else {
+        (("\u{201E}", "\u{201C}"), ("\u{201A}", "\u{2018}"))
+    }
+}
+
 /// Smart quotes and AutoFormat-as-you-type (lists from "* " / "1. ", dashes).
 fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     if text.chars().count() != 1 {
@@ -56,9 +70,19 @@ fn autoformat(s: &mut Session, text: &str) -> Option<String> {
     let before = para.text.get(..f.off)?;
     let prev = before.chars().next_back();
     let opening = prev.is_none_or(|p| p.is_whitespace() || "([{<\u{2014}\u{2013}".contains(p));
+    // The quotes follow the language of the text being typed into (#735): the character before
+    // the caret, else the paragraph's own formatting.
+    let lang = super::tools::text_lang(s, f, f.off.saturating_sub(1));
+    let (double, single) = quote_pairs(lang.as_deref());
+    // After a letter or digit a single quote is an apostrophe (geht’s, Andreas’), which German
+    // writes as ’ like English, not as its closing quote ‘; unless it closes a ‚ still open in
+    // the paragraph (‚tschüss‘).
+    let open_single = before.matches(single.0).count() > before.matches(single.1).count();
+    let apostrophe = prev.is_some_and(char::is_alphanumeric) && !open_single;
     match c {
-        '"' => Some(if opening { "\u{201C}" } else { "\u{201D}" }.into()),
-        '\'' => Some(if opening { "\u{2018}" } else { "\u{2019}" }.into()),
+        '"' => Some(if opening { double.0 } else { double.1 }.into()),
+        '\'' if !opening && apostrophe => Some("\u{2019}".into()),
+        '\'' => Some(if opening { single.0 } else { single.1 }.into()),
         _ => None,
     }
 }

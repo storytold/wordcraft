@@ -318,6 +318,58 @@ fn autocorrect_replacement_list_follows_the_texts_language() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "So I think ");
 }
 
+/// A session whose document is written in `lang` (Review › Language, as default).
+fn in_lang(lang: &str) -> Session {
+    let mut s = s();
+    run(&mut s, "review.language", json!({"lang": lang, "default": true}));
+    s
+}
+
+/// #735: smart quotes follow the text's language. German „…“ and ‚…‘ (Germany and Austria),
+/// Swiss «…» and ‹…›; an apostrophe after a letter stays ’; English is unchanged.
+#[test]
+fn smart_quotes_follow_the_texts_language() {
+    for lang in ["de-DE", "de-AT", "de"] {
+        let mut s = in_lang(lang);
+        typ(&mut s, "Er sagte \"Hallo\" und 'tschüss', geht's? ");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte „Hallo“ und ‚tschüss‘, geht’s? ", "{lang}");
+    }
+    let mut s = in_lang("de-CH");
+    typ(&mut s, "Er sagte \"Grüezi\" und 'tschau', gäll's? ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte «Grüezi» und ‹tschau›, gäll’s? ");
+    // English text keeps “…” and ‘…’, also with the apostrophe rule.
+    let mut s = in_lang("en-GB");
+    typ(&mut s, "she said \"hi\" and 'bye', don't ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "She said “hi” and ‘bye’, don’t ");
+    // A German word inside an English document: the run's language counts.
+    let mut s = self::s();
+    typ(&mut s, "Er sagte");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "de-DE"}));
+    run(&mut s, "caret.docEnd", json!({}));
+    typ(&mut s, " \"ja\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Er sagte „ja“ ");
+    // A German interface writes German: untagged text follows the editing language.
+    let mut s = self::s();
+    s.editing_lang = Some("de-DE".into());
+    s.doc.styles.default_chr.lang = None;
+    typ(&mut s, "\"Ja\" ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "„Ja“ ");
+}
+
+/// #735: German abbreviations and ordinal numbers don't end a sentence, so the next word keeps
+/// its lowercase letter; a real sentence end still capitalises. English keeps its own list.
+#[test]
+fn german_abbreviations_and_ordinals_dont_end_sentences() {
+    let mut s = in_lang("de-DE");
+    typ(&mut s, "das gilt z.B. für alle, vgl. dazu Abs. drei bzw. vier. am 3. oktober ggf. mehr. ende ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Das gilt z.B. für alle, vgl. dazu Abs. drei bzw. vier. Am 3. oktober ggf. mehr. Ende ");
+    // English text: a number's full stop still ends a sentence.
+    let mut s = in_lang("en-US");
+    typ(&mut s, "we won 3. then it ended ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "We won 3. Then it ended ");
+}
+
 #[test]
 fn autocorrect_options_change_what_typing_does() {
     let mut s = s();

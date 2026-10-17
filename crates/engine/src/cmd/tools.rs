@@ -801,11 +801,9 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     // The word's language (run, paragraph style, document default) picks the list (#835).
     // Text with no language at all is in the editing language (a Polish interface writes Polish),
     // else English. Proofing decides what is English the same way.
-    let english = s.doc.para_at(&f).is_none_or(|p| {
-        let rc = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(start));
-        let lang = rc.lang.as_deref().or(s.editing_lang.as_deref());
-        wordcraft_proof::ProofLang::from_tag(lang) == wordcraft_proof::ProofLang::En
-    });
+    let lang = text_lang(s, &f, start);
+    let english = wordcraft_proof::ProofLang::from_tag(lang.as_deref()) == wordcraft_proof::ProofLang::En;
+    let german = is_german(lang.as_deref());
     let found = if ac.replace_text { ac.replacement_in(&word, english) } else { None };
     let (from, rep) = match found {
         Some(r) => (start, Some(r)),
@@ -855,7 +853,10 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     let before_word = text.get(..start).unwrap_or("");
     // The first word in a table cell follows its own option; other sentences the sentence one.
     let sentence_on = if before_word.trim().is_empty() && f.path.cell().is_some() { ac.cap_cells } else { ac.cap_sentences };
-    let exceptions = ac.exception_list();
+    let mut exceptions = ac.exception_list();
+    if german {
+        exceptions.extend(GERMAN_NOT_SENTENCE_END.iter().map(|a| a.to_string()));
+    }
     // A replacement of several words ("brb" → "be right back") is capitalised by its first.
     let first = word.split_whitespace().next().unwrap_or("");
     let next = if first.len() < word.len() {
@@ -865,7 +866,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     } else {
         last
     };
-    let sentence = sentence_on && starts_sentence(before_word, &exceptions) && should_capitalize(first, next);
+    let sentence = sentence_on && starts_sentence(before_word, &exceptions, german) && should_capitalize(first, next);
     let day = ac.cap_days && DAYS.contains(&first);
     if sentence || day {
         let para = s.doc.para_mut(f.story, &f.path)?;
@@ -948,12 +949,37 @@ const NOT_SENTENCE_END: &[&str] = &[
     "ltd.", "co.", "vol.", "a.m.", "p.m.",
 ];
 
+/// German abbreviations whose full stop doesn't end a sentence, used in German text on top of
+/// the list above (#735): `z.B. das`, `vgl. die`, `bzw. eine` keep their lowercase word.
+const GERMAN_NOT_SENTENCE_END: &[&str] = &[
+    "abb.", "abs.", "allg.", "anm.", "bd.", "bspw.", "bzgl.", "bzw.", "d.h.", "evtl.", "geb.", "ggf.", "hrsg.", "i.d.r.", "inkl.", "insb.", "jh.",
+    "lt.", "mio.", "mrd.", "nr.", "o.ä.", "o.g.", "prof.", "s.", "s.o.", "s.u.", "sog.", "str.", "tel.", "u.a.", "u.ä.", "u.u.", "usw.", "v.a.",
+    "vgl.", "z.b.", "z.t.", "zzgl.",
+];
+
+/// The language of the text at byte `off` of the paragraph at `f`: the run's, else its paragraph
+/// style's, else the document default's (#835). Text with no language at all is in the editing
+/// language (a Polish interface writes Polish); `None` means none of these is set (English).
+/// AutoCorrect, smart quotes and proofing decide the text's language the same way.
+pub(crate) fn text_lang(s: &Session, f: &Pos, off: usize) -> Option<String> {
+    let p = s.doc.para_at(f)?;
+    let rc = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off));
+    rc.lang.or_else(|| s.editing_lang.clone())
+}
+
+/// German in any region (`de`, `de-DE`, `de-AT`, `de-CH`, the ISO 639-2 codes `deu`/`ger`).
+pub(crate) fn is_german(tag: Option<&str>) -> bool {
+    let primary = tag.unwrap_or("").split(['-', '_']).next().unwrap_or("");
+    ["de", "deu", "ger"].iter().any(|d| primary.eq_ignore_ascii_case(d))
+}
+
 /// Names of days, capitalised as you type (Capitalize names of days).
 const DAYS: [&str; 7] = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
 
 /// Does a word typed after `before` (the paragraph text up to the word) begin a sentence?
-/// `exceptions` are the lowercase abbreviations whose full stop doesn't end one.
-fn starts_sentence(before: &str, exceptions: &[String]) -> bool {
+/// `exceptions` are the lowercase abbreviations whose full stop doesn't end one; with
+/// `ordinals`, neither does a number's (German `am 3. oktober`, `die 2. auflage`).
+fn starts_sentence(before: &str, exceptions: &[String], ordinals: bool) -> bool {
     let t = before.trim_end();
     if t.is_empty() {
         return true;
@@ -969,7 +995,8 @@ fn starts_sentence(before: &str, exceptions: &[String]) -> bool {
     let lower = prev.to_lowercase();
     // "J." (an initial) or a known abbreviation.
     let initial = prev.chars().count() == 2 && prev.chars().next().is_some_and(char::is_uppercase);
-    !initial && !exceptions.contains(&lower)
+    let ordinal = ordinals && prev.strip_suffix('.').is_some_and(|n| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+    !initial && !ordinal && !exceptions.contains(&lower)
 }
 
 /// Only plain lowercase words are capitalised (not "iPhone", "x2", file names or addresses).
