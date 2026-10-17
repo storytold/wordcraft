@@ -2632,3 +2632,14 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	API key:	API ključ:
+	Check spelling and grammar with LanguageTool	Provjeri pravopis i gramatiku pomoću LanguageToola
+	Detect automatically	Prepoznaj automatski
+	Each paragraph's proofing language	Jezik provjere svakog odlomka
+	Language:	Jezik:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Provjera pomoću LanguageToola zahtijeva aplikaciju za stolna računala; preglednička verzija još ne može slati tekst poslužitelju za provjeru.
+	Paragraphs checked: {count}	Provjereni odlomci: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Šalje tekst vaših odlomaka na LanguageTool poslužitelj navedeni u nastavku. Kad je isključeno, koristi se WordCraftov ugrađeni alat i ništa ne napušta ovo računalo.
+	Server:	Poslužitelj:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Za vlastiti LanguageTool poslužitelj unesite njegovu adresu, npr. http://localhost:8081.
+	Username:	Korisničko ime:

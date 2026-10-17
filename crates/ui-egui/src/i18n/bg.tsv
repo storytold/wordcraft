@@ -2610,6 +2610,18 @@
 	Existing File or Web Page	Съществуващ файл или уеб страница
 	Link to:	Връзка към:
 	Place in This Document	Място в този документ
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Проверка на правописа и граматиката с LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Изпраща текста на абзаците ви към сървъра на LanguageTool по-долу. Когато е изключено, се използва вградената проверка на WordCraft и нищо не напуска този компютър.
+	Server:	Сървър:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	За да използвате собствен сървър на LanguageTool, въведете адреса му, например http://localhost:8081.
+	Username:	Потребителско име:
+	API key:	API ключ:
+	Detect automatically	Автоматично разпознаване
+	Each paragraph's proofing language	Езикът за проверка на всеки абзац
+	Language:	Език:
+	Paragraphs checked: {count}	Проверени абзаци: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Проверката с LanguageTool изисква настолното приложение; версията за браузър все още не може да изпраща текст към сървър за проверка.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Колона {n}
 	Header row	Заглавен ред

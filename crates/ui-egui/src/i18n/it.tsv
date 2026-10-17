@@ -2500,6 +2500,17 @@ preview	Title	Esempio
 	Reading Text Size	Dimensione testo di lettura
 	Correct TWo INitial CApitals	Correggi DUe MAiuscole INiziali
 	Correct accidental usage of cAPS LOCK key	Correggi l'uso accidentale del tasto bLOC mAIUSC
+	API key:	Chiave API:
+	Check spelling and grammar with LanguageTool	Controlla ortografia e grammatica con LanguageTool
+	Detect automatically	Rileva automaticamente
+	Each paragraph's proofing language	Lingua di correzione di ciascun paragrafo
+	Language:	Lingua:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Il controllo con LanguageTool richiede l'app desktop; la versione per browser non può ancora inviare testo a un server di controllo.
+	Paragraphs checked: {count}	Paragrafi controllati: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Invia il testo dei tuoi paragrafi al server LanguageTool indicato sotto. Se disattivato, viene usato il controllo integrato di WordCraft e nulla lascia questo computer.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Per usare un tuo server LanguageTool, inseriscine l'indirizzo, ad esempio http://localhost:8081.
+	Username:	Nome utente:
 	Region:	Area geografica:
 	Automatic ({region})	Automatico ({region})
 	Text of the nearest paragraph with a given style (running headers)	Testo del paragrafo più vicino con uno stile specificato (intestazioni correnti)
