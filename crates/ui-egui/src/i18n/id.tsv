@@ -1,0 +1,773 @@
+# Indonesian (id) interface catalog. Same format and clean-room rules as zh-hans.tsv.		
+		
+	(no suggestions)	(tidak ada saran）
+	1.5 Line Spacing	Spasi Baris 1.5
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Pengolah kata sumber terbuka yang bebas, ditulis dari awal dalam Rust.\nBagian dari Crafting Apps dari tim ArtCraft.
+	About	Tentang
+	About WordCraft	Tentang WordCraft
+	Accept	Terima
+	Accept All Changes	Terima Semua Perubahan
+	Accept This Change	Terima Perubahan Ini
+	Accessibility	Aksesibilitas
+	Add	Tambah
+	Add a comment	Tambah komentar
+	Add a Table	Tambah Tabel
+	Add Space Before Paragraph	Tambahkan Spasi Sebelum Paragraf
+	Add Text	Tambah Teks
+	Add to Dictionary	Tambahkan ke Kamus
+	Add to Style Gallery	Tambahkan ke Galeri Gaya
+	Address Block	Blok Alamat
+	Address:	Alamat:
+	Address\nBlock	Blok\nAlamat
+	Adjust	Setel
+	Advanced	Tingkat Lanjut
+	After:	Setelah:
+	Agents	Agen
+	Align	Ratakan
+	Align Left	Rata Kiri
+	Align Right	Rata Kanan
+	Alignment	Perataan
+	All Borders	Semua Tepi
+	All Caps	Semua Huruf Besar
+	All caps	Semua huruf besar
+	All Markup	Semua Markup
+	Alt Text	Teks Alt
+	Apply Character Style	Terapkan Gaya Karakter
+	Apply Style	Terapkan Gaya
+	Arrange	Susun
+	Arrange\nAll	Susun\nSemua
+	Arrow	Panah
+	Artistic Effects	Efek Seni
+	Author	Penulis
+	AutoCorrect Options	Opsi Koreksi Otomatis
+	AutoFit	Otomatis Pas
+	AutoFit Contents	Otomatis Paskan Konten
+	AutoFit Window	Otomatis Pas Jendela
+	Automatic	Otomatis
+	Automatic ({language})	Otomatis ({language})
+	Automatic follows your system's language. Menus and commands change; your documents don't.	Secara otomatis mengikuti bahasa sistem Anda. Menu dan perintah berubah; dokumen Anda tidak.
+	Automatic Table 1 (3 levels)	Tabel Otomatis 1 (3 tingkat)
+	Automatic Table 2 (2 levels)	Tabel Otomatis 2 (2 tingkat)
+	AutoSave	Simpan Otomatis
+	AutoSave documents that have been saved	Simpan otomatis dokumen yang telah disimpan
+	AutoSave saves every change to the file (needs a saved document)	Simpan otomatis setiap perubahan ke berkas (perlu suatu dokumen yang telah disimpan)
+	AutoText	Teks Otomatis
+	Backspace	Backspace
+	Banded Columns	Kolom Terkelompok
+	Banded Rows	Baris Terkelompok
+	Before:	Sebelum:
+	Bibliography	Bibliografi
+	Binary assets added	Aset biner ditambahkan
+	Binary assets removed	Aset biner dihapus
+	Blank	Kosong
+	Blank (Three Columns)	Kosong (Tiga Kolom)
+	Blank document	Dokumen kosong
+	Blank Page	Halaman Kosong
+	Block\nAuthors	Blok\nPenulis
+	Bold	Tebal
+	Bookmark	Markah
+	Bookmark name:	Nama markah:
+	Border Painter	
+	Border\nPainter	
+	Borders	
+	Bottom Border	Tepi Bawah
+	Bottom of Page	Dasar Halaman
+	Bottom:	Dasar:
+	Box	Kotak
+	Breaks	
+	Bring Forward	Bawa ke Depan
+	Bullet Library	Pustaka Bulatan
+	Bullets	Bulatan
+	Calendar	Kalender
+	Cancel	Batal
+	Capitalize Each Word	
+	Captions	
+	Cell Margins	
+	Cell Size	Ukuran Sel
+	Cell\nMargins	
+	Center	Tengah
+	Change	Ubah
+	Change Case	
+	Change List Level	
+	Change Picture	
+	Change Shape	
+	Changes	
+	Character Position	
+	Character Scale	
+	Character Shading	
+	Character Spacing	
+	Characters (no spaces)	
+	Characters (with spaces)	
+	Chart	
+	Check Accessibility	
+	Check Compatibility	
+	Check for Errors	
+	Check Spelling as You Type	
+	Check\nAccessibility	
+	Citation Style	
+	Citations & Bibliography	
+	Clear	
+	Clear All Formatting	
+	Clipboard	
+	Close	
+	Close Header and Footer	
+	Collapse Selection	
+	Color	Warna
+	Color:	Warna:
+	Colors	
+	Column	Kolom
+	Column Break	
+	Columns	
+	Combine	
+	Commands	Perintah
+	Comment	Komentar
+	Comments	Komentar
+	Comments Pane	
+	Community\nDiscord	
+	Compact	
+	Compare	
+	Compress Pictures	
+	Continuous	
+	Convert	
+	Convert Text to Table	
+	Convert Text to Table…	
+	Convert to Text	
+	Copy	Salin
+	Copy Formatting	
+	Corrections	
+	Cover Page	
+	Create	
+	Create a Style	
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	
+	Create New Style	
+	Crop	
+	Cross-reference	
+	Current Position	
+	Current style: {style}	
+	Custom Margins…	
+	Custom Watermark	
+	Custom Watermark…	
+	Customize Quick Access Toolbar	
+	Cut	
+	Dark Mode	Mode Gelap
+	Dark mode	Mode gelap
+	Dashed	
+	Data	Data
+	Date & Time	Tanggal & Waktu
+	Decrease Font Size	
+	Decrease Indent	
+	Default	Baku
+	Define New Bullet	
+	Define New Number Format	
+	Delete	Hapus
+	Delete Cells	
+	Delete Columns	
+	Delete Comment	
+	Delete Next Word	
+	Delete Previous Word	
+	Delete Rows	
+	Delete Style	
+	Delete Table	
+	Design	
+	development build	
+	Diagonal	
+	Diamond	
+	Dictate	
+	Different First Page	
+	Different Odd & Even Pages	
+	Discord	Discord
+	Discord community	
+	Display	Tampilan
+	Display for Review	
+	Distribute Columns	
+	Distribute Rows	
+	Distributed	
+	Do Not Show in TOC	
+	Document End	
+	Document Formatting	
+	Document Property	
+	Document Start	
+	Document Text	
+	Document Title	
+	Documents you open will show up here.	
+	Dot-dash	
+	Dotted	
+	Double	
+	Double Spacing	
+	Double Strikethrough	
+	Double Underline	
+	Down	
+	Draft	
+	Draw	Gambar
+	Drawing Tools	
+	Drawing\nCanvas	
+	Drop Cap	
+	Edit Footer	
+	Edit Header	
+	Edit Recipient List	
+	Edit\nRecipient List	
+	Edited	
+	Editing	
+	Editing header/footer	
+	Editing — edit the document directly	
+	Editor	
+	Effects	
+	Emboss	
+	Encrypt with Password	
+	English (United States)	
+	Engrave	
+	Enter page number:	
+	Envelopes	
+	Equation	
+	Eraser	
+	Even Page	
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	
+	Export	Ekspor
+	Export a copy to share (PDF, Word document)	
+	Export Page as PNG	
+	Export PDF	
+	Exported {path}	
+	Extend Selection	
+	Field	
+	File	Berkas
+	Find	
+	Find and Replace	
+	Find Next	
+	Find Previous	
+	Find Recipient	
+	Find what:	
+	Finish	
+	Finish & Merge	
+	Finish &\nMerge	
+	First Column	
+	First commit	
+	First line:	
+	Fixed Column Width	
+	Focus	
+	Font	
+	Font Color	
+	Font color:	
+	Font Dialog	
+	Font Size	
+	Font:	
+	Fonts	
+	Footer	
+	Footnote and Endnote	
+	Footnotes	
+	Format	Format
+	Format Page Numbers	
+	Format Page Numbers…	
+	Format Painter	
+	Formatting at Selection	
+	Formula	Rumus
+	General	Umum
+	Go To	
+	Go to	
+	Go To (⌘⌥G)	
+	Grab bag	
+	Greeting Line	
+	Greeting\nLine	
+	Gridlines	
+	Group	
+	Grow Font 1 Point	
+	Hanging Indent	
+	Header	
+	Header & Footer	
+	Header Row	
+	Header/Footer Position	
+	Heading 1	
+	Heading 2	
+	Heading 3	
+	Headings	
+	Heart	
+	Help	Bantuan
+	Hidden	
+	Highlight Merge Fields	
+	Highlight\nMerge Fields	
+	Highlighter	
+	Home	Beranda
+	Horizontal	Horizontal
+	Horizontal Line	Garis Horizontal
+	Hyphenation	
+	Icons	
+	Ignore All	
+	Illustrations	
+	Immersive	
+	Immersive Reader	
+	Immersive\nReader	
+	Increase Font Size	
+	Increase Indent	
+	Indent	
+	Indentation	
+	Indents	
+	Index	
+	Info	Info
+	Ink to\nMath	
+	Ink to\nShape	
+	Ink\nReplay	
+	Insert	Sisip
+	Insert Above	
+	Insert Below	
+	Insert Caption	
+	Insert Citation	
+	Insert Endnote	
+	Insert Footnote	
+	Insert Hyperlink	
+	Insert Index	
+	Insert Left	
+	Insert Merge Field	
+	Insert Merge\nField	
+	Insert Right	
+	Insert Shapes	
+	Insert Table	
+	Insert Table of Authorities	
+	Insert Table of Figures	
+	Insert Table…	
+	Insert\nAbove	
+	Insert\nCaption	
+	Insert\nCitation	
+	Insert\nFootnote	
+	Inside Borders	
+	Inspect Document	
+	Interface language:	Bahasa antarmuka:
+	Italic	
+	Join the ArtCraft community on Discord	
+	Join us on Discord: discord.gg/artcraft	
+	Justify	
+	Keep Lines Together	
+	Keep lines together	
+	Keep Text Only	
+	Keep with Next	
+	Keep with next	
+	Labels	
+	Landscape	
+	Language	
+	Lasso	
+	Last Column	
+	Last commit	
+	Layout	Tata Letak
+	Layout Summary	
+	Left	
+	Left Border	
+	Left:	
+	Letter	
+	Line	
+	Line and Page Breaks	
+	Line and Paragraph Spacing	
+	Line Break	
+	Line delta	
+	Line End	
+	Line Numbers	
+	Line Spacing	
+	Line Spacing Options…	
+	Line spacing:	
+	Line Start	
+	Lines	
+	Lines added	
+	Lines deleted	
+	Link	
+	Link to Previous	
+	Links	
+	Location: {path}	
+	lowercase	
+	Macros	
+	Mailings	Persuratan
+	Manage Sources	
+	Many pages	
+	Margins	
+	Mark Citation	
+	Mark Entry	
+	Mark\nCitation	
+	Mark\nEntry	
+	Markdown (*.md)	Markdown (*.md)
+	Match case	
+	Match Fields	
+	Matrix	
+	Merge	
+	Merge Cells	
+	Merge Formatting	
+	Merged PRs	
+	Mirrored	
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	
+	Moderate	
+	Modify Style	
+	Modify…	
+	Multilevel List	
+	Multiple Pages	
+	Name (A–Z)	
+	Name:	
+	"Narrow  0.5"" all"	
+	Navigation	
+	Navigation Pane	
+	New	Baru
+	New Comment	
+	New from Template	
+	New Paragraph	
+	New Style…	
+	New Window	
+	New\nComment	
+	New\nWindow	
+	Next	
+	Next Change	
+	Next Comment	
+	Next Footnote	
+	Next Page	
+	Next Record	
+	Next Section	
+	No Border	
+	No Color	
+	No contributor data was built into this copy.	
+	No Markup	
+	No model credits were built into this copy.	
+	No Paragraph Space	
+	Nonbreaking Hyphen	
+	Nonbreaking Space	
+	None	
+	"Normal  1"" all"	
+	Normal Style	
+	Not available right now	
+	Not saved	Tidak disimpan
+	Not saved yet	Belum disimpan
+	Number of columns:	
+	Number of rows:	
+	Numbering	Penomoran
+	Object	
+	Odd Page	
+	Office 2003 Default	
+	OK	OK
+	One	Satu
+	One Page	Satu Halaman
+	Open	Buka
+	OpenDocument Text (*.odt)	
+	Optional Hyphen	
+	Options	Opsi
+	Orientation	Orientasi
+	Outline	
+	Outline Level	
+	Outside Borders	
+	Oval	
+	Page	Halaman
+	Page Background	
+	Page Borders	
+	Page Break	
+	Page Break Before	
+	Page break before	
+	Page Breaks	
+	Page Color	
+	Page Down	
+	Page image (*.png)	
+	Page Movement	
+	Page Number	
+	Page Setup	
+	Page Up	
+	Page Width	
+	Page width	
+	Page X of Y	
+	Page {page}	
+	Page {page} of {pages}	
+	Page\nBorders	
+	Page\nColor	
+	Page\nNumber	
+	Pages	
+	Paragraph	Paragraf
+	Paragraph Details	
+	Paragraph Down	
+	Paragraph Settings	
+	Paragraph Spacing	
+	Paragraph Up	
+	Paragraphs	
+	Paste	Tempel
+	Paste (⌘V)	
+	Paste Formatting	
+	Paste: Keep Text Only	
+	Paste: Merge Formatting	
+	PDF document (*.pdf)	Dokumen PDF (*.pdf)
+	Pen	Pena
+	Pencil	Pinsil
+	Picture Border	
+	Picture Format	
+	Picture Styles	
+	Pictures	
+	Plain text (*.txt)	
+	Portrait	
+	Position	
+	Preview Results	
+	Preview\nResults	
+	Previous	
+	Previous Change	
+	Previous Comment	
+	Previous Record	
+	Previous Section	
+	Print	Cetak
+	Print Layout	
+	Print\nLayout	
+	Proofing	
+	Proofing Issues	
+	Properties	
+	Protect	
+	Protect Document	
+	Quick Access Toolbar	
+	Quick Parts	
+	Quick Tables	
+	Read Aloud	
+	Read Mode	
+	Read\nAloud	
+	Read\nMode	
+	Recent	
+	Record Macro	
+	Recover Unsaved Documents	
+	Rectangle	
+	Redo	
+	Reduce Hanging Indent	
+	References	Referensi
+	Reject	
+	Reject All Changes	
+	Reject Change	
+	Relaxed	
+	Remove Background	
+	Remove Footer	
+	Remove Header	
+	Remove Hyperlink	
+	Remove Space After Paragraph	
+	Remove Table of Contents	
+	Remove Watermark	
+	Repeat	
+	Repeat Header Rows	
+	Replace	
+	Replace All	
+	Replace Document Text	
+	Replace with:	
+	Replay	
+	Reply	
+	Report	
+	Research	
+	Researcher	
+	Reset Picture	
+	Resolve	
+	Resolved	
+	Restart at 1	
+	Restart Each Page	
+	Restart Each Section	
+	Restrict Editing	
+	Restrict\nEditing	
+	Results	
+	Reverse the order	
+	Review	Tinjauan
+	Reviewing	
+	Reviewing Pane	
+	Reviewing — edits become suggestions	
+	Rich Text Format (*.rtf)	
+	Right	
+	Right Border	
+	Right-to-Left Text Direction	
+	Right:	
+	Rotate	
+	Rounded Rectangle	
+	Rows & Columns	
+	Ruler	
+	Rules	
+	Résumé	
+	Save	Simpan
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	
+	Save As	Simpan Sebagai
+	Save as Template	Simpan sebagai Templat
+	Saved	
+	Search Commands	
+	Search commands and help	
+	Search document	
+	Section Breaks	
+	Section Properties	
+	Sections	
+	Select	Pilih
+	Select All	Pilih Semua
+	Select Cell	Pilih Sel
+	Select Line	Pilih Baris
+	Select Objects	Pilih Objek
+	Select Paragraph	Pilih Paragraf
+	Select Range	Pilih Rentang
+	Select Recipients	Pilih Penerima
+	Select Row	Pilih Baris
+	Select Sentence	Pilih Kalimat
+	Select Table	Pilih Tabel
+	Select Text	Pilih Teks
+	Select Text with Similar Formatting	
+	Select Word	Pilih Kata
+	Select\nRecipients	
+	Selection	
+	Selection Pane	
+	Send Backward	
+	Sentence case.	
+	Set as Default	
+	Set Caret	
+	Set Character Formatting	
+	Set Numbering Value	
+	Set Paragraph Formatting	
+	Shading	
+	Shadow	
+	Shape Fill	
+	Shape Format	
+	Shape Outline	
+	Shape Styles	
+	Shapes	
+	Share	
+	Shift+Tab	Shift+Tab
+	Show	
+	Show all formatting marks	
+	Show Comments	
+	Show Markup	
+	Show Notes	
+	Show rulers	
+	Show the community button in the title bar	
+	Show/Hide ¶	
+	Show\nComments	
+	Shrink Font 1 Point	
+	Side to Side	
+	Side\nto Side	
+	Signature Line	
+	Single	
+	Single Spacing	
+	Size	
+	Size:	
+	Small Caps	
+	Small caps	
+	SmartArt	SmartArt
+	Sort	
+	Source code: github.com/storytold/wordcraft	
+	Space before/after:	
+	Spacing	
+	Spacing (pt):	
+	Speech	
+	Spelling & Grammar	
+	Spelling &\nGrammar	
+	Spelling Suggestions	
+	Split	
+	Split Cells	
+	Split Table	
+	Spreadsheet Table	
+	Standard Colors	
+	Star	
+	Start Mail Merge	
+	Start Mail\nMerge	
+	Statistics	
+	Status Bar	
+	Strikethrough	
+	Studio cover	
+	Studio handbook (sample)	
+	Style	
+	Style based on:	
+	Style Set	
+	Style: APA	
+	Styles	
+	Styles Pane	
+	Subscript	
+	Superscript	
+	Switch Modes	
+	Switch\nModes	
+	Symbol	
+	Symbols	
+	Synonyms	
+	Tab	
+	Table	
+	Table Column Width	
+	Table Design	
+	Table Layout	
+	Table of Authorities	
+	Table of Contents	
+	Table of\nContents	
+	Table Properties	
+	Table Row Height	
+	Table Style Options	
+	Table Styles	
+	Tables	
+	Tabs	
+	Tabular List	
+	Text	
+	Text Box	
+	Text Direction	
+	Text Effects	
+	Text Effects and Typography	
+	Text from File	
+	Text Highlight Color	
+	Text to display:	
+	Text Wrapping	
+	Text:	
+	Text\nBox	
+	Text\nDirection	
+	The new style takes the formatting of the current paragraph.	
+	Theme Colors	
+	Theme Fonts	
+	Theme List	
+	Themes	
+	Thesaurus	
+	Thick	
+	Three	
+	Tight	
+	Top Border	
+	Top of Page	
+	Top:	
+	Total Row	
+	Track Changes	
+	Track Changes: On	
+	Tracking	
+	Translate	
+	Transparency	
+	Triangle	
+	Two	
+	"Type a command, e.g. ""insert table"""	
+	Type Text	
+	Underline	
+	Underline Words Only	
+	Undo	Urung
+	Undo {action}	Urungkan {action}
+	Up	Naik
+	Update Field	Perbarui Ruas
+	Update Index	Perbarui Indeks
+	Update Style to Match Selection	Perbarui Gaya agar Cocok Pilihan
+	Update Table	Perbarui Tabel
+	Update Table of Figures	Perbarui Daftar Gambar
+	Update to Match	Perbarui agar Cocok
+	Update to Match Selection	Perbarui agar Cocok Pilihan
+	UPPERCASE	HURUF BESAR
+	User Name	Nama Pengguna
+	User name:	Nama pengguna:
+	Version History	Riwayat Versi
+	Version {version} ({build})	Versi {version}（{build}）
+	Vertical	Vertikal
+	Vertical Alignment	Perataan Vertikal
+	View	Tampilan
+	View Gridlines	Tampilkan Garis Kisi
+	View State	Tampilkan Keadaan
+	Views	Tilikan
+	Voice	Suara
+	Watermark	Tanda Air
+	Wave	Gelombang
+	Web Layout	Tata Letak Web
+	Web page (*.html)	Laman web (*.html)
+	Web\nLayout	Tata Letak\nWeb
+	Whole page	Seluruh halaman
+	Whole words	Seluruh kata
+	Wide	Lebar
+	Widow/Orphan Control	
+	Widow/Orphan control	
+	Wildcards (regex)	
+	Window	Jendela
+	Word Count	Cacah Kata
+	Word document (*.docx)	Dokumen Word (*.docx)
+	Word Left	Kata Kiri
+	Word Right	Kata Kanan
+	WordArt	Seni Kata
+	WordCraft	WordCraft
+	Words	Kata
+	Words only	Hanya kata
+	Wrap Text	Lipat Teks
+	Wrap\nText	Lipat\nTeks
+	Write & Insert Fields	Tulis & Sisip Ruas
+	Zoom	Zum
+	Zoom In	Perbesar
+	Zoom Out	Perkecil
+	{group} settings	pengaturan {group}
+	{key}+Click to follow link	{key}+Klik untuk mengikuti tautan
+	➕ New comment	➕ Komentar baru
+	📂  Browse…	📂  Ramban…
+	{words} words	{words} kata
+	{selected} of {words} words	{selected} dari {words} kata
