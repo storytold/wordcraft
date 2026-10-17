@@ -301,6 +301,26 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     (args, files)
 }
 
+/// The arguments without the ones macOS adds when it launches an app (#1103): `-psn_0_12345`, and
+/// the `-NS…` / `-Apple…` options (`-AppleLanguages (en)`, `-NSDocumentRevisionsDebugMode YES`) with
+/// the value after each. They are not files, and opening them as files fails.
+fn without_launch_args(args: Vec<String>) -> Vec<String> {
+    let mut kept = Vec::with_capacity(args.len());
+    let mut args = args.into_iter().peekable();
+    while let Some(a) = args.next() {
+        if a.starts_with("-psn_") {
+            continue;
+        }
+        if a.starts_with("-NS") || a.starts_with("-Apple") {
+            // Its value, unless the next argument is another flag.
+            args.next_if(|v| !v.starts_with('-'));
+            continue;
+        }
+        kept.push(a);
+    }
+    kept
+}
+
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
@@ -312,7 +332,9 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
         // Not when it waits for a password: that open names the document itself.
         Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
         Ok(_) => {}
-        Err(e) => log::warn!("{name}: {e}"),
+        Err(e) => {
+            app.report_open_failure(&name, &e);
+        }
     }
 }
 
@@ -324,6 +346,7 @@ fn main() -> eframe::Result {
     let mut files = Vec::new();
     let mut sample = false;
     let (args, other_files) = text_args();
+    let args = without_launch_args(args);
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
     while let Some(a) = args.next() {
@@ -461,7 +484,7 @@ fn main() -> eframe::Result {
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    log::warn!("{f}: {e}");
+                    app.report_open_failure(&f, &e);
                 }
             }
             for f in other_files {
@@ -509,6 +532,33 @@ mod tests {
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));
         assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod launch_arg_tests {
+    use super::without_launch_args;
+
+    fn strip(args: &[&str]) -> Vec<String> {
+        without_launch_args(args.iter().map(|a| a.to_string()).collect())
+    }
+
+    #[test]
+    fn macos_launch_arguments_are_not_files() {
+        assert_eq!(strip(&["-psn_0_12345", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["-AppleLanguages", "(en)", "a.docx"]), ["a.docx"]);
+        assert_eq!(strip(&["a.docx", "-NSDocumentRevisionsDebugMode", "YES", "b.docx"]), ["a.docx", "b.docx"]);
+        // A flag with no value after it, or followed by another flag, takes nothing with it.
+        assert_eq!(strip(&["a.docx", "-AppleLocale"]), ["a.docx"]);
+        assert_eq!(strip(&["-NSFoo", "--sample", "a.docx"]), ["--sample", "a.docx"]);
+    }
+
+    #[test]
+    fn real_arguments_are_kept() {
+        assert_eq!(strip(&["--control", "7981", "--sample", "-h"]), ["--control", "7981", "--sample", "-h"]);
+        // Files whose names merely start like a launch argument keep their place when they are paths.
+        assert_eq!(strip(&["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]), ["./-psn_x.docx", "Apple.docx", "-", "-nsfoo"]);
+        assert!(strip(&[]).is_empty());
     }
 }
 

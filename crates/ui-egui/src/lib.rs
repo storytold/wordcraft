@@ -1575,6 +1575,15 @@ impl WordApp {
         }
     }
 
+    /// A file that wouldn't open (#1103): log it, and say on the status bar which file and why,
+    /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
+    pub fn report_open_failure(&mut self, path: &str, error: &str) -> String {
+        log::warn!("{path}: {error}");
+        let msg = i18n::fmt(tl!("Couldn't open {path}: {error}"), &[("path", path), ("error", error)]);
+        self.status(msg.clone());
+        msg
+    }
+
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
     }
@@ -1850,7 +1859,7 @@ impl WordApp {
                 let lp = path.to_ascii_lowercase();
                 let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
                 let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
-                let _ = if img {
+                let opened = if img {
                     self.caret_after_placed_picture(placed_picture);
                     let r = self.run("insert.picture", json!({"path": path}));
                     placed_picture = Self::placed_in_text(&r);
@@ -1863,6 +1872,9 @@ impl WordApp {
                 } else {
                     self.run("file.open", json!({"path": path}))
                 };
+                if let Err(e) = opened {
+                    self.report_open_failure(&path, &e);
+                }
             }
         }
         // The open above may have changed the file name the caption draws.
@@ -2774,6 +2786,27 @@ mod tests {
         b.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
         assert!(b.has_document());
         assert!(body_text(&b).contains("Signed copy"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #1103: a file that fails to open names the file and the real cause on the status bar.
+    #[test]
+    fn a_file_that_wont_open_says_which_file_and_why() {
+        let dir = scratch("open-failure");
+        let bad = dir.join("broken.docx");
+        std::fs::write(&bad, b"PK\x03\x04 this is not really a zip").unwrap();
+        let mut a = app();
+        let path = bad.to_string_lossy().to_string();
+        let error = a.run("file.open", json!({"path": path})).unwrap_err();
+        assert!(error.contains("zip") || error.contains("Word"), "the engine names the cause: {error}");
+        let msg = a.report_open_failure(&path, &error);
+        assert!(msg.contains(&path) && msg.contains(&error), "{msg}");
+        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(msg.as_str()));
+
+        let missing = dir.join("gone.docx").to_string_lossy().to_string();
+        let error = a.run("file.open", json!({"path": missing})).unwrap_err();
+        let msg = a.report_open_failure(&missing, &error);
+        assert!(msg.contains("gone.docx") && (msg.to_lowercase().contains("no such file") || msg.contains("os error")), "{msg}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
