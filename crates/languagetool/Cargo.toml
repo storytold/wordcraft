@@ -1,0 +1,24 @@
+[package]
+name = "wordcraft-languagetool"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "WordCraft LanguageTool client: opt-in spelling and grammar checking by a LanguageTool server (public or self-hosted) over its HTTP API"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-proof = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+form_urlencoded = "1.2"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# HTTPS to the server. Desktop only: the browser build has no checker (see `http`).
+ureq = { version = "2.12", default-features = false, features = ["tls"] }
+
+[dev-dependencies]
+proptest = { workspace = true }

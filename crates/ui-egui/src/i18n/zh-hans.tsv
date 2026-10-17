@@ -1591,6 +1591,18 @@
 	Sat:	饱和度:
 	Lum:	亮度:
 	Hex:	十六进制:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	使用 LanguageTool 检查拼写和语法
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	将段落文本发送到下方的 LanguageTool 服务器。关闭时使用 WordCraft 内置检查器，任何内容都不会离开这台计算机。
+	Server:	服务器：
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	输入自己的 LanguageTool 服务器地址即可使用，例如 http://localhost:8081。
+	Username:	用户名：
+	API key:	API 密钥：
+	Detect automatically	自动检测
+	Each paragraph's proofing language	各段落的校对语言
+	Language:	语言：
+	Paragraphs checked: {count}	已检查段落：{count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTool 检查需要桌面应用；浏览器版本暂时无法将文本发送到检查服务器。
 	Accessibility Pane	辅助功能窗格
 	Alt Text Pane	替代文字窗格
 	Alt\nText	替代\n文字

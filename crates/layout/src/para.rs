@@ -2672,6 +2672,16 @@ pub fn paragraph_issues(p: &Paragraph, runs: &[ProofRun], spelling: &wordcraft_p
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
+    // The external checker's result for this text when it has one (#575), each issue in the
+    // language of the run it is in; grammar marks only with `grammar`.
+    if let Some(found) = wordcraft_proof::check_external(&text) {
+        let lang_at = |at: usize| spans.iter().find(|(r, _)| r.contains(&at)).map(|(_, l)| *l).unwrap_or_default();
+        return found
+            .into_iter()
+            .filter(|i| !skip(i.start, i.end) && (grammar || i.kind != wordcraft_proof::IssueKind::Grammar))
+            .map(|i| wordcraft_proof::Issue { lang: lang_at(i.start), ..i })
+            .collect();
+    }
     wordcraft_proof::check_text_with(&text, &spans, spelling, grammar).into_iter().filter(|i| !skip(i.start, i.end)).collect()
 }
 

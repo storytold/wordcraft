@@ -850,7 +850,13 @@ fn issue_at(s: &Session, at: &Pos) -> Option<(Pos, Pos, wordcraft_proof::Issue)>
 
 fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Value {
     let word = s.doc.para_at(a).and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_string();
-    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling { wordcraft_proof::suggest_in(&word, 6, i.lang) } else { i.suggestions.clone() };
+    // Built-in spelling issues carry no suggestions (found on demand); an external checker's
+    // issues carry their own (#575).
+    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling && i.suggestions.is_empty() {
+        wordcraft_proof::suggest_in(&word, 6, i.lang)
+    } else {
+        i.suggestions.clone()
+    };
     json!({
         "start": pos_json(a), "end": pos_json(b), "text": word,
         "kind": if i.kind == wordcraft_proof::IssueKind::Spelling { "spelling" } else { "grammar" },

@@ -1829,6 +1829,18 @@ preview	Title	Пример
 	Sat:	Насыщенность:
 	Lum:	Яркость:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Проверять орфографию и грамматику с помощью LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Отправляет текст ваших абзацев на указанный ниже сервер LanguageTool. Если выключено, используется встроенная проверка WordCraft и ничего не покидает этот компьютер.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Чтобы использовать свой сервер LanguageTool, введите его адрес, например http://localhost:8081.
+	Username:	Имя пользователя:
+	API key:	Ключ API:
+	Detect automatically	Определять автоматически
+	Each paragraph's proofing language	Язык проверки каждого абзаца
+	Language:	Язык:
+	Paragraphs checked: {count}	Проверено абзацев: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Для проверки с LanguageTool нужно настольное приложение; версия для браузера пока не может отправлять текст на сервер проверки.
 	Accessibility Pane	Область специальных возможностей
 	Alt Text Pane	Область замещающего текста
 	Alt\nText	Замещающий\nтекст

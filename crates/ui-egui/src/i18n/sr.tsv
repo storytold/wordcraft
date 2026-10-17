@@ -1593,6 +1593,18 @@
 	Sat:	Засићеност:
 	Lum:	Осветљеност:
 	Hex:	Хекс:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Провери правопис и граматику помоћу алата LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Шаље текст ваших пасуса на LanguageTool сервер наведен испод. Када је искључено, користи се уграђена провера програма WordCraft и ништа не напушта овај рачунар.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Користите сопствени LanguageTool сервер уносом његове адресе, на пример http://localhost:8081.
+	Username:	Корисничко име:
+	API key:	API кључ:
+	Detect automatically	Аутоматски откриј
+	Each paragraph's proofing language	Језик провере сваког пасуса
+	Language:	Језик:
+	Paragraphs checked: {count}	Проверено пасуса: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Провера помоћу алата LanguageTool захтева десктоп апликацију; верзија у прегледачу још не може да шаље текст серверу за проверу.
 	Accessibility Pane	Окно приступачности
 	Alt Text Pane	Окно алтернативног текста
 	Alt\nText	Алтернативни\nтекст
