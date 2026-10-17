@@ -1741,6 +1741,12 @@
 	Reading Text Size	Lugemisteksti suurus
 	Do Not Check Spelling or Grammar	Ära kontrolli õigekirja ega grammatikat
 	English (United Kingdom)	Inglise (Ühendkuningriik)
+	English (Australia)	Inglise (Austraalia)
+	English (Canada)	Inglise (Kanada)
+	English (India)	Inglise (India)
+	English (Ireland)	Inglise (Iirimaa)
+	English (New Zealand)	Inglise (Uus-Meremaa)
+	English (South Africa)	Inglise (Lõuna-Aafrika)
 	Polish	Poola
 
 # Built-in file browser when the system file dialog is unavailable (#576)

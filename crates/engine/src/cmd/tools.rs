@@ -804,7 +804,7 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     let english = s.doc.para_at(&f).is_none_or(|p| {
         let rc = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(start));
         let lang = rc.lang.as_deref().or(s.editing_lang.as_deref());
-        wordcraft_proof::ProofLang::from_tag(lang) == wordcraft_proof::ProofLang::En
+        wordcraft_proof::ProofLang::from_tag(lang).is_english()
     });
     let found = if ac.replace_text { ac.replacement_in(&word, english) } else { None };
     let (from, rep) = match found {

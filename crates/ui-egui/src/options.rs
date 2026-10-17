@@ -346,7 +346,7 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Ru => tl!("Russian"),
         ProofLang::Cs => tl!("Czech"),
         // English uses its bundled word list; Bulgarian has no dictionary yet.
-        ProofLang::En | ProofLang::Bg | ProofLang::Other => "",
+        ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::Other => "",
     }
 }
 
@@ -423,7 +423,9 @@ fn language(app: &mut WordApp, ui: &mut Ui) {
     // #414 (detect the document's language) goes here.
     ui.add_space(8.0);
     section(ui, "Proofing language");
-    note(ui, "Spelling and grammar are checked in English (United States).");
+    // The document's default language (Review › Language › Set As Default changes it).
+    let tag = app.session.doc.styles.default_chr.lang.clone();
+    note(ui, &crate::ribbon::language_name(tag.as_deref()));
 }
 
 fn accessibility(app: &mut WordApp, ui: &mut Ui) {

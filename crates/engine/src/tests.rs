@@ -5524,6 +5524,107 @@ fn portuguese_proofing_through_the_review_commands() {
     assert_eq!(left.as_array().unwrap().len(), 1, "{left}");
 }
 
+/// The spelling issues of the document: each word with its first suggestion.
+fn spelling_with_first_suggestion(s: &mut Session) -> Vec<(String, String)> {
+    let issues = run(s, "review.issues", json!({}));
+    issues
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["kind"] == "spelling")
+        .map(|i| (i["text"].as_str().unwrap().to_string(), i["suggestions"][0].as_str().unwrap_or("").to_string()))
+        .collect()
+}
+
+fn pairs(v: &[(&str, &str)]) -> Vec<(String, String)> {
+    v.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect()
+}
+
+/// English (UK), (Canada) and (Australia) through Review › Language (#1281, #1045): each accepts
+/// its own spellings and flags the other dialect's with its own form suggested first, F7 finds
+/// it and Change fixes it.
+#[test]
+fn english_dialects_through_the_review_commands() {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "The colour of the center."}));
+    // US English by default: the British spelling is flagged, the American one isn't.
+    assert_eq!(spelling_with_first_suggestion(&mut s), pairs(&[("colour", "color")]));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "en_gb", "default": true}));
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("en-GB"));
+    assert_eq!(run(&mut s, "format.state", json!({}))["lang"], "en-GB");
+    assert_eq!(spelling_with_first_suggestion(&mut s), pairs(&[("center", "centre")]));
+    run(&mut s, "caret.docStart", json!({}));
+    assert_eq!(run(&mut s, "review.spelling", json!({}))["text"], "center");
+    run(&mut s, "review.applySuggestion", json!({"text": "centre"}));
+    assert_eq!(text(&s), "The colour of the centre.");
+    assert!(spelling_with_first_suggestion(&mut s).is_empty());
+    // Canada: British -our and -re, American -ize.
+    run(&mut s, "document.setText", json!({"text": "We organise the colour and analyze the centre."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "en-CA", "default": true}));
+    assert_eq!(spelling_with_first_suggestion(&mut s), pairs(&[("organise", "organize")]));
+    // Australia spells the British way: -ise is right, -yze isn't.
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "en-AU", "default": true}));
+    assert_eq!(spelling_with_first_suggestion(&mut s), pairs(&[("analyze", "analyse")]));
+    // Add to Dictionary overrules the dialect.
+    run(&mut s, "review.addToDictionary", json!({"word": "analyze"}));
+    assert!(spelling_with_first_suggestion(&mut s).is_empty());
+    wordcraft_proof::remove_word("analyze");
+}
+
+/// A British document keeps its languages through .docx (`w:lang` in the defaults and on a run)
+/// and is proofed the same way when it comes back.
+#[test]
+fn english_dialects_survive_a_docx_round_trip() {
+    use std::io::Read;
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "Colour and color. Centre and center."}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "review.language", json!({"lang": "en-GB", "default": true}));
+    run(&mut s, "select.text", json!({"text": "Centre and center."}));
+    run(&mut s, "review.language", json!({"lang": "en-US"}));
+    let before = spelling_with_first_suggestion(&mut s);
+    assert_eq!(before, pairs(&[("color", "colour"), ("Centre", "Center")]));
+    let bytes = crate::io::save_bytes("british.docx", &s.doc).unwrap();
+    let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+    let mut part = |name: &str| {
+        let mut xml = String::new();
+        zip.by_name(name).unwrap().read_to_string(&mut xml).unwrap();
+        xml
+    };
+    assert!(part("word/styles.xml").contains(r#"w:val="en-GB""#), "the default language is written");
+    assert!(part("word/document.xml").contains(r#"w:val="en-US""#), "the run's language is written");
+    let doc = crate::io::open_bytes("british.docx", &bytes).unwrap();
+    assert_eq!(doc.styles.default_chr.lang.as_deref(), Some("en-GB"));
+    let mut back = Session::new(doc);
+    assert_eq!(spelling_with_first_suggestion(&mut back), before);
+}
+
+/// An English interface writes new documents in the region's English (English (UK) on a British
+/// system, #1045); another region's language leaves US English.
+#[test]
+fn new_documents_follow_the_regions_english() {
+    let mut s = s();
+    s.system_region = wordcraft_geom::Region::from_tag("en_GB.UTF-8");
+    assert_eq!(s.region_english().as_deref(), Some("en-GB"));
+    let tag = s.region_english();
+    s.set_editing_language(tag.as_deref());
+    assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("en-GB"), "the untouched document follows");
+    run(&mut s, "document.setText", json!({"text": "Colour, color."}));
+    assert_eq!(spelling_with_first_suggestion(&mut s), pairs(&[("color", "colour")]));
+    // The region chosen in Options wins over the system's.
+    run(&mut s, "file.options", json!({"region": "en-CA"}));
+    assert_eq!(s.region_english().as_deref(), Some("en-CA"));
+    for (tag, english) in [("pl-PL", None), ("en-US", None), ("en-AU", Some("en-AU")), ("auto", Some("en-GB"))] {
+        run(&mut s, "file.options", json!({"region": tag}));
+        assert_eq!(s.region_english().as_deref(), english, "{tag}");
+    }
+    s.system_region = wordcraft_geom::Region::from_tag("fr-FR");
+    assert_eq!(s.region_english(), None);
+}
+
 /// Czech proofing through the same commands as Review, F7, Change and Add to Dictionary.
 #[test]
 fn czech_proofing_through_the_review_commands() {

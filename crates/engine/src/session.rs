@@ -977,6 +977,17 @@ impl Session {
         }
     }
 
+    /// The English of the region in effect (`en-GB` for a British region), or `None` when the
+    /// region's language isn't English, it names no territory, or it is the United States (US
+    /// English is the default anyway). An English interface writes new documents in it, as Word
+    /// does on a British or Canadian system (#1045).
+    pub fn region_english(&self) -> Option<String> {
+        let r = self.region();
+        (r.language == "en" && !r.territory.is_empty() && r.territory != "US")
+            .then(|| format!("en-{}", r.territory))
+            .and_then(|t| wordcraft_proof::lang::normalize_tag(&t))
+    }
+
     /// The unit rulers and dialogs show lengths in: the user's choice, else the region's.
     pub fn units(&self) -> wordcraft_geom::Unit {
         self.prefs.units.unwrap_or_else(|| self.region().units())

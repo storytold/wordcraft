@@ -501,9 +501,11 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
 }
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 9] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 11] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
+    ("en-AU", "English (Australia)"),
+    ("en-CA", "English (Canada)"),
     ("pl-PL", "Polish"),
     ("pt-BR", "Portuguese (Brazil)"),
     ("it-IT", "Italian"),
@@ -2767,7 +2769,7 @@ mod tests {
         assert_eq!(language_name(Some("en-ZZ")), "English (ZZ)");
         assert_eq!(language_name(Some("xx-YY")), "xx-YY");
         let exact = |cur: &'static str| move |t: &str| t.eq_ignore_ascii_case(cur);
-        for tag in ["fr-CA", "pt-AO", "en-AU"] {
+        for tag in ["fr-CA", "pt-AO", "en-SG"] {
             let c = language_checks(tag, exact(tag));
             let name = c.extra.expect("shown above the list");
             assert!(!PROOFING_LANGUAGES.iter().any(|(_, n)| *n == name), "{name} is listed once");
@@ -2777,6 +2779,30 @@ mod tests {
         let c = language_checks("PT-br-x-test", |_| false);
         assert_eq!(c.extra, None);
         assert_eq!(c.listed, PROOFING_LANGUAGES.map(|(t, _)| t == "pt-BR"));
+    }
+
+    /// The Englishes WordCraft proofs differently are in the menu, checked by their tags, and
+    /// every English region has a name (#1281, #1045).
+    #[test]
+    fn english_dialects_are_in_the_language_menu() {
+        for (tag, name) in [
+            ("en-US", "English (United States)"),
+            ("en-GB", "English (United Kingdom)"),
+            ("en-AU", "English (Australia)"),
+            ("en-CA", "English (Canada)"),
+        ] {
+            assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
+            assert_eq!(language_name(Some(tag)), name);
+            let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
+            assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        }
+        for (tag, name) in
+            [("en-NZ", "English (New Zealand)"), ("en-IE", "English (Ireland)"), ("en-ZA", "English (South Africa)"), ("en-IN", "English (India)")]
+        {
+            assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)), "{tag}");
+            assert_eq!(language_name(Some(tag)), name);
+        }
+        assert_eq!(language_name(Some("en-SG")), "English (Singapore)");
     }
 
     #[test]
