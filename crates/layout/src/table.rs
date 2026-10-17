@@ -5,7 +5,7 @@
 use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
-use wordcraft_doc::{Block, Blocks, Paragraph, StoryRef, Table};
+use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::para::{CellText, ClKind, ParaLayout};
@@ -1154,26 +1154,63 @@ fn is_automatic(t: &Table) -> bool {
         && t.rows.iter().all(|r| r.cells.iter().all(|c| c.props.width.is_none() && c.props.width_pct.is_none()))
 }
 
-/// Consistent cell widths replace a stale grid without changing the table's total width.
-/// Conflicting widths, spans and percentages need the full shared-grid algorithm.
+/// Consistent cell boundaries replace a stale grid without changing its total width.
+/// Every boundary must be declared; missing or conflicting preferences keep the grid.
 fn apply_cell_widths(t: &Table, grid: &mut [f32]) {
-    let Some(first) = t.rows.first() else { return };
-    if first.cells.len() != grid.len() {
+    const WIDTH_EPSILON: f32 = 0.01;
+    let total: f32 = grid.iter().sum();
+    if grid.is_empty() || !total.is_finite() {
         return;
     }
-    let widths: Option<Vec<f32>> = first.cells.iter().map(|c| c.props.width.filter(|w| w.is_finite() && *w > 0.0)).collect();
-    let Some(widths) = widths else { return };
-    let total: f32 = widths.iter().sum();
-    if !total.is_finite() || (total - grid.iter().sum::<f32>()).abs() > 0.01 {
-        return;
+    let mut edges = vec![None; grid.len() + 1];
+    edges[0] = Some(0.0);
+    edges[grid.len()] = Some(total);
+    for row in &t.rows {
+        let pct_total = rounded_pct_total(row, grid.len());
+        let (mut g, mut x) = (0usize, 0.0f32);
+        for cell in &row.cells {
+            let width = match (cell.props.width_pct, cell.props.width) {
+                (Some(pct), _) => total * pct / pct_total,
+                (_, Some(width)) => width,
+                _ => return,
+            };
+            if !width.is_finite() || width <= 0.0 {
+                return;
+            }
+            g = g.saturating_add(cell.span());
+            x += width;
+            let Some(edge) = edges.get_mut(g) else { return };
+            if !x.is_finite() || edge.is_some_and(|previous: f32| (previous - x).abs() > WIDTH_EPSILON) {
+                return;
+            }
+            if edge.is_none() {
+                *edge = Some(x);
+            }
+        }
+        if g != grid.len() {
+            return;
+        }
     }
-    if t.rows.iter().any(|r| {
-        r.cells.len() != grid.len()
-            || r.cells.iter().zip(&widths).any(|(c, w)| c.span() != 1 || c.props.width_pct.is_some() || c.props.width != Some(*w))
-    }) {
-        return;
+    let widths: Option<Vec<f32>> = edges.windows(2).map(|pair| Some(pair[1]? - pair[0]?)).collect();
+    if let Some(widths) = widths.filter(|widths| widths.iter().all(|w| *w > 0.0)) {
+        grid.copy_from_slice(&widths);
     }
-    grid.copy_from_slice(&widths);
+}
+
+// Word retains a complete percentage row rounded down by one OOXML fiftieth-percent unit.
+// Normalize that remainder before solving shared boundaries; real conflicts still reject the row.
+fn rounded_pct_total(row: &Row, columns: usize) -> f32 {
+    const PERCENT_TOTAL: f64 = 100.0;
+    const OOXML_PCT_UNIT: f64 = 1.0 / 50.0;
+    const FLOAT_SLOP: f64 = f32::EPSILON as f64 * PERCENT_TOTAL;
+    if row.cells.iter().fold(0usize, |n, c| n.saturating_add(c.span())) != columns {
+        return PERCENT_TOTAL as f32;
+    }
+    let total: Option<f64> = row.cells.iter().map(|c| c.props.width_pct.filter(|p| p.is_finite() && *p > 0.0).map(f64::from)).sum();
+    match total {
+        Some(sum) if PERCENT_TOTAL - sum > FLOAT_SLOP && PERCENT_TOTAL - sum <= OOXML_PCT_UNIT + FLOAT_SLOP => sum as f32,
+        _ => PERCENT_TOTAL as f32,
+    }
 }
 
 /// Word's autofit for a table whose widths may follow its content (`tblLayout` not fixed).
@@ -1208,5 +1245,141 @@ fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
     let give = (short / spare.max(0.01)).min(1.0);
     for (w, c) in grid.iter_mut().zip(content) {
         *w = if *w < c.0 { c.0 } else { *w - (*w - c.0) * give };
+    }
+}
+
+#[cfg(test)]
+mod width_tests {
+    use super::*;
+
+    fn merged_width_table() -> Table {
+        let mut table = Table::new(3, 4, 400.0);
+        let rows = [vec![(4, 400.0)], vec![(2, 150.0), (1, 200.0), (1, 50.0)], vec![(1, 60.0), (1, 90.0), (2, 250.0)]];
+        for (row, widths) in table.rows.iter_mut().zip(rows) {
+            row.cells.truncate(widths.len());
+            for (cell, (span, width)) in row.cells.iter_mut().zip(widths) {
+                cell.props.span = span;
+                cell.props.width = Some(width);
+            }
+        }
+        table
+    }
+
+    #[test]
+    fn merged_rows_replace_stale_grid() {
+        let table = merged_width_table();
+        let mut grid = table.grid.clone();
+        apply_cell_widths(&table, &mut grid);
+        assert_eq!(grid, [60.0, 90.0, 200.0, 50.0]);
+    }
+
+    #[test]
+    fn percent_rows_replace_grid() {
+        let mut table = merged_width_table();
+        for cell in table.rows.iter_mut().flat_map(|row| &mut row.cells) {
+            cell.props.width_pct = cell.props.width.map(|width| width / 4.0);
+            cell.props.width = None;
+        }
+        let mut grid = table.grid.clone();
+        apply_cell_widths(&table, &mut grid);
+        assert_eq!(grid, [60.0, 90.0, 200.0, 50.0]);
+
+        table.rows[1].cells[0].props.width_pct = None;
+        table.rows[1].cells[0].props.width = Some(150.0);
+        grid.copy_from_slice(&table.grid);
+        apply_cell_widths(&table, &mut grid);
+        assert_eq!(grid, [60.0, 90.0, 200.0, 50.0]);
+    }
+
+    fn rounded_width_table() -> Table {
+        let mut table = Table::new(3, 6, 468.0);
+        table.grid = vec![25.0, 25.0, 30.0, 300.0, 44.0, 44.0];
+        for row in &mut table.rows {
+            for (cell, pct) in row.cells.iter_mut().zip([18.58, 7.28, 16.04, 18.36, 17.38, 22.34]) {
+                cell.props.width = None;
+                cell.props.width_pct = Some(pct);
+            }
+        }
+        table
+    }
+
+    #[test]
+    fn rounded_percent_rows_fit() {
+        for total in [468.0, 422.05, 1584.0] {
+            let table = rounded_width_table();
+            let mut grid: Vec<_> = table.grid.iter().map(|width| width * total / 468.0).collect();
+            apply_cell_widths(&table, &mut grid);
+            for (width, pct) in grid.iter().zip([18.58, 7.28, 16.04, 18.36, 17.38, 22.34]) {
+                assert!((width - total * pct / 99.98).abs() < 0.01, "{grid:?}");
+            }
+            assert!((grid.iter().sum::<f32>() - total).abs() < 0.01);
+        }
+    }
+
+    #[test]
+    fn rounded_spans_share_edges() {
+        let mut table = rounded_width_table();
+        table.rows[0].cells.remove(1);
+        table.rows[0].cells[0].props.span = 2;
+        table.rows[0].cells[0].props.width_pct = Some(25.86);
+        let mut grid = table.grid.clone();
+        apply_cell_widths(&table, &mut grid);
+        assert!((grid[0] - 468.0 * 18.58 / 99.98).abs() < 0.01);
+        assert!((grid[1] - 468.0 * 7.28 / 99.98).abs() < 0.01);
+    }
+
+    #[test]
+    fn rounding_has_one_unit_limit() {
+        for (first, normalized) in [(18.58, true), (18.5801, true), (18.599998, false), (18.5799, false), (18.56, false), (18.62, false)] {
+            let mut table = rounded_width_table();
+            table.rows[0].cells[0].props.width_pct = Some(first);
+            let total = rounded_pct_total(&table.rows[0], 6);
+            assert_eq!(total < 100.0, normalized, "first {first}: {total}");
+        }
+    }
+
+    #[test]
+    fn rounding_keeps_conflict_guard() {
+        for case in 0..8 {
+            let mut table = rounded_width_table();
+            match case {
+                0 => table.rows[1].cells[0].props.width_pct = Some(18.56),
+                1 => table.rows[1].cells[0].props.width_pct = Some(18.60),
+                2 => table.rows[1].cells[0].props.width_pct = Some(f32::NAN),
+                3 => table.rows[1].cells[0].props.width_pct = None,
+                4 => table.rows[1].cells[0].props.width_pct = Some(0.0),
+                5 => table.rows[1].cells[0].props.span = 2,
+                6 => {
+                    table.rows[1].cells[0].props.width_pct = Some(19.58);
+                    table.rows[1].cells[3].props.width_pct = Some(17.36);
+                }
+                _ => table.rows.iter_mut().for_each(|row| row.cells[0].props.width_pct = Some(18.5799)),
+            }
+            let mut grid = table.grid.clone();
+            apply_cell_widths(&table, &mut grid);
+            assert_eq!(grid, table.grid, "case {case}");
+        }
+    }
+
+    #[test]
+    fn uncertain_widths_keep_grid() {
+        for case in 0..7 {
+            let mut table = merged_width_table();
+            match case {
+                0 => {
+                    table.rows[2].cells[1].props.width = Some(95.0);
+                    table.rows[2].cells[2].props.width = Some(245.0);
+                }
+                1 => table.rows[2].cells[1].props.width = None,
+                2 => table.rows[2].cells[1].props.width_pct = Some(20.0),
+                3 => table.rows.truncate(2),
+                4 => table.rows[2].cells[1].props.span = 2,
+                5 => table.rows[2].cells[1].props.width = Some(0.0),
+                _ => table.rows[2].cells[1].props.width = Some(f32::NAN),
+            }
+            let mut grid = table.grid.clone();
+            apply_cell_widths(&table, &mut grid);
+            assert_eq!(grid, table.grid, "case {case}");
+        }
     }
 }
