@@ -227,11 +227,15 @@ pub struct Cell {
     pub shading: Option<Rgb>,
     /// The cell's own borders (RTF `\clbrdr…`), drawn whatever the table's style.
     pub borders: Option<wordcraft_doc::props::Borders>,
+    /// The cell's own margins (top, left, bottom, right), points.
+    pub margins: Option<[f32; 4]>,
+    /// Vertical alignment of the cell's content (RTF `\clvertal…`).
+    pub valign: Option<wordcraft_doc::props::VAlign>,
 }
 
 impl Default for Cell {
     fn default() -> Self {
-        Cell { blocks: Vec::new(), colspan: 1, rowspan: 1, covered: false, header: false, shading: None, borders: None }
+        Cell { blocks: Vec::new(), colspan: 1, rowspan: 1, covered: false, header: false, shading: None, borders: None, margins: None, valign: None }
     }
 }
 
@@ -256,6 +260,10 @@ pub struct FTable {
     pub widths: Vec<f32>,
     /// The source table had no borders (HTML default); the document table gets no grid style.
     pub borderless: bool,
+    /// The table's indent from the left margin and its default cell margins (top, left, bottom,
+    /// right), points, when the source states them (RTF).
+    pub indent: Option<f32>,
+    pub cell_margins: Option<[f32; 4]>,
 }
 
 impl FTable {
@@ -620,6 +628,12 @@ impl<'a> Builder<'a> {
         if t.borderless {
             tb.props.style = None;
         }
+        if t.indent.is_some() {
+            tb.props.indent = t.indent;
+        }
+        if t.cell_margins.is_some() {
+            tb.props.cell_margins = t.cell_margins;
+        }
         if t.widths.len() == cols && t.widths.iter().all(|w| w.is_finite() && *w > 1.0) {
             tb.grid = t.widths.iter().map(|w| w.clamp(6.0, 1584.0)).collect();
         }
@@ -644,7 +658,16 @@ impl<'a> Builder<'a> {
                     VMerge::None
                 };
                 row.cells.push(wordcraft_doc::Cell {
-                    props: CellProps { width: Some(w), span: span as u32, vmerge, shading: c.shading, borders: c.borders, ..Default::default() },
+                    props: CellProps {
+                        width: Some(w),
+                        span: span as u32,
+                        vmerge,
+                        shading: c.shading,
+                        borders: c.borders,
+                        margins: c.margins,
+                        valign: c.valign,
+                        ..Default::default()
+                    },
                     blocks,
                     controls: Default::default(),
                 });
@@ -977,6 +1000,8 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
                 header,
                 shading: c.props.shading,
                 borders: c.props.borders,
+                margins: c.props.margins,
+                valign: c.props.valign,
             });
         }
         rows.push(cells);
@@ -985,7 +1010,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
     let visible = |b: &Option<wordcraft_doc::props::Borders>| b.as_ref().is_some_and(|b| b.any_visible());
     let borderless =
         t.props.style.is_none() && !visible(&t.props.borders) && t.rows.iter().flat_map(|r| &r.cells).all(|c| !visible(&c.props.borders));
-    FTable { rows, widths: t.grid.clone(), borderless }
+    FTable { rows, widths: t.grid.clone(), borderless, ..Default::default() }
 }
 
 /// The document body as a flow.
@@ -1260,8 +1285,12 @@ mod tests {
     fn insert_covered_is_bounded_on_hostile_rowspan() {
         // Many rows each carrying the maximum rowspan would be O(rows × rowspan) covered cells;
         // the work cap must keep insertion bounded (and quick) instead of exhausting memory.
-        let mut t =
-            FTable { rows: (0..20_000).map(|_| vec![Cell { rowspan: 1000, ..Default::default() }]).collect(), widths: Vec::new(), borderless: false };
+        let mut t = FTable {
+            rows: (0..20_000).map(|_| vec![Cell { rowspan: 1000, ..Default::default() }]).collect(),
+            widths: Vec::new(),
+            borderless: false,
+            ..Default::default()
+        };
         t.insert_covered();
         assert!(t.rows.iter().all(|r| r.len() <= 64), "a row grew past the column cap");
     }
@@ -1304,6 +1333,7 @@ mod tests {
             rows: vec![vec![Cell { rowspan: 2, ..Default::default() }, Cell::default()], vec![Cell::default()]],
             widths: vec![],
             borderless: false,
+            ..Default::default()
         };
         t.insert_covered();
         assert_eq!(t.rows[1].len(), 2);

@@ -2005,7 +2005,7 @@ impl Body<'_> {
                 if let Some(t) = self.tables.pop()
                     && !t.rows.is_empty()
                 {
-                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
+                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, ..Default::default() }));
                 }
             }
             "desc" | "title" => self.in_desc = false,
@@ -2224,7 +2224,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>), Str
     let mut blocks = body.containers.pop().unwrap_or_default();
     for t in body.tables.drain(..) {
         if !t.rows.is_empty() {
-            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
+            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false, ..Default::default() }));
         }
     }
     // An open section with nothing in it (after a column section at the end) isn't one: the

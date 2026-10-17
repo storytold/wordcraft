@@ -625,6 +625,8 @@ struct Output {
     row_header: bool,
     rule_pending: bool,
     table_rights: Vec<Vec<i32>>,
+    row_geom: RowGeom,
+    table_geom: Option<RowGeom>,
 }
 
 #[derive(Clone, Debug)]
@@ -696,9 +698,34 @@ struct CellDef {
     hmerge: u8,
     shading: Option<Rgb>,
     right: i32,
+    valign: Option<wordcraft_doc::props::VAlign>,
     /// The borders the cell names (`\clbrdrt` … `\clbrdrr`, each with its line style, `\brdrw`
     /// width and `\brdrcf` colour).
     borders: wordcraft_doc::props::Borders,
+}
+
+/// Where a row's cells sit, in twips: the row's left edge (`\trleft`), half the space between
+/// cells (`\trgaph`) and the cell margins (`\trpaddt`, `\trpaddl`, `\trpaddb`, `\trpaddr`), each
+/// in force only with its `\trpaddf…3` (twips) unit.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct RowGeom {
+    left: i32,
+    gaph: i32,
+    /// Top, left, bottom, right margins and whether each is in twips.
+    pad: [i32; 4],
+    pad_twips: [bool; 4],
+}
+
+impl RowGeom {
+    /// The table's indent and default cell margins (top, left, bottom, right), in points, as
+    /// measured in Word (which opens RTF in compatibility mode 11, where the indent is the first
+    /// cell's text): the border stands at `\trleft`; the left and right margins are the
+    /// `\trpadd` ones in twips, else `\trgaph`; the top and bottom ones only the `\trpadd` ones.
+    fn table_props(&self) -> (f32, [f32; 4]) {
+        let side = |i: usize, other: i32| if self.pad_twips[i] { self.pad[i] } else { other };
+        let m = [side(0, 0), side(1, self.gaph), side(2, 0), side(3, self.gaph)].map(|t| (t.max(0) as f32 / 20.0).min(1584.0));
+        ((self.left as f32 / 20.0).clamp(-1584.0, 1584.0) + m[1], m)
+    }
 }
 
 /// Page size and margins in twips (`\paperw`, `\margl`… and their `…sxn` section forms).
@@ -836,6 +863,9 @@ struct Reader {
     cell_side: Option<char>,
     /// Each table row's cell right edges (`\cellx`, twips), for the table's column grid.
     table_rights: Vec<Vec<i32>>,
+    /// The row definition's placement being read, and the one of the table's first row.
+    row_geom: RowGeom,
+    table_geom: Option<RowGeom>,
     colors: Vec<Option<Rgb>>,
     color_cur: (u8, u8, u8, bool),
     styles: HashMap<i32, String>,
@@ -901,6 +931,8 @@ impl Reader {
         std::mem::swap(&mut o.row_header, &mut self.row_header);
         std::mem::swap(&mut o.rule_pending, &mut self.rule_pending);
         std::mem::swap(&mut o.table_rights, &mut self.table_rights);
+        std::mem::swap(&mut o.row_geom, &mut self.row_geom);
+        std::mem::swap(&mut o.table_geom, &mut self.table_geom);
         o
     }
 
@@ -1337,6 +1369,7 @@ impl Reader {
                 rights.push(d.right);
             }
             c.shading = d.shading;
+            c.valign = d.valign;
             c.borders = d.borders.any_visible().then_some(d.borders);
             c.header = self.row_header;
             match d.vmerge {
@@ -1354,6 +1387,14 @@ impl Reader {
         }
         if !out.is_empty() && self.table.len() < wordcraft_doc::table::MAX_ROWS {
             rights.truncate(out.len());
+            // The table takes its indent and default cell margins from its first row; a later
+            // row whose margins differ gives its cells their own.
+            let margins = self.row_geom.table_props().1;
+            match self.table_geom {
+                None => self.table_geom = Some(self.row_geom),
+                Some(first) if first.table_props().1 != margins => out.iter_mut().for_each(|c| c.margins = Some(margins)),
+                Some(_) => {}
+            }
             self.table.push(out);
             self.table_rights.push(rights);
         }
@@ -1372,7 +1413,8 @@ impl Reader {
             let rights = std::mem::take(&mut self.table_rights);
             let widths = column_grid(&mut rows, &rights);
             // Word draws only the borders the cells name: no grid style, each cell its own.
-            self.body.push(FBlock::Table(FTable { rows, widths, borderless: true }));
+            let (indent, cell_margins) = self.table_geom.take().unwrap_or_default().table_props();
+            self.body.push(FBlock::Table(FTable { rows, widths, borderless: true, indent: Some(indent), cell_margins: Some(cell_margins) }));
         }
     }
 
@@ -1709,12 +1751,20 @@ impl Reader {
                 self.defs.clear();
                 self.def_cur = CellDef::default();
                 self.row_header = false;
+                self.row_geom = RowGeom::default();
             }
+            "trleft" => self.row_geom.left = pv,
+            "trgaph" => self.row_geom.gaph = pv,
+            "trpaddt" | "trpaddl" | "trpaddb" | "trpaddr" => self.row_geom.pad[pad_side(w)] = pv,
+            "trpaddft" | "trpaddfl" | "trpaddfb" | "trpaddfr" => self.row_geom.pad_twips[pad_side(w)] = pv == 3,
             "trhdr" => self.row_header = true,
             "clvmgf" => self.def_cur.vmerge = 1,
             "clvmrg" => self.def_cur.vmerge = 2,
             "clmgf" => self.def_cur.hmerge = 1,
             "clmrg" => self.def_cur.hmerge = 2,
+            "clvertalt" => self.def_cur.valign = Some(wordcraft_doc::props::VAlign::Top),
+            "clvertalc" => self.def_cur.valign = Some(wordcraft_doc::props::VAlign::Center),
+            "clvertalb" => self.def_cur.valign = Some(wordcraft_doc::props::VAlign::Bottom),
             "clcbpat" => self.def_cur.shading = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "sb" => self.st.sb = Some(pv),
             "sa" => self.st.sa = Some(pv),
@@ -2070,6 +2120,19 @@ fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
         .collect()
 }
 
+/// The compatibility mode Word opens RTF files in.
+pub const RTF_COMPAT_MODE: u32 = 11;
+
+/// The side a `\trpadd…` word sets: 0 top, 1 left, 2 bottom, 3 right.
+fn pad_side(w: &str) -> usize {
+    match w.chars().last() {
+        Some('t') => 0,
+        Some('l') => 1,
+        Some('b') => 2,
+        _ => 3,
+    }
+}
+
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
@@ -2106,6 +2169,8 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     }
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
+    // Word opens an RTF file in compatibility mode 11 (measured).
+    doc.settings.compat_mode = RTF_COMPAT_MODE;
     let dp = &mut doc.styles.default_para;
     dp.space_before = Some(0.0);
     dp.space_after = Some(0.0);
@@ -2294,6 +2359,35 @@ mod tests {
         // Nonsense keeps Word's defaults.
         let d = import(br"{\rtf1\ansi\paperw0\margl99999 x\par}").unwrap();
         assert_eq!(d.last_section, wordcraft_doc::SectionProps::default());
+    }
+
+    #[test]
+    fn table_rows_are_placed_as_word_places_them() {
+        // Measured in Word: the border stands at \trleft and the text after the left cell margin,
+        // which is \trpaddl in twips (\trpaddfl3), else \trgaph; the top and bottom margins are
+        // only the \trpadd ones. Word opens RTF in compatibility mode 11, where the table indent
+        // is the first cell's text.
+        let rtf = br"{\rtf1\ansi
+\trowd\trleft500\trgaph108\trpaddt200\trpaddft3\cellx2000\clvertalc\cellx9000 \pard\intbl a\cell b\cell\row
+\trowd\trleft500\trgaph300\cellx2000\clvertalb\cellx9000 \pard\intbl c\cell d\cell\row
+\trowd\cellx9000 \pard\intbl e\cell\row
+\pard after\par}";
+        let d = import(rtf).unwrap();
+        assert_eq!(d.settings.compat_mode, RTF_COMPAT_MODE);
+        let Some(wordcraft_doc::Block::Table(t)) = d.body.first().map(|b| &**b) else { panic!("a table first") };
+        assert_eq!(t.props.indent, Some(25.0 + 5.4));
+        assert_eq!(t.props.cell_margins, Some([10.0, 5.4, 0.0, 5.4]));
+        use wordcraft_doc::props::VAlign;
+        assert_eq!(t.rows[0].cells.iter().map(|c| c.props.valign).collect::<Vec<_>>(), [None, Some(VAlign::Center)]);
+        assert_eq!(t.rows[1].cells[1].props.valign, Some(VAlign::Bottom));
+        // The first row's margins are the table's; a row with other margins gives its cells theirs.
+        assert!(t.rows[0].cells.iter().all(|c| c.props.margins.is_none()));
+        assert!(t.rows[1].cells.iter().all(|c| c.props.margins == Some([0.0, 15.0, 0.0, 15.0])));
+        assert!(t.rows[2].cells.iter().all(|c| c.props.margins == Some([0.0; 4])));
+        // \trpaddl without its twips unit is not in force.
+        let d = import(br"{\rtf1\ansi\trowd\trgaph108\trpaddl300\cellx9000 \pard\intbl a\cell\row}").unwrap();
+        let Some(wordcraft_doc::Block::Table(t)) = d.body.first().map(|b| &**b) else { panic!("a table first") };
+        assert_eq!(t.props.cell_margins, Some([0.0, 5.4, 0.0, 5.4]));
     }
 
     #[test]
