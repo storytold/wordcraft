@@ -1344,6 +1344,34 @@ fn cells(s: &Session) -> Option<((usize, usize), (usize, usize))> {
 }
 
 #[test]
+fn tracked_table_changes_are_kept_as_formatting_changes() {
+    // Word records a table property change made while Track Changes and Track Formatting are
+    // on (`w:tblPrChange`): Reject All puts the properties back, Accept All keeps the change.
+    // The model, OOXML I/O and both answers already existed; only the recording was missing.
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "review.trackingOptions", json!({"trackFormatting": true}));
+    run(&mut s, "table.borders", json!({"kind": "all"}));
+    let at = |s: &Session| -> (bool, bool) {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        (t.props.borders.unwrap_or_default().top.is_some(), t.props.fmt_change.is_some())
+    };
+    let (b, ch) = at(&s);
+    assert!(b, "the borders were set");
+    assert!(ch, "the border change was recorded as a formatting change");
+    run(&mut s, "review.rejectAll", json!({}));
+    let (b, ch) = at(&s);
+    assert!(!b, "Reject All restores the table's formatting before the change");
+    assert!(!ch, "the change is answered");
+    run(&mut s, "table.borders", json!({"kind": "all"}));
+    assert!(at(&s).1, "the second change records again");
+    run(&mut s, "review.acceptAll", json!({}));
+    let (b, ch) = at(&s);
+    assert!(b && !ch, "Accept All keeps it");
+}
+
+#[test]
 fn select_all_grows_cell_then_row_then_table_then_document() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Before"}));
