@@ -51,8 +51,8 @@ fn the_first_supported_preferred_language_wins() {
     assert_eq!(first_supported(["en-US", "ja-JP"]), Some(Lang::EN));
     assert_eq!(first_supported([UNSUPPORTED, "qtz"]), None);
     assert_eq!(first_supported(["fr-FR", "de-DE"]), Some(lang("fr")));
-    assert_eq!(first_supported(["nl-NL", "de-DE"]), Some(lang("de")));
-    assert_eq!(first_supported(["nl-NL", UNSUPPORTED]), None);
+    assert_eq!(first_supported([UNSUPPORTED, "de-DE"]), Some(lang("de")));
+    assert_eq!(first_supported(["nl-NL", "da-DK"]), Some(lang("nl")), "nl wins over da now that both are languages");
     assert_eq!(first_supported([]), None);
 }
 
