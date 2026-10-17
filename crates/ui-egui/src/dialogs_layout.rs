@@ -426,9 +426,10 @@ pub struct LanguageForm {
 impl LanguageForm {
     pub fn read(app: &WordApp) -> LanguageForm {
         let s = &app.session;
-        let here = s.typing_props();
-        let lang = here.lang.clone().or_else(|| s.doc.styles.default_chr.lang.clone()).unwrap_or_else(|| "en-US".into());
-        LanguageForm { lang, no_proof: here.no_proof.unwrap_or(false), detect: s.prefs.detect_language }
+        let style = s.doc.para_at(&s.sel.focus).and_then(|p| p.props.style.as_deref());
+        let here = s.doc.styles.resolve_char(style, &s.typing_props());
+        let lang = here.lang.unwrap_or_else(|| "en-US".into());
+        LanguageForm { lang, no_proof: here.no_proof, detect: s.prefs.detect_language }
     }
 
     /// `review.language` parameters for OK.
@@ -890,6 +891,72 @@ mod tests {
         assert_eq!(a.session.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
         assert!(a.dialog.is_none());
         assert_eq!(language_name("xx-YY"), "xx-YY", "an unknown tag shows as itself");
+    }
+
+    /// #2717: language and no-proof can come from defaults or either kind of style.
+    #[test]
+    fn language_dialog_reads_inherited_proofing() {
+        for source in ["default", "paragraph", "character"] {
+            let mut a = app();
+            a.run("select.all", json!({})).unwrap();
+            let proofing = wordcraft_doc::CharProps { lang: Some("en-GB".into()), no_proof: Some(true), ..Default::default() };
+            match source {
+                "default" => a.session.doc.styles.default_chr.overlay(&proofing),
+                "paragraph" => a.session.doc.styles.styles.iter_mut().find(|s| s.id == "Normal").unwrap().chr.overlay(&proofing),
+                _ => {
+                    a.session.doc.styles.styles.push(wordcraft_doc::Style {
+                        id: "ProofingCharacter".into(),
+                        kind: wordcraft_doc::StyleKind::Character,
+                        chr: proofing,
+                        ..Default::default()
+                    });
+                    let (from, to) = a.session.sel.ordered();
+                    let (from, to) = (from.clone(), to.clone());
+                    a.session.doc.format_range(&from, &to, &|c| c.style = Some("ProofingCharacter".into())).unwrap();
+                }
+            }
+            let f = LanguageForm::read(&a);
+            assert_eq!((f.lang.as_str(), f.no_proof), ("en-GB", true), "{source}");
+            a.run("review.language", json!({"lang": "fr-FR", "noProof": false})).unwrap();
+            let f = LanguageForm::read(&a);
+            assert_eq!((f.lang.as_str(), f.no_proof), ("fr-FR", false), "direct formatting overrides {source}");
+        }
+    }
+
+    /// #2717: opening and accepting the dialog must not reset inherited proofing.
+    #[test]
+    fn language_dialog_ok_keeps_inherited_proofing() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = app();
+        a.run("ui.language", json!({"value": "en"})).unwrap();
+        let normal = a.session.doc.styles.styles.iter_mut().find(|s| s.id == "Normal").unwrap();
+        normal.chr.lang = Some("en-GB".into());
+        normal.chr.no_proof = Some(true);
+        a.run("select.all", json!({})).unwrap();
+        let before = a.session.doc.clone();
+        a.run("review.language", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(3);
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc, before, "cancel must not format the selection");
+        h.state_mut().run("review.language", json!({})).unwrap();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let state = h.state_mut().run("format.state", json!({})).unwrap();
+        assert_eq!(state["lang"], "en-GB");
+        assert_eq!(state["noProof"], true);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.doc, before, "one undo restores the inherited formatting");
     }
 
     /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
