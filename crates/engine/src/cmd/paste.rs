@@ -136,13 +136,78 @@ fn paste_special(s: &mut Session, v: &Value) -> CmdResult {
             return Ok(r);
         }
         "formatted" => s.clipboard.clone().ok_or_else(|| CmdError::Failed("the clipboard is empty".into()))?,
-        "html" => adopt(s, wordcraft_formats::html::import(html_fragment(&src))),
+        "html" => adopt(s, import_html(&src)),
         _ => adopt(s, wordcraft_formats::rtf::import(src.as_bytes()).map_err(|e| CmdError::Failed(format!("bad RTF: {e}")))?),
     };
     insert(s, frag)?;
     let mut r = sel_result(s)?;
     r["pastedAs"] = json!(fmt);
     Ok(r)
+}
+
+/// Indent each side of a pasted `<blockquote>` whose page gives it no margins, points.
+const BLOCKQUOTE_INDENT: f32 = 36.0;
+
+/// Another program's HTML clipboard payload as a document. A `<blockquote>` there is how
+/// LibreOffice (and many web pages) write a paragraph indented on both sides, not a quotation
+/// (#1270): it pastes as a Normal paragraph indented by the page's `blockquote` margins, else half
+/// an inch each side, rather than in the (centred, italic) Quote style. Opening an .html file keeps
+/// `<blockquote>` as Quote, so HTML round-trips.
+fn import_html(html: &str) -> Document {
+    let mut doc = wordcraft_formats::html::import(html_fragment(html));
+    let (left, right) = blockquote_margins(html);
+    for b in &mut doc.body {
+        each_para(Arc::make_mut(b), 0, &mut |p| {
+            if p.props.style.as_deref() == Some("Quote") {
+                p.props.style = None;
+                p.props.indent_left.get_or_insert(left);
+                p.props.indent_right.get_or_insert(right);
+                p.touch();
+            }
+        });
+    }
+    doc
+}
+
+/// The left and right margins (points) the payload's `<style>` sheets give `blockquote` — LibreOffice
+/// writes `blockquote { margin-left: 1cm; margin-right: 1cm }` — else [`BLOCKQUOTE_INDENT`].
+fn blockquote_margins(html: &str) -> (f32, f32) {
+    let len = |v: &str| wordcraft_formats::html::css_len_pt(v).map(|x| x.clamp(0.0, 1584.0));
+    let (mut left, mut right) = (BLOCKQUOTE_INDENT, BLOCKQUOTE_INDENT);
+    let lower = html.to_ascii_lowercase();
+    let mut rest = lower.as_str();
+    while let Some(at) = rest.find("<style") {
+        let tag = rest.get(at..).unwrap_or("");
+        let sheet = tag.find('>').and_then(|j| tag.get(j + 1..)).unwrap_or("");
+        let end = sheet.find("</style").unwrap_or(sheet.len());
+        for rule in sheet.get(..end).unwrap_or("").split('}') {
+            let Some((sel, decls)) = rule.split_once('{') else { continue };
+            if !sel.split(',').any(|s| s.trim().trim_start_matches("<!--").trim() == "blockquote") {
+                continue;
+            }
+            for d in decls.split(';') {
+                let Some((name, v)) = d.split_once(':') else { continue };
+                match name.trim() {
+                    "margin-left" => left = len(v).unwrap_or(left),
+                    "margin-right" => right = len(v).unwrap_or(right),
+                    "margin" => {
+                        let vals: Vec<&str> = v.split_whitespace().take(4).collect();
+                        let (r, l) = match vals.as_slice() {
+                            [a] => (*a, *a),
+                            [_, h] | [_, h, _] => (*h, *h),
+                            [_, r, _, l] => (*r, *l),
+                            _ => continue,
+                        };
+                        right = len(r).unwrap_or(right);
+                        left = len(l).unwrap_or(left);
+                    }
+                    _ => {}
+                }
+            }
+        }
+        rest = sheet.get(end..).unwrap_or("");
+    }
+    (left, right)
 }
 
 /// The HTML itself from a Windows "HTML Format" (CF_HTML) clipboard payload — a `Version:` header
@@ -178,7 +243,7 @@ fn has_content(d: &Document) -> bool {
 /// [`MAX_PASTE_BYTES`], or it holds nothing to paste (the caller pastes the text then).
 pub fn rich_fragment(s: &mut Session, v: &Value) -> Option<Fragment> {
     let fits = |k: &str| p::str(v, k).filter(|t| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES);
-    let doc = fits("html").map(|html| wordcraft_formats::html::import(html_fragment(html)));
+    let doc = fits("html").map(import_html);
     let doc = match doc.filter(has_content) {
         Some(d) => d,
         None => {

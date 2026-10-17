@@ -475,7 +475,8 @@ fn closes_p(n: &str) -> bool {
     )
 }
 
-fn css_len_pt(v: &str) -> Option<f32> {
+/// A CSS length (or font-size keyword) in points; `None` when it is not one.
+pub fn css_len_pt(v: &str) -> Option<f32> {
     let v = v.trim().to_ascii_lowercase();
     let num = |s: &str| s.trim().parse::<f32>().ok().filter(|x| x.is_finite());
     if let Some(x) = v.strip_suffix("pt") {

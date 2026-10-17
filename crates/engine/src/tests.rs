@@ -1240,6 +1240,62 @@ fn paste_keeps_source_formatting_from_other_programs() {
     assert_eq!(props_at(&s, 4).italic, Some(true));
 }
 
+/// A CF_HTML ("HTML Format") clipboard payload around `html`, with the byte offsets Windows writes.
+fn cf_html(html: &str) -> String {
+    let n = "Version:1.0\r\nStartHTML:0000000000\r\nEndHTML:0000000000\r\nStartFragment:0000000000\r\nEndFragment:0000000000\r\n".len();
+    let a = html.find("<body>").map_or(0, |i| i + 6);
+    let b = html.find("</body>").unwrap_or(html.len());
+    format!(
+        "Version:1.0\r\nStartHTML:{n:010}\r\nEndHTML:{:010}\r\nStartFragment:{:010}\r\nEndFragment:{:010}\r\n{html}",
+        n + html.len(),
+        n + a,
+        n + b
+    )
+}
+
+/// LibreOffice copies a paragraph indented on both sides as `<blockquote>`, its margins in the
+/// page's stylesheet (#1270). Pasting it gives a Normal paragraph with those indents — not the
+/// Quote style (centred, italic) — by Paste and by Paste Special > HTML alike.
+#[test]
+fn pasted_blockquote_is_an_indented_paragraph_not_a_quote() {
+    let page = "<!DOCTYPE html><html><head><meta name=\"generator\" content=\"LibreOffice\"/><style type=\"text/css\">\
+        blockquote { margin-left: 1cm; margin-right: 2cm; background: transparent }\
+        p { line-height: 115%; margin-bottom: 0.25cm }</style></head>\
+        <body><p>First plain.</p><blockquote lang=\"en-US\"><b>Bold indented.</b></blockquote><p>Last plain.</p></body></html>";
+    let check = |s: &Session, left: f32, right: f32| {
+        assert!(text(s).starts_with("First plain.\nBold indented.\nLast plain."), "{}", text(s));
+        let q = s.doc.body.get(1).and_then(|b| b.as_para()).unwrap();
+        assert_ne!(q.props.style.as_deref(), Some("Quote"), "not the Quote style");
+        let rp = s.doc.styles.resolve_para(&q.props);
+        assert_ne!(rp.align, wordcraft_doc::props::Align::Center, "not centred");
+        assert!((rp.indent_left - left).abs() < 0.1, "left {}", rp.indent_left);
+        assert!((rp.indent_right - right).abs() < 0.1, "right {}", rp.indent_right);
+        let rc = s.doc.styles.resolve_char(q.props.style.as_deref(), q.props_of_char(0));
+        assert!(!rc.italic, "not italic");
+        assert!(rc.bold, "keeps its bold");
+    };
+    let mut s = s();
+    run(&mut s, "edit.paste", json!({"text": "First plain.\nBold indented.\nLast plain.", "html": cf_html(page)}));
+    check(&s, 72.0 / 2.54, 144.0 / 2.54);
+    let mut s2 = self::s();
+    run(&mut s2, "edit.pasteSpecial", json!({"as": "html", "html": cf_html(page)}));
+    check(&s2, 72.0 / 2.54, 144.0 / 2.54);
+    // No margins given: half an inch each side.
+    let mut s3 = self::s();
+    run(&mut s3, "edit.paste", json!({"text": "a\nq", "html": "<p>a</p><blockquote>q</blockquote>"}));
+    let q = s3.doc.body.get(1).and_then(|b| b.as_para()).unwrap();
+    assert_ne!(q.props.style.as_deref(), Some("Quote"));
+    assert_eq!((q.props.indent_left, q.props.indent_right), (Some(36.0), Some(36.0)));
+}
+
+/// Opening an .html file keeps `<blockquote>` as the Quote style, so HTML round-trips.
+#[test]
+fn opened_html_blockquote_stays_a_quote() {
+    let d = crate::io::open_bytes("q.html", b"<p>a</p><blockquote>q</blockquote>").unwrap();
+    let q = d.body.get(1).and_then(|b| b.as_para()).unwrap();
+    assert_eq!(q.props.style.as_deref(), Some("Quote"));
+}
+
 /// Paste Special lists a picture on the system clipboard and pastes it (#687).
 #[test]
 fn paste_special_lists_and_pastes_a_picture() {
