@@ -187,6 +187,54 @@ fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
     S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
 }
 
+/// Thai combining marks: above/below vowel signs, tone marks, and diacritics that stack on top
+/// of or below the base consonant. These are Unicode `Extend` (UAX #29) so UAX #29 grapheme
+/// clusters already keep them attached to their base — the caret never stops on one alone.
+/// This predicate exists to make the rule explicit and to drive tests.
+pub fn is_thai_combining(c: char) -> bool {
+    matches!(u32::from(c),
+        0x0E31              // mai han akat (above short vowel marker)
+        | 0x0E34..=0x0E37  // sara i, sara ii, sara ue, sara uee (above)
+        | 0x0E38..=0x0E3A  // sara u, sara uu, phinthu (below)
+        | 0x0E47..=0x0E4E) // maitaikhu, mai ek–chattawa (tone), thanthakhat, nikhahit, yamakkan
+}
+
+/// Start of the Thai/Lao word at or before `off` using ICU4X dictionary word segmentation
+/// (Ctrl+Left / Option+Left inside a Thai/Lao run). `off` must be ≤ `text.len()`.
+pub fn thai_word_start(text: &str, off: usize) -> usize {
+    let segmenter = icu_segmenter::WordSegmenter::new_auto(
+        icu_segmenter::options::WordBreakInvariantOptions::default(),
+    );
+    let mut prev = 0usize;
+    for b in segmenter.segment_str(text) {
+        if b >= off {
+            break;
+        }
+        prev = b;
+    }
+    prev
+}
+
+/// End of the Thai/Lao word after `off` using ICU4X dictionary word segmentation
+/// (Ctrl+Right / Option+Right inside a Thai/Lao run). `off` must be ≤ `text.len()`.
+pub fn thai_word_end(text: &str, off: usize) -> usize {
+    let segmenter = icu_segmenter::WordSegmenter::new_auto(
+        icu_segmenter::options::WordBreakInvariantOptions::default(),
+    );
+    segmenter.segment_str(text).find(|&b| b > off).unwrap_or(text.len())
+}
+
+/// The Thai/Lao word around `off` for double-click selection: (start, end).
+pub fn thai_word_at(text: &str, off: usize) -> (usize, usize) {
+    let segmenter = icu_segmenter::WordSegmenter::new_auto(
+        icu_segmenter::options::WordBreakInvariantOptions::default(),
+    );
+    let bounds: Vec<usize> = segmenter.segment_str(text).collect();
+    let a = bounds.iter().copied().rev().find(|&b| b <= off).unwrap_or(0);
+    let b = bounds.iter().copied().find(|&b| b > off).unwrap_or(text.len());
+    (a, b)
+}
+
 /// Line-break opportunities within Thai and Lao text, which have no spaces between words.
 ///
 /// UAX #14 (`unicode_linebreak`) assigns class SA to these scripts and permits a break at every
@@ -298,6 +346,60 @@ mod tests {
         assert!(backspaces_by_char('\u{064E}') && backspaces_by_char('\u{06E7}') && backspaces_by_char('\u{10EFF}'));
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
         assert!(!backspaces_by_char('ب') && !backspaces_by_char('\u{06E5}') && !backspaces_by_char('\u{08E2}'));
+    }
+
+    #[test]
+    fn thai_combining_marks_are_one_caret_stop() {
+        // กี้ = ก (0E01) + ◌ี sara ii (0E35, Mn/Extend) + ◌้ mai ek (0E48, Mn/Extend).
+        // UAX #29 grapheme clusters group all three into one unit; next_cluster must skip over
+        // both combining marks in a single step.
+        let s = "\u{0E01}\u{0E35}\u{0E48}"; // กี้
+        assert_eq!(next_cluster(s, 0), s.len(), "must jump over base + 2 combining marks");
+        assert_eq!(prev_cluster(s, s.len()), 0, "must jump back over all three");
+
+        // Verify is_thai_combining covers exactly the above/below marks, not base consonants.
+        assert!(is_thai_combining('\u{0E35}')); // sara ii (above)
+        assert!(is_thai_combining('\u{0E38}')); // sara u (below)
+        assert!(is_thai_combining('\u{0E48}')); // mai ek tone mark
+        assert!(!is_thai_combining('\u{0E01}')); // ก consonant — NOT combining
+        assert!(!is_thai_combining('a'));
+
+        // A string with no combining marks: one stop per character.
+        let abc = "\u{0E01}\u{0E02}\u{0E03}"; // กขค
+        assert_eq!(next_cluster(abc, 0), 3);
+        assert_eq!(next_cluster(abc, 3), 6);
+        assert_eq!(next_cluster(abc, 6), 9);
+    }
+
+    #[test]
+    fn thai_word_movement_uses_icu4x_segmenter() {
+        // "สวัสดีชาวโลก" = สวัสดี + ชาว + โลก (three words, no spaces).
+        let s = "สวัสดีชาวโลก";
+        let len = s.len();
+
+        // word_end from offset 0 must NOT return the full string length.
+        let end0 = thai_word_end(s, 0);
+        assert!(end0 > 0 && end0 < len, "first word end must be inside the string: got {end0}");
+
+        // word_start from `end0` must return 0 (back to the beginning of the first word).
+        assert_eq!(thai_word_start(s, end0), 0);
+
+        // word_end chained must reach the end within a bounded number of steps.
+        let mut off = 0;
+        let mut steps = 0usize;
+        while off < len {
+            let next = thai_word_end(s, off);
+            assert!(next > off, "thai_word_end must advance (off={off})");
+            off = next;
+            steps += 1;
+            assert!(steps <= len, "infinite loop guard");
+        }
+        assert!(steps >= 2, "expected at least 2 words, got {steps}");
+
+        // word_at for a click inside the first word must not span the whole string.
+        let (a, b) = thai_word_at(s, 3);
+        assert!(b < len || a > 0, "word_at must not return the whole string: ({a}, {b})");
+        assert!(a <= 3 && b > 3, "word_at must straddle the click offset");
     }
 
     #[test]
