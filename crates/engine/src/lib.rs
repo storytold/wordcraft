@@ -8,6 +8,7 @@
 
 pub mod catalog;
 pub mod cmd;
+pub mod collab;
 pub mod file_access;
 pub mod io;
 mod io_ext;
@@ -24,6 +25,7 @@ use std::collections::HashMap;
 
 use serde_json::Value;
 
+pub use collab::CollabSink;
 pub use io::Password;
 pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;

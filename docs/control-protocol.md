@@ -68,6 +68,7 @@ and set `WORDCRAFT_CONTROL_KEY` to that app's key.
 | `ui.render` | `path?`, `page?` (1-based), `scale?` | PNG of a page, rendered by the engine: written to `path`, or without one returned as base64 `png` in the reply (never a fixed name in the shared temporary folder) |
 | `ui.parity` | — | feature-catalog parity |
 | `ui.resize` / `ui.focus` / `app.quit` | | window control |
+| `cloud.*` (via `engine.execute`) | see [Cloud storage](#cloud-storage) | Open and Save against cloud storage |
 
 Any other method name is treated as a command id: `{"method": "format.bold"}` works.
 
@@ -75,6 +76,39 @@ The `CharProps` and `ParaProps` that `format.set`, `para.set` and `styles.modify
 in [MCP server](mcp.md#character-and-paragraph-properties).
 
 Positions are `{"story": "body" | {"part": n}, "path": [block, row, cell, block, …], "off": byteOffset}`.
+
+### Cloud storage
+
+Everything reaches storage through the CollabCraft service, and every call to it blocks, so these
+commands start the work and return at once. Poll `cloud.status` for the answer. It reports the
+account, what the provider can do, the folder being listed, any transfer in flight, a refused save,
+and where the open document came from.
+
+| Command | Params | What it does |
+| --- | --- | --- |
+| `cloud.open` | `{}` | Opens File › Open and lists your cloud files |
+| `cloud.browse` | `{path?}` | Lists one folder (the root when empty) |
+| `cloud.shared` | `{}` | Lists what other people shared with you |
+| `cloud.openFile` | `{id}` or `{name}` | Opens something from the current listing |
+| `cloud.save` | `{}` | Writes back under the version the document was opened at |
+| `cloud.saveAs` | `{folder, name}` | Saves a new document. Without both, opens File › Save As on the cloud |
+| `cloud.reload` | `{}` | Replaces local edits with the stored copy |
+| `cloud.link` | `{}` | Starts linking a cloud account, which finishes in a browser |
+| `cloud.status` | `{}` | The whole cloud state as JSON |
+
+`Ctrl+S` and `file.save` need no cloud-specific call. A document opened from the cloud saves back
+to it. One with a file on this computer saves to that file. The name a save goes under decides the
+format its bytes are written in, so a document opened as `.odt` is written back as OpenDocument.
+
+Opening a cloud document over unsaved changes asks about them first (`ui.saveChanges`), as opening
+a local file does, and the open goes ahead once that is answered.
+
+A refused save is the case worth scripting against. `cloud.status` reports `conflict` when the
+stored copy moved on while the document was being edited, and nothing has been written at that
+point. `cloud.reload` takes the stored copy and discards the local edits. Nothing else does.
+
+Without a configured service (`WORDCRAFT_CLOUD_URL`) these commands answer `no cloud service is
+configured`, and the interface offers nothing cloud-shaped.
 
 ### Closing the document
 

@@ -38,6 +38,14 @@ pub fn start() {
         {
             create.instance_descriptor.backends = eframe::wgpu::Backends::GL;
         }
+        let mut invite = match craft_cloud_client::invite::arrive().await {
+            craft_cloud_client::invite::Arrival::Ordinary => None,
+            craft_cloud_client::invite::Arrival::Refused(reason) => {
+                craft_cloud_client::invite::refuse(&reason);
+                return;
+            }
+            craft_cloud_client::invite::Arrival::Invited(invitation) => Some(invitation),
+        };
         let result = eframe::WebRunner::new()
             .start(
                 canvas,
@@ -65,9 +73,18 @@ pub fn start() {
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
                     app.autosave = false;
+                    app.cloud.connect(crate::cloud::Service::new(cc.egui_ctx.clone()));
+                    if let Some(share) = collabcraft_share::CollabCraft::from_env() {
+                        app.share.connect(share.for_app("wordcraft"));
+                    }
+                    wordcraft_ui_egui::cloud::start(&mut app);
                     // No document to show: start on File › Home, as the desktop app does (#766).
-                    if !sample {
+                    // A keyed invite already has a document, so the start screen would hide it.
+                    if invite.is_none() && !sample {
                         app.start_screen();
+                    }
+                    if let Some(invitation) = invite.take() {
+                        open_invite(&mut app, invitation);
                     }
                     Ok(Box::new(WebShell { app, inbox, messages }))
                 }),
@@ -80,6 +97,25 @@ pub fn start() {
             }
         }
     });
+}
+
+fn open_invite(app: &mut WordApp, invitation: craft_cloud_client::invite::Invitation) {
+    let name = invitation.name.clone();
+    match wordcraft_ui_egui::cloud::CloudApp::open_bytes(app, &name, invitation.document.clone()) {
+        Ok(Some(_)) => {
+            let mode = if invitation.read_only() { " (view only)" } else { "" };
+            let who = if invitation.recipient.is_empty() { String::new() } else { format!(" (shared with {})", invitation.recipient) };
+            app.status(format!("Opened \"{name}\"{mode}{who}"));
+            if let Err(e) = invitation.join() {
+                log::warn!("invite relay join failed: {e}");
+            }
+        }
+        Ok(None) => app.status(format!("Shared \"{name}\" needs a choice before it opens")),
+        Err(e) => {
+            log::error!("invite open failed: {e}");
+            craft_cloud_client::invite::refuse(&format!("The shared document could not be opened. {e}"));
+        }
+    }
 }
 
 fn query() -> String {

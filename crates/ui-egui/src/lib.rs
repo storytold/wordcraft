@@ -28,6 +28,7 @@ pub mod backstage;
 pub mod canvas;
 pub mod caret_glide;
 pub mod chrome;
+pub mod cloud;
 pub mod colors;
 pub mod content_controls;
 pub mod control;
@@ -159,6 +160,9 @@ pub struct Services {
     pub store_font: Option<Box<dyn Fn(&str, &[u8])>>,
     /// Web: forget a stored font (its stored file name) once the user removes it.
     pub forget_font: Option<Box<dyn Fn(&str)>>,
+    /// Open a URL in the user's browser. Without one the frontend asks egui, which is what the
+    /// desktop and the web shell both want. A host that has to decide for itself supplies one.
+    pub open_url: Option<Box<dyn Fn(&str)>>,
     /// Web: request browser to query and load local installed fonts (`window.queryLocalFonts()`).
     pub load_system_fonts: Option<Box<dyn Fn()>>,
     /// Desktop: File › Options › General › Make WordCraft the default for Word documents (#295),
@@ -233,6 +237,11 @@ pub struct UiState {
     /// File › Print settings (#641); not saved.
     #[serde(skip)]
     pub print: print_page::PrintSettings,
+    /// File › Save As: the chosen destination, once the user has picked one. `None` follows the
+    /// document, so one that came from the cloud offers the cloud first and everything else
+    /// starts on this computer. A choice about one save, so it is not saved between runs.
+    #[serde(skip)]
+    pub save_to_cloud: Option<bool>,
     pub ribbon_collapsed: bool,
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
@@ -341,6 +350,7 @@ impl Default for UiState {
             backstage: false,
             backstage_page: "home".into(),
             print: print_page::PrintSettings::default(),
+            save_to_cloud: None,
             ribbon_collapsed: false,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
@@ -427,6 +437,21 @@ pub struct WordApp {
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
+    /// Open and Save against cloud storage: the account, the folder being browsed, transfers in
+    /// flight, and where the open document came from. The pages are `craft_ui`'s, so every Craft
+    /// app offers the same ones. Inert until the host connects a backend (see [`cloud`]).
+    pub cloud: cloud::CloudFiles,
+    /// What each cloud save in flight encoded. Only WordCraft knows what a version of its
+    /// document is, so the pages do not hold these.
+    pub(crate) cloud_sent: cloud::Sent,
+    /// A cloud open a prompt stood in the way of (see [`cloud`]).
+    pub(crate) cloud_opening: Option<cloud::Opening>,
+    /// Giving other people access to this document. The dialog is `craft_ui`'s, so every Craft app
+    /// offers the same one. Inert until the host connects a backend, and unavailable until that
+    /// service says sharing exists.
+    pub share: craft_ui::share::ShareDialog,
+    /// Who else is in this document. Draws nothing when nobody is.
+    pub presence: craft_ui::presence::PresenceBar,
     /// The Colors dialog (More Colors…), shown above any other dialog (#606).
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).
@@ -579,6 +604,11 @@ impl WordApp {
             canvas: canvas::CanvasState::default(),
             controls: Default::default(),
             dialog: None,
+            cloud: cloud::CloudFiles::new(),
+            cloud_sent: cloud::Sent::new(),
+            cloud_opening: None,
+            share: craft_ui::share::ShareDialog::new(),
+            presence: craft_ui::presence::PresenceBar::new().badges_only(),
             colors: None,
             restrict: Default::default(),
             status_msg: None,
@@ -991,8 +1021,9 @@ impl WordApp {
             SaveChoice::Cancel => false,
             SaveChoice::DontSave => true,
             // A new document: ask where through Save As; the command runs once that has saved,
-            // which with the desktop's non-blocking dialog is on a later frame (#94).
-            SaveChoice::Save if self.session.path.is_none() && self.services.download.is_none() => {
+            // which with the desktop's non-blocking dialog is on a later frame (#94). A document
+            // that came from the cloud has a destination already, so it goes the ordinary way.
+            SaveChoice::Save if self.session.path.is_none() && self.services.download.is_none() && !cloud::has_target(self) => {
                 return match self.save_as(file_dialogs::AfterSave::Continue { then, params, document }) {
                     file_dialogs::Asked::Done(r) => r,
                     file_dialogs::Asked::Pending => Ok(json!({"pending": "saveAs"})),
@@ -1043,6 +1074,12 @@ impl WordApp {
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
         let v = self.execute("file.save", json!({}))?;
+        // A cloud save travels, so it has not happened yet when the call returns. The
+        // command it was holding up is cancelled and the user is told to come back once
+        // the save has landed, rather than being left with a button that did nothing.
+        if v.get("saving").is_some() {
+            self.status(tl!("The document is still being saved to the cloud. Try again once that has finished."));
+        }
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
@@ -1540,6 +1577,87 @@ impl WordApp {
                 self.status(tl!("Click the empty text box the text should continue in (Esc cancels)"));
                 json!({"pending": "link"})
             }
+            // ---- cloud storage (File › Open, File › Save As)
+            //
+            // `file.save` is intercepted only for a document that came from the cloud, which is
+            // also the only kind with no file of its own, so saving a local document behaves
+            // exactly as it always did.
+            "file.save" if p.get("path").is_none() && cloud::has_target(self) => {
+                self.cloud.save_name.clear();
+                return Some(cloud::save(self));
+            }
+            "cloud.status" => cloud::status(self),
+            "cloud.open" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                self.ui.backstage = true;
+                self.ui.backstage_page = "open".into();
+                cloud::start(self);
+                cloud::status(self)
+            }
+            "cloud.browse" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                let path = s("path").unwrap_or("");
+                cloud::browse(self, path);
+                json!({"folder": path})
+            }
+            "cloud.shared" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                cloud::load_shared(self);
+                Value::Null
+            }
+            "cloud.link" => {
+                if !cloud::available(self) {
+                    return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                }
+                cloud::link(self);
+                cloud::status(self)
+            }
+            // Opens something already listed, by id or by name. The listing is what the user can
+            // see, which keeps a scripted open and a clicked one on the same footing.
+            "cloud.openFile" => {
+                let id = s("id");
+                let name = s("name").unwrap_or("");
+                let found = self
+                    .cloud
+                    .mine
+                    .entries
+                    .iter()
+                    .chain(self.cloud.shared.entries.iter())
+                    .find(|e| id.is_some_and(|id| e.id == id) || (!name.is_empty() && e.name == name))
+                    .cloned();
+                match found {
+                    Some(entry) if cloud::opens(&entry) => {
+                        cloud::open_entry(self, entry, None);
+                        cloud::status(self)
+                    }
+                    Some(entry) => return Some(Err(format!("WordCraft cannot open {}", entry.name))),
+                    None => return Some(Err("no such file in the cloud listing".to_owned())),
+                }
+            }
+            "cloud.save" => {
+                self.cloud.save_name.clear();
+                return Some(cloud::save(self));
+            }
+            "cloud.saveAs" => match (s("folder"), s("name")) {
+                (Some(folder), Some(name)) => {
+                    self.cloud.save_name = name.to_owned();
+                    return Some(cloud::save_as(self, folder, name));
+                }
+                _ => {
+                    if !cloud::available(self) {
+                        return Some(Err(cloud::UNAVAILABLE.to_owned()));
+                    }
+                    cloud::CloudApp::go_to_save_as(self);
+                    cloud::status(self)
+                }
+            },
+            "cloud.reload" => return Some(cloud::reload_active(self)),
             _ => return None,
         }))
     }
@@ -1716,10 +1834,17 @@ impl WordApp {
     pub fn title_stem(&self) -> String {
         match &self.session.path {
             Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
-            None => match &self.session.file_name {
-                Some(name) => name.clone(),
-                None if self.session.doc.core.title.is_empty() => tl!("Document1").into(),
-                None => self.session.doc.core.title.clone(),
+            // A document that came from cloud storage has no file here, and it is named there.
+            None => match cloud::origin(self) {
+                Some(origin) => match origin.entry.name.rsplit_once('.') {
+                    Some((stem, _)) if !stem.is_empty() => stem.to_string(),
+                    _ => origin.entry.name.clone(),
+                },
+                None => match &self.session.file_name {
+                    Some(name) => name.clone(),
+                    None if self.session.doc.core.title.is_empty() => tl!("Document1").into(),
+                    None => self.session.doc.core.title.clone(),
+                },
             },
         }
     }
@@ -1806,6 +1931,8 @@ impl WordApp {
             self.ctx = Some(ctx.clone());
         }
         self.poll_printing(ctx);
+        // Answers from the cloud worker, and anything still in flight.
+        cloud::poll(self, ctx);
         self.drain_control(ctx);
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
@@ -2021,7 +2148,16 @@ impl WordApp {
             });
         }
         content_controls::popup(self, &ctx);
+        // Unconditional, because this is also where the share service's answers are collected,
+        // which has to keep happening while the dialog is shut.
+        self.share.show(&ctx);
+        // A share of a document that has never been saved. The dialog asked; only this side can
+        // serialise a document, so it answers.
+        share_save(self);
         dialogs::show(self, &ctx);
+        // Above the dialogs: a refused save has to be answered, and the answer decides what
+        // happens to the user's edits.
+        cloud::conflict_modal(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, &ctx);
         colors::show(self, &ctx);
@@ -2259,6 +2395,40 @@ impl AutoSaveBlock {
     /// Whether Save As can lift the block (everywhere but the browser).
     pub fn save_as_helps(&self) -> bool {
         !matches!(self, AutoSaveBlock::Browser)
+    }
+}
+
+/// Carry out a save the share dialog asked for, and report the outcome back.
+///
+/// Split into asking and answering because the save travels. The dialog waits, showing its own
+/// progress, until one of these arrives.
+fn share_save(app: &mut WordApp) {
+    if let Some(request) = app.share.take_save_request() {
+        // One destination today. `request.destination` names which, and is carried through so a
+        // second provider needs no change here.
+        let _ = request.destination;
+        // The name the copy is saved under is also the format it is written in (see
+        // `cloud::target_name`), so the pages hold it while the bytes are made.
+        app.cloud.save_name = request.name.clone();
+        match cloud::save_as(app, "/", &request.name) {
+            Ok(_) => app.cloud.sharing_save = true,
+            Err(reason) => app.share.save_failed(reason),
+        }
+    }
+
+    // The worker reports by clearing `busy`. A new origin means it landed.
+    if app.cloud.sharing_save && app.cloud.busy.is_none() {
+        app.cloud.sharing_save = false;
+        match cloud::origin(app) {
+            Some(origin) => {
+                let (id, name) = (origin.entry.id.clone(), origin.entry.name.clone());
+                app.share.saved(id, name);
+            }
+            None => {
+                let reason = app.cloud.status.clone().unwrap_or_else(|| tl!("The document was not saved.").to_owned());
+                app.share.save_failed(reason);
+            }
+        }
     }
 }
 

@@ -559,6 +559,14 @@ pub fn regular(size: f32) -> FontId {
     FontId::proportional(size)
 }
 
+/// The interface face, for a control that picks its own sizes (`craft_ui`'s do).
+pub fn ui_family() -> FontFamily {
+    FontFamily::Proportional
+}
+pub fn ui_bold_family() -> FontFamily {
+    FontFamily::Name("semibold".into())
+}
+
 /// A UI type rung: size, weight pairing, and size-specific letter-spacing (large text is
 /// tightened, small text opened). Use these instead of raw `regular(size)`/`semibold(size)`.
 #[derive(Clone, Copy, Debug, PartialEq)]

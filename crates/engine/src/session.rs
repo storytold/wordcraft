@@ -461,6 +461,12 @@ pub struct Session {
     /// A selection widened to whole table cells or rows, and where it really runs (see
     /// [`Session::sel_ends`]).
     pub(crate) widened: Option<Widened>,
+    /// Hears about every local command that changed the document, when a collaboration layer is
+    /// attached. `None` is the ordinary single-writer case and costs nothing.
+    pub collab: Option<Arc<dyn crate::collab::CollabSink>>,
+    /// Set while a remote command is being applied, so it is not sent back to the peer that sent
+    /// it. Without this, one edit echoes forever.
+    applying_remote: bool,
     /// Where the last edits happened, oldest first (at most [`EDIT_MARKS`]), for Go Back
     /// (Shift+F5). Positions aren't mapped through later edits; they're clamped when used.
     edit_marks: Vec<Pos>,
@@ -648,6 +654,8 @@ impl Session {
             column: None,
             column_mode: false,
             widened: None,
+            collab: None,
+            applying_remote: false,
             edit_marks: Vec::new(),
             go_back_step: 0,
         }
@@ -1100,6 +1108,10 @@ impl Session {
             column: _,
             column_mode: _,
             widened: _,
+            // The collaboration layer and whether a remote edit is being applied: host wiring and
+            // a flag that lives for one command, not part of the document.
+            collab: _,
+            applying_remote: _,
             // Go Back's places, like the caret history: not part of the document.
             edit_marks: _,
             go_back_step: _,
@@ -1284,6 +1296,19 @@ impl Session {
                 if !matches!(id, "select.addObject" | "arrange.ungroup") && (spec.mutates || self.sel != sel_before) {
                     self.also_selected.clear();
                 }
+                // `spec.mutates` with a result means the document changed, which is exactly what
+                // another peer needs to see. Caret movement, view commands and saves do not
+                // mutate and are not shared. The selection goes with it because a WordCraft
+                // command carries no address of its own: Bold means "here". The Arc is cloned so
+                // the sink can be called without holding a borrow of `self`.
+                if spec.mutates
+                    && !self.applying_remote
+                    && let Some(sink) = self.collab.clone()
+                {
+                    // `kept()`, which is also what a recorded macro and Repeat get: a password
+                    // never leaves this machine.
+                    sink.on_local(id, &kept(), &sel_before, &crate::collab::scope_of(&sel_before.focus));
+                }
             }
             Err(e) => {
                 if let Some((d, s, h, r, t, ev, c)) = before_doc {
@@ -1300,6 +1325,49 @@ impl Session {
             }
         }
         result
+    }
+
+    /// Runs a command that arrived from another peer.
+    ///
+    /// Two things differ from [`Session::run`]. It is not reported to the
+    /// [`CollabSink`](crate::CollabSink), which is what stops an edit bouncing between two peers
+    /// forever. And it runs against `at`, the selection the sender had, because a WordCraft
+    /// command says only "here": applying somebody else's Backspace at the reader's own caret
+    /// would delete the reader's own text.
+    ///
+    /// The reader's selection is put back afterwards, moved by whatever the edit did to the text
+    /// before it in the same paragraph (see [`crate::collab::follow`]). An edit that split or
+    /// joined paragraphs cannot be followed that way, and the caret is clamped rather than
+    /// guessed at.
+    ///
+    /// It journals and records undo history like any other command, so a remote edit can be
+    /// undone locally. Both peers applied the same ordered sequence, so both hold the same undo
+    /// stack, and an Undo one of them shares undoes the same step on each.
+    pub fn apply_remote(&mut self, id: &str, params: &Value, at: Option<Selection>) -> Result<Value, CmdError> {
+        let was = std::mem::replace(&mut self.applying_remote, true);
+        let mine = self.sel.clone();
+        let there = at.unwrap_or_else(|| mine.clone());
+        let edit = there.ordered().0;
+        // Read before the edit and again after it: the difference is how much text appeared or
+        // went away, whatever the command was. Only the reader's own paragraph matters.
+        let same = mine.focus.story == edit.story && mine.focus.path == edit.path;
+        let before = if same { self.para_len(&mine.focus) } else { None };
+        self.sel = there;
+        self.clamp_selection();
+        let out = self.run(id, params);
+        let grew = match (before, self.para_len(&mine.focus)) {
+            (Some(before), Some(after)) => (after as isize) - (before as isize),
+            _ => 0,
+        };
+        self.sel = crate::collab::follow(mine, &edit, grew);
+        self.clamp_selection();
+        self.applying_remote = was;
+        out
+    }
+
+    /// How long the paragraph a position names is, when it names one.
+    fn para_len(&self, at: &Pos) -> Option<usize> {
+        self.doc.para_at(at).map(|p| p.len())
     }
 
     /// The paragraph path the caret is in.

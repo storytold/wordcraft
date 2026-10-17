@@ -9,7 +9,14 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
+# The printing controls, the share dialog, and the Open and Save pages for cloud storage, so
+# WordCraft offers the same ones as every other Craft app. Pinned by revision, which is how this
+# repository already reached craft-print. The interface half opens no socket, so this builds for
+# the web. The host application supplies the backend that reaches the service (see `cloud`).
+craft-ui = { git = "https://github.com/wdunn001/craft-libs", rev = "6f0a6d2", features = ["cloud"] }
+# The vendor-neutral cloud types (a file entry, a capability). Types and contracts only: the crate
+# opens no socket and names no provider, so this builds for the web too.
+craft-cloud = { git = "https://github.com/wdunn001/craft-libs", rev = "6f0a6d2" }
 wordcraft-geom = { workspace = true }
 wordcraft-doc = { workspace = true }
 unicode-bidi = { workspace = true }
