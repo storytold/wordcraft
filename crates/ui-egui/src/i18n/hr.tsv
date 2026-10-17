@@ -2632,3 +2632,7 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	Clear all	Izbriši sve
+	Remove from list	Ukloni s liste
+	Removed {name} from the recent list	{name} je uklonjen s liste nedavnih dokumenata
+	Removed {count} documents from the recent list	S liste nedavnih dokumenata uklonjeno: {count}

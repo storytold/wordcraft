@@ -2247,3 +2247,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Уска
 	Medium	Средња
+	Clear all	Обриши све
+	Remove from list	Уклони из листе
+	Removed {name} from the recent list	{name} је уклоњен из листе недавних докумената
+	Removed {count} documents from the recent list	Из листе недавних докумената уклоњено: {count}

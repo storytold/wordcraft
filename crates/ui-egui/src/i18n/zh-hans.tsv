@@ -2245,3 +2245,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+	Clear all	全部清除
+	Remove from list	从列表移除
+	Removed {name} from the recent list	已从最近使用的文档列表中移除 {name}
+	Removed {count} documents from the recent list	已从最近使用的文档列表中移除 {count} 个文档

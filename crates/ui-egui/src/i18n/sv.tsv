@@ -2647,3 +2647,7 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	Clear all	Rensa allt
+	Remove from list	Ta bort från listan
+	Removed {name} from the recent list	{name} har tagits bort från listan över senaste dokument
+	Removed {count} documents from the recent list	{count} dokument har tagits bort från listan över senaste dokument

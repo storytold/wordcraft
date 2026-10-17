@@ -2240,3 +2240,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+	Clear all	Effacer tout
+	Remove from list	Supprimer de la liste
+	Removed {name} from the recent list	{name} a été supprimé de la liste des documents récents
+	Removed {count} documents from the recent list	{count} documents supprimés de la liste des documents récents

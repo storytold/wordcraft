@@ -2599,3 +2599,7 @@ preview	Title	Título
 # Reading Mode column widths (#1040)
 	Narrow	Estrecha
 	Medium	Media
+	Clear all	Borrar todo
+	Remove from list	Quitar de la lista
+	Removed {name} from the recent list	{name} se quitó de la lista de documentos recientes
+	Removed {count} documents from the recent list	{count} documentos se quitaron de la lista de documentos recientes

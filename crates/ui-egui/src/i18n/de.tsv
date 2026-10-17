@@ -2232,3 +2232,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+	Clear all	Alle löschen
+	Remove from list	Aus Liste entfernen
+	Removed {name} from the recent list	{name} wurde aus der Liste der zuletzt verwendeten Dokumente entfernt
+	Removed {count} documents from the recent list	Aus der Liste der zuletzt verwendeten Dokumente entfernt: {count}

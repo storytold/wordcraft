@@ -2621,3 +2621,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	Clear all	Изчисти всичко
+	Remove from list	Премахване от списъка
+	Removed {name} from the recent list	{name} е премахнат от списъка с последни документи
+	Removed {count} documents from the recent list	От списъка с последни документи премахнати: {count}

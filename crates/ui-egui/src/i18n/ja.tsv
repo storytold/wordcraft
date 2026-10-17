@@ -2233,3 +2233,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+	Clear all	すべてクリア
+	Remove from list	一覧から削除
+	Removed {name} from the recent list	最近使用したファイルの一覧から {name} を削除しました
+	Removed {count} documents from the recent list	最近使用したファイルの一覧から {count} 件のファイルを削除しました
