@@ -511,8 +511,12 @@ impl Paragraph {
         }
     }
     /// Start of the word at or before `off` (Ctrl+Left).
+    /// Thai and Lao have no spaces between words; ICU4X dictionary segmentation is used there.
     pub fn word_start(&self, off: usize) -> usize {
         let off = self.clamp(off);
+        if self.text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(crate::cluster::is_thai_lao) {
+            return crate::cluster::thai_word_start(&self.text, off);
+        }
         let Some(before) = self.text.get(..off) else { return 0 };
         let mut idx = off;
         let mut seen_word = false;
@@ -530,8 +534,12 @@ impl Paragraph {
         idx
     }
     /// End of the word after `off`, including trailing spaces (Ctrl+Right, like Word).
+    /// Thai and Lao have no spaces between words; ICU4X dictionary segmentation is used there.
     pub fn word_end(&self, off: usize) -> usize {
         let off = self.clamp(off);
+        if self.text.get(off..).and_then(|t| t.chars().next()).is_some_and(crate::cluster::is_thai_lao) {
+            return crate::cluster::thai_word_end(&self.text, off);
+        }
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
@@ -551,8 +559,14 @@ impl Paragraph {
         end
     }
     /// The word around `off` (double-click): (start, end) without trailing space.
+    /// Thai and Lao have no spaces between words; ICU4X dictionary segmentation is used there.
     pub fn word_at(&self, off: usize) -> (usize, usize) {
         let off = self.clamp(off);
+        let at_off = self.text.get(off..).and_then(|t| t.chars().next());
+        let before_off = self.text.get(..off).and_then(|t| t.chars().next_back());
+        if at_off.is_some_and(crate::cluster::is_thai_lao) || before_off.is_some_and(crate::cluster::is_thai_lao) {
+            return crate::cluster::thai_word_at(&self.text, off);
+        }
         let is_w = |c: char| crate::bidi::is_word_char(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
