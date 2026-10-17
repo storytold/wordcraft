@@ -2628,3 +2628,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	Clear all	Az összes törlése
+	Remove from list	Eltávolítás a listából
+	Removed {name} from the recent list	{name} eltávolítva a legutóbbi dokumentumok listájából
+	Removed {count} documents from the recent list	{count} dokumentum eltávolítva a legutóbbi dokumentumok listájából

@@ -167,6 +167,10 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// Desktop: write the app's current preferences out now, not only at exit (#2716): a
+    /// document taken off the recent list should survive the app being killed before a normal
+    /// close. `None` (web, tests) keeps the change to this run.
+    pub save_prefs: Option<Box<dyn Fn(&WordApp)>>,
 }
 
 /// How Save in the Save Changes prompt went.
@@ -1192,6 +1196,9 @@ impl WordApp {
         for req in std::mem::take(&mut self.session.ui_requests) {
             self.handle_request(&req);
         }
+        // The open document goes to the front of the recent list after every command. The recent
+        // commands (`ui.recentRemove`, `ui.recentClear`) return from `ui_command` before this
+        // runs, so taking a document off the list is never undone by the re-add (#2716).
         if let Some(p) = self.session.path.as_ref().map(|p| p.to_string_lossy().to_string())
             && self.ui.recent.first() != Some(&p)
         {
@@ -1526,6 +1533,30 @@ impl WordApp {
                 }
                 json!({"startScreen": self.ui.start_screen})
             }
+            "ui.recentRemove" => {
+                // Backstage ▸ Home/Open ▸ Recent: take one document off the list (Word's context
+                // menu Remove). The path must be an entry that is on the list (#2716).
+                let Some(path) = p.get("path").and_then(Value::as_str) else {
+                    return Some(Err("`path` must name a document on the recent list".into()));
+                };
+                let before = self.ui.recent.len();
+                self.ui.recent.retain(|r| r != path);
+                if self.ui.recent.len() == before {
+                    return Some(Err(format!("`{path}` is not on the recent list")));
+                }
+                self.save_prefs_now();
+                let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.to_string());
+                self.status(i18n::fmt(tl!("Removed {name} from the recent list"), &[("name", &name)]));
+                json!({"removed": 1, "recent": self.ui.recent})
+            }
+            "ui.recentClear" => {
+                // Clear the whole list, as Word's registry clear does for recent documents (#2716).
+                let removed = self.ui.recent.len();
+                self.ui.recent.clear();
+                self.save_prefs_now();
+                self.status(i18n::fmt(tl!("Removed {count} documents from the recent list"), &[("count", &removed.to_string())]));
+                json!({"removed": removed, "recent": self.ui.recent})
+            }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
             // Picture Format › Size › Crop: crop mode on the selected picture, or off (`crop`).
@@ -1577,6 +1608,16 @@ impl WordApp {
 
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
+    }
+
+    /// Write the current preferences out through the host's hook, if it has one (#2716). The
+    /// desktop app saves them at exit; a change that should survive a crash, like taking a
+    /// document off the recent list, needs a save at the moment of the change.
+    fn save_prefs_now(&mut self) {
+        let hook = self.services.save_prefs.as_ref();
+        if let Some(save) = hook {
+            save(self);
+        }
     }
 
     /// Media key of the selected picture, if any.
@@ -2393,6 +2434,8 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.recentRemove"
+            | "ui.recentClear"
     ) || id.starts_with("help.")
 }
 
@@ -6759,5 +6802,76 @@ mod tests {
         h.step();
         h.step();
         assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
+    }
+
+    /// Issue #2716: taking documents off the recent list is final — the open document must not be
+    /// pushed back by the after-command re-add — and the change goes to the settings at once, so
+    /// it survives the app being killed. Junk params return errors, never panics.
+    #[test]
+    fn recent_list_edits_are_final_and_persist() {
+        let saved = std::rc::Rc::new(std::cell::Cell::new(0u32));
+        let saved_hook = saved.clone();
+        let mut a = app();
+        a.services.save_prefs = Some(Box::new(move |app: &WordApp| {
+            saved_hook.set(saved_hook.get() + 1);
+            let _ = serde_json::to_string(&app.prefs()).unwrap();
+        }));
+        a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+        // The open document is on the list, at the back.
+        a.session.path = Some(std::path::PathBuf::from("/tmp/beta.docx"));
+
+        // Removing the open document sticks: `after_command` must not re-add it.
+        let r = a.run("ui.recentRemove", json!({"path": "/tmp/beta.docx"})).unwrap();
+        assert_eq!(r["removed"], 1);
+        assert_eq!(r["recent"], json!(["/tmp/alpha.docx"]));
+        assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "the open document stays off the list");
+        assert_eq!(saved.get(), 1, "the change is written out at once");
+
+        // Removing an entry that isn't there is an error, not a silent success, and saves nothing.
+        assert!(a.run("ui.recentRemove", json!({"path": "/tmp/gamma.docx"})).is_err());
+        assert_eq!(saved.get(), 1, "a rejected command writes nothing");
+        // Hostile params: missing path, junk types.
+        for junk in [json!({}), json!({"path": 7}), json!({"path": null}), json!({"path": ["x"]})] {
+            assert!(a.run("ui.recentRemove", junk).is_err());
+        }
+        assert_eq!(a.ui.recent, ["/tmp/alpha.docx".to_string()], "junk params change nothing");
+
+        // A normal command re-adds the open document, as before.
+        a.run("text.insert", json!({"text": "x"})).unwrap();
+        assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()));
+
+        // Clearing empties the list (the re-added open document is back, so both entries go) and
+        // keeps it empty through the next command.
+        let r = a.run("ui.recentClear", json!({})).unwrap();
+        assert_eq!(r["removed"], 2);
+        assert!(a.ui.recent.is_empty());
+        assert_eq!(saved.get(), 2, "the clear is written out at once");
+        a.run("text.insert", json!({"text": "y"})).unwrap();
+        assert_eq!(a.ui.recent.first(), Some(&"/tmp/beta.docx".to_string()), "the open document comes back after clearing");
+
+        // Clearing an empty list reports zero removed and is not an error.
+        a.ui.recent.clear();
+        assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
+
+        // The list lives in the prefs, so a restart keeps the removal.
+        a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+        a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap();
+        let saved_prefs = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved_prefs.contains(r#""recent":["/tmp/beta.docx"]"#), "{saved_prefs}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved_prefs).unwrap());
+        assert_eq!(b.ui.recent, ["/tmp/beta.docx".to_string()]);
+    }
+
+    /// Issue #2716: taking documents off the list needs no open document — the Start screen shows
+    /// the recent list, and its buttons must work from there.
+    #[test]
+    fn recent_list_edits_work_without_a_document() {
+        let mut a = app();
+        a.ui.recent = vec!["/tmp/alpha.docx".into()];
+        assert!(!a.session.dirty && a.session.path.is_none());
+        assert!(works_without_document("ui.recentRemove") && works_without_document("ui.recentClear"));
+        assert_eq!(a.run("ui.recentRemove", json!({"path": "/tmp/alpha.docx"})).unwrap()["removed"], 1);
+        assert_eq!(a.run("ui.recentClear", json!({})).unwrap()["removed"], 0);
     }
 }

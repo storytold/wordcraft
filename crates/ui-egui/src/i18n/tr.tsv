@@ -2629,3 +2629,7 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	Clear all	Tümünü temizle
+	Remove from list	Listeden kaldır
+	Removed {name} from the recent list	{name} son kullanılan belgeler listesinden kaldırıldı
+	Removed {count} documents from the recent list	Son kullanılan belgeler listesinden kaldırılan belge sayısı: {count}

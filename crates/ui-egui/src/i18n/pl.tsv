@@ -2622,3 +2622,7 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+	Clear all	Wyczyść wszystko
+	Remove from list	Usuń z listy
+	Removed {name} from the recent list	{name} został usunięty z listy ostatnio używanych dokumentów
+	Removed {count} documents from the recent list	Z listy ostatnio używanych dokumentów usunięto: {count}

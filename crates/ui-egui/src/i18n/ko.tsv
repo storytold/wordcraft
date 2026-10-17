@@ -2488,3 +2488,7 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+	Clear all	모두 지우기
+	Remove from list	목록에서 삭제
+	Removed {name} from the recent list	최근 문서 목록에서 {name}을(를) 삭제했습니다
+	Removed {count} documents from the recent list	최근 문서 목록에서 문서 {count}개를 삭제했습니다

@@ -2243,3 +2243,7 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+	Clear all	Obriši sve
+	Remove from list	Ukloni iz liste
+	Removed {name} from the recent list	{name} je uklonjen iz liste nedavnih dokumenata
+	Removed {count} documents from the recent list	Iz liste nedavnih dokumenata uklonjeno: {count}

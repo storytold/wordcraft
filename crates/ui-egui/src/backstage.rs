@@ -339,6 +339,9 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Width of the × that sits at the right end of a recent row (#2716).
+const REMOVE_W: f32 = 28.0;
+
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
@@ -346,20 +349,40 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     if app.ui.recent.is_empty() {
         ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
     }
-    for p in app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>() {
+    let shown = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>();
+    for p in shown {
         let name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
+        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
+        // of its own at the right end, so it never opens the document; clicking the rest of the
+        // row opens it as before.
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &name));
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, &name, medium(13.0), t.text);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, &p, regular(11.0), t.text_dim);
+        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
+        let xresp = ui.interact(xr, ui.id().with(("recent-remove", &p)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Remove from list")));
+        if xresp.hovered() {
+            ui.painter().rect_filled(xr, 4.0, t.hover);
+            ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+        }
         if resp.clicked() {
             let _ = app.run("file.open", json!({"path": p}));
             app.ui.backstage = false;
             app.canvas.want_focus = true;
         }
+        if xresp.clicked() {
+            let _ = app.run("ui.recentRemove", json!({"path": p}));
+        }
+    }
+    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
+        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
+    {
+        let _ = app.run("ui.recentClear", json!({}));
     }
 }
 
@@ -606,6 +629,45 @@ mod tests {
         assert_eq!(ids("re"), ["resume", "report"]);
         assert_eq!(ids("résumé"), ["resume"]);
         assert!(ids("no such template").is_empty());
+    }
+
+    /// #2716: each recent row has its own Remove (× at the right end, so it opens nothing), and
+    /// Clear all takes the whole list away; the list is empty afterwards.
+    #[test]
+    fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
+        use egui::accesskit::Role;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+        a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
+        assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
+        // The × inside alpha's row, not beta's: click it and only alpha goes.
+        let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
+            let r = row(h, name).expect(name);
+            h.query_all_by_role_and_label(Role::Button, "Remove from list")
+                .find(|n| n.rect().min.y >= r.min.y && n.rect().min.y < r.max.y)
+                .expect("row has its Remove")
+                .click();
+        };
+        remove_in(&mut h, "alpha.docx");
+        h.run_steps(4);
+        assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "the row's own Remove takes its row");
+        assert!(h.state().ui.backstage, "the × does not open the Backstage away");
+        assert!(row(&h, "alpha.docx").is_none() && row(&h, "beta.docx").is_some());
+        h.get_by_label("Clear all").click();
+        h.run_steps(4);
+        assert!(h.state().ui.recent.is_empty(), "Clear all empties the list");
+        assert!(h.query_by_label("Documents you open will show up here.").is_some());
+        assert!(row(&h, "beta.docx").is_none(), "and Clear all goes with it");
     }
 
     /// Home and New are different pages (#141): Home has the short template row, the link to New
