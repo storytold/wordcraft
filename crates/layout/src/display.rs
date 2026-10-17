@@ -1494,7 +1494,7 @@ fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) ->
     }
     let k = size / face.upem.max(1.0) as f32;
     let width: f32 = shaped.iter().map(|g| g.x_advance as f32 * k).sum();
-    let (ascent, descent) = wordcraft_fonts::word::line_metrics(face);
+    let (ascent, descent) = wordcraft_fonts::word::fixed_line_metrics(face);
     let baseline = r.y + r.h / 2.0 + (ascent - descent) as f32 * k / 2.0;
     let mut pen = match align {
         TextAlign::Left => r.x,

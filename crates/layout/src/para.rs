@@ -499,6 +499,7 @@ pub struct Exclusion {
 
 struct Builder<'a> {
     env: &'a ParaEnv<'a>,
+    spacing: LineSpacing,
     styles: Vec<StyleRun>,
     /// Hash of a style's format → (index in `styles`, small caps), see `style`.
     style_index: std::collections::HashMap<u64, Vec<(u32, bool)>>,
@@ -687,6 +688,13 @@ impl<'a> Builder<'a> {
         self.env.numeral.map(c, dir)
     }
 
+    fn font_metrics(&self, face: &wordcraft_fonts::FontFace) -> (f64, f64) {
+        if matches!(self.spacing, LineSpacing::Exactly(_)) {
+            return wordcraft_fonts::word::fixed_line_metrics(face);
+        }
+        wordcraft_fonts::word::line_metrics(face)
+    }
+
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
         let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
@@ -715,7 +723,7 @@ impl<'a> Builder<'a> {
             }
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
-        let (a, d) = wordcraft_fonts::word::line_metrics(&face);
+        let (a, d) = self.font_metrics(&face);
         let k = size as f64 / face.upem.max(1.0);
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
         // no bold or italic of its own.
@@ -1233,8 +1241,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     }
     let resolve = |c: &CharProps| -> Arc<ResolvedChar> { Arc::new(doc.styles.resolve_char_in(para_style, table_chr, c)) };
     let levels = bidi_levels(&p.text, rp.bidi);
-    let mut b =
-        Builder { env, styles: Vec::new(), style_index: Default::default(), glyphs: Vec::new(), clusters: Vec::new(), levels, shown: Vec::new() };
+    let mut b = Builder {
+        env,
+        spacing: rp.line_spacing,
+        styles: Vec::new(),
+        style_index: Default::default(),
+        glyphs: Vec::new(),
+        clusters: Vec::new(),
+        levels,
+        shown: Vec::new(),
+    };
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
@@ -1533,7 +1549,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         for c in &cl {
             style = c.style;
             if let Some(st) = b.styles.get(style as usize) {
-                let a = wordcraft_fonts::word::line_metrics(&st.face).0 * st.size as f64 / st.face.upem.max(1.0);
+                let a = b.font_metrics(&st.face).0 * st.size as f64 / st.face.upem.max(1.0);
                 ascent = ascent.max(a as f32 + st.shift.max(0.0));
             }
             let g0 = glyphs.len();
