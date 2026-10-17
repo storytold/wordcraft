@@ -11,11 +11,15 @@
 //! also be stored in WordCraft's compact format ([`AffixDict::to_bytes`]): the rules as text
 //! lines and the stems front-coded, raw-deflated together (the Polish dictionary is under 1 MB).
 //!
-//! Supported: one-character flags (at most 128 distinct, any Unicode character — `FLAG UTF-8`),
-//! `PFX`/`SFX` with strip, append and condition (`.`, letters, `[abc]`, `[^abc]`), cross
-//! products, continuation classes on suffixes (at most two suffixes in a row, as in Hunspell),
-//! `FORBIDDENWORD`, `NOSUGGEST`, and the suggestion tables `TRY`, `KEY`, `MAP` and `REP`. Rejected: compounding,
-//! long or numeric flags, `NEEDAFFIX` and the other directives that change which words are correct.
+//! Supported: one-character flags (any Unicode character — `FLAG UTF-8`), two-character
+//! (`FLAG long`) and numeric (`FLAG num`) flags, at most [`MAX_FLAGS`] distinct; `PFX`/`SFX`
+//! with strip, append and condition (`.`, letters, `[abc]`, `[^abc]`), cross products,
+//! continuation classes on suffixes (at most two suffixes in a row, as in Hunspell; a prefix
+//! flag in a suffix's continuation lets that prefix attach to the suffixed form),
+//! `FORBIDDENWORD`, `NEEDAFFIX`, `KEEPCASE`, `FULLSTRIP`, `ICONV`, `NOSUGGEST` (for
+//! [`AffixDict::can_suggest`]) and the suggestion tables `TRY`, `KEY`, `MAP` and `REP`. Ignored (they
+//! only shape output or compounding hints): `OCONV`, `BREAK`, morphological fields. Rejected: compounding, `AF`/`AM` aliases,
+//! `CIRCUMFIX` used by a rule, and the other directives that change which words are correct.
 //!
 //! Lookups never panic: stems sit in one string, found through an open-addressing hash table, and
 //! a probe allocates only small scratch strings for the candidate roots it tries.
@@ -36,7 +40,6 @@ const UNSUPPORTED: &[&str] = &[
     "AF",
     "AM",
     "CHECKSHARPS",
-    "CIRCUMFIX",
     "COMPLEXPREFIXES",
     "COMPOUNDBEGIN",
     "COMPOUNDEND",
@@ -45,17 +48,128 @@ const UNSUPPORTED: &[&str] = &[
     "COMPOUNDMIN",
     "COMPOUNDPERMITFLAG",
     "COMPOUNDRULE",
-    "FULLSTRIP",
-    "ICONV",
     "IGNORE",
-    "KEEPCASE",
     "LEMMA_PRESENT",
-    "NEEDAFFIX",
-    "OCONV",
     "ONLYINCOMPOUND",
     "PSEUDOROOT",
     "SUBSTANDARD",
 ];
+
+/// Most distinct flags a dictionary may use (the Dicollecte French dictionary uses about 180).
+pub const MAX_FLAGS: usize = 512;
+
+/// A set of flags, one bit per flag index (see [`AffixDict::flag_chars`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+struct FlagSet([u64; MAX_FLAGS / 64]);
+
+impl FlagSet {
+    fn single(i: usize) -> FlagSet {
+        let mut s = FlagSet::default();
+        if let Some(w) = s.0.get_mut(i / 64) {
+            *w |= 1 << (i % 64);
+        }
+        s
+    }
+
+    fn has(self, i: usize) -> bool {
+        self.0.get(i / 64).is_some_and(|w| w & (1 << (i % 64)) != 0)
+    }
+
+    fn is_empty(self) -> bool {
+        self.0.iter().all(|&w| w == 0)
+    }
+
+    fn union(self, o: FlagSet) -> FlagSet {
+        let mut out = self;
+        for (a, b) in out.0.iter_mut().zip(o.0) {
+            *a |= b;
+        }
+        out
+    }
+
+    fn intersects(self, o: FlagSet) -> bool {
+        self.0.iter().zip(o.0).any(|(a, b)| a & b != 0)
+    }
+
+    fn contains_all(self, o: FlagSet) -> bool {
+        self.0.iter().zip(o.0).all(|(a, b)| a & b == b)
+    }
+
+    fn without(self, o: FlagSet) -> FlagSet {
+        let mut out = self;
+        for (a, b) in out.0.iter_mut().zip(o.0) {
+            *a &= !b;
+        }
+        out
+    }
+}
+
+/// How an `.aff`/`.dic` pair writes flags (`FLAG` directive).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FlagMode {
+    /// One character per flag (the default, `FLAG UTF-8`).
+    Char,
+    /// Two characters per flag (`FLAG long`).
+    Long,
+    /// Decimal numbers separated by commas (`FLAG num`).
+    Num,
+}
+
+/// Reads flag fields. Long and numeric flags become one private-use character each, so the rest
+/// of the engine (and the compact format) deals in one-character flags only.
+struct FlagReader {
+    mode: FlagMode,
+    names: HashMap<String, char>,
+}
+
+impl FlagReader {
+    fn new() -> FlagReader {
+        FlagReader { mode: FlagMode::Char, names: HashMap::new() }
+    }
+
+    fn intern(&mut self, name: &str) -> Result<char, String> {
+        if let Some(&c) = self.names.get(name) {
+            return Ok(c);
+        }
+        // Supplementary Private Use Area-A: never a letter of a real flag field.
+        let c = u32::try_from(self.names.len()).ok().and_then(|n| char::from_u32(0xF0000 + n)).filter(|_| self.names.len() < MAX_FLAGS);
+        let c = c.ok_or_else(|| format!("more than {MAX_FLAGS} distinct flags"))?;
+        self.names.insert(name.to_string(), c);
+        Ok(c)
+    }
+
+    /// The flags of a field (`ab`, `S.()`, `12,7`), as one character each.
+    fn read(&mut self, field: &str) -> Result<String, String> {
+        match self.mode {
+            FlagMode::Char => Ok(field.to_string()),
+            FlagMode::Long => {
+                let chars: Vec<char> = field.chars().collect();
+                if !chars.len().is_multiple_of(2) {
+                    return Err(format!("long flags `{field}` have an odd length"));
+                }
+                chars.chunks(2).map(|p| self.intern(&p.iter().collect::<String>())).collect()
+            }
+            FlagMode::Num => field
+                .split(',')
+                .filter(|n| !n.is_empty())
+                .map(|n| match n.parse::<u16>() {
+                    Ok(_) => self.intern(n),
+                    Err(_) => Err(format!("numeric flag `{n}` is not a number")),
+                })
+                .collect(),
+        }
+    }
+
+    /// Exactly one flag.
+    fn one(&mut self, field: &str) -> Result<char, String> {
+        let flags = self.read(field)?;
+        let mut it = flags.chars();
+        match (it.next(), it.next()) {
+            (Some(c), None) if !c.is_whitespace() => Ok(c),
+            _ => Err(format!("`{field}` is not one flag")),
+        }
+    }
+}
 
 /// One character class of a rule's condition.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -125,14 +239,16 @@ const INNER_CHAIN: u8 = MAX_CHAIN - 1;
 #[derive(Clone, Debug)]
 struct Rule {
     /// Bit of the rule's flag in the stems' flag masks.
-    bit: u128,
+    bit: FlagSet,
     flag: char,
     cross: bool,
     strip: Box<str>,
     add: Box<str>,
     /// Continuation classes (`SFX A 0 able/B`): flags the derived form carries, licensing
     /// further affixes. Chained application is bounded by [`MAX_CHAIN`].
-    cont: u128,
+    cont: FlagSet,
+    /// The continuation holds `NEEDAFFIX`: the derived form is a word only with another affix.
+    needs_affix: bool,
     cond: Box<[Cond]>,
     cond_text: Box<str>,
 }
@@ -169,11 +285,20 @@ pub struct AffixDict {
     /// Per stem: index into `sets`.
     flags: Vec<u16>,
     /// Distinct flag masks.
-    sets: Vec<u128>,
-    /// The `FORBIDDENWORD` flag's bit; stems carrying it are not words (0: none declared).
-    forbidden: u128,
-    /// Stems with NOSUGGEST are correct, but none of their forms are suggested.
-    no_suggest: u128,
+    sets: Vec<FlagSet>,
+    /// The `FORBIDDENWORD` flag's bit; stems carrying it are not words (empty: none declared).
+    forbidden: FlagSet,
+    /// The `NEEDAFFIX` flag's bit: a stem carrying it is a word only with an affix.
+    need_affix: FlagSet,
+    /// The `KEEPCASE` flag's bit: a stem carrying it is a word only in its own case.
+    keep_case: FlagSet,
+    /// The `NOSUGGEST` flag's bit: a stem carrying it (and its forms) is correct but never
+    /// suggested.
+    no_suggest: FlagSet,
+    /// `FULLSTRIP`: a rule may strip the whole stem (`être` → `suis`).
+    full_strip: bool,
+    /// `ICONV` input conversions, applied before lookup (`’` → `'`).
+    iconv: Vec<(String, String)>,
     /// Open-addressing hash table of stem indices (`EMPTY` = free).
     table: Vec<u32>,
     /// Flag char of each bit.
@@ -255,7 +380,13 @@ struct Rules {
     rep: Vec<(String, String)>,
     /// The `FORBIDDENWORD` flag: stems carrying it are listed but never correct.
     forbidden: Option<char>,
+    need_affix: Option<char>,
+    keep_case: Option<char>,
     no_suggest: Option<char>,
+    full_strip: bool,
+    iconv: Vec<(String, String)>,
+    /// The `CIRCUMFIX` flag, refused when a rule or stem uses it (not implemented).
+    circumfix: Option<char>,
 }
 
 /// A rule as parsed from text, before flags become bits: `(flag, cross, strip, add, cont, cond)`.
@@ -266,12 +397,15 @@ fn zero_empty(s: &str) -> String {
     if s == "0" { String::new() } else { s.to_string() }
 }
 
-/// Read Hunspell `.aff` text (already decoded to UTF-8).
-fn parse_aff(aff: &str) -> Result<Rules, String> {
+/// Read Hunspell `.aff` text (already decoded to UTF-8). The returned reader decodes the
+/// `.dic` flag fields the same way.
+fn parse_aff(aff: &str) -> Result<(Rules, FlagReader), String> {
     let mut r = Rules::default();
+    let mut flags = FlagReader::new();
     let mut cross: HashMap<(bool, char), bool> = HashMap::new();
     let mut map_header = false;
     let mut rep_header = false;
+    let mut iconv_header = false;
     for (n, line) in aff.lines().enumerate() {
         let f: Vec<&str> = line.split_whitespace().collect();
         let Some(&dir) = f.first() else { continue };
@@ -279,27 +413,29 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
             continue;
         }
         let at = |k: usize| f.get(k).copied().unwrap_or("");
+        let line_err = |e: String| format!("line {}: {e}", n + 1);
         match dir {
             "SET" | "LANG" | "NAME" | "VERSION" | "HOME" | "WORDCHARS" | "MAXNGRAMSUGS" | "MAXDIFF" | "ONLYMAXDIFF" | "NOSPLITSUGS"
-            | "SUGSWITHDOTS" | "WARN" | "FORBIDWARN" | "MAXCPDSUGS" => {}
+            | "SUGSWITHDOTS" | "WARN" | "FORBIDWARN" | "MAXCPDSUGS" | "OCONV" | "BREAK" => {}
             "FLAG" => {
-                // Per-character flag modes (`FLAG UTF-8`, as VERO's pt_BR dictionary uses) work
-                // with the one-character parsing here; only the multi-character encodings differ.
-                if !matches!(at(1), "UTF-8" | "DEFAULT" | "utf-8" | "default" | "UTF8" | "") {
-                    return Err(format!("line {}: FLAG {} is not supported (one-character flags only)", n + 1, at(1)));
+                flags.mode = match at(1) {
+                    "UTF-8" | "DEFAULT" | "utf-8" | "default" | "UTF8" | "" => FlagMode::Char,
+                    "long" | "LONG" => FlagMode::Long,
+                    "num" | "NUM" => FlagMode::Num,
+                    other => return Err(line_err(format!("FLAG {other} is not supported"))),
                 }
             }
-            directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
-                let mut it = at(1).chars();
-                match (it.next(), it.next()) {
-                    (Some(c), None) if !c.is_whitespace() => {
-                        if directive == "FORBIDDENWORD" {
-                            r.forbidden = Some(c);
-                        } else {
-                            r.no_suggest = Some(c);
-                        }
-                    }
-                    _ => return Err(format!("line {}: {directive} needs one flag character", n + 1)),
+            "FORBIDDENWORD" => r.forbidden = Some(flags.one(at(1)).map_err(line_err)?),
+            "NEEDAFFIX" => r.need_affix = Some(flags.one(at(1)).map_err(line_err)?),
+            "KEEPCASE" => r.keep_case = Some(flags.one(at(1)).map_err(line_err)?),
+            "NOSUGGEST" => r.no_suggest = Some(flags.one(at(1)).map_err(line_err)?),
+            "CIRCUMFIX" => r.circumfix = Some(flags.one(at(1)).map_err(line_err)?),
+            "FULLSTRIP" => r.full_strip = true,
+            "ICONV" => {
+                if !iconv_header && f.len() == 2 && at(1).parse::<usize>().is_ok() {
+                    iconv_header = true;
+                } else if f.len() >= 3 && !at(1).is_empty() {
+                    r.iconv.push((at(1).replace('_', " "), at(2).replace('_', " ")));
                 }
             }
             "TRY" => r.try_chars = at(1).to_string(),
@@ -320,10 +456,7 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
             }
             "PFX" | "SFX" => {
                 let suffix = dir == "SFX";
-                let mut flag_chars = at(1).chars();
-                let (Some(flag), None) = (flag_chars.next(), flag_chars.next()) else {
-                    return Err(format!("line {}: flag `{}` is not one character", n + 1, at(1)));
-                };
+                let flag = flags.one(at(1)).map_err(line_err)?;
                 // Only a header ignores trailing fields; a rule condition beginning with # is literal.
                 let is_header = f.len() >= 4 && matches!(at(2), "Y" | "N") && at(3).parse::<usize>().is_ok() && !cross.contains_key(&(suffix, flag));
                 if is_header {
@@ -341,7 +474,8 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
                 let cond = if f.len() >= 5 { at(4) } else { "." };
                 parse_cond(cond).map_err(|e| format!("line {}: {e}", n + 1))?;
                 let c = cross.get(&(suffix, flag)).copied().unwrap_or(false);
-                let rule: RawRule = (flag, c, zero_empty(at(2)), zero_empty(add), cont.to_string(), cond.to_string());
+                let cont = flags.read(cont).map_err(line_err)?;
+                let rule: RawRule = (flag, c, zero_empty(at(2)), zero_empty(add), cont, cond.to_string());
                 if suffix {
                     r.suffixes.push(rule);
                 } else {
@@ -352,7 +486,7 @@ fn parse_aff(aff: &str) -> Result<Rules, String> {
             _ => {}
         }
     }
-    Ok(r)
+    Ok((r, flags))
 }
 
 impl AffixDict {
@@ -363,7 +497,7 @@ impl AffixDict {
         // directive or turn the `.dic` count line into a stem.
         let aff = aff.strip_prefix('\u{feff}').unwrap_or(aff);
         let dic = dic.strip_prefix('\u{feff}').unwrap_or(dic);
-        let rules = parse_aff(aff)?;
+        let (rules, mut reader) = parse_aff(aff)?;
         let mut stems: Vec<(String, String)> = Vec::new();
         for (n, line) in dic.lines().enumerate() {
             let Some(tok) = line.split_whitespace().next() else { continue };
@@ -390,22 +524,33 @@ impl AffixDict {
             if word.is_empty() || word.len() > MAX_WORD_BYTES || word.contains(['\n', '/']) {
                 continue;
             }
+            let flags = reader.read(&flags).map_err(|e| format!(".dic line {}: {e}", n + 1))?;
             stems.push((word, flags));
         }
         AffixDict::build(rules, stems, comments.iter().map(|s| s.to_string()).collect())
     }
 
     fn build(rules: Rules, mut stems: Vec<(String, String)>, comments: Vec<String>) -> Result<AffixDict, String> {
-        // Flags: every one a rule or a stem uses gets a bit.
+        if let Some(c) = rules.circumfix
+            && (rules.prefixes.iter().chain(&rules.suffixes).any(|r| r.4.contains(c)) || stems.iter().any(|s| s.1.contains(c)))
+        {
+            return Err("CIRCUMFIX is not supported".into());
+        }
+        // Flags: every one a rule, a stem or a directive uses gets a bit.
         let mut flag_chars: Vec<char> = rules.prefixes.iter().chain(&rules.suffixes).map(|r| r.0).collect();
+        flag_chars.extend(rules.prefixes.iter().chain(&rules.suffixes).flat_map(|r| r.4.chars()));
         flag_chars.extend(stems.iter().flat_map(|s| s.1.chars()));
+        flag_chars.extend([rules.forbidden, rules.need_affix, rules.keep_case, rules.no_suggest].into_iter().flatten());
         flag_chars.sort_unstable();
         flag_chars.dedup();
-        if flag_chars.len() > 128 {
-            return Err(format!("{} distinct flags; at most 128 are supported", flag_chars.len()));
+        if flag_chars.len() > MAX_FLAGS {
+            return Err(format!("{} distinct flags; at most {MAX_FLAGS} are supported", flag_chars.len()));
         }
-        let bit_of = |c: char| flag_chars.iter().position(|&x| x == c).map_or(0, |i| 1u128 << i);
-        let forbidden = rules.forbidden.map_or(0, bit_of);
+        let bit_of = |c: char| flag_chars.iter().position(|&x| x == c).map_or(FlagSet::default(), FlagSet::single);
+        let set_of = |s: &str| s.chars().fold(FlagSet::default(), |m, c| m.union(bit_of(c)));
+        let directive = |c: Option<char>| c.map_or(FlagSet::default(), bit_of);
+        let (forbidden, need_affix, keep_case) = (directive(rules.forbidden), directive(rules.need_affix), directive(rules.keep_case));
+        let no_suggest = directive(rules.no_suggest);
         // Stems sorted by bytes; homonyms (the same word twice) are merged.
         stems.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
         let mut d = AffixDict {
@@ -413,7 +558,11 @@ impl AffixDict {
             offs: Vec::with_capacity(stems.len() + 1),
             flag_chars: flag_chars.clone(),
             forbidden,
-            no_suggest: rules.no_suggest.map_or(0, bit_of),
+            need_affix,
+            keep_case,
+            no_suggest,
+            full_strip: rules.full_strip,
+            iconv: rules.iconv,
             try_chars: rules.try_chars,
             key: rules.key,
             map: rules.map,
@@ -422,17 +571,25 @@ impl AffixDict {
             ..AffixDict::default()
         };
         d.offs.push(0);
-        let mut set_ids: HashMap<u128, u16> = HashMap::new();
+        let mut set_ids: HashMap<FlagSet, u16> = HashMap::new();
         let mut i = 0;
         while i < stems.len() {
             let Some((word, _)) = stems.get(i) else { break };
-            let mut mask = 0u128;
+            let mut mask = FlagSet::default();
+            let mut every_no_suggest = true;
             let mut j = i;
             while let Some((w, f)) = stems.get(j)
                 && w == word
             {
-                mask |= f.chars().map(bit_of).fold(0, |a, b| a | b);
+                let entry = set_of(f);
+                every_no_suggest &= entry.intersects(no_suggest);
+                mask = mask.union(entry);
                 j += 1;
+            }
+            // `bar` the unit is NOSUGGEST, `bar` the noun isn't: the word stays suggestible unless
+            // every entry spelled like it is marked.
+            if !every_no_suggest {
+                mask = mask.without(no_suggest);
             }
             let next_id = u16::try_from(d.sets.len()).map_err(|_| "too many distinct flag sets".to_string())?;
             let id = *set_ids.entry(mask).or_insert(next_id);
@@ -445,8 +602,10 @@ impl AffixDict {
             i = j;
         }
         let mk = |(flag, cross, strip, add, cont, cond): RawRule| -> Result<Rule, String> {
-            let cont = cont.chars().fold(0u128, |m, c| m | bit_of(c));
-            Ok(Rule { bit: bit_of(flag), flag, cross, strip: strip.into(), add: add.into(), cont, cond: parse_cond(&cond)?, cond_text: cond.into() })
+            let cont = set_of(&cont);
+            let needs_affix = cont.intersects(need_affix);
+            let (strip, add, cond_text) = (strip.into(), add.into(), cond.as_str().into());
+            Ok(Rule { bit: bit_of(flag), flag, cross, strip, add, cont, needs_affix, cond: parse_cond(&cond)?, cond_text })
         };
         d.prefixes = rules.prefixes.into_iter().map(mk).collect::<Result<_, _>>()?;
         d.suffixes = rules.suffixes.into_iter().map(mk).collect::<Result<_, _>>()?;
@@ -505,12 +664,12 @@ impl AffixDict {
     }
 
     /// The flag characters of `mask`, in flag order (how the compact format stores flags).
-    fn flag_chars_for(&self, mask: u128) -> String {
-        self.flag_chars.iter().enumerate().filter(|&(i, _)| mask & (1u128 << i) != 0).map(|(_, c)| c).collect()
+    fn flag_chars_for(&self, mask: FlagSet) -> String {
+        self.flag_chars.iter().enumerate().filter(|&(i, _)| mask.has(i)).map(|(_, c)| c).collect()
     }
 
     /// The character of `mask` when it holds exactly one flag.
-    fn flag_char(&self, mask: u128) -> Option<char> {
+    fn flag_char(&self, mask: FlagSet) -> Option<char> {
         let s = self.flag_chars_for(mask);
         let mut it = s.chars();
         match (it.next(), it.next()) {
@@ -542,12 +701,8 @@ impl AffixDict {
         (first..self.len()).map_while(move |i| self.word(i).filter(|w| w.starts_with(prefix.as_str())))
     }
 
-    /// Flag mask of a stem, if `w` is one.
-    fn stem_flags(&self, w: &str) -> Option<u128> {
-        self.stem_flags_excluding(w, self.forbidden)
-    }
-
-    fn stem_flags_excluding(&self, w: &str, excluded: u128) -> Option<u128> {
+    /// Flag mask of a stem, if `w` is one and carries none of the flags in `reject`.
+    fn stem_flags(&self, w: &str, reject: FlagSet) -> Option<FlagSet> {
         if self.table.is_empty() {
             return None;
         }
@@ -561,34 +716,47 @@ impl AffixDict {
             if self.word(t as usize) == Some(w) {
                 let id = *self.flags.get(t as usize)?;
                 let mask = self.sets.get(usize::from(id)).copied();
-                // All derivations use this lookup: exclusions apply to stems and their forms.
-                return mask.filter(|m| m & excluded == 0);
+                // A stem carrying FORBIDDENWORD (always in `reject`) is listed but is not a
+                // word: no direct hit, and (this is the only stem lookup) no affixed form either.
+                return mask.filter(|m| !m.intersects(reject));
             }
             slot = (slot + 1) & mask;
         }
         None
     }
 
+    /// The split points of `w` into a base and an appended suffix, from the end: the suffix is at
+    /// most the longest one, and something stays before it unless `FULLSTRIP` allows a rule to
+    /// replace the whole stem.
+    fn cuts<'a>(&self, w: &'a str) -> impl Iterator<Item = (&'a str, &'a str)> + use<'a> {
+        let min = usize::from(!self.full_strip);
+        std::iter::once(w.len())
+            .chain(w.char_indices().rev().map(|(i, _)| i).filter(move |&i| i >= min))
+            .take(self.max_sfx_chars + 1)
+            .filter_map(|b| Some((w.get(..b)?, w.get(b..)?)))
+    }
+
     /// Does `w` carry flag `bit` — as a stem, or as the form of a suffix rule whose
     /// continuation classes include `bit` (chained suffixation, depth-bounded)?
-    fn form_has_flag(&self, w: &str, bit: u128, depth: u8, excluded: u128) -> bool {
-        if self.stem_flags_excluding(w, excluded).is_some_and(|f| f & bit != 0) {
+    fn form_has_flag(&self, w: &str, bit: FlagSet, depth: u8, reject: FlagSet) -> bool {
+        if self.stem_flags(w, reject).is_some_and(|f| f.intersects(bit)) {
             return true;
         }
         if depth == 0 {
             return false;
         }
         let mut root = String::with_capacity(w.len() + 8);
-        let cuts = std::iter::once(w.len()).chain(w.char_indices().rev().map(|(i, _)| i).filter(|&i| i > 0));
-        for b in cuts.take(self.max_sfx_chars + 1) {
-            let (Some(base), Some(add)) = (w.get(..b), w.get(b..)) else { continue };
+        for (base, add) in self.cuts(w) {
             let Some(groups) = self.sfx_index.get(add) else { continue };
             for g in groups {
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
+                if root.is_empty() {
+                    continue;
+                }
                 for r in g.rules.iter().filter_map(|&i| self.suffixes.get(i as usize)) {
-                    if r.cont & bit != 0 && r.cond_matches(&root, true) && self.form_has_flag(&root, r.bit, depth - 1, excluded) {
+                    if r.cont.intersects(bit) && r.cond_matches(&root, true) && self.form_has_flag(&root, r.bit, depth - 1, reject) {
                         return true;
                     }
                 }
@@ -599,40 +767,40 @@ impl AffixDict {
 
     /// Is `w` exactly (case and all) a stem or an affixed form of one?
     pub fn contains(&self, w: &str) -> bool {
-        self.contains_excluding(w, self.forbidden)
+        self.contains_with(w, self.forbidden)
     }
 
-    /// Exactly spelled dictionary words eligible for suggestions (NOSUGGEST stems excluded).
+    /// May `w` be offered as a suggestion: [`AffixDict::contains`], leaving out the stems marked
+    /// `NOSUGGEST` and their forms (currency codes, unit symbols, interjections)?
     pub fn contains_suggestible(&self, w: &str) -> bool {
-        self.contains_excluding(w, self.forbidden | self.no_suggest)
+        self.contains_with(w, self.forbidden.union(self.no_suggest))
     }
 
-    fn contains_excluding(&self, w: &str, excluded: u128) -> bool {
+    /// [`AffixDict::contains`], with stems carrying a flag of `reject` left out.
+    fn contains_with(&self, w: &str, reject: FlagSet) -> bool {
         if w.is_empty() || w.len() > MAX_WORD_BYTES {
             return false;
         }
-        if self.stem_flags_excluding(w, excluded).is_some() || self.suffixed(w, 0, excluded) {
+        if self.stem_flags(w, reject).is_some_and(|f| !f.intersects(self.need_affix)) || self.suffixed(w, FlagSet::default(), reject) {
             return true;
         }
         let mut root = String::with_capacity(w.len() + 8);
         for r in &self.prefixes {
             let Some(rest) = w.strip_prefix(&*r.add) else { continue };
-            if rest.is_empty() {
+            if rest.is_empty() && !self.full_strip {
                 continue;
             }
             root.clear();
             root.push_str(&r.strip);
             root.push_str(rest);
-            if !r.cond_matches(&root, false) {
+            if root.is_empty() || !r.cond_matches(&root, false) {
                 continue;
             }
-            if self.stem_flags_excluding(&root, excluded).is_some_and(|f| f & r.bit != 0) {
+            // A prefix whose continuation holds NEEDAFFIX needs a suffix too: the cross product.
+            if !r.needs_affix && self.form_has_flag(&root, r.bit, INNER_CHAIN, reject) {
                 return true;
             }
-            if self.form_has_flag(&root, r.bit, INNER_CHAIN, excluded) {
-                return true;
-            }
-            if r.cross && self.suffixed(&root, r.bit, excluded) {
+            if r.cross && self.suffixed(&root, r.bit, reject) {
                 return true;
             }
         }
@@ -641,30 +809,31 @@ impl AffixDict {
 
     /// Is `w` a stem with one suffix? With `need` set (a prefix was taken off), the stem must
     /// carry those flags too and the suffix must allow cross products.
-    fn suffixed(&self, w: &str, need: u128, excluded: u128) -> bool {
+    fn suffixed(&self, w: &str, need: FlagSet, reject: FlagSet) -> bool {
         let mut root = String::with_capacity(w.len() + 8);
-        // Each split point from the end: the appended string is `w[b..]`, at most the longest
-        // suffix, and something must stay before it.
-        let cuts = std::iter::once(w.len()).chain(w.char_indices().rev().map(|(i, _)| i).filter(|&i| i > 0));
-        for b in cuts.take(self.max_sfx_chars + 1) {
-            let (Some(base), Some(add)) = (w.get(..b), w.get(b..)) else { continue };
+        let alone = need.is_empty();
+        for (base, add) in self.cuts(w) {
             let Some(groups) = self.sfx_index.get(add) else { continue };
             for g in groups {
                 root.clear();
                 root.push_str(base);
                 root.push_str(&g.strip);
-                let rules = || g.rules.iter().filter_map(|&i| self.suffixes.get(i as usize));
+                if root.is_empty() {
+                    continue;
+                }
+                // Without a prefix, the suffix is the only affix: one needing another won't do.
+                let rules = || g.rules.iter().filter_map(|&i| self.suffixes.get(i as usize)).filter(|r| !(alone && r.needs_affix));
                 // The stem path: `root` is a stem carrying the rule's flag (and the prefix's,
                 // when a cross product is being checked).
-                if let Some(f) = self.stem_flags_excluding(&root, excluded)
-                    && f & need == need
-                    && rules().any(|r| f & r.bit != 0 && (need == 0 || r.cross) && r.cond_matches(&root, true))
+                if let Some(f) = self.stem_flags(&root, reject)
+                    && f.contains_all(need)
+                    && rules().any(|r| f.intersects(r.bit) && (alone || r.cross) && r.cond_matches(&root, true))
                 {
                     return true;
                 }
                 // Continuation classes: `root` need not be a stem carrying this rule's flag —
                 // it may be a form that gained the flag from another rule's continuation.
-                if need == 0 && rules().any(|r| r.cond_matches(&root, true) && self.form_has_flag(&root, r.bit, INNER_CHAIN, excluded)) {
+                if alone && rules().any(|r| r.cond_matches(&root, true) && self.form_has_flag(&root, r.bit, INNER_CHAIN, reject)) {
                     return true;
                 }
             }
@@ -672,52 +841,91 @@ impl AffixDict {
         false
     }
 
+    /// `w` through the `ICONV` table (longest match first, left to right).
+    fn input_conv<'a>(&self, w: &'a str) -> std::borrow::Cow<'a, str> {
+        if self.iconv.is_empty() || !self.iconv.iter().any(|(from, _)| w.contains(from.as_str())) {
+            return std::borrow::Cow::Borrowed(w);
+        }
+        let mut out = String::with_capacity(w.len());
+        let mut rest = w;
+        while let Some(c) = rest.chars().next() {
+            let best = self.iconv.iter().filter(|(from, _)| !from.is_empty() && rest.starts_with(from.as_str())).max_by_key(|(from, _)| from.len());
+            match best {
+                Some((from, to)) => {
+                    out.push_str(to);
+                    rest = rest.get(from.len()..).unwrap_or_default();
+                }
+                None => {
+                    out.push(c);
+                    rest = rest.get(c.len_utf8()..).unwrap_or_default();
+                }
+            }
+        }
+        std::borrow::Cow::Owned(out)
+    }
+
     /// Is `w` correct, Hunspell style: as written, or — for a capitalized word or one in capitals
     /// — in lower case (and capitalized), since a sentence may start with any word and headings
-    /// may be in capitals. Lower-case input never matches a capitalized stem (`warszawa`).
+    /// may be in capitals. Lower-case input never matches a capitalized stem (`warszawa`), and a
+    /// `KEEPCASE` stem only matches as written.
     pub fn check(&self, w: &str) -> bool {
-        self.check_excluding(w, self.forbidden)
+        self.check_with(w, self.forbidden)
     }
 
-    /// Whether a suggestion is correct in its displayed case and has an eligible stem.
+    /// May `w` be offered as a suggestion: [`AffixDict::check`], leaving out the stems marked
+    /// `NOSUGGEST` and their forms, in any case.
     pub fn can_suggest(&self, w: &str) -> bool {
-        self.check_excluding(w, self.forbidden | self.no_suggest)
+        self.check_with(w, self.forbidden.union(self.no_suggest))
     }
 
-    fn check_excluding(&self, w: &str, excluded: u128) -> bool {
-        if self.contains_excluding(w, excluded) {
+    /// [`AffixDict::check`], with stems carrying a flag of `reject` left out.
+    fn check_with(&self, w: &str, reject: FlagSet) -> bool {
+        let w = self.input_conv(w);
+        let w = w.as_ref();
+        if self.contains_with(w, reject) {
             return true;
         }
+        let reject = reject.union(self.keep_case);
         match casing(w) {
             Casing::Lower | Casing::Mixed => false,
-            Casing::Initial => self.contains_excluding(&w.to_lowercase(), excluded),
+            Casing::Initial => self.contains_with(&w.to_lowercase(), reject),
             Casing::Upper => {
                 let lower = w.to_lowercase();
-                self.contains_excluding(&capitalize(&lower), excluded) || self.contains_excluding(&lower, excluded)
+                self.contains_with(&capitalize(&lower), reject) || self.contains_with(&lower, reject)
             }
         }
     }
 
-    /// Every form of the stem `stem` (itself included), unsorted, possibly with repeats.
+    /// Every form of the stem `stem` (itself included unless it needs an affix), unsorted,
+    /// possibly with repeats.
     pub fn forms(&self, stem: &str) -> Vec<String> {
-        let Some(f) = self.stem_flags(stem) else { return Vec::new() };
-        let mut out = vec![stem.to_string()];
+        let Some(f) = self.stem_flags(stem, self.forbidden) else { return Vec::new() };
+        let mut out = Vec::new();
+        if !f.intersects(self.need_affix) {
+            out.push(stem.to_string());
+        }
         let mut cross_sfx = Vec::new();
         // Suffix forms queued with the continuation classes they carry, for chained expansion.
-        let mut chain: Vec<(String, u128)> = Vec::new();
+        let mut chain: Vec<(String, FlagSet)> = Vec::new();
         for r in &self.suffixes {
-            if f & r.bit == 0 || !r.cond_matches(stem, true) {
+            if !f.intersects(r.bit) || !r.cond_matches(stem, true) {
                 continue;
             }
             let Some(base) = stem.strip_suffix(&*r.strip) else { continue };
+            // Stripping the whole stem needs FULLSTRIP, as in the checker.
             let form = format!("{base}{}", r.add);
+            if form.is_empty() || (base.is_empty() && !self.full_strip) {
+                continue;
+            }
             if r.cross {
                 cross_sfx.push(form.clone());
             }
-            if r.cont != 0 {
+            if !r.cont.is_empty() {
                 chain.push((form.clone(), r.cont));
             }
-            out.push(form);
+            if !r.needs_affix {
+                out.push(form);
+            }
         }
         // Continuation classes chain suffixes (`workable/B` → `workables`), up to [`MAX_CHAIN`]
         // suffixes in all — the same bound the checker walks.
@@ -728,24 +936,34 @@ impl AffixDict {
             }
             for (form, flags) in level {
                 for r in &self.suffixes {
-                    if flags & r.bit == 0 || !r.cond_matches(&form, true) {
+                    if !flags.intersects(r.bit) || !r.cond_matches(&form, true) {
                         continue;
                     }
                     let Some(base) = form.strip_suffix(&*r.strip) else { continue };
                     let next = format!("{base}{}", r.add);
-                    if r.cont != 0 {
+                    if next.is_empty() || (base.is_empty() && !self.full_strip) {
+                        continue;
+                    }
+                    if !r.cont.is_empty() {
                         chain.push((next.clone(), r.cont));
                     }
-                    out.push(next);
+                    if !r.needs_affix {
+                        out.push(next);
+                    }
                 }
             }
         }
         for r in &self.prefixes {
-            if f & r.bit == 0 || !r.cond_matches(stem, false) {
+            if !f.intersects(r.bit) || !r.cond_matches(stem, false) {
                 continue;
             }
             let Some(rest) = stem.strip_prefix(&*r.strip) else { continue };
-            out.push(format!("{}{rest}", r.add));
+            if rest.is_empty() && !self.full_strip {
+                continue;
+            }
+            if !r.needs_affix {
+                out.push(format!("{}{rest}", r.add));
+            }
             if r.cross {
                 for s in &cross_sfx {
                     if let Some(rest) = s.strip_prefix(&*r.strip) {
@@ -807,12 +1025,18 @@ impl AffixDict {
         for (a, b) in &self.rep {
             out.push_str(&format!("REP {} {}\n", a.replace(' ', "_"), b.replace(' ', "_")));
         }
-        for (directive, mask) in [("FORBIDDENWORD", self.forbidden), ("NOSUGGEST", self.no_suggest)] {
-            if mask != 0
-                && let Some(c) = self.flag_char(mask)
-            {
-                out.push_str(&format!("{directive} {c}\n"));
+        let directives =
+            [("FORBIDDENWORD", self.forbidden), ("NEEDAFFIX", self.need_affix), ("KEEPCASE", self.keep_case), ("NOSUGGEST", self.no_suggest)];
+        for (name, set) in directives {
+            if let Some(c) = self.flag_char(set) {
+                out.push_str(&format!("{name} {c}\n"));
             }
+        }
+        if self.full_strip {
+            out.push_str("FULLSTRIP\n");
+        }
+        for (a, b) in &self.iconv {
+            out.push_str(&format!("ICONV {} {}\n", a.replace(' ', "_"), b.replace(' ', "_")));
         }
         let z = |s: &str| if s.is_empty() { "0".to_string() } else { s.to_string() };
         for (kind, rules) in [("PFX", &self.prefixes), ("SFX", &self.suffixes)] {
@@ -837,8 +1061,8 @@ impl AffixDict {
             let p = prev.iter().zip(b).take_while(|(x, y)| x == y).count().min(255);
             raw.push(p as u8);
             raw.extend_from_slice(b.get(p..).unwrap_or_default());
-            let mask = self.flags.get(i).and_then(|&id| self.sets.get(usize::from(id))).copied().unwrap_or(0);
-            if mask != 0 {
+            let mask = self.flags.get(i).and_then(|&id| self.sets.get(usize::from(id))).copied().unwrap_or_default();
+            if !mask.is_empty() {
                 raw.push(b'/');
                 raw.extend_from_slice(self.flag_chars_for(mask).as_bytes());
             }
@@ -872,17 +1096,23 @@ impl AffixDict {
                 "KEY" => rules.key = at(1).to_string(),
                 "MAP" => rules.map.push(at(1).chars().collect()),
                 "REP" => rules.rep.push((at(1).replace('_', " "), at(2).replace('_', " "))),
-                directive @ ("FORBIDDENWORD" | "NOSUGGEST") => {
+                name @ ("FORBIDDENWORD" | "NEEDAFFIX" | "KEEPCASE" | "NOSUGGEST") => {
                     let mut it = at(1).chars();
-                    match (it.next(), it.next()) {
-                        (Some(c), None) if !c.is_whitespace() => {
-                            if directive == "FORBIDDENWORD" {
-                                rules.forbidden = Some(c);
-                            } else {
-                                rules.no_suggest = Some(c);
-                            }
-                        }
-                        _ => return Err(format!("affix dictionary: bad {directive} in `{line}`")),
+                    let c = match (it.next(), it.next()) {
+                        (Some(c), None) if !c.is_whitespace() => c,
+                        _ => return Err(format!("affix dictionary: bad {name} in `{line}`")),
+                    };
+                    match name {
+                        "FORBIDDENWORD" => rules.forbidden = Some(c),
+                        "NEEDAFFIX" => rules.need_affix = Some(c),
+                        "KEEPCASE" => rules.keep_case = Some(c),
+                        _ => rules.no_suggest = Some(c),
+                    }
+                }
+                "FULLSTRIP" => rules.full_strip = true,
+                "ICONV" => {
+                    if !at(1).is_empty() {
+                        rules.iconv.push((at(1).replace('_', " "), at(2).replace('_', " ")));
                     }
                 }
                 kind @ ("PFX" | "SFX") => {
@@ -1166,8 +1396,9 @@ pub(crate) mod tests {
 
     #[test]
     fn unsupported_and_broken_input_is_an_error() {
-        assert!(AffixDict::from_hunspell("FLAG long\n", DIC, &[]).is_err());
-        assert!(AffixDict::from_hunspell("FLAG num\n", DIC, &[]).is_err());
+        assert!(AffixDict::from_hunspell("FLAG long\n", "1\nkot/abc\n", &[]).is_err(), "odd-length long flags");
+        assert!(AffixDict::from_hunspell("FLAG num\n", "1\nkot/1,x\n", &[]).is_err(), "a numeric flag that isn't a number");
+        assert!(AffixDict::from_hunspell("FLAG ucs2\n", DIC, &[]).is_err());
         assert!(AffixDict::from_hunspell("COMPOUNDFLAG X\n", DIC, &[]).is_err());
         assert!(AffixDict::from_hunspell("SFX a Y 1\nSFX a 0 y [ab\n", DIC, &[]).is_err());
         assert!(AffixDict::from_bytes(b"not deflate").is_err());
@@ -1179,6 +1410,152 @@ pub(crate) mod tests {
         assert!(!empty.contains("kot") && !empty.check("Kot") && empty.forms("kot").is_empty());
     }
 
+    #[test]
+    fn long_and_numeric_flags() {
+        // `FLAG long` (the Dicollecte French dictionary): two characters per flag.
+        let aff = "SET UTF-8\nFLAG long\nSFX S. Y 1\nSFX S. 0 s [^sxz]\nSFX Aa N 1\nSFX Aa 0 ette .\n";
+        let d = AffixDict::from_hunspell(aff, "2\nchat/S.Aa\nchien/S.\n", &[]).unwrap();
+        assert!(d.contains("chat") && d.contains("chats") && d.contains("chatette") && d.contains("chiens"));
+        assert!(!d.contains("chienette"), "chien carries S. only");
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.contains("chats") && back.contains("chatette") && !back.contains("chienette"), "long flags survive a round trip");
+        // `FLAG num`: comma-separated numbers.
+        let aff = "SET UTF-8\nFLAG num\nSFX 101 Y 1\nSFX 101 0 s .\nSFX 7 N 1\nSFX 7 0 ette .\n";
+        let d = AffixDict::from_hunspell(aff, "2\nchat/101,7\nchien/101\n", &[]).unwrap();
+        assert!(d.contains("chats") && d.contains("chatette") && d.contains("chiens") && !d.contains("chienette"));
+    }
+
+    #[test]
+    fn more_than_128_distinct_flags_load() {
+        // The French dictionary uses about 180 long flags; 300 here, past the old 128-bit limit.
+        let mut aff = String::from("SET UTF-8\nFLAG num\n");
+        let mut flags = Vec::new();
+        for n in 1..=300 {
+            aff.push_str(&format!("SFX {n} N 1\nSFX {n} 0 x{n} .\n"));
+            flags.push(n.to_string());
+        }
+        let d = AffixDict::from_hunspell(&aff, &format!("2\nmot/{}\nautre/300\n", flags.join(",")), &[]).unwrap();
+        assert!(d.contains("motx1") && d.contains("motx200") && d.contains("motx300") && d.contains("autrex300"));
+        assert!(!d.contains("autrex1") && !d.contains("motx301"));
+        let mut too_many = String::from("SET UTF-8\nFLAG num\n");
+        for n in 1..=MAX_FLAGS + 1 {
+            too_many.push_str(&format!("SFX {n} N 1\nSFX {n} 0 x .\n"));
+        }
+        assert!(AffixDict::from_hunspell(&too_many, "0\n", &[]).is_err(), "past MAX_FLAGS is an error, not a panic");
+    }
+
+    #[test]
+    fn need_affix_stems_and_affixes() {
+        // French style: the stem needs an affix, and an empty suffix gives the singular.
+        let aff = "SET UTF-8\nFLAG long\nNEEDAFFIX ()\nSFX S. Y 2\nSFX S. 0 0 [^sxz]\nSFX S. 0 s [^sxz]\nSFX Zz N 1\nSFX Zz 0 iste/()S. .\n";
+        let d = AffixDict::from_hunspell(aff, "3\nAllemagne/S.()\nbleu/()\nart/Zz\n", &[]).unwrap();
+        assert!(d.contains("Allemagne") && d.contains("Allemagnes"), "the empty suffix is an affix");
+        assert!(!d.contains("bleu"), "a NEEDAFFIX stem with no affix is not a word");
+        assert!(d.contains("art") && d.contains("artistes"), "the suffix needing an affix gets one");
+        assert!(d.contains("artiste"), "artiste is artist + iste + the empty S. suffix");
+        let aff = "SET UTF-8\nFLAG long\nNEEDAFFIX ()\nSFX Zz N 1\nSFX Zz 0 iste/() .\n";
+        let d = AffixDict::from_hunspell(aff, "1\nart/Zz\n", &[]).unwrap();
+        assert!(!d.contains("artiste"), "nothing follows the suffix that needs an affix");
+        let mut forms = d.forms("art");
+        forms.sort();
+        assert_eq!(forms, ["art"]);
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.contains("art") && !back.contains("artiste"), "NEEDAFFIX survives a round trip");
+    }
+
+    #[test]
+    fn prefix_flags_from_a_suffix_continuation() {
+        // French elision: `SFX S. 0 0/L'` lets the prefix `l'` attach to the suffixed form.
+        let aff = "SET UTF-8\nFLAG long\nNEEDAFFIX ()\nPFX L' Y 1\nPFX L' 0 l' [aeiouh]\nSFX S. Y 2\nSFX S. 0 0/L' [^sxz]\nSFX S. 0 s [^sxz]\n";
+        let d = AffixDict::from_hunspell(aff, "2\narbre/S.()\nchat/S.()\n", &[]).unwrap();
+        assert!(d.contains("arbre") && d.contains("arbres") && d.contains("l'arbre"));
+        assert!(!d.contains("l'arbres"), "the plural suffix carries no L'");
+        assert!(!d.contains("l'chat"), "the prefix condition still applies");
+    }
+
+    #[test]
+    fn keep_case_stems_match_only_as_written() {
+        let aff = "SET UTF-8\nFLAG long\nKEEPCASE ||\nSFX S. Y 1\nSFX S. 0 s .\n";
+        let d = AffixDict::from_hunspell(aff, "2\nkm/||\nchat/S.\n", &[]).unwrap();
+        assert!(d.check("km") && !d.check("Km") && !d.check("KM"));
+        assert!(d.check("Chats") && d.check("CHATS"), "other stems keep the case variants");
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.check("km") && !back.check("KM"), "KEEPCASE survives a round trip");
+    }
+
+    #[test]
+    fn full_strip_replaces_the_whole_stem() {
+        let aff = "SET UTF-8\nFLAG long\nFULLSTRIP\nSFX Et N 2\nSFX Et être suis être\nSFX Et être es être\n";
+        let d = AffixDict::from_hunspell(aff, "1\nêtre/Et\n", &[]).unwrap();
+        assert!(d.contains("être") && d.contains("suis") && d.contains("es"));
+        assert!(!d.contains("suiss"));
+        let mut forms = d.forms("être");
+        forms.sort();
+        assert_eq!(forms, ["es", "suis", "être"]);
+        assert!(AffixDict::from_bytes(&d.to_bytes()).unwrap().contains("suis"), "FULLSTRIP survives a round trip");
+        let without = AffixDict::from_hunspell(&aff.replace("FULLSTRIP\n", ""), "1\nêtre/Et\n", &[]).unwrap();
+        assert!(!without.contains("suis"), "without FULLSTRIP a rule can't strip the whole stem");
+        assert_eq!(without.forms("être"), ["être"], "nor list such a form");
+    }
+
+    #[test]
+    fn iconv_converts_input_before_lookup() {
+        let aff = "SET UTF-8\nICONV 2\nICONV ’ '\nICONV ﬁ fi\n";
+        let d = AffixDict::from_hunspell(aff, "2\naujourd'hui\nfin\n", &[]).unwrap();
+        assert!(d.check("aujourd’hui") && d.check("aujourd'hui") && d.check("ﬁn") && d.check("Aujourd’hui"));
+        assert!(!d.check("aujourd’huy"));
+        assert!(AffixDict::from_bytes(&d.to_bytes()).unwrap().check("aujourd’hui"), "ICONV survives a round trip");
+        // An ICONV line without operands in compact data must not loop forever.
+        let empty = miniz_oxide::deflate::compress_to_vec(b"WCAFF1\nICONV\nWORDS\n\x00fin\n", 6);
+        let d = AffixDict::from_bytes(&empty).unwrap();
+        assert!(d.check("fin") && !d.check("a"));
+    }
+
+    #[test]
+    fn circumfix_is_refused_only_when_used() {
+        let aff = "SET UTF-8\nFLAG long\nCIRCUMFIX **\nSFX S. Y 1\nSFX S. 0 s .\n";
+        assert!(AffixDict::from_hunspell(aff, "1\nchat/S.\n", &[]).is_ok(), "declared but unused: harmless");
+        assert!(AffixDict::from_hunspell(aff, "1\nchat/S.**\n", &[]).is_err(), "used: not implemented, so refused");
+    }
+
+    #[test]
+    fn no_suggest_words_are_correct_but_not_suggestible() {
+        // Dicollecte marks currency codes, unit symbols and interjections NOSUGGEST.
+        let aff = "SET UTF-8\nFLAG long\nNOSUGGEST --\nSFX S. Y 1\nSFX S. 0 s .\n";
+        let d = AffixDict::from_hunspell(aff, "2\nchat/S.\nchf/S.--\n", &[]).unwrap();
+        assert!(d.contains("chf") && d.contains("chfs") && d.check("chf"), "still correct");
+        assert!(!d.contains_suggestible("chf") && !d.contains_suggestible("chfs"), "never suggested, nor its forms");
+        assert!(d.contains_suggestible("chat") && d.contains_suggestible("chats"));
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.contains("chf") && !back.contains_suggestible("chf"), "NOSUGGEST survives a round trip");
+    }
+
+    #[test]
+    fn no_suggest_on_one_homonym_keeps_the_word_suggestible() {
+        // `bar` the unit is NOSUGGEST and KEEPCASE, `bar` the noun is an ordinary word.
+        let aff = "SET UTF-8\nFLAG long\nNOSUGGEST --\nKEEPCASE ||\nSFX S. Y 1\nSFX S. 0 s .\n";
+        let d = AffixDict::from_hunspell(aff, "3\nbar/S.\nbar/||--\ncgr/||--\n", &[]).unwrap();
+        assert!(d.contains_suggestible("bar") && d.contains_suggestible("bars"), "the noun stays suggestible");
+        assert!(!d.contains_suggestible("cgr") && d.contains("cgr"), "a symbol with one entry doesn't");
+        let back = AffixDict::from_bytes(&d.to_bytes()).unwrap();
+        assert!(back.contains_suggestible("bars") && !back.contains_suggestible("cgr"), "both survive a round trip");
+    }
+
+    /// `.aff` text built from random pieces with the features the French dictionary uses.
+    fn random_aff(mode: u8, directives: &[String], rules: &[(String, String, String, String, String)]) -> String {
+        let mode = ["long", "num", "UTF-8"].get(usize::from(mode % 3)).copied().unwrap_or("long");
+        let mut aff = format!("SET UTF-8\nFLAG {mode}\nFULLSTRIP\nICONV 2\nICONV ’ '\n");
+        for d in directives {
+            aff.push_str(d);
+            aff.push('\n');
+        }
+        for (flag, strip, add, cont, cond) in rules {
+            let kind = if strip.len() % 2 == 0 { "SFX" } else { "PFX" };
+            aff.push_str(&format!("{kind} {flag} Y 1\n{kind} {flag} {strip} {add}/{cont} {cond}\n"));
+        }
+        aff
+    }
+
     proptest::proptest! {
         #[test]
         fn lookups_never_panic(s in "\\PC{0,40}", bytes in proptest::collection::vec(proptest::num::u8::ANY, 0..200)) {
@@ -1187,6 +1564,28 @@ pub(crate) mod tests {
             let _ = d.forms(&s);
             let _ = AffixDict::from_bytes(&bytes);
             let _ = AffixDict::from_bytes(&miniz_oxide::deflate::compress_to_vec(&bytes, 1));
+        }
+
+        #[test]
+        fn random_french_style_dictionaries_never_panic(
+            mode in 0u8..3,
+            directives in proptest::collection::vec("(NEEDAFFIX|KEEPCASE|NOSUGGEST|FORBIDDENWORD|ICONV|CIRCUMFIX) [a-c0-9(),.'’]{0,3}", 0..4),
+            rules in proptest::collection::vec(("[A-Ca-c0-9().']{1,2}", "[a-cé0]{1,3}", "[a-cé0']{1,3}", "[A-Ca-c0-9(),.']{0,4}", "[a-cé.\\[\\]^]{1,4}"), 0..8),
+            stems in proptest::collection::vec(("[a-cé'’-]{1,6}", "[A-Ca-c0-9(),.']{0,6}"), 0..8),
+            word in "[a-cé'’ -]{0,10}",
+        ) {
+            let aff = random_aff(mode, &directives, &rules);
+            let dic: String = std::iter::once(format!("{}\n", stems.len())).chain(stems.iter().map(|(w, f)| format!("{w}/{f}\n"))).collect();
+            if let Ok(d) = AffixDict::from_hunspell(&aff, &dic, &[]) {
+                let _ = d.check(&word);
+                let _ = d.contains_suggestible(&word);
+                for stem in d.stems().map(str::to_string).collect::<Vec<_>>() {
+                    let _ = d.forms(&stem);
+                }
+                let _ = crate::fr::suggest_in(&d, &word, 3);
+                let back = AffixDict::from_bytes(&d.to_bytes());
+                proptest::prop_assert!(back.is_ok(), "{aff}\n{dic}");
+            }
         }
     }
 }

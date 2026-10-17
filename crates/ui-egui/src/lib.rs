@@ -1747,7 +1747,7 @@ impl WordApp {
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         if self.applied_editing != Some(lang) {
-            self.session.set_editing_language(lang.editing_lang());
+            self.session.set_editing_language(lang.editing_lang_in(i18n::system_locales()).as_deref());
             self.applied_editing = Some(lang);
         }
         options::sync(self);

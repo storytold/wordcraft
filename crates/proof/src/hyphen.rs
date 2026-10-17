@@ -13,6 +13,9 @@
 //! Kołodziejska, Bogusław Jackowski and Marek Ryćko, MIT licence option), then a Polish syllable
 //! heuristic for words with letters outside the Polish alphabet (`é`, `ü`…).
 //!
+//! **Portuguese**, **Italian** and **French**: the language's hyph-utf8 TeX patterns
+//! ([`Patterns::pt`], [`Patterns::it`], [`Patterns::fr`]), then the generic heuristic.
+//!
 //! **Bulgarian**: the Bulgarian syllable rules ([`crate::bg`]); no pattern file or word list.
 //!
 //! Then the paragraph's limits ([`Limits`]) are applied.
@@ -36,6 +39,8 @@ static PT_PAT: &str = include_str!("../../../assets/hyphenation/pt.pat");
 /// hyph-utf8's `hyph-it.tex`, unmodified (offered under MIT or LPPL; WordCraft uses MIT, whose
 /// notice is in the file's header).
 static IT_PAT: &str = include_str!("../../../assets/hyphenation/it.pat");
+/// hyph-utf8's `hyph-fr.tex`, unmodified (MIT; its notice is in the file's header).
+static FR_PAT: &str = include_str!("../../../assets/hyphenation/fr.pat");
 
 impl Dictionary {
     /// The bundled US English dictionary (decoded on first use).
@@ -76,6 +81,12 @@ impl Patterns {
     pub fn it() -> &'static Patterns {
         static P: OnceLock<Patterns> = OnceLock::new();
         P.get_or_init(|| Patterns::parse(IT_PAT))
+    }
+
+    /// The bundled French patterns (parsed on first use).
+    pub fn fr() -> &'static Patterns {
+        static P: OnceLock<Patterns> = OnceLock::new();
+        P.get_or_init(|| Patterns::parse(FR_PAT))
     }
 }
 
@@ -130,11 +141,11 @@ fn core_breaks(core: &[char], lang: ProofLang) -> (Vec<usize>, Source) {
     if lang == ProofLang::Tr && core.iter().all(|&c| crate::tr::hyphen::is_letter(c)) {
         return (crate::tr::hyphen::points(core), Source::Rules);
     }
-    if lang == ProofLang::Pt {
-        return core_breaks_pt(core);
-    }
-    if lang == ProofLang::It {
-        return core_breaks_it(core);
+    match lang {
+        ProofLang::Pt => return core_breaks_patterns(core, Patterns::pt()),
+        ProofLang::It => return core_breaks_patterns(core, Patterns::it()),
+        ProofLang::Fr | ProofLang::FrCa => return core_breaks_patterns(core, Patterns::fr()),
+        _ => {}
     }
     if lang == ProofLang::Ru && core.iter().all(|&c| crate::ru::is_cyrillic(c)) {
         return (crate::ru::hyphen::points(core), Source::Heuristic);
@@ -178,25 +189,9 @@ fn core_breaks_pl(core: &[char]) -> (Vec<usize>, Source) {
     (heuristic_points_pl(core), Source::Heuristic)
 }
 
-/// [`core_breaks_pl`] for Portuguese: the bundled patterns, then the generic heuristic.
-fn core_breaks_pt(core: &[char]) -> (Vec<usize>, Source) {
-    let pats = Patterns::pt();
-    let s: String = core.iter().collect();
-    if let Some(p) = pats.exception(&s) {
-        return (p.to_vec(), Source::Dictionary);
-    }
-    if !pats.is_empty()
-        && let Some(p) = pats.points(core)
-    {
-        return (p, Source::Patterns);
-    }
-    (heuristic_points(core), Source::Heuristic)
-}
-
-/// [`core_breaks_pt`] for Italian: the bundled patterns (the file has no exception words),
-/// then the generic heuristic.
-fn core_breaks_it(core: &[char]) -> (Vec<usize>, Source) {
-    let pats = Patterns::it();
+/// A language with bundled patterns only (Portuguese, Italian, French): its exception words,
+/// then its patterns, then the generic heuristic.
+fn core_breaks_patterns(core: &[char], pats: &Patterns) -> (Vec<usize>, Source) {
     let s: String = core.iter().collect();
     if let Some(p) = pats.exception(&s) {
         return (p.to_vec(), Source::Dictionary);
@@ -776,6 +771,42 @@ mod tests {
             assert_eq!(it(w), want, "{w}");
         }
         assert_eq!(word_breaks_in("famiglia", ProofLang::It).1, Source::Patterns);
+    }
+
+    fn fr(w: &str) -> String {
+        hyphenate_word_in(w, &Limits::default(), ProofLang::Fr)
+    }
+
+    #[test]
+    fn french_patterns_load() {
+        let p = Patterns::fr();
+        assert_eq!(p.len(), 1145);
+        // The file has no exception words.
+        assert_eq!(p.exception_count(), 0);
+    }
+
+    #[test]
+    fn french_words_hyphenate_by_french_rules() {
+        for (w, want) in [
+            ("maison", "mai-son"),
+            ("ordinateur", "or-di-na-teur"),
+            ("chocolat", "cho-co-lat"),
+            ("question", "ques-tion"),
+            ("développement", "dé-ve-lop-pe-ment"),
+            ("bibliothèque", "bi-blio-thèque"),
+            ("anticonstitutionnellement", "an-ti-cons-ti-tu-tion-nel-le-ment"),
+            ("parfaitement", "par-fai-te-ment"),
+            ("Montréal", "Mont-réal"),
+            // Elision: no break next to the apostrophe.
+            ("l'ordinateur", "l'or-di-na-teur"),
+            ("aujourd'hui", "au-jour-d'hui"),
+            // Under five letters (`Limits::min_word`): no break.
+            ("chat", "chat"),
+            ("été", "été"),
+        ] {
+            assert_eq!(fr(w), want, "{w}");
+        }
+        assert_eq!(word_breaks_in("ordinateur", ProofLang::Fr).1, Source::Patterns);
     }
 
     #[test]

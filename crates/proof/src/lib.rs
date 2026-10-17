@@ -31,10 +31,15 @@
 //! - **Czech** ([`ProofLang::Cs`], module [`cs`]): the installed Hunspell `cs_CZ` dictionary
 //!   (not bundled), dictionary-driven suggestions and generic checks with Czech messages.
 //!   Hyphenation uses the existing English fallback; no Czech patterns are bundled.
+//! - **French** ([`ProofLang::Fr`], module [`fr`]): spelling against the Hunspell `fr_FR`
+//!   dictionary installed on the system (or a regional one; not bundled), elisions and both
+//!   apostrophes included, suggestions tuned for French (missing accents, `REP` confusions,
+//!   missing spaces), French typography and conservative grammar rules with French messages, and
+//!   `hyph-utf8`'s French patterns (MIT).
 //! - **Other languages** ([`ProofLang::Other`]): no spelling or grammar marks, like Word without
 //!   the language's proofing tools.
-//! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns (English, Polish, Portuguese),
-//!   Bulgarian syllable rules, Russian word-division rules, heuristic.
+//! - **Hyphenation** ([`hyphen`]): dictionary, Liang patterns (English, Polish, Portuguese,
+//!   Italian, French), Bulgarian syllable rules, Russian word-division rules, heuristic.
 //!
 //! [`check_text`] checks a paragraph whose runs are in different languages.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -43,6 +48,7 @@ pub mod affix;
 pub mod bg;
 pub mod cs;
 pub mod dict;
+pub mod fr;
 pub mod hr;
 pub mod hunspell;
 pub mod hyphen;
@@ -146,6 +152,7 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     it::reload_dictionary();
     hr::reload_dictionary();
     tr::reload_dictionary();
+    fr::reload_dictionary();
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
 
@@ -158,6 +165,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
         (ProofLang::It, it::installed_path()),
         (ProofLang::Hr, hr::installed_path()),
         (ProofLang::Tr, tr::installed_path()),
+        (ProofLang::Fr, fr::installed_path()),
     ]
 }
 
@@ -575,7 +583,8 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
 /// The whitespace-delimited token enclosing the word at `a..b` of `text`: its byte range, and
 /// whether it looks like a web or e-mail address.
 fn enclosing_token(text: &str, a: usize, b: usize) -> (usize, usize, bool) {
-    let ts = text.get(..a).and_then(|t| t.rfind(char::is_whitespace)).map(|i| i + 1).unwrap_or(0);
+    // Past the whole space: French text puts multi-byte non-breaking ones (U+00A0, U+202F) here.
+    let ts = text.get(..a).and_then(|t| t.char_indices().rev().find(|(_, c)| c.is_whitespace())).map_or(0, |(i, c)| i + c.len_utf8());
     let te = text.get(b..).and_then(|t| t.find(char::is_whitespace)).map(|i| b + i).unwrap_or(text.len());
     let token = text.get(ts..te).unwrap_or("");
     (ts, te, token.contains("://") || token.contains('@') || token.starts_with("www."))
@@ -598,6 +607,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Tr => "Olası yazım hatası",
         ProofLang::Ru => "Возможна орфографическая ошибка",
         ProofLang::Cs => "Možná pravopisná chyba",
+        ProofLang::Fr | ProofLang::FrCa => "Faute d’orthographe possible",
         _ => "Possible spelling mistake",
     };
     Some(Issue { start: a, end: b, kind: IssueKind::Spelling, message: message.into(), suggestions: Vec::new(), lang })
@@ -619,6 +629,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         ProofLang::Tr => accepted_by_options(word, opts) || tr::is_correct(word),
         ProofLang::Ru => accepted_by_options(word, opts) || ru::is_correct(word),
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct(word),
+        ProofLang::Fr | ProofLang::FrCa => accepted_by_options(word, opts) || fr::is_correct(word),
         ProofLang::Bg | ProofLang::Other => true,
     }
 }
@@ -634,13 +645,15 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Tr => tr::suggest(word, max),
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
+        ProofLang::Fr | ProofLang::FrCa => fr::suggest(word, max),
         ProofLang::Bg | ProofLang::Other => Vec::new(),
     }
 }
 
 /// Grammar issues in a paragraph of text in `lang`: the English rules, the Polish ones
 /// ([`pl::grammar`]), the Portuguese ones ([`pt::grammar`]), the Italian ones ([`it::grammar`]),
-/// the Turkish ones ([`tr::grammar`]), Czech generic checks ([`cs::grammar`]), or none for a language WordCraft doesn't proof.
+/// the Turkish ones ([`tr::grammar`]), Czech generic checks ([`cs::grammar`]), the French ones
+/// ([`fr::grammar`]), or none for a language WordCraft doesn't proof.
 pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
     match lang {
         ProofLang::En => check_grammar(text),
@@ -651,6 +664,7 @@ pub fn check_grammar_in(text: &str, lang: ProofLang) -> Vec<Issue> {
         ProofLang::Tr => tr::grammar::check(text),
         ProofLang::Ru => ru::grammar::check(text),
         ProofLang::Cs => cs::grammar::check(text),
+        ProofLang::Fr | ProofLang::FrCa => fr::grammar::check_in(text, lang),
         ProofLang::Bg | ProofLang::Other => Vec::new(),
     }
 }
@@ -856,6 +870,7 @@ mod tests {
             ("pt_BR", pt::test_dict::AFF, pt::test_dict::DIC),
             ("it_IT", it::test_dict::AFF, it::test_dict::DIC),
             ("hr_HR", hr::test_dict::AFF, hr::test_dict::DIC),
+            ("fr_FR", fr::test_dict::AFF, fr::test_dict::DIC),
         ] {
             std::fs::write(dir.join(format!("{name}.aff")), aff).unwrap();
             std::fs::write(dir.join(format!("{name}.dic")), dic).unwrap();
@@ -863,9 +878,9 @@ mod tests {
         let before = dictionary_generation();
         set_dictionaries_folder(Some(dir.clone()));
         assert!(dictionary_generation() > before, "cached checks are dropped");
-        // Turkish has no test dictionary to put in the folder; it's listed after the others.
+        // Turkish has no test dictionary to put in the folder; it's listed before French.
         let found = installed_dictionaries();
-        assert_eq!(found.last().map(|(lang, _)| *lang), Some(ProofLang::Tr));
+        assert_eq!(found.get(4).map(|(lang, _)| *lang), Some(ProofLang::Tr));
         assert_eq!(
             found[..4],
             [
@@ -875,6 +890,8 @@ mod tests {
                 (ProofLang::Hr, Some(dir.join("hr_HR.dic"))),
             ]
         );
+        assert_eq!(found.last(), Some(&(ProofLang::Fr, Some(dir.join("fr_FR.dic")))));
+        assert!(is_correct_in("rivière", ProofLang::Fr) && !is_correct_in("riviere", ProofLang::Fr));
         assert!(is_correct_in("chrząszcz", ProofLang::Pl) && !is_correct_in("chrzonszcz", ProofLang::Pl));
     }
 
@@ -1177,7 +1194,7 @@ mod tests {
         for l in [None, Some(""), Some("  "), Some("en"), Some("en-US"), Some("en-GB"), Some("EN-us"), Some("en_US")] {
             assert!(has_dictionary(l), "{l:?}");
         }
-        for l in [Some("lt-LT"), Some("fr-FR"), Some("de"), Some("uk"), Some("es"), Some("-US"), Some("e")] {
+        for l in [Some("lt-LT"), Some("de-DE"), Some("de"), Some("uk"), Some("es"), Some("-US"), Some("e")] {
             assert!(!has_dictionary(l), "{l:?}");
         }
         // The gate follows the dictionaries, not English: every proofed language is proofed.
@@ -1192,7 +1209,7 @@ mod tests {
     fn non_english_words_are_not_flagged() {
         for w in ["ąžuolas", "élève", "über", "labas", "bonjour"] {
             assert!(is_correct_for(w, Some("lt-LT")), "{w}");
-            assert!(is_correct_for(w, Some("fr-FR")), "{w}");
+            assert!(is_correct_for(w, Some("de-DE")), "{w}");
         }
         assert!(!is_correct_for("helo", Some("en-US")), "English typos still flagged");
         assert!(!is_correct_for("helo", None), "default language still proofed");
@@ -1227,7 +1244,7 @@ mod tests {
         let pl = "Zażółć gęślą jaźń, chrząszcz brzmi w trzcinie.";
         assert!(check_spelling_in(pl, ProofLang::Pl).is_empty(), "{:?}", check_spelling_in(pl, ProofLang::Pl));
         assert!(check_spelling_in(pl, ProofLang::En).len() >= 3, "Polish words are English misspellings");
-        assert!(check_spelling_in("Nous écrivons en français.", ProofLang::Other).is_empty());
+        assert!(check_spelling_in("Wir schreiben auf Deutsch.", ProofLang::Other).is_empty());
         assert!(check_grammar_in("this is is wrong", ProofLang::Other).is_empty());
         assert!(is_correct_in("anything", ProofLang::Other) && suggest_in("xyzzy", 5, ProofLang::Other).is_empty());
         let v = check_spelling_in("Płynie żeka.", ProofLang::Pl);
@@ -1257,6 +1274,26 @@ mod tests {
     }
 
     #[test]
+    fn french_uses_its_own_tools() {
+        fr::test_dict::install();
+        let fr = "Les enfants aiment l’école et la maison près de la rivière.";
+        assert!(check_spelling_in(fr, ProofLang::Fr).is_empty(), "{:?}", check_spelling_in(fr, ProofLang::Fr));
+        assert!(check_spelling_in(fr, ProofLang::En).len() >= 3, "French words are English misspellings");
+        let v = check_spelling_in("Une maisonn près de Paris.", ProofLang::Fr);
+        assert_eq!(flagged("Une maisonn près de Paris.", &v), ["maisonn"]);
+        assert_eq!((v[0].lang, v[0].message.as_str()), (ProofLang::Fr, "Faute d’orthographe possible"));
+        assert!(suggest_in("ecole", 5, ProofLang::Fr).contains(&"école".to_string()));
+        // French grammar speaks French, wants the space English forbids, and has no a/an rule.
+        let g = check_grammar_in("le le chat dort ; il a un apple!", ProofLang::Fr);
+        assert!(g.iter().any(|i| i.message.contains("Mot répété")), "{g:?}");
+        assert!(g.iter().any(|i| i.message.contains("fine insécable")), "{g:?}");
+        assert!(!g.iter().any(|i| i.message.contains("\"an\"") || i.message.contains("Space before")), "{g:?}");
+        assert!(check_grammar_in("Bonjour\u{202F}! Ça va\u{202F}?", ProofLang::Fr).is_empty());
+        // An address after a non-breaking space is still an address (#1335's token, multi-byte).
+        assert!(check_spelling_in("Paris\u{A0}www.zxqsite.fr\u{202F}!", ProofLang::Fr).is_empty());
+    }
+
+    #[test]
     fn mixed_language_paragraphs_check_each_run_in_its_language() {
         pl::test_dict::install();
         // A Polish paragraph quoting English: English spelling and rules inside the quote only.
@@ -1274,7 +1311,7 @@ mod tests {
         assert_eq!(flagged("helo świat", &check_text("helo świat", &[])), ["helo", "świat"]);
         assert_eq!(flagged("helo świat", &check_text("helo świat", &[(5..12, ProofLang::Pl)])), ["helo"]);
         // A language without tools: nothing flagged there.
-        assert!(check_text("Bonjour mes amis", &[(0..16, ProofLang::Other)]).is_empty());
+        assert!(check_text("Hallo meine Freunde", &[(0..19, ProofLang::Other)]).is_empty());
         // Portuguese checks in their span only, with the Portuguese message.
         pt::test_dict::install();
         let t = "Ele disse que coraçao e frequencia existem.";
@@ -1287,18 +1324,45 @@ mod tests {
         let v = check_text(t, &[(0..t.len(), ProofLang::It)]);
         assert_eq!(flagged(t, &v), ["lbiro", "caffe"], "{v:?}");
         assert!(v.iter().all(|i| i.lang == ProofLang::It && i.message == "Possibile errore di ortografia"), "{v:?}");
+        // A French quotation in an English paragraph: French spelling and typography inside it
+        // only, and no English space rule on its `!`.
+        fr::test_dict::install();
+        let t = "She wrote «\u{A0}Une maisonn près de Paris!\u{A0}» and left!";
+        let (a, b) = (t.find('«').unwrap(), t.find('»').unwrap() + '»'.len_utf8());
+        let v = check_text(t, &[(a..b, ProofLang::Fr)]);
+        assert_eq!(flagged(t, &v), ["maisonn"], "{v:?}");
+        let g: Vec<&Issue> = v.iter().filter(|i| i.kind == IssueKind::Grammar).collect();
+        assert_eq!(g.len(), 1, "{g:?}");
+        assert_eq!((g[0].lang, t.get(g[0].start..g[0].end)), (ProofLang::Fr, Some("!")), "{g:?}");
+        // The same quotation in Quebec French: Quebec typography, no space wanted before `!`.
+        let v = check_text(t, &[(a..b, ProofLang::FrCa)]);
+        assert_eq!(flagged(t, &v), ["maisonn"], "{v:?}");
+        assert!(v.iter().all(|i| i.kind == IssueKind::Spelling && i.lang == ProofLang::FrCa), "{v:?}");
     }
 
     proptest::proptest! {
         #[test]
         fn never_panics(s in "\\PC{0,80}") {
+            fr::test_dict::install();
             let _ = check_spelling(&s);
             let _ = check_grammar(&s);
             let _ = suggest(&s, 3);
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Other] {
+            for lang in [
+                ProofLang::En,
+                ProofLang::Pl,
+                ProofLang::Pt,
+                ProofLang::It,
+                ProofLang::Hr,
+                ProofLang::Tr,
+                ProofLang::Ru,
+                ProofLang::Cs,
+                ProofLang::Fr,
+                ProofLang::FrCa,
+                ProofLang::Other,
+            ] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1335,8 +1399,28 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..8), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Other];
+        fn french_suggestions_never_panic(s in "[a-zàâäéèêëîïôöùûüçœæA-ZÀÂÉÈÊÎÔÙÛÇŒ'’ «»;:!?-]{0,14}") {
+            fr::test_dict::install();
+            let _ = suggest_in(&s, 4, ProofLang::Fr);
+            let _ = check_grammar_in(&s, ProofLang::Fr);
+            let _ = check_grammar_in(&s, ProofLang::FrCa);
+        }
+
+        #[test]
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..10), 0..6)) {
+            fr::test_dict::install();
+            let langs = [
+                ProofLang::En,
+                ProofLang::Pl,
+                ProofLang::Pt,
+                ProofLang::It,
+                ProofLang::Tr,
+                ProofLang::Ru,
+                ProofLang::Cs,
+                ProofLang::Fr,
+                ProofLang::FrCa,
+                ProofLang::Other,
+            ];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
