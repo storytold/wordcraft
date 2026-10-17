@@ -17,8 +17,33 @@
 use wordcraft_engine::cmd::paste::MAX_PASTE_BYTES;
 use wordcraft_ui_egui::paste_picture::ClipboardPicture;
 
+/// Open the system clipboard. A session where that fails (Wayland without data-control and no
+/// X11) fails on every read, so only the first failure is a warning (#1368).
 fn open() -> Option<arboard::Clipboard> {
-    arboard::Clipboard::new().map_err(|e| log::warn!("clipboard: {e}")).ok()
+    arboard::Clipboard::new().map_err(|e| log_open_failure(&e)).ok()
+}
+
+fn log_open_failure(e: &arboard::Error) {
+    static WARNED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if WARNED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        log::debug!("clipboard: {e}");
+    } else {
+        log::warn!("clipboard: {e}");
+    }
+}
+
+/// What a picture paste yields when the clipboard couldn't be opened: whatever `fallback` reads,
+/// else the explanation.
+fn unopened_picture(detail: &str, fallback: impl FnOnce() -> Option<Vec<u8>>) -> ClipboardPicture {
+    match fallback() {
+        Some(bytes) => ClipboardPicture::Encoded(bytes),
+        None => ClipboardPicture::Unreadable(open_failed_message(detail)),
+    }
+}
+
+/// What the paste says when no way of reading the clipboard worked: what's wrong, and what to do.
+pub fn open_failed_message(detail: &str) -> String {
+    format!("WordCraft couldn't open the system clipboard ({detail}). Use Insert > Picture, or drag the picture file into the window")
 }
 
 thread_local! {
@@ -84,8 +109,9 @@ pub fn picture() -> Option<ClipboardPicture> {
     let mut clipboard = match arboard::Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
-            log::warn!("clipboard: {e}");
-            return Some(ClipboardPicture::Unreadable(format!("the system clipboard couldn't be opened ({e})")));
+            log_open_failure(&e);
+            // arboard has no usable backend here (#1368): ask Wayland and wl-paste / xclip directly.
+            return Some(unopened_picture(&e.to_string(), platform::fallback_picture));
         }
     };
     if let Ok(files) = clipboard.get().file_list()
@@ -146,6 +172,72 @@ mod platform {
             )
     }
 
+    /// The programs that can read the clipboard when arboard and Wayland's data-control can't.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum ExternalCommand {
+        WlPaste,
+        Xclip,
+    }
+
+    impl ExternalCommand {
+        fn invocation(self) -> (&'static str, &'static [&'static str]) {
+            match self {
+                Self::WlPaste => ("wl-paste", &["--no-newline", "--type", "image/png"]),
+                Self::Xclip => ("xclip", &["-selection", "clipboard", "-t", "image/png", "-o"]),
+            }
+        }
+    }
+
+    /// Run `program` (no shell), returning its stdout when it exits successfully with at most
+    /// `cap` bytes inside `timeout`. A missing program, failure, oversize or hang is `None`.
+    pub fn run_capture(program: &str, args: &[&str], cap: u64, timeout: std::time::Duration) -> Option<Vec<u8>> {
+        use std::process::{Command, Stdio};
+        let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+        let Some(mut stdout) = child.stdout.take() else {
+            let _ = child.kill();
+            let _ = child.wait();
+            return None;
+        };
+        let (tx, rx) = std::sync::mpsc::channel();
+        let reader = std::thread::Builder::new().name("clipboard-read".into()).spawn(move || {
+            let mut out = Vec::new();
+            let r = (&mut stdout).take(cap.saturating_add(1)).read_to_end(&mut out).map(|_| out);
+            let _ = tx.send(r);
+        });
+        let out = if reader.is_ok() { rx.recv_timeout(timeout).ok().and_then(Result::ok) } else { None };
+        // Always stop the program before reaping it: one that closed stdout but keeps running
+        // must not hang the caller. The output is complete once stdout reached its end.
+        let _ = child.kill();
+        let _ = child.wait();
+        out.filter(|o| o.len() as u64 <= cap)
+    }
+
+    /// The first command whose output looks like a PNG (the type asked for; a program that
+    /// prints text or an error instead is ignored).
+    pub fn picture_via(commands: &[ExternalCommand], run: &mut dyn FnMut(ExternalCommand) -> Option<Vec<u8>>) -> Option<Vec<u8>> {
+        commands.iter().find_map(|&c| run(c).filter(|b| b.starts_with(b"\x89PNG")))
+    }
+
+    /// A picture read by `wl-paste` / `xclip`, for sessions where arboard can't open the clipboard.
+    pub fn external_picture() -> Option<Vec<u8>> {
+        let mut commands = Vec::new();
+        if wayland() {
+            commands.push(ExternalCommand::WlPaste);
+        }
+        if std::env::var_os("DISPLAY").is_some_and(|d| !d.is_empty()) {
+            commands.push(ExternalCommand::Xclip);
+        }
+        picture_via(&commands, &mut |c| {
+            let (program, args) = c.invocation();
+            run_capture(program, args, wordcraft_ui_egui::paste_picture::MAX_FILE_BYTES, std::time::Duration::from_secs(5))
+        })
+    }
+
+    /// Every way left to read a picture once arboard can't open the clipboard.
+    pub fn fallback_picture() -> Option<Vec<u8>> {
+        encoded_picture().or_else(external_picture)
+    }
+
     pub fn rtf() -> Option<Vec<u8>> {
         if !wayland() {
             return None;
@@ -190,6 +282,10 @@ mod platform {
         None
     }
 
+    pub fn fallback_picture() -> Option<Vec<u8>> {
+        None
+    }
+
     pub fn can_set() -> bool {
         true
     }
@@ -209,7 +305,91 @@ mod platform {
         None
     }
 
+    pub fn fallback_picture() -> Option<Vec<u8>> {
+        None
+    }
+
     pub fn can_set() -> bool {
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn unreadable_message_says_what_to_do() {
+        let m = open_failed_message("X11 server connection timed out");
+        assert!(m.contains("couldn't open the system clipboard"), "{m}");
+        assert!(m.contains("X11 server connection timed out"), "{m}");
+        assert!(m.contains("Insert > Picture") && m.contains("drag"), "{m}");
+    }
+
+    #[test]
+    fn unopened_clipboard_runs_the_fallback_then_explains() {
+        assert!(matches!(unopened_picture("x", || Some(vec![1, 2])), ClipboardPicture::Encoded(b) if b == [1, 2]));
+        assert!(matches!(unopened_picture("boom", || None), ClipboardPicture::Unreadable(m) if m.contains("boom") && m.contains("Insert > Picture")));
+    }
+
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "emscripten"))))]
+    mod external {
+        use super::super::platform::{ExternalCommand, picture_via};
+
+        fn png() -> Vec<u8> {
+            b"\x89PNG\r\n\x1a\nrest".to_vec()
+        }
+
+        #[test]
+        fn first_command_with_output_wins() {
+            let mut asked = Vec::new();
+            let got = picture_via(&[ExternalCommand::WlPaste, ExternalCommand::Xclip], &mut |c| {
+                asked.push(c);
+                (c == ExternalCommand::Xclip).then(png)
+            });
+            assert_eq!(got, Some(png()));
+            assert_eq!(asked, [ExternalCommand::WlPaste, ExternalCommand::Xclip]);
+        }
+
+        #[test]
+        fn empty_or_missing_output_is_none() {
+            assert_eq!(picture_via(&[ExternalCommand::WlPaste], &mut |_| Some(Vec::new())), None);
+            assert_eq!(picture_via(&[ExternalCommand::WlPaste, ExternalCommand::Xclip], &mut |_| None), None);
+            assert_eq!(picture_via(&[], &mut |_| Some(png())), None);
+        }
+
+        #[test]
+        fn text_instead_of_a_picture_is_rejected() {
+            // wl-paste prints its errors to stderr, but a program may hand back text on stdout.
+            assert_eq!(picture_via(&[ExternalCommand::Xclip], &mut |_| Some(b"hello".to_vec())), None);
+        }
+
+        #[test]
+        fn missing_program_is_none_not_a_panic() {
+            let out = super::super::platform::run_capture("wordcraft-no-such-program", &[], 16, std::time::Duration::from_secs(1));
+            assert_eq!(out, None);
+        }
+
+        #[test]
+        fn output_is_capped_and_timeout_kills() {
+            use std::time::Duration;
+            let big = super::super::platform::run_capture("sh", &["-c", "head -c 1000 /dev/zero"], 100, Duration::from_secs(5));
+            assert_eq!(big, None, "larger than the cap");
+            let ok = super::super::platform::run_capture("sh", &["-c", "printf abc"], 100, Duration::from_secs(5));
+            assert_eq!(ok, Some(b"abc".to_vec()));
+            let t = std::time::Instant::now();
+            let slow = super::super::platform::run_capture("sh", &["-c", "sleep 5"], 100, Duration::from_millis(200));
+            assert_eq!(slow, None);
+            assert!(t.elapsed() < Duration::from_secs(3));
+        }
+
+        #[test]
+        fn program_that_closes_stdout_but_keeps_running_does_not_hang() {
+            use std::time::{Duration, Instant};
+            let t = Instant::now();
+            let out = super::super::platform::run_capture("sh", &["-c", "printf abc; exec >&-; exec sleep 5"], 100, Duration::from_secs(10));
+            assert_eq!(out, Some(b"abc".to_vec()));
+            assert!(t.elapsed() < Duration::from_secs(3), "waited for the program to exit");
+        }
     }
 }
