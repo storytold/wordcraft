@@ -37,8 +37,11 @@ fmv-macos-events = "=0.1.0"
 # The system's Reduce motion setting (System Settings › Accessibility › Display), read through
 # NSWorkspace: a safe call in these bindings. Already in the build through eframe, rfd and arboard,
 # at this version; this adds the `NSAccessibility` bindings and, to fit the title bar around the
-# traffic lights, the window, button and view ones.
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder"] }
+# traffic lights, the window, button and view ones; and `NSPasteboard` for the clipboard's RTF.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSWorkspace", "NSAccessibility", "NSApplication", "NSWindow", "NSButton", "NSControl", "NSView", "NSResponder", "NSPasteboard"] }
+# The strings and bytes NSPasteboard takes, for the clipboard's RTF. Already in the build through
+# arboard and objc2-app-kit, at this version.
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSString", "NSData"] }
 objc2 = "0.6"
 # Closing the window must quit through NSApplication rather than by dropping the NSWindow
 # inside the AppKit run loop (see `schedule_macos_terminate`).
@@ -53,6 +56,9 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 # types that arboard doesn't read, and the formats offered. Already in the build through arboard's
 # `wayland-data-control` feature, at this version.
 wl-clipboard-rs = "0.9"
+# Another program's RTF on X11 (`text/rtf`), which arboard doesn't read. Already in the build
+# through arboard, at this version.
+x11rb = "0.13"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 # The upstream default-apps button opens Windows Settings; printing uses craft-print instead.
