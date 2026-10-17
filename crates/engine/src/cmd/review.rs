@@ -837,7 +837,7 @@ fn word_count(s: &mut Session, v: &Value) -> CmdResult {
 fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<(Pos, Pos, wordcraft_proof::Issue)> {
     let Some(p) = s.doc.para(story, path) else { return Vec::new() };
     let runs = wordcraft_layout::para::proof_runs(&s.doc, p, None);
-    wordcraft_layout::para::paragraph_issues(p, &runs, &s.prefs.spelling(), true)
+    wordcraft_layout::para::paragraph_issues(p, &runs, &wordcraft_layout::para::language_key(&runs), &s.prefs.spelling(), true)
         .into_iter()
         .map(|i| (Pos { story, path: path.clone(), off: i.start }, Pos { story, path: path.clone(), off: i.end }, i))
         .collect()
@@ -850,7 +850,13 @@ fn issue_at(s: &Session, at: &Pos) -> Option<(Pos, Pos, wordcraft_proof::Issue)>
 
 fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Value {
     let word = s.doc.para_at(a).and_then(|p| p.text.get(a.off..b.off)).unwrap_or("").to_string();
-    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling { wordcraft_proof::suggest_in(&word, 6, i.lang) } else { i.suggestions.clone() };
+    // Built-in spelling issues carry no suggestions (found on demand); an external checker's
+    // issues carry their own (#575).
+    let sugg = if i.kind == wordcraft_proof::IssueKind::Spelling && i.suggestions.is_empty() {
+        wordcraft_proof::suggest_in(&word, 6, i.lang)
+    } else {
+        i.suggestions.clone()
+    };
     json!({
         "start": pos_json(a), "end": pos_json(b), "text": word,
         "kind": if i.kind == wordcraft_proof::IssueKind::Spelling { "spelling" } else { "grammar" },

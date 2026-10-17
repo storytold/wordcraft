@@ -1619,6 +1619,18 @@
 	Sat:	Sat.:
 	Lum:	Lum.:
 	Hex:	Hex.:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Revisar ortografía y gramática con LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Envía el texto de sus párrafos al servidor de LanguageTool indicado abajo. Desactivado, se usa el corrector integrado de WordCraft y nada sale de este equipo.
+	Server:	Servidor:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Use su propio servidor de LanguageTool escribiendo su dirección, por ejemplo http://localhost:8081.
+	Username:	Usuario:
+	API key:	Clave de API:
+	Detect automatically	Detectar automáticamente
+	Each paragraph's proofing language	Idioma de revisión de cada párrafo
+	Language:	Idioma:
+	Paragraphs checked: {count}	Párrafos revisados: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	La revisión con LanguageTool necesita la aplicación de escritorio; la versión del navegador aún no puede enviar texto a un servidor de revisión.
 	Accessibility Pane	Panel de accesibilidad
 	Alt Text Pane	Panel de texto alternativo
 	Alt\nText	Texto\nalternativo

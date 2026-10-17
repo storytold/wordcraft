@@ -2755,6 +2755,36 @@ fn paragraph_style_and_direct_formatting_beat_table_style() {
     assert_eq!(cell_para(&lay(&d), 2, 0).rp.space_after, 10.0, "Normal");
 }
 
+/// #2679: an external checker's result is stored under the paragraph's language key built without
+/// table formatting (as the app does), so a cell whose language comes only from its table style
+/// still shows it.
+#[test]
+fn external_result_shows_in_a_cell_whose_language_is_from_its_table_style() {
+    let mut d = styled_table_doc(Some("FrGrid"), 3);
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "FrGrid".into(),
+        name: "Fr Grid".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        chr: CharProps { lang: Some("fr-FR".into()), ..Default::default() },
+        ..Default::default()
+    });
+    let cell = d.para(StoryRef::Body, &Path(vec![1, 1, 0, 0])).unwrap();
+    let key = para::language_key(&para::proof_runs(&d, cell, None));
+    let text = para::proof_text(cell);
+    let issue = wordcraft_proof::Issue {
+        start: 0,
+        end: 2,
+        kind: wordcraft_proof::IssueKind::Spelling,
+        message: "m".into(),
+        suggestions: Vec::new(),
+        lang: wordcraft_proof::ProofLang::En,
+    };
+    wordcraft_proof::external::put(&text, &key, "fr-FR", vec![issue]);
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions { proofing: true, ..LayoutOptions::default() });
+    assert_eq!(cell_para(&l, 1, 0).issues, vec![(0, 2, false)]);
+    wordcraft_proof::external::clear();
+}
+
 /// A table style based on another keeps the base style's borders and cell text formatting, and
 /// adds its own run formatting and conditional formats.
 #[test]
@@ -5450,7 +5480,10 @@ fn hyphenation_and_proofing_follow_each_runs_language() {
     assert_eq!(flagged, ["żeka", "beautifull"]);
     // The layout and the Review commands report the same issues.
     let p = d.para(StoryRef::Body, &Path::top(0)).unwrap();
-    let issues = para::paragraph_issues(p, &para::proof_runs(&d, p, None), &Default::default(), true);
+    let issues = {
+        let runs = para::proof_runs(&d, p, None);
+        para::paragraph_issues(p, &runs, &para::language_key(&runs), &Default::default(), true)
+    };
     assert_eq!(issues.iter().map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar)).collect::<Vec<_>>(), para.issues);
     assert_eq!(issues[0].lang, wordcraft_proof::ProofLang::Pl);
     assert_eq!(issues[1].lang, wordcraft_proof::ProofLang::En);

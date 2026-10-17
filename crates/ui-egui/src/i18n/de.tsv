@@ -2124,6 +2124,17 @@
 	Reading Text Size	Textgröße beim Lesen
 	Correct TWo INitial CApitals	ZWei GRoßbuchstaben am WOrtanfang korrigieren
 	Correct accidental usage of cAPS LOCK key	Unbeabsichtigtes Verwenden der fESTSTELLTASTE korrigieren
+	API key:	API-Schlüssel:
+	Check spelling and grammar with LanguageTool	Rechtschreibung und Grammatik mit LanguageTool prüfen
+	Detect automatically	Automatisch erkennen
+	Each paragraph's proofing language	Korrektursprache des jeweiligen Absatzes
+	Language:	Sprache:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Die Prüfung mit LanguageTool braucht die Desktop-App; die Browserversion kann noch keinen Text an einen Prüfserver senden.
+	Paragraphs checked: {count}	Geprüfte Absätze: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Sendet den Text Ihrer Absätze an den unten angegebenen LanguageTool-Server. Ist die Option aus, wird die integrierte Prüfung von WordCraft verwendet und nichts verlässt diesen Computer.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Um einen eigenen LanguageTool-Server zu verwenden, geben Sie seine Adresse ein, etwa http://localhost:8081.
+	Username:	Benutzername:
 	Region:	Region:
 	Automatic ({region})	Automatisch ({region})
 	Text of the nearest paragraph with a given style (running headers)	Text des nächsten Absatzes mit einer bestimmten Formatvorlage (lebende Kolumnentitel)

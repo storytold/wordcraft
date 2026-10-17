@@ -1567,7 +1567,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         text_len: p.text.len(),
         has_page_fields,
         notes,
-        issues: env.proofing.map(|o| proof_issues(p, &runs, &o)).unwrap_or_default(),
+        issues: env
+            .proofing
+            .map(|o| {
+                // The external checker's results are keyed without table-style formatting, as the
+                // app and the Review commands see the paragraph.
+                let key = if wordcraft_proof::external::is_empty() { String::new() } else { language_key(&proof_runs(env.doc, p, None)) };
+                proof_issues(p, &runs, &key, &o)
+            })
+            .unwrap_or_default(),
         drop_cap,
         hyph_after: Vec::new(),
         bidi_levels: b.levels,
@@ -2640,13 +2648,35 @@ impl ParaLayout {
 pub struct ProofRun {
     pub range: std::ops::Range<usize>,
     pub lang: wordcraft_proof::ProofLang,
+    /// The run's language tag as resolved (empty: none), for [`language_key`].
+    pub tag: String,
     pub skip: bool,
 }
 
 impl ProofRun {
     fn of(range: std::ops::Range<usize>, rc: &ResolvedChar) -> ProofRun {
-        ProofRun { range, lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()), skip: rc.no_proof || rc.hidden || rc.link.is_some() }
+        ProofRun {
+            range,
+            lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()),
+            tag: rc.lang.clone().unwrap_or_default(),
+            skip: rc.no_proof || rc.hidden || rc.link.is_some(),
+        }
     }
+}
+
+/// The paragraph's language key for the external checker's results ([`wordcraft_proof::external`]):
+/// its runs' language tags with the byte ranges they cover, adjacent runs in one language merged.
+/// Build `runs` without table-style formatting ([`proof_runs`] with `None`) so every caller agrees.
+/// Identical text in another language gets another key (#2679).
+pub fn language_key(runs: &[ProofRun]) -> String {
+    let mut spans: Vec<(&str, usize, usize)> = Vec::new();
+    for r in runs {
+        match spans.last_mut() {
+            Some((t, _, end)) if *t == r.tag && *end == r.range.start => *end = r.range.end,
+            _ => spans.push((&r.tag, r.range.start, r.range.end)),
+        }
+    }
+    spans.iter().map(|(t, a, b)| format!("{t}@{a}-{b}")).collect::<Vec<_>>().join(",")
 }
 
 /// The proofing runs of a paragraph, in order. `table` is the cell's table-style character
@@ -2665,19 +2695,35 @@ fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLang {
 /// Spelling and grammar issues in a paragraph, in order: each word in its run's language
 /// ([`wordcraft_proof::check_text_with`]: what spelling skips, and grammar only with `grammar`),
 /// and none touching a run left unchecked.
-pub fn paragraph_issues(p: &Paragraph, runs: &[ProofRun], spelling: &wordcraft_proof::Options, grammar: bool) -> Vec<wordcraft_proof::Issue> {
+pub fn paragraph_issues(
+    p: &Paragraph,
+    runs: &[ProofRun],
+    key: &str,
+    spelling: &wordcraft_proof::Options,
+    grammar: bool,
+) -> Vec<wordcraft_proof::Issue> {
     if p.text.trim().is_empty() || p.text.len() > 100_000 {
         return Vec::new();
     }
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
+    // The external checker's result for this text when it has one (#575), each issue in the
+    // language of the run it is in; grammar marks only with `grammar`.
+    if let Some(found) = wordcraft_proof::check_external(&text, key) {
+        let lang_at = |at: usize| spans.iter().find(|(r, _)| r.contains(&at)).map(|(_, l)| *l).unwrap_or_default();
+        return found
+            .into_iter()
+            .filter(|i| !skip(i.start, i.end) && (grammar || i.kind != wordcraft_proof::IssueKind::Grammar))
+            .map(|i| wordcraft_proof::Issue { lang: lang_at(i.start), ..i })
+            .collect();
+    }
     wordcraft_proof::check_text_with(&text, &spans, spelling, grammar).into_iter().filter(|i| !skip(i.start, i.end)).collect()
 }
 
 /// Spelling and grammar issues in a paragraph as squiggles: (start, end, is grammar).
-fn proof_issues(p: &Paragraph, runs: &[ProofRun], opts: &crate::ProofOptions) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar)
+fn proof_issues(p: &Paragraph, runs: &[ProofRun], key: &str, opts: &crate::ProofOptions) -> Vec<(usize, usize, bool)> {
+    paragraph_issues(p, runs, key, &opts.spelling, opts.grammar)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
         .collect()

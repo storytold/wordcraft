@@ -1591,6 +1591,18 @@
 	Sat:	Насиченість:
 	Lum:	Яскравість:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Перевіряти правопис і граматику за допомогою LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Надсилає текст ваших абзаців на вказаний нижче сервер LanguageTool. Якщо вимкнено, використовується вбудована перевірка WordCraft і ніщо не залишає цей комп'ютер.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Щоб використовувати власний сервер LanguageTool, введіть його адресу, наприклад http://localhost:8081.
+	Username:	Ім'я користувача:
+	API key:	Ключ API:
+	Detect automatically	Визначати автоматично
+	Each paragraph's proofing language	Мова перевірки кожного абзацу
+	Language:	Мова:
+	Paragraphs checked: {count}	Перевірено абзаців: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Перевірка з LanguageTool потребує настільного застосунку; версія для браузера поки що не може надсилати текст на сервер перевірки.
 	Accessibility Pane	Панель доступності
 	Alt Text Pane	Панель альтернативного тексту
 	Alt\nText	Альтернативний\nтекст
