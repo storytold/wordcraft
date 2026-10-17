@@ -1486,3 +1486,54 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     assert!(String::from_utf8_lossy(&bytes).contains("/ToUnicode"));
     assert_eq!(squash(&extract_text(&bytes).concat()), TEXT);
 }
+
+/// Scale to paper size (#2108): every page goes on the chosen paper, turned to the page's
+/// orientation, with its text, links and Print Markup's balloons scaled onto it.
+#[test]
+fn pages_print_scaled_to_other_paper() {
+    let size = |bytes: &[u8]| {
+        let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+        pdf.pages().iter().map(|p| p.media_box()).map(|r| (r.width().round(), r.height().round())).collect::<Vec<_>>()
+    };
+    let a4 = Some((595.28, 841.89));
+    let d = sample();
+    let plain = export(&d, &PdfOptions::default()).unwrap();
+    assert!(size(&plain).iter().all(|s| *s == (612.0, 792.0)), "the sample is Letter");
+    let on_a4 = export(&d, &PdfOptions { paper: a4, compress: false, ..Default::default() }).unwrap();
+    assert!(size(&on_a4).iter().all(|s| *s == (595.0, 842.0)), "{:?}", size(&on_a4));
+    assert_eq!(size(&on_a4).len(), size(&plain).len(), "the pagination is the document's");
+    assert_eq!(squash(&extract_text(&on_a4).concat()), squash(&extract_text(&plain).concat()));
+    // Link areas are scaled with the page: they stay on the narrower paper.
+    let raw = String::from_utf8_lossy(&on_a4).into_owned();
+    let rects: Vec<Vec<f32>> = raw
+        .split("/Rect[")
+        .skip(1)
+        .filter_map(|r| r.split(']').next())
+        .map(|r| r.split_whitespace().filter_map(|n| n.parse().ok()).collect())
+        .collect();
+    assert!(!rects.is_empty(), "the sample has links");
+    for r in &rects {
+        assert!(r.len() == 4 && r.iter().all(|v| (0.0..=842.0).contains(v)) && r[0] <= 595.28 && r[2] <= 595.28, "{r:?}");
+    }
+    // A landscape page gets landscape paper; Legal is taller than Letter.
+    let mut wide = Document::from_text("Wide page");
+    let s = &mut wide.last_section;
+    (s.page_w, s.page_h) = (792.0, 612.0);
+    let landscape = export(&wide, &PdfOptions { paper: a4, ..Default::default() }).unwrap();
+    assert_eq!(size(&landscape), vec![(842.0, 595.0)]);
+    let legal = export(&Document::from_text("Tall"), &PdfOptions { paper: Some((612.0, 1008.0)), ..Default::default() }).unwrap();
+    assert_eq!(size(&legal), vec![(612.0, 1008.0)]);
+    // Print Markup's page with balloons goes on the same paper.
+    let mut c = Document::from_text("Quarterly figures are in.");
+    let part = c.add_part(wordcraft_doc::PartKind::Comment, vec![para_block(Paragraph::with_text("Check the totals", CharProps::default()))]);
+    c.comments.insert(0, wordcraft_doc::Comment { author: "Ada".into(), part, ..Default::default() });
+    c.insert_object(&wordcraft_doc::Pos::body(0, 4), InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+    let marked = export(&c, &PdfOptions { comments: true, include_markup: true, paper: a4, ..Default::default() }).unwrap();
+    assert_eq!(size(&marked), vec![(595.0, 842.0)]);
+    assert!(squash(&extract_text(&marked).concat()).contains("Check the totals"));
+    // Hostile paper never panics: it prints the page as it is.
+    for paper in [(f32::NAN, 1.0), (0.0, 0.0), (-5.0, f32::INFINITY)] {
+        let bytes = export(&d, &PdfOptions { paper: Some(paper), ..Default::default() }).unwrap();
+        assert_eq!(size(&bytes), size(&plain));
+    }
+}

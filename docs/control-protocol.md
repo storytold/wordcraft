@@ -100,7 +100,10 @@ and check `status`/`detail`. The browser keeps its own print hook. PDF export re
 `parity`, `copies`, `collate`). Native printing renders the selected pages once and passes
 copies/collation to the spooler; the browser and `file.printPdf` keep copies in the PDF.
 Omitting native `copies` uses the configured `ui.printSettings` value. `collate` defaults to
-File › Print's setting; invalid ranges submit no job.
+File › Print's setting; invalid ranges submit no job. `paper` (`none`, or a Layout › Size name
+such as `Letter`, `Legal`, `A4`) is Scale to paper size (#2108): every page is scaled onto that
+paper and centred, and native jobs ask the spooler for that `media`; the document's page size is
+unchanged. `file.printPdf` takes it too; an unknown paper submits no job.
 
 `engine.commands {"search":"print"}` lists the engine print commands and the app-owned
 `ui.printSettings`, `ui.printSubmit`, and legacy `ui.print` alias, with current enablement

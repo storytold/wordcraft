@@ -294,6 +294,45 @@ pub fn paper_name(w: f32, h: f32) -> Option<&'static str> {
         .map(|(n, _, _)| *n)
 }
 
+/// The standard paper size named `name` (case-insensitive), as (name, width, height) in points.
+pub fn paper_by_name(name: &str) -> Option<(&'static str, f32, f32)> {
+    let name = name.trim();
+    PAPER_SIZES.iter().find(|(n, _, _)| n.eq_ignore_ascii_case(name)).copied()
+}
+
+/// How a page is placed on other paper when printing with "Scale to paper size" (#2108).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PaperFit {
+    /// The sheet, turned to the page's orientation (points).
+    pub paper_w: f32,
+    pub paper_h: f32,
+    /// Page points to sheet points.
+    pub k: f32,
+    /// Where the page's top-left corner lands on the sheet (the page is centred).
+    pub dx: f32,
+    pub dy: f32,
+}
+
+/// Fits a `page_w` × `page_h` page onto `paper_w` × `paper_h` paper: the paper is turned to the
+/// page's orientation, the page is scaled up or down by one factor to fill it and centred, as
+/// Word's Pages per sheet › Scale to paper size does. Degenerate or non-finite sizes give the
+/// page as it is (scale 1 on paper of its own size).
+pub fn fit_to_paper(page_w: f32, page_h: f32, paper_w: f32, paper_h: f32) -> PaperFit {
+    let ok = |v: f32| v.is_finite() && v >= 1.0;
+    let as_is = PaperFit { paper_w: page_w, paper_h: page_h, k: 1.0, dx: 0.0, dy: 0.0 };
+    if !(ok(page_w) && ok(page_h) && ok(paper_w) && ok(paper_h)) {
+        return as_is;
+    }
+    let (short, long) = (paper_w.min(paper_h), paper_w.max(paper_h));
+    let (pw, ph) = if page_w > page_h { (long, short) } else { (short, long) };
+    let k = (pw / page_w).min(ph / page_h);
+    let (dx, dy) = ((pw - page_w * k) / 2.0, (ph - page_h * k) / 2.0);
+    if !(k.is_finite() && k > 0.0 && dx.is_finite() && dy.is_finite()) {
+        return as_is;
+    }
+    PaperFit { paper_w: pw, paper_h: ph, k, dx, dy }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +408,37 @@ mod tests {
         assert_eq!(paper_name(612.0, 792.0), Some("Letter"));
         assert_eq!(paper_name(792.0, 612.0), Some("Letter"));
         assert_eq!(paper_name(100.0, 100.0), None);
+        assert_eq!(paper_by_name(" a4 ").map(|p| p.0), Some("A4"));
+        assert_eq!(paper_by_name("Legal").map(|p| (p.1, p.2)), Some((612.0, 1008.0)));
+        assert_eq!(paper_by_name("Quarto"), None);
+    }
+
+    /// Scale to paper size (#2108): one factor, centred, paper turned to the page's orientation.
+    #[test]
+    fn pages_fit_other_paper() {
+        let close = |a: f32, b: f32| (a - b).abs() < 0.01;
+        // Letter on A4: narrower paper, so the width decides and the page is centred vertically.
+        let f = fit_to_paper(612.0, 792.0, 595.28, 841.89);
+        assert!(close(f.paper_w, 595.28) && close(f.paper_h, 841.89));
+        assert!(close(f.k, 595.28 / 612.0) && close(f.dx, 0.0));
+        assert!(close(f.dy, (841.89 - 792.0 * f.k) / 2.0) && f.dy > 0.0);
+        // A4 on Legal: the width decides; A5 on A4 is enlarged.
+        assert!(close(fit_to_paper(595.28, 841.89, 612.0, 1008.0).k, 612.0 / 595.28));
+        assert!(close(fit_to_paper(419.53, 595.28, 595.28, 841.89).k, 595.28 / 419.53));
+        // A landscape page gets landscape paper whichever way the paper is given.
+        let l = fit_to_paper(792.0, 612.0, 595.28, 841.89);
+        assert!(close(l.paper_w, 841.89) && close(l.paper_h, 595.28));
+        assert!(close(l.k, 595.28 / 612.0) && l.dx > 0.0 && close(l.dy, 0.0));
+        // The same paper is the page as it is.
+        let same = fit_to_paper(612.0, 792.0, 612.0, 792.0);
+        assert!(close(same.k, 1.0) && close(same.dx, 0.0) && close(same.dy, 0.0));
+        // Hostile sizes never produce NaN or infinite scales.
+        for (a, b, c, d) in
+            [(f32::NAN, 792.0, 595.0, 842.0), (612.0, 0.0, 595.0, 842.0), (612.0, 792.0, f32::INFINITY, 842.0), (612.0, 792.0, -5.0, 842.0)]
+        {
+            let f = fit_to_paper(a, b, c, d);
+            assert_eq!((f.k, f.dx, f.dy), (1.0, 0.0, 0.0));
+        }
+        assert!(fit_to_paper(1.0, 1.0, f32::MAX, f32::MAX).k.is_finite());
     }
 }

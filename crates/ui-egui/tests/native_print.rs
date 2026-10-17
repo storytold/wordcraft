@@ -244,3 +244,54 @@ fn native_print_passes_orientation_options_to_spooler() {
     app.run("ui.printSubmit", json!({"orientation": "portrait"})).unwrap();
     assert_eq!(jobs.borrow().last().unwrap().3, vec![("orientation-requested".to_owned(), "3".to_owned())]);
 }
+
+/// Scale to paper size (#2108): the job's PDF goes on the chosen paper, the spooler is asked
+/// for that media, and the document keeps its own page size.
+#[test]
+fn native_print_scales_to_the_chosen_paper() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    app.run("text.insert", json!({"text": "Scale me"})).unwrap();
+    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, settings, collate, options| {
+        observed.borrow_mut().push((bytes, settings, collate, options));
+        let (sender, receiver) = std::sync::mpsc::channel();
+        sender.send(Ok("queued".into())).unwrap();
+        receiver
+    }));
+    let page = (app.session.doc.last_section.page_w, app.session.doc.last_section.page_h);
+    let media_box = |bytes: &[u8]| {
+        let raw = String::from_utf8_lossy(bytes).into_owned();
+        let n: Vec<f32> =
+            raw.split("/MediaBox[").nth(1).and_then(|r| r.split(']').next()).unwrap().split_whitespace().map(|n| n.parse().unwrap()).collect();
+        (n[2].round(), n[3].round())
+    };
+
+    // The Print page's choice reaches the job.
+    assert!(app.ui.print.params().get("paper").is_none(), "No Scaling by default");
+    app.ui.print.paper = "Legal".into();
+    let params = app.ui.print.params();
+    assert_eq!(params["paper"], "Legal");
+    app.run("ui.printSubmit", params).unwrap();
+    {
+        let jobs = jobs.borrow();
+        let (bytes, _, _, options) = jobs.last().unwrap();
+        assert_eq!(media_box(bytes), (612.0, 1008.0));
+        assert!(options.contains(&("media".to_owned(), "na_legal_8.5x14in".to_owned())), "{options:?}");
+    }
+    app.printing.poll(&egui::Context::default());
+    app.poll_printing(&egui::Context::default());
+
+    app.run("ui.printSubmit", json!({"paper": "A4"})).unwrap();
+    assert_eq!(media_box(&jobs.borrow().last().unwrap().0), (595.0, 842.0));
+    app.printing.poll(&egui::Context::default());
+    app.poll_printing(&egui::Context::default());
+
+    // An unknown paper submits nothing.
+    let before = jobs.borrow().len();
+    assert!(app.run("ui.printSubmit", json!({"paper": "Quarto"})).is_err());
+    assert_eq!(jobs.borrow().len(), before);
+    assert_eq!((app.session.doc.last_section.page_w, app.session.doc.last_section.page_h), page, "the document is unchanged");
+}

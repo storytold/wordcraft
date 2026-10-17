@@ -127,6 +127,21 @@ pub fn plan(v: &Value, total: usize, current: (usize, usize)) -> Result<PrintPla
     Ok(PrintPlan { pages: out, chosen, copies })
 }
 
+/// The `paper` param of a print job: the standard paper (see [`wordcraft_geom::PAPER_SIZES`]) to
+/// scale every page to (Scale to paper size, #2108), or `None` to print the document's own page
+/// sizes (absent, null, `""`, `none` or `document`). Any other value is an error.
+pub fn paper(v: &Value) -> Result<Option<(&'static str, f32, f32)>, CmdError> {
+    match v.get("paper") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(name)) if name.trim().is_empty() || ["none", "document"].contains(&name.trim().to_ascii_lowercase().as_str()) => Ok(None),
+        Some(Value::String(name)) => wordcraft_geom::paper_by_name(name).map(Some).ok_or_else(|| {
+            let names: Vec<&str> = wordcraft_geom::PAPER_SIZES.iter().map(|(n, _, _)| *n).collect();
+            CmdError::Params(format!("unknown paper `{}`; use none or one of {}", name.chars().take(40).collect::<String>(), names.join(", ")))
+        }),
+        Some(_) => Err(CmdError::Params("paper must be a paper size name or none".into())),
+    }
+}
+
 impl Session {
     /// The pages the caret (or selection) is on, in the output layout: (first, last).
     pub fn current_pages(&self, lay: &DocLayout) -> (usize, usize) {
@@ -143,12 +158,14 @@ impl Session {
         let markup = crate::cmd::file::export_options(self, v);
         let lay = self.export_layout_with(markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
+        let paper = paper(v)?.map(|(_, w, h)| (w, h));
         let opts = wordcraft_pdf::PdfOptions {
             pages: Some(plan.pages.clone()),
             // Repeated pages would repeat the structure tree's entries too.
             tagged: plan.copies <= 1,
             include_markup: markup.markup,
             comments: markup.comments,
+            paper,
             ..Default::default()
         };
         let bytes = wordcraft_pdf::export_layout(&self.doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
@@ -215,6 +232,38 @@ mod tests {
         assert!(s.print_pdf(&json!({"pages": "9999"})).is_err());
         let r = s.run("file.printPdf", &json!({})).is_err();
         assert!(r, "printPdf needs a path");
+    }
+
+    /// Scale to paper size (#2108): the PDF goes on the chosen paper; the document keeps its size.
+    #[test]
+    fn print_pdf_scales_to_the_chosen_paper() {
+        // Page dictionaries are written uncompressed: `/MediaBox[0 0 w h]`.
+        let media = |bytes: &[u8]| {
+            let raw = String::from_utf8_lossy(bytes).into_owned();
+            raw.split("/MediaBox[")
+                .skip(1)
+                .filter_map(|r| r.split(']').next())
+                .map(|r| r.split_whitespace().filter_map(|n| n.parse::<f32>().ok()).collect::<Vec<_>>())
+                .map(|n| (n[2].round(), n[3].round()))
+                .collect::<Vec<_>>()
+        };
+        let s = Session::new(crate::sample::sample_document());
+        let (w, h) = (s.doc.last_section.page_w, s.doc.last_section.page_h);
+        let rev = s.rev();
+        let (own, _) = s.print_pdf(&json!({"range": "current"})).unwrap();
+        assert_eq!(media(&own), vec![(w.round(), h.round())]);
+        for (name, want) in [("A4", (595.0, 842.0)), ("letter", (612.0, 792.0)), ("Legal", (612.0, 1008.0))] {
+            let (bytes, _) = s.print_pdf(&json!({"range": "current", "paper": name})).unwrap();
+            assert_eq!(media(&bytes), vec![want], "{name}");
+        }
+        for none in [json!(null), json!(""), json!("none"), json!("Document")] {
+            let (bytes, _) = s.print_pdf(&json!({"range": "current", "paper": none})).unwrap();
+            assert_eq!(media(&bytes), media(&own));
+        }
+        for bad in [json!("Quarto"), json!(5), json!({"w": 1}), json!("x".repeat(10_000))] {
+            assert!(s.print_pdf(&json!({"paper": bad})).is_err(), "{bad}");
+        }
+        assert_eq!((s.doc.last_section.page_w, s.doc.last_section.page_h, s.rev()), (w, h, rev), "the document is unchanged");
     }
 
     /// `file.printPdf` writes only inside the automation write root when there is one (#769).

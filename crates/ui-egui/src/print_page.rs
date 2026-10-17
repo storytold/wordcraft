@@ -29,6 +29,9 @@ pub struct PrintSettings {
     pub orientation: String,
     /// The preview's zoom (1.0 is the page's real size), or `None` to fit the whole page.
     pub zoom: Option<f32>,
+    /// Scale to paper size (#2108): `none` prints the document's page sizes, a Layout › Size
+    /// name scales every page onto that paper. The document itself is unchanged.
+    pub paper: String,
 }
 
 impl Default for PrintSettings {
@@ -42,6 +45,7 @@ impl Default for PrintSettings {
             preview: 0,
             zoom: None,
             orientation: "auto".into(),
+            paper: NO_SCALING.into(),
         }
     }
 }
@@ -59,12 +63,22 @@ impl PrintSettings {
         if self.range == "custom" {
             v["pages"] = json!(self.pages);
         }
+        if self.paper != NO_SCALING {
+            v["paper"] = json!(self.paper);
+        }
         v
+    }
+
+    /// The paper pages are scaled to, as (width, height) in points, or `None` for their own size.
+    pub fn paper_size(&self) -> Option<(f32, f32)> {
+        wordcraft_geom::paper_by_name(&self.paper).map(|(_, w, h)| (w, h))
     }
 }
 
 const RANGES: [(&str, &str); 4] = [("all", "All pages"), ("current", "Current page"), ("selection", "Selected pages"), ("custom", "Custom range")];
 const PARITIES: [(&str, &str); 3] = [("all", "All pages in the range"), ("odd", "Odd pages only"), ("even", "Even pages only")];
+/// The Scale to paper size choice that keeps each page's own size.
+const NO_SCALING: &str = "none";
 const ORIENTATIONS: [(&str, &str); 3] = [("auto", "Auto orientation"), ("portrait", "Portrait"), ("landscape", "Landscape")];
 
 /// A choice list over `(id, label)` pairs; true when the choice changed.
@@ -198,6 +212,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 choice(ui, "print_parity", &mut app.ui.print.parity, &PARITIES);
                 ui.label(egui::RichText::new(tl!("Orientation")).font(medium(13.0)));
                 choice(ui, "print_orientation", &mut app.ui.print.orientation, &ORIENTATIONS);
+                // Word: Pages per sheet › Scale to paper size. Only the printout changes.
+                ui.label(egui::RichText::new(tl!("Scale to paper size")).font(medium(13.0)));
+                let papers: Vec<(&str, &str)> =
+                    std::iter::once((NO_SCALING, "No Scaling")).chain(wordcraft_geom::PAPER_SIZES.iter().map(|(n, _, _)| (*n, *n))).collect();
+                choice(ui, "print_paper", &mut app.ui.print.paper, &papers);
 
                 match wordcraft_engine::print::plan(&app.ui.print.params(), total, current) {
                     Ok(plan) => {
@@ -242,7 +261,10 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
     let page = app.ui.print.preview;
-    let (pw, ph) = lay.pages.get(page).map_or((612.0, 792.0), |p| (p.w.max(1.0), p.h.max(1.0)));
+    let (page_w, page_h) = lay.pages.get(page).map_or((612.0, 792.0), |p| (p.w.max(1.0), p.h.max(1.0)));
+    // Scale to paper size: the sheet is the chosen paper with the page scaled and centred on it.
+    let sheet = app.ui.print.paper_size().map(|(w, h)| wordcraft_geom::fit_to_paper(page_w, page_h, w, h));
+    let (pw, ph) = sheet.map_or((page_w, page_h), |f| (f.paper_w, f.paper_h));
     let pane = vec2(ui.available_width().max(120.0), (ui.available_height() - PREVIEW_BAR).max(120.0));
     // Screen points per page point.
     let fit = ((pane.x - 2.0 * PREVIEW_MARGIN) / pw).min((pane.y - 2.0 * PREVIEW_MARGIN) / ph).max(0.01);
@@ -257,8 +279,9 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Image, true, &label));
         ui.painter().rect_filled(r.translate(vec2(2.0, 3.0)), 0.0, t.page_shadow);
         ui.painter().rect(r, 0.0, egui::Color32::WHITE, Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        if let Some(tex) = page_texture(app, &ctx, lay, page, size.x) {
-            ui.painter().image(tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+        let on_sheet = sheet.map_or(r, |f| Rect::from_min_size(r.min + vec2(f.dx, f.dy) * scale, vec2(page_w, page_h) * f.k * scale));
+        if let Some(tex) = page_texture(app, &ctx, lay, page, on_sheet.width()) {
+            ui.painter().image(tex.id(), on_sheet, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
         }
     });
     ui.horizontal(|ui| {
