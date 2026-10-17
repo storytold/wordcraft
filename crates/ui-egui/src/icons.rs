@@ -239,18 +239,42 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.fcircle(16.5, 13.5, 1.6, a);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
         }
-        "borders" => {
+        // Borders (#2718): a dotted box in four parts, the lines a kind draws in the accent
+        // colour (Inside and All have both middle lines) and dots only where no line is.
+        "borders" | "borderBottom" | "borderTop" | "borderLeft" | "borderRight" | "borderNone" | "borderAll" | "borderOutside" | "borderInside" => {
+            // Top, bottom, left, right, middle horizontal, middle vertical.
+            let on = match name {
+                "borderTop" => [true, false, false, false, false, false],
+                "borderLeft" => [false, false, true, false, false, false],
+                "borderRight" => [false, false, false, true, false, false],
+                "borderNone" => [false; 6],
+                "borderAll" => [true; 6],
+                "borderOutside" => [true, true, true, true, false, false],
+                "borderInside" => [false, false, false, false, true, true],
+                _ => [false, true, false, false, false, false],
+            };
+            // Each line: horizontal (at y) or vertical (at x), from 3 to 17.
+            let lines = [(true, 3.0), (true, 17.0), (false, 3.0), (false, 17.0), (true, 10.0), (false, 10.0)];
+            let drawn = lines.iter().zip(on).filter(|(_, on)| *on).map(|(l, _)| *l).collect::<Vec<(bool, f32)>>();
+            let covered = |x: f32, y: f32| drawn.iter().any(|&(horizontal, at)| if horizontal { y == at } else { x == at });
             for y in [3.0, 10.0, 17.0] {
                 for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
-                    pen.fcircle(x, y, 0.6, c);
+                    if !covered(x, y) {
+                        pen.fcircle(x, y, 0.6, c);
+                    }
                 }
             }
             for x in [3.0, 10.0, 17.0] {
                 for y in [6.5, 13.5] {
-                    pen.fcircle(x, y, 0.6, c);
+                    if !covered(x, y) {
+                        pen.fcircle(x, y, 0.6, c);
+                    }
                 }
             }
-            pen.line_c(&[(3.0, 17.0), (17.0, 17.0)], a);
+            for (horizontal, at) in drawn {
+                let line = if horizontal { [(3.0, at), (17.0, at)] } else { [(at, 3.0), (at, 17.0)] };
+                pen.line_c(&line, a);
+            }
         }
         // Editing
         "find" => {
@@ -1473,5 +1497,40 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
             }
             p.add(Shape::line(pts, stroke));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// What `name` draws, as text to compare.
+    fn drawn(name: &str) -> String {
+        let ctx = egui::Context::default();
+        ctx.begin_pass(egui::RawInput::default());
+        let p = ctx.layer_painter(egui::LayerId::background());
+        paint(&p, Rect::from_min_size(pos2(0.0, 0.0), vec2(20.0, 20.0)), name, Color32::BLACK, Color32::BLUE);
+        let mut out = ctx.end_pass();
+        out.textures_delta.clear();
+        let shapes = out.shapes;
+        assert!(!shapes.iter().any(|s| matches!(s.shape, Shape::Text(_))), "{name} draws the lettered fallback tile");
+        format!("{:?}", shapes.iter().map(|s| &s.shape).collect::<Vec<_>>())
+    }
+
+    /// #2718: each border kind has its own icon, none the fallback tile; Borders and Bottom
+    /// Border are the same picture (the button's icon before a kind is picked).
+    #[test]
+    fn every_border_kind_has_its_own_icon() {
+        let kinds = ["borderBottom", "borderTop", "borderLeft", "borderRight", "borderNone", "borderAll", "borderOutside", "borderInside"];
+        let pictures: Vec<String> = kinds.iter().map(|k| drawn(k)).collect();
+        for (i, a) in pictures.iter().enumerate() {
+            for (j, b) in pictures.iter().enumerate().skip(i + 1) {
+                assert_ne!(a, b, "{} and {} look the same", kinds[i], kinds[j]);
+            }
+        }
+        assert_eq!(drawn("borders"), drawn("borderBottom"));
+        // Dots only where no line is drawn: 21 on the empty box, none once every line is drawn.
+        let dots = |name: &str| drawn(name).matches("Circle(").count();
+        assert_eq!([dots("borderNone"), dots("borderBottom"), dots("borderInside"), dots("borderAll")], [21, 16, 12, 0]);
     }
 }

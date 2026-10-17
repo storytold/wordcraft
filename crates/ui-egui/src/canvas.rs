@@ -72,6 +72,9 @@ pub struct CanvasState {
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
+    /// The paragraph border kind the Home › Borders button applies: the last one picked from
+    /// its menu (`para.borders` kind; #2718).
+    pub last_border: String,
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
@@ -204,6 +207,7 @@ impl Default for CanvasState {
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
+            last_border: "bottom".into(),
             open_url: None,
             page_rects: Vec::new(),
             scale: PX_PER_PT,

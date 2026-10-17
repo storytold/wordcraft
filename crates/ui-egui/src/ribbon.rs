@@ -485,12 +485,44 @@ pub(crate) fn size_menu(ui: &mut Ui, app: &mut WordApp) {
     mi(ui, app, crate::dialogs::PAPER_LABELS.more, "ui.dialog", json!({"name": "pageSetup"}));
 }
 
+/// Home › Borders: the paragraph border kinds (`para.borders` kind), with their labels and icons.
+const BORDER_KINDS: [(&str, &str, &str); 8] = [
+    ("Bottom Border", "bottom", "borderBottom"),
+    ("Top Border", "top", "borderTop"),
+    ("Left Border", "left", "borderLeft"),
+    ("Right Border", "right", "borderRight"),
+    ("No Border", "none", "borderNone"),
+    ("All Borders", "all", "borderAll"),
+    ("Outside Borders", "outside", "borderOutside"),
+    ("Inside Borders", "inside", "borderInside"),
+];
+
+/// The Borders button's icon and params: it applies the kind last picked from its menu, as Word's
+/// does, and shows that kind's icon (#2718). An unknown kind is Bottom, the default.
+fn border_button(kind: &str) -> (&'static str, Value) {
+    let (_, k, icon) = BORDER_KINDS.iter().find(|(_, k, _)| *k == kind).copied().unwrap_or(BORDER_KINDS[0]);
+    (icon, json!({"kind": k}))
+}
+
+/// The Borders menu: each kind, remembered for the button when picked; then Horizontal Line and
+/// the dialog.
+fn borders_items(ui: &mut Ui, app: &mut WordApp) {
+    for (l, k, _) in BORDER_KINDS {
+        if mi_text(ui, app, tl!(l), "para.borders", json!({"kind": k})) {
+            app.canvas.last_border = k.to_string();
+        }
+    }
+    ui.separator();
+    mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
+    mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
+}
+
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     mi_text(ui, app, tl!(label), id, params);
 }
 
-/// A menu item whose text is already in the interface language.
-fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) {
+/// A menu item whose text is already in the interface language. Returns whether it was clicked.
+fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) -> bool {
     let sc = crate::widgets::shortcut_text(app, id);
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new(text).shortcut_text(sc).min_size(vec2(200.0, 0.0)));
@@ -498,6 +530,7 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
     }
+    resp.clicked()
 }
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
@@ -955,23 +988,8 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     let theme = app.session.doc.settings.theme_colors.clone();
                     crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
                 });
-                split(ui, app, "borders", "Borders", "para.borders", json!({"kind": "bottom"}), false, None, |ui, app| {
-                    for (l, k) in [
-                        ("Bottom Border", "bottom"),
-                        ("Top Border", "top"),
-                        ("Left Border", "left"),
-                        ("Right Border", "right"),
-                        ("No Border", "none"),
-                        ("All Borders", "all"),
-                        ("Outside Borders", "outside"),
-                        ("Inside Borders", "inside"),
-                    ] {
-                        mi(ui, app, l, "para.borders", json!({"kind": k}));
-                    }
-                    ui.separator();
-                    mi(ui, app, "Horizontal Line", "insert.horizontalLine", json!({}));
-                    mi(ui, app, "Borders and Shading…", "para.borders", json!({}));
-                });
+                let (icon, params) = border_button(&app.canvas.last_border);
+                split(ui, app, icon, "Borders", "para.borders", params, false, None, borders_items);
             });
         });
     });
@@ -2708,6 +2726,35 @@ mod tests {
         assert!((gallery.width() - crate::previews::STYLE_SET_GALLERY_W).abs() < 0.01);
         assert!(used.right() <= gallery.right() + 0.01, "{used:?} {gallery:?}");
         assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
+    }
+
+    /// #2718: a kind picked from the Borders menu is applied and becomes the button's: the button
+    /// shows that kind's icon and applies it. Bottom until a kind is picked; Horizontal Line
+    /// isn't a kind and leaves the button alone; an unknown kind is Bottom.
+    #[test]
+    fn borders_button_applies_the_last_border_picked() {
+        use egui_kittest::kittest::Queryable;
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        assert_eq!(border_button(&app.canvas.last_border), ("borderBottom", json!({"kind": "bottom"})));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(borders_items, app);
+        h.run_steps(2);
+        h.get_by_label_contains("Top Border").click();
+        h.run_steps(2);
+        let top = |app: &WordApp| {
+            let b = app.session.doc.para_at(&app.session.sel.focus).and_then(|p| p.props.borders);
+            b.and_then(|b| b.top).is_some_and(|t| t.is_visible())
+        };
+        assert_eq!(h.state().canvas.last_border, "top");
+        assert!(top(h.state()), "the menu applies Top Border");
+        let (icon, params) = border_button(&h.state().canvas.last_border);
+        assert_eq!((icon, &params), ("borderTop", &json!({"kind": "top"})));
+        // The button runs the same command: a second Top Border takes it off, as in Word.
+        h.state_mut().run("para.borders", params).unwrap();
+        assert!(!top(h.state()));
+        h.get_by_label_contains("Horizontal Line").click();
+        h.run_steps(2);
+        assert_eq!(h.state().canvas.last_border, "top");
+        assert_eq!(border_button("junk").0, "borderBottom");
     }
 
     /// #658: menu buttons grey out (and don't open) while the command their menu is about is
