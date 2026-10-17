@@ -2233,3 +2233,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Separate pieces of text selected at once (#788)
+	Add to Selection	選択範囲に追加

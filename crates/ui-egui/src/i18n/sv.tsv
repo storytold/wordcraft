@@ -2647,3 +2647,5 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+# Separate pieces of text selected at once (#788)
+	Add to Selection	Lägg till i markeringen

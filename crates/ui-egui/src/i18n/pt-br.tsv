@@ -2245,3 +2245,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+# Separate pieces of text selected at once (#788)
+	Add to Selection	Adicionar à seleção

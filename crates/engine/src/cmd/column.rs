@@ -6,7 +6,8 @@
 //! Whole table cells that aren't one run of the text (part of a column, `CellRange`) are a block
 //! of their paragraphs: edits and formatting go cell by cell; table commands take the cells.
 //! Extending the selection from one cell into another (Shift+arrows, Shift+click, a drag) makes
-//! such cells, as in Word (`table::extend_selection`).
+//! such cells, as in Word (`table::extend_selection`). Separate pieces of text (`multisel.rs`)
+//! are a block of their paragraph segments too, but Delete removes each piece whole.
 
 use serde_json::{Value, json};
 use wordcraft_doc::edit::Fragment;
@@ -45,7 +46,7 @@ fn row_text(s: &Session, a: &Pos, b: &Pos) -> String {
 }
 
 /// `{"page": n, "x": pt, "y": pt}`.
-fn point(v: &Value, name: &str) -> Result<(usize, f32, f32), CmdError> {
+pub(super) fn point(v: &Value, name: &str) -> Result<(usize, f32, f32), CmdError> {
     match (p::u64(v, "page"), p::f32(v, "x"), p::f32(v, "y")) {
         (Some(pg), Some(x), Some(y)) => Ok((usize::try_from(pg).unwrap_or(usize::MAX), x, y)),
         _ => Err(CmdError::Params(format!("`{name}` needs `page`, `x` and `y`"))),
@@ -98,7 +99,7 @@ fn make(s: &mut Session, a: Pos, b: Pos, xa: f32, xb: f32) {
     let l = s.layout();
     let segments = l.column_segments(&s.doc, &a, &b, left, right, s.page_hint, MAX_LINES);
     s.sel = Selection { anchor: a, focus: b };
-    s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None });
+    s.column = Some(ColumnBlock { sel: s.sel.clone(), anchor_x: xa, focus_x: xb, segments, cells: None, pieces: None });
     s.pending = None;
 }
 
@@ -161,6 +162,8 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
     }
     let Some(segs) = s.column_segments().map(<[(Pos, Pos)]>::to_vec) else { return run(s, v) };
     let cells = s.cell_range().is_some();
+    // Separate pieces of text are deleted whole (one across paragraphs joins them).
+    let cut = s.selection_pieces().map_or_else(|| segs.clone(), <[(Pos, Pos)]>::to_vec);
     match id {
         // Whole cells: table commands take the rectangle between the corners, and Tab moves on
         // from it without clearing it, as in Word.
@@ -168,18 +171,18 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
         "edit.copy" => copy(s, &segs),
         "edit.cut" => {
             let r = copy(s, &segs)?;
-            delete(s, &segs)?;
+            delete(s, &cut)?;
             Ok(r)
         }
         "text.delete" | "text.backspace" | "text.deleteWordBack" | "text.deleteWordForward" => {
-            delete(s, &segs)?;
+            delete(s, &cut)?;
             super::sel_result(s)
         }
         "format.changeCase" | "format.clear" | "format.resetChar" => per_row(s, run, v, &segs),
-        _ if id.starts_with("format.") || id.starts_with("para.") || id == "select.column" => run(s, v),
+        _ if id.starts_with("format.") || id.starts_with("para.") || matches!(id, "select.column" | "select.add") => run(s, v),
         // Pasting formatting (the format painter) leaves the text alone.
         _ if mutates && (id.starts_with("text.") || (id.starts_with("edit.paste") && id != "edit.pasteFormat")) => {
-            delete(s, &segs)?;
+            delete(s, &cut)?;
             run(s, v)
         }
         _ if mutates => {
@@ -219,14 +222,21 @@ fn copy(s: &mut Session, segs: &[(Pos, Pos)]) -> CmdResult {
     Ok(super::edit::copy_result(s))
 }
 
-/// Delete each row's piece (bottom up, so earlier positions stay valid) and leave the caret at
-/// the block's top-left corner.
+/// Delete each row's piece, or each separate piece of text (bottom up, so earlier positions
+/// stay valid) and leave the caret at the block's top-left corner.
 fn delete(s: &mut Session, segs: &[(Pos, Pos)]) -> Result<(), CmdError> {
-    for (a, b) in segs.iter().rev() {
-        let (a, b) = (s.doc.clamp(a), s.doc.clamp(b));
-        if a == b || a.path != b.path || a.story != b.story {
-            continue;
-        }
+    let ranges: Vec<(Pos, Pos)> = segs
+        .iter()
+        .map(|(a, b)| (s.doc.clamp(a), s.doc.clamp(b)))
+        .filter(|(a, b)| a != b && a.story == b.story)
+        .map(|(a, b)| if a <= b { (a, b) } else { (b, a) })
+        .collect();
+    // Locked content controls refuse the whole deletion before anything is deleted.
+    if let Some((first, _)) = ranges.first() {
+        let story = first.story;
+        super::controls::check_deletions(s, story, ranges.iter().map(|(a, b)| (a, b)))?;
+    }
+    for (a, b) in ranges.into_iter().rev() {
         if s.doc.settings.track_changes {
             super::track_delete(s, &a, &b)?;
         } else {

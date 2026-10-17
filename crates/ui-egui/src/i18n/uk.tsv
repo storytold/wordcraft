@@ -2245,3 +2245,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+# Separate pieces of text selected at once (#788)
+	Add to Selection	Додати до виділення

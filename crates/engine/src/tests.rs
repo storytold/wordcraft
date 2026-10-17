@@ -3682,6 +3682,234 @@ fn column_selection_from_points() {
     }
 }
 
+/// #788: a selection of separate pieces (Ctrl+drag, Ctrl+double-click).
+fn multi_doc() -> Session {
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "one two three\nfour five six\nseven eight nine"}));
+    s
+}
+
+fn add(s: &mut Session, a: (usize, usize), b: (usize, usize)) -> serde_json::Value {
+    run(s, "select.add", json!({"anchor": {"block": a.0, "off": a.1}, "focus": {"block": b.0, "off": b.1}}))
+}
+
+/// "one", "three" and "eight": the selection "one" plus two more pieces, added out of order.
+fn three_pieces(s: &mut Session) {
+    run(s, "select.text", json!({"text": "one"}));
+    add(s, (2, 6), (2, 11));
+    let r = add(s, (0, 8), (0, 13));
+    assert_eq!(r["pieces"], json!(["one", "three", "eight"]));
+}
+
+#[test]
+fn multi_selection_keeps_pieces_sorted_and_merged() {
+    let mut s = multi_doc();
+    three_pieces(&mut s);
+    // The newest piece is the selection, so the block stays current.
+    assert_eq!(s.sel, crate::Selection { anchor: Pos::body(0, 8), focus: Pos::body(0, 13) });
+    assert_eq!(s.column_segments().map(<[_]>::len), Some(3));
+    // Overlapping and touching pieces merge.
+    let r = add(&mut s, (0, 2), (0, 8));
+    assert_eq!(r["pieces"], json!(["one two three", "eight"]));
+    // A piece across paragraphs is one piece but a segment per paragraph.
+    let r = add(&mut s, (2, 2), (1, 10));
+    assert_eq!(r["pieces"], json!(["one two three", "six\nse", "eight"]));
+    assert_eq!(s.column_segments().map(<[_]>::len), Some(4));
+    // Pieces that merge into one are an ordinary selection.
+    let mut t = multi_doc();
+    run(&mut t, "select.text", json!({"text": "two"}));
+    add(&mut t, (0, 0), (0, 5));
+    assert!(t.column.is_none());
+    assert_eq!(t.sel.ordered(), (Pos::body(0, 0), Pos::body(0, 7)));
+}
+
+#[test]
+fn multi_selection_adds_a_word() {
+    let mut s = multi_doc();
+    run(&mut s, "select.text", json!({"text": "four"}));
+    let r = run(&mut s, "select.add", json!({"word": {"block": 2, "off": 8}}));
+    assert_eq!(r["pieces"], json!(["four", "eight "]));
+    // With nothing selected, the first piece is the selection's start.
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 1}}));
+    let r = run(&mut s, "select.add", json!({"word": {"block": 1, "off": 1}}));
+    assert_eq!(r["pieces"], json!(["four "]));
+    assert!(s.column.is_none());
+}
+
+#[test]
+fn multi_selection_copies_and_cuts_every_piece() {
+    let mut s = multi_doc();
+    three_pieces(&mut s);
+    let r = run(&mut s, "edit.copy", json!({}));
+    assert_eq!(r["text"], "one\nthree\neight");
+    assert_eq!(s.clipboard.as_ref().map(|f| f.blocks.len()), Some(3));
+    let r = run(&mut s, "edit.cut", json!({}));
+    assert_eq!(r["text"], "one\nthree\neight");
+    assert_eq!(text(&s), " two \nfour five six\nseven  nine");
+}
+
+#[test]
+fn multi_selection_deletes_every_piece_in_one_undo_step() {
+    let mut s = multi_doc();
+    three_pieces(&mut s);
+    run(&mut s, "text.delete", json!({}));
+    assert_eq!(text(&s), " two \nfour five six\nseven  nine");
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 0)));
+    assert!(s.column.is_none());
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "one two three\nfour five six\nseven eight nine");
+    // A piece across paragraphs joins them, as deleting it alone would.
+    run(&mut s, "select.text", json!({"text": "one"}));
+    add(&mut s, (1, 10), (2, 2));
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(text(&s), " two three\nfour five ven eight nine");
+}
+
+#[test]
+fn multi_selection_typing_replaces_the_pieces() {
+    let mut s = multi_doc();
+    s.prefs.autocorrect.enabled = false;
+    three_pieces(&mut s);
+    run(&mut s, "text.insert", json!({"text": "X"}));
+    assert_eq!(text(&s), "X two \nfour five six\nseven  nine");
+}
+
+#[test]
+fn multi_selection_formats_every_piece() {
+    let mut s = multi_doc();
+    three_pieces(&mut s);
+    run(&mut s, "format.bold", json!({}));
+    let bold = |s: &Session, i: usize, off: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props_of_char(off).bold == Some(true);
+    assert!(bold(&s, 0, 0) && bold(&s, 0, 2) && bold(&s, 0, 8) && bold(&s, 2, 6) && bold(&s, 2, 10));
+    assert!(!bold(&s, 0, 4) && !bold(&s, 1, 0) && !bold(&s, 2, 0) && !bold(&s, 2, 12));
+    // The pieces survive formatting; paragraph formatting takes their paragraphs only.
+    assert!(s.column_segments().is_some());
+    run(&mut s, "para.alignCenter", json!({}));
+    let align = |s: &Session, i: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props.align;
+    assert_eq!(align(&s, 0), Some(wordcraft_doc::props::Align::Center));
+    assert_ne!(align(&s, 1), Some(wordcraft_doc::props::Align::Center));
+    assert_eq!(align(&s, 2), Some(wordcraft_doc::props::Align::Center));
+    // One undo step takes each change back.
+    run(&mut s, "edit.undo", json!({}));
+    assert_ne!(align(&s, 0), Some(wordcraft_doc::props::Align::Center));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!bold(&s, 0, 0) && !bold(&s, 2, 6));
+}
+
+#[test]
+fn multi_selection_ends_with_a_caret_move() {
+    let mut s = multi_doc();
+    three_pieces(&mut s);
+    run(&mut s, "caret.right", json!({}));
+    assert!(s.column_segments().is_none());
+    assert_eq!(s.selected_text(), "");
+    // A fresh selection then starts again from one piece.
+    run(&mut s, "select.text", json!({"text": "nine"}));
+    let r = add(&mut s, (1, 0), (1, 4));
+    assert_eq!(r["pieces"], json!(["four", "nine"]));
+}
+
+#[test]
+fn multi_selection_from_points_and_hostile_params() {
+    let mut s = multi_doc();
+    run(&mut s, "select.text", json!({"text": "one"}));
+    let l = s.layout();
+    let a = l.caret(&Pos::body(1, 0)).unwrap();
+    let b = l.caret(&Pos::body(1, 4)).unwrap();
+    let r =
+        run(&mut s, "select.add", json!({"from": {"page": a.page, "x": a.x, "y": a.top + 2.0}, "to": {"page": b.page, "x": b.x, "y": b.top + 2.0}}));
+    assert_eq!(r["pieces"], json!(["one", "four"]));
+    for bad in [
+        json!({}),
+        json!({"from": {"page": 99, "x": 1, "y": 1}, "to": {"page": 0, "x": 1, "y": 1}}),
+        json!({"from": 1, "to": "x"}),
+        json!({"anchor": 1, "focus": {}}),
+        json!({"word": "x"}),
+    ] {
+        assert!(s.run("select.add", &bad).is_err(), "{bad}");
+    }
+    // Positions past the end are clamped; repeating a piece doesn't grow the list.
+    let junk = json!({"anchor": {"block": 99999, "off": usize::MAX}, "focus": {"block": 0, "off": 99999999}});
+    let r = run(&mut s, "select.add", junk.clone());
+    assert_eq!(r["pieces"], json!(["one", "\nfour five six\nseven eight nine"]));
+    let segs = s.column.as_ref().map(|c| c.segments.len());
+    for _ in 0..300 {
+        run(&mut s, "select.add", junk.clone());
+    }
+    assert_eq!(s.column.as_ref().map(|c| c.segments.len()), segs);
+}
+
+#[test]
+fn multi_selection_respects_locked_content_controls() {
+    use wordcraft_doc::para::OBJ;
+    let w = OBJ.len_utf8();
+    for (lock, piece) in [("lockDelete", (0, 5 + 2 * w)), ("lockEdit", (w + 1, w + 3))] {
+        // "hello world" with "hello" in a locked control; the control (or some of its text) and
+        // "world" are the pieces.
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "hello world"}));
+        s.sel = crate::Selection { anchor: Pos::body(0, 0), focus: Pos::body(0, 5) };
+        run(&mut s, "developer.richText", json!({"tag": "ctl"}));
+        run(&mut s, "developer.properties", json!({"control": "ctl", lock: true}));
+        s.sel = crate::Selection { anchor: Pos::body(0, piece.0), focus: Pos::body(0, piece.1) };
+        let r = add(&mut s, (0, 6 + 2 * w), (0, 11 + 2 * w));
+        assert_eq!(r["pieces"].as_array().map(Vec::len), Some(2), "{lock}");
+        let before = s.doc.clone();
+        for id in ["text.delete", "text.backspace", "edit.cut"] {
+            assert!(s.run(id, &json!({})).is_err(), "{lock}: {id} went through the lock");
+            assert_eq!(s.doc, before, "{lock}: {id}");
+        }
+        assert!(s.run("text.insert", &json!({"text": "X"})).is_err(), "{lock}: typing went through the lock");
+        assert_eq!(s.doc, before, "{lock}: typing");
+    }
+}
+
+#[test]
+fn multi_selection_deletes_tracked() {
+    let mut s = multi_doc();
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    // "one", "six" + the paragraph mark + "se", and "eight".
+    run(&mut s, "select.text", json!({"text": "one"}));
+    add(&mut s, (1, 10), (2, 2));
+    let r = add(&mut s, (2, 6), (2, 11));
+    assert_eq!(r["pieces"], json!(["one", "six\nse", "eight"]));
+    run(&mut s, "text.delete", json!({}));
+    // The text stays, marked deleted; nothing between the pieces is.
+    assert_eq!(text(&s), "one two three\nfour five six\nseven eight nine");
+    let del = |s: &Session, i: usize, off: usize| s.doc.para_at(&Pos::body(i, 0)).unwrap().props_of_char(off).del.is_some();
+    for (i, off) in [(0, 0), (0, 2), (1, 10), (1, 12), (2, 0), (2, 1), (2, 6), (2, 10)] {
+        assert!(del(&s, i, off), "({i}, {off}) not marked deleted");
+    }
+    for (i, off) in [(0, 3), (0, 8), (1, 0), (1, 9), (2, 2), (2, 5), (2, 12)] {
+        assert!(!del(&s, i, off), "({i}, {off}) marked deleted");
+    }
+    assert!(s.doc.para_at(&Pos::body(1, 0)).unwrap().mark.del.is_some(), "the paragraph mark is marked deleted");
+    assert!(!s.doc.revisions.is_empty());
+    assert_eq!(s.sel, crate::Selection::caret(Pos::body(0, 0)));
+    // One undo takes the whole tracked deletion back.
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!del(&s, 0, 0) && !del(&s, 1, 10) && !del(&s, 2, 6));
+    assert!(s.doc.para_at(&Pos::body(1, 0)).unwrap().mark.del.is_none());
+}
+
+#[test]
+fn multi_selection_stops_at_its_piece_limit() {
+    // 10,001 one-letter words; the first 9,999 are already pieces.
+    let mut s = s();
+    run(&mut s, "document.setText", json!({"text": "x ".repeat(10_001)}));
+    let piece = |i: usize| (Pos::body(0, 2 * i), Pos::body(0, 2 * i + 1));
+    let pieces: Vec<_> = (0..9_999).map(piece).collect();
+    let (a, b) = piece(9_998);
+    s.sel = crate::Selection { anchor: a, focus: b };
+    s.column =
+        Some(crate::ColumnBlock { sel: s.sel.clone(), anchor_x: 0.0, focus_x: 0.0, segments: pieces.clone(), cells: None, pieces: Some(pieces) });
+    // The 10,000th piece is taken, the next one refused and the pieces kept.
+    let r = add(&mut s, (0, 2 * 9_999), (0, 2 * 9_999 + 1));
+    assert_eq!(r["pieces"].as_array().map(Vec::len), Some(10_000));
+    assert!(s.run("select.add", &json!({"anchor": {"block": 0, "off": 20_000}, "focus": {"block": 0, "off": 20_001}})).is_err());
+    assert_eq!(s.selection_pieces().map(<[_]>::len), Some(10_000));
+}
+
 #[test]
 fn style_inspector_reports_and_clears_levels() {
     let mut s = s();

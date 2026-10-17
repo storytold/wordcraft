@@ -25,6 +25,7 @@ pub mod inspector;
 pub mod lists;
 pub mod mailings;
 pub mod moves;
+pub mod multisel;
 pub mod objects;
 pub mod options;
 pub mod outline;
@@ -61,6 +62,7 @@ pub fn registry() -> Registry {
     v.extend(text::specs());
     v.extend(caret::specs());
     v.extend(column::specs());
+    v.extend(multisel::specs());
     v.extend(edit::specs());
     v.extend(paste::specs());
     v.extend(format::specs());
@@ -141,6 +143,14 @@ pub fn selected_paths(s: &Session) -> Vec<wordcraft_doc::Path> {
         && let Some(segs) = s.column_segments()
     {
         return segs.iter().map(|(a, _)| a.path.clone()).collect();
+    }
+    // Separate pieces of text: the paragraphs they touch, once each.
+    if s.selection_pieces().is_some()
+        && let Some(segs) = s.column_segments()
+    {
+        let mut paths: Vec<wordcraft_doc::Path> = segs.iter().map(|(a, _)| a.path.clone()).collect();
+        paths.dedup();
+        return paths;
     }
     let (a, b) = s.sel.ordered();
     s.doc.para_paths_in(&a, &b)

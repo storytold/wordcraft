@@ -978,7 +978,7 @@ pub(crate) fn select_range(s: &mut Session, story: StoryRef, tp: &Path, rows: (u
     let focus = segments.iter().rev().find(|(_, b)| b.path.0.len() == depth + 3).map_or(&last.1, |(_, b)| b).clone();
     let sel = Selection { anchor: first.0.clone(), focus };
     s.sel = sel.clone();
-    s.column = Some(crate::ColumnBlock { sel, anchor_x: 0.0, focus_x: 0.0, segments, cells: Some(range) });
+    s.column = Some(crate::ColumnBlock { sel, anchor_x: 0.0, focus_x: 0.0, segments, cells: Some(range), pieces: None });
     s.column_mode = false;
     s.widened = None;
     s.goal_x = None;

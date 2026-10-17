@@ -69,6 +69,8 @@ pub struct CanvasState {
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
+    /// Ctrl/⌘+press with text selected: adding a separate piece to the selection (#788).
+    multi_drag: Option<MultiDrag>,
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
@@ -171,6 +173,7 @@ impl CanvasState {
         self.dragging = false;
         self.column_drag = None;
         self.unit_drag = None;
+        self.multi_drag = None;
     }
 
     /// How many pages have a cached rendering.
@@ -201,6 +204,7 @@ impl Default for CanvasState {
             column_drag: None,
             last_press: None,
             unit_drag: None,
+            multi_drag: None,
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
@@ -263,6 +267,33 @@ struct UnitDrag {
     start: Pos,
     end: Pos,
     last: Pos,
+}
+
+/// See [`CanvasState::multi_drag`]. A drag past the click distance adds the piece from `start`
+/// to the pointer (`select.add`); a click without one selects the sentence on release, and the
+/// selection is kept so that a second click (a Ctrl/⌘+double-click) adds the word instead.
+struct MultiDrag {
+    /// The selection the piece is added to.
+    sel: wordcraft_engine::Selection,
+    column: Option<wordcraft_engine::ColumnBlock>,
+    /// Where the press hit, its screen point and the last position the pointer hit.
+    start: Pos,
+    at: Pos2,
+    last: Pos,
+    /// A piece was added (dragged, or the word of a double-click).
+    added: bool,
+    /// Clicks in a row (1, or 2 for a double-click).
+    clicks: u8,
+}
+
+impl MultiDrag {
+    /// Put back the selection the piece is added to, clamped to the document as it is now; if
+    /// the document changed under it, its pieces are dropped and only the clamped selection stays.
+    fn restore(&self, s: &mut wordcraft_engine::Session) {
+        let sel = wordcraft_engine::Selection { anchor: s.doc.clamp(&self.sel.anchor), focus: s.doc.clamp(&self.sel.focus) };
+        s.column = if sel == self.sel { self.column.clone() } else { None };
+        s.sel = sel;
+    }
 }
 
 /// Clicks in a row for a press at `at` (time `now`) after `last`: within the double-click
@@ -2159,6 +2190,12 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.canvas.dragging = false;
         return;
     }
+    // The press of a Ctrl/⌘+double-click already added the word.
+    if released_clicks > 0 && app.canvas.multi_drag.as_ref().is_some_and(|m| m.clicks == released_clicks) {
+        app.canvas.multi_drag = None;
+        app.canvas.dragging = false;
+        return;
+    }
     // Double-click in the header/footer area edits it (creating it when the page has none, #960);
     // double-click in the body leaves it. Print Layout only: the other views show no margins.
     let hf_zone = if app.session.view.mode == wordcraft_layout::ViewMode::Print && !app.session.view.read_mode {
@@ -2207,6 +2244,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         let clicks = press_count(app.canvas.last_press, now, p, delay, dist);
         app.canvas.last_press = Some((now, p, clicks));
         app.canvas.unit_drag = None;
+        let prev_multi = app.canvas.multi_drag.take();
         // A double-click that enters or leaves a header/footer is handled on release.
         let hf_switch =
             (hf_zone.is_some() && story == StoryRef::Body) || (matches!(story, StoryRef::Part(_)) && !in_text_box(app) && hf_zone.is_none());
@@ -2293,6 +2331,31 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             return;
         }
         let pj = serde_json::to_value(&pos).unwrap_or_default();
+        // With text selected, Ctrl/⌘+drag adds a separate piece and Ctrl/⌘+double-click the word
+        // (#788); a Ctrl/⌘+click without a drag still selects the sentence, on release. With no
+        // text selected, Ctrl/⌘+click and drag selects by sentences (#549).
+        if mods.command && !mods.shift && !mods.alt {
+            if clicks == 2
+                && let Some(mut m) = prev_multi
+            {
+                m.restore(&mut app.session);
+                let _ = app.run("select.add", json!({"word": pj}));
+                m.clicks = 2;
+                m.added = true;
+                app.canvas.multi_drag = Some(m);
+                app.session.page_hint = page;
+                app.canvas.dragging = true;
+                return;
+            }
+            if clicks == 1 && (!app.session.sel.is_collapsed() || app.session.selection_pieces().is_some()) {
+                let (sel, column) = (app.session.sel.clone(), app.session.column.clone());
+                app.canvas.multi_drag = Some(MultiDrag { sel, column, start: pos.clone(), at: p, last: pos, added: false, clicks: 1 });
+                app.canvas.column_drag = None;
+                app.session.page_hint = page;
+                app.canvas.dragging = true;
+                return;
+            }
+        }
         // Alt+drag selects a column (block) of text.
         if mods.alt && !mods.shift && !mods.command {
             let _ = app.run("caret.set", json!({"pos": pj}));
@@ -2320,6 +2383,25 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.session.page_hint = page;
         app.canvas.dragging = true;
         // Format painter applies on mouse up.
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && let Some(m) = app.canvas.multi_drag.as_mut()
+    {
+        // Each frame adds the piece to the selection as it was, so the drag shows it live (the
+        // button held after a double-click keeps the word).
+        let dist = ui.ctx().options(|o| o.input_options.max_click_dist);
+        if m.clicks == 1
+            && let Some(pos) = layout.hit(page, x, y, m.start.story)
+            && pos != m.last
+            && (m.added || (p - m.at).length() > dist)
+        {
+            m.last = pos.clone();
+            m.added = true;
+            m.restore(&mut app.session);
+            let _ = app.session.run("select.add", &json!({"anchor": m.start, "focus": pos}));
+            app.session.page_hint = page;
+            app.canvas.caret_visible_since = crate::now_ms();
+        }
     } else if app.canvas.dragging
         && ui.input(|i| i.pointer.primary_down())
         && let Some((from, last)) = app.canvas.column_drag
@@ -2368,6 +2450,15 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.canvas.dragging = false;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
+        // A Ctrl/⌘+click that didn't drag selects the sentence (kept for a double-click, above).
+        match app.canvas.multi_drag.as_ref() {
+            Some(m) if !m.added => {
+                let pj = serde_json::to_value(&m.start).unwrap_or_default();
+                let _ = app.run("caret.set", json!({"pos": pj}));
+                let _ = app.run("select.sentence", json!({}));
+            }
+            _ => app.canvas.multi_drag = None,
+        }
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
             let _ = app.run("edit.pasteFormat", json!({}));
         }
@@ -3322,6 +3413,77 @@ mod tests {
         multi_drag(&mut h, at, at, 2);
         let (s, e) = h.state().session.sel.ordered();
         assert_eq!((s, e), (Pos::body(0, 0), Pos::body(0, 6)));
+    }
+
+    /// #788: with text selected, Ctrl/⌘+drag adds a separate piece and Ctrl/⌘+double-click adds
+    /// a word; a Ctrl/⌘+click without a drag still selects the sentence.
+    #[test]
+    fn ctrl_drag_adds_separate_pieces() {
+        use egui::{Event, Modifiers, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "Alpha beta gamma delta\rSecond para\rThird para"})).unwrap();
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        h.state_mut().run("select.text", json!({"text": "Alpha"})).unwrap();
+        h.step();
+        let screen = |h: &mut egui_kittest::Harness<'_, WordApp>, pos: Pos| {
+            let c = h.state_mut().session.layout().caret(&pos).expect("caret");
+            page_to_screen(h.state_mut(), c.page, c.x + 1.0, c.top + c.height / 2.0).expect("on screen")
+        };
+        let ctrl = Modifiers { ctrl: true, command: true, ..Default::default() };
+        let button = |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: ctrl };
+        let press = |h: &mut egui_kittest::Harness<'_, WordApp>, at: Pos2, clicks: usize, to: Pos2| {
+            h.event(Event::ModifiersChanged(ctrl));
+            h.event(Event::PointerMoved(at));
+            h.step();
+            for i in 0..clicks {
+                h.event(button(at, true));
+                h.step();
+                if i + 1 < clicks {
+                    h.event(button(at, false));
+                    h.step();
+                }
+            }
+            for k in 1..=4 {
+                h.event(Event::PointerMoved(at + (to - at) * (k as f32 / 4.0)));
+                h.step();
+            }
+            h.event(button(to, false));
+            for _ in 0..3 {
+                h.step();
+            }
+            // Let the double-click time pass.
+            for _ in 0..40 {
+                h.step();
+            }
+        };
+        let pieces = |h: &egui_kittest::Harness<'_, WordApp>| {
+            let s = &h.state().session;
+            s.selection_pieces().map(|p| p.iter().map(|(a, b)| s.doc.copy_range(a, b).plain_text()).collect::<Vec<_>>())
+        };
+        // Ctrl+drag across "Second" adds it.
+        let (from, to) = (screen(&mut h, Pos::body(1, 0)), screen(&mut h, Pos::body(1, 6)));
+        press(&mut h, from, 1, to);
+        assert_eq!(pieces(&h), Some(vec!["Alpha".to_string(), "Second".to_string()]));
+        // Ctrl+double-click in "Third" adds the word.
+        let at = screen(&mut h, Pos::body(2, 2));
+        press(&mut h, at, 2, at);
+        assert_eq!(pieces(&h), Some(vec!["Alpha".to_string(), "Second".to_string(), "Third ".to_string()]));
+        // A Ctrl+click without a drag selects the sentence instead.
+        let at = screen(&mut h, Pos::body(0, 8));
+        press(&mut h, at, 1, at);
+        assert_eq!(pieces(&h), None);
+        assert_eq!(h.state().session.sel.ordered(), (Pos::body(0, 0), Pos::body(0, 22)));
     }
 
     /// #1014: Ctrl+drag on a shape leaves it and drops a copy; a plain drag moves it.

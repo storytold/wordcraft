@@ -2234,3 +2234,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Separate pieces of text selected at once (#788)
+	Add to Selection	新增至選取範圍

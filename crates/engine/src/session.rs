@@ -59,6 +59,9 @@ pub struct ColumnBlock {
     /// Set when the block is whole table cells (Select Cell, Row, Column or Table, or the mouse in
     /// a table's selection areas): one segment per paragraph of the cells.
     pub cells: Option<CellRange>,
+    /// Set when the selection is separate pieces of text (Ctrl+drag, `select.add`, #788): each
+    /// piece's `(start, end)`, sorted and apart; `segments` splits them at paragraph ends.
+    pub pieces: Option<Vec<(Pos, Pos)>>,
 }
 
 /// Whole table cells selected: rows `rows.0..=rows.1` and every cell of them that reaches into
@@ -690,6 +693,11 @@ impl Session {
     pub fn column_segments(&self) -> Option<&[(Pos, Pos)]> {
         // Cells that are one run of the text are an ordinary stream selection.
         self.column.as_ref().filter(|c| c.sel == self.sel && !c.cells.as_ref().is_some_and(|r| r.stream)).map(|c| c.segments.as_slice())
+    }
+
+    /// The separate pieces of text selected, if the selection is that (see [`ColumnBlock::pieces`]).
+    pub fn selection_pieces(&self) -> Option<&[(Pos, Pos)]> {
+        self.column.as_ref().filter(|c| c.sel == self.sel).and_then(|c| c.pieces.as_deref())
     }
 
     /// The whole table cells selected, if the selection is that (see [`CellRange`]).

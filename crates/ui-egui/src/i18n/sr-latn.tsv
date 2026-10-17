@@ -2243,3 +2243,5 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# Separate pieces of text selected at once (#788)
+	Add to Selection	Dodaj u izbor
