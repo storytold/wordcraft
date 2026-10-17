@@ -2632,3 +2632,6 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	Border Styles	Stilovi obruba
+	Border\nStyles	Stilovi\nobruba
+	Click a table border to paint it with the chosen border style. Esc stops.	Kliknite obrub tablice da biste ga obojili odabranim stilom obruba. Esc zaustavlja.
