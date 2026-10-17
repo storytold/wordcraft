@@ -2610,6 +2610,23 @@
 	Existing File or Web Page	Съществуващ файл или уеб страница
 	Link to:	Връзка към:
 	Place in This Document	Място в този документ
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Проверка на правописа и граматиката с LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Изпраща текста на абзаците ви към сървъра на LanguageTool по-долу. Когато е изключено, се използва вградената проверка на WordCraft и нищо не напуска този компютър.
+	Server:	Сървър:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	За да използвате собствен сървър на LanguageTool, въведете адреса му, например http://localhost:8081.
+	Username:	Потребителско име:
+	API key:	API ключ:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	Тази система няма хранилище за идентификационни данни, затова API ключът се записва във файла с настройки на WordCraft.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Системното хранилище за идентификационни данни не можа да запази API ключа ({error}), затова той се записва във файла с настройки на WordCraft.
+	The API key is kept in the system's credential store.	API ключът се пази в системното хранилище за идентификационни данни.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	Системното хранилище за идентификационни данни вече няма API ключа. Въведете го отново, за да продължите проверката с LanguageTool.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Старият API ключ все още е в системното хранилище за идентификационни данни: не можа да бъде премахнат ({error}).
+	Detect automatically	Автоматично разпознаване
+	Each paragraph's proofing language	Езикът за проверка на всеки абзац
+	Language:	Език:
+	Paragraphs checked: {count}	Проверени абзаци: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Проверката с LanguageTool изисква настолното приложение; версията за браузър все още не може да изпраща текст към сървър за проверка.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Колона {n}
 	Header row	Заглавен ред

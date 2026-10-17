@@ -2647,3 +2647,19 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	API key:	API-nyckel:
+	Check spelling and grammar with LanguageTool	Kontrollera stavning och grammatik med LanguageTool
+	Detect automatically	Identifiera automatiskt
+	Each paragraph's proofing language	Varje styckes språkkontrollspråk
+	Language:	Språk:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Kontroll med LanguageTool kräver skrivbordsappen; webbversionen kan ännu inte skicka text till en kontrollserver.
+	Paragraphs checked: {count}	Kontrollerade stycken: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Skickar texten i dina stycken till LanguageTool-servern nedan. När det är av används WordCrafts inbyggda kontroll och inget lämnar den här datorn.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Ange adressen till din egen LanguageTool-server, till exempel http://localhost:8081.
+	Username:	Användarnamn:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	Systemet har ingen lagring för autentiseringsuppgifter, så API-nyckeln sparas i WordCrafts inställningsfil.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Systemets lagring för autentiseringsuppgifter kunde inte spara API-nyckeln ({error}), så den sparas i WordCrafts inställningsfil.
+	The API key is kept in the system's credential store.	API-nyckeln förvaras i systemets lagring för autentiseringsuppgifter.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	Systemets lagring för autentiseringsuppgifter har inte längre API-nyckeln. Ange den igen för att fortsätta kontrollera med LanguageTool.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Den gamla API-nyckeln finns kvar i systemets lagring för autentiseringsuppgifter: den kunde inte tas bort ({error}).

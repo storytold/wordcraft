@@ -274,6 +274,9 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
+    section(ui, "LanguageTool");
+    language_tool(app, ui);
+    ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
     ui.add_space(8.0);
@@ -347,6 +350,85 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::Cs => tl!("Czech"),
         // English uses its bundled word list; Bulgarian has no dictionary yet.
         ProofLang::En | ProofLang::Bg | ProofLang::Other => "",
+    }
+}
+
+/// Options › Proofing › LanguageTool (#575). Off by default: when on, paragraph
+/// text goes to the chosen server. The fields edit the settings directly (a half-typed address
+/// only takes effect once it's a web address); the switch and language go through
+/// `ui.languageTool`.
+fn language_tool(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_languagetool::{DEFAULT_SERVER, http};
+    let mut on = app.ui.language_tool.enabled;
+    let r = ui.add_enabled(http::available(), egui::Checkbox::new(&mut on, tl!("Check spelling and grammar with LanguageTool")));
+    if !http::available() {
+        r.on_disabled_hover_text(tl!(http::UNSUPPORTED_REASON));
+    } else if r.changed()
+        && let Err(e) = app.run("ui.languageTool", json!({"enabled": on}))
+    {
+        app.status(e);
+    }
+    ui.label(
+        egui::RichText::new(tl!(
+            "Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer."
+        ))
+        .small()
+        .weak(),
+    );
+    let key_note = api_key_note(app);
+    let s = &mut app.ui.language_tool;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Server:"));
+        ui.add(egui::TextEdit::singleline(&mut s.server).hint_text(DEFAULT_SERVER).desired_width(300.0));
+    });
+    ui.label(egui::RichText::new(tl!("Use your own LanguageTool server by entering its address, such as http://localhost:8081.")).small().weak());
+    ui.horizontal(|ui| {
+        ui.label(tl!("Username:"));
+        ui.add(egui::TextEdit::singleline(&mut s.username).desired_width(220.0));
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("API key:"));
+        ui.add(egui::TextEdit::singleline(&mut s.api_key).password(true).desired_width(220.0));
+    });
+    ui.label(egui::RichText::new(key_note).small().weak());
+    let current = s.language.clone();
+    let label = |code: &str| match code {
+        "auto" | "" => tl!("Detect automatically").to_string(),
+        "document" => tl!("Each paragraph's proofing language").to_string(),
+        c => c.to_string(),
+    };
+    ui.horizontal(|ui| {
+        ui.label(tl!("Language:"));
+        egui::ComboBox::from_id_salt("languagetool_language").selected_text(label(&current)).width(260.0).show_ui(ui, |ui| {
+            for code in ["auto", "document"] {
+                if ui.selectable_label(current == code, label(code)).clicked() {
+                    let _ = app.run("ui.languageTool", json!({"language": code}));
+                }
+            }
+        });
+    });
+    if let Some(line) = crate::languagetool::status_line(app) {
+        ui.label(egui::RichText::new(line).small());
+    }
+}
+
+/// Where the LanguageTool API key is kept (#764): the system's credential store, or WordCraft's
+/// settings file where there is none or it refused the key.
+pub(crate) fn api_key_note(app: &WordApp) -> String {
+    use crate::LtKeyError;
+    match (&app.services.secrets, &app.lt_key.error) {
+        (None, _) => tl!("This system has no credential store, so the API key is saved in WordCraft's settings file.").to_string(),
+        (Some(_), Some(LtKeyError::Store(e))) => crate::i18n::fmt(
+            tl!("The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file."),
+            &[("error", e)],
+        ),
+        (Some(_), Some(LtKeyError::Lost)) => {
+            tl!("The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.").to_string()
+        }
+        (Some(_), Some(LtKeyError::NotRemoved(e))) => {
+            crate::i18n::fmt(tl!("The old API key is still in the system's credential store: it could not be removed ({error})."), &[("error", e)])
+        }
+        (Some(_), None) => tl!("The API key is kept in the system's credential store.").to_string(),
     }
 }
 

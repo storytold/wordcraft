@@ -1598,6 +1598,23 @@
 	Sat:	Küllastus:
 	Lum:	Heledus:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Kontrolli õigekirja ja grammatikat LanguageTooliga
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Saadab lõikude teksti allpool märgitud LanguageTooli serverisse. Väljas olekus kasutatakse WordCrafti sisseehitatud kontrollijat ja midagi ei lahku sellest arvutist.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Oma LanguageTooli serveri kasutamiseks sisestage selle aadress, näiteks http://localhost:8081.
+	Username:	Kasutajanimi:
+	API key:	API-võti:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	Selles süsteemis pole mandaadihoidlat, seega salvestatakse API-võti WordCrafti sätete faili.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Süsteemi mandaadihoidla ei saanud API-võtit hoida ({error}), seega salvestatakse see WordCrafti sätete faili.
+	The API key is kept in the system's credential store.	API-võtit hoitakse süsteemi mandaadihoidlas.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	Süsteemi mandaadihoidlas pole enam API-võtit. Sisestage see uuesti, et LanguageTooliga kontrollimist jätkata.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Vana API-võti on endiselt süsteemi mandaadihoidlas: seda ei saanud eemaldada ({error}).
+	Detect automatically	Tuvasta automaatselt
+	Each paragraph's proofing language	Iga lõigu õigekirjakeel
+	Language:	Keel:
+	Paragraphs checked: {count}	Kontrollitud lõike: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTooli kontroll vajab töölauarakendust; brauseriversioon ei saa veel teksti kontrollserverisse saata.
 	Right-to-Left Table	Paremalt vasakule tabel
 	Right-to-Left Section	Paremalt vasakule jaotis
 	Table direction:	Tabeli suund:

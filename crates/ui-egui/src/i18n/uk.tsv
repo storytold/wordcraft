@@ -1591,6 +1591,23 @@
 	Sat:	Насиченість:
 	Lum:	Яскравість:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Перевіряти правопис і граматику за допомогою LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Надсилає текст ваших абзаців на вказаний нижче сервер LanguageTool. Якщо вимкнено, використовується вбудована перевірка WordCraft і ніщо не залишає цей комп'ютер.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Щоб використовувати власний сервер LanguageTool, введіть його адресу, наприклад http://localhost:8081.
+	Username:	Ім'я користувача:
+	API key:	Ключ API:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	У цій системі немає сховища облікових даних, тому ключ API зберігається у файлі налаштувань WordCraft.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Системне сховище облікових даних не змогло зберегти ключ API ({error}), тому він зберігається у файлі налаштувань WordCraft.
+	The API key is kept in the system's credential store.	Ключ API зберігається в системному сховищі облікових даних.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	У системному сховищі облікових даних більше немає ключа API. Введіть його знову, щоб і далі перевіряти з LanguageTool.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Старий ключ API досі в системному сховищі облікових даних: його не вдалося видалити ({error}).
+	Detect automatically	Визначати автоматично
+	Each paragraph's proofing language	Мова перевірки кожного абзацу
+	Language:	Мова:
+	Paragraphs checked: {count}	Перевірено абзаців: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Перевірка з LanguageTool потребує настільного застосунку; версія для браузера поки що не може надсилати текст на сервер перевірки.
 	Accessibility Pane	Панель доступності
 	Alt Text Pane	Панель альтернативного тексту
 	Alt\nText	Альтернативний\nтекст

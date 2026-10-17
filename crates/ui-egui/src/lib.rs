@@ -61,6 +61,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+pub mod languagetool;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -73,6 +74,7 @@ pub mod read_aloud;
 pub mod ribbon;
 pub mod ruler_tabs;
 pub mod scroll;
+pub mod secrets;
 pub mod system_clipboard;
 pub mod table_mouse;
 pub mod table_pen;
@@ -167,6 +169,9 @@ pub struct Services {
     /// `xdg-mime`. `None` (web, macOS) hides the button; macOS shows how to do it in Finder
     /// instead. An error means nothing changed.
     pub make_default_app: Option<Box<dyn Fn() -> Result<DefaultApp, String>>>,
+    /// Desktop: the system's credential store, where the LanguageTool API key is kept instead of
+    /// `ui.json` (#764). `None` (web, no store) keeps it in `ui.json`.
+    pub secrets: Option<Box<dyn secrets::SecretStore>>,
 }
 
 /// How Save in the Save Changes prompt went.
@@ -273,6 +278,10 @@ pub struct UiState {
     /// Digits entered for a multi-key Quick Access Toolbar badge; never persisted.
     #[serde(skip)]
     pub keytip_prefix: String,
+    /// LanguageTool checking (File › Options › Proofing, #575): off by default.
+    pub language_tool: wordcraft_languagetool::Settings,
+    /// The credential store holds the LanguageTool API key, so `ui.json` doesn't (#764).
+    pub language_tool_key_in_store: bool,
     /// Keytips (Alt) state; not persisted, it resets each session.
     #[serde(skip)]
     pub keytips: crate::keytips::Phase,
@@ -360,6 +369,8 @@ impl Default for UiState {
             read_aloud_skip_citations: true,
             keytips_enabled: true,
             keytip_prefix: String::new(),
+            language_tool: wordcraft_languagetool::Settings::default(),
+            language_tool_key_in_store: false,
             keytips: crate::keytips::Phase::Off,
             alt_pressed: false,
             alt_chord_used: false,
@@ -414,6 +425,29 @@ fn migrate_units(v: &mut Value) {
         let old = Value::String(old.to_string());
         editing.insert("measurementUnits".into(), old);
     }
+}
+
+/// Where the LanguageTool API key is kept (#764).
+#[derive(Default)]
+pub(crate) struct LtKeyPlace {
+    /// The key the credential store is known to hold; `ui.json` leaves out a key equal to it.
+    stored: Option<String>,
+    /// `ui.json` said the store holds a key but it couldn't be read: keep saying so, so the key
+    /// comes back once the store is reachable again.
+    unread: bool,
+    /// Why the store couldn't keep, give back or forget the key, for File › Options.
+    pub(crate) error: Option<LtKeyError>,
+}
+
+/// What went wrong with the LanguageTool API key in the credential store (#764).
+pub(crate) enum LtKeyError {
+    /// The store failed to save or read the key: its error.
+    Store(String),
+    /// `ui.json` said the store holds the key, but it has none (removed outside WordCraft) or one
+    /// too long to be a key.
+    Lost,
+    /// A cleared key couldn't be removed from the store: its error.
+    NotRemoved(String),
 }
 
 /// The application.
@@ -515,6 +549,10 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// LanguageTool checking in flight (`ui.languageTool`, #575).
+    pub language_tool: languagetool::LtLink,
+    /// Where the LanguageTool API key is kept (#764): see [`WordApp::sync_secrets`].
+    pub(crate) lt_key: LtKeyPlace,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
@@ -623,6 +661,8 @@ impl WordApp {
             smart_art_typing: None,
             outline_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
+            language_tool: languagetool::LtLink::default(),
+            lt_key: LtKeyPlace::default(),
             ctx: None,
             read_aloud_at: None,
             read_aloud_error: None,
@@ -683,6 +723,11 @@ impl WordApp {
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
+        // A key the credential store holds is left out (#764).
+        ui.language_tool_key_in_store = self.language_tool_key_in_store();
+        if ui.language_tool_key_in_store {
+            ui.language_tool.api_key.clear();
+        }
         ui
     }
 
@@ -730,6 +775,79 @@ impl WordApp {
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
+        self.load_secrets();
+    }
+
+    /// Read the LanguageTool API key back from the credential store when `ui.json` says it is
+    /// there (#764). A key still in `ui.json` (from before #764, or kept there when the store
+    /// refused it) wins; [`WordApp::sync_secrets`] moves it.
+    fn load_secrets(&mut self) {
+        let in_store = std::mem::take(&mut self.ui.language_tool_key_in_store);
+        self.lt_key = LtKeyPlace::default();
+        let Some(store) = &self.services.secrets else { return };
+        if !in_store || !self.ui.language_tool.api_key.is_empty() {
+            return;
+        }
+        match store.get(secrets::LANGUAGE_TOOL_KEY) {
+            Ok(Some(key)) if key.len() <= secrets::MAX_SECRET_LEN => {
+                self.ui.language_tool.api_key = key.clone();
+                self.lt_key.stored = Some(key);
+            }
+            // Removed outside WordCraft, or too long to be a key: say so rather than let it vanish.
+            Ok(_) => {
+                log::warn!("credential store: the LanguageTool API key is no longer there");
+                self.lt_key.error = Some(LtKeyError::Lost);
+            }
+            Err(e) => {
+                log::warn!("credential store: cannot read the LanguageTool API key: {e}");
+                self.lt_key.unread = true;
+                self.lt_key.error = Some(LtKeyError::Store(e));
+            }
+        }
+    }
+
+    /// Bring the credential store up to date with the LanguageTool API key (#764): save a new or
+    /// changed key there, or forget a cleared one. Run before saving `ui.json`, which then leaves
+    /// the key out ([`WordApp::prefs`]). `true` when the store changed, so `ui.json` should be
+    /// written again. Without a store, or when it fails, the key stays in `ui.json` and
+    /// File › Options says why.
+    pub fn sync_secrets(&mut self) -> bool {
+        let Some(store) = &self.services.secrets else { return false };
+        let key = &self.ui.language_tool.api_key;
+        if key.is_empty() {
+            // The key couldn't be read: the user didn't clear it, so leave it in the store.
+            if self.lt_key.unread || self.lt_key.stored.take().is_none() {
+                return false;
+            }
+            self.lt_key.error = match store.delete(secrets::LANGUAGE_TOOL_KEY) {
+                Ok(()) => None,
+                Err(e) => {
+                    log::warn!("credential store: cannot remove the LanguageTool API key: {e}");
+                    Some(LtKeyError::NotRemoved(e))
+                }
+            };
+            return true;
+        }
+        if self.lt_key.stored.as_deref() == Some(key.as_str()) {
+            return false;
+        }
+        match store.set(secrets::LANGUAGE_TOOL_KEY, key) {
+            Ok(()) => {
+                self.lt_key = LtKeyPlace { stored: Some(key.clone()), unread: false, error: None };
+                true
+            }
+            Err(e) => {
+                log::warn!("credential store: cannot save the LanguageTool API key: {e}");
+                self.lt_key.error = Some(LtKeyError::Store(e));
+                false
+            }
+        }
+    }
+
+    /// Whether the LanguageTool API key is kept in the credential store rather than `ui.json`.
+    pub fn language_tool_key_in_store(&self) -> bool {
+        let key = &self.ui.language_tool.api_key;
+        if key.is_empty() { self.lt_key.unread } else { self.lt_key.stored.as_deref() == Some(key.as_str()) }
     }
 
     /// Select the picture or icon the person just inserted or pasted, so it shows its handles.
@@ -830,6 +948,9 @@ impl WordApp {
             return self.set_autosave(&params);
         }
         if let Some(r) = table_pen::toggle(self, id, &params) {
+            return r;
+        }
+        if let Some(r) = languagetool::command(self, id, &params) {
             return r;
         }
         let ctx = self.ctx.clone();
@@ -1809,6 +1930,7 @@ impl WordApp {
         self.drain_control(ctx);
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
+        languagetool::poll(self, ctx);
         self.clear_stale_change_picture();
         let _ = self.poll_file_dialog();
         self.drain_inbox();

@@ -1831,6 +1831,23 @@ preview	Title	Örnek
 	Sat:	Doygunluk:
 	Lum:	Parlaklık:
 	Hex:	Onaltılık:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Yazım ve dil bilgisini LanguageTool ile denetle
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Paragraflarınızın metnini aşağıdaki LanguageTool sunucusuna gönderir. Kapalıyken WordCraft'ın yerleşik denetleyicisi kullanılır ve hiçbir şey bu bilgisayardan çıkmaz.
+	Server:	Sunucu:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Kendi LanguageTool sunucunuzu kullanmak için adresini girin, örneğin http://localhost:8081.
+	Username:	Kullanıcı adı:
+	API key:	API anahtarı:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	Bu sistemde kimlik bilgisi deposu yok, bu yüzden API anahtarı WordCraft'ın ayar dosyasına kaydedilir.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Sistemin kimlik bilgisi deposu API anahtarını saklayamadı ({error}), bu yüzden anahtar WordCraft'ın ayar dosyasına kaydedilir.
+	The API key is kept in the system's credential store.	API anahtarı sistemin kimlik bilgisi deposunda saklanır.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	Sistemin kimlik bilgisi deposunda artık API anahtarı yok. LanguageTool ile denetlemeye devam etmek için anahtarı yeniden girin.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Eski API anahtarı hâlâ sistemin kimlik bilgisi deposunda: kaldırılamadı ({error}).
+	Detect automatically	Otomatik algıla
+	Each paragraph's proofing language	Her paragrafın yazım denetimi dili
+	Language:	Dil:
+	Paragraphs checked: {count}	Denetlenen paragraf: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTool denetimi masaüstü uygulamasını gerektirir; tarayıcı sürümü henüz bir denetim sunucusuna metin gönderemez.
 	Accessibility Pane	Erişilebilirlik Bölmesi
 	Alt Text Pane	Alternatif Metin Bölmesi
 	Alt\nText	Alternatif\nMetin

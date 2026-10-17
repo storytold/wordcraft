@@ -1829,6 +1829,23 @@ preview	Title	Пример
 	Sat:	Насыщенность:
 	Lum:	Яркость:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Проверять орфографию и грамматику с помощью LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Отправляет текст ваших абзацев на указанный ниже сервер LanguageTool. Если выключено, используется встроенная проверка WordCraft и ничего не покидает этот компьютер.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Чтобы использовать свой сервер LanguageTool, введите его адрес, например http://localhost:8081.
+	Username:	Имя пользователя:
+	API key:	Ключ API:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	В этой системе нет хранилища учётных данных, поэтому ключ API сохраняется в файле настроек WordCraft.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Системное хранилище учётных данных не смогло сохранить ключ API ({error}), поэтому он сохраняется в файле настроек WordCraft.
+	The API key is kept in the system's credential store.	Ключ API хранится в системном хранилище учётных данных.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	В системном хранилище учётных данных больше нет ключа API. Введите его снова, чтобы продолжить проверку с LanguageTool.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Старый ключ API всё ещё в системном хранилище учётных данных: его не удалось удалить ({error}).
+	Detect automatically	Определять автоматически
+	Each paragraph's proofing language	Язык проверки каждого абзаца
+	Language:	Язык:
+	Paragraphs checked: {count}	Проверено абзацев: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Для проверки с LanguageTool нужно настольное приложение; версия для браузера пока не может отправлять текст на сервер проверки.
 	Accessibility Pane	Область специальных возможностей
 	Alt Text Pane	Область замещающего текста
 	Alt\nText	Замещающий\nтекст

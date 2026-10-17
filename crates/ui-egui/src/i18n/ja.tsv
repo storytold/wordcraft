@@ -1579,6 +1579,23 @@
 	Sat:	鮮やかさ:
 	Lum:	明るさ:
 	Hex:	16 進数:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	LanguageTool でスペルと文法をチェックする
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	段落のテキストを下の LanguageTool サーバーに送信します。オフのときは WordCraft 内蔵のチェッカーを使い、何もこのコンピューターの外に出ません。
+	Server:	サーバー:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	独自の LanguageTool サーバーを使うには、そのアドレスを入力します (例: http://localhost:8081)。
+	Username:	ユーザー名:
+	API key:	API キー:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	このシステムには資格情報ストアがないため、API キーは WordCraft の設定ファイルに保存されます。
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	システムの資格情報ストアに API キーを保存できなかったため ({error})、WordCraft の設定ファイルに保存されます。
+	The API key is kept in the system's credential store.	API キーはシステムの資格情報ストアに保管されています。
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	システムの資格情報ストアに API キーがなくなりました。LanguageTool でのチェックを続けるには、もう一度入力してください。
+	The old API key is still in the system's credential store: it could not be removed ({error}).	古い API キーはまだシステムの資格情報ストアにあります。削除できませんでした ({error})。
+	Detect automatically	自動検出
+	Each paragraph's proofing language	各段落の校正言語
+	Language:	言語:
+	Paragraphs checked: {count}	チェック済みの段落: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTool によるチェックにはデスクトップ版が必要です。ブラウザー版はまだチェック用サーバーにテキストを送信できません。
 	Accessibility Pane	アクセシビリティ ウィンドウ
 	Alt Text Pane	代替テキスト ウィンドウ
 	Alt\nText	代替\nテキスト

@@ -2509,6 +2509,22 @@ preview	Title	Ukázka
 	Reading Text Size	Velikost textu pro čtení
 	Correct TWo INitial CApitals	Opravovat DVě POčáteční VElká písmena
 	Correct accidental usage of cAPS LOCK key	Opravovat náhodné použití klávesy cAPS LOCK
+	API key:	Klíč API:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	Tento systém nemá úložiště přihlašovacích údajů, proto se klíč API ukládá do souboru nastavení WordCraftu.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Systémové úložiště přihlašovacích údajů nemohlo klíč API uložit ({error}), proto se ukládá do souboru nastavení WordCraftu.
+	The API key is kept in the system's credential store.	Klíč API je uložen v systémovém úložišti přihlašovacích údajů.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	Systémové úložiště přihlašovacích údajů už klíč API nemá. Zadejte ho znovu, abyste mohli dál kontrolovat pomocí LanguageTool.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Starý klíč API je stále v systémovém úložišti přihlašovacích údajů: nepodařilo se ho odebrat ({error}).
+	Check spelling and grammar with LanguageTool	Kontrolovat pravopis a gramatiku pomocí LanguageTool
+	Detect automatically	Rozpoznat automaticky
+	Each paragraph's proofing language	Jazyk kontroly každého odstavce
+	Language:	Jazyk:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Kontrola pomocí LanguageTool vyžaduje desktopovou aplikaci; verze v prohlížeči zatím nemůže odesílat text na kontrolní server.
+	Paragraphs checked: {count}	Zkontrolované odstavce: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Odesílá text vašich odstavců na níže uvedený server LanguageTool. Když je vypnuto, použije se vestavěná kontrola WordCraftu a nic neopustí tento počítač.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Chcete-li použít vlastní server LanguageTool, zadejte jeho adresu, například http://localhost:8081.
+	Username:	Uživatelské jméno:
 	Region:	Oblast:
 	Automatic ({region})	Automaticky ({region})
 	Text of the nearest paragraph with a given style (running headers)	Text nejbližšího odstavce s daným stylem (živá záhlaví)

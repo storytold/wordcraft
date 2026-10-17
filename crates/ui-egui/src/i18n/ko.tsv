@@ -2488,3 +2488,8 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	이 시스템에는 자격 증명 저장소가 없으므로 API 키가 WordCraft 설정 파일에 저장됩니다.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	시스템 자격 증명 저장소에 API 키를 보관할 수 없어({error}) WordCraft 설정 파일에 저장됩니다.
+	The API key is kept in the system's credential store.	API 키는 시스템 자격 증명 저장소에 보관됩니다.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	시스템 자격 증명 저장소에 더 이상 API 키가 없습니다. LanguageTool로 계속 검사하려면 다시 입력하세요.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	이전 API 키가 아직 시스템 자격 증명 저장소에 있습니다. 제거할 수 없습니다({error}).

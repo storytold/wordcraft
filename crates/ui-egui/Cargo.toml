@@ -18,6 +18,8 @@ wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-zotero = { workspace = true }
+wordcraft-languagetool = { workspace = true }
+wordcraft-proof = { workspace = true }
 egui = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -33,6 +35,12 @@ sys-locale = { version = "0.3", features = ["js"] }
 # bus; pinned to one version so nothing is built twice.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
+
+# The LanguageTool API key in the system's credential store (#764): Keychain on macOS, Credential
+# Manager on Windows, the Secret Service on Linux and the BSDs (pure Rust over zbus, no libdbus).
+# Browsers have none: there the key stays in the settings, as before.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+keyring = "4.2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).

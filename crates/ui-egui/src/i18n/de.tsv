@@ -2124,6 +2124,22 @@
 	Reading Text Size	Textgröße beim Lesen
 	Correct TWo INitial CApitals	ZWei GRoßbuchstaben am WOrtanfang korrigieren
 	Correct accidental usage of cAPS LOCK key	Unbeabsichtigtes Verwenden der fESTSTELLTASTE korrigieren
+	API key:	API-Schlüssel:
+	This system has no credential store, so the API key is saved in WordCraft's settings file.	Dieses System hat keinen Anmeldeinformationsspeicher, daher wird der API-Schlüssel in der Einstellungsdatei von WordCraft gespeichert.
+	The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file.	Der Anmeldeinformationsspeicher des Systems konnte den API-Schlüssel nicht aufnehmen ({error}), daher wird er in der Einstellungsdatei von WordCraft gespeichert.
+	The API key is kept in the system's credential store.	Der API-Schlüssel liegt im Anmeldeinformationsspeicher des Systems.
+	The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.	Der Anmeldeinformationsspeicher des Systems enthält den API-Schlüssel nicht mehr. Geben Sie ihn erneut ein, um weiter mit LanguageTool zu prüfen.
+	The old API key is still in the system's credential store: it could not be removed ({error}).	Der alte API-Schlüssel liegt noch im Anmeldeinformationsspeicher des Systems: Er konnte nicht entfernt werden ({error}).
+	Check spelling and grammar with LanguageTool	Rechtschreibung und Grammatik mit LanguageTool prüfen
+	Detect automatically	Automatisch erkennen
+	Each paragraph's proofing language	Korrektursprache des jeweiligen Absatzes
+	Language:	Sprache:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Die Prüfung mit LanguageTool braucht die Desktop-App; die Browserversion kann noch keinen Text an einen Prüfserver senden.
+	Paragraphs checked: {count}	Geprüfte Absätze: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Sendet den Text Ihrer Absätze an den unten angegebenen LanguageTool-Server. Ist die Option aus, wird die integrierte Prüfung von WordCraft verwendet und nichts verlässt diesen Computer.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Um einen eigenen LanguageTool-Server zu verwenden, geben Sie seine Adresse ein, etwa http://localhost:8081.
+	Username:	Benutzername:
 	Region:	Region:
 	Automatic ({region})	Automatisch ({region})
 	Text of the nearest paragraph with a given style (running headers)	Text des nächsten Absatzes mit einer bestimmten Formatvorlage (lebende Kolumnentitel)
