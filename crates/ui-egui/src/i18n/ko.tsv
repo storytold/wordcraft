@@ -2488,3 +2488,31 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+	Format Selection	선택 형식
+	Current Selection	현재 선택
+	Axis	축
+	Axis Titles	축 제목
+	Axis Labels	축 이름
+	Tick labels	눈금 이름
+	Axis line	축 선
+	Format Axis	축 형식
+	Format Axis…	축 형식…
+	Format Series	계열 형식
+	Format Series…	계열 형식…
+	No fill	채우기 없음
+	Markers	마커
+	Smooth lines	매끄러운 선
+	Series	계열
+	Data labels	데이터 이름
+	Fill:	채우기:
+	Major gridlines	주요 눈금선
+	Maximum:	최댓값:
+	Minimum:	최솟값:
+	Number format:	번호 형식:
+	Width (pt):	두께(pt):
+	accent	강조
+	auto	자동
+	linked	연결됨
+	“{text}” isn't a colour (RRGGBB).	“{text}”은 색상(RRGGBB)이 아닙니다.
+	“{text}” isn't a number.	“{text}”는 숫자가 아닙니다.
+	“{text}” isn't a width in points.	“{text}”는 pt 단위 폭이 아닙니다.

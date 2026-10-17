@@ -463,7 +463,16 @@ fn text(sp: &El, xf: Xf, b: [f64; 4], theme: &[Rgb], filled: bool, fit: f32, out
     let mut y = y0 + (th - total) / 2.0;
     for l in lines {
         let lh = l.size * LINE;
-        out.push(GraphicItem::Text { rect: [x0, y, tw, lh], text: l.text, size: l.size, color: l.color, bold: l.bold, align: l.align, font: l.font });
+        out.push(GraphicItem::Text {
+            rect: [x0, y, tw, lh],
+            text: l.text,
+            size: l.size,
+            color: l.color,
+            bold: l.bold,
+            align: l.align,
+            font: l.font,
+            angle: 0.0,
+        });
         y += lh;
     }
 }

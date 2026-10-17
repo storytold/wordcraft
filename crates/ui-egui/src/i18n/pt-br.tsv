@@ -2245,3 +2245,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+	Format Selection	Formatar seleção
+	Current Selection	Seleção atual
+	Axis	Eixo
+	Axis Titles	Títulos dos eixos
+	Axis Labels	Rótulos dos eixos
+	Tick labels	Rótulos de graduação
+	Axis line	Linha do eixo
+	Format Axis	Formatar eixo
+	Format Axis…	Formatar eixo…
+	Format Series	Formatar série
+	Format Series…	Formatar série…
+	Minimum	Mínimo
+	Maximum	Máximo
+	No fill	Sem preenchimento
+	Markers	Marcadores
+	Smooth lines	Linhas suavizadas
+	Series	Série
+	Data labels	Rótulos de dados
+	Fill:	Preenchimento:
+	Major gridlines	Linhas de grade principais
+	Maximum:	Máximo:
+	Minimum:	Mínimo:
+	Number format:	Formato de número:
+	Width (pt):	Largura (pt):
+	accent	acento
+	auto	automático
+	linked	vinculado
+	“{text}” isn't a colour (RRGGBB).	“{text}” não é uma cor (RRGGBB).
+	“{text}” isn't a number.	“{text}” não é um número.
+	“{text}” isn't a width in points.	“{text}” não é uma largura em pontos.

@@ -2630,3 +2630,31 @@ preview	Title	Пример
 # Reading Mode column widths (#1040)
 	Narrow	Узкая
 	Medium	Средняя
+	Format Selection	Формат выделения
+	Current Selection	Текущее выделение
+	Axis	Ось
+	Axis Titles	Заголовки осей
+	Axis Labels	Подписи осей
+	Tick labels	Подписи делений
+	Axis line	Линия осей
+	Format Axis	Формат осей
+	Format Axis…	Формат осей…
+	Format Series	Формат ряда
+	Format Series…	Формат ряда…
+	No fill	Без заполнения
+	Markers	Маркеры
+	Smooth lines	Сглаженные линии
+	Series	Ряд
+	Data labels	Подписи данных
+	Fill:	Заполнение:
+	Major gridlines	Основные линии сетки
+	Maximum:	Максимум:
+	Minimum:	Минимум:
+	Number format:	Формат чисел:
+	Width (pt):	Ширина (пт):
+	accent	акцент
+	auto	авто
+	linked	связано
+	“{text}” isn't a colour (RRGGBB).	«{text}» — не цвет (RRGGBB).
+	“{text}” isn't a number.	«{text}» — не число.
+	“{text}” isn't a width in points.	«{text}» — не ширина в пунктах.

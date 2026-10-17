@@ -2629,3 +2629,31 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	Format Selection	Seçimi biçimlendir
+	Current Selection	Geçerli seçim
+	Axis	Eksen
+	Axis Titles	Eksen başlıkları
+	Axis Labels	Eksen etiketleri
+	Tick labels	Aralık etiketleri
+	Axis line	Eksen çizgisi
+	Format Axis	Ekseni biçimlendir
+	Format Axis…	Ekseni biçimlendir…
+	Format Series	Seriyi biçimlendir
+	Format Series…	Seriyi biçimlendir…
+	No fill	Dolgu yok
+	Markers	İşaretler
+	Smooth lines	Düz çizgiler
+	Series	Seri
+	Data labels	Veri etiketleri
+	Fill:	Dolgu:
+	Major gridlines	Ana kılavuz çizgileri
+	Maximum:	En büyük:
+	Minimum:	En küçük:
+	Number format:	Sayı biçimi:
+	Width (pt):	Genişlik (pt):
+	accent	vurgu
+	auto	otomatik
+	linked	bağlı
+	“{text}” isn't a colour (RRGGBB).	“{text}” bir renk değil (RRGGBB).
+	“{text}” isn't a number.	“{text}” bir sayı değil.
+	“{text}” isn't a width in points.	“{text}” punto cinsinden bir genişlik değil.

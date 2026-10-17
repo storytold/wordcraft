@@ -99,6 +99,194 @@ impl ChartDataForm {
     }
 }
 
+/// Chart Design ▸ Current Selection ▸ Format Axis (the selected chart's value axis): bounds,
+/// tick-label format, gridlines, tick labels and the axis line. Running `chart.axis` with the
+/// same params does the same without the dialog.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartAxisForm {
+    pub title: String,
+    pub min: String,
+    pub max: String,
+    pub fmt: String,
+    pub gridlines: bool,
+    pub labels: bool,
+    pub line: bool,
+    pub message: String,
+}
+
+impl ChartAxisForm {
+    pub fn new(app: &WordApp) -> Option<ChartAxisForm> {
+        let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
+        let a = &c.val_axis;
+        Some(ChartAxisForm {
+            title: a.title.clone().unwrap_or_default(),
+            min: a.min.map(number_text).unwrap_or_default(),
+            max: a.max.map(number_text).unwrap_or_default(),
+            fmt: a.fmt.clone().unwrap_or_default(),
+            gridlines: a.gridlines,
+            labels: a.labels,
+            line: a.line,
+            message: String::new(),
+        })
+    }
+
+    /// The `chart.axis` params, or the first bound that isn't a number.
+    pub fn params(&self) -> Result<Value, String> {
+        let bound = |t: &str| -> Result<Option<Value>, String> {
+            let t = t.trim();
+            if t.is_empty() {
+                return Ok(None);
+            }
+            match t.replace(',', ".").parse::<f64>() {
+                Ok(v) if v.is_finite() => Ok(Some(json!(v))),
+                _ => Err(crate::i18n::fmt(tl!("“{text}” isn't a number."), &[("text", t)])),
+            }
+        };
+        let (min, max) = (bound(&self.min)?, bound(&self.max)?);
+        Ok(
+            json!({"side": "value", "title": self.title.trim(), "min": min, "max": max, "format": self.fmt.trim(), "gridlines": self.gridlines, "labels": self.labels, "line": self.line}),
+        )
+    }
+}
+
+/// A number as text, without a trailing `.0`.
+fn number_text(v: f64) -> String {
+    if v.fract() == 0.0 && v.abs() < 1e15 { format!("{v:.0}") } else { format!("{v}") }
+}
+
+/// The Format Axis dialog; returns true to close.
+pub fn axis_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartAxisForm) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        ui.label(tl!("Title:"));
+        ui.add_sized([280.0, 24.0], egui::TextEdit::singleline(&mut f.title).hint_text(tl!("(none)")));
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("Minimum:"));
+        ui.add_sized([90.0, 24.0], egui::TextEdit::singleline(&mut f.min).hint_text(tl!("auto")));
+        ui.label(tl!("Maximum:"));
+        ui.add_sized([90.0, 24.0], egui::TextEdit::singleline(&mut f.max).hint_text(tl!("auto")));
+        ui.label(tl!("Number format:"));
+        ui.add_sized([120.0, 24.0], egui::TextEdit::singleline(&mut f.fmt).hint_text(tl!("linked")));
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut f.gridlines, tl!("Major gridlines"));
+        ui.checkbox(&mut f.labels, tl!("Tick labels"));
+        ui.checkbox(&mut f.line, tl!("Axis line"));
+    });
+    if !f.message.is_empty() {
+        ui.label(egui::RichText::new(f.message.as_str()).color(t.red));
+    }
+    let (ok, cancel) = crate::dialogs::buttons(ui, tl!("OK"));
+    if !ok {
+        return cancel;
+    }
+    match f.params().and_then(|p| app.run("chart.axis", p)) {
+        Ok(_) => true,
+        Err(e) => {
+            f.message = e;
+            false
+        }
+    }
+}
+
+/// Chart Design ▸ Format Series (the first series, or the one `index` says): fill, line,
+/// markers, smooth lines, labels. `chart.series` with the same params does the same.
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChartSeriesForm {
+    pub index: usize,
+    pub fill: String,
+    pub no_fill: bool,
+    pub width: String,
+    pub markers: bool,
+    pub smooth: bool,
+    pub labels: bool,
+    pub fmt: String,
+    pub message: String,
+}
+
+impl ChartSeriesForm {
+    pub fn new(app: &WordApp) -> Option<ChartSeriesForm> {
+        let c = wordcraft_engine::cmd::chart::selected_chart(&app.session)?;
+        let s = c.series.first()?;
+        Some(ChartSeriesForm {
+            index: 0,
+            fill: s.fill.map(|c| c.hex()).unwrap_or_default(),
+            no_fill: s.no_fill,
+            width: s.line_w.map(|w| number_text(w as f64)).unwrap_or_default(),
+            markers: s.markers.unwrap_or(c.kind == wordcraft_doc::chart::ChartType::Scatter),
+            smooth: s.smooth,
+            labels: s.labels.unwrap_or(c.data_labels),
+            fmt: s.fmt.clone().unwrap_or_default(),
+            message: String::new(),
+        })
+    }
+
+    /// The `chart.series` params.
+    pub fn params(&self) -> Result<Value, String> {
+        let mut v = serde_json::Map::new();
+        v.insert("index".into(), json!(self.index));
+        if self.no_fill {
+            v.insert("fill".into(), json!("none"));
+        } else if !self.fill.trim().is_empty() {
+            let t = self.fill.trim().trim_start_matches('#').to_string();
+            if wordcraft_doc::props::Rgb::parse(&t).is_none() {
+                return Err(crate::i18n::fmt(tl!("“{text}” isn't a colour (RRGGBB)."), &[("text", &t)]));
+            }
+            v.insert("fill".into(), json!(t));
+        }
+        let width = self.width.trim().replace(',', ".");
+        if let Some(w) = width.parse::<f64>().ok().filter(|w| w.is_finite()) {
+            v.insert("line".into(), json!(w));
+        } else if !self.width.trim().is_empty() {
+            return Err(crate::i18n::fmt(tl!("“{text}” isn't a width in points."), &[("text", self.width.trim())]));
+        }
+        v.insert("markers".into(), json!(self.markers));
+        v.insert("smooth".into(), json!(self.smooth));
+        v.insert("labels".into(), json!(self.labels));
+        if !self.fmt.trim().is_empty() {
+            v.insert("format".into(), json!(self.fmt.trim()));
+        }
+        Ok(Value::Object(v))
+    }
+}
+
+/// The Format Series dialog; returns true to close.
+pub fn series_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartSeriesForm) -> bool {
+    let t = Tokens::get(ui.ctx());
+    ui.label(crate::i18n::fmt(tl!("Series {n}"), &[("n", &(f.index + 1).to_string())]));
+    ui.horizontal(|ui| {
+        ui.label(tl!("Fill:"));
+        ui.add_sized([90.0, 24.0], egui::TextEdit::singleline(&mut f.fill).hint_text(tl!("accent")));
+        ui.checkbox(&mut f.no_fill, tl!("No fill"));
+        ui.label(tl!("Width (pt):"));
+        ui.add_sized([70.0, 24.0], egui::TextEdit::singleline(&mut f.width));
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(&mut f.markers, tl!("Markers"));
+        ui.checkbox(&mut f.smooth, tl!("Smooth lines"));
+        ui.checkbox(&mut f.labels, tl!("Data labels"));
+        ui.label(tl!("Number format:"));
+        ui.add_sized([110.0, 24.0], egui::TextEdit::singleline(&mut f.fmt).hint_text(tl!("linked")));
+    });
+    if !f.message.is_empty() {
+        ui.label(egui::RichText::new(f.message.as_str()).color(t.red));
+    }
+    let (ok, cancel) = crate::dialogs::buttons(ui, tl!("OK"));
+    if !ok {
+        return cancel;
+    }
+    match f.params().and_then(|p| app.run("chart.series", p)) {
+        Ok(_) => true,
+        Err(e) => {
+            f.message = e;
+            false
+        }
+    }
+}
+
 /// The theme's first accents, for previews.
 fn accents(app: &WordApp) -> [Color32; 3] {
     let t = &app.session.doc.settings.theme_colors;

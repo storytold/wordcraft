@@ -2240,3 +2240,33 @@
 # Reading Mode column widths (#1040)
 	Narrow	Étroite
 	Medium	Moyenne
+	Format Selection	Format de la sélection
+	Current Selection	Sélection actuelle
+	Axis	Axe
+	Axis Titles	Titres de l'axe
+	Axis Labels	Étiquettes de l'axe
+	Tick labels	Étiquettes des graduations
+	Axis line	Ligne de l'axe
+	Format Axis	Format de l'axe
+	Format Axis…	Format de l'axe…
+	Format Series	Format de la série
+	Format Series…	Format de la série…
+	Minimum	Minimum
+	Maximum	Maximum
+	No fill	Aucun remplissage
+	Markers	Marqueurs
+	Smooth lines	Lignes lissées
+	Series	Série
+	Data labels	Étiquettes de données
+	Fill:	Remplissage :
+	Major gridlines	Lignes de grille principales
+	Maximum:	Maximum :
+	Minimum:	Minimum :
+	Number format:	Format des nombres :
+	Width (pt):	Largeur (pt) :
+	accent	accent
+	auto	auto
+	linked	lié
+	“{text}” isn't a colour (RRGGBB).	« {text} » n’est pas une couleur (RRGGBB).
+	“{text}” isn't a number.	« {text} » n’est pas un nombre.
+	“{text}” isn't a width in points.	« {text} » n’est pas une largeur en points.

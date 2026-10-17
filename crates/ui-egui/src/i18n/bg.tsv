@@ -2621,3 +2621,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	Format Selection	Форматиране на избраното
+	Current Selection	Текущ избор
+	Axis	Ос
+	Axis Titles	Заглавия на осите
+	Axis Labels	Етикети на осите
+	Tick labels	Етикети на деленията
+	Axis line	Линия на оста
+	Format Axis	Формат на ос
+	Format Axis…	Формат на ос…
+	Format Series	Формат на серията
+	Format Series…	Формат на серията…
+	No fill	Без запълване
+	Markers	Маркери
+	Smooth lines	Гладки линии
+	Series	Серия
+	Data labels	Етикети на данните
+	Fill:	Запълване:
+	Major gridlines	Основни мрежови линии
+	Maximum:	Максимум:
+	Minimum:	Минимум:
+	Number format:	Формат на числата:
+	Width (pt):	Ширина (пт):
+	accent	акцент
+	auto	авто
+	linked	свързан
+	“{text}” isn't a colour (RRGGBB).	„{text}“ не е цвят (RRGGBB).
+	“{text}” isn't a number.	„{text}“ не е число.
+	“{text}” isn't a width in points.	„{text}“ не е ширина в точки.

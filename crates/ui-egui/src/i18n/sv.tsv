@@ -2647,3 +2647,31 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	Format Selection	Formatera markeringen
+	Current Selection	Aktuell markering
+	Axis	Axel
+	Axis Titles	Axelnamn
+	Axis Labels	Axelns etiketter
+	Tick labels	Gradertaggar
+	Axis line	Axellinje
+	Format Axis	Formatera axeln
+	Format Axis…	Formatera axeln…
+	Format Series	Formatera serien
+	Format Series…	Formatera serien…
+	No fill	Ingen ifyllning
+	Markers	Markörer
+	Smooth lines	Utjämnade linjer
+	Series	Serie
+	Data labels	Dataetiketter
+	Fill:	Ifyllning:
+	Major gridlines	Huvudnätlinjer
+	Maximum:	Maximum:
+	Minimum:	Minimum:
+	Number format:	Sifformat:
+	Width (pt):	Bredd (pt):
+	accent	accent
+	auto	auto
+	linked	linkad
+	“{text}” isn't a colour (RRGGBB).	”{text}” är ingen färg (RRGGBB).
+	“{text}” isn't a number.	”{text}” är inget tal.
+	“{text}” isn't a width in points.	”{text}” är ingen bredd i punkter.

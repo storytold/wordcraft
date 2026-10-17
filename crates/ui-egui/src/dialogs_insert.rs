@@ -20,6 +20,8 @@ pub enum InsertDialog {
     SmartArt(crate::dialogs_smart_art::SmartArtForm),
     ChartType(crate::dialogs_chart::ChartTypeForm),
     ChartData(crate::dialogs_chart::ChartDataForm),
+    ChartAxis(crate::dialogs_chart::ChartAxisForm),
+    ChartSeries(crate::dialogs_chart::ChartSeriesForm),
 }
 
 impl InsertDialog {
@@ -32,6 +34,8 @@ impl InsertDialog {
             InsertDialog::ChartType(f) if f.change => "changeChartType",
             InsertDialog::ChartType(_) => "insertChart",
             InsertDialog::ChartData(_) => "chartData",
+            InsertDialog::ChartAxis(_) => "formatAxis",
+            InsertDialog::ChartSeries(_) => "formatSeries",
         }
     }
 
@@ -45,6 +49,8 @@ impl InsertDialog {
             InsertDialog::ChartType(f) if f.change => "Change Chart Type",
             InsertDialog::ChartType(_) => "Insert Chart",
             InsertDialog::ChartData(_) => "Edit Data",
+            InsertDialog::ChartAxis(_) => "Format Axis",
+            InsertDialog::ChartSeries(_) => "Format Series",
         }
     }
 }
@@ -62,6 +68,8 @@ pub fn open(name: &str, app: &WordApp) -> Option<InsertDialog> {
         "insertChart" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, false)?),
         "changeChartType" => InsertDialog::ChartType(crate::dialogs_chart::ChartTypeForm::new(app, true)?),
         "chartData" => InsertDialog::ChartData(crate::dialogs_chart::ChartDataForm::new(app)?),
+        "formatAxis" => InsertDialog::ChartAxis(crate::dialogs_chart::ChartAxisForm::new(app)?),
+        "formatSeries" => InsertDialog::ChartSeries(crate::dialogs_chart::ChartSeriesForm::new(app)?),
         _ => return None,
     })
 }
@@ -75,6 +83,8 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut InsertDialog) -> bool {
         InsertDialog::SmartArt(f) => crate::dialogs_smart_art::picker_ui(app, ui, f),
         InsertDialog::ChartType(f) => crate::dialogs_chart::type_ui(app, ui, f),
         InsertDialog::ChartData(f) => crate::dialogs_chart::data_ui(app, ui, f),
+        InsertDialog::ChartAxis(f) => crate::dialogs_chart::axis_ui(app, ui, f),
+        InsertDialog::ChartSeries(f) => crate::dialogs_chart::series_ui(app, ui, f),
     }
 }
 
