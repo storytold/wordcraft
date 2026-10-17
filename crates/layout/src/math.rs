@@ -1498,7 +1498,8 @@ impl Ctx {
         }
         let ncols = segs_rows.iter().map(|r| r.len()).max().unwrap_or(1);
         let mut col_w = vec![0.0f32; ncols];
-        for r in &segs_rows {
+        // Rows without `&` take no part in the alignment columns (they centre instead).
+        for r in segs_rows.iter().filter(|r| ncols == 1 || r.len() > 1) {
             for (i, b) in r.iter().enumerate() {
                 if let Some(c) = col_w.get_mut(i) {
                     *c = c.max(b.w);
@@ -1517,8 +1518,8 @@ impl Ctx {
                 let dx = if ncols == 1 {
                     0.0
                 } else if single {
-                    // A row without `&` aligns with the first column's right edge.
-                    cw - bw
+                    // A row without `&` is centred across the whole array.
+                    (total - bw) / 2.0
                 } else if i % 2 == 0 {
                     cw - bw
                 } else {
@@ -2206,6 +2207,21 @@ mod tests {
         assert_eq!(math_alnum('α', false, true, MScr::Roman), '𝛼');
         assert_eq!(math_alnum('2', false, true, MScr::Roman), '2');
         assert_eq!(math_alnum('A', true, false, MScr::Roman), '𝐀');
+    }
+
+    #[test]
+    fn eqarr_rows_without_an_align_marker_are_centred() {
+        use wordcraft_doc::math::*;
+        // A row without `&` must not widen the alignment columns; it centres across the
+        // array instead of right-aligning at the first column's edge.
+        let rows: Vec<Vec<MNode>> = vec![vec![MNode::Run(MRun::new("mmm"))], vec![MNode::Run(MRun::new("x&yyyyyyyy"))]];
+        let math = Math { nodes: vec![MNode::EqArr { rows }], ..Default::default() };
+        let ls = lines(&lay_in(&math, "", true, 400.0, &MathProps::default()));
+        assert_eq!(ls.len(), 2, "{ls:?}");
+        let left: Vec<f32> = ls.iter().map(|(_, gs)| gs.iter().map(|(x, _)| *x).fold(f32::MAX, |a, b| if b < a { b } else { a })).collect();
+        assert!(left.iter().all(|x| *x >= -0.5), "nothing hangs left of the array: {left:?}");
+        // The short row starts right of the aligned row's first segment.
+        assert!(ls[0].1.first().is_some_and(|(x, _)| *x > left[1] + 1.0), "short row centred, not flush left: {ls:?}");
     }
 
     #[test]
