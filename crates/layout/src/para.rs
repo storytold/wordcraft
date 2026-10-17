@@ -670,11 +670,31 @@ fn east_asian(c: char) -> bool {
 /// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
 const MISSING_ROMAN_FONT: &str = "Cambria";
 
-/// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
-fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
+/// The family to look `font` up as. A font that isn't installed is drawn, as Word draws it
+/// (measured in Word 2024, #2702):
+/// 1. in the alternate the font table names for it (`w:altName`), when that one can be drawn:
+///    installed, or a font whose own substitutes we know. That comes before the family class: a
+///    roman font with an installed alternate is drawn in the alternate;
+/// 2. in [`MISSING_ROMAN_FONT`] when the font table classes it as roman;
+/// 3. else as `font`, which [`wordcraft_fonts::word::resolve`] substitutes.
+fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    let settings = &doc.settings;
+    let alternate = settings.font_alt_names.iter().find(|(f, _)| f.eq_ignore_ascii_case(font)).map(|(_, alt)| alt.as_str());
+    let roman = settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
+    if alternate.is_none() && !roman {
+        return font;
+    }
     let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman && !db.has_family(font) && !db.has_family(wordcraft_fonts::word::charset_base_family(font)) { MISSING_ROMAN_FONT } else { font }
+    let installed = |f: &str| db.has_family(f) || db.has_family(wordcraft_fonts::word::charset_base_family(f));
+    if installed(font) {
+        return font;
+    }
+    // Calibri has no list of its own because the generic sans list is its (Carlito first).
+    let drawable = |f: &&str| !f.is_empty() && (installed(f) || wordcraft_fonts::word::has_own_substitutes(f) || f.eq_ignore_ascii_case("Calibri"));
+    if let Some(alt) = alternate.and_then(|a| a.split(',').map(str::trim).find(drawable)) {
+        return alt;
+    }
+    if roman { MISSING_ROMAN_FONT } else { font }
 }
 
 impl<'a> Builder<'a> {
