@@ -50,7 +50,10 @@ Windows is therefore unverified.
 Limits are 256 MiB of encoded JSON per snapshot, 2 GiB of snapshot files per profile, 128 records
 and 16 generations per record during discovery. Ordinarily only two valid generations remain.
 Copies are retained until saved or explicitly discarded; there is no automatic age-based deletion.
-Over-limit writes report an error and retain the previous valid copy. JSON stores binary parts
+Over-limit writes report an error and retain the previous valid copy. A failure caused by the
+snapshot itself (the size limit, the folder or disk budget, a value the format cannot keep) is
+not retried until the document changes; other failures, such as a lock or I/O error, are tried
+again at the next interval. JSON stores binary parts
 as byte arrays, so it can be substantially larger than DOCX. This first version has a fixed
 interval, English fallback for new labels, and no cloud, version-history or browser recovery.
 
