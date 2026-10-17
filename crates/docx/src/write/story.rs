@@ -520,7 +520,12 @@ impl Writer<'_> {
                         self.rev_open(w, props);
                         w.open("w:r", &[]);
                         self.rpr(w, &p);
-                        w.empty(mark, &[]);
+                        // A custom mark is plain text; the placeholder would turn it into a number.
+                        if custom.is_empty() {
+                            w.empty(mark, &[]);
+                        } else {
+                            w.leaf("w:t", &[("xml:space", "preserve")], custom);
+                        }
                         w.close("w:r");
                         self.rev_close(w, props);
                     }
