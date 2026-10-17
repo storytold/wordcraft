@@ -2636,6 +2636,9 @@
 # Missing dictionary on the status bar (#1441)
 	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	Chưa cài từ điển chính tả cho {language}, nên ngôn ngữ này không được kiểm tra. WordCraft tìm từ điển Hunspell {name} trong thư mục WORDCRAFT_DICTIONARIES và ở các vị trí thông thường của hệ thống.
 	{language} (no dictionary)	{language} (không có từ điển)
+	Border Styles	Kiểu viền
+	Border\nStyles	Kiểu\nviền
+	Click a table border to paint it with the chosen border style. Esc stops.	Nhấp vào một đường viền của bảng để tô bằng kiểu viền đã chọn. Nhấn Esc để hủy.
 # Table style parts in the Modify Table Style dialog (#714)
 	Odd Banded Rows	Hàng xen kẽ lẻ
 	Even Banded Rows	Hàng xen kẽ chẵn

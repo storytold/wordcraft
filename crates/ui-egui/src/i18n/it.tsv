@@ -2630,6 +2630,9 @@ preview	Title	Esempio
 	Existing File or Web Page	File o pagina Web esistente
 	Link to:	Collega a:
 	Place in This Document	Posizione nel documento
+	Border Styles	Stili bordo
+	Border\nStyles	Stili\nbordo
+	Click a table border to paint it with the chosen border style. Esc stops.	Fai clic su un bordo della tabella per applicargli lo stile bordo scelto. Esc per uscire.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Colonna {n}
 	Header row	Riga di intestazione

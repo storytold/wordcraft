@@ -2618,6 +2618,9 @@ preview	Title	Örnek
 	Existing File or Web Page	Varolan Dosya veya Web Sayfası
 	Link to:	Bağlantı:
 	Place in This Document	Bu Belgede Bir Yer
+	Border Styles	Kenarlık Stilleri
+	Border\nStyles	Kenarlık\nStilleri
+	Click a table border to paint it with the chosen border style. Esc stops.	Seçilen kenarlık stilini uygulamak için tablonun bir kenarlığına tıklayın. Esc ile bitirin.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Sütun {n}
 	Header row	Başlık satırı

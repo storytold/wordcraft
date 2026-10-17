@@ -2613,6 +2613,9 @@ preview	Title	Ukázka
 	Existing File or Web Page	Existující soubor nebo webová stránka
 	Link to:	Odkaz na:
 	Place in This Document	Místo v tomto dokumentu
+	Border Styles	Styly ohraničení
+	Border\nStyles	Styly\nohraničení
+	Click a table border to paint it with the chosen border style. Esc stops.	Kliknutím na ohraničení tabulky ho nastavíte na zvolený styl ohraničení. Esc akci ukončí.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Sloupec {n}
 	Header row	Řádek záhlaví

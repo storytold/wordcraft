@@ -2488,3 +2488,6 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+	Border Styles	테두리 스타일
+	Border\nStyles	테두리\n스타일
+	Click a table border to paint it with the chosen border style. Esc stops.	표의 테두리를 클릭하면 선택한 테두리 스타일로 칠합니다. Esc 키를 누르면 중지합니다.

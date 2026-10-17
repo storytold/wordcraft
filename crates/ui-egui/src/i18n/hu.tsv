@@ -2617,6 +2617,9 @@
 	Existing File or Web Page	Létező fájl vagy weblap
 	Link to:	Hivatkozás helye:
 	Place in This Document	Dokumentumon belüli hely
+	Border Styles	Szegélystílusok
+	Border\nStyles	Szegély-\nstílusok
+	Click a table border to paint it with the chosen border style. Esc stops.	Kattints a táblázat egy szegélyére, hogy a kiválasztott szegélystílussal fesd át. Kilépés: Esc.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	{n}. oszlop
 	Header row	Fejlécsor

@@ -2647,3 +2647,6 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	Border Styles	Kantlinjeformat
+	Border\nStyles	Kantlinje-\nformat
+	Click a table border to paint it with the chosen border style. Esc stops.	Klicka på en kantlinje i tabellen för att måla den med det valda kantlinjeformatet. Esc avslutar.

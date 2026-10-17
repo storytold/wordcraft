@@ -2588,6 +2588,9 @@ preview	Title	Título
 	Existing File or Web Page	Archivo o página web existente
 	Link to:	Vincular a:
 	Place in This Document	Lugar de este documento
+	Border Styles	Estilos de borde
+	Border\nStyles	Estilos de\nborde
+	Click a table border to paint it with the chosen border style. Esc stops.	Haz clic en un borde de la tabla para pintarlo con el estilo de borde elegido. Esc termina.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Columna {n}
 	Header row	Fila de encabezado

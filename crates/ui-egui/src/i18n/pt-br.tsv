@@ -2234,6 +2234,9 @@
 	Existing File or Web Page	Página da Web ou arquivo existente
 	Link to:	Vincular a:
 	Place in This Document	Colocar neste documento
+	Border Styles	Estilos de borda
+	Border\nStyles	Estilos de\nborda
+	Click a table border to paint it with the chosen border style. Esc stops.	Clique em uma borda da tabela para pintá-la com o estilo de borda escolhido. Esc encerra.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Coluna {n}
 	Header row	Linha de cabeçalho

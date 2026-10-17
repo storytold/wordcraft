@@ -2611,6 +2611,9 @@ preview	Title	Tytuł
 	Existing File or Web Page	Istniejący plik lub strona sieci Web
 	Link to:	Połącz z:
 	Place in This Document	Miejsce w tym dokumencie
+	Border Styles	Style krawędzi
+	Border\nStyles	Style\nkrawędzi
+	Click a table border to paint it with the chosen border style. Esc stops.	Kliknij krawędź tabeli, aby nadać jej wybrany styl krawędzi. Esc kończy.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Kolumna {n}
 	Header row	Wiersz nagłówka

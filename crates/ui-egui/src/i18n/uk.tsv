@@ -2234,6 +2234,9 @@
 	Existing File or Web Page	Файл або веб-сторінка
 	Link to:	Зв'язати з:
 	Place in This Document	Місце в документі
+	Border Styles	Стилі меж
+	Border\nStyles	Стилі\nмеж
+	Click a table border to paint it with the chosen border style. Esc stops.	Клацніть межу таблиці, щоб намалювати її вибраним стилем межі. Esc завершує.
 # Table Layout › Sort dialog (#1205)
 	Column {n}	Стовпець {n}
 	Header row	Рядок заголовка
