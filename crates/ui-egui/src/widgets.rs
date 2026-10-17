@@ -189,6 +189,8 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
+    // A compact group (#662) shows only the icon; the tooltip keeps the name.
+    let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
@@ -263,6 +265,7 @@ pub fn menu_button(
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
+    let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     // `id` names the command the menu is about (Header for the Header menu…); while it is
     // disabled the button greys out and doesn't open, like the other ribbon buttons. "" = always on.
@@ -327,12 +330,20 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
     let t = Tokens::get(ui.ctx());
     let label_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.0), t.group_label).size().x);
     let start = ui.cursor().min;
+    // #662: the window may be too narrow for the tab; the plan says how this group fits.
+    let level = crate::ribbon_fit::level(ui.ctx(), id_title);
     let inner = ui.vertical(|ui| {
         ui.set_min_width(label_w + if launcher.is_some() { 22.0 } else { 10.0 });
+        if level == crate::ribbon_fit::COLLAPSED {
+            collapsed_group(ui, id_title, title, app, add);
+            return;
+        }
+        crate::ribbon_fit::set_compact(ui.ctx(), level == crate::ribbon_fit::COMPACT);
         let content = ui.allocate_ui_with_layout(vec2(ui.available_width(), CONTENT_H), egui::Layout::left_to_right(egui::Align::Min), |ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
             add(ui, app);
         });
+        crate::ribbon_fit::set_compact(ui.ctx(), false);
         #[cfg(test)]
         if content.response.rect.height() > CONTENT_H + 0.5 {
             TALL_GROUPS.with(|g| g.borrow_mut().push(format!("{id_title}: {:.1}", content.response.rect.height())));
@@ -359,6 +370,45 @@ pub fn group_titled(ui: &mut Ui, id_title: &str, title: &str, launcher: Option<&
     let x = ui.cursor().min.x;
     ui.painter().line_segment([pos2(x, start.y + 4.0), pos2(x, start.y + CONTENT_H + LABEL_H - 4.0)], Stroke::new(1.0, t.border));
     ui.add_space(6.0);
+    crate::ribbon_fit::record(ui.ctx(), id_title, level, ui.cursor().min.x - start.x);
+}
+
+/// A group folded into one drop-down button (the window is too narrow, #662): the button shows the
+/// group's name, and its menu holds the whole group as designed.
+fn collapsed_group(ui: &mut Ui, id_title: &str, title: &str, app: &mut WordApp, add: impl FnOnce(&mut Ui, &mut WordApp)) {
+    let t = Tokens::get(ui.ctx());
+    let text_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size().x);
+    let (r, resp) = ui.allocate_exact_size(vec2((text_w + DROPDOWN + 14.0).max(48.0), CONTENT_H), Sense::click());
+    bg(ui, r, &resp, false, &t);
+    icons::paint(
+        ui.painter(),
+        Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)),
+        group_icon(id_title),
+        t.icon,
+        t.accent,
+    );
+    label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, title, regular(11.5), t.text, true);
+    let resp = resp.on_hover_text(title);
+    egui::Popup::menu(&resp).show(|ui| {
+        ui.horizontal_top(|ui| {
+            ui.set_min_height(CONTENT_H);
+            ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+            add(ui, app);
+        });
+    });
+}
+
+/// The icon a collapsed group's button shows.
+fn group_icon(title: &str) -> &'static str {
+    match title {
+        "Clipboard" => "paste",
+        "Font" => "bold",
+        "Paragraph" => "alignLeft",
+        "Styles" => "styles",
+        "Editing" => "find",
+        "Voice" => "dictate",
+        _ => "more",
+    }
 }
 
 /// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
