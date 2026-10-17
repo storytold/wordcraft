@@ -39,25 +39,77 @@ pub fn key_text(sc: &str) -> String {
     }
 }
 
+/// The lines of a control's hover hint: the title (`Name (Ctrl+B)`), then the group it lives in
+/// and, while the control is off, why. Empty parts are left out; `reason` falls back to a generic
+/// line when the command gave none.
+pub(crate) fn tooltip_lines(label: &str, shortcut: &str, desc: &str, disabled: Option<&str>) -> (String, Vec<String>) {
+    let title = if shortcut.is_empty() { label.to_string() } else { format!("{label} ({shortcut})") };
+    let mut notes = Vec::new();
+    if !desc.is_empty() {
+        notes.push(desc.to_string());
+    }
+    if let Some(reason) = disabled {
+        notes.push(if reason.is_empty() { tl!("Not available right now").to_string() } else { capitalised(tl!(reason)) });
+    }
+    (title, notes)
+}
+
+/// `text` with its first letter in capitals (the engine's reasons are lower case).
+fn capitalised(text: &str) -> String {
+    let mut chars = text.chars();
+    match chars.next() {
+        Some(c) => c.to_uppercase().chain(chars).collect(),
+        None => String::new(),
+    }
+}
+
+/// Show the hover hint on `resp`. A control reached with the keyboard shows it too, after the
+/// usual delay (egui itself only hints for the pointer), unless the pointer is busy elsewhere or a
+/// menu is open, whose hint would otherwise be drawn over the menu.
+fn show_hint(resp: &Response, title: &str, notes: &[String]) {
+    let add = |ui: &mut Ui| {
+        ui.set_max_width(260.0);
+        ui.label(egui::RichText::new(title).font(crate::theme::semibold(12.0)));
+        for n in notes {
+            ui.label(egui::RichText::new(n).small().weak());
+        }
+    };
+    let ctx = &resp.ctx;
+    let since_key = id_since_focus(resp);
+    if resp.hovered() || !resp.has_focus() {
+        egui::Tooltip::for_enabled(resp).show(add);
+    }
+    if let Some(waited) = since_key {
+        let delay = ctx.global_style().interaction.tooltip_delay;
+        let pointer_idle = !ctx.input(|i| i.pointer.has_pointer()) || ctx.input(|i| i.pointer.time_since_last_movement()) > 2.0;
+        if waited < delay {
+            ctx.request_repaint_after_secs(delay - waited);
+        } else if !resp.hovered() && pointer_idle && !egui::Popup::is_any_open(ctx) {
+            egui::Tooltip::for_widget(resp).show(add);
+        }
+    }
+}
+
+/// Seconds `resp` has had the keyboard focus (None when it hasn't), tracked in egui memory.
+fn id_since_focus(resp: &Response) -> Option<f32> {
+    let key = resp.id.with("hint_focus_since");
+    let now = resp.ctx.input(|i| i.time);
+    if !resp.has_focus() {
+        resp.ctx.data_mut(|d| d.remove::<f64>(key));
+        return None;
+    }
+    let since = resp.ctx.data_mut(|d| *d.get_temp_mut_or_insert_with(key, || now));
+    Some((now - since) as f32)
+}
+
 /// `label` is already in the interface language.
 fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
-    let sc = shortcut_text(app, id);
-    let desc = app.session.registry.get(id).map(|s| crate::i18n::location(s.location)).unwrap_or_default();
-    let enabled = app.session.registry.get(id).map(|s| (s.enabled)(&app.session).is_none()).unwrap_or(true);
-    resp.on_hover_ui(|ui| {
-        ui.set_max_width(260.0);
-        if sc.is_empty() {
-            ui.label(egui::RichText::new(label).font(crate::theme::semibold(12.0)));
-        } else {
-            ui.label(egui::RichText::new(format!("{label} ({sc})")).font(crate::theme::semibold(12.0)));
-        }
-        if !desc.is_empty() {
-            ui.label(egui::RichText::new(desc).small().weak());
-        }
-        if !enabled {
-            ui.label(egui::RichText::new(tl!("Not available right now")).small().weak());
-        }
-    })
+    let spec = app.session.registry.get(id);
+    let desc = spec.map(|s| crate::i18n::location(s.location)).unwrap_or_default();
+    let reason = spec.and_then(|s| (s.enabled)(&app.session));
+    let (title, notes) = tooltip_lines(label, &shortcut_text(app, id), &desc, reason);
+    show_hint(&resp, &title, &notes);
+    resp
 }
 
 /// Record a keytip badge over a control's rect when keytips are showing commands. `ui` reaches
@@ -240,6 +292,8 @@ pub fn split(
     if resp.clicked() {
         run_from_ribbon(app, id, params);
     }
+    let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
+    show_hint(&aresp, &arrow_title, &[]);
     egui::Popup::menu(&aresp).show(|ui| {
         ui.set_min_width(180.0);
         menu(ui, app);
@@ -298,7 +352,9 @@ pub fn menu_button(
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 6.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
     };
-    let resp = resp.on_hover_text(tip);
+    let reason = if on { None } else { Some(app.session.registry.get(id).and_then(|s| (s.enabled)(&app.session)).unwrap_or("")) };
+    let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
+    show_hint(&resp, &title, &notes);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
     if !on {
         return;
@@ -492,7 +548,20 @@ pub fn combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, preview, false)
+    combo_impl(ui, id, width, current, items, preview, false, "")
+}
+
+/// [`combo`] whose field and arrow show the hover hint `tip` (already translated).
+pub fn combo_hint(
+    ui: &mut Ui,
+    id: &str,
+    width: f32,
+    current: &str,
+    items: &[String],
+    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
+    tip: &str,
+) -> Option<String> {
+    combo_impl(ui, id, width, current, items, preview, false, tip)
 }
 
 /// What [`font_combo`] returns when its list's last entry, Add Font…, is chosen (#582): the
@@ -516,7 +585,20 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, preview, true)
+    combo_impl(ui, id, width, current, items, preview, true, "")
+}
+
+/// [`font_combo`] with a hover hint `tip` (already translated).
+pub fn font_combo_hint(
+    ui: &mut Ui,
+    id: &str,
+    width: f32,
+    current: &str,
+    items: &[String],
+    preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
+    tip: &str,
+) -> Option<String> {
+    combo_impl(ui, id, width, current, items, preview, true, tip)
 }
 
 /// Indices of the `items` matching `query`, ignoring case: exact matches, then the names starting
@@ -570,6 +652,7 @@ fn combo_impl(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
     search: bool,
+    tip: &str,
 ) -> Option<String> {
     let mut out = None;
     let edit_id = ui.id().with(("combo_text", id));
@@ -657,6 +740,11 @@ fn combo_impl(
         let fill = if aresp.hovered() { t.hover } else { t.input };
         let arrow_box = egui::epaint::RectShape::new(under, ar_radius, fill, Stroke::new(ARROW_BORDER, t.input_border), egui::StrokeKind::Inside);
         ui.painter().set(arrow_bg, arrow_box);
+        // Not while typing: the family list drops from the field's bottom edge and the hint would cover it.
+        if !tip.is_empty() && !focused && !s.open {
+            show_hint(&resp, tip, &[]);
+            show_hint(&aresp, tip, &[]);
+        }
         icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", t.icon, t.accent);
         // The list drops from the box's left edge, as in Word, not from the arrow (#535).
         egui::Popup::menu(&aresp).anchor(resp.rect.union(ar)).show(|ui| {
@@ -890,6 +978,91 @@ mod tests {
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let h = ctx.fonts_mut(|f| f.layout_no_wrap("Page Number Mail Merge gjpqy".into(), crate::theme::regular(11.5), Color32::WHITE).size().y);
         assert!(h <= LABEL_LINE_H, "label line is {h} px tall");
+    }
+
+    fn hint_ctx() -> egui::Context {
+        let ctx = egui::Context::default();
+        ctx.set_fonts(crate::theme::font_definitions(false, false));
+        ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
+        ctx
+    }
+
+    /// Runs `frames` frames of `build` from time `t0` on 10 fps, with `events` in the first; returns
+    /// whether a tooltip layer is showing after the last.
+    fn hint_showing(ctx: &egui::Context, t0: f64, frames: u32, events: Vec<egui::Event>, build: &mut dyn FnMut(&mut Ui)) -> bool {
+        let mut shown = false;
+        for k in 0..frames {
+            let input = egui::RawInput {
+                time: Some(t0 + f64::from(k) * 0.1),
+                predicted_dt: 0.1,
+                events: if k == 0 { events.clone() } else { vec![] },
+                ..Default::default()
+            };
+            ctx.run_ui(input, |ui| build(ui)).drop_without_applying_deltas();
+            shown = ctx.memory(|m| m.areas().visible_layer_ids().iter().any(|l| l.order == egui::Order::Tooltip));
+        }
+        shown
+    }
+
+    #[test]
+    fn a_combo_shows_its_hint_on_hover_and_not_before() {
+        let sizes: Vec<String> = ["10", "11", "12"].map(String::from).to_vec();
+        let ctx = hint_ctx();
+        let field = std::cell::Cell::new(Rect::NOTHING);
+        let mut build = |ui: &mut Ui| {
+            combo_hint(ui, "f", 150.0, "12", &sizes, None, "Font Size");
+            field.set(ui.min_rect());
+        };
+        assert!(!hint_showing(&ctx, 1.0, 3, vec![], &mut build));
+        let over = field.get().left_center() + vec2(20.0, 0.0);
+        assert!(hint_showing(&ctx, 2.0, 12, vec![egui::Event::PointerMoved(over)], &mut build), "no hint over the field");
+        // Over the arrow too.
+        let ctx = hint_ctx();
+        let mut build2 = |ui: &mut Ui| {
+            combo_hint(ui, "f", 150.0, "12", &sizes, None, "Font Size");
+        };
+        hint_showing(&ctx, 1.0, 3, vec![], &mut build2);
+        let arrow = field.get().right_center() - vec2(6.0, 0.0);
+        assert!(hint_showing(&ctx, 2.0, 12, vec![egui::Event::PointerMoved(arrow)], &mut build2), "no hint over the arrow");
+    }
+
+    #[test]
+    fn keyboard_focus_shows_the_hint_after_a_delay_but_not_over_a_menu() {
+        let ctx = hint_ctx();
+        let btn_id = std::cell::Cell::new(None);
+        let menu = std::cell::Cell::new(false);
+        let mut build = |ui: &mut Ui| {
+            let (_, resp) = ui.allocate_exact_size(vec2(40.0, 20.0), Sense::click());
+            btn_id.set(Some(resp.id));
+            if menu.get() {
+                egui::Popup::menu(&resp).open_memory(egui::SetOpenCommand::Bool(true)).show(|ui| ui.label("menu"));
+            }
+            show_hint(&resp, "Bold", &[]);
+        };
+        hint_showing(&ctx, 1.0, 2, vec![], &mut build);
+        let Some(id) = btn_id.get() else { return };
+        ctx.memory_mut(|m| m.request_focus(id));
+        // Just focused: no hint yet; after the tooltip delay: shown.
+        assert!(!hint_showing(&ctx, 2.0, 2, vec![], &mut build));
+        assert!(hint_showing(&ctx, 2.2, 10, vec![], &mut build), "focused control shows no hint");
+        // A menu open anywhere hides it.
+        menu.set(true);
+        assert!(!hint_showing(&ctx, 4.0, 3, vec![], &mut build), "hint drawn over an open menu");
+    }
+
+    #[test]
+    fn tooltip_lines_name_shortcut_group_and_reason() {
+        let (t, n) = tooltip_lines("Bold", "Ctrl+B", "Home > Font", None);
+        assert_eq!(t, "Bold (Ctrl+B)");
+        assert_eq!(n, vec!["Home > Font".to_string()]);
+        let (t, n) = tooltip_lines("Header", "", "", Some("Open a document first"));
+        assert_eq!(t, "Header");
+        assert_eq!(n, vec!["Open a document first".to_string()]);
+        let (_, n) = tooltip_lines("Header", "", "", Some("nothing is selected"));
+        assert_eq!(n, vec!["Nothing is selected".to_string()]);
+        // No reason given: the generic line.
+        let (_, n) = tooltip_lines("Header", "", "", Some(""));
+        assert_eq!(n, vec!["Not available right now".to_string()]);
     }
 
     #[test]

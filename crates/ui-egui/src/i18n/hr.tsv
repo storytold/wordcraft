@@ -2632,3 +2632,32 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	nothing is selected	ništa nije odabrano
+	select a picture or shape first	najprije odaberite sliku ili oblik
+	select recipients first	najprije odaberite primatelje
+	select two or more pictures or shapes first (Shift+click)	odaberite dvije ili više slika ili oblika (Shift+klik)
+	text boxes can't go inside a text box	tekstni okviri ne mogu biti unutar tekstnog okvira
+	the cursor isn't in a table	kursor nije u tablici
+	{name} options	Mogućnosti: {name}
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	platno za crtanje ne može se razgrupirati
+	a drawing canvas can't go inside a text box	platno za crtanje ne može ići u tekstni okvir
+	charts and diagrams can't be moved or resized yet	grafikoni i dijagrami još se ne mogu premještati ni mijenjati im veličina
+	no equation at the caret	na mjestu pokazivača nema jednadžbe
+	not editing an equation	ne uređuje se nijedna jednadžba
+	only in Outline view	samo u prikazu Struktura
+	select a SmartArt graphic first	najprije odaberite SmartArt grafiku
+	select a chart first	najprije odaberite grafikon
+	select a connector first	najprije odaberite poveznik
+	select a drawing canvas first	najprije odaberite platno za crtanje
+	select a floating picture or shape first	najprije odaberite plutajuću sliku ili oblik
+	select a group first	najprije odaberite grupu
+	select a picture first	najprije odaberite sliku
+	select a shape first	najprije odaberite oblik
+	select a text box first	najprije odaberite tekstni okvir
+	select a text box linked to another first	najprije odaberite tekstni okvir povezan s drugim
+	the Clipboard pane is empty	okno Međuspremnik je prazno
+	there is nothing to undo	nema ničega za poništavanje
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	ovaj SmartArt izrađen je u drugom programu: WordCraft ga prikazuje, ali ga ne može uređivati
+	this chart was made in another program: WordCraft shows it but can't edit it	ovaj grafikon izrađen je u drugom programu: WordCraft ga prikazuje, ali ga ne može uređivati
+	this text box is already linked: break the link first	ovaj tekstni okvir već je povezan: najprije prekinite vezu

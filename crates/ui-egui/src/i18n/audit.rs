@@ -389,3 +389,133 @@ fn complete_catalogs_have_every_string_the_interface_looked_up(mut keys: std::co
     }
     assert!(report.is_empty(), "{report}");
 }
+
+/// The text from `open` (the first char of `src`) to its matching `close`, skipping string
+/// literals (reasons hold brackets: `(Shift+click)`).
+fn balanced(src: &str, open: char, close: char) -> &str {
+    let (mut depth, mut in_str, mut escaped) = (0usize, false, false);
+    for (i, c) in src.char_indices() {
+        match (in_str, escaped, c) {
+            (true, true, _) => escaped = false,
+            (true, false, '\\') => escaped = true,
+            (true, false, '"') | (false, _, '"') => in_str = !in_str,
+            (false, _, c) if c == open => depth += 1,
+            (false, _, c) if c == close => {
+                depth -= 1;
+                if depth == 0 {
+                    return &src[..i + c.len_utf8()];
+                }
+            }
+            _ => {}
+        }
+    }
+    src
+}
+
+/// The string literals in `code`.
+fn literals(code: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = code;
+    while let Some(start) = rest.find('"') {
+        let body = &rest[start + 1..];
+        let mut escaped = false;
+        let end = body.char_indices().find(|&(_, c)| {
+            let ends = !escaped && c == '"';
+            escaped = !escaped && c == '\\';
+            ends
+        });
+        let Some((end, _)) = end else { break };
+        out.push(body[..end].replace("\\'", "'").replace("\\\"", "\""));
+        rest = &body[end + 1..];
+    }
+    out
+}
+
+/// Every reason a command gives for being off (its `enabled` check), which ribbon tooltips show
+/// (#1086). Read from the engine's command sources so a new reason can't slip by: the literals in
+/// each `.when(…)` closure and in the checks it names (and the checks those call), with `const`
+/// reasons resolved.
+fn disabled_reasons() -> std::collections::BTreeSet<String> {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../engine/src/cmd");
+    let mut files: Vec<_> =
+        std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "rs")).collect();
+    files.sort();
+    let all: String = files.iter().map(|p| std::fs::read_to_string(p).unwrap()).collect::<Vec<_>>().join("\n");
+    // A named check's bodies (any file's `fn name(…) -> Option<&'static str>`).
+    let checks = |name: &str| -> Vec<&str> {
+        all.match_indices(&format!("fn {name}("))
+            .filter_map(|(i, _)| {
+                let from = &all[i..];
+                let brace = from.find('{')?;
+                from[..brace].contains("-> Option<&'static str>").then(|| balanced(&from[brace..], '{', '}'))
+            })
+            .collect()
+    };
+    let is_ident = |s: &str| !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == ':');
+    let mut bodies: Vec<&str> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for (i, _) in all.match_indices(".when(") {
+        let args = balanced(&all[i + ".when".len()..], '(', ')');
+        let inner = args.trim_start_matches('(').trim_end_matches(')').trim();
+        if is_ident(inner) {
+            names.push(inner.rsplit("::").next().unwrap_or(inner).to_string());
+        } else {
+            bodies.push(inner);
+        }
+    }
+    let mut seen = std::collections::HashSet::new();
+    while let Some(name) = names.pop() {
+        if !seen.insert(name.clone()) {
+            continue;
+        }
+        for body in checks(&name) {
+            bodies.push(body);
+            // The checks this one calls (`has_object(s)`).
+            for (j, _) in body.match_indices("(s)") {
+                let callee = body[..j].rsplit(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).next().unwrap_or("");
+                if !callee.is_empty() {
+                    names.push(callee.to_string());
+                }
+            }
+        }
+    }
+    let mut reasons = std::collections::BTreeSet::new();
+    for body in bodies {
+        // `cfg!(target_arch = "wasm32")` names a target, not a reason.
+        let mut code = body.to_string();
+        while let Some(i) = code.find("cfg!(") {
+            let len = balanced(&code[i + "cfg!".len()..], '(', ')').len();
+            code.replace_range(i..i + "cfg!".len() + len, "");
+        }
+        reasons.extend(literals(&code));
+        // `const FROZEN: &str = "…"` reasons.
+        for word in body.split(|c: char| !(c.is_ascii_uppercase() || c == '_')).filter(|w| w.len() > 2) {
+            if let Some(i) = all.find(&format!("const {word}: &str = ")) {
+                reasons.extend(literals(all[i..].lines().next().unwrap_or("")));
+            }
+        }
+    }
+    reasons
+}
+
+/// Ribbon tooltips show why a control is off in the interface's language: every reason has an
+/// entry in every catalog (#2678).
+#[test]
+fn every_disabled_reason_is_translated() {
+    let reasons = disabled_reasons();
+    // The source scan finds every reason the registry gives in a blank and the sample document.
+    for doc in [wordcraft_doc::Document::new(), wordcraft_engine::sample::sample_document()] {
+        let session = wordcraft_engine::Session::new(doc);
+        for spec in session.registry.all() {
+            if let Some(r) = (spec.enabled)(&session) {
+                assert!(reasons.contains(r), "{}: the source scan missed its reason {r:?}", spec.id);
+            }
+        }
+    }
+    assert!(reasons.len() > 20, "the source scan found only {reasons:#?}");
+    let mut missing = Vec::new();
+    for l in super::Lang::all().filter(|l| *l != super::Lang::EN) {
+        missing.extend(reasons.iter().filter(|r| !super::has(l, r)).map(|r| format!("{}: {r:?}", l.code())));
+    }
+    assert!(missing.is_empty(), "{} disabled reasons are untranslated:\n{missing:#?}", missing.len());
+}

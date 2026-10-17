@@ -2245,3 +2245,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	Вузька
 	Medium	Середня
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	полотно малювання не можна розгрупувати
+	a drawing canvas can't go inside a text box	полотно малювання не можна вставити в текстове поле
+	charts and diagrams can't be moved or resized yet	діаграми та схеми поки що не можна переміщувати чи змінювати їхній розмір
+	no equation at the caret	біля курсора немає рівняння
+	not editing an equation	рівняння не редагується
+	nothing is selected	нічого не виділено
+	only in Outline view	лише в поданні «План»
+	select a SmartArt graphic first	спочатку виділіть графічний об’єкт SmartArt
+	select a chart first	спочатку виділіть діаграму
+	select a connector first	спочатку виділіть сполучну лінію
+	select a drawing canvas first	спочатку виділіть полотно малювання
+	select a floating picture or shape first	спочатку виділіть плаваюче зображення або фігуру
+	select a group first	спочатку виділіть групу
+	select a picture first	спочатку виділіть зображення
+	select a picture or shape first	спочатку виділіть зображення або фігуру
+	select a shape first	спочатку виділіть фігуру
+	select a text box first	спочатку виділіть текстове поле
+	select a text box linked to another first	спочатку виділіть текстове поле, зв’язане з іншим
+	select recipients first	спочатку виберіть одержувачів
+	select two or more pictures or shapes first (Shift+click)	спочатку виділіть два або більше зображень чи фігур (Shift+клацання)
+	text boxes can't go inside a text box	текстові поля не можна вставити в текстове поле
+	the Clipboard pane is empty	область «Буфер обміну» порожня
+	the cursor isn't in a table	курсор не в таблиці
+	there is nothing to undo	немає чого скасовувати
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	цей SmartArt створено в іншій програмі: WordCraft показує його, але не може редагувати
+	this chart was made in another program: WordCraft shows it but can't edit it	цю діаграму створено в іншій програмі: WordCraft показує її, але не може редагувати
+	this text box is already linked: break the link first	це текстове поле вже зв’язане: спочатку розірвіть зв’язок

@@ -2245,3 +2245,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	Estreita
 	Medium	Média
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	uma tela de desenho não pode ser desagrupada
+	a drawing canvas can't go inside a text box	uma tela de desenho não pode ficar dentro de uma caixa de texto
+	charts and diagrams can't be moved or resized yet	gráficos e diagramas ainda não podem ser movidos nem redimensionados
+	no equation at the caret	nenhuma equação no cursor
+	not editing an equation	nenhuma equação está sendo editada
+	nothing is selected	nada está selecionado
+	only in Outline view	somente no modo de exibição Estrutura de tópicos
+	select a SmartArt graphic first	selecione primeiro um elemento gráfico SmartArt
+	select a chart first	selecione primeiro um gráfico
+	select a connector first	selecione primeiro um conector
+	select a drawing canvas first	selecione primeiro uma tela de desenho
+	select a floating picture or shape first	selecione primeiro uma imagem ou forma flutuante
+	select a group first	selecione primeiro um grupo
+	select a picture first	selecione primeiro uma imagem
+	select a picture or shape first	selecione primeiro uma imagem ou forma
+	select a shape first	selecione primeiro uma forma
+	select a text box first	selecione primeiro uma caixa de texto
+	select a text box linked to another first	selecione primeiro uma caixa de texto vinculada a outra
+	select recipients first	selecione primeiro os destinatários
+	select two or more pictures or shapes first (Shift+click)	selecione primeiro duas ou mais imagens ou formas (Shift+clique)
+	text boxes can't go inside a text box	caixas de texto não podem ficar dentro de uma caixa de texto
+	the Clipboard pane is empty	o painel Área de transferência está vazio
+	the cursor isn't in a table	o cursor não está em uma tabela
+	there is nothing to undo	não há nada para desfazer
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	este SmartArt foi criado em outro programa: o WordCraft o exibe, mas não pode editá-lo
+	this chart was made in another program: WordCraft shows it but can't edit it	este gráfico foi criado em outro programa: o WordCraft o exibe, mas não pode editá-lo
+	this text box is already linked: break the link first	esta caixa de texto já está vinculada: desfaça o vínculo primeiro

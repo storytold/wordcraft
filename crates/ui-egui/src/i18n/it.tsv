@@ -2641,3 +2641,32 @@ preview	Title	Esempio
 # Reading Mode column widths (#1040)
 	Narrow	Stretta
 	Medium	Media
+	nothing is selected	nessuna selezione
+	select a picture or shape first	seleziona prima un'immagine o una forma
+	select recipients first	seleziona prima i destinatari
+	select two or more pictures or shapes first (Shift+click)	seleziona due o più immagini o forme (Maiusc+clic)
+	text boxes can't go inside a text box	le caselle di testo non possono stare in una casella di testo
+	the cursor isn't in a table	il cursore non è in una tabella
+	{name} options	Opzioni di {name}
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	un'area di disegno non può essere separata
+	a drawing canvas can't go inside a text box	un'area di disegno non può stare in una casella di testo
+	charts and diagrams can't be moved or resized yet	grafici e diagrammi non si possono ancora spostare né ridimensionare
+	no equation at the caret	nessuna equazione al cursore
+	not editing an equation	nessuna equazione in modifica
+	only in Outline view	solo nella visualizzazione Struttura
+	select a SmartArt graphic first	seleziona prima un elemento grafico SmartArt
+	select a chart first	seleziona prima un grafico
+	select a connector first	seleziona prima un connettore
+	select a drawing canvas first	seleziona prima un'area di disegno
+	select a floating picture or shape first	seleziona prima un'immagine o una forma mobile
+	select a group first	seleziona prima un gruppo
+	select a picture first	seleziona prima un'immagine
+	select a shape first	seleziona prima una forma
+	select a text box first	seleziona prima una casella di testo
+	select a text box linked to another first	seleziona prima una casella di testo collegata a un'altra
+	the Clipboard pane is empty	il riquadro Appunti è vuoto
+	there is nothing to undo	non c'è niente da annullare
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	questo SmartArt è stato creato in un altro programma: WordCraft lo mostra ma non può modificarlo
+	this chart was made in another program: WordCraft shows it but can't edit it	questo grafico è stato creato in un altro programma: WordCraft lo mostra ma non può modificarlo
+	this text box is already linked: break the link first	questa casella di testo è già collegata: interrompi prima il collegamento

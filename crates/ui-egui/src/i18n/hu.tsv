@@ -2628,3 +2628,32 @@
 # Reading Mode column widths (#1040)
 	Narrow	Keskeny
 	Medium	Közepes
+	nothing is selected	nincs kijelölve semmi
+	select a picture or shape first	előbb jelöljön ki egy képet vagy alakzatot
+	select recipients first	előbb válasszon címzetteket
+	select two or more pictures or shapes first (Shift+click)	jelöljön ki két vagy több képet vagy alakzatot (Shift+kattintás)
+	text boxes can't go inside a text box	szövegdoboz nem kerülhet szövegdobozba
+	the cursor isn't in a table	a kurzor nem táblázatban van
+	{name} options	{name} beállításai
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	a rajzvászon csoportbontása nem lehetséges
+	a drawing canvas can't go inside a text box	rajzvászon nem kerülhet szövegdobozba
+	charts and diagrams can't be moved or resized yet	a diagramok és ábrák még nem helyezhetők át és nem méretezhetők át
+	no equation at the caret	nincs egyenlet a kurzornál
+	not editing an equation	nincs szerkesztés alatt álló egyenlet
+	only in Outline view	csak Vázlat nézetben
+	select a SmartArt graphic first	előbb jelöljön ki egy SmartArt-ábrát
+	select a chart first	előbb jelöljön ki egy diagramot
+	select a connector first	előbb jelöljön ki egy összekötőt
+	select a drawing canvas first	előbb jelöljön ki egy rajzvásznat
+	select a floating picture or shape first	előbb jelöljön ki egy lebegő képet vagy alakzatot
+	select a group first	előbb jelöljön ki egy csoportot
+	select a picture first	előbb jelöljön ki egy képet
+	select a shape first	előbb jelöljön ki egy alakzatot
+	select a text box first	előbb jelöljön ki egy szövegdobozt
+	select a text box linked to another first	előbb jelöljön ki egy másikhoz csatolt szövegdobozt
+	the Clipboard pane is empty	a Vágólap munkaablak üres
+	there is nothing to undo	nincs mit visszavonni
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	ez a SmartArt egy másik programban készült: a WordCraft megjeleníti, de nem tudja szerkeszteni
+	this chart was made in another program: WordCraft shows it but can't edit it	ez a diagram egy másik programban készült: a WordCraft megjeleníti, de nem tudja szerkeszteni
+	this text box is already linked: break the link first	ez a szövegdoboz már csatolva van: előbb bontsa a csatolást

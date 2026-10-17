@@ -2243,3 +2243,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	Uska
 	Medium	Srednja
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	platno za crtanje ne može da se razgrupiše
+	a drawing canvas can't go inside a text box	platno za crtanje ne može da se stavi u okvir za tekst
+	charts and diagrams can't be moved or resized yet	grafikoni i dijagrami još ne mogu da se pomeraju niti da im se menja veličina
+	no equation at the caret	na mestu kursora nema jednačine
+	not editing an equation	ne uređuje se nijedna jednačina
+	nothing is selected	ništa nije izabrano
+	only in Outline view	samo u prikazu Kontura
+	select a SmartArt graphic first	prvo izaberite SmartArt grafiku
+	select a chart first	prvo izaberite grafikon
+	select a connector first	prvo izaberite liniju za povezivanje
+	select a drawing canvas first	prvo izaberite platno za crtanje
+	select a floating picture or shape first	prvo izaberite plutajuću sliku ili oblik
+	select a group first	prvo izaberite grupu
+	select a picture first	prvo izaberite sliku
+	select a picture or shape first	prvo izaberite sliku ili oblik
+	select a shape first	prvo izaberite oblik
+	select a text box first	prvo izaberite okvir za tekst
+	select a text box linked to another first	prvo izaberite okvir za tekst povezan sa drugim
+	select recipients first	prvo izaberite primaoce
+	select two or more pictures or shapes first (Shift+click)	prvo izaberite dve ili više slika ili oblika (Shift+klik)
+	text boxes can't go inside a text box	okviri za tekst ne mogu da se stave u okvir za tekst
+	the Clipboard pane is empty	okno Ostava je prazno
+	the cursor isn't in a table	kursor nije u tabeli
+	there is nothing to undo	nema šta da se opozove
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	ovaj SmartArt je napravljen u drugom programu: WordCraft ga prikazuje, ali ne može da ga uređuje
+	this chart was made in another program: WordCraft shows it but can't edit it	ovaj grafikon je napravljen u drugom programu: WordCraft ga prikazuje, ali ne može da ga uređuje
+	this text box is already linked: break the link first	ovaj okvir za tekst je već povezan: prvo prekinite vezu

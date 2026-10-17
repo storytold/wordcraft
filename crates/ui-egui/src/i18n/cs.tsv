@@ -2624,3 +2624,32 @@ preview	Title	Ukázka
 # Reading Mode column widths (#1040)
 	Narrow	Úzká
 	Medium	Střední
+	nothing is selected	nic není vybráno
+	select a picture or shape first	nejdřív vyberte obrázek nebo tvar
+	select recipients first	nejdřív vyberte příjemce
+	select two or more pictures or shapes first (Shift+click)	vyberte dva nebo více obrázků či tvarů (Shift+klepnutí)
+	text boxes can't go inside a text box	textové pole nelze vložit do textového pole
+	the cursor isn't in a table	kurzor není v tabulce
+	{name} options	Možnosti: {name}
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	kreslicí plátno nelze oddělit
+	a drawing canvas can't go inside a text box	kreslicí plátno nelze vložit do textového pole
+	charts and diagrams can't be moved or resized yet	grafy a diagramy zatím nelze přesouvat ani měnit jejich velikost
+	no equation at the caret	u kurzoru není žádná rovnice
+	not editing an equation	neupravuje se žádná rovnice
+	only in Outline view	pouze v zobrazení Osnova
+	select a SmartArt graphic first	nejprve vyberte obrázek SmartArt
+	select a chart first	nejprve vyberte graf
+	select a connector first	nejprve vyberte spojnici
+	select a drawing canvas first	nejprve vyberte kreslicí plátno
+	select a floating picture or shape first	nejprve vyberte plovoucí obrázek nebo tvar
+	select a group first	nejprve vyberte skupinu
+	select a picture first	nejprve vyberte obrázek
+	select a shape first	nejprve vyberte tvar
+	select a text box first	nejprve vyberte textové pole
+	select a text box linked to another first	nejprve vyberte textové pole propojené s jiným
+	the Clipboard pane is empty	podokno Schránka je prázdné
+	there is nothing to undo	není co vrátit zpět
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	tento SmartArt byl vytvořen v jiném programu: WordCraft ho zobrazí, ale nemůže ho upravit
+	this chart was made in another program: WordCraft shows it but can't edit it	tento graf byl vytvořen v jiném programu: WordCraft ho zobrazí, ale nemůže ho upravit
+	this text box is already linked: break the link first	toto textové pole už je propojené: nejprve zrušte propojení

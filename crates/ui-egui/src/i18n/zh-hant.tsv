@@ -2234,3 +2234,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	窄
 	Medium	中等
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	繪圖畫布無法取消群組
+	a drawing canvas can't go inside a text box	繪圖畫布不能放在文字方塊內
+	charts and diagrams can't be moved or resized yet	圖表和圖形暫時無法移動或調整大小
+	no equation at the caret	游標處沒有方程式
+	not editing an equation	未在編輯方程式
+	nothing is selected	未選取任何內容
+	only in Outline view	僅在大綱檢視中可用
+	select a SmartArt graphic first	請先選取 SmartArt 圖形
+	select a chart first	請先選取圖表
+	select a connector first	請先選取連接線
+	select a drawing canvas first	請先選取繪圖畫布
+	select a floating picture or shape first	請先選取浮動的圖片或圖案
+	select a group first	請先選取群組
+	select a picture first	請先選取圖片
+	select a picture or shape first	請先選取圖片或圖案
+	select a shape first	請先選取圖案
+	select a text box first	請先選取文字方塊
+	select a text box linked to another first	請先選取已連結到另一個文字方塊的文字方塊
+	select recipients first	請先選取收件者
+	select two or more pictures or shapes first (Shift+click)	請先選取兩個以上的圖片或圖案 (Shift+按一下)
+	text boxes can't go inside a text box	文字方塊不能放在文字方塊內
+	the Clipboard pane is empty	剪貼簿窗格是空的
+	the cursor isn't in a table	游標不在表格中
+	there is nothing to undo	沒有可復原的動作
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	此 SmartArt 由其他程式建立: WordCraft 可以顯示但無法編輯
+	this chart was made in another program: WordCraft shows it but can't edit it	此圖表由其他程式建立: WordCraft 可以顯示但無法編輯
+	this text box is already linked: break the link first	此文字方塊已連結: 請先中斷連結

@@ -2621,3 +2621,32 @@
 # Reading Mode column widths (#1040)
 	Narrow	Тясна
 	Medium	Средна
+	nothing is selected	нищо не е избрано
+	select a picture or shape first	първо изберете картина или фигура
+	select recipients first	първо изберете получатели
+	select two or more pictures or shapes first (Shift+click)	изберете две или повече картини или фигури (Shift+щракване)
+	text boxes can't go inside a text box	текстови полета не могат да са в текстово поле
+	the cursor isn't in a table	курсорът не е в таблица
+	{name} options	{name}: опции
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	платното за рисуване не може да се разгрупира
+	a drawing canvas can't go inside a text box	платното за рисуване не може да се постави в текстово поле
+	charts and diagrams can't be moved or resized yet	диаграмите и схемите все още не могат да се преместват или преоразмеряват
+	no equation at the caret	няма уравнение при курсора
+	not editing an equation	не се редактира уравнение
+	only in Outline view	само в изгледа „Структура“
+	select a SmartArt graphic first	първо изберете SmartArt графика
+	select a chart first	първо изберете диаграма
+	select a connector first	първо изберете съединител
+	select a drawing canvas first	първо изберете платно за рисуване
+	select a floating picture or shape first	първо изберете плаваща картина или фигура
+	select a group first	първо изберете група
+	select a picture first	първо изберете картина
+	select a shape first	първо изберете фигура
+	select a text box first	първо изберете текстово поле
+	select a text box linked to another first	първо изберете текстово поле, свързано с друго
+	the Clipboard pane is empty	екранът „Клипборд“ е празен
+	there is nothing to undo	няма нищо за отмяна
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	този SmartArt е създаден в друга програма: WordCraft го показва, но не може да го редактира
+	this chart was made in another program: WordCraft shows it but can't edit it	тази диаграма е създадена в друга програма: WordCraft я показва, но не може да я редактира
+	this text box is already linked: break the link first	това текстово поле вече е свързано: първо прекъснете връзката

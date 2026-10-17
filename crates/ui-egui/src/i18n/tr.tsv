@@ -2629,3 +2629,32 @@ preview	Title	Örnek
 # Reading Mode column widths (#1040)
 	Narrow	Dar
 	Medium	Orta
+	nothing is selected	hiçbir şey seçili değil
+	select a picture or shape first	önce bir resim veya şekil seçin
+	select recipients first	önce alıcıları seçin
+	select two or more pictures or shapes first (Shift+click)	iki veya daha fazla resim ya da şekil seçin (Shift+tıklama)
+	text boxes can't go inside a text box	metin kutuları bir metin kutusunun içine konamaz
+	the cursor isn't in a table	imleç bir tabloda değil
+	{name} options	{name} seçenekleri
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	çizim tuvalinin grubu çözülemez
+	a drawing canvas can't go inside a text box	çizim tuvali bir metin kutusunun içine konamaz
+	charts and diagrams can't be moved or resized yet	grafikler ve diyagramlar henüz taşınamaz veya yeniden boyutlandırılamaz
+	no equation at the caret	imleçte denklem yok
+	not editing an equation	düzenlenen bir denklem yok
+	only in Outline view	yalnızca Ana Hat görünümünde
+	select a SmartArt graphic first	önce bir SmartArt grafiği seçin
+	select a chart first	önce bir grafik seçin
+	select a connector first	önce bir bağlayıcı seçin
+	select a drawing canvas first	önce bir çizim tuvali seçin
+	select a floating picture or shape first	önce kayan bir resim veya şekil seçin
+	select a group first	önce bir grup seçin
+	select a picture first	önce bir resim seçin
+	select a shape first	önce bir şekil seçin
+	select a text box first	önce bir metin kutusu seçin
+	select a text box linked to another first	önce başka bir kutuya bağlı bir metin kutusu seçin
+	the Clipboard pane is empty	Pano bölmesi boş
+	there is nothing to undo	geri alınacak bir şey yok
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	bu SmartArt başka bir programda oluşturuldu: WordCraft onu gösterir ancak düzenleyemez
+	this chart was made in another program: WordCraft shows it but can't edit it	bu grafik başka bir programda oluşturuldu: WordCraft onu gösterir ancak düzenleyemez
+	this text box is already linked: break the link first	bu metin kutusu zaten bağlı: önce bağlantıyı kesin

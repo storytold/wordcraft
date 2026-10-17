@@ -2622,3 +2622,32 @@ preview	Title	Tytuł
 # Reading Mode column widths (#1040)
 	Narrow	Wąska
 	Medium	Średnia
+	nothing is selected	nic nie jest zaznaczone
+	select a picture or shape first	najpierw zaznacz obraz lub kształt
+	select recipients first	najpierw wybierz adresatów
+	select two or more pictures or shapes first (Shift+click)	zaznacz co najmniej dwa obrazy lub kształty (Shift+kliknięcie)
+	text boxes can't go inside a text box	pola tekstowego nie można umieścić w polu tekstowym
+	the cursor isn't in a table	kursor nie jest w tabeli
+	{name} options	{name}: opcje
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	kanwy rysunku nie można rozgrupować
+	a drawing canvas can't go inside a text box	kanwy rysunku nie można umieścić w polu tekstowym
+	charts and diagrams can't be moved or resized yet	wykresów i diagramów nie można jeszcze przenosić ani zmieniać ich rozmiaru
+	no equation at the caret	przy kursorze nie ma równania
+	not editing an equation	żadne równanie nie jest edytowane
+	only in Outline view	tylko w widoku Konspekt
+	select a SmartArt graphic first	najpierw zaznacz grafikę SmartArt
+	select a chart first	najpierw zaznacz wykres
+	select a connector first	najpierw zaznacz łącznik
+	select a drawing canvas first	najpierw zaznacz kanwę rysunku
+	select a floating picture or shape first	najpierw zaznacz pływający obraz lub kształt
+	select a group first	najpierw zaznacz grupę
+	select a picture first	najpierw zaznacz obraz
+	select a shape first	najpierw zaznacz kształt
+	select a text box first	najpierw zaznacz pole tekstowe
+	select a text box linked to another first	najpierw zaznacz pole tekstowe połączone z innym
+	the Clipboard pane is empty	okienko Schowek jest puste
+	there is nothing to undo	nie ma nic do cofnięcia
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	ta grafika SmartArt została utworzona w innym programie: WordCraft ją wyświetla, ale nie może jej edytować
+	this chart was made in another program: WordCraft shows it but can't edit it	ten wykres został utworzony w innym programie: WordCraft go wyświetla, ale nie może go edytować
+	this text box is already linked: break the link first	to pole tekstowe jest już połączone: najpierw przerwij połączenie

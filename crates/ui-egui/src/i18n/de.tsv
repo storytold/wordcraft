@@ -2232,3 +2232,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	Schmal
 	Medium	Mittel
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	die Gruppierung einer Zeichenfläche kann nicht aufgehoben werden
+	a drawing canvas can't go inside a text box	eine Zeichenfläche kann nicht in ein Textfeld eingefügt werden
+	charts and diagrams can't be moved or resized yet	Diagramme und SmartArt können noch nicht verschoben oder in der Größe geändert werden
+	no equation at the caret	keine Formel an der Einfügemarke
+	not editing an equation	es wird keine Formel bearbeitet
+	nothing is selected	nichts ist markiert
+	only in Outline view	nur in der Gliederungsansicht
+	select a SmartArt graphic first	markieren Sie zuerst eine SmartArt-Grafik
+	select a chart first	markieren Sie zuerst ein Diagramm
+	select a connector first	markieren Sie zuerst eine Verbindung
+	select a drawing canvas first	markieren Sie zuerst eine Zeichenfläche
+	select a floating picture or shape first	markieren Sie zuerst ein frei positioniertes Bild oder eine Form
+	select a group first	markieren Sie zuerst eine Gruppe
+	select a picture first	markieren Sie zuerst ein Bild
+	select a picture or shape first	markieren Sie zuerst ein Bild oder eine Form
+	select a shape first	markieren Sie zuerst eine Form
+	select a text box first	markieren Sie zuerst ein Textfeld
+	select a text box linked to another first	markieren Sie zuerst ein mit einem anderen verknüpftes Textfeld
+	select recipients first	wählen Sie zuerst Empfänger aus
+	select two or more pictures or shapes first (Shift+click)	markieren Sie zuerst zwei oder mehr Bilder oder Formen (Umschalt+Klick)
+	text boxes can't go inside a text box	Textfelder können nicht in ein Textfeld eingefügt werden
+	the Clipboard pane is empty	der Zwischenablage-Bereich ist leer
+	the cursor isn't in a table	die Einfügemarke befindet sich nicht in einer Tabelle
+	there is nothing to undo	es gibt nichts rückgängig zu machen
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	diese SmartArt-Grafik wurde in einem anderen Programm erstellt: WordCraft zeigt sie an, kann sie aber nicht bearbeiten
+	this chart was made in another program: WordCraft shows it but can't edit it	dieses Diagramm wurde in einem anderen Programm erstellt: WordCraft zeigt es an, kann es aber nicht bearbeiten
+	this text box is already linked: break the link first	dieses Textfeld ist bereits verknüpft: heben Sie zuerst die Verknüpfung auf

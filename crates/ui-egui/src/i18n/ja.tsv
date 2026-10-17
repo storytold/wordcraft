@@ -2233,3 +2233,31 @@
 # Reading Mode column widths (#1040)
 	Narrow	狭い
 	Medium	中
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	描画キャンバスはグループ解除できません
+	a drawing canvas can't go inside a text box	描画キャンバスはテキスト ボックス内に配置できません
+	charts and diagrams can't be moved or resized yet	グラフと図はまだ移動やサイズ変更ができません
+	no equation at the caret	カーソル位置に数式がありません
+	not editing an equation	数式を編集していません
+	nothing is selected	何も選択されていません
+	only in Outline view	アウトライン表示でのみ使用できます
+	select a SmartArt graphic first	先に SmartArt グラフィックを選択してください
+	select a chart first	先にグラフを選択してください
+	select a connector first	先にコネクタを選択してください
+	select a drawing canvas first	先に描画キャンバスを選択してください
+	select a floating picture or shape first	先に浮動の画像または図形を選択してください
+	select a group first	先にグループを選択してください
+	select a picture first	先に画像を選択してください
+	select a picture or shape first	先に画像または図形を選択してください
+	select a shape first	先に図形を選択してください
+	select a text box first	先にテキスト ボックスを選択してください
+	select a text box linked to another first	先に別のボックスにリンクされたテキスト ボックスを選択してください
+	select recipients first	先に宛先を選択してください
+	select two or more pictures or shapes first (Shift+click)	先に 2 つ以上の画像または図形を選択してください (Shift+クリック)
+	text boxes can't go inside a text box	テキスト ボックスはテキスト ボックス内に配置できません
+	the Clipboard pane is empty	クリップボード ウィンドウは空です
+	the cursor isn't in a table	カーソルが表の中にありません
+	there is nothing to undo	元に戻す操作はありません
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	この SmartArt は別のプログラムで作成されました: WordCraft で表示できますが編集はできません
+	this chart was made in another program: WordCraft shows it but can't edit it	このグラフは別のプログラムで作成されました: WordCraft で表示できますが編集はできません
+	this text box is already linked: break the link first	このテキスト ボックスは既にリンクされています: 先にリンクを解除してください

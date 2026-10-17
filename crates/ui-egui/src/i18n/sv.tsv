@@ -2647,3 +2647,32 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	nothing is selected	inget är markerat
+	select a picture or shape first	markera först en bild eller form
+	select recipients first	markera först mottagare
+	select two or more pictures or shapes first (Shift+click)	markera två eller fler bilder eller former (Skift+klick)
+	text boxes can't go inside a text box	textrutor kan inte placeras i en textruta
+	the cursor isn't in a table	markören är inte i en tabell
+	{name} options	Alternativ för {name}
+# Why a ribbon control is off (#2678)
+	a drawing canvas can't be ungrouped	en rityta kan inte delas upp
+	a drawing canvas can't go inside a text box	en rityta kan inte placeras i en textruta
+	charts and diagrams can't be moved or resized yet	diagram och grafik kan ännu inte flyttas eller storleksändras
+	no equation at the caret	ingen ekvation vid markören
+	not editing an equation	ingen ekvation redigeras
+	only in Outline view	bara i dispositionsvyn
+	select a SmartArt graphic first	markera en SmartArt-grafik först
+	select a chart first	markera ett diagram först
+	select a connector first	markera en koppling först
+	select a drawing canvas first	markera en rityta först
+	select a floating picture or shape first	markera en flytande bild eller figur först
+	select a group first	markera en grupp först
+	select a picture first	markera en bild först
+	select a shape first	markera en figur först
+	select a text box first	markera en textruta först
+	select a text box linked to another first	markera en textruta som är länkad till en annan först
+	the Clipboard pane is empty	fönstret Urklipp är tomt
+	there is nothing to undo	det finns inget att ångra
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	denna SmartArt skapades i ett annat program: WordCraft visar den men kan inte redigera den
+	this chart was made in another program: WordCraft shows it but can't edit it	detta diagram skapades i ett annat program: WordCraft visar det men kan inte redigera det
+	this text box is already linked: break the link first	denna textruta är redan länkad: bryt länken först
