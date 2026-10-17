@@ -510,6 +510,9 @@ pub struct WordApp {
     /// SmartArt Text Pane: the item last focused (Promote, Demote and Add Shape act on it) and
     /// the item being typed in (its keystrokes join one undo step).
     pub smart_art_item: Option<usize>,
+    /// A Text Pane row has focus (`smart_art_item` remembers the last one, so Tab handling in
+    /// [`WordApp::logic`] only fires while a row is focused, not from the canvas).
+    pub smart_art_row_focused: bool,
     pub(crate) smart_art_typing: Option<usize>,
     /// The tab shown before Outline view brought up the Outlining tab (restored when it closes).
     pub(crate) outline_prev_tab: Option<String>,
@@ -621,6 +624,7 @@ impl WordApp {
             equation_prev_tab: None,
             smart_art_item: None,
             smart_art_typing: None,
+            smart_art_row_focused: false,
             outline_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
@@ -1752,6 +1756,17 @@ impl WordApp {
         }
         options::sync(self);
         self.settle_async_saves();
+        // SmartArt Text Pane (#2701): Tab demotes and Shift+Tab promote the focused item, as Word's
+        // pane does. Consuming the key stops Tab from moving the caret to the next row, and so does
+        // resetting the focus direction: the item keeps focus after its level changes.
+        if self.session.view.smart_art_pane && self.smart_art_row_focused && self.smart_art_item.is_some() {
+            let shift_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
+            let tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+            if shift_tab || tab {
+                ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                let _ = self.run(if shift_tab { "smartArt.promote" } else { "smartArt.demote" }, json!({"index": self.smart_art_item.unwrap_or(0)}));
+            }
+        }
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         // An installed CJK font is read only once CJK text is shown (#241): a CJK interface, the
         // language names in Options, or a file name the caption is drawing. A file opened later

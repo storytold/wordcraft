@@ -265,7 +265,8 @@ pub fn items_without(g: &SmartArtSpec, i: usize) -> Value {
 }
 
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
-/// undo step per item typed in); Enter adds an item after the current one.
+/// undo step per item typed in); Enter adds an item after the current one; Tab demotes the
+/// focused item and Shift+Tab promotes it, as Word's Text Pane does.
 pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return };
     let t = Tokens::get(ui.ctx());
@@ -274,6 +275,7 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     let focus_id = egui::Id::new("smart_art_focus");
     let want_focus: Option<usize> = ui.data_mut(|d| d.remove_temp(focus_id));
     let mut typed = false;
+    app.smart_art_row_focused = false;
     egui::ScrollArea::vertical().id_salt("smart_art_items").max_height((ui.available_height() - 40.0).max(60.0)).show(ui, |ui| {
         for (i, it) in g.items.iter().enumerate() {
             ui.horizontal(|ui| {
@@ -286,6 +288,7 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                 }
                 if r.has_focus() || r.gained_focus() {
                     app.smart_art_item = Some(i);
+                    app.smart_art_row_focused = true;
                 }
                 if r.changed() {
                     typed = true;

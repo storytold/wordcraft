@@ -4502,4 +4502,55 @@ mod tests {
         }
         assert_eq!(wordcraft_engine::cmd::page::sect(&h.state().session).valign, PageVAlign::Justify);
     }
+
+    /// #2701: in the SmartArt Text Pane, Tab demotes and Shift+Tab promotes the focused item, as
+    /// Word's pane does; the row keeps its focus, so the next Tab acts on the same item. An item
+    /// that can't go down a level (the one before it isn't deeper) is left as it is.
+    #[test]
+    fn text_pane_tab_demotes_and_shift_tab_promotes_the_focused_item() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.smartArt", json!({"layout": "hierarchy"})).unwrap();
+        app.run("smartArt.textPane", json!({"value": true})).unwrap();
+        let levels = |app: &WordApp| {
+            wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).map(|g| g.items.iter().map(|i| i.level).collect::<Vec<u8>>())
+        };
+        assert_eq!(levels(&app), Some([0, 1, 2, 1, 2, 2].to_vec()), "Lead, Design, Sketches, Build, Code, Tests");
+        let mut h = app_harness(app);
+        h.run_steps(2);
+        // Focus a pane row: the text box with this value (the graphic drawn on the page shows the
+        // same words as shape names, so match by role).
+        let focus_row = |h: &mut egui_kittest::Harness<'static, WordApp>, text: &str| {
+            let node = h
+                .query_all(egui_kittest::kittest::By::new().role(egui::accesskit::Role::TextInput).value(text))
+                .next()
+                .unwrap_or_else(|| panic!("no text box for {text}"));
+            node.focus();
+            h.run_steps(2);
+        };
+        let tab = |h: &mut egui_kittest::Harness<'static, WordApp>, shift: bool| {
+            if shift {
+                h.key_press_modifiers(egui::Modifiers::SHIFT, egui::Key::Tab);
+            } else {
+                h.key_press(egui::Key::Tab);
+            }
+            h.run_steps(2);
+        };
+        // Focus "Design" (the second top-level item, at level 1): Tab can't demote it, because
+        // the item before it ("Lead") is shallower — Word leaves the level alone.
+        focus_row(&mut h, "Design");
+        assert_eq!(h.state().smart_art_item, Some(1), "the pane remembers the focused row");
+        tab(&mut h, false);
+        assert_eq!(levels(h.state()), Some([0, 1, 2, 1, 2, 2].to_vec()), "Tab on an item that can't go down changes nothing");
+        assert_eq!(h.state().smart_art_item, Some(1), "the row keeps focus after a refused demote");
+        // Focus "Build" (level 1 after the deeper "Sketches"): Tab demotes it and its sub-items,
+        // and the next Tab (the row stayed focused) demotes them again; Shift+Tab promotes back.
+        focus_row(&mut h, "Build");
+        tab(&mut h, false);
+        assert_eq!(levels(h.state()), Some([0, 1, 2, 2, 3, 3].to_vec()), "Tab demotes the focused item");
+        tab(&mut h, false);
+        assert_eq!(levels(h.state()), Some([0, 1, 2, 3, 4, 4].to_vec()), "the same row takes the next Tab");
+        tab(&mut h, true);
+        assert_eq!(levels(h.state()), Some([0, 1, 2, 2, 3, 3].to_vec()), "Shift+Tab promotes them back");
+    }
 }
