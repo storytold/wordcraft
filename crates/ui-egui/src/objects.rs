@@ -5,8 +5,9 @@
 //! everything else.
 //!
 //! While dragging, nothing is laid out: the preview is the object drawn alone, once, when the
-//! drag starts (#1010: a cut of the page would carry along whatever is behind it). The drop is
-//! one command, one relayout.
+//! drag starts (#1010: a cut of the page would carry along whatever is behind it). The page it
+//! was on is drawn again without it (see [`dragged_off_page`]), so it is not left behind where it
+//! was. The drop is one command, one relayout.
 //!
 //! Moving one snaps it to alignment guides ([`crate::guides`]): the page's edges and centre, the
 //! margins and the other floating objects on the page, shown as thin lines while dragging. Alt
@@ -292,6 +293,18 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         }
     }
     true
+}
+
+/// The object a move has taken off its page (which page, and where it is in the document): the
+/// page is rendered again without it while the preview follows the pointer, so the object is not
+/// left behind where it was. Only for a move — resizing and turning show the object itself, and
+/// dragging a connector's end onto a shape still shows that connector.
+pub(crate) fn dragged_off_page(drag: Option<&ObjectDrag>) -> Option<(usize, Pos)> {
+    let d = drag?;
+    if !d.drag.moved || d.end.is_some() || d.drag.grab != Grab::Move {
+        return None;
+    }
+    Some((d.object.page, d.object.pos()))
 }
 
 /// Snap a moved object's bounds (rotated ones by their turned box) to the guides of the page
@@ -911,5 +924,68 @@ mod tests {
         assert_eq!(dark, 0, "no text from behind the shape in its preview");
         button(&h, end, false);
         steps(&mut h, 3);
+    }
+
+    /// A 100×60 pt rectangle filled E2EFDA: [`fill_pixels`] counts the page's pixels of that colour.
+    fn filled_shape() -> InlineObject {
+        InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 100.0,
+            h: 60.0,
+            fill: Some(wordcraft_doc::props::Rgb(0xE2, 0xEF, 0xDA)),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Default::default(),
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        }
+    }
+
+    /// How many pixels of the first page have the fill colour: how many copies of the shape the
+    /// page shows.
+    fn fill_pixels(app: &mut WordApp, opts: &wordcraft_render::RenderOptions) -> usize {
+        let layout = app.session.layout();
+        let img = wordcraft_render::render_page(&app.session.doc, &layout.pages[0], 1.0, opts);
+        img.to_straight().as_chunks::<4>().0.iter().filter(|p| (p[0], p[1], p[2]) == (0xE2, 0xEF, 0xDA)).count()
+    }
+
+    /// A shape dragged on the page is left out of it: the preview under the pointer stands in for
+    /// it, so the page must not draw it where it was as well (`DisplayOptions::hide_object`).
+    ///
+    /// Judged by pixels: the page raster has none of its fill colour once it is left out, and a
+    /// thousand or so while it isn't. Without this, "it stays where it was while it is dragged"
+    /// would come back with nothing to catch it.
+    #[test]
+    fn a_dragged_inline_object_is_left_out_of_its_page() {
+        let (mut app, hit) = app_with(filled_shape());
+        let pos = hit.pos();
+        let on = wordcraft_render::RenderOptions::default();
+        let before = fill_pixels(&mut app, &on);
+        assert!(before > 1000, "the shape is on its page to begin with: {before} px");
+        let mut hidden = on.clone();
+        hidden.display.hide_object = Some(pos);
+        assert_eq!(fill_pixels(&mut app, &hidden), 0, "a dragged object is left out of its page");
+    }
+
+    /// The same for an object that is already floating: it is drawn as a `Placed::Shape` of its
+    /// own rather than inside a line, so leaving it out goes by the object the shape carries.
+    #[test]
+    fn a_dragged_floating_shape_is_left_out_of_its_page() {
+        let (mut app, hit) = app_with(filled_shape());
+        let pos = hit.pos();
+        let end = Pos { off: pos.off + wordcraft_doc::para::OBJ.len_utf8(), ..pos.clone() };
+        let _ = app.run("select.range", serde_json::json!({"anchor": pos, "focus": end}));
+        app.run("arrange.bounds", serde_json::json!({"page": 0, "x": 100.0, "y": 150.0})).expect("floats it");
+        let hit = app.session.layout().object(&pos, 0).expect("laid out");
+        assert!(hit.floating(), "arrange.bounds makes it float");
+
+        let on = wordcraft_render::RenderOptions::default();
+        let before = fill_pixels(&mut app, &on);
+        assert!(before > 1000, "the floating shape is on its page to begin with: {before} px");
+        let mut hidden = on.clone();
+        hidden.display.hide_object = Some(pos);
+        assert_eq!(fill_pixels(&mut app, &hidden), 0, "a dragged floating shape is left out of its page");
     }
 }

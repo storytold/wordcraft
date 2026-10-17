@@ -175,6 +175,8 @@ pub(crate) fn symbol_items(pl: &Arc<ParaLayout>, x: f32, y: f32, level: u8, chil
         effects: Default::default(),
         spin: Default::default(),
         extra: Default::default(),
+        // A heading's symbol, not an object of its own: never left out of a page.
+        object: None,
     };
     let white = Border { style: BorderStyle::Single, width: 1.1, color: Some(Rgb(0xFF, 0xFF, 0xFF)), space: 0.0 };
     if level >= BODY {

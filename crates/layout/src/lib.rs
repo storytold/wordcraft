@@ -241,6 +241,9 @@ pub enum Placed {
         spin: Spin,
         /// Arrowheads and text warp (see [`wordcraft_doc::connector::ShapeExtra`]).
         extra: wordcraft_doc::connector::ShapeExtra,
+        /// The floating object it draws (a Drawing Canvas's members: the canvas's), for leaving
+        /// exactly one object out of a page (see [`crate::display::DisplayOptions::hide_object`]).
+        object: Option<wordcraft_doc::Pos>,
     },
     /// A floating chart or diagram, drawn from its items inside `rect`. The object is the U+FFFC at
     /// byte `off` of paragraph `path` (its alt text).
@@ -2785,6 +2788,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
             vec![Placed::Image { rect, media: media.clone(), crop: *crop, story, path: Path(path.to_vec()), off, spin }]
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
+            let object = wordcraft_doc::Pos { story, path: Path(path.to_vec()), off };
             vec![Placed::Shape {
                 rect,
                 kind: *kind,
@@ -2795,6 +2799,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                 freeform: freeform.clone(),
                 spin,
                 extra: extra.clone(),
+                object: Some(object),
             }]
         }
         InlineObject::Graphic { graphic, .. } => {
@@ -2822,6 +2827,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                             freeform: None,
                             spin,
                             extra: Default::default(),
+                            object: Some(wordcraft_doc::Pos { story, path: Path(path.to_vec()), off }),
                         },
                         Placed::Clip { rect, spin, items: members },
                     ]

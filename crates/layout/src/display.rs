@@ -167,6 +167,9 @@ pub struct DisplayOptions {
     pub hide_ink: bool,
     /// How tracked changes and comments are marked when `markup` is on (Track Changes Options).
     pub revisions: MarkupOptions,
+    /// Leave this object out of the page: while it is dragged, the preview under the pointer
+    /// stands in for it, so the page must not also show it where it was.
+    pub hide_object: Option<wordcraft_doc::Pos>,
 }
 
 impl Default for DisplayOptions {
@@ -180,6 +183,39 @@ impl Default for DisplayOptions {
             placeholders: false,
             hide_ink: false,
             revisions: MarkupOptions::default(),
+            hide_object: None,
+        }
+    }
+}
+
+/// An object left out of a page's drawing ([`DisplayOptions::hide_object`]).
+struct Hidden {
+    object: wordcraft_doc::Pos,
+    /// The text box stories it shows (its own and its group members', resolved to the story each
+    /// one shows): a box's text is drawn as lines of its story, so it goes with the box.
+    boxes: Vec<u32>,
+}
+
+impl Hidden {
+    /// The object at `object` and the text box stories whose lines belong to it.
+    fn new(doc: &Document, object: &wordcraft_doc::Pos) -> Hidden {
+        let boxes = doc
+            .para(object.story, &object.path)
+            .and_then(|p| p.object_at(object.off))
+            .map(|o| o.text_boxes().into_iter().map(|id| doc.text_box_chain(id).and_then(|c| c.first().copied()).unwrap_or(id)).collect())
+            .unwrap_or_default();
+        Hidden { object: object.clone(), boxes }
+    }
+
+    fn hides(&self, it: &Placed) -> bool {
+        let me = &self.object;
+        match it {
+            Placed::Object { story, path, off, .. } | Placed::Image { story, path, off, .. } | Placed::Graphic { story, path, off, .. } => {
+                *story == me.story && *path == me.path && *off == me.off
+            }
+            Placed::Shape { object: Some(pos), .. } => pos == me,
+            Placed::Lines { story: StoryRef::Part(id), .. } => self.boxes.contains(id),
+            _ => false,
         }
     }
 }
@@ -344,6 +380,7 @@ fn stroke_of(u: Underline) -> Stroke {
 /// Draw items for a page.
 pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<Draw> {
     let mut out = Vec::new();
+    let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     let ha = if opts.dim_header { 0.45 } else { 1.0 };
     let ba = if opts.dim_body { 0.45 } else { 1.0 };
     for (items, a) in [(&page.header, ha), (&page.footer, ha), (&page.items, ba)] {
@@ -351,6 +388,10 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
         let clips = clipped_cells(items);
         let mut done: Vec<u32> = Vec::new();
         for it in items.iter() {
+            // The object being dragged is drawn by its preview instead: leave it out here.
+            if hidden.as_ref().is_some_and(|h| h.hides(it)) {
+                continue;
+            }
             if let Placed::Lines { story, path, .. } = it
                 && let Some(rect) = cell_clip(&clips, *story, &path.0)
             {
@@ -581,7 +622,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
         Placed::Image { rect, media, crop, spin, .. } => {
             spun(*spin, *rect, vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new() }], out)
         }
-        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra } => {
+        Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
             let mut items = Vec::new();
             let fx = effects_in(*effects, spin.within(outer));
             shape_draws(*rect, *kind, *fill, *stroke, *stroke_width, fx, freeform.as_deref(), extra, opts, &mut items);
@@ -1018,6 +1059,10 @@ fn lines(
             let Some(c) = pl.clusters.get(k) else { continue };
             let ClKind::Object(oi) = c.kind else { continue };
             if c.obj_h <= 0.0 {
+                continue;
+            }
+            // A dragged inline object is left out too: its preview stands in for it.
+            if opts.hide_object.as_ref().is_some_and(|p| p.story == story && p.path == *path && p.off == c.start) {
                 continue;
             }
             let cx = x + line.cl_left(k).unwrap_or(0.0);
