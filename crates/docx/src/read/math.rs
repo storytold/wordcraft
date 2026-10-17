@@ -26,6 +26,58 @@ pub fn lift_color(math: &mut Math) -> Option<Rgb> {
     Some(c)
 }
 
+/// An explicit size shared by every run and structural control, without inherited arguments.
+pub(super) fn shared_size(e: &El) -> Option<f32> {
+    fn scan(e: &El, depth: usize, common: &mut Option<f32>, runs: &mut usize) -> Option<()> {
+        if depth > MAX_DEPTH || e.name == "m:argSz" {
+            return None;
+        }
+        if matches!(e.name.as_str(), "m:r" | "w:r" | "m:ctrlPr") {
+            let mut r = MRun::default();
+            wrpr(e.child("w:rPr"), &mut r);
+            let size = r.size?;
+            if common.is_some_and(|previous| previous != size) {
+                return None;
+            }
+            *common = Some(size);
+            if e.name != "m:ctrlPr" {
+                *runs = runs.saturating_add(1);
+            }
+        }
+        if matches!(
+            e.name.as_str(),
+            "m:f"
+                | "m:sSup"
+                | "m:sSub"
+                | "m:sSubSup"
+                | "m:sPre"
+                | "m:rad"
+                | "m:nary"
+                | "m:d"
+                | "m:func"
+                | "m:limLow"
+                | "m:limUpp"
+                | "m:acc"
+                | "m:bar"
+                | "m:borderBox"
+                | "m:box"
+                | "m:groupChr"
+                | "m:eqArr"
+                | "m:m"
+                | "m:phant"
+        ) {
+            e.child(&format!("{}Pr", e.name))?.child("m:ctrlPr")?;
+        }
+        for child in e.els() {
+            scan(child, depth + 1, common, runs)?;
+        }
+        Some(())
+    }
+    let (mut common, mut runs) = (None, 0usize);
+    scan(e, 0, &mut common, &mut runs)?;
+    common.filter(|_| runs > 0)
+}
+
 /// `m:oMathParaPr/m:jc`.
 pub fn para_jc(para: &El) -> MathJc {
     match para.child("m:oMathParaPr").and_then(|p| p.child("m:jc")).and_then(|j| j.attr("m:val")) {
@@ -332,6 +384,27 @@ mod tests {
             r#"<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{inner}</m:oMath>"#
         );
         crate::xml::parse(x.as_bytes()).unwrap()
+    }
+
+    #[test]
+    fn shared_math_size() {
+        let run = |size: Option<u16>| {
+            format!("<m:r><w:rPr>{}</w:rPr><m:t>x</m:t></m:r>", size.map(|v| format!("<w:sz w:val=\"{v}\"/>")).unwrap_or_default())
+        };
+        for size in [18, 28, 40] {
+            let control = format!("<m:ctrlPr><w:rPr><w:sz w:val=\"{size}\"/></w:rPr></m:ctrlPr>");
+            let uniform = format!("<m:sSup><m:sSupPr>{control}</m:sSupPr><m:e>{}</m:e><m:sup>{}</m:sup></m:sSup>", run(Some(size)), run(Some(size)));
+            assert_eq!(shared_size(&omath(&uniform)), Some(f32::from(size) / 2.0));
+            for inner in [
+                uniform.replace(&run(Some(size)), &run(None)),
+                uniform.replace(&control, ""),
+                uniform.replace(&control, &control.replace(&format!("val=\"{size}\""), "val=\"22\"")),
+                format!("{}{uniform}", run(Some(22))),
+                uniform.replace("<m:e>", "<m:e><m:argPr><m:argSz m:val=\"-1\"/></m:argPr>"),
+            ] {
+                assert_eq!(shared_size(&omath(&inner)), None, "preserve operand/control boundaries: {inner}");
+            }
+        }
     }
 
     #[test]
