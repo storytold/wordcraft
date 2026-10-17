@@ -1140,3 +1140,40 @@ fn typing_after_a_citation_goes_outside_its_field() {
     let inside = Pos { off: f[0].start.off + wordcraft_doc::para::OBJ.len_utf8(), ..f[0].start.clone() };
     assert_eq!(s.doc.copy_range(&inside, &f[0].end).plain_text(), "(Smith 2020)");
 }
+
+/// Tab in a table typed in right-to-left text (#2634): like Word, a table inserted in a
+/// right-to-left paragraph is a right-to-left table, so its first cell stands at the right and
+/// Tab moves to the cell on the left (the next one in reading order); Shift+Tab comes back. A
+/// table inserted in a left-to-right paragraph is unchanged: Tab moves right.
+#[test]
+fn tab_in_a_table_inserted_in_right_to_left_text_moves_left() {
+    // The caret's cell column and the x of that cell on the page.
+    fn caret_cell_x(s: &mut Session) -> (usize, f32) {
+        let (_, r, c) = s.sel.focus.path.cell().expect("caret in a cell");
+        let x = s
+            .layout()
+            .pages
+            .iter()
+            .flat_map(|p| p.items.iter())
+            .find_map(|it| match it {
+                wordcraft_layout::Placed::Cell { rect, row, cell, covered: false, .. } if *row == r && *cell == c => Some(rect.x),
+                _ => None,
+            })
+            .expect("cell laid out");
+        (c, x)
+    }
+    for (keys, rtl) in [("مرحبا\n", true), ("Hello\n", false)] {
+        let mut s = s();
+        typ(&mut s, keys);
+        run(&mut s, "insert.table", json!({"rows": 1, "cols": 3}));
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).expect("table");
+        assert_eq!(t.props.bidi_visual, rtl, "{keys:?}: the table takes the paragraph's direction");
+        let (c0, x0) = caret_cell_x(&mut s);
+        typ(&mut s, "\t");
+        let (c1, x1) = caret_cell_x(&mut s);
+        assert_eq!((c0, c1), (0, 1), "{keys:?}: Tab goes to the next cell in reading order");
+        assert_eq!(x1 < x0, rtl, "{keys:?}: Tab moves {} ({x0} -> {x1})", if rtl { "left" } else { "right" });
+        run(&mut s, "text.backTab", json!({}));
+        assert_eq!(caret_cell_x(&mut s), (0, x0), "{keys:?}: Shift+Tab comes back");
+    }
+}

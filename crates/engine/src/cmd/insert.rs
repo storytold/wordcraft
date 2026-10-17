@@ -159,6 +159,11 @@ fn table(s: &mut Session, v: &Value) -> CmdResult {
         let id = s.doc.styles.find(st).map(|x| x.id.clone()).ok_or_else(|| CmdError::Params(format!("no table style `{st}`")))?;
         t.props.style = Some(id);
     }
+    // Like Word, a table inserted in a right-to-left paragraph is a right-to-left table (#2634):
+    // its first cell stands at the right, so Tab, which follows reading order, moves leftwards.
+    if s.doc.para_at(&s.sel.focus).is_some_and(|p| s.doc.styles.resolve_para(&p.props).bidi) {
+        t.props.bidi_visual = true;
+    }
     let story = s.sel.focus.story;
     let path = insert_block_at_caret(s, Block::Table(t))?;
     let mut first = path.0.clone();
