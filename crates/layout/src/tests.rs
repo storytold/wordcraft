@@ -7263,3 +7263,158 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+fn anchor_story(kind: wordcraft_doc::PartKind, before: f32, preceding: usize, float: wordcraft_doc::para::Float) -> DocLayout {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("Body");
+    d.styles = wordcraft_doc::StyleSheet::empty();
+    d.styles.default_chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+    d.styles.default_para =
+        ParaProps { space_before: Some(before), space_after: Some(0.0), line_spacing: Some(LineSpacing::Exactly(12.0)), ..Default::default() };
+    d.styles.upsert(wordcraft_doc::Style { id: "AnchorBase".into(), name: "Anchor base".into(), ..Default::default() });
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "AnchorInherited".into(),
+        name: "Anchor inherited".into(),
+        based_on: Some("AnchorBase".into()),
+        ..Default::default()
+    });
+    let mut blocks = Vec::new();
+    for _ in 0..preceding {
+        let mut p = wordcraft_doc::Paragraph::with_text("Preceding", Default::default());
+        p.props.space_before = Some(0.0);
+        blocks.push(wordcraft_doc::para_block(p));
+    }
+    let mut p = wordcraft_doc::Paragraph::with_text("Reference", Default::default());
+    p.props.style = Some("AnchorInherited".into());
+    p.insert_object(0, rect_shape(96.0, 24.0, float), &Default::default()).unwrap();
+    blocks.push(wordcraft_doc::para_block(p));
+    let id = d.add_part(kind, blocks);
+    d.last_section.page_w = 612.0;
+    d.last_section.page_h = 792.0;
+    d.last_section.margin_left = 72.0;
+    d.last_section.margin_right = 72.0;
+    d.last_section.margin_top = 96.0;
+    d.last_section.header = 36.0;
+    d.last_section.footer = 36.0;
+    match kind {
+        wordcraft_doc::PartKind::Header => d.last_section.headers.default = Some(id),
+        wordcraft_doc::PartKind::Footer => d.last_section.footers.default = Some(id),
+        _ => panic!("header or footer required"),
+    }
+    lay(&d)
+}
+
+#[test]
+fn header_anchor_native_matrix() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign, Wrap};
+    // Original Word 16.113.2 eight-case control, with inherited spacing and exact offsets.
+    for before in [0.0, 3.0] {
+        for right in [0.0, 0.75] {
+            for offset in [0.0, -5.0] {
+                let float = Float {
+                    wrap: Wrap::Square,
+                    h_rel: Anchor::Margin,
+                    h_align: Some(FloatAlign::End),
+                    v_rel: Anchor::Paragraph,
+                    y: offset,
+                    effect: [0.0, 0.0, right, 0.0],
+                    ..Default::default()
+                };
+                let layout = anchor_story(wordcraft_doc::PartKind::Header, before, 0, float);
+                let rect = shapes(&layout.pages[0].header)[0];
+                assert!((rect.x - (444.0 - right)).abs() < 0.001, "before={before} right={right}: {rect:?}");
+                assert!((rect.y - (36.0 + offset)).abs() < 0.001, "before={before} offset={offset}: {rect:?}");
+                assert_eq!((rect.w, rect.h), (96.0, 24.0));
+            }
+        }
+    }
+}
+
+#[test]
+fn effect_alignment_outside() {
+    use wordcraft_doc::para::{Anchor, Float, FloatAlign};
+    let sect = SectionProps { page_w: 612.0, margin_left: 72.0, margin_right: 72.0, ..Default::default() };
+    for number in [1, 2] {
+        for mirror in [false, true] {
+            let frame = PageFrame { sect: &sect, origin: (0.0, 0.0), number, mirror };
+            for align in [FloatAlign::Outside, FloatAlign::Inside] {
+                let float = Float { h_rel: Anchor::Margin, h_align: Some(align), effect: [6.0, 9.0, 0.75, 12.0], ..Default::default() };
+                let rect = float_rect(Some(frame), (72.0, 468.0), 40.0, 96.0, 24.0, &float);
+                let end = matches!((number, align), (1, FloatAlign::Outside) | (2, FloatAlign::Inside));
+                let expected = if end { 443.25 } else { 72.0 };
+                assert_eq!(rect.x, expected, "page={number} mirror={mirror} align={align:?}");
+                assert_eq!((rect.y, rect.w, rect.h), (40.0, 96.0, 24.0));
+            }
+        }
+    }
+}
+
+#[test]
+fn effect_alignment_negative() {
+    use wordcraft_doc::para::{Float, FloatAlign};
+    for (align, x) in [(None, 89.0), (Some(FloatAlign::Start), 72.0), (Some(FloatAlign::Center), 258.0)] {
+        let float = Float { x: 17.0, h_align: align, effect: [6.0, 9.0, 0.75, 12.0], ..Default::default() };
+        assert_eq!(float_rect(None, (72.0, 468.0), 40.0, 96.0, 24.0, &float).x, x);
+    }
+    for angle in [90.0, -90.0, 180.0] {
+        let float = Float { h_align: Some(FloatAlign::End), rot: angle, effect: [6.0, 9.0, 0.75, 12.0], ..Default::default() };
+        assert_eq!(float_rect(None, (72.0, 468.0), 40.0, 96.0, 24.0, &float).x, 444.0, "rotation={angle}");
+    }
+}
+
+#[test]
+fn header_anchor_other_origins() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for before in [0.0, 3.0] {
+        for anchor in [Anchor::Page, Anchor::Line] {
+            let float = Float { wrap: Wrap::Square, v_rel: anchor, y: 5.0, ..Default::default() };
+            let layout = anchor_story(wordcraft_doc::PartKind::Header, before, 0, float);
+            let rect = shapes(&layout.pages[0].header)[0];
+            let expected = if anchor == Anchor::Page { 5.0 } else { 41.0 + before };
+            assert_eq!(rect.y, expected, "before={before} anchor={anchor:?}");
+        }
+    }
+}
+
+#[test]
+fn footer_anchor_native_spacing() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for before in [0.0, 3.0] {
+        let float = Float { wrap: Wrap::Square, v_rel: Anchor::Paragraph, ..Default::default() };
+        let layout = anchor_story(wordcraft_doc::PartKind::Footer, before, 0, float);
+        let rect = shapes(&layout.pages[0].footer)[0];
+        assert_eq!(rect.y, 744.0 - before, "native footer paragraph origin, before={before}");
+    }
+}
+
+#[test]
+fn footer_anchor_other_origins() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for before in [0.0, 3.0] {
+        for anchor in [Anchor::Page, Anchor::Line] {
+            let float = Float { wrap: Wrap::Square, v_rel: anchor, y: 5.0, ..Default::default() };
+            let layout = anchor_story(wordcraft_doc::PartKind::Footer, before, 0, float);
+            let rect = shapes(&layout.pages[0].footer)[0];
+            let expected = if anchor == Anchor::Page { 5.0 } else { 749.0 };
+            assert_eq!(rect.y, expected, "before={before} anchor={anchor:?}");
+        }
+    }
+}
+
+#[test]
+fn header_anchor_second_paragraph() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let float = Float { wrap: Wrap::Square, v_rel: Anchor::Paragraph, ..Default::default() };
+    let layout = anchor_story(wordcraft_doc::PartKind::Header, 3.0, 1, float);
+    assert_eq!(shapes(&layout.pages[0].header)[0].y, 48.0);
+}
+
+#[test]
+fn header_anchor_before_inherited() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let float = Float { wrap: Wrap::Square, v_rel: Anchor::Paragraph, ..Default::default() };
+    let layout = anchor_story(wordcraft_doc::PartKind::Header, 3.0, 0, float);
+    assert_eq!(shapes(&layout.pages[0].header)[0].y, 36.0);
+    let text_y = layout.pages[0].header.iter().find_map(|item| if let Placed::Lines { y, .. } = item { Some(*y) } else { None }).unwrap();
+    assert_eq!(text_y, 39.0, "the text retains inherited paragraph spacing");
+}

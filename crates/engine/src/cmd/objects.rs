@@ -2209,4 +2209,122 @@ mod tests {
         let got = anchor_paragraph(&s.doc, &layout, 1, (mid, top + 1.0), StoryRef::Body);
         assert_eq!(got, Some(wordcraft_doc::Path::top(plain)));
     }
+    fn anchor_edit_session(kind: wordcraft_doc::PartKind, before: f32, preceding: usize, anchor: wordcraft_doc::para::Anchor) -> Session {
+        use wordcraft_doc::props::LineSpacing;
+        let mut doc = wordcraft_doc::Document::from_text("Body");
+        doc.styles = wordcraft_doc::StyleSheet::empty();
+        doc.styles.default_chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+        doc.styles.default_para = wordcraft_doc::props::ParaProps {
+            space_before: Some(before),
+            space_after: Some(0.0),
+            line_spacing: Some(LineSpacing::Exactly(12.0)),
+            ..Default::default()
+        };
+        let mut blocks = Vec::new();
+        for _ in 0..preceding {
+            let mut p = wordcraft_doc::Paragraph::with_text("Preceding", Default::default());
+            p.props.space_before = Some(0.0);
+            blocks.push(wordcraft_doc::para_block(p));
+        }
+        blocks.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Reference", Default::default())));
+        let id = doc.add_part(kind, blocks);
+        doc.last_section.page_w = 612.0;
+        doc.last_section.page_h = 792.0;
+        doc.last_section.margin_left = 72.0;
+        doc.last_section.margin_right = 72.0;
+        doc.last_section.margin_top = 96.0;
+        doc.last_section.header = 36.0;
+        doc.last_section.footer = 36.0;
+        match kind {
+            wordcraft_doc::PartKind::Header => doc.last_section.headers.default = Some(id),
+            wordcraft_doc::PartKind::Footer => doc.last_section.footers.default = Some(id),
+            _ => panic!("header or footer required"),
+        }
+        let mut s = Session::new(doc);
+        let pos = Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(preceding), off: 0 };
+        s.sel = Selection::caret(pos.clone());
+        s.run("insert.shape", &json!({"kind": "rectangle", "width": 96, "height": 24})).unwrap();
+        let f = s.doc.para_mut(pos.story, &pos.path).unwrap().objects[0].float_mut().unwrap();
+        *f = Float {
+            wrap: Wrap::Square,
+            h_rel: wordcraft_doc::para::Anchor::Margin,
+            h_align: Some(wordcraft_doc::para::FloatAlign::End),
+            v_rel: anchor,
+            y: if anchor == wordcraft_doc::para::Anchor::Page { 100.0 } else { 0.0 },
+            ..Default::default()
+        };
+        s.touch();
+        s
+    }
+
+    #[derive(Clone, Copy)]
+    enum AnchorEdit {
+        Move,
+        Toggle,
+    }
+
+    fn check_anchor_edits(kind: wordcraft_doc::PartKind, preceding: usize, edit: AnchorEdit) {
+        use wordcraft_doc::para::Anchor;
+        for before in [0.0, 3.0] {
+            for anchor in [Anchor::Paragraph, Anchor::Line, Anchor::Page] {
+                let mut s = anchor_edit_session(kind, before, preceding, anchor);
+                let expected = object_area(&mut s).rect;
+                if anchor == Anchor::Paragraph {
+                    let top = if kind == wordcraft_doc::PartKind::Header { 36.0 + 12.0 * preceding as f32 } else { 744.0 - before };
+                    assert!((expected.y - top).abs() < 0.001, "native starting position: {expected:?}");
+                }
+                let commands = match edit {
+                    AnchorEdit::Move => vec![("arrange.bounds", json!({"page": 0, "x": expected.x, "y": expected.y})); 2],
+                    AnchorEdit::Toggle => vec![
+                        ("arrange.moveWithText", json!({"value": false})),
+                        ("arrange.moveWithText", json!({"value": true})),
+                        ("arrange.moveWithText", json!({"value": false})),
+                        ("arrange.moveWithText", json!({"value": true})),
+                        ("edit.undo", json!({})),
+                        ("edit.redo", json!({})),
+                    ],
+                };
+                for (command, args) in commands {
+                    s.run(command, &args).unwrap();
+                    let actual = object_area(&mut s).rect;
+                    assert!(
+                        (actual.y - expected.y).abs() < 0.001,
+                        "{kind:?} before={before} preceding={preceding} {anchor:?} {command}: {actual:?} vs {expected:?}"
+                    );
+                    assert!((actual.x - expected.x).abs() < 0.001);
+                    assert_eq!((actual.w, actual.h), (expected.w, expected.h));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn header_footer_first_noop() {
+        check_anchor_edits(wordcraft_doc::PartKind::Header, 0, AnchorEdit::Move);
+    }
+
+    #[test]
+    fn header_footer_first_toggle() {
+        check_anchor_edits(wordcraft_doc::PartKind::Header, 0, AnchorEdit::Toggle);
+    }
+
+    #[test]
+    fn header_footer_second_noop() {
+        check_anchor_edits(wordcraft_doc::PartKind::Header, 1, AnchorEdit::Move);
+    }
+
+    #[test]
+    fn header_footer_second_toggle() {
+        check_anchor_edits(wordcraft_doc::PartKind::Header, 1, AnchorEdit::Toggle);
+    }
+
+    #[test]
+    fn header_footer_footer_noop() {
+        check_anchor_edits(wordcraft_doc::PartKind::Footer, 0, AnchorEdit::Move);
+    }
+
+    #[test]
+    fn header_footer_footer_toggle() {
+        check_anchor_edits(wordcraft_doc::PartKind::Footer, 0, AnchorEdit::Toggle);
+    }
 }

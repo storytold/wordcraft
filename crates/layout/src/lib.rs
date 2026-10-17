@@ -1009,6 +1009,10 @@ fn layout_box(
         BoxContext::Other => (None, false),
         BoxContext::Cell(table) => (table, true),
     };
+    let story_root = prefix.is_empty()
+        && !in_cell
+        && matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p|
+            matches!(p.kind, wordcraft_doc::PartKind::Header | wordcraft_doc::PartKind::Footer)));
     // Word 16.113.3: the override applies in modes 11/12/14, but not mode 15.
     let allow_same_style_space =
         in_cell && ctx.doc.settings.allow_space_of_same_style_in_table && matches!(ctx.doc.settings.compat_mode, 11 | 12 | 14);
@@ -1086,7 +1090,10 @@ fn layout_box(
                 } else if i > 0 && before > 0.0 && prev_after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
                     before = (before - prev_after).max(0.0);
                 }
+                let paragraph_y = y;
                 y += if i == 0 { before } else { before.max(0.0) };
+                // Header/footer drawing and edit origins precede applied paragraph spacing.
+                let anchor_y = if story_root { paragraph_y } else { y };
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
                 let mut floats = HashMap::new();
@@ -1096,7 +1103,8 @@ fn layout_box(
                     if left_out(oi) {
                         continue;
                     }
-                    let r = float_rect(frame, (0.0, width), y, w, h, float);
+                    let object_y = if float.v_rel == Anchor::Paragraph { anchor_y } else { y };
+                    let r = float_rect(frame, (0.0, width), object_y, w, h, float);
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
                     floats.insert(oi, r);
@@ -1109,7 +1117,7 @@ fn layout_box(
                 push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr: table.map(|t| &t.chr) };
+                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: anchor_y, table_chr: table.map(|t| &t.chr) };
                     let (back, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
                     let at = behind.min(items.len());
                     behind += back.len();
@@ -2719,7 +2727,12 @@ fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: f32, h: f32
     let hx = frame.and_then(|f| page_x(&f).map(|(a, e)| (a - f.origin.0, e))).unwrap_or(col);
     let vy = frame.and_then(|f| page_y(f.sect).map(|(a, e)| (a - f.origin.1, e))).unwrap_or((y0, 0.0));
     let h_align = PageFrame::h_align(frame.as_ref(), float.h_align);
-    Rect::new(align_in(hx, float.x, w, h_align), align_in(vy, float.y, h, float.v_align), w, h)
+    let mut x = align_in(hx, float.x, w, h_align);
+    if matches!(h_align, Some(FloatAlign::End | FloatAlign::Outside)) && float.spin().deg == 0.0 {
+        // Right alignment includes the unrotated object's right effect extent.
+        x -= float.effect_extent()[2];
+    }
+    Rect::new(x, align_in(vy, float.y, h, float.v_align), w, h)
 }
 
 /// Where an object of `size` starts on one axis of `area` (start, extent): at `offset` from the
