@@ -171,6 +171,9 @@ impl Writer {
     fn para_style(&mut self, p: &Para) -> String {
         let parent = parent_style(p.kind).to_string();
         let mut props = String::new();
+        if p.rtl {
+            props.push_str(" style:writing-mode=\"rl-tb\"");
+        }
         match p.align {
             Some(Align::Center) => props.push_str(" fo:text-align=\"center\""),
             Some(Align::Right) => props.push_str(" fo:text-align=\"end\""),
@@ -912,6 +915,8 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
+    /// `style:writing-mode="rl-tb"`: the style's paragraphs read right to left.
+    rtl: bool,
     page_break: bool,
     outline: Option<u8>,
     border_bottom: bool,
@@ -1047,7 +1052,9 @@ impl Styles {
                 "automatic-styles" => in_auto = true,
                 "style" if q.starts_with("style:") => {
                     if let Some(name) = get(&a, "style:name") {
+                        let rtl = get(&a, "style:writing-mode").is_some_and(|v| v.trim() == "rl-tb");
                         let info = StyleInfo {
+                            rtl,
                             parent: get(&a, "style:parent-style-name").map(String::from),
                             display: get(&a, "style:display-name").map(String::from),
                             auto: in_auto && auto_section_is_auto,
@@ -1115,6 +1122,9 @@ impl Styles {
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
+                        if get(&a, "style:writing-mode").is_some_and(|v| v.trim() == "rl-tb") {
+                            s.rtl = true;
+                        }
                         s.align = match get(&a, "fo:text-align") {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
@@ -1214,6 +1224,11 @@ impl Styles {
     /// Columns of a section style (whole chain).
     fn columns(&self, name: &str) -> Option<Columns> {
         self.chain(name).iter().find_map(|(_, s)| s.columns.clone())
+    }
+
+    /// Does this paragraph style read right to left (`style:writing-mode="rl-tb"`, whole chain)?
+    fn rtl(&self, name: &str) -> bool {
+        self.chain(name).iter().any(|(_, s)| s.rtl)
     }
 
     /// Background colour of a table-cell style (whole chain).
@@ -1419,6 +1434,8 @@ impl Body<'_> {
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
         let (mut kind, align, mut pb, rule, base) = style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, Fmt::default()));
+        // `style:writing-mode="rl-tb"` somewhere in the style's chain: the paragraph reads right to left.
+        let rtl = style.is_some_and(|s| self.styles.rtl(s));
         // The section break starts the new page; no page break besides.
         if let Some(next) = style.and_then(|s| self.page_section(s))
             && self.break_section(next)
@@ -1428,7 +1445,7 @@ impl Body<'_> {
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, ..Default::default() };
+        let mut p = Para { kind, align, rtl, page_break: pb, ..Default::default() };
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }
@@ -1881,7 +1898,7 @@ impl Body<'_> {
             self.para = Some(cur);
             return;
         }
-        let mut rest = Para { kind: cur.kind, list: cur.list, align: cur.align, ..Default::default() };
+        let mut rest = Para { kind: cur.kind, list: cur.list, align: cur.align, rtl: cur.rtl, ..Default::default() };
         // The host paragraph now ends at the first deleted paragraph's mark.
         cur.mark_del = Some(Box::new(mark.clone()));
         cur.mark_ins = first_mark_ins;
@@ -1891,6 +1908,7 @@ impl Body<'_> {
                 // The last deleted paragraph runs on into the rest of the body paragraph.
                 rest.kind = p.kind;
                 rest.align = p.align.or(rest.align);
+                rest.rtl |= p.rtl;
                 append(&mut rest, p.inlines);
             } else {
                 p.mark_del = Some(Box::new(mark.clone()));
@@ -2906,6 +2924,24 @@ mod tests {
         assert_eq!(marks(&back), want);
         let authors = |d: &Document| d.revisions.iter().map(|r| r.author.clone()).collect::<Vec<_>>();
         assert_eq!(authors(&back), authors(&doc));
+    }
+
+    #[test]
+    fn rtl_paragraphs_read_and_write_their_direction() {
+        // #2693: a paragraph style's `style:writing-mode="rl-tb"` (LibreOffice / Word) keeps the
+        // direction through the flow, the document's `w:bidi`, and the export writes it back.
+        let styles = r#"<office:styles><style:style style:name="RtlP" style:family="paragraph" style:parent-style-name="Standard"><style:paragraph-properties style:writing-mode="rl-tb"/></style:style></office:styles>"#;
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p text:style-name="RtlP">مرها</text:p></office:text></office:body></office:document-content>"#,
+        );
+        let pkg = package(content.as_str(), Some(styles));
+        let flow = parse(&pkg).unwrap();
+        assert!(paras(&flow).iter().any(|p| p.rtl), "the style's writing-mode reaches the flow");
+        let doc = import(&pkg).unwrap();
+        assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+        // The export's automatic style keeps it, so reopening the package still reads RTL.
+        let back = import(&export(&doc).unwrap()).unwrap();
+        assert!(back.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
     }
 
     #[test]

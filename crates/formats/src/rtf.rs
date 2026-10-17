@@ -246,6 +246,11 @@ impl Writer {
             Some(Align::Justify) | Some(Align::Distribute) => out.push_str("\\qj"),
             _ => out.push_str("\\ql"),
         }
+        // The paragraph's text direction, as Word writes it (`\paragragraphdir` in newer RTF,
+        // the classic `\dir\rtldir`).
+        if p.rtl {
+            out.push_str("\\dir\\rtldir")
+        }
         if p.page_break {
             out.push_str("\\pagebb");
         }
@@ -636,6 +641,8 @@ struct St {
     hidden: bool,
     // Paragraph properties.
     align: Option<Align>,
+    /// `\dir\rtldir`: the paragraph reads right to left.
+    rtldir: bool,
     style: i32,
     intbl: bool,
     ls: Option<i32>,
@@ -669,6 +676,7 @@ impl Default for St {
             uc: 1,
             hidden: false,
             align: None,
+            rtldir: false,
             style: 0,
             intbl: false,
             ls: None,
@@ -1244,6 +1252,7 @@ impl Reader {
         }
         self.rule_pending = false;
         p.align = self.st.align;
+        p.rtl = self.st.rtldir;
         p.page_break = self.st.pagebb;
         p.spacing = self.spacing();
         p.borders = self.st.borders.any_visible().then_some(self.st.borders);
@@ -1693,6 +1702,8 @@ impl Reader {
             "qc" => self.st.align = Some(Align::Center),
             "qr" => self.st.align = Some(Align::Right),
             "qj" | "qd" => self.st.align = Some(Align::Justify),
+            "rtldir" => self.st.rtldir = true,
+            "ltrdir" => self.st.rtldir = false,
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
@@ -2155,6 +2166,23 @@ mod tests {
         assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "red" && f.color == Some(Rgb(255, 0, 0)))));
         let FBlock::Para(l) = &f.blocks[2] else { panic!() };
         assert!(matches!(&l.inlines[0], Inline::Text(_, f) if f.link.as_deref() == Some("http://a.b")));
+    }
+
+    #[test]
+    fn rtl_paragraphs_read_and_write_their_direction() {
+        // #2693: Word writes an RTL paragraph as `\dir\rtldir`; reading it keeps the direction
+        // (para.rtl, which feeds w:bidi on the document), and export writes it back.
+        let rtf = br#"{\rtf1\ansi\pard\dir\rtldir RTL\par\pard\dir\ltrdir LTR\par\pard plain\par}"#;
+        let flow = parse(rtf).unwrap();
+        let paras: Vec<&Para> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None }).collect();
+        assert!(paras[0].rtl, "rtldir sets the direction");
+        assert!(!paras[1].rtl && !paras[2].rtl, "ltrdir and no word: not RTL");
+        // Import keeps it as w:bidi on the document paragraph.
+        let doc = import(rtf).unwrap();
+        assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+        // Export writes \dir\rtldir before the alignment word.
+        let out = export(&doc);
+        assert!(out.contains("\\dir\\rtldir"), "{out}");
     }
 
     #[test]

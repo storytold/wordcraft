@@ -122,6 +122,9 @@ pub struct Para {
     pub kind: Kind,
     pub list: Option<ListInfo>,
     pub align: Option<Align>,
+    /// The paragraph reads right to left (OOXML `w:bidi`, HTML `dir="rtl"`, ODF
+    /// `style:writing-mode="rl-tb"`, RTF `\dir\rtldir`).
+    pub rtl: bool,
     pub page_break: bool,
     pub inlines: Vec<Inline>,
     pub spacing: Spacing,
@@ -474,6 +477,9 @@ impl<'a> Builder<'a> {
             out.props.numbering = Some(NumRef { num, level: li.level.min(8) });
         }
         out.props.align = p.align;
+        if p.rtl {
+            out.props.bidi = Some(true);
+        }
         let sp = p.spacing;
         out.props.space_before = sp.before.or(out.props.space_before);
         out.props.space_after = sp.after.or(out.props.space_after);
@@ -826,6 +832,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         kind,
         list,
         align: p.props.align,
+        rtl: p.props.bidi.unwrap_or(false),
         page_break: p.props.page_break_before.unwrap_or(false),
         inlines: Vec::new(),
         spacing: Spacing::default(),
@@ -854,6 +861,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         kind,
                         list: None,
                         align: p.props.align,
+                        rtl: out.rtl,
                         page_break: true,
                         inlines: Vec::new(),
                         spacing: Spacing::default(),
