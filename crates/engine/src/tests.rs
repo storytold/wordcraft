@@ -1755,6 +1755,36 @@ fn layout_size_refuses_a_page_its_margins_dont_fit() {
     assert_eq!((s.doc.last_section.page_w, s.doc.last_section.page_h), (180.0, 180.0), "exactly 36 pt of room is enough");
 }
 
+/// #2072: `layout.size` when the focus is in a header or footer modifies that section, not
+/// always section 0, and `sect` reports the focused section's properties.
+#[test]
+fn layout_size_when_focus_is_in_header_updates_correct_section() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "section 1"}));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "text.insert", json!({"text": "section 2"}));
+    assert_eq!(s.doc.sections().len(), 2);
+
+    let hid = s.doc.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![std::sync::Arc::new(wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("header text", Default::default())))],
+    );
+    s.doc.last_section.headers.default = Some(hid);
+
+    // Focus inside section 2's header
+    s.sel = crate::Selection::caret(s.doc.start_of(wordcraft_doc::StoryRef::Part(hid)));
+    assert_eq!(crate::cmd::page::sect(&s).page_w, s.doc.last_section.page_w);
+
+    // Change size to A4
+    run(&mut s, "layout.size", json!({"name": "A4"}));
+    assert!((s.doc.last_section.page_w - 595.28).abs() < 0.1);
+    assert!((s.doc.last_section.page_h - 841.89).abs() < 0.1);
+
+    // Section 1 remains Letter (612.0 x 792.0)
+    let s0 = s.doc.sections()[0].1;
+    assert_eq!((s0.page_w, s0.page_h), (612.0, 792.0));
+}
+
 /// #1433: the smallest page there can be (0.1" wide, no margins, set straight through Page
 /// Setup's section) still lays out and exports text, a table and two columns.
 #[test]

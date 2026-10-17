@@ -215,20 +215,46 @@ fn manual_hyphenation(s: &mut Session, v: &Value) -> CmdResult {
     Ok(best.map(|(_, v)| v).unwrap_or_else(|| json!({"done": true})))
 }
 
-fn block_of(s: &Session) -> usize {
-    s.sel.focus.path.0.first().copied().unwrap_or(0) as usize
+fn section_of_part(s: &Session, id: u32) -> usize {
+    let sections = s.doc.sections();
+    for (i, (_, sp)) in sections.iter().enumerate() {
+        if [sp.headers.default, sp.headers.first, sp.headers.even, sp.footers.default, sp.footers.first, sp.footers.even].contains(&Some(id)) {
+            return i;
+        }
+    }
+    for (bi, block) in s.doc.body.iter().enumerate() {
+        if let wordcraft_doc::Block::Para(p) = &**block {
+            for o in &p.objects {
+                if matches!(o, wordcraft_doc::para::InlineObject::NoteRef { id: nid, .. } if *nid == id) {
+                    return s.doc.section_index_of(bi);
+                }
+            }
+        }
+    }
+    0
+}
+
+fn section_index_of_focus(s: &Session) -> usize {
+    match s.sel.focus.story {
+        wordcraft_doc::StoryRef::Body => s.doc.section_index_of(s.sel.focus.path.0.first().copied().unwrap_or(0) as usize),
+        wordcraft_doc::StoryRef::Part(id) => section_of_part(s, id),
+    }
 }
 
 pub fn sect(s: &Session) -> SectionProps {
-    let i = s.doc.section_index_of(block_of(s));
+    let i = section_index_of_focus(s);
     s.doc.sections().get(i).map(|(_, x)| (*x).clone()).unwrap_or_default()
 }
 
 /// The last block of each section of the selection.
 fn selected_section_ends(s: &Session) -> Vec<usize> {
     let (a, b) = s.sel.ordered();
-    let (i0, i1) = (a.path.0.first().copied().unwrap_or(0) as usize, b.path.0.first().copied().unwrap_or(0) as usize);
     let ends: Vec<usize> = s.doc.sections().iter().map(|(e, _)| *e).collect();
+    if a.story != wordcraft_doc::StoryRef::Body || b.story != wordcraft_doc::StoryRef::Body {
+        let i = section_index_of_focus(s);
+        return vec![ends.get(i).copied().unwrap_or(0)];
+    }
+    let (i0, i1) = (a.path.0.first().copied().unwrap_or(0) as usize, b.path.0.first().copied().unwrap_or(0) as usize);
     let first = ends.iter().position(|e| i0 <= *e).unwrap_or(0);
     let last = ends.iter().position(|e| i1 <= *e).unwrap_or(first);
     (first..=last).map(|k| ends.get(k).copied().unwrap_or(0)).collect()
