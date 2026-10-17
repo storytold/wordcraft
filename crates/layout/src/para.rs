@@ -715,7 +715,11 @@ impl<'a> Builder<'a> {
             }
         }
         let size = rc.draw_size() * if small { 0.8 } else { 1.0 };
-        let (a, d) = wordcraft_fonts::word::line_metrics(&face);
+        let (a, d) = match wordcraft_fonts::word::symbol_font_metrics(&rc.font) {
+            // A symbol font that isn't installed keeps its own height, as in Word.
+            Some((a, d)) if !wordcraft_fonts::FontDb::global().has_family(&rc.font) => (a * face.upem, d * face.upem),
+            _ => wordcraft_fonts::word::line_metrics(&face),
+        };
         let k = size as f64 / face.upem.max(1.0);
         // A fallback face (letters the requested font lacks) is emboldened or slanted when it has
         // no bold or italic of its own.
@@ -1533,8 +1537,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         for c in &cl {
             style = c.style;
             if let Some(st) = b.styles.get(style as usize) {
-                let a = wordcraft_fonts::word::line_metrics(&st.face).0 * st.size as f64 / st.face.upem.max(1.0);
-                ascent = ascent.max(a as f32 + st.shift.max(0.0));
+                ascent = ascent.max(st.ascent + st.shift.max(0.0));
             }
             let g0 = glyphs.len();
             for g in b.glyphs.get(c.g0 as usize..c.g1 as usize).into_iter().flatten() {

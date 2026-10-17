@@ -1044,6 +1044,33 @@ fn symbol_font_bullet_without_the_font_draws_a_bullet() {
 }
 
 #[test]
+fn a_symbol_bullet_sizes_its_line_by_the_symbol_font() {
+    // Measured in Word: a Symbol bullet makes its line taller than the text alone (Calibri 11 pt
+    // at 1.08 spacing: 15.1 pt, not 14.5 pt), the extra ascent added unscaled. Symbol isn't an open
+    // font; without it the bullet is drawn from another face but its line keeps Symbol's height.
+    if !wordcraft_fonts::word::resolve("Symbol", false, false).substituted {
+        return;
+    }
+    let first_line = |label_font: &str| {
+        let mut d = Document::from_text("one");
+        let id = d.numbering.add_list(wordcraft_doc::ListKind::BulletChar('\u{F0B7}'));
+        for a in &mut d.numbering.abstracts {
+            if let Some(l) = a.levels.first_mut() {
+                l.chr.font = Some(label_font.into());
+            }
+        }
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 })).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let size = para.styles.iter().map(|s| s.size).fold(0.0f32, f32::max);
+        (para.label.as_ref().map_or(0.0, |lab| lab.ascent), size)
+    };
+    let (ascent, size) = first_line("Symbol");
+    let want = (1.005 * f64::from(size)) as f32;
+    assert!((ascent - want).abs() < 0.01, "{ascent} vs {want}");
+}
+
+#[test]
 fn wingdings_text_draws_and_reads_as_its_unicode_symbols() {
     // Word stores symbol-font text both ways: plain codes ("J" = smiley) and private-use codes
     // (U+F0FC = check mark, what `w:sym` writes).
