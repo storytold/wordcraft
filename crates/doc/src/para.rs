@@ -216,6 +216,11 @@ pub struct Float {
     /// laid out, as Word for Windows does (Word for Mac draws hidden VML shapes).
     #[serde(skip_serializing_if = "is_false")]
     pub hidden: bool,
+    /// Stacking order among the floating objects of its layer (`wp:anchor/@relativeHeight`):
+    /// a higher one is drawn over a lower one, whatever their order in the text, as Word does.
+    /// `None` (objects made here) stacks above every object that has one, in text order.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub z: Option<u32>,
 }
 
 /// Longest alternative text kept (characters): hostile files and commands are capped.
@@ -257,6 +262,10 @@ fn is_false(v: &bool) -> bool {
 }
 
 impl Float {
+    /// Where it stacks among the floating objects of its layer: see [`Float::z`].
+    pub fn stack(&self) -> u32 {
+        self.z.unwrap_or(u32::MAX)
+    }
     /// The rotation and flips, the angle normalised to `0..360` (a NaN angle is no rotation).
     pub fn spin(&self) -> wordcraft_geom::Spin {
         wordcraft_geom::Spin::new(self.rot, self.flip_h, self.flip_v)

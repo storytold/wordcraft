@@ -3547,6 +3547,26 @@ fn floats_align_within_their_reference_area() {
     assert!((r[0].y - (792.0 - 72.0)).abs() < 0.01, "top of the bottom margin: {:?}", r[0]);
 }
 
+/// #2638: floating objects are drawn in their stacking order (`relativeHeight`), the higher over
+/// the lower, in front of the text and behind it, whatever their order in the text; objects
+/// made here (no order) go on top. Before, the text order decided.
+#[test]
+fn floating_objects_are_drawn_in_their_stacking_order() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Two trees.");
+    let at = |x: f32, z: Option<u32>, wrap: Wrap| Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 100.0, z, ..Default::default() };
+    // Inserted at the start, so the text order is the reverse: 50, 40, 30, 20, 10.
+    for f in [at(10.0, Some(1), Wrap::InFrontOfText), at(20.0, Some(2), Wrap::InFrontOfText), at(30.0, None, Wrap::InFrontOfText)]
+        .into_iter()
+        .chain([at(40.0, Some(5), Wrap::BehindText), at(50.0, Some(6), Wrap::BehindText)])
+    {
+        d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let drawn: Vec<f32> = shapes(&l.pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(drawn, [40.0, 50.0, 10.0, 20.0, 30.0], "behind the text, then in front, each lowest first");
+}
+
 #[test]
 fn top_and_bottom_float_pushes_its_own_first_line_down() {
     use wordcraft_doc::para::{Anchor, Float, Wrap};

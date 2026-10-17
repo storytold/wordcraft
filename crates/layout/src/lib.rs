@@ -2906,7 +2906,8 @@ struct ObjFrame<'a> {
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
-/// worked out from `at`. Returns what goes behind the text, and what goes in front.
+/// worked out from `at`. Returns what goes behind the text, and what goes in front, the
+/// floating objects of each in their stacking order ([`Float::stack`]).
 #[allow(clippy::too_many_arguments)]
 fn place_objects(
     ctx: &mut Ctx,
@@ -2920,8 +2921,9 @@ fn place_objects(
     floats: &HashMap<usize, Rect>,
     depth: usize,
 ) -> (Vec<Placed>, Vec<Placed>) {
-    let (mut behind, mut front) = (Vec::new(), Vec::new());
-    let Some(fl) = pl.lines.get(l0) else { return (behind, front) };
+    // Each object's items behind and in front of the text, with its stacking order if floating.
+    let mut placed: Vec<(Option<u32>, Vec<Placed>, Vec<Placed>)> = Vec::new();
+    let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
     let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
     // A floating object belongs to its paragraph, not to its line: Word puts it on the page the
@@ -2954,6 +2956,7 @@ fn place_objects(
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
+            let (mut behind, mut front) = (Vec::new(), Vec::new());
             let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
             // Floating ones are drawn here; inline ones with their line.
             if floating {
@@ -2997,7 +3000,29 @@ fn place_objects(
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }
+            placed.push((floating.then(|| float.stack()), behind, front));
         }
+    }
+    stack_objects(placed)
+}
+
+/// The items of objects placed in text order (each with its stacking order if floating), the
+/// floating ones put in stacking order (a stable sort: equal ones keep text order). Inline
+/// objects keep their places.
+fn stack_objects(mut placed: Vec<(Option<u32>, Vec<Placed>, Vec<Placed>)>) -> (Vec<Placed>, Vec<Placed>) {
+    let floating: Vec<bool> = placed.iter().map(|o| o.0.is_some()).collect();
+    let mut stacked: Vec<_> = placed.iter_mut().filter(|o| o.0.is_some()).map(std::mem::take).collect();
+    stacked.sort_by_key(|o| o.0);
+    let mut stacked = stacked.into_iter();
+    for (o, _) in placed.iter_mut().zip(floating).filter(|(_, f)| *f) {
+        if let Some(s) = stacked.next() {
+            *o = s;
+        }
+    }
+    let (mut behind, mut front) = (Vec::new(), Vec::new());
+    for (_, b, f) in placed {
+        behind.extend(b);
+        front.extend(f);
     }
     (behind, front)
 }

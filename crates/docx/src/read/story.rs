@@ -1677,6 +1677,8 @@ fn nv_alt(p: Option<&El>) -> (String, AltText) {
 fn anchor_float(c: &El) -> Float {
     let mut f = Float { wrap: Wrap::Square, ..Float::default() };
     let behind = on_off_attr(c, "behindDoc");
+    // ECMA-376 Part 1, §20.4.2.3: an unsigned int, the higher drawn over the lower.
+    f.z = c.attr("relativeHeight").and_then(|v| v.trim().parse::<u32>().ok());
     // Word wraps a position relative to the page's size (`wp14:pctPosVOffset`) in
     // `mc:AlternateContent`; its Fallback gives the same position as an offset (#743).
     let kids = c.els().flat_map(|k| match k.name.as_str() {

@@ -18,6 +18,17 @@ fn rt(doc: &Document) -> Document {
     wordcraft_docx::read(&bytes).expect("read")
 }
 
+/// `doc` without the stacking order a save gives objects made in WordCraft (`relativeHeight`,
+/// read back as `Float::z`), to compare them with the objects as made.
+fn unstacked(mut doc: Document) -> Document {
+    doc.objects_mut(&|_| true, &mut |o| {
+        if let Some(f) = o.float_mut() {
+            f.z = None;
+        }
+    });
+    doc
+}
+
 fn paras(doc: &Document) -> Vec<&Paragraph> {
     doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
@@ -444,7 +455,7 @@ fn images_round_trip() {
         p.insert_object(end, f.clone(), &CharProps::default()).unwrap();
     }
     d.body = vec![para_block(p)];
-    let r = rt(&d);
+    let r = unstacked(rt(&d));
     let got = paras(&r)[0];
     let mut expect = vec![inline];
     expect.extend(floats);
@@ -1187,7 +1198,7 @@ fn groups_round_trip() {
     let end = p.len();
     p.insert_object(end, group, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
-    let r = rt(&d);
+    let r = unstacked(rt(&d));
     let got = paras(&r);
     let InlineObject::Group { w, h, float: f, ch_w, ch_h, children, .. } = &got[0].objects[0] else { panic!("{:?}", got[0].objects) };
     assert_eq!((*w, *h, *ch_w, *ch_h), (240.0, 120.0, 200.0, 100.0));
@@ -1912,7 +1923,7 @@ fn ink_and_freeforms_round_trip_as_custom_geometry() {
     assert_eq!(xml.matches("<a:custGeom>").count(), 3, "{xml}");
     assert!(xml.contains(r#"<a:path w="762000" h="254000" fill="none"><a:moveTo><a:pt x="12700" y="12700"/></a:moveTo><a:lnTo>"#), "{xml}");
     assert!(xml.contains(r#"<a:alpha val="50000"/>"#) && xml.contains(r#"cap="rnd""#), "{xml}");
-    let r = rt(&d);
+    let r = unstacked(rt(&d));
     let objs = &paras(&r)[0].objects;
     assert_eq!(objs.len(), 3);
     // Written in reverse (each inserted at the start): the triangle, the highlighter, the pen.
@@ -2293,7 +2304,7 @@ fn wrap_polygons_round_trip() {
     std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
     assert!(xml.contains(r#"<wp:wrapPolygon edited="1"><wp:start x="-300" y="0"/><wp:lineTo x="21600" y="1200"/>"#), "{xml}");
     assert!(xml.contains(r#"<wp:lineTo x="-300" y="0"/></wp:wrapPolygon>"#), "closed: {xml}");
-    let r = wordcraft_docx::read(&bytes).expect("read");
+    let r = unstacked(wordcraft_docx::read(&bytes).expect("read"));
     let got = paras(&r)[0];
     let floats: Vec<Float> = got.objects.iter().filter_map(|o| o.frame().map(|(_, _, f)| f.clone())).collect();
     assert_eq!(floats[0], edited);

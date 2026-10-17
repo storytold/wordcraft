@@ -155,7 +155,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
         docpr: doc.next_shape_id().saturating_sub(1),
         shape_ids: std::collections::HashSet::new(),
-        z: 251_658_240,
+        z: doc.top_z().unwrap_or(0).max(251_658_240),
         footnotes: Vec::new(),
         endnotes: Vec::new(),
         hf: Vec::new(),

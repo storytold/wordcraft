@@ -1817,6 +1817,32 @@ fn anchored_wsp(name: &str, cx: u32, cy: u32, sppr: &str, style: &str, extra: &s
     )
 }
 
+/// #2638: Word stacks floating objects by `relativeHeight`, not by their order in the text (a
+/// shape sent to back, then copied with the shape over it, comes first in the text but stays
+/// behind). The order is read and kept on save, and an object made here is saved above them.
+#[test]
+fn floating_objects_keep_their_stacking_order() {
+    let shape = |name: &str, z: u32| {
+        anchored_wsp(name, 127000, 127000, r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#, "", "<wps:cNvSpPr/>")
+            .replace(r#"relativeHeight="1""#, &format!(r#"relativeHeight="{z}""#))
+    };
+    let body = format!("<w:p>{}{}</w:p>", shape("Canopy", 251662336), shape("Trunk", 251661312));
+    let mut d = read_body(&body);
+    let stacking = |d: &Document| paras(d)[0].objects.iter().map(|o| o.frame().and_then(|(_, _, f)| f.z)).collect::<Vec<_>>();
+    assert_eq!(stacking(&d), [Some(251662336), Some(251661312)]);
+    let mut made = paras(&d)[0].objects[0].clone();
+    if let InlineObject::Shape { float, .. } = &mut made {
+        float.z = None;
+    }
+    let Some(Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) else { panic!("a paragraph") };
+    p.insert_object(0, made, &Default::default()).unwrap();
+    let files = unzip(&wordcraft_docx::write(&d).unwrap());
+    let written = attr_values(&text(&files, "word/document.xml"), "wp:anchor", "relativeHeight");
+    assert_eq!(written, ["251662337", "251662336", "251661312"]);
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(stacking(&back), [Some(251662337), Some(251662336), Some(251661312)]);
+}
+
 /// #611: diagrams drawn with Word's shapes were mostly missing. Connectors and boxes take their
 /// outline and fill from the theme through their style references, or name preset and scheme
 /// colours; all of these are read, with line widths and arrowheads.

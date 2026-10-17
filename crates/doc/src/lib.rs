@@ -1229,6 +1229,22 @@ impl Document {
         max.saturating_add(1).max(1)
     }
 
+    /// The highest stacking order ([`para::Float::z`]) of any floating object in any story.
+    pub fn top_z(&self) -> Option<u32> {
+        let mut top = None;
+        for blocks in std::iter::once(&self.body).chain(self.parts.values().map(|p| &p.blocks)) {
+            for b in blocks {
+                edit::each_para(b, 0, &mut |p| {
+                    for o in &p.objects {
+                        let z = o.frame().and_then(|(_, _, f)| f.z);
+                        top = top.max(z);
+                    }
+                });
+            }
+        }
+        top
+    }
+
     /// Change every inline object in every story (paragraphs inside tables too), copying only
     /// the blocks whose paragraphs `wants` says have objects to change.
     pub fn objects_mut(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {
