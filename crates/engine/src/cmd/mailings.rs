@@ -226,7 +226,16 @@ fn apply_filter(s: &mut Session) {
     if m.rows.is_empty() {
         m.preview = false;
     }
-    refresh(s);
+    refresh_shown(s);
+}
+
+/// [`refresh`] for the non-mutating recipient-list commands: in a protected document the merge
+/// fields' shown results stay as they are, since these commands skip the protection checks and
+/// undo (Preview Results and the record buttons, which mutate, show the new list's values).
+fn refresh_shown(s: &mut Session) {
+    if !super::protect::enforced(&s.doc) {
+        refresh(s);
+    }
 }
 
 /// The canonical field name for `f` (any case), or a params error.
@@ -647,7 +656,7 @@ fn recipients(s: &mut Session, v: &Value) -> CmdResult {
     s.merge.filter.clear();
     s.merge.sort.clear();
     s.merge.record = 0;
-    refresh(s);
+    refresh_shown(s);
     let mut r = json!({"fields": s.merge.headers, "records": s.merge.rows.len()});
     if !sheet.is_null() {
         r["sheet"] = sheet;
