@@ -2237,6 +2237,21 @@
 	Print failed: the printing worker stopped.	Printimine nurjus: printimisprotsess peatus.
 	Print settings	Printimisseaded
 	Submit print job	Saada prinditöö
+	Saving as {name} may lose some of this document's features:	Kui salvestate nimega {name}, võivad mõned selle dokumendi funktsioonid kaduda:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Jätkake selles vormingus salvestamist või salvestage Wordi dokument (.docx), et kõik säiliks.
+	Continue	Jätka
+	Save as Word Document	Salvesta Wordi dokumendina
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Automaatsalvestus on väljas: {name} ei suuda kõike selles dokumendis säilitada. Automaatsalvestuse sisselülitamiseks salvestage .docx-vormingus.
+	Content controls	Sisujuhtelemendid
+	Equations (written as plain text)	Võrrandid (kirjutatakse lihttekstina)
+	Charts and SmartArt	Diagrammid ja SmartArt
+	Shapes, text boxes and drawings	Kujundid, tekstiväljad ja joonistused
+	Embedded objects (their pictures are kept)	Manustatud objektid (nende pildid säilivad)
+	Fields (their current text is kept)	Väljad (nende praegune tekst säilib)
+	Section breaks and columns	Jaotisepiirid ja veerud
+	Phonetic guides	Foneetilised juhendid
+	Other content from the original file	Muu sisu algsest failist
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Pildid, mida RTF ei mahuta (nt EMF, WMF ja SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Sõnastikud

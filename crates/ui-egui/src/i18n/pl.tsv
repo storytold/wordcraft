@@ -2594,6 +2594,21 @@ preview	Title	Tytuł
 	Heading text	Tekst nagłówka
 	Insert reference to:	Wstaw odwołanie do:
 	Reference type:	Typ odwołania:
+	Saving as {name} may lose some of this document's features:	Zapisanie jako {name} może spowodować utratę niektórych elementów tego dokumentu:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Kontynuuj, aby zapisać w tym formacie, lub zapisz dokument programu Word (.docx), aby zachować wszystko.
+	Continue	Kontynuuj
+	Save as Word Document	Zapisz jako dokument programu Word
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Autozapis jest wyłączony: {name} nie może zachować całej zawartości tego dokumentu. Zapisz jako .docx, aby włączyć autozapis.
+	Content controls	Formanty zawartości
+	Equations (written as plain text)	Równania (zapisane jako zwykły tekst)
+	Charts and SmartArt	Wykresy i grafiki SmartArt
+	Shapes, text boxes and drawings	Kształty, pola tekstowe i rysunki
+	Embedded objects (their pictures are kept)	Obiekty osadzone (ich obrazy zostaną zachowane)
+	Fields (their current text is kept)	Pola (ich bieżący tekst zostanie zachowany)
+	Section breaks and columns	Podziały sekcji i kolumny
+	Phonetic guides	Przewodniki fonetyczne
+	Other content from the original file	Inna zawartość z oryginalnego pliku
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Obrazy, których RTF nie obsługuje (np. EMF, WMF i SVG)
 	Dictionaries	Słowniki
 	Dictionaries folder:	Folder słowników:
 	Not set: the system's usual places	Nie ustawiono: standardowe miejsca w systemie

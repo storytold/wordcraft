@@ -169,6 +169,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-13 | Replace All respects locked content controls with Track Changes on or off; it refuses the entire batch before editing when any match would change locked content or remove a control locked against deletion |
 | 2026-10-14 | File › Print translated in all 18 interface languages — printer list, duplex, grayscale, discovery/submission feedback and print commands (18 strings that shipped English-only with the craft-print integration; written from the English meaning, pending native-speaker review like the rest of the catalogs) |
 | 2026-10-14 | All Caps and Small Caps draw ß as SS, as Word does (#1581): "Straße" in All Caps reads STRASSE, not STRASE, and other letters whose capital is two characters (ﬀ, ŉ) draw in full. The ß is still one character: the caret never stops between the two S, and a click on them lands before or after it |
+| 2026-10-14 | Saving to RTF or ODT no longer quietly drops part of a richer document (#1316): as in Word, a warning first lists what the format can't keep (comments, tracked changes, footnotes, headers and footers, content controls, equations, charts…) and offers Continue, Save as Word Document or Cancel; scripts get the list as `losses` in `file.save`'s result, and AutoSave skips such files |
 | 2026-10-13 | Windows Magnifier follows the caret onto a new line: after Enter or Shift+Enter the view moves to the empty line at once, instead of staying on the line above until two more letters are typed (#1119) |
 | 2026-10-13 | A window too big for its screen shrinks to fit when it opens (#1215): on a laptop screen the first window reached under the taskbar or past the screen edge, with the end of the scroll bar, so dragging the scroll bar stopped where the pointer met the edge. A window saved that size is fitted on its next launch too |
 | 2026-10-14 | `layout.pageSetup` with a `section` checks its values like Margins, Size and Columns (#1582): non-finite numbers and margins that leave no room for text are refused with nothing changed; page sides, column count and gap, header/footer distances and line-numbering values are clamped to the same ranges |
@@ -433,6 +434,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 | 2026-10-13 | trivial | Replace All checks content-control locks before editing; a refused batch leaves the document and undo history unchanged; existing deletion-lock rules reused, with tracked/untracked regression coverage |
 | 2026-10-14 | trivial | Progress log: print-area strings translated in every catalog |
 | 2026-10-14 | trivial | Progress log: All Caps and Small Caps draw ß as SS (#1581) |
+| 2026-10-14 | trivial | Progress log: RTF/ODT save warning (#1316) |
 | 2026-10-13 | trivial | Progress log: Windows Magnifier follows the caret onto a new line (#1119) |
 | 2026-10-13 | trivial | Progress log: a window too big for its screen shrinks to fit (#1215) |
 | 2026-10-14 | trivial | Progress log: Page Setup sections are validated (#1582) |

@@ -2215,6 +2215,21 @@
 	Print failed: the printing worker stopped.	打印失败：打印工作线程已停止。
 	Print settings	打印设置
 	Submit print job	提交打印作业
+	Saving as {name} may lose some of this document's features:	另存为 {name} 可能会丢失此文档的部分功能：
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	继续以此格式保存，或保存为 Word 文档 (.docx) 以保留全部内容。
+	Continue	继续
+	Save as Word Document	另存为 Word 文档
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	自动保存已关闭：{name} 无法保留此文档中的全部内容。另存为 .docx 即可打开自动保存。
+	Content controls	内容控件
+	Equations (written as plain text)	公式（以纯文本写入）
+	Charts and SmartArt	图表和 SmartArt
+	Shapes, text boxes and drawings	形状、文本框和绘图
+	Embedded objects (their pictures are kept)	嵌入对象（保留其图片）
+	Fields (their current text is kept)	域（保留其当前文本）
+	Section breaks and columns	分节符和分栏
+	Phonetic guides	拼音指南
+	Other content from the original file	原始文件中的其他内容
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	RTF 无法保存的图片（如 EMF、WMF 和 SVG）
 
 # Dictionaries folder (#1063)
 	Dictionaries	词典

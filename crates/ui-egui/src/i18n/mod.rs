@@ -394,6 +394,13 @@ pub fn lowercase(s: &str) -> String {
     out
 }
 
+/// Whether `lang`'s catalog has a row for `s` (tests: text built at run time, such as the losses
+/// the RTF/ODT warning lists).
+#[cfg(test)]
+pub(crate) fn has_translation(lang: Lang, s: &str) -> bool {
+    lang.catalog().plain(s).is_some()
+}
+
 /// `s` in `lang`; strings without a translation come back unchanged.
 pub fn tr(lang: Lang, s: &str) -> &str {
     #[cfg(test)]

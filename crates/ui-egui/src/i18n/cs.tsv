@@ -2594,6 +2594,21 @@ preview	Title	Ukázka
 	Heading text	Text nadpisu
 	Insert reference to:	Vložit odkaz na:
 	Reference type:	Typ odkazu:
+	Saving as {name} may lose some of this document's features:	Při uložení jako {name} se mohou ztratit některé funkce tohoto dokumentu:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Pokračujte uložením v tomto formátu, nebo uložte dokument Wordu (.docx), aby se zachovalo vše.
+	Continue	Pokračovat
+	Save as Word Document	Uložit jako dokument Wordu
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Automatické ukládání je vypnuté: {name} nedokáže zachovat vše z tohoto dokumentu. Uložte jako .docx a automatické ukládání se zapne.
+	Content controls	Ovládací prvky obsahu
+	Equations (written as plain text)	Rovnice (zapsané jako prostý text)
+	Charts and SmartArt	Grafy a obrázky SmartArt
+	Shapes, text boxes and drawings	Obrazce, textová pole a kresby
+	Embedded objects (their pictures are kept)	Vložené objekty (jejich obrázky zůstanou)
+	Fields (their current text is kept)	Pole (zůstane jejich aktuální text)
+	Section breaks and columns	Konce oddílů a sloupce
+	Phonetic guides	Fonetické průvodce
+	Other content from the original file	Další obsah z původního souboru
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Obrázky, které RTF neumí uložit (např. EMF, WMF a SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Slovníky

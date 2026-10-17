@@ -2488,3 +2488,18 @@ preview	Title	제목
 	Bottom Right Cell	오른쪽 아래 셀
 	Inside Horizontal Border	안쪽 가로 테두리
 	Inside Vertical Border	안쪽 세로 테두리
+	Saving as {name} may lose some of this document's features:	{name}(으)로 저장하면 이 문서의 일부 기능이 사라질 수 있습니다:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	이 형식으로 계속 저장하거나, Word 문서(.docx)로 저장하여 모든 내용을 유지하세요.
+	Continue	계속
+	Save as Word Document	Word 문서로 저장
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	자동 저장이 꺼져 있습니다: {name}은(는) 이 문서의 모든 내용을 유지할 수 없습니다. 자동 저장을 켜려면 .docx로 저장하세요.
+	Content controls	콘텐츠 컨트롤
+	Equations (written as plain text)	수식(일반 텍스트로 기록됨)
+	Charts and SmartArt	차트 및 SmartArt
+	Shapes, text boxes and drawings	도형, 텍스트 상자 및 그리기
+	Embedded objects (their pictures are kept)	포함된 개체(그림은 유지됨)
+	Fields (their current text is kept)	필드(현재 텍스트는 유지됨)
+	Section breaks and columns	구역 나누기 및 단
+	Phonetic guides	한자 발음 안내
+	Other content from the original file	원본 파일의 기타 내용
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	RTF가 담을 수 없는 그림(EMF, WMF, SVG 등)

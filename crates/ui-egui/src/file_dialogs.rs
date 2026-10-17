@@ -222,8 +222,11 @@ impl WordApp {
                 } else {
                     self.run("file.saveAs", json!({"path": path}))
                 };
-                if r.is_ok() {
+                // Not while the RTF/ODT warning waits for an answer: Continue says it (#1316).
+                if r.as_ref().is_ok_and(|v| v.get("pending").is_none()) {
                     self.status(crate::i18n::fmt(tl!("Exported {path}"), &[("path", &path)]));
+                } else if let Some(crate::dialogs::Dialog::FormatLosses { export, .. }) = &mut self.dialog {
+                    *export = true;
                 }
                 r
             }
@@ -238,6 +241,20 @@ impl WordApp {
                 r
             }
             AfterPick::SaveAs(after) => {
+                // The picked RTF or ODT file can't keep everything: say what first (#1316), and
+                // carry on with what a Save Changes prompt held back once that is answered.
+                if let Some(path) = &picked {
+                    let mut then = match &after {
+                        AfterSave::Continue { then, params, .. } => Some((then.clone(), params.clone())),
+                        AfterSave::Nothing | AfterSave::AutoSave => None,
+                    };
+                    if let Some(r) = self.ask_format_losses("file.save", &json!({"path": path}), &mut then) {
+                        if let (AfterSave::AutoSave, Some(crate::dialogs::Dialog::FormatLosses { autosave, .. })) = (&after, &mut self.dialog) {
+                            *autosave = true;
+                        }
+                        return r;
+                    }
+                }
                 // The save's error, kept for the Save Changes prompt to explain (#1445).
                 let result = picked.map(|path| self.run("file.save", json!({"path": path})));
                 let saved = matches!(&result, Some(Ok(v)) if v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some());
@@ -275,6 +292,11 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
+        self.save_as_named(name, after)
+    }
+
+    /// [`Self::save_as`] suggesting `name`.
+    pub(crate) fn save_as_named(&mut self, name: String, after: AfterSave) -> Asked {
         self.ask_file(FileDialogRequest::Save { name }, AfterPick::SaveAs(after))
     }
 

@@ -2215,6 +2215,21 @@
 	Print failed: the printing worker stopped.	A impressão falhou: o processo de impressão parou.
 	Print settings	Configurações de impressão
 	Submit print job	Enviar trabalho de impressão
+	Saving as {name} may lose some of this document's features:	Ao salvar como {name}, alguns recursos deste documento podem ser perdidos:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Continue para salvar neste formato ou salve um documento do Word (.docx) para manter tudo.
+	Continue	Continuar
+	Save as Word Document	Salvar como Documento do Word
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	O Salvamento Automático está desativado: {name} não consegue manter tudo deste documento. Salve como .docx para ativá-lo.
+	Content controls	Controles de conteúdo
+	Equations (written as plain text)	Equações (gravadas como texto sem formatação)
+	Charts and SmartArt	Gráficos e SmartArt
+	Shapes, text boxes and drawings	Formas, caixas de texto e desenhos
+	Embedded objects (their pictures are kept)	Objetos inseridos (suas imagens são mantidas)
+	Fields (their current text is kept)	Campos (seu texto atual é mantido)
+	Section breaks and columns	Quebras de seção e colunas
+	Phonetic guides	Guias fonéticos
+	Other content from the original file	Outro conteúdo do arquivo original
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Imagens que o RTF não comporta (como EMF, WMF e SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Dicionários

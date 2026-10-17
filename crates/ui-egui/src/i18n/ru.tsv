@@ -2600,6 +2600,21 @@ preview	Title	Пример
 	Heading text	Текст заголовка
 	Insert reference to:	Вставить ссылку на:
 	Reference type:	Тип ссылки:
+	Saving as {name} may lose some of this document's features:	При сохранении в формате {name} некоторые возможности этого документа могут быть потеряны:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Продолжите, чтобы сохранить в этом формате, или сохраните документ Word (.docx), чтобы сохранить всё.
+	Continue	Продолжить
+	Save as Word Document	Сохранить как документ Word
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Автосохранение выключено: {name} не может сохранить всё содержимое этого документа. Сохраните в формате .docx, чтобы включить автосохранение.
+	Content controls	Элементы управления содержимым
+	Equations (written as plain text)	Уравнения (записываются как обычный текст)
+	Charts and SmartArt	Диаграммы и рисунки SmartArt
+	Shapes, text boxes and drawings	Фигуры, надписи и рисунки
+	Embedded objects (their pictures are kept)	Внедрённые объекты (их изображения сохраняются)
+	Fields (their current text is kept)	Поля (сохраняется их текущий текст)
+	Section breaks and columns	Разрывы разделов и колонки
+	Phonetic guides	Фонетические подсказки
+	Other content from the original file	Другое содержимое исходного файла
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Рисунки, которые RTF не поддерживает (например, EMF, WMF и SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Словари

@@ -2585,6 +2585,21 @@ preview	Title	Esempio
 	Heading text	Testo del titolo
 	Insert reference to:	Inserisci riferimento a:
 	Reference type:	Tipo di riferimento:
+	Saving as {name} may lose some of this document's features:	Salvando come {name} alcune funzionalità di questo documento potrebbero andare perse:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Continua per salvare in questo formato, oppure salva un documento Word (.docx) per conservare tutto.
+	Continue	Continua
+	Save as Word Document	Salva come documento Word
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Il salvataggio automatico è disattivato: {name} non può conservare tutto il contenuto di questo documento. Salva come .docx per attivarlo.
+	Content controls	Controlli contenuto
+	Equations (written as plain text)	Equazioni (scritte come testo normale)
+	Charts and SmartArt	Grafici e SmartArt
+	Shapes, text boxes and drawings	Forme, caselle di testo e disegni
+	Embedded objects (their pictures are kept)	Oggetti incorporati (le loro immagini vengono mantenute)
+	Fields (their current text is kept)	Campi (il loro testo attuale viene mantenuto)
+	Section breaks and columns	Interruzioni di sezione e colonne
+	Phonetic guides	Guide fonetiche
+	Other content from the original file	Altro contenuto del file originale
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Immagini che RTF non supporta (come EMF, WMF e SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Dizionari

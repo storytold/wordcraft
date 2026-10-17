@@ -2599,6 +2599,21 @@ preview	Title	Örnek
 	Heading text	Başlık metni
 	Insert reference to:	Başvuru ekle:
 	Reference type:	Başvuru türü:
+	Saving as {name} may lose some of this document's features:	{name} olarak kaydetmek bu belgenin bazı özelliklerinin kaybolmasına neden olabilir:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Bu biçimde kaydetmek için devam edin veya her şeyi korumak için bir Word belgesi (.docx) kaydedin.
+	Continue	Devam
+	Save as Word Document	Word Belgesi Olarak Kaydet
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Otomatik Kaydet kapalı: {name} bu belgedeki her şeyi koruyamaz. Otomatik Kaydet'i açmak için .docx olarak kaydedin.
+	Content controls	İçerik denetimleri
+	Equations (written as plain text)	Denklemler (düz metin olarak yazılır)
+	Charts and SmartArt	Grafikler ve SmartArt
+	Shapes, text boxes and drawings	Şekiller, metin kutuları ve çizimler
+	Embedded objects (their pictures are kept)	Katıştırılmış nesneler (resimleri korunur)
+	Fields (their current text is kept)	Alanlar (geçerli metinleri korunur)
+	Section breaks and columns	Bölüm sonları ve sütunlar
+	Phonetic guides	Fonetik kılavuzlar
+	Other content from the original file	Özgün dosyadaki diğer içerik
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	RTF'nin tutamadığı resimler (EMF, WMF ve SVG gibi)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Sözlükler

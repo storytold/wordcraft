@@ -2591,6 +2591,21 @@
 	Heading text	Текст на заглавието
 	Insert reference to:	Вмъкване на препратка към:
 	Reference type:	Тип препратка:
+	Saving as {name} may lose some of this document's features:	При запазване като {name} някои функции на този документ може да бъдат загубени:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Продължете, за да запишете в този формат, или запишете документ на Word (.docx), за да запазите всичко.
+	Continue	Продължи
+	Save as Word Document	Запиши като документ на Word
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Автоматичното записване е изключено: {name} не може да запази всичко в този документ. Запишете като .docx, за да го включите.
+	Content controls	Контроли за съдържание
+	Equations (written as plain text)	Уравнения (записват се като обикновен текст)
+	Charts and SmartArt	Диаграми и SmartArt
+	Shapes, text boxes and drawings	Фигури, текстови полета и рисунки
+	Embedded objects (their pictures are kept)	Вградени обекти (картините им се запазват)
+	Fields (their current text is kept)	Полета (текущият им текст се запазва)
+	Section breaks and columns	Нови раздели и колони
+	Phonetic guides	Фонетични ръководства
+	Other content from the original file	Друго съдържание от оригиналния файл
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Картини, които RTF не поддържа (например EMF, WMF и SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Речници

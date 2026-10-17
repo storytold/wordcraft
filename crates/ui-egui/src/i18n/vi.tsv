@@ -2672,3 +2672,19 @@ template	Letter	Thư
 # Reading Mode column widths (#1040)
 	Narrow	Hẹp
 	Medium	Trung bình
+# Save safety: RTF and ODT (#1316)
+	Saving as {name} may lose some of this document's features:	Lưu dưới dạng {name} có thể làm mất một số tính năng của tài liệu này:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Tiếp tục lưu ở định dạng này, hoặc lưu thành tài liệu Word (.docx) để giữ lại mọi thứ.
+	Continue	Tiếp tục
+	Save as Word Document	Lưu thành tài liệu Word
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Tự động lưu đang tắt: {name} không giữ được mọi thứ trong tài liệu này. Hãy lưu thành .docx để bật Tự động lưu.
+	Content controls	Điều khiển nội dung
+	Equations (written as plain text)	Phương trình (ghi thành văn bản thuần)
+	Charts and SmartArt	Biểu đồ và SmartArt
+	Shapes, text boxes and drawings	Các hình, hộp văn bản và hình vẽ
+	Embedded objects (their pictures are kept)	Đối tượng nhúng (vẫn giữ ảnh của chúng)
+	Fields (their current text is kept)	Trường (vẫn giữ văn bản hiện tại)
+	Section breaks and columns	Ngắt phần và cột
+	Phonetic guides	Hướng dẫn phát âm
+	Other content from the original file	Nội dung khác từ tệp gốc
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Ảnh mà RTF không chứa được (như EMF, WMF và SVG)

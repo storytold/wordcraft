@@ -2217,6 +2217,21 @@
 	Print failed: the printing worker stopped.	Штампање није успело: процес штампања је заустављен.
 	Print settings	Подешавања штампања
 	Submit print job	Пошаљи задатак за штампање
+	Saving as {name} may lose some of this document's features:	Чување као {name} може да доведе до губитка неких функција овог документа:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Наставите да бисте сачували у овом формату или сачувајте Word документ (.docx) да бисте задржали све.
+	Continue	Настави
+	Save as Word Document	Сачувај као Word документ
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Аутоматско чување је искључено: {name} не може да задржи све у овом документу. Сачувајте као .docx да бисте га укључили.
+	Content controls	Контроле садржаја
+	Equations (written as plain text)	Једначине (записане као обичан текст)
+	Charts and SmartArt	Графикони и SmartArt
+	Shapes, text boxes and drawings	Облици, оквири за текст и цртежи
+	Embedded objects (their pictures are kept)	Уграђени објекти (њихове слике се задржавају)
+	Fields (their current text is kept)	Поља (њихов тренутни текст се задржава)
+	Section breaks and columns	Преломи одељака и колоне
+	Phonetic guides	Фонетски водичи
+	Other content from the original file	Остали садржај из оригиналне датотеке
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Слике које RTF не подржава (нпр. EMF, WMF и SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Речници

@@ -2632,3 +2632,18 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+	Saving as {name} may lose some of this document's features:	Spremanje kao {name} moglo bi izgubiti neke značajke ovog dokumenta:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Nastavite spremati u ovom formatu ili spremite Word dokument (.docx) da sve sačuvate.
+	Continue	Nastavi
+	Save as Word Document	Spremi kao Word dokument
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Automatsko spremanje je isključeno: {name} ne može sačuvati sve u ovom dokumentu. Spremite kao .docx da uključite automatsko spremanje.
+	Content controls	Kontrole sadržaja
+	Equations (written as plain text)	Jednadžbe (zapisane kao običan tekst)
+	Charts and SmartArt	Grafikoni i SmartArt
+	Shapes, text boxes and drawings	Oblici, tekstni okviri i crteži
+	Embedded objects (their pictures are kept)	Ugrađeni objekti (njihove slike ostaju)
+	Fields (their current text is kept)	Polja (njihov trenutni tekst ostaje)
+	Section breaks and columns	Prijelomi odjeljaka i stupci
+	Phonetic guides	Fonetski vodiči
+	Other content from the original file	Ostali sadržaj iz izvorne datoteke
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Slike koje RTF ne može pohraniti (npr. EMF, WMF i SVG)

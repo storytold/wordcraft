@@ -2647,3 +2647,18 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+	Saving as {name} may lose some of this document's features:	Om du sparar som {name} kan vissa av dokumentets funktioner gå förlorade:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Fortsätt att spara i det här formatet, eller spara ett Word-dokument (.docx) för att behålla allt.
+	Continue	Fortsätt
+	Save as Word Document	Spara som Word-dokument
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Autospara är av: {name} kan inte behålla allt i det här dokumentet. Spara som .docx för att slå på autospara.
+	Content controls	Innehållskontroller
+	Equations (written as plain text)	Ekvationer (skrivs som vanlig text)
+	Charts and SmartArt	Diagram och SmartArt
+	Shapes, text boxes and drawings	Former, textrutor och ritningar
+	Embedded objects (their pictures are kept)	Inbäddade objekt (deras bilder behålls)
+	Fields (their current text is kept)	Fält (deras aktuella text behålls)
+	Section breaks and columns	Avsnittsbrytningar och kolumner
+	Phonetic guides	Fonetiska guider
+	Other content from the original file	Annat innehåll från originalfilen
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Bilder som RTF inte kan lagra (som EMF, WMF och SVG)

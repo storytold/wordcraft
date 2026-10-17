@@ -405,6 +405,26 @@ pub enum Dialog {
         #[serde(default)]
         message: String,
     },
+    /// A save to RTF or ODT of a document with features that format drops (#1316): what would be
+    /// lost, then Continue (save in that format), save as a Word document instead, or Cancel
+    /// (`ui.formatLosses`). `save` is the `file.save` params; `then` the command a Save Changes
+    /// prompt held back, run once the document is saved; `document` the one it asked about.
+    FormatLosses {
+        name: String,
+        losses: Vec<String>,
+        #[serde(skip)]
+        save: Value,
+        #[serde(skip)]
+        then: Option<(String, Value)>,
+        /// Asked from the AutoSave switch's Save As: saving a Word document instead turns AutoSave on.
+        #[serde(skip)]
+        autosave: bool,
+        /// Asked from File › Export: Continue says "Exported" once the file is written.
+        #[serde(skip)]
+        export: bool,
+        #[serde(skip)]
+        document: u64,
+    },
     /// Mailings › Select Recipients / Edit Recipient List: a table of recipients to type or
     /// edit (field names on top), or a file to load instead (#240).
     RecipientList {
@@ -819,6 +839,7 @@ impl Dialog {
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
+            Dialog::FormatLosses { .. } => "formatLosses",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
             Dialog::InsertMergeField { .. } => "insertMergeField",
@@ -1264,7 +1285,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
-        Dialog::SaveChanges { .. } => "WordCraft",
+        Dialog::SaveChanges { .. } | Dialog::FormatLosses { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::SelectTable { .. } => "Select Table",
@@ -2471,6 +2492,51 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             // `ui.saveChanges` reads the prompt from `app.dialog`, which `show` has taken out.
             app.dialog = Some(d.clone());
             let _ = app.run("ui.saveChanges", json!({"answer": answer}));
+            true
+        }
+        Dialog::FormatLosses { name, losses, .. } => {
+            ui.label(
+                egui::RichText::new(crate::i18n::fmt(tl!("Saving as {name} may lose some of this document's features:"), &[("name", name)]))
+                    .font(semibold(15.0)),
+            );
+            ui.add_space(4.0);
+            for loss in losses.iter().filter_map(|id| wordcraft_engine::losses::Loss::from_id(id)) {
+                ui.label(format!("•  {}", tl!(loss.label())));
+            }
+            ui.add_space(4.0);
+            ui.label(tl!("Continue to save in this format, or save a Word document (.docx) to keep everything."));
+            ui.add_space(8.0);
+            let buttons = ui.horizontal(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let cancel = ui.button(tl!("Cancel"));
+                    let docx = ui.button(tl!("Save as Word Document"));
+                    let go = ui.add(crate::widgets::primary_button(ui, tl!("Continue")));
+                    [(cancel, "cancel"), (docx, "docx"), (go, "continue")]
+                })
+                .inner
+            });
+            let buttons = buttons.inner;
+            // As in "Save changes?", the keyboard alone answers: Continue has focus when the
+            // warning opens, the arrow keys or Tab move between the buttons, Escape cancels.
+            if ui.memory(|m| m.focused().is_none())
+                && let Some((go, _)) = buttons.get(2)
+            {
+                go.request_focus();
+            }
+            let focused = buttons.iter().any(|(b, _)| b.has_focus());
+            let answer = if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                Some("cancel")
+            } else if let Some((_, a)) = buttons.iter().find(|(b, _)| b.clicked()) {
+                Some(*a)
+            } else if !focused && ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                Some("continue")
+            } else {
+                None
+            };
+            let Some(answer) = answer else { return false };
+            // `ui.formatLosses` reads the warning from `app.dialog`, which `show` has taken out.
+            app.dialog = Some(d.clone());
+            let _ = app.run("ui.formatLosses", json!({"answer": answer}));
             true
         }
         Dialog::RecipientList { fields, rows, message, filter } => recipient_list(app, ui, fields, rows, message, filter),

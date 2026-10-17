@@ -2598,6 +2598,21 @@
 	Heading text	Címsor szövege
 	Insert reference to:	Hivatkozás beszúrása erre:
 	Reference type:	Hivatkozás típusa:
+	Saving as {name} may lose some of this document's features:	Ha {name} néven menti, a dokumentum egyes funkciói elveszhetnek:
+	Continue to save in this format, or save a Word document (.docx) to keep everything.	Folytassa a mentést ebben a formátumban, vagy mentsen Word-dokumentumot (.docx), hogy minden megmaradjon.
+	Continue	Folytatás
+	Save as Word Document	Mentés Word-dokumentumként
+	AutoSave is off: {name} can't keep everything in this document. Save as .docx to turn on AutoSave.	Az automatikus mentés ki van kapcsolva: {name} nem tudja megőrizni a dokumentum minden részét. Mentse .docx formátumban az automatikus mentés bekapcsolásához.
+	Content controls	Tartalomvezérlők
+	Equations (written as plain text)	Egyenletek (egyszerű szövegként mentve)
+	Charts and SmartArt	Diagramok és SmartArt-ábrák
+	Shapes, text boxes and drawings	Alakzatok, szövegdobozok és rajzok
+	Embedded objects (their pictures are kept)	Beágyazott objektumok (a képük megmarad)
+	Fields (their current text is kept)	Mezők (a jelenlegi szövegük megmarad)
+	Section breaks and columns	Szakasztörések és hasábok
+	Phonetic guides	Kiejtési útmutatók
+	Other content from the original file	Egyéb tartalom az eredeti fájlból
+	Pictures RTF can't hold (such as EMF, WMF and SVG)	Az RTF által nem tárolható képek (például EMF, WMF és SVG)
 
 # Dictionaries folder (#1063)
 	Dictionaries	Szótárak
