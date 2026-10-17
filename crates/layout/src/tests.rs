@@ -7263,3 +7263,88 @@ fn row_nil_overrides_style() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(rules_on_page0(&lay(&d)), vec![2.0]);
 }
+
+/// Distance from the top of the first paragraph's line to the top of the second's, the first
+/// spaced `after` points below and bordered with `borders`.
+fn bordered_second_para_offset(after: f32, borders: Option<Borders>) -> f32 {
+    let mut d = Document::from_text("First\nSecond");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.space_after = Some(after);
+        p.borders = borders;
+    })
+    .unwrap();
+    let l = lay(&d);
+    l.caret(&Pos::body(1, 0)).unwrap().top - l.caret(&Pos::body(0, 0)).unwrap().top
+}
+
+#[test]
+fn bottom_border_takes_its_distance_and_width() {
+    let rule = Border { style: BorderStyle::Single, width: 0.5, color: None, space: 3.0 };
+    let plain = bordered_second_para_offset(3.0, None);
+    let ruled = bordered_second_para_offset(3.0, Some(Borders { bottom: Some(rule), ..Default::default() }));
+    assert!((ruled - plain - 3.5).abs() < 0.01, "{plain} {ruled}");
+    // An invisible border takes no room.
+    let none = Border { style: BorderStyle::None, ..rule };
+    let hidden = bordered_second_para_offset(3.0, Some(Borders { bottom: Some(none), ..Default::default() }));
+    assert!((hidden - plain).abs() < 0.01, "{plain} {hidden}");
+}
+
+#[test]
+fn a_run_of_identically_bordered_paragraphs_is_one_box() {
+    let side = Border { style: BorderStyle::Single, width: 1.0, color: None, space: 4.0 };
+    let boxed = Borders { top: Some(side), bottom: Some(side), left: Some(side), right: Some(side), ..Default::default() };
+    let mut d = Document::from_text("One\nTwo\nThree");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 5), &|p| p.borders = Some(boxed)).unwrap();
+    let l = lay(&d);
+    let tops: Vec<f32> = (0..3).map(|i| l.caret(&Pos::body(i, 0)).unwrap().top).collect();
+    let plain = lay(&Document::from_text("One\nTwo\nThree"));
+    let plain_tops: Vec<f32> = (0..3).map(|i| plain.caret(&Pos::body(i, 0)).unwrap().top).collect();
+    // Room above the first and below the last only: the inner lines keep their spacing.
+    assert!((tops[0] - plain_tops[0] - 5.0).abs() < 0.01, "{tops:?} {plain_tops:?}");
+    assert!(((tops[2] - tops[1]) - (plain_tops[2] - plain_tops[1])).abs() < 0.01, "{tops:?} {plain_tops:?}");
+}
+
+/// Baseline gap between two paragraphs, the first with a bottom rule, in the body or a cell.
+fn ruled_gap(rule: Option<Border>, in_cell: bool) -> f32 {
+    let mut d = Document::new();
+    let mut a = wordcraft_doc::Paragraph::with_text("Alpha", Default::default());
+    a.props = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(24.0)),
+        borders: rule.map(|r| Borders { bottom: Some(r), ..Default::default() }),
+        ..Default::default()
+    };
+    let mut b = wordcraft_doc::Paragraph::with_text("Beta", Default::default());
+    b.props = ParaProps { borders: None, ..a.props.clone() };
+    let blocks = vec![wordcraft_doc::para_block(a), wordcraft_doc::para_block(b)];
+    if in_cell {
+        let mut table = Table::new(1, 1, 468.0);
+        table.props.style = None;
+        table.props.cell_margins = Some([0.0; 4]);
+        table.rows[0].cells[0].blocks = blocks;
+        d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
+    } else {
+        d.body = blocks;
+    }
+    let l = lay(&d);
+    let baselines: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|i| match i {
+            Placed::Lines { para, y, .. } => Some(y + para.lines[0].baseline),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(baselines.len(), 2);
+    baselines[1] - baselines[0]
+}
+
+#[test]
+fn bottom_border_takes_room_in_table_cells_too() {
+    let rule = Border { style: BorderStyle::Single, width: 1.0, color: None, space: 2.0 };
+    for in_cell in [false, true] {
+        let extra = ruled_gap(Some(rule), in_cell) - ruled_gap(None, in_cell);
+        assert!((extra - 3.0).abs() < 0.01, "in cell {in_cell}: {extra}");
+    }
+}
