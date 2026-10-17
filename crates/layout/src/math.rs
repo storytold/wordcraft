@@ -804,22 +804,9 @@ impl Ctx {
                 if *grow {
                     target = target.max(e.a + e.d);
                 }
-                let op = if *grow && target > 0.0 && self.t.is_some() {
+                // The display minimum applies even when growth to the operand is disabled.
+                let op = if target > 0.0 && self.t.is_some() {
                     self.stretch_v(base_gid, target, size).unwrap_or_else(|| self.glyph_id(base_gid, size, self.color))
-                } else if target > 0.0 && self.t.is_some() {
-                    // Word sets display operators about 1.2 em tall: the size variant nearest that.
-                    let want = target.min(size * 1.2) * self.upem / size;
-                    let (g, adv) = self
-                        .t
-                        .as_ref()
-                        .and_then(|t| t.vert.get(&base_gid))
-                        .and_then(|c| c.variants.iter().min_by(|a, b| (a.1 - want).abs().total_cmp(&(b.1 - want).abs())))
-                        .copied()
-                        .unwrap_or((base_gid, want));
-                    // A font without a variant near that size: scale the nearest one.
-                    let f = if adv > 0.0 { (want / adv).clamp(0.6, 1.5) } else { 1.0 };
-                    let f = if (0.9..=1.1).contains(&f) { 1.0 } else { f };
-                    self.glyph_id(g, size * f, self.color)
                 } else if base_gid != 0 {
                     self.glyph_id(base_gid, size, self.color)
                 } else {
@@ -2091,6 +2078,54 @@ mod tests {
         let plus_w = lay("+", false).width;
         assert!(spaced.width > tight.width + plus_w + 2.0, "medium spaces around +");
         assert!(unary.width < lay("b", false).width + plus_w + 1.0, "no space after a unary minus");
+    }
+
+    #[test]
+    fn display_operator_minimum() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+        let face = FaceRef::of(&font);
+        let upem = face.upem as f32;
+        let base_gid = face.glyph_for('S');
+        let variants = [face.glyph_for('a'), face.glyph_for('b'), face.glyph_for('c')];
+        let mut table = MathTable::default();
+        table.display_operator_min_height = upem * 1.5;
+        table.vert.insert(
+            base_gid,
+            Construction { variants: vec![(variants[0], upem), (variants[1], upem * 1.4), (variants[2], upem * 1.6)], ..Default::default() },
+        );
+        let node = MNode::Nary {
+            chr: 'S',
+            lim_loc: None,
+            grow: false,
+            sub_hide: true,
+            sup_hide: true,
+            sub: Vec::new(),
+            sup: Vec::new(),
+            e: vec![MNode::Run(MRun::new("x"))],
+        };
+        for display in [false, true] {
+            for size in [9.0, 14.0, 20.0] {
+                let mut cx = Ctx {
+                    face,
+                    t: Some(Arc::new(table.clone())),
+                    upem,
+                    base: size,
+                    color: Rgb::BLACK,
+                    text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+                    nodes: 0,
+                    path: Vec::new(),
+                    node_stack: Vec::new(),
+                };
+                let st = St { level: 0, display, cramped: false, upright: false };
+                let boxes = cx.op_atoms(&node, st, 0);
+                let MItem::Glyphs { size: actual_size, glyphs, .. } = &boxes[0].items[0] else { panic!("operator glyph missing") };
+                let expected = if display { variants[2] } else { base_gid };
+                assert_eq!(glyphs[0].0, expected, "display minimum changes only display operators");
+                assert_eq!(*actual_size, size, "the chosen variant keeps its font size");
+            }
+        }
     }
 
     #[test]
