@@ -2647,3 +2647,24 @@ preview	Title	Titel
 	Bottom Right Cell	Nedre högra cellen
 	Inside Horizontal Border	Inre vågrät kantlinje
 	Inside Vertical Border	Inre lodrät kantlinje
+# LanguageTool proofing (#575, #1283)
+	Check spelling and grammar with LanguageTool	Kontrollera stavning och grammatik med LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Skickar texten i dina stycken till LanguageTool-servern nedan. När det är avstängt används WordCrafts inbyggda kontroll och inget lämnar den här datorn.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Använd din egen LanguageTool-server genom att ange dess adress, till exempel http://localhost:8081.
+	Username:	Användarnamn:
+	API key:	API-nyckel:
+	Detect automatically	Identifiera automatiskt
+	Each paragraph's proofing language	Språkkontrollens språk för varje stycke
+	Language:	Språk:
+	Paragraphs checked: {count}	Kontrollerade stycken: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Kontroll med LanguageTool kräver skrivbordsappen; webbläsarversionen kan ännu inte skicka text till en kontrollserver.
+	The LanguageTool server address isn't a web address: {address}	LanguageTool-serverns adress är inte en webbadress: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Ett stycke är för långt för att kontrolleras ({bytes} byte; högst {max}).
+	Couldn't reach the LanguageTool server: {reason}	Det gick inte att nå LanguageTool-servern: {reason}
+	The LanguageTool server didn't answer in time.	LanguageTool-servern svarade inte i tid.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	LanguageTool-servern begränsar förfrågningar; kontrollen återupptas om en minut.
+	The LanguageTool server answered {status}: {message}	LanguageTool-servern svarade {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Oväntat svar från LanguageTool-servern: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Användarnamn och API-nyckel skickas bara över https:// eller till den här datorn. Använd en serveradress med https://.
+	Changes to these fields apply when you press Enter or leave the field.	Ändringar i de här fälten börjar gälla när du trycker på Enter eller lämnar fältet.

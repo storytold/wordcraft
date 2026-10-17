@@ -2632,3 +2632,24 @@ preview	Title	Naslov
 	Bottom Right Cell	Donja desna ćelija
 	Inside Horizontal Border	Unutarnji vodoravni obrub
 	Inside Vertical Border	Unutarnji okomiti obrub
+# LanguageTool proofing (#575, #1283)
+	Check spelling and grammar with LanguageTool	Provjeri pravopis i gramatiku pomoću LanguageToola
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Šalje tekst vaših odlomaka na LanguageTool poslužitelj u nastavku. Kad je isključeno, koristi se WordCraftova ugrađena provjera i ništa ne napušta ovo računalo.
+	Server:	Poslužitelj:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Koristite vlastiti LanguageTool poslužitelj upisivanjem njegove adrese, na primjer http://localhost:8081.
+	Username:	Korisničko ime:
+	API key:	API ključ:
+	Detect automatically	Otkrij automatski
+	Each paragraph's proofing language	Jezik provjere svakog odlomka
+	Language:	Jezik:
+	Paragraphs checked: {count}	Provjereno odlomaka: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Provjera pomoću LanguageToola zahtijeva aplikaciju za radnu površinu; preglednička verzija još ne može slati tekst poslužitelju za provjeru.
+	The LanguageTool server address isn't a web address: {address}	Adresa LanguageTool poslužitelja nije web-adresa: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Odlomak je predug za provjeru ({bytes} bajtova; najviše {max}).
+	Couldn't reach the LanguageTool server: {reason}	Nije moguće doći do LanguageTool poslužitelja: {reason}
+	The LanguageTool server didn't answer in time.	LanguageTool poslužitelj nije odgovorio na vrijeme.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	LanguageTool poslužitelj ograničava zahtjeve; provjera se nastavlja za minutu.
+	The LanguageTool server answered {status}: {message}	LanguageTool poslužitelj je odgovorio {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Neočekivan odgovor LanguageTool poslužitelja: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Korisničko ime i API ključ šalju se samo preko https:// ili na ovo računalo. Koristite adresu poslužitelja s https://.
+	Changes to these fields apply when you press Enter or leave the field.	Promjene u ovim poljima primjenjuju se kad pritisnete Enter ili napustite polje.

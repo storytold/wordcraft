@@ -2124,6 +2124,27 @@
 	Reading Text Size	Textgröße beim Lesen
 	Correct TWo INitial CApitals	ZWei GRoßbuchstaben am WOrtanfang korrigieren
 	Correct accidental usage of cAPS LOCK key	Unbeabsichtigtes Verwenden der fESTSTELLTASTE korrigieren
+	API key:	API-Schlüssel:
+	Check spelling and grammar with LanguageTool	Rechtschreibung und Grammatik mit LanguageTool prüfen
+	Detect automatically	Automatisch erkennen
+	Each paragraph's proofing language	Korrektursprache des jeweiligen Absatzes
+	Language:	Sprache:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Die Prüfung mit LanguageTool braucht die Desktop-App; die Browserversion kann noch keinen Text an einen Prüfserver senden.
+	Paragraphs checked: {count}	Geprüfte Absätze: {count}
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	Die Adresse des LanguageTool-Servers ist keine Webadresse: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Ein Absatz ist zu lang für die Prüfung ({bytes} Byte; höchstens {max}).
+	Couldn't reach the LanguageTool server: {reason}	Der LanguageTool-Server ist nicht erreichbar: {reason}
+	The LanguageTool server didn't answer in time.	Der LanguageTool-Server hat nicht rechtzeitig geantwortet.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Der LanguageTool-Server begrenzt die Anfragen; die Prüfung geht in einer Minute weiter.
+	The LanguageTool server answered {status}: {message}	Der LanguageTool-Server hat mit {status} geantwortet: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Unerwartete Antwort vom LanguageTool-Server: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Benutzername und API-Schlüssel werden nur über https:// oder an diesen Computer gesendet. Verwenden Sie eine https://-Serveradresse.
+	Changes to these fields apply when you press Enter or leave the field.	Änderungen in diesen Feldern gelten, sobald Sie die Eingabetaste drücken oder das Feld verlassen.
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Sendet den Text Ihrer Absätze an den unten angegebenen LanguageTool-Server. Ist die Option aus, wird die integrierte Prüfung von WordCraft verwendet und nichts verlässt diesen Computer.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Um einen eigenen LanguageTool-Server zu verwenden, geben Sie seine Adresse ein, etwa http://localhost:8081.
+	Username:	Benutzername:
 	Region:	Region:
 	Automatic ({region})	Automatisch ({region})
 	Text of the nearest paragraph with a given style (running headers)	Text des nächsten Absatzes mit einer bestimmten Formatvorlage (lebende Kolumnentitel)

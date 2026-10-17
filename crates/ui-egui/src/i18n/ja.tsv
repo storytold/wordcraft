@@ -1579,6 +1579,28 @@
 	Sat:	鮮やかさ:
 	Lum:	明るさ:
 	Hex:	16 進数:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	LanguageTool でスペルと文法をチェックする
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	段落のテキストを下の LanguageTool サーバーに送信します。オフのときは WordCraft 内蔵のチェッカーを使い、何もこのコンピューターの外に出ません。
+	Server:	サーバー:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	独自の LanguageTool サーバーを使うには、そのアドレスを入力します (例: http://localhost:8081)。
+	Username:	ユーザー名:
+	API key:	API キー:
+	Detect automatically	自動検出
+	Each paragraph's proofing language	各段落の校正言語
+	Language:	言語:
+	Paragraphs checked: {count}	チェック済みの段落: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTool によるチェックにはデスクトップ版が必要です。ブラウザー版はまだチェック用サーバーにテキストを送信できません。
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	LanguageTool サーバーのアドレスが Web アドレスではありません: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	段落が長すぎてチェックできません ({bytes} バイト、上限 {max})。
+	Couldn't reach the LanguageTool server: {reason}	LanguageTool サーバーに接続できませんでした: {reason}
+	The LanguageTool server didn't answer in time.	LanguageTool サーバーから時間内に応答がありませんでした。
+	The LanguageTool server is limiting requests; checking resumes in a minute.	LanguageTool サーバーがリクエストを制限しています。1 分後にチェックを再開します。
+	The LanguageTool server answered {status}: {message}	LanguageTool サーバーの応答 {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	LanguageTool サーバーから予期しない応答がありました: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	ユーザー名と API キーは https:// またはこのコンピューターにのみ送信されます。https:// のサーバー アドレスを使用してください。
+	Changes to these fields apply when you press Enter or leave the field.	これらのフィールドの変更は、Enter キーを押すかフィールドから移動したときに適用されます。
 	Accessibility Pane	アクセシビリティ ウィンドウ
 	Alt Text Pane	代替テキスト ウィンドウ
 	Alt\nText	代替\nテキスト

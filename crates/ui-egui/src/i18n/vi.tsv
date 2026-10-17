@@ -2636,6 +2636,28 @@
 # Missing dictionary on the status bar (#1441)
 	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	Chưa cài từ điển chính tả cho {language}, nên ngôn ngữ này không được kiểm tra. WordCraft tìm từ điển Hunspell {name} trong thư mục WORDCRAFT_DICTIONARIES và ở các vị trí thông thường của hệ thống.
 	{language} (no dictionary)	{language} (không có từ điển)
+# LanguageTool checking in Options › Proofing (#575, #1283)
+	API key:	Khóa API:
+	Check spelling and grammar with LanguageTool	Kiểm tra chính tả và ngữ pháp bằng LanguageTool
+	Detect automatically	Tự động nhận diện
+	Each paragraph's proofing language	Ngôn ngữ soát lỗi của từng đoạn
+	Language:	Ngôn ngữ:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Kiểm tra bằng LanguageTool cần ứng dụng máy tính; phiên bản trình duyệt chưa thể gửi văn bản tới máy chủ kiểm tra.
+	Paragraphs checked: {count}	Số đoạn đã kiểm tra: {count}
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Gửi văn bản các đoạn của bạn tới máy chủ LanguageTool bên dưới. Khi tắt, WordCraft dùng trình kiểm tra tích hợp và không có gì rời khỏi máy tính này.
+	Server:	Máy chủ:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Dùng máy chủ LanguageTool riêng của bạn bằng cách nhập địa chỉ, ví dụ http://localhost:8081.
+	Username:	Tên người dùng:
+# LanguageTool checking in Options › Proofing (#575, #1283)
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Một đoạn văn quá dài để kiểm tra ({bytes} byte; tối đa {max}).
+	Changes to these fields apply when you press Enter or leave the field.	Thay đổi trong các trường này được áp dụng khi bạn nhấn Enter hoặc rời khỏi trường.
+	Couldn't reach the LanguageTool server: {reason}	Không thể kết nối tới máy chủ LanguageTool: {reason}
+	The LanguageTool server address isn't a web address: {address}	Địa chỉ máy chủ LanguageTool không phải là địa chỉ web: {address}
+	The LanguageTool server answered {status}: {message}	Máy chủ LanguageTool trả lời {status}: {message}
+	The LanguageTool server didn't answer in time.	Máy chủ LanguageTool không trả lời kịp thời.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Máy chủ LanguageTool đang giới hạn yêu cầu; việc kiểm tra sẽ tiếp tục sau một phút.
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Tên người dùng và khóa API chỉ được gửi qua https:// hoặc tới máy tính này. Hãy dùng địa chỉ máy chủ https://.
+	Unexpected answer from the LanguageTool server: {reason}	Câu trả lời không mong đợi từ máy chủ LanguageTool: {reason}
 # Table style parts in the Modify Table Style dialog (#714)
 	Odd Banded Rows	Hàng xen kẽ lẻ
 	Even Banded Rows	Hàng xen kẽ chẵn

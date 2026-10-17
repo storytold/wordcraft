@@ -2500,6 +2500,27 @@ preview	Title	Esempio
 	Reading Text Size	Dimensione testo di lettura
 	Correct TWo INitial CApitals	Correggi DUe MAiuscole INiziali
 	Correct accidental usage of cAPS LOCK key	Correggi l'uso accidentale del tasto bLOC mAIUSC
+	API key:	Chiave API:
+	Check spelling and grammar with LanguageTool	Controlla ortografia e grammatica con LanguageTool
+	Detect automatically	Rileva automaticamente
+	Each paragraph's proofing language	Lingua di correzione di ciascun paragrafo
+	Language:	Lingua:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Il controllo con LanguageTool richiede l'app desktop; la versione per browser non può ancora inviare testo a un server di controllo.
+	Paragraphs checked: {count}	Paragrafi controllati: {count}
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	L'indirizzo del server LanguageTool non è un indirizzo web: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Un paragrafo è troppo lungo da controllare ({bytes} byte; al massimo {max}).
+	Couldn't reach the LanguageTool server: {reason}	Impossibile raggiungere il server LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	Il server LanguageTool non ha risposto in tempo.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Il server LanguageTool sta limitando le richieste; il controllo riprende tra un minuto.
+	The LanguageTool server answered {status}: {message}	Il server LanguageTool ha risposto {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Risposta inattesa dal server LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Il nome utente e la chiave API vengono inviati solo tramite https:// o a questo computer. Usa un indirizzo del server https://.
+	Changes to these fields apply when you press Enter or leave the field.	Le modifiche a questi campi si applicano quando premi Invio o esci dal campo.
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Invia il testo dei tuoi paragrafi al server LanguageTool indicato sotto. Se disattivato, viene usato il controllo integrato di WordCraft e nulla lascia questo computer.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Per usare un tuo server LanguageTool, inseriscine l'indirizzo, ad esempio http://localhost:8081.
+	Username:	Nome utente:
 	Region:	Area geografica:
 	Automatic ({region})	Automatico ({region})
 	Text of the nearest paragraph with a given style (running headers)	Testo del paragrafo più vicino con uno stile specificato (intestazioni correnti)

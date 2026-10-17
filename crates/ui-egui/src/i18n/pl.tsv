@@ -2166,6 +2166,27 @@
 	Reading Text Size	Rozmiar tekstu do czytania
 	Correct TWo INitial CApitals	Poprawiaj DWie POczątkowe WIelkie litery
 	Correct accidental usage of cAPS LOCK key	Poprawiaj przypadkowe użycie klawisza cAPS LOCK
+	API key:	Klucz API:
+	Check spelling and grammar with LanguageTool	Sprawdzaj pisownię i gramatykę za pomocą LanguageTool
+	Detect automatically	Wykrywaj automatycznie
+	Each paragraph's proofing language	Język sprawdzania każdego akapitu
+	Language:	Język:
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Sprawdzanie przez LanguageTool wymaga aplikacji desktopowej; wersja przeglądarkowa nie może jeszcze wysyłać tekstu na serwer sprawdzający.
+	Paragraphs checked: {count}	Sprawdzone akapity: {count}
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	Adres serwera LanguageTool nie jest adresem internetowym: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Akapit jest za długi do sprawdzenia ({bytes} B; najwyżej {max}).
+	Couldn't reach the LanguageTool server: {reason}	Nie można połączyć się z serwerem LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	Serwer LanguageTool nie odpowiedział na czas.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Serwer LanguageTool ogranicza liczbę żądań; sprawdzanie zostanie wznowione za minutę.
+	The LanguageTool server answered {status}: {message}	Serwer LanguageTool odpowiedział {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Nieoczekiwana odpowiedź serwera LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Nazwa użytkownika i klucz API są wysyłane tylko przez https:// lub do tego komputera. Użyj adresu serwera https://.
+	Changes to these fields apply when you press Enter or leave the field.	Zmiany w tych polach są stosowane po naciśnięciu klawisza Enter lub opuszczeniu pola.
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Wysyła tekst twoich akapitów na poniższy serwer LanguageTool. Gdy jest wyłączone, używane jest wbudowane sprawdzanie WordCrafta i nic nie opuszcza tego komputera.
+	Server:	Serwer:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Aby użyć własnego serwera LanguageTool, wpisz jego adres, na przykład http://localhost:8081.
+	Username:	Nazwa użytkownika:
 	Region:	Region:
 	Automatic ({region})	Automatycznie ({region})
 	Text of the nearest paragraph with a given style (running headers)	Tekst najbliższego akapitu o danym stylu (żywa pagina)

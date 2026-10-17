@@ -1831,6 +1831,28 @@ preview	Title	Örnek
 	Sat:	Doygunluk:
 	Lum:	Parlaklık:
 	Hex:	Onaltılık:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Yazım ve dil bilgisini LanguageTool ile denetle
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Paragraflarınızın metnini aşağıdaki LanguageTool sunucusuna gönderir. Kapalıyken WordCraft'ın yerleşik denetleyicisi kullanılır ve hiçbir şey bu bilgisayardan çıkmaz.
+	Server:	Sunucu:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Kendi LanguageTool sunucunuzu kullanmak için adresini girin, örneğin http://localhost:8081.
+	Username:	Kullanıcı adı:
+	API key:	API anahtarı:
+	Detect automatically	Otomatik algıla
+	Each paragraph's proofing language	Her paragrafın yazım denetimi dili
+	Language:	Dil:
+	Paragraphs checked: {count}	Denetlenen paragraf: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTool denetimi masaüstü uygulamasını gerektirir; tarayıcı sürümü henüz bir denetim sunucusuna metin gönderemez.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	LanguageTool sunucu adresi bir web adresi değil: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Bir paragraf denetlenemeyecek kadar uzun ({bytes} bayt; en fazla {max}).
+	Couldn't reach the LanguageTool server: {reason}	LanguageTool sunucusuna ulaşılamadı: {reason}
+	The LanguageTool server didn't answer in time.	LanguageTool sunucusu zamanında yanıt vermedi.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	LanguageTool sunucusu istekleri sınırlıyor; denetim bir dakika içinde sürer.
+	The LanguageTool server answered {status}: {message}	LanguageTool sunucusu {status} yanıtını verdi: {message}
+	Unexpected answer from the LanguageTool server: {reason}	LanguageTool sunucusundan beklenmeyen yanıt: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Kullanıcı adı ve API anahtarı yalnızca https:// üzerinden veya bu bilgisayara gönderilir. Bir https:// sunucu adresi kullanın.
+	Changes to these fields apply when you press Enter or leave the field.	Bu alanlardaki değişiklikler Enter tuşuna bastığınızda veya alandan çıktığınızda uygulanır.
 	Accessibility Pane	Erişilebilirlik Bölmesi
 	Alt Text Pane	Alternatif Metin Bölmesi
 	Alt\nText	Alternatif\nMetin

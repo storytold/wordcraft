@@ -1598,6 +1598,28 @@
 	Sat:	Küllastus:
 	Lum:	Heledus:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Kontrolli õigekirja ja grammatikat LanguageTooliga
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Saadab lõikude teksti allpool märgitud LanguageTooli serverisse. Väljas olekus kasutatakse WordCrafti sisseehitatud kontrollijat ja midagi ei lahku sellest arvutist.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Oma LanguageTooli serveri kasutamiseks sisestage selle aadress, näiteks http://localhost:8081.
+	Username:	Kasutajanimi:
+	API key:	API-võti:
+	Detect automatically	Tuvasta automaatselt
+	Each paragraph's proofing language	Iga lõigu õigekirjakeel
+	Language:	Keel:
+	Paragraphs checked: {count}	Kontrollitud lõike: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	LanguageTooli kontroll vajab töölauarakendust; brauseriversioon ei saa veel teksti kontrollserverisse saata.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	LanguageTooli serveri aadress ei ole veebiaadress: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Lõik on kontrollimiseks liiga pikk ({bytes} baiti; kõige rohkem {max}).
+	Couldn't reach the LanguageTool server: {reason}	LanguageTooli serveriga ei saa ühendust: {reason}
+	The LanguageTool server didn't answer in time.	LanguageTooli server ei vastanud õigeks ajaks.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	LanguageTooli server piirab päringuid; kontrollimine jätkub minuti pärast.
+	The LanguageTool server answered {status}: {message}	LanguageTooli server vastas {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Ootamatu vastus LanguageTooli serverilt: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Kasutajanimi ja API-võti saadetakse ainult https:// kaudu või sellesse arvutisse. Kasutage https://-serveriaadressi.
+	Changes to these fields apply when you press Enter or leave the field.	Nende väljade muudatused rakenduvad, kui vajutate sisestusklahvi või lahkute väljalt.
 	Right-to-Left Table	Paremalt vasakule tabel
 	Right-to-Left Section	Paremalt vasakule jaotis
 	Table direction:	Tabeli suund:

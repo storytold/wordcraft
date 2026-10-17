@@ -1619,6 +1619,28 @@
 	Sat:	Sat.:
 	Lum:	Lum.:
 	Hex:	Hex.:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Revisar ortografía y gramática con LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Envía el texto de sus párrafos al servidor de LanguageTool indicado abajo. Desactivado, se usa el corrector integrado de WordCraft y nada sale de este equipo.
+	Server:	Servidor:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Use su propio servidor de LanguageTool escribiendo su dirección, por ejemplo http://localhost:8081.
+	Username:	Usuario:
+	API key:	Clave de API:
+	Detect automatically	Detectar automáticamente
+	Each paragraph's proofing language	Idioma de revisión de cada párrafo
+	Language:	Idioma:
+	Paragraphs checked: {count}	Párrafos revisados: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	La revisión con LanguageTool necesita la aplicación de escritorio; la versión del navegador aún no puede enviar texto a un servidor de revisión.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	La dirección del servidor de LanguageTool no es una dirección web: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Un párrafo es demasiado largo para revisarlo ({bytes} bytes; como máximo {max}).
+	Couldn't reach the LanguageTool server: {reason}	No se pudo conectar con el servidor de LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	El servidor de LanguageTool no respondió a tiempo.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	El servidor de LanguageTool está limitando las solicitudes; la revisión se reanuda en un minuto.
+	The LanguageTool server answered {status}: {message}	El servidor de LanguageTool respondió {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Respuesta inesperada del servidor de LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	El nombre de usuario y la clave de API solo se envían por https:// o a este equipo. Use una dirección de servidor https://.
+	Changes to these fields apply when you press Enter or leave the field.	Los cambios en estos campos se aplican al presionar Entrar o al salir del campo.
 	Accessibility Pane	Panel de accesibilidad
 	Alt Text Pane	Panel de texto alternativo
 	Alt\nText	Texto\nalternativo

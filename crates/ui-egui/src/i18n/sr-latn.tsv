@@ -1589,6 +1589,28 @@
 	Sat:	Zasićenost:
 	Lum:	Osvetljenost:
 	Hex:	Heks:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Proveri pravopis i gramatiku pomoću alata LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Šalje tekst vaših pasusa na LanguageTool server naveden ispod. Kada je isključeno, koristi se ugrađena provera programa WordCraft i ništa ne napušta ovaj računar.
+	Server:	Server:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Koristite sopstveni LanguageTool server unosom njegove adrese, na primer http://localhost:8081.
+	Username:	Korisničko ime:
+	API key:	API ključ:
+	Detect automatically	Automatski otkrij
+	Each paragraph's proofing language	Jezik provere svakog pasusa
+	Language:	Jezik:
+	Paragraphs checked: {count}	Provereno pasusa: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Provera pomoću alata LanguageTool zahteva desktop aplikaciju; verzija u pregledaču još ne može da šalje tekst serveru za proveru.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	Adresa servera LanguageTool nije veb adresa: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Pasus je predugačak za proveru ({bytes} bajtova; najviše {max}).
+	Couldn't reach the LanguageTool server: {reason}	Nije moguće povezati se sa serverom LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	Server LanguageTool nije odgovorio na vreme.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Server LanguageTool ograničava zahteve; provera se nastavlja za minut.
+	The LanguageTool server answered {status}: {message}	Server LanguageTool je odgovorio {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Neočekivan odgovor servera LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Korisničko ime i API ključ šalju se samo preko https:// ili ovom računaru. Koristite adresu servera https://.
+	Changes to these fields apply when you press Enter or leave the field.	Izmene u ovim poljima primenjuju se kada pritisnete Enter ili napustite polje.
 	Accessibility Pane	Okno pristupačnosti
 	Alt Text Pane	Okno alternativnog teksta
 	Alt\nText	Alternativni\ntekst

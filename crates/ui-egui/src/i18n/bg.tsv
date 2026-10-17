@@ -2532,6 +2532,27 @@
 	Leave out the date and time of comments and tracked changes when saving	Без дата и час на коментарите и проследените промени при запазване
 	The document you are editing keeps the names and dates; only the saved file leaves them out.	Документът, който редактирате, запазва имената и датите; само записаният файл ги пропуска.
 	Privacy Settings	Текущи настройки за поверителност
+	Check spelling and grammar with LanguageTool	Проверка на правописа и граматиката с LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Изпраща текста на абзаците ви към сървъра на LanguageTool по-долу. Когато е изключено, се използва вградената проверка на WordCraft и нищо не напуска този компютър.
+	Server:	Сървър:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	За да използвате собствен сървър на LanguageTool, въведете адреса му, например http://localhost:8081.
+	Username:	Потребителско име:
+	API key:	API ключ:
+	Detect automatically	Автоматично разпознаване
+	Each paragraph's proofing language	Езикът за проверка на всеки абзац
+	Language:	Език:
+	Paragraphs checked: {count}	Проверени абзаци: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Проверката с LanguageTool изисква настолното приложение; версията за браузър все още не може да изпраща текст към сървър за проверка.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	Адресът на сървъра на LanguageTool не е уеб адрес: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Абзац е твърде дълъг за проверка ({bytes} байта; най-много {max}).
+	Couldn't reach the LanguageTool server: {reason}	Няма връзка със сървъра на LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	Сървърът на LanguageTool не отговори навреме.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Сървърът на LanguageTool ограничава заявките; проверката продължава след минута.
+	The LanguageTool server answered {status}: {message}	Сървърът на LanguageTool отговори {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Неочакван отговор от сървъра на LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Потребителското име и API ключът се изпращат само през https:// или към този компютър. Използвайте адрес на сървър с https://.
+	Changes to these fields apply when you press Enter or leave the field.	Промените в тези полета се прилагат, когато натиснете Enter или напуснете полето.
 	Waiting for the save to finish…	Изчакване запазването да приключи…
 	Saving {name} was cancelled, so it is still open and nothing was lost.	Запазването на {name} е отменено. Документът остава отворен и нищо не е загубено.
 	Paper	Хартия

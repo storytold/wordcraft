@@ -1591,6 +1591,28 @@
 	Sat:	Насиченість:
 	Lum:	Яскравість:
 	Hex:	Hex:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Перевіряти правопис і граматику за допомогою LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Надсилає текст ваших абзаців на вказаний нижче сервер LanguageTool. Якщо вимкнено, використовується вбудована перевірка WordCraft і ніщо не залишає цей комп'ютер.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Щоб використовувати власний сервер LanguageTool, введіть його адресу, наприклад http://localhost:8081.
+	Username:	Ім'я користувача:
+	API key:	Ключ API:
+	Detect automatically	Визначати автоматично
+	Each paragraph's proofing language	Мова перевірки кожного абзацу
+	Language:	Мова:
+	Paragraphs checked: {count}	Перевірено абзаців: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Перевірка з LanguageTool потребує настільного застосунку; версія для браузера поки що не може надсилати текст на сервер перевірки.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	Адреса сервера LanguageTool не є веб-адресою: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Абзац задовгий для перевірки ({bytes} байтів; щонайбільше {max}).
+	Couldn't reach the LanguageTool server: {reason}	Не вдалося зв'язатися з сервером LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	Сервер LanguageTool не відповів вчасно.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Сервер LanguageTool обмежує кількість запитів; перевірка відновиться за хвилину.
+	The LanguageTool server answered {status}: {message}	Сервер LanguageTool відповів {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Неочікувана відповідь сервера LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Ім'я користувача й ключ API надсилаються лише через https:// або на цей комп'ютер. Укажіть адресу сервера https://.
+	Changes to these fields apply when you press Enter or leave the field.	Зміни в цих полях застосовуються, коли ви натискаєте Enter або виходите з поля.
 	Accessibility Pane	Панель доступності
 	Alt Text Pane	Панель альтернативного тексту
 	Alt\nText	Альтернативний\nтекст

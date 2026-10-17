@@ -2504,6 +2504,27 @@
 	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Be: a WordCraft a Fájl › Kezdőlap oldalon nyílik meg, üres dokumentummal, a sablonokkal és a legutóbbi dokumentumokkal. Ki: üres dokumentumot nyit meg.
 	Correct TWo INitial CApitals	KÉt KEzdő NAgybetű javítása
 	Correct accidental usage of cAPS LOCK key	A cAPS LOCK billentyű véletlen használatának javítása
+	Check spelling and grammar with LanguageTool	Helyesírás és nyelvtan ellenőrzése a LanguageTool segítségével
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	A bekezdések szövegét elküldi az alábbi LanguageTool-kiszolgálónak. Kikapcsolva a WordCraft beépített ellenőrzője működik, és semmi sem hagyja el ezt a számítógépet.
+	Server:	Kiszolgáló:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Saját LanguageTool-kiszolgáló használatához adja meg a címét, például http://localhost:8081.
+	Username:	Felhasználónév:
+	API key:	API-kulcs:
+	Detect automatically	Automatikus felismerés
+	Each paragraph's proofing language	Az egyes bekezdések nyelvi ellenőrzési nyelve
+	Language:	Nyelv:
+	Paragraphs checked: {count}	Ellenőrzött bekezdések: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	A LanguageTool-ellenőrzéshez az asztali alkalmazás szükséges; a böngészős változat még nem tud szöveget küldeni ellenőrző kiszolgálónak.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	A LanguageTool-kiszolgáló címe nem webcím: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Egy bekezdés túl hosszú az ellenőrzéshez ({bytes} bájt; legfeljebb {max}).
+	Couldn't reach the LanguageTool server: {reason}	Nem érhető el a LanguageTool-kiszolgáló: {reason}
+	The LanguageTool server didn't answer in time.	A LanguageTool-kiszolgáló nem válaszolt időben.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	A LanguageTool-kiszolgáló korlátozza a kéréseket; az ellenőrzés egy perc múlva folytatódik.
+	The LanguageTool server answered {status}: {message}	A LanguageTool-kiszolgáló válasza {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Váratlan válasz a LanguageTool-kiszolgálótól: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	A felhasználónév és az API-kulcs csak https:// kapcsolaton vagy erre a számítógépre megy. Adjon meg https:// kiszolgálócímet.
+	Changes to these fields apply when you press Enter or leave the field.	Ezeknek a mezőknek a módosításai az Enter lenyomásakor vagy a mező elhagyásakor lépnek életbe.
 	Region:	Régió:
 	Automatic ({region})	Automatikus ({region})
 	Picture	Kép

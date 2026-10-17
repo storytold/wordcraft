@@ -1593,6 +1593,28 @@
 	Sat:	Засићеност:
 	Lum:	Осветљеност:
 	Hex:	Хекс:
+# LanguageTool proofing (#575)
+	Check spelling and grammar with LanguageTool	Провери правопис и граматику помоћу алата LanguageTool
+	Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer.	Шаље текст ваших пасуса на LanguageTool сервер наведен испод. Када је искључено, користи се уграђена провера програма WordCraft и ништа не напушта овај рачунар.
+	Server:	Сервер:
+	Use your own LanguageTool server by entering its address, such as http://localhost:8081.	Користите сопствени LanguageTool сервер уносом његове адресе, на пример http://localhost:8081.
+	Username:	Корисничко име:
+	API key:	API кључ:
+	Detect automatically	Аутоматски откриј
+	Each paragraph's proofing language	Језик провере сваког пасуса
+	Language:	Језик:
+	Paragraphs checked: {count}	Проверено пасуса: {count}
+	LanguageTool checking needs the desktop app; the browser version can't send text to a checking server yet.	Провера помоћу алата LanguageTool захтева десктоп апликацију; верзија у прегледачу још не може да шаље текст серверу за проверу.
+# LanguageTool: errors and committed fields (#1283)
+	The LanguageTool server address isn't a web address: {address}	Адреса сервера LanguageTool није веб адреса: {address}
+	A paragraph is too long to check ({bytes} bytes; at most {max}).	Пасус је предугачак за проверу ({bytes} бајтова; највише {max}).
+	Couldn't reach the LanguageTool server: {reason}	Није могуће повезати се са сервером LanguageTool: {reason}
+	The LanguageTool server didn't answer in time.	Сервер LanguageTool није одговорио на време.
+	The LanguageTool server is limiting requests; checking resumes in a minute.	Сервер LanguageTool ограничава захтеве; провера се наставља за минут.
+	The LanguageTool server answered {status}: {message}	Сервер LanguageTool је одговорио {status}: {message}
+	Unexpected answer from the LanguageTool server: {reason}	Неочекиван одговор сервера LanguageTool: {reason}
+	The username and API key are only sent over https:// or to this computer. Use an https:// server address.	Корисничко име и API кључ шаљу се само преко https:// или овом рачунару. Користите адресу сервера https://.
+	Changes to these fields apply when you press Enter or leave the field.	Измене у овим пољима примењују се када притиснете Enter или напустите поље.
 	Accessibility Pane	Окно приступачности
 	Alt Text Pane	Окно алтернативног текста
 	Alt\nText	Алтернативни\nтекст
