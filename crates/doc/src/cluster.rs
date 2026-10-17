@@ -1,5 +1,5 @@
 //! Text clusters for complex scripts (Myanmar, Khmer, Tai Tham, the Indic scripts): where the
-//! caret may stop, what Backspace removes, and where Myanmar text may wrap.
+//! caret may stop, what Backspace removes, and where Myanmar / Thai / Lao text may wrap.
 //!
 //! Extended grapheme clusters (UAX #29) split some syllables that a shaper draws as one unit: a
 //! Myanmar consonant stacked under a virama (`မ္ဘ`), the Myanmar vowel signs U+102B/U+102C and
@@ -159,6 +159,32 @@ pub fn myanmar_breaks(text: &str) -> Vec<usize> {
     out
 }
 
+/// Whether `c` is a Thai or Lao character (U+0E00–U+0EFF).
+pub fn is_thai_lao(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0EFF)
+}
+
+/// Line-break opportunities within Thai and Lao text, which have no spaces between words.
+///
+/// UAX #14 (`unicode_linebreak`) assigns class SA to these scripts and permits a break at every
+/// character boundary — which is visually wrong. This function uses the ICU4X dictionary
+/// segmenter to return proper word boundaries instead. Only breaks between two consecutive
+/// Thai/Lao characters are returned so that Latin/Thai mixed text is unaffected outside the
+/// Thai/Lao spans.
+///
+/// Returns sorted byte offsets into `text`.
+pub fn thai_lao_breaks(text: &str) -> Vec<usize> {
+    let segmenter = icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default());
+    segmenter
+        .segment_str(text)
+        .filter(|&i| {
+            i < text.len()
+                && text.get(..i).and_then(|s| s.chars().next_back()).is_some_and(is_thai_lao)
+                && text.get(i..).and_then(|s| s.chars().next()).is_some_and(is_thai_lao)
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,5 +258,38 @@ mod tests {
     fn backspace_by_character_in_brahmic_scripts_only() {
         assert!(backspaces_by_char('ေ') && backspaces_by_char('ि') && backspaces_by_char('្'));
         assert!(!backspaces_by_char('\u{301}') && !backspaces_by_char('a') && !backspaces_by_char('語'));
+    }
+
+    #[test]
+    fn thai_wraps_at_word_boundaries() {
+        // "สวัสดีชาวโลก" = สวัสดี + ชาว + โลก (Hello + world people + world).
+        // The ICU4X dictionary segmenter should find the word boundaries between them.
+        let thai = "สวัสดีชาวโลก";
+        let breaks = thai_lao_breaks(thai);
+        assert!(!breaks.is_empty(), "should find at least one word boundary in Thai text");
+        // Every break must fall on a char boundary.
+        for &b in &breaks {
+            assert!(thai.is_char_boundary(b), "break at {b} is not a char boundary");
+        }
+        // No break at position 0 or at the end.
+        assert!(!breaks.contains(&0));
+        assert!(!breaks.contains(&thai.len()));
+        // Breaks must not fall inside a Thai character (sanity: all offsets map to is_thai_lao chars).
+        for &b in &breaks {
+            let prev = thai.get(..b).and_then(|s| s.chars().next_back()).unwrap();
+            let next = thai.get(b..).and_then(|s| s.chars().next()).unwrap();
+            assert!(is_thai_lao(prev) && is_thai_lao(next));
+        }
+        // Latin text: no breaks injected (UAX #14 handles Latin; this function is Thai/Lao only).
+        assert!(thai_lao_breaks("Hello world").is_empty());
+        // Empty input is fine.
+        assert!(thai_lao_breaks("").is_empty());
+        // Mixed: breaks are only between Thai characters, not at the Thai–Latin boundary.
+        let mixed = "testสวัสดีtest";
+        for &b in &thai_lao_breaks(mixed) {
+            let prev = mixed.get(..b).and_then(|s| s.chars().next_back()).unwrap();
+            let next = mixed.get(b..).and_then(|s| s.chars().next()).unwrap();
+            assert!(is_thai_lao(prev) && is_thai_lao(next), "break at {b} crosses script boundary");
+        }
     }
 }
