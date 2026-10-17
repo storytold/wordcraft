@@ -72,15 +72,22 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
-            let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
+            // A given `start` (null: continue from the previous section) replaces it; left out it stays.
+            let start = v.get("start").map(|_| p::u64(v, "start").map(|x| x.min(100_000) as u32));
+            if fmt.is_none() && start.is_none() {
+                s.ui_requests.push(json!({"open": "pageNumberFormat"}));
+                return Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null));
+            }
             with_sect(s, |x| {
                 if let Some(f) = fmt {
                     x.page_num_format = f;
                 }
-                x.page_num_start = start;
+                if let Some(n) = start {
+                    x.page_num_start = n;
+                }
             })
         })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n | null (null: continue from the previous section)} — left out stays as it is; with neither the app opens the dialog"#),
         CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
             r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,
         ),

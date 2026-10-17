@@ -1,5 +1,6 @@
 //! Layout, Review and Mailings dialogs (#407): Line Numbers (Layout › Line Numbers › Line
-//! Numbering Options…), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
+//! Numbering Options…), Page Number Format (Insert › Page Number › Format Page Numbers…,
+//! `layout.pageNumberFormat`), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
 //! Language), Envelopes and Labels (Mailings › Create), Formula (Table Layout › Data, #1201)
 //! and Sort (Table Layout › Data, #1200). Each ends by running a command (`layout.lineNumbers`,
 //! `layout.hyphenation`, `layout.manualHyphenation` with `caret.set` and `text.optionalHyphen`,
@@ -22,6 +23,7 @@ use crate::theme::semibold;
 #[serde(tag = "form", rename_all = "camelCase")]
 pub enum LayoutDialog {
     LineNumbers(LineNumbersForm),
+    PageNumbers(PageNumbersForm),
     Hyphenation(HyphenationForm),
     ManualHyphenation(ManualForm),
     Language(LanguageForm),
@@ -35,6 +37,7 @@ impl LayoutDialog {
     pub fn name(&self) -> &'static str {
         match self {
             LayoutDialog::LineNumbers(_) => "lineNumbers",
+            LayoutDialog::PageNumbers(_) => "pageNumberFormat",
             LayoutDialog::Hyphenation(_) => "hyphenation",
             LayoutDialog::ManualHyphenation(_) => "manualHyphenation",
             LayoutDialog::Language(_) => "language",
@@ -49,6 +52,7 @@ impl LayoutDialog {
     pub fn title(&self) -> &'static str {
         match self {
             LayoutDialog::LineNumbers(_) => "Line Numbers",
+            LayoutDialog::PageNumbers(_) => "Page Number Format",
             LayoutDialog::Hyphenation(_) => "Hyphenation",
             LayoutDialog::ManualHyphenation(_) => "Manual Hyphenation",
             LayoutDialog::Language(_) => "Language",
@@ -64,6 +68,7 @@ impl LayoutDialog {
 pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
     Some(match name {
         "lineNumbers" => LayoutDialog::LineNumbers(LineNumbersForm::read(app)),
+        "pageNumberFormat" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),
         "hyphenation" => LayoutDialog::Hyphenation(HyphenationForm::read(app)),
         "manualHyphenation" => LayoutDialog::ManualHyphenation(ManualForm::start(app)),
         "language" => LayoutDialog::Language(LanguageForm::read(app)),
@@ -79,6 +84,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
 pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
     match d {
         LayoutDialog::LineNumbers(f) => line_numbers_ui(app, ui, f),
+        LayoutDialog::PageNumbers(f) => page_numbers_ui(app, ui, f),
         LayoutDialog::Hyphenation(f) => hyphenation_ui(app, ui, f),
         LayoutDialog::ManualHyphenation(f) => manual_ui(app, ui, f),
         LayoutDialog::Language(f) => language_ui(app, ui, f),
@@ -202,6 +208,70 @@ fn line_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LineNumbersForm) -> b
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {
         return run(app, "layout.lineNumbers", f.params());
+    }
+    cancel
+}
+
+// ---------------------------------------------------------------------------------------------
+// Page Number Format
+
+/// The number formats Format Page Numbers… offers: (OOXML name, sample).
+const PAGE_NUMBER_FORMATS: [(&str, &str); 5] = [
+    ("decimal", "1, 2, 3, …"),
+    ("lowerLetter", "a, b, c, …"),
+    ("upperLetter", "A, B, C, …"),
+    ("lowerRoman", "i, ii, iii, …"),
+    ("upperRoman", "I, II, III, …"),
+];
+
+/// The Page Number Format dialog's fields: the section's number format and where it starts.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageNumbersForm {
+    /// An OOXML number format (`decimal`, `upperRoman`…).
+    pub format: String,
+    /// Continue from the previous section, or start at `start`.
+    pub continue_prev: bool,
+    pub start: u32,
+}
+
+impl PageNumbersForm {
+    pub fn read(app: &WordApp) -> PageNumbersForm {
+        let sp = wordcraft_engine::cmd::page::sect(&app.session);
+        PageNumbersForm {
+            format: sp.page_num_format.ooxml().into(),
+            continue_prev: sp.page_num_start.is_none(),
+            start: sp.page_num_start.unwrap_or(1),
+        }
+    }
+
+    /// `layout.pageNumberFormat` parameters.
+    pub fn params(&self) -> Value {
+        let start = if self.continue_prev { Value::Null } else { json!(self.start) };
+        json!({"format": self.format, "start": start})
+    }
+}
+
+fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumbersForm) -> bool {
+    egui::Grid::new("pnum").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+        ui.label(tl!("Number format:"));
+        let shown = PAGE_NUMBER_FORMATS.iter().find(|(k, _)| *k == f.format).map_or(f.format.as_str(), |(_, l)| *l).to_string();
+        egui::ComboBox::from_id_salt("pnum_format").selected_text(shown).width(160.0).show_ui(ui, |ui| {
+            for (k, l) in PAGE_NUMBER_FORMATS {
+                ui.selectable_value(&mut f.format, k.to_string(), l);
+            }
+        });
+        ui.end_row();
+    });
+    heading(ui, "Page numbering");
+    ui.radio_value(&mut f.continue_prev, true, tl!("Continue from previous section"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut f.continue_prev, false, tl!("Start at:"));
+        ui.add_enabled(!f.continue_prev, egui::DragValue::new(&mut f.start).range(0..=100_000));
+    });
+    let (ok, cancel) = buttons(ui, "OK", true);
+    if ok {
+        return run(app, "layout.pageNumberFormat", f.params());
     }
     cancel
 }
@@ -847,6 +917,34 @@ mod tests {
         let s = &a.session.doc.settings;
         assert!(s.auto_hyphenation && !s.hyphenate_caps && s.consecutive_hyphen_limit == 2);
         assert!((s.hyphenation_zone - 18.0).abs() < 0.01, "zone untouched: {}", s.hyphenation_zone);
+    }
+
+    /// #1870: Insert › Page Number › Format Page Numbers… opens the dialog with the section's
+    /// numbering, and OK applies the chosen format and start value.
+    #[test]
+    fn page_number_format_dialog_applies() {
+        use egui_kittest::kittest::Queryable;
+        use wordcraft_doc::section::NumFormat;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app(),
+        );
+        h.state_mut().run("layout.pageNumberFormat", json!({})).unwrap();
+        h.run_steps(3);
+        let Some(Dialog::Layout(d)) = h.state_mut().dialog.as_mut() else { panic!("no dialog") };
+        let LayoutDialog::PageNumbers(f) = d.as_mut() else { panic!("not page numbers: {}", d.name()) };
+        assert_eq!(f, &mut PageNumbersForm { format: "decimal".into(), continue_prev: true, start: 1 });
+        (f.format, f.continue_prev, f.start) = ("lowerRoman".into(), false, 3);
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        let sp = &h.state().session.doc.last_section;
+        assert_eq!((sp.page_num_format, sp.page_num_start), (NumFormat::LowerRoman, Some(3)));
     }
 
     /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
