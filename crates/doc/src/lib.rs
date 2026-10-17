@@ -387,6 +387,40 @@ impl Document {
     }
 }
 
+/// A building block (Insert › Quick Parts, AutoText…) kept in the document's glossary
+/// (ECMA-376 §17.12: `w:docPart`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
+#[serde(default, rename_all = "camelCase")]
+pub struct BuildingBlock {
+    /// The entry's name (`w:docPartPr/w:name`).
+    pub name: String,
+    /// Its gallery (`w:category/w:gallery`: `docParts` for Quick Parts, `autoTxt` for AutoText…).
+    pub gallery: String,
+    /// Its category within the gallery (`w:category/w:name`, e.g. "General").
+    pub category: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    /// The entry's identity (`w:guid`), kept as read.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub guid: String,
+    /// The paragraph style it's associated with (`w:style`), kept as read.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub style: String,
+    /// Its types (`w:types/w:type`: `normal`, `bbPlcHdr` for a content control's placeholder…).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub types: Vec<String>,
+    /// How it's inserted (`w:behaviors/w:behavior`: `content`, `p`, `pg`).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub behaviors: Vec<String>,
+    /// The content (`w:docPartBody`).
+    pub blocks: Blocks,
+}
+
+/// The gallery Quick Parts saves to (`w:gallery w:val="docParts"`).
+pub const QUICK_PARTS_GALLERY: &str = "docParts";
+/// The AutoText gallery (`w:gallery w:val="autoTxt"`).
+pub const AUTO_TEXT_GALLERY: &str = "autoTxt";
+
 /// A bibliography source.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default, rename_all = "camelCase")]
@@ -682,6 +716,9 @@ pub struct Document {
     /// Source-format parts we keep verbatim for round-trip (e.g. custom XML), by part name.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub passthrough: BTreeMap<String, Arc<Vec<u8>>>,
+    /// The document's own building blocks (its glossary document), in file order.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub glossary: Vec<BuildingBlock>,
 }
 
 impl Default for Document {
@@ -709,6 +746,7 @@ impl Document {
             endnote_separators: NoteSeparators::default(),
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
+            glossary: Vec::new(),
         }
     }
 

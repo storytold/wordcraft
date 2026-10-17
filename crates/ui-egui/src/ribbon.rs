@@ -1102,7 +1102,11 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "textBox", "Text\nBox", "insert.textBox", json!({}), false);
         stack(ui, |ui| {
             menu_button(ui, app, "quickParts", Some("Quick Parts"), "Quick Parts", false, "insert.quickParts", |ui, app| {
-                let parts: Vec<String> = app.session.building_blocks.keys().cloned().collect();
+                // This session's building blocks, then the document's own Quick Parts.
+                let mut parts: Vec<String> = app.session.building_blocks.keys().cloned().collect();
+                let mut seen: std::collections::HashSet<String> = parts.iter().cloned().collect();
+                let glossary = app.session.doc.glossary.iter().filter(|e| e.gallery == wordcraft_doc::QUICK_PARTS_GALLERY);
+                parts.extend(glossary.filter(|e| seen.insert(e.name.clone())).map(|e| e.name.clone()));
                 for name in parts {
                     if ui.button(&name).clicked() {
                         let _ = app.run("insert.quickParts", json!({"insert": name}));

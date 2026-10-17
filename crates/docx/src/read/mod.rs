@@ -5,6 +5,7 @@ pub(crate) mod diagram;
 mod drawing_color;
 mod embed;
 mod freeform;
+mod glossary;
 pub(crate) mod math;
 mod props;
 mod sdt;
@@ -286,6 +287,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         r.doc.passthrough.insert(VBA_PROJECT_PART.into(), Arc::new(b.to_vec()));
         r.read_vba_related(&v);
     }
+    r.read_glossary(&rels);
     r.keep_custom_xml(&root_rels, &rels);
     r.keep_unmodelled(&root_rels, &rels);
     if !r.embedded.parts.is_empty() {

@@ -455,11 +455,12 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(json!({"hint": "Save or export a copy (PDF, Word document) to share it."}))
         })
         .pure(),
-        CommandSpec::new("insert.quickParts", "Quick Parts", "Insert › Text", quick_parts)
-            .params(r#"{"save"?: name (from the selection), "insert"?: name, "delete"?: name} → list"#),
-        CommandSpec::new("insert.autoText", "AutoText", "Insert › Text › Quick Parts", quick_parts)
+        CommandSpec::new("insert.quickParts", "Quick Parts", "Insert › Text", |s, v| quick_parts(s, v, wordcraft_doc::QUICK_PARTS_GALLERY)).params(
+            r#"{"save"?: name (from the selection), "in"?: "document" (save into the document's own building blocks, kept in its file; else this session's), "insert"?: name, "delete"?: name} → {"parts": names (this session's, then the document's Quick Parts), "document": the document's Quick Parts}"#,
+        ),
+        CommandSpec::new("insert.autoText", "AutoText", "Insert › Text › Quick Parts", |s, v| quick_parts(s, v, wordcraft_doc::AUTO_TEXT_GALLERY))
             .key(super::non_mac("Alt+F3"))
-            .params(r#"{"save"?: name, "insert"?: name}"#),
+            .params(r#"{"save"?: name, "in"?: "document", "insert"?: name, "delete"?: name} → {"parts": names, "document": the document's AutoText}"#),
         CommandSpec::new("insert.docProperty", "Document Property", "Insert › Text › Quick Parts", |s, v| {
             let name = p::str(v, "name").unwrap_or("Title").to_string();
             let c = &s.doc.core;
@@ -1552,25 +1553,66 @@ fn tables_hiding_text(doc: &Document, story: StoryRef, blocks: &wordcraft_doc::B
     }
 }
 
-fn quick_parts(s: &mut Session, v: &Value) -> CmdResult {
+/// Insert › Quick Parts and AutoText: this session's building blocks, and the document's own
+/// (`Document::glossary`, kept in its file) in `gallery`. A name is looked up in the session's
+/// first, then in the document's (`gallery` first).
+fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResult {
+    let in_document = p::str(v, "in") == Some("document");
     if let Some(name) = p::str(v, "save") {
         let (a, b) = s.sel.ordered();
         if a == b {
             return Err(CmdError::Params("select the content to save".into()));
         }
         let frag = s.doc.copy_range(&a, &b);
-        s.building_blocks.insert(name.to_string(), frag);
+        if in_document {
+            if name.trim().is_empty() {
+                return Err(CmdError::Params("a building block needs a name".into()));
+            }
+            let blocks: wordcraft_doc::Blocks = frag.blocks.into_iter().map(Arc::new).collect();
+            match s.doc.glossary.iter_mut().find(|e| e.name == name && e.gallery == gallery) {
+                Some(e) => e.blocks = blocks,
+                None => s.doc.glossary.push(wordcraft_doc::BuildingBlock {
+                    name: name.to_string(),
+                    gallery: gallery.to_string(),
+                    category: "General".into(),
+                    blocks,
+                    ..Default::default()
+                }),
+            }
+        } else {
+            s.building_blocks.insert(name.to_string(), frag);
+        }
     }
-    if let Some(name) = p::str(v, "delete") {
-        s.building_blocks.remove(name);
+    if let Some(name) = p::str(v, "delete")
+        && (in_document || s.building_blocks.remove(name).is_none())
+        && let Some(i) = document_entry(&s.doc, name, gallery)
+    {
+        s.doc.glossary.remove(i);
     }
     if let Some(name) = p::str(v, "insert") {
-        let frag = s.building_blocks.get(name).cloned().ok_or_else(|| CmdError::Params(format!("no Quick Part `{name}`")))?;
+        let frag = match s.building_blocks.get(name) {
+            Some(f) => f.clone(),
+            None => {
+                let e = document_entry(&s.doc, name, gallery).and_then(|i| s.doc.glossary.get(i));
+                let e = e.ok_or_else(|| CmdError::Params(format!("no Quick Part `{name}`")))?;
+                wordcraft_doc::edit::Fragment { blocks: e.blocks.iter().map(|b| (**b).clone()).collect(), parts: Default::default() }
+            }
+        };
         let at = delete_selection(s)?;
         let end = s.doc.insert_fragment(&at, &frag)?;
         s.sel = Selection::caret(end);
     }
-    Ok(json!({"parts": s.building_blocks.keys().collect::<Vec<_>>()}))
+    let document: Vec<&str> = s.doc.glossary.iter().filter(|e| e.gallery == gallery).map(|e| e.name.as_str()).collect();
+    let mut parts: Vec<&str> = s.building_blocks.keys().map(String::as_str).collect();
+    let mut seen: std::collections::HashSet<&str> = parts.iter().copied().collect();
+    parts.extend(document.iter().copied().filter(|n| seen.insert(n)));
+    Ok(json!({"parts": parts, "document": document}))
+}
+
+/// The index of the document's building block `name`, in `gallery` if there is one there.
+fn document_entry(doc: &Document, name: &str, gallery: &str) -> Option<usize> {
+    let g = &doc.glossary;
+    g.iter().position(|e| e.name == name && e.gallery == gallery).or_else(|| g.iter().position(|e| e.name == name))
 }
 
 fn hf_nav(s: &mut Session, dir: i32) -> CmdResult {

@@ -44,6 +44,38 @@ pub mod rt {
     pub const DIAGRAM_QUICK_STYLE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramQuickStyle";
     pub const DIAGRAM_COLORS: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/diagramColors";
     pub const CUSTOM_XML: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
+    pub const GLOSSARY: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/glossaryDocument";
+}
+
+/// Content type of a glossary document part (ECMA-376 Part 1 §11.3.8).
+pub const GLOSSARY_CONTENT_TYPE: &str = "application/vnd.openxmlformats-officedocument.wordprocessingml.document.glossary+xml";
+/// `Document::passthrough` key: a fingerprint of `Document::glossary` as read, so a save can tell
+/// an untouched glossary (written back verbatim) from an edited one (written from the model).
+/// Not a package part: WordCraft's own bookkeeping.
+pub const GLOSSARY_READ: &str = "wordcraft:glossary.read";
+/// Most building blocks read from one glossary.
+pub const MAX_GLOSSARY_ENTRIES: usize = 10_000;
+/// The glossary entry types `w:type` takes (ST_DocPartType); others aren't kept.
+pub const GLOSSARY_TYPES: [&str; 7] = ["none", "normal", "autoExp", "toolbar", "speller", "formFld", "bbPlcHdr"];
+/// The insertion behaviours `w:behavior` takes (ST_DocPartBehavior); others aren't kept.
+pub const GLOSSARY_BEHAVIORS: [&str; 3] = ["content", "p", "pg"];
+
+/// A fingerprint of `glossary` (FNV-1a over its debug form): stable across runs and builds that
+/// keep the model's shape, and cheap (nothing is allocated).
+pub fn glossary_fingerprint(glossary: &[wordcraft_doc::BuildingBlock]) -> String {
+    struct Fnv(u64);
+    impl std::fmt::Write for Fnv {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            for b in s.bytes() {
+                self.0 = (self.0 ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3);
+            }
+            Ok(())
+        }
+    }
+    let mut h = Fnv(0xcbf2_9ce4_8422_2325);
+    // Writing into `Fnv` never fails.
+    let _ = std::fmt::Write::write_fmt(&mut h, format_args!("{glossary:?}"));
+    format!("{:016x}", h.0)
 }
 
 /// `Document::passthrough` key for a macro project, kept as opaque bytes (never parsed or run).

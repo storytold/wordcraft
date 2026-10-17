@@ -7232,3 +7232,55 @@ fn vertical_align_command_sets_justified() {
         assert_eq!(serde_json::to_value(crate::cmd::page::sect(&s)).unwrap()["valign"], json!(name));
     }
 }
+
+/// Insert › Quick Parts and AutoText list, insert and save the document's own building blocks
+/// (its glossary, kept in the file); saving with `"in": "document"` is undoable.
+#[test]
+fn quick_parts_use_the_documents_building_blocks() {
+    use wordcraft_doc::{BuildingBlock, CharProps, Paragraph, para_block};
+    let entry = |name: &str, gallery: &str, text: &str| BuildingBlock {
+        name: name.into(),
+        gallery: gallery.into(),
+        category: "General".into(),
+        blocks: vec![para_block(Paragraph::with_text(text, CharProps::default()))],
+        ..Default::default()
+    };
+    let mut d = wordcraft_doc::Document::new();
+    d.glossary = vec![entry("Signature", "docParts", "Kind regards, Ann"), entry("Disclaimer", "autoTxt", "No warranty.")];
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let mut s = Session::new(crate::io::open_bytes("glossary.docx", &bytes).unwrap());
+    let listed = run(&mut s, "insert.quickParts", json!({}));
+    assert_eq!(listed["document"], json!(["Signature"]), "{listed}");
+    assert_eq!(listed["parts"], json!(["Signature"]), "{listed}");
+    assert_eq!(run(&mut s, "insert.autoText", json!({}))["document"], json!(["Disclaimer"]));
+    run(&mut s, "insert.quickParts", json!({"insert": "Signature"}));
+    assert!(text(&s).contains("Kind regards, Ann"), "{}", text(&s));
+    run(&mut s, "insert.autoText", json!({"insert": "Disclaimer"}));
+    assert!(text(&s).contains("No warranty."), "{}", text(&s));
+
+    // Saved into the document: undoable, and kept in its file.
+    run(&mut s, "select.text", json!({"text": "Kind regards"}));
+    s.dirty = false;
+    let listed = run(&mut s, "insert.quickParts", json!({"save": "Closing", "in": "document"}));
+    assert_eq!(listed["document"], json!(["Signature", "Closing"]), "{listed}");
+    assert!(s.building_blocks.is_empty(), "not in the session's store");
+    assert!(s.dirty);
+    run(&mut s, "edit.undo", json!({}));
+    assert!(!s.doc.glossary.iter().any(|e| e.name == "Closing"));
+    run(&mut s, "edit.redo", json!({}));
+    let back = crate::io::open_bytes("glossary.docx", &wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    let closing = back.glossary.iter().find(|e| e.name == "Closing").expect("saved entry");
+    assert_eq!(closing.gallery, "docParts");
+    assert_eq!(closing.blocks.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect::<String>(), "Kind regards");
+    assert_eq!(back.glossary.len(), 3);
+
+    // Without "in", saving stays in the session; deleting removes the name where it lives.
+    run(&mut s, "insert.quickParts", json!({"save": "Scratch"}));
+    assert!(s.building_blocks.contains_key("Scratch") && !s.doc.glossary.iter().any(|e| e.name == "Scratch"));
+    run(&mut s, "insert.quickParts", json!({"delete": "Scratch"}));
+    run(&mut s, "insert.quickParts", json!({"delete": "Closing"}));
+    assert!(s.building_blocks.is_empty());
+    assert_eq!(s.doc.glossary.iter().map(|e| e.name.as_str()).collect::<Vec<_>>(), ["Signature", "Disclaimer"]);
+    assert!(s.run("insert.quickParts", &json!({"save": " ", "in": "document"})).is_err());
+    assert!(s.run("insert.quickParts", &json!({"insert": "Closing"})).is_err());
+}

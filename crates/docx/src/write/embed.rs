@@ -46,6 +46,8 @@ pub(crate) struct EmbedWriter<'d> {
     markup_bytes: u64,
     /// Parts to write: (name, bytes, content type, relationships).
     pub parts: Vec<(String, Vec<u8>, String, PartRels)>,
+    /// Leave out the main document's kept glossary (it's written from the model instead).
+    pub drop_glossary: bool,
 }
 
 impl<'d> EmbedWriter<'d> {
@@ -90,6 +92,7 @@ impl<'d> EmbedWriter<'d> {
             copy_bytes: MAX_COPY_BYTES,
             markup_bytes: MAX_MARKUP_BYTES,
             parts: Vec::new(),
+            drop_glossary: false,
         }
     }
 
@@ -142,7 +145,7 @@ impl<'d> EmbedWriter<'d> {
     }
 
     /// A number `n` for which every `{stem}{n}{ext}` is a free part name, with those names taken.
-    fn fresh_set(&mut self, stems: &[&str], ext: &str) -> Vec<String> {
+    pub(super) fn fresh_set(&mut self, stems: &[&str], ext: &str) -> Vec<String> {
         let mut n: u32 = 1;
         loop {
             let names: Vec<String> = stems.iter().map(|s| format!("{s}{n}{ext}")).collect();
@@ -205,7 +208,7 @@ impl<'d> EmbedWriter<'d> {
         for line in String::from_utf8_lossy(&roots).lines().take(MAX_EMBEDDED_RELS * 2) {
             let fields: Vec<&str> = line.split('\t').collect();
             let [source, kind, target] = fields.as_slice() else { continue };
-            if *source != owner {
+            if *source != owner || (self.drop_glossary && owner == "D" && rel_is(kind, rt::GLOSSARY)) {
                 continue;
             }
             if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
@@ -214,6 +217,15 @@ impl<'d> EmbedWriter<'d> {
             }
         }
         self.first = memo;
+    }
+
+    /// Whether `unmodelled_rels("D", …)` can write the main document's kept glossary back.
+    pub fn kept_glossary(&self) -> bool {
+        let Some(roots) = self.passthrough.get(crate::package::UNMODELLED_ROOTS) else { return false };
+        String::from_utf8_lossy(roots).lines().take(MAX_EMBEDDED_RELS * 2).any(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            matches!(fields.as_slice(), [source, kind, target] if *source == "D" && rel_is(kind, rt::GLOSSARY) && (self.first.contains_key(*target) || self.available(target)))
+        })
     }
 
     /// What copying the parts reached from `roots` costs against the copy budget.

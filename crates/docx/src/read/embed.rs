@@ -100,11 +100,14 @@ impl Reader<'_> {
             main.windows(needle.len()).any(|w| w == needle.as_bytes())
         };
         let mut roots = String::new();
+        // One glossary per main document (its first relationship; see `read_glossary`).
+        let mut glossary = false;
         for (owner, rels) in [("P", package), ("D", document)] {
             for rel in rels.list.iter().filter(|r| !r.external).take(MAX_EMBEDDED_RELS) {
                 let tail = rel.kind.rsplit('/').next().unwrap_or("");
                 if HANDLED_RELS.contains(&tail)
                     || (owner == "D" && referenced(&rel.id))
+                    || (owner == "D" && tail == "glossaryDocument" && std::mem::replace(&mut glossary, true))
                     || ![&rel.kind, &rel.target].iter().all(|s| manifest_field_ok(s))
                 {
                     continue;

@@ -1,6 +1,6 @@
 # File-format parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-14 · **Change:** trivial (every table style part round-trips, #714); previously trivial: VML freeforms read and kept on save; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: `flowChartOr` draws its circle and cross spokes, as in Word; previously trivial: RTF: Mac OS Roman and DOS text, #1653; previously trivial: VML text boxes keep their internal margins, fit to their text and vertical alignment; hidden drawings not shown; previously trivial: PDF export draws horizontal and vertical lines inside groups, #1474; previously trivial: symbol-font text exported as Unicode, #776; previously trivial: text-box margins, Resize shape to fit text and freeforms in groups, #743; previously trivial: formatted paste from the system clipboard's HTML and RTF, #687; previously trivial: independent complex-script formatting inheritance and round-trip regression tests; previously trivial: import/export fixes for TXT, RTF, ODT, HTML and LaTeX, #433–#440; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-17 · **Change:** trivial (DOCX glossary documents (building blocks) read, kept and written; previously trivial: every table style part round-trips, #714); previously trivial: VML freeforms read and kept on save; previously trivial: multi-paragraph field instructions no longer add blank lines; previously trivial: `flowChartOr` draws its circle and cross spokes, as in Word; previously trivial: RTF: Mac OS Roman and DOS text, #1653; previously trivial: VML text boxes keep their internal margins, fit to their text and vertical alignment; hidden drawings not shown; previously trivial: PDF export draws horizontal and vertical lines inside groups, #1474; previously trivial: symbol-font text exported as Unicode, #776; previously trivial: text-box margins, Resize shape to fit text and freeforms in groups, #743; previously trivial: formatted paste from the system clipboard's HTML and RTF, #687; previously trivial: independent complex-script formatting inheritance and round-trip regression tests; previously trivial: import/export fixes for TXT, RTF, ODT, HTML and LaTeX, #433–#440; previously major: first version; every format Word reads or writes, measured from the readers and writers on origin/main) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4, plus Word for Windows' extra formats
 
 Every format Word opens or saves, what WordCraft does with it, and how it's tested. Fidelity is the
 share of a typical real-world file's content and formatting that survives (read: shows correctly;
@@ -98,7 +98,8 @@ Measured by grepping `crates/docx/src/read` and `src/write` for the OOXML elemen
 | Ruby (`w:ruby`: `w:rubyPr`, `w:rt`, `w:rubyBase`) | ✅ | ✅ | #288; base and ruby text with their run formatting, alignment, sizes, raise, language |
 | Document grid (`w:docGrid`: type, line pitch, `w:charSpace`), paragraph `w:snapToGrid` | ✅ | ✅ | #391; run-level `w:snapToGrid` not read |
 | `w:eastAsianLayout`, `w:fitText` | ❌ | ❌ | East Asian layout |
-| Glossary document (building blocks), `w:altChunk`, sub-documents | ❌ | ❌ | |
+| Glossary document (building blocks) | ✅ | ✅ | `w:docPart` entries (name, style, gallery, category, types, behaviours, description, guid, body) are read into `Document::glossary` and offered by Insert › Quick Parts and AutoText; `save` with `"in": "document"` stores one in the file. An untouched glossary is written back byte for byte with its own parts (styles, settings, fonts…); an edited one, or one whose parts weren't kept, is written from the model as `word/glossary1.xml` with copies of the document's styles and numbering. The glossary's own styles, settings and fonts, text boxes inside entries, and the notes and comments of a selection saved into the document don't survive an edit. Tests: `crates/docx/tests/glossary.rs` |
+| `w:altChunk`, sub-documents | ❌ | ❌ | |
 | Hostile input | ✅ | — | `malformed.rs`, capped allocations, never-crash standard |
 | Document paragraph defaults (`w:pPrDefault`) | ✅ | ✅ | Omission and explicit empty defaults remain distinct across repeated saves; nonempty defaults and later default-spacing edits are written |
 
@@ -194,8 +195,9 @@ in `w:compat` only `compatibilityMode` is replaced. Kept children that point at 
 ## Unmodelled-part preservation
 
 Parts the package or the main document relate to that WordCraft neither models nor writes (web
-settings, styles-with-effects, add-in task panes, people, the thumbnail, a glossary, future parts)
-are carried verbatim with their relationships and content types. Relationship types the writer
+settings, styles-with-effects, add-in task panes, people, the thumbnail, future parts) are
+carried verbatim with their relationships and content types. The glossary document is carried the
+same way while its building blocks are as read; once they change it is written from the model. Relationship types the writer
 produces, and any the document's markup refers to by id, are not (`HANDLED_RELS` in
 `crates/docx/src/read/embed.rs`), so nothing is written twice. `app.xml` keeps Template, Manager,
 Company, HyperlinkBase and the link/sharing flags; counts (pages, lines, characters, editing
@@ -210,6 +212,7 @@ attributes inside stories and style or list definitions; a regenerated theme. Te
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | trivial | Glossary document (building blocks) read into the model, kept verbatim while unchanged and written from the model once edited; split from the `w:altChunk`/sub-documents row |
 | 2026-10-13 | trivial | A cell's explicit top vertical alignment (`w:vAlign w:val="top"`) is kept on read and write and beats a table style that centres or bottom-aligns (#1288) |
 | 2026-10-14 | trivial | Row table border exceptions survive DOCX saves |
 | 2026-10-12 | trivial | Fields keep `w:dirty` through DOCX round trips — on buffered fields and range-field begin markers alike — and computing a result (Update Field, Update Table) clears it like Word's F9, so a generator's placeholder TOC still refreshes when Word opens the file until WordCraft replaces the placeholder (#877) |
