@@ -2129,6 +2129,10 @@
 	Contains	包含
 	Does not contain	不包含
 	{count} of {total} recipients will be merged.	將合併 {total} 位收件者中的 {count} 位。
+	Find in list:	在清單中尋找：
+	Any field	任意欄位
+	Matches: {count}	相符項目：{count}
+	Show only records that will be merged	僅顯示將要合併的記錄
 	Take the last match on the page	取本頁最後一個相符項目
 	Show its list number	顯示其清單編號
 	Show its number relative to this field	顯示相對於此欄位的編號

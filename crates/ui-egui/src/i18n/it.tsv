@@ -2493,6 +2493,10 @@ preview	Title	Esempio
 	Contains	Contiene
 	Does not contain	Non contiene
 	{count} of {total} recipients will be merged.	Destinatari da unire: {count} su {total}.
+	Find in list:	Trova nell'elenco:
+	Any field	Qualsiasi campo
+	Matches: {count}	Corrispondenze: {count}
+	Show only records that will be merged	Mostra solo i record che verranno uniti
 	Show KeyTips (Alt or F10)	Mostra i suggerimenti tasti (Alt o F10)
 	Reading	Lettura
 	Reading Column Width	Larghezza colonna di lettura

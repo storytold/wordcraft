@@ -2117,6 +2117,10 @@
 	Contains	Enthält
 	Does not contain	Enthält nicht
 	{count} of {total} recipients will be merged.	{count} von {total} Empfängern werden zusammengeführt.
+	Find in list:	In Liste suchen:
+	Any field	Beliebiges Feld
+	Matches: {count}	Treffer: {count}
+	Show only records that will be merged	Nur Datensätze anzeigen, die zusammengeführt werden
 	Show KeyTips (Alt or F10)	Zugriffstasten anzeigen (Alt oder F10)
 	Reading	Lesen
 	Reading Column Width	Spaltenbreite beim Lesen

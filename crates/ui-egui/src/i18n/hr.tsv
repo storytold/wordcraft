@@ -2601,6 +2601,10 @@ preview	Title	Naslov
 	Waiting for the save to finish…	Čeka se završetak spremanja…
 	Word 2003 XML Document (*.xml)	Word 2003 XML dokument (*.xml)
 	{count} of {total} recipients will be merged.	Spojit će se {count} od {total} primatelja.
+	Find in list:	Traži na popisu:
+	Any field	Bilo koje polje
+	Matches: {count}	Podudaranja: {count}
+	Show only records that will be merged	Prikaži samo zapise koji će se spojiti
 	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
 	{language} (no dictionary)	{language} (nema rječnika)
 	{language}: no dictionary found	{language}: rječnik nije pronađen

@@ -2572,6 +2572,10 @@ preview	Title	Titel
 	Contains	Innehåller
 	Does not contain	Innehåller inte
 	{count} of {total} recipients will be merged.	{count} av {total} mottagare kopplas.
+	Find in list:	Sök i listan:
+	Any field	Valfritt fält
+	Matches: {count}	Träffar: {count}
+	Show only records that will be merged	Visa bara poster som ska kopplas
 	Take the last match on the page	Använd den sista träffen på sidan
 	Show its list number	Visa dess listnummer
 	Show its number relative to this field	Visa dess nummer i förhållande till det här fältet

@@ -2502,6 +2502,10 @@ preview	Title	Ukázka
 	Contains	Obsahuje
 	Does not contain	Neobsahuje
 	{count} of {total} recipients will be merged.	Příjemci ke sloučení: {count} z {total}.
+	Find in list:	Najít v seznamu:
+	Any field	Libovolné pole
+	Matches: {count}	Shody: {count}
+	Show only records that will be merged	Zobrazit jen záznamy, které budou sloučeny
 	Show KeyTips (Alt or F10)	Zobrazit klávesové tipy (Alt nebo F10)
 	Reading	Čtení
 	Reading Column Width	Šířka sloupce pro čtení

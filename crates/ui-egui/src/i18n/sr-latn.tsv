@@ -2138,6 +2138,10 @@
 	Contains	Sadrži
 	Does not contain	Ne sadrži
 	{count} of {total} recipients will be merged.	Primalaca za spajanje: {count} od {total}.
+	Find in list:	Pronađi na listi:
+	Any field	Bilo koje polje
+	Matches: {count}	Podudaranja: {count}
+	Show only records that will be merged	Prikaži samo zapise koji će biti objedinjeni
 	Take the last match on the page	Uzmi poslednje podudaranje na stranici
 	Show its list number	Prikaži njegov broj u listi
 	Show its number relative to this field	Prikaži njegov broj u odnosu na ovo polje

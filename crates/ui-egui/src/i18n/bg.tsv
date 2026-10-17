@@ -2489,6 +2489,10 @@
 	Contains	Съдържа
 	Does not contain	Не съдържа
 	{count} of {total} recipients will be merged.	Ще бъдат обединени {count} от {total} получатели.
+	Find in list:	Търсене в списъка:
+	Any field	Всяко поле
+	Matches: {count}	Съвпадения: {count}
+	Show only records that will be merged	Показване само на записите за сливане
 	Take the last match on the page	Взимай последното съвпадение на страницата
 	Show its list number	Показвай номера му в списъка
 	Show its number relative to this field	Показвай номера му спрямо това поле

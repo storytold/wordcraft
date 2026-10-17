@@ -2511,6 +2511,10 @@ preview	Title	Пример
 	Contains	Содержит
 	Does not contain	Не содержит
 	{count} of {total} recipients will be merged.	Получателей для слияния: {count} из {total}.
+	Find in list:	Найти в списке:
+	Any field	Любое поле
+	Matches: {count}	Совпадений: {count}
+	Show only records that will be merged	Показывать только записи для слияния
 	Take the last match on the page	Брать последнее совпадение на странице
 	Show its list number	Показывать его номер в списке
 	Show its number relative to this field	Показывать его номер относительно этого поля

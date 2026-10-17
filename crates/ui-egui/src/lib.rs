@@ -6348,6 +6348,79 @@ mod tests {
         assert!(open_filters("recipients")[0].1.contains(&"xls"));
     }
 
+    /// #1576: Find in list and "only records that will be merged" hide rows from the grid
+    /// without touching the list; the shown rows keep their real indices for edit and remove.
+    #[test]
+    fn recipient_list_search_and_merged_view() {
+        let fields: Vec<String> = vec!["Name".into(), "City".into()];
+        let rows: Vec<Vec<String>> = [["Ada", "London"], ["Alan", "Wilmslow"], ["Grace", "LONDON"], ["Émile", "Paris"]]
+            .iter()
+            .map(|r| r.iter().map(|c| c.to_string()).collect())
+            .collect();
+        let none = dialogs::visible_recipients(&rows, None, "", false);
+        assert_eq!(none, [0, 1, 2, 3], "no search, no filter: every row");
+        // Search: any cell, any case, including non-ASCII.
+        assert_eq!(dialogs::visible_recipients(&rows, None, "london", false), [0, 2]);
+        assert_eq!(dialogs::visible_recipients(&rows, None, "  AL ", false), [1], "trimmed, any case");
+        assert_eq!(dialogs::visible_recipients(&rows, None, "émi", false), [3]);
+        assert_eq!(dialogs::visible_recipients(&rows, None, "ÉMI", false), [3]);
+        assert!(dialogs::visible_recipients(&rows, None, "zzz", false).is_empty());
+        // Filter only: City = London keeps Ada and Grace.
+        let mut filter = dialogs::RecipientFilter::default();
+        filter.rules.push(dialogs::FilterRow {
+            field: "City".into(),
+            op: wordcraft_engine::cmd::mailings::FilterOp::Equal,
+            value: "London".into(),
+            or: false,
+        });
+        let order = dialogs::merge_order(&fields, &rows, &filter).unwrap();
+        assert_eq!(order, [Some(1), None, Some(2), None]);
+        assert_eq!(dialogs::visible_recipients(&rows, Some(&order), "", false), [0, 1, 2, 3], "unchecked: excluded rows still shown");
+        assert_eq!(dialogs::visible_recipients(&rows, Some(&order), "", true), [0, 2]);
+        // Both: search within the merged records.
+        assert_eq!(dialogs::visible_recipients(&rows, Some(&order), "grace", true), [2]);
+        assert!(dialogs::visible_recipients(&rows, Some(&order), "alan", true).is_empty());
+        // No filter: only_merged hides nothing.
+        assert_eq!(dialogs::visible_recipients(&rows, None, "", true), [0, 1, 2, 3]);
+        // Removing the first shown row removes the real record, not row 0.
+        let shown = dialogs::visible_recipients(&rows, None, "grace", false);
+        let mut edited = rows.clone();
+        edited.remove(shown[0]);
+        assert_eq!(edited.iter().map(|r| r[0].as_str()).collect::<Vec<_>>(), ["Ada", "Alan", "Émile"]);
+        // Hostile order (shorter than the list) never panics; missing entries count as excluded.
+        assert_eq!(dialogs::visible_recipients(&rows, Some(&[Some(1)]), "", true), [0]);
+        // The view settings don't reach the merge.
+        let mut viewed = filter.clone();
+        viewed.find = "grace".into();
+        viewed.only_merged = true;
+        assert_eq!(viewed.params(), filter.params());
+    }
+
+    /// #1576 review: while a cell is edited the grid keeps its rows, so a record the edit stops
+    /// matching stays put instead of sliding another record under the cursor; and New Entry
+    /// shows every row, so the new, empty entry can't be hidden.
+    #[test]
+    fn recipient_grid_holds_its_rows_while_a_cell_is_edited() {
+        let mut held = None;
+        // Not editing: whatever matches now.
+        assert_eq!(dialogs::hold_rows(vec![0, 2], &mut held, false, 4), [0, 2]);
+        assert_eq!(held, None);
+        // Editing starts: the rows shown then are held…
+        assert_eq!(dialogs::hold_rows(vec![0, 2], &mut held, true, 4), [0, 2]);
+        // …even when the edit makes row 0 stop matching.
+        assert_eq!(dialogs::hold_rows(vec![2], &mut held, true, 4), [0, 2]);
+        // A held row past the end of a shrunk list is dropped, never indexed.
+        assert_eq!(dialogs::hold_rows(vec![], &mut held, true, 1), [0]);
+        // Editing ends: the view catches up.
+        assert_eq!(dialogs::hold_rows(vec![2], &mut held, false, 4), [2]);
+        assert_eq!(held, None);
+        assert_eq!(dialogs::hold_rows(vec![1], &mut held, true, 4), [1], "a new edit holds the new rows");
+
+        let mut filter = dialogs::RecipientFilter { find: "grace".into(), only_merged: true, held: Some(vec![1]), ..Default::default() };
+        filter.show_all();
+        assert!(filter.find.is_empty() && !filter.only_merged && filter.held.is_none());
+    }
+
     /// #240: Select Recipients needs data, so clicking it opens the recipient list instead of
     /// reporting missing parameters; scripts and agents still get the error.
     #[test]

@@ -2140,6 +2140,10 @@
 	Contains	包含
 	Does not contain	不包含
 	{count} of {total} recipients will be merged.	将合并 {total} 位收件人中的 {count} 位。
+	Find in list:	在列表中查找：
+	Any field	任意字段
+	Matches: {count}	匹配项：{count}
+	Show only records that will be merged	仅显示将要合并的记录
 	Take the last match on the page	取本页最后一个匹配项
 	Show its list number	显示其列表编号
 	Show its number relative to this field	显示相对于此域的编号

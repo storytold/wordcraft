@@ -700,6 +700,17 @@ pub struct RecipientFilter {
     pub rules: Vec<FilterRow>,
     /// Sort by, then by, then by: a field (empty: none) and descending.
     pub sort: [(String, bool); 3],
+    /// Find in list (#1576): only rows with a cell containing this (any case) are shown.
+    /// View only, like `only_merged`: neither changes the list or the merge.
+    pub find: String,
+    /// Show only the records the filter keeps (#1576).
+    pub only_merged: bool,
+    /// The grid's rows held while one of its cells is edited (see [`hold_rows`]).
+    #[serde(skip)]
+    pub(crate) held: Option<Vec<usize>>,
+    /// The grid cell that had the keyboard last frame.
+    #[serde(skip)]
+    pub(crate) editing: Option<egui::Id>,
 }
 
 /// One filter condition row: `field op value`, joined to the row above with And or Or.
@@ -725,7 +736,7 @@ impl RecipientFilter {
         }
         let rules: Vec<FilterRow> =
             m.filter.iter().map(|r| FilterRow { field: r.field.clone(), op: r.op, value: r.value.clone(), or: r.or }).collect();
-        RecipientFilter { open: !rules.is_empty() || !m.sort.is_empty(), rules, sort }
+        RecipientFilter { open: !rules.is_empty() || !m.sort.is_empty(), rules, sort, ..Default::default() }
     }
 
     fn engine(&self) -> (Vec<FilterRule>, Vec<SortKey>) {
@@ -751,6 +762,63 @@ impl RecipientFilter {
             "sort": sort.iter().map(|k| json!({"field": k.field, "descending": k.descending})).collect::<Vec<_>>(),
         })
     }
+}
+
+/// Each record's place in the merge (None: filtered out), when `filter` filters or sorts.
+pub(crate) fn merge_order(fields: &[String], rows: &[Vec<String>], filter: &RecipientFilter) -> Option<Vec<Option<usize>>> {
+    (!filter.is_empty()).then(|| {
+        let (rules, sort) = filter.engine();
+        let mut order = vec![None; rows.len()];
+        for (k, i) in wordcraft_engine::cmd::mailings::select_records(fields, rows, &rules, &sort).into_iter().enumerate() {
+            if let Some(slot) = order.get_mut(i) {
+                *slot = Some(k + 1);
+            }
+        }
+        order
+    })
+}
+
+/// The Recipient List grid's rows (#1576): real indices into `rows`, in list order, matching
+/// `find` and, with `only_merged`, kept by the filter (`order` from [`merge_order`]).
+pub(crate) fn visible_recipients(rows: &[Vec<String>], order: Option<&[Option<usize>]>, find: &str, only_merged: bool) -> Vec<usize> {
+    let needle: Vec<char> = find.trim().chars().flat_map(char::to_lowercase).collect();
+    let kept = |i: usize| !only_merged || order.is_none_or(|o| o.get(i).copied().flatten().is_some());
+    let found = |row: &Vec<String>| needle.is_empty() || row.iter().any(|c| contains_folded(c, &needle));
+    rows.iter().enumerate().filter(|(i, row)| kept(*i) && found(row)).map(|(i, _)| i).collect()
+}
+
+/// The rows the grid shows (#1576): `fresh`, except while a grid cell is being edited, when the
+/// rows shown as the edit began stay put, so a row the edit stops matching doesn't vanish (or
+/// slide another record under the cursor) mid-edit. `rows` is the list's length.
+pub(crate) fn hold_rows(fresh: Vec<usize>, held: &mut Option<Vec<usize>>, editing: bool, rows: usize) -> Vec<usize> {
+    if !editing {
+        *held = None;
+        return fresh;
+    }
+    match held {
+        Some(h) => h.iter().copied().filter(|&r| r < rows).collect(),
+        None => {
+            *held = Some(fresh.clone());
+            fresh
+        }
+    }
+}
+
+impl RecipientFilter {
+    /// New Entry: show every row again, so the new, empty entry can't be hidden by the view.
+    pub(crate) fn show_all(&mut self) {
+        self.find.clear();
+        self.only_merged = false;
+        self.held = None;
+    }
+}
+
+/// Whether `hay` contains `needle` (lower-cased chars) in any case, without allocating.
+fn contains_folded(hay: &str, needle: &[char]) -> bool {
+    hay.char_indices().any(|(i, _)| {
+        let mut h = hay.get(i..).unwrap_or_default().chars().flat_map(char::to_lowercase);
+        needle.iter().all(|n| h.next() == Some(*n))
+    })
 }
 
 /// A colour menu: a swatch with the colour grid and No Color. `value` is hex, empty for none.
@@ -2757,20 +2825,13 @@ fn recipient_list(
     const X_W: f32 = 18.0;
     const ROW_H: f32 = 24.0;
     const NUM_W: f32 = 34.0;
-    // Each record's place in the merge (None: filtered out), when there is a filter or sort.
-    let order: Option<Vec<Option<usize>>> = (!filter.is_empty()).then(|| {
-        let (rules, sort) = filter.engine();
-        let mut order = vec![None; rows.len()];
-        for (k, i) in wordcraft_engine::cmd::mailings::select_records(fields, rows, &rules, &sort).into_iter().enumerate() {
-            if let Some(slot) = order.get_mut(i) {
-                *slot = Some(k + 1);
-            }
-        }
-        order
-    });
+    let order = merge_order(fields, rows, filter);
     // Wide enough for every field (up to a limit; more scroll sideways).
     let gap = ui.spacing().item_spacing.x;
-    let table_w = NUM_W + gap + fields.len() as f32 * (CELL_W + X_W + 2.0 * gap) + X_W + 2.0 * gap;
+    // Plus the rows' scroll bar, so each row's remove button stays in view (#1576).
+    let scroll = ui.spacing().scroll;
+    let bar = scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin;
+    let table_w = NUM_W + gap + fields.len() as f32 * (CELL_W + X_W + 2.0 * gap) + X_W + 2.0 * gap + bar + X_W;
     ui.set_min_width(table_w.clamp(340.0, 720.0));
     ui.label(tl!("Type the recipients, or load them from a file."));
     if ui.button(tl!("Use an Existing List…")).clicked() {
@@ -2779,10 +2840,38 @@ fn recipient_list(
         return true;
     }
     ui.add_space(6.0);
+    // Find in list and the merged-only view (#1576) hide rows from the grid, never change them.
+    // Nothing to leave out without a filter: the box shows unticked.
+    if order.is_none() {
+        filter.only_merged = false;
+    }
+    // A grid cell still has the keyboard: its rows stay put (see `hold_rows`).
+    let editing = filter.editing.is_some_and(|id| ui.memory(|m| m.has_focus(id)));
+    if !editing {
+        filter.editing = None;
+    }
+    let merged_only = egui::Checkbox::new(&mut filter.only_merged, tl!("Show only records that will be merged"));
+    ui.add_enabled(order.is_some(), merged_only);
+    let visible = ui
+        .horizontal(|ui| {
+            ui.label(tl!("Find in list:"));
+            ui.add(egui::TextEdit::singleline(&mut filter.find).desired_width(180.0).hint_text(tl!("Any field")));
+            // The rows the grid shows, by real index: edits and removes go to the right record.
+            let fresh = visible_recipients(rows, order.as_deref(), &filter.find, filter.only_merged);
+            let visible = hold_rows(fresh, &mut filter.held, editing, rows.len());
+            if !filter.find.trim().is_empty() {
+                let count = visible.len().to_string();
+                ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Matches: {count}"), &[("count", &count)])).weak());
+            }
+            visible
+        })
+        .inner;
+    ui.add_space(4.0);
     let mut remove_field = None;
     let can_remove = fields.len() > 1;
     let mut remove_row = None;
     let mut x_w = X_W;
+    let mut focused = None;
     egui::ScrollArea::horizontal().id_salt("recipients_h").max_width(720.0).show(ui, |ui| {
         ui.vertical(|ui| {
             ui.horizontal(|ui| {
@@ -2797,21 +2886,29 @@ fn recipient_list(
                 }
             });
             ui.separator();
-            egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, rows.len(), |ui, range| {
-                for r in range {
+            egui::ScrollArea::vertical().id_salt("recipients_v").max_height(260.0).show_rows(ui, ROW_H, visible.len(), |ui, range| {
+                for k in range {
+                    let Some(&r) = visible.get(k) else { continue };
                     let Some(row) = rows.get_mut(r) else { continue };
-                    ui.horizontal(|ui| {
+                    // Striped rows, like a data grid: painted under the row once its size is known.
+                    let stripe = ui.painter().add(egui::Shape::Noop);
+                    let line = ui.horizontal(|ui| {
                         // The record's number in the merge, a dash when the filter leaves it out.
                         let (num, kept) = match order.as_ref().map(|o| o.get(r).copied().flatten()) {
                             None => ((r + 1).to_string(), true),
-                            Some(Some(k)) => (k.to_string(), true),
+                            Some(Some(n)) => (n.to_string(), true),
                             Some(None) => ("–".to_string(), false),
                         };
                         let num = egui::RichText::new(num).weak();
                         let (rect, _) = ui.allocate_exact_size(vec2(NUM_W, ROW_H - 4.0), Sense::hover());
                         ui.put(rect, egui::Label::new(if kept { num } else { num.strikethrough() }));
-                        for c in row.iter_mut() {
-                            ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c));
+                        for (j, c) in row.iter_mut().enumerate() {
+                            // Keyed on the record, not its place in the grid: when the view hides
+                            // or moves rows, the keyboard can't land in another record (#1576).
+                            let cell = ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(c).id_salt(("recipient_cell", r, j)));
+                            if cell.has_focus() {
+                                focused = Some(cell.id);
+                            }
                             // Under the field's remove button.
                             ui.allocate_exact_size(vec2(x_w, X_W), Sense::hover());
                         }
@@ -2819,10 +2916,22 @@ fn recipient_list(
                             remove_row = Some(r);
                         }
                     });
+                    if k % 2 == 1 {
+                        let half = ui.spacing().item_spacing.y / 2.0;
+                        let rect = line.response.rect.expand2(vec2(0.0, half));
+                        ui.painter().set(stripe, egui::Shape::rect_filled(rect, 2.0, ui.visuals().faint_bg_color));
+                    }
                 }
             });
         });
     });
+    if focused.is_some() {
+        filter.editing = focused;
+    }
+    if remove_field.is_some() || remove_row.is_some() {
+        // Row numbers move: hold nothing.
+        filter.held = None;
+    }
     if let Some(i) = remove_field.filter(|_| fields.len() > 1) {
         fields.remove(i);
         for r in rows.iter_mut() {
@@ -2836,6 +2945,8 @@ fn recipient_list(
     }
     ui.horizontal(|ui| {
         if ui.button(tl!("New Entry")).clicked() {
+            // The view would hide the new, empty entry.
+            filter.show_all();
             rows.push(vec![String::new(); fields.len()]);
         }
         if ui.button(tl!("Add Field")).clicked() {

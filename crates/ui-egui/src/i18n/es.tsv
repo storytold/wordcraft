@@ -2494,6 +2494,10 @@ preview	Title	Título
 	Contains	Contiene
 	Does not contain	No contiene
 	{count} of {total} recipients will be merged.	Se combinarán {count} de {total} destinatarios.
+	Find in list:	Buscar en la lista:
+	Any field	Cualquier campo
+	Matches: {count}	Coincidencias: {count}
+	Show only records that will be merged	Mostrar solo los registros que se combinarán
 	Take the last match on the page	Tomar la última coincidencia de la página
 	Show its list number	Mostrar su número de lista
 	Show its number relative to this field	Mostrar su número respecto a este campo

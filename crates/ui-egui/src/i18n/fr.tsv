@@ -2114,6 +2114,10 @@
 	Contains	Contient
 	Does not contain	Ne contient pas
 	{count} of {total} recipients will be merged.	{count} destinataires sur {total} seront fusionnés.
+	Find in list:	Rechercher dans la liste :
+	Any field	N’importe quel champ
+	Matches: {count}	Correspondances : {count}
+	Show only records that will be merged	Afficher uniquement les enregistrements fusionnés
 	Undo Actions	Annuler plusieurs actions
 	Undo History	Historique des annulations
 	Undo 1 Action	Annuler 1 action

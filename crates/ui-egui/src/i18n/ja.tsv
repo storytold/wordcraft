@@ -2128,6 +2128,10 @@
 	Contains	含む
 	Does not contain	含まない
 	{count} of {total} recipients will be merged.	差し込む宛先: {total} 件中 {count} 件
+	Find in list:	リスト内を検索:
+	Any field	任意のフィールド
+	Matches: {count}	一致: {count} 件
+	Show only records that will be merged	差し込むレコードのみ表示
 	Take the last match on the page	ページ内で最後に一致したものを使う
 	Show its list number	リスト番号を表示
 	Show its number relative to this field	このフィールドを基準にした番号を表示

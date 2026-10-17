@@ -2140,6 +2140,10 @@
 	Contains	Містить
 	Does not contain	Не містить
 	{count} of {total} recipients will be merged.	Одержувачів для злиття: {count} з {total}.
+	Find in list:	Знайти в списку:
+	Any field	Будь-яке поле
+	Matches: {count}	Збігів: {count}
+	Show only records that will be merged	Показувати лише записи для злиття
 	Take the last match on the page	Брати останній збіг на сторінці
 	Show its list number	Показувати його номер у списку
 	Show its number relative to this field	Показувати його номер відносно цього поля

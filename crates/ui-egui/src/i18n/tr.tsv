@@ -2510,6 +2510,10 @@ preview	Title	Örnek
 	Contains	İçerir
 	Does not contain	İçermez
 	{count} of {total} recipients will be merged.	Birleştirilecek alıcılar: {count} / {total}.
+	Find in list:	Listede bul:
+	Any field	Herhangi bir alan
+	Matches: {count}	Eşleşme: {count}
+	Show only records that will be merged	Yalnızca birleştirilecek kayıtları göster
 	Take the last match on the page	Sayfadaki son eşleşmeyi al
 	Show its list number	Liste numarasını göster
 	Show its number relative to this field	Numarasını bu alana göre göster

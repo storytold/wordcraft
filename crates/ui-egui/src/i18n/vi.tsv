@@ -2608,6 +2608,10 @@
 	Sort by	Sắp xếp theo
 	Then by	Sau đó theo
 	{count} of {total} recipients will be merged.	Sẽ phối {count} trên {total} người nhận.
+	Find in list:	Tìm trong danh sách:
+	Any field	Trường bất kỳ
+	Matches: {count}	Kết quả khớp: {count}
+	Show only records that will be merged	Chỉ hiện các bản ghi sẽ được phối
 
 # Backstage › Recover (#586)
 	Recover	Khôi phục

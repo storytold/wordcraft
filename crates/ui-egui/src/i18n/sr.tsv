@@ -2142,6 +2142,10 @@
 	Contains	Садржи
 	Does not contain	Не садржи
 	{count} of {total} recipients will be merged.	Прималаца за спајање: {count} од {total}.
+	Find in list:	Пронађи на листи:
+	Any field	Било које поље
+	Matches: {count}	Подударања: {count}
+	Show only records that will be merged	Прикажи само записе који ће бити обједињени
 	Take the last match on the page	Узми последње подударање на страници
 	Show its list number	Прикажи његов број у листи
 	Show its number relative to this field	Прикажи његов број у односу на ово поље

@@ -2495,6 +2495,10 @@
 	Contains	Tartalmazza
 	Does not contain	Nem tartalmazza
 	{count} of {total} recipients will be merged.	{total} címzettből {count} kerül egyesítésre.
+	Find in list:	Keresés a listában:
+	Any field	Bármely mező
+	Matches: {count}	Találatok: {count}
+	Show only records that will be merged	Csak az egyesítendő rekordok megjelenítése
 	Undo Actions	Több művelet visszavonása
 	Undo History	Visszavonási előzmények
 	Undo 1 Action	1 művelet visszavonása

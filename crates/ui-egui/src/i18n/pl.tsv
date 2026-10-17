@@ -2135,6 +2135,10 @@
 	Contains	Zawiera
 	Does not contain	Nie zawiera
 	{count} of {total} recipients will be merged.	Adresaci do scalenia: {count} z {total}.
+	Find in list:	Znajdź na liście:
+	Any field	Dowolne pole
+	Matches: {count}	Dopasowania: {count}
+	Show only records that will be merged	Pokaż tylko rekordy, które zostaną scalone
 	Book Title	Tytuł książki
 	Category	Kategoria
 	Contributors	Współtwórcy

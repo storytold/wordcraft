@@ -2162,6 +2162,10 @@
 	Contains	Sisaldab
 	Does not contain	Ei sisalda
 	{count} of {total} recipients will be merged.	Ühendatavaid adressaate: {count} / {total}.
+	Find in list:	Otsi loendist:
+	Any field	Mis tahes väli
+	Matches: {count}	Vasteid: {count}
+	Show only records that will be merged	Näita ainult ühendatavaid kirjeid
 	Take the last match on the page	Võta lehe viimane vaste
 	Show its list number	Näita selle loendinumbrit
 	Show its number relative to this field	Näita selle numbrit selle välja suhtes

@@ -2140,6 +2140,10 @@
 	Contains	Contém
 	Does not contain	Não contém
 	{count} of {total} recipients will be merged.	{count} de {total} destinatários serão mesclados.
+	Find in list:	Localizar na lista:
+	Any field	Qualquer campo
+	Matches: {count}	Correspondências: {count}
+	Show only records that will be merged	Mostrar somente os registros que serão mesclados
 	Take the last match on the page	Usar a última ocorrência da página
 	Show its list number	Mostrar seu número na lista
 	Show its number relative to this field	Mostrar seu número em relação a este campo
