@@ -80,7 +80,12 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"password": string (Word documents are saved encrypted with it) | null or "" (saved unencrypted)}"#)
             .pure(),
         CommandSpec::new("file.exportPdf", "Export PDF", "File › Export", |s, v| {
-            let path = p::req_str(v, "path")?;
+            // No path (the command search, say): the app asks where to save, as File › Export
+            // does, instead of failing on the required parameter (#2313).
+            let Some(path) = p::str(v, "path") else {
+                s.ui_requests.push(json!({"open": "exportPdf"}));
+                return Ok(json!({"exported": false}));
+            };
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
             let opts = export_options(s, v);
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
@@ -334,7 +339,11 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
 }
 
 fn export_png(s: &mut Session, v: &Value) -> CmdResult {
-    let path = p::req_str(v, "path")?;
+    // No path: the app asks where to save, as file.exportPdf does (#2313).
+    let Some(path) = p::str(v, "path") else {
+        s.ui_requests.push(json!({"open": "exportPng"}));
+        return Ok(json!({"exported": false}));
+    };
     let page = p::u64(v, "page").unwrap_or(1).max(1) as usize - 1;
     let scale = p::f32(v, "scale").unwrap_or(2.0).clamp(0.1, 8.0);
     let l = s.export_layout_with(export_options(s, v).markup);

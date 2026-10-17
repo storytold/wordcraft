@@ -453,6 +453,42 @@ mod tests {
         assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
     }
 
+    /// #2313: Export PDF from the command search (no path given) asks where to save it, as the
+    /// Backstage's Export button does, instead of failing with "bad parameters: `path` (string)
+    /// is required" on the status bar.
+    #[test]
+    fn export_pdf_without_a_path_asks_where_to_save() {
+        let (mut a, shown) = async_app();
+        let r = a.run("file.exportPdf", json!({})).unwrap();
+        assert_eq!(r, json!({"exported": false}));
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: format!("{}.pdf", a.title_stem()) });
+        let dir = scratch("export-pdf");
+        let picked = dir.join("out.pdf");
+        answer(&shown, Some(&picked.to_string_lossy()));
+        let r = a.poll_file_dialog().unwrap().unwrap();
+        assert_eq!(r["path"], json!(picked.to_string_lossy().to_string()));
+        let bytes = std::fs::read(&picked).unwrap();
+        assert!(bytes.starts_with(b"%PDF"), "a PDF is written to the picked path");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Open, Save As and Export PNG from the command search (no path) ask for a file the same way.
+    #[test]
+    fn file_commands_without_a_path_ask_for_one() {
+        let (mut a, shown) = async_app();
+        a.run("file.open", json!({})).unwrap();
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Open { purpose: "document".into() });
+        // A second dialog can't open while one is up, so cancel before the next command.
+        answer(&shown, None);
+        a.poll_file_dialog();
+        a.run("file.saveAs", json!({})).unwrap();
+        assert!(matches!(shown.borrow()[0].0, FileDialogRequest::Save { .. }));
+        answer(&shown, None);
+        a.poll_file_dialog();
+        a.run("file.exportPng", json!({})).unwrap();
+        assert!(matches!(shown.borrow()[0].0, FileDialogRequest::Save { ref name } if name.ends_with(".png")));
+    }
+
     /// #1445: "Save changes?" → Save on a new document while another file dialog is still open:
     /// nothing can be asked, so nothing happens, and the status bar says why.
     #[test]
