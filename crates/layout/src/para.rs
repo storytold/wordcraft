@@ -1491,6 +1491,22 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             found.push(i);
         }
     }
+    // Word breaks after a hyphen even when a digit follows ("2016-" / "2022"), where UAX #14
+    // keeps a hyphen and a number together (LB25): add those positions back. Only U+002D before
+    // ASCII digits is added here; a non-breaking hyphen (U+2011) and a minus sign (U+2212) stay
+    // unbreakable, and the other dashes keep their ordinary UAX #14 breaks.
+    let hyphen_breaks: Vec<usize> = text
+        .match_indices('-')
+        .filter_map(|(pos, _)| {
+            let i = pos + 1;
+            text.get(i..).and_then(|t| t.chars().next()).is_some_and(|n| n.is_ascii_digit()).then_some(i)
+        })
+        .collect();
+    if !hyphen_breaks.is_empty() {
+        found.extend(hyphen_breaks);
+        found.sort_unstable();
+        found.dedup();
+    }
     // Myanmar has no spaces between words: it wraps between syllables.
     if text.chars().any(|c| matches!(u32::from(c), 0x1000..=0x109F | 0xA9E0..=0xA9FF | 0xAA60..=0xAA7F)) {
         found.extend(wordcraft_doc::cluster::myanmar_breaks(&text));
