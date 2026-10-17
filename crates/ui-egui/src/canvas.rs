@@ -190,6 +190,8 @@ pub struct CanvasState {
     pub(crate) ink_ui: crate::ink::InkUi,
     /// Wheel/touchpad scrolling (smooth notches, touchpad momentum).
     pub(crate) wheel: crate::scroll::CanvasScroll,
+    /// One-finger touch gestures: pan, tap and long-press selection (#1503, #2155).
+    pub(crate) touch: crate::touch::TouchDrag,
     /// Middle-click scrolling (#1065).
     pub(crate) auto_scroll: crate::autoscroll::AutoScroll,
     /// The scroll offset and its maximum at the end of last frame.
@@ -402,6 +404,7 @@ impl Default for CanvasState {
             alt_code: String::new(),
             alt_code_echo: None,
             wheel: Default::default(),
+            touch: Default::default(),
             auto_scroll: Default::default(),
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,
@@ -610,12 +613,38 @@ struct ScrollMotion {
     middle: egui::Vec2,
 }
 
+/// A finger's horizontal travel turns reading columns like a touchpad's pixels: 55 points a
+/// column, discarding the excess so a long swipe doesn't turn several at once on the next move.
+fn read_touch_turns(dx: f32, accum: &mut f32) -> i32 {
+    if !dx.is_finite() {
+        return 0;
+    }
+    *accum = (*accum + dx).clamp(-300.0, 300.0);
+    if accum.abs() >= 55.0 {
+        let turns = -accum.signum() as i32;
+        *accum = 0.0;
+        turns
+    } else {
+        0
+    }
+}
+
 fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> ScrollMotion {
     // Read Mode's centred columns leave margins at the sides; the wheel turns pages over them too.
     let wheel_area = if app.session.view.read_mode { full } else { view.area };
     let hovered = wheel_hovered(ui.rect_contains_pointer(wheel_area), ui.ctx().dragged_id().is_some(), app.canvas.drag_selecting());
     let notch = crate::scroll::notch_px(app.canvas.scale / PX_PER_PT);
+    let long_press = ui.ctx().options(|o| o.input_options).max_click_duration;
+    let mut touch_delta = ui.input(|i| app.canvas.touch.advance(i, i.unstable_dt, long_press, !app.session.view.read_mode));
     let wheel_delta = if app.session.view.read_mode {
+        // A finger's horizontal travel turns reading columns like a touchpad's.
+        if touch_delta != egui::Vec2::ZERO {
+            let turns = read_touch_turns(touch_delta.x, &mut app.canvas.read_wheel_accum);
+            for _ in 0..turns.unsigned_abs() {
+                turn_read_page(app, turns.signum() as f32);
+            }
+            touch_delta = egui::Vec2::ZERO;
+        }
         let turns = ui.input(|i| read_wheel_turns(&i.events, hovered, &mut app.canvas.read_wheel_accum));
         for _ in 0..turns.unsigned_abs() {
             turn_read_page(app, turns.signum() as f32);
@@ -661,11 +690,16 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
     // Middle-click scrolling (#1065): Print Layout and the other editing views, not Read Mode.
     let middle_delta = if app.session.view.read_mode || app.dialog.is_some() {
         app.canvas.auto_scroll.cancel();
+        if app.dialog.is_some() {
+            // A modal dialog owns the pointer; a finger that was panning must not scroll the
+            // document behind it.
+            app.canvas.touch.cancel();
+        }
         egui::Vec2::ZERO
     } else {
         app.canvas.auto_scroll.update(ui, view.area)
     };
-    ScrollMotion { wheel: wheel_delta, auto: auto_delta, middle: middle_delta }
+    ScrollMotion { wheel: wheel_delta + touch_delta, auto: auto_delta, middle: middle_delta }
 }
 
 fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: ScrollMotion) -> egui::ScrollArea {
@@ -695,6 +729,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
         };
         if after == before && motion.wheel != egui::Vec2::ZERO {
             app.canvas.wheel.hit_edge();
+            app.canvas.touch.cancel_momentum();
         }
         if motion.auto != egui::Vec2::ZERO && after != before {
             // The scroll keeps going without new input.
@@ -702,7 +737,7 @@ fn configure_scroll_area(app: &mut WordApp, ui: &Ui, view: &CanvasView, motion: 
         }
         scroll_area = scroll_area.scroll_offset(after);
     }
-    if app.canvas.wheel.is_animating() {
+    if app.canvas.wheel.is_animating() || app.canvas.touch.is_animating() {
         ui.ctx().request_repaint();
     }
     scroll_area
