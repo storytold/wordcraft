@@ -19,6 +19,7 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", test))]
 mod graphics;
 mod logging;
+mod network_print;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -242,6 +243,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         file_dialog: Some(file_dialog),
         printers: Some(print::discover()),
         print_native: Some(print::submit()),
+        print_network: Some(network_print::service()),
         clipboard_picture: Some(Box::new(clipboard::picture)),
         make_default_app: default_apps::hook(),
         animations_enabled: Some(animations::hook(ctx)),

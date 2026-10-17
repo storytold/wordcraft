@@ -25,24 +25,32 @@ pub fn finish_pending_jobs() {
     }
 }
 
+/// The spooler job for a local queue. The pages are the document's own sizes, so the job never
+/// asks for a paper the queue lacks: it prints on the queue's default paper, shrunk to fit.
+/// (Exact scaling is for a paper the person picked in the dialog; this dialog has none.)
+fn job(settings: Settings, collate: bool, options: Vec<(String, String)>) -> craft_print::Job {
+    craft_print::Job {
+        printer: Some(settings.printer),
+        copies: settings.copies.clamp(1, 999),
+        collate,
+        duplex: settings.duplex.map(|value| match value {
+            Duplex::LongEdge => craft_print::Duplex::LongEdge,
+            Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
+            Duplex::Off => craft_print::Duplex::Off,
+        }),
+        // The pages are already gray when this is set; the driver is asked for monochrome as well.
+        grayscale: settings.grayscale,
+        scaling: craft_print::Scaling::ShrinkToFit,
+        title: "WordCraft document".into(),
+        options,
+    }
+}
+
 pub fn submit() -> Submit {
     Box::new(|bytes, settings: Settings, collate, options| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let worker = std::thread::Builder::new().name("print-submit".into()).spawn(move || {
-            let job = craft_print::Job {
-                printer: Some(settings.printer),
-                copies: settings.copies.clamp(1, 999),
-                collate,
-                duplex: settings.duplex.map(|value| match value {
-                    Duplex::LongEdge => craft_print::Duplex::LongEdge,
-                    Duplex::ShortEdge => craft_print::Duplex::ShortEdge,
-                    Duplex::Off => craft_print::Duplex::Off,
-                }),
-                grayscale: settings.grayscale,
-                scaling: craft_print::Scaling::ShrinkToFit,
-                title: "WordCraft document".into(),
-                options,
-            };
+            let job = job(settings, collate, options);
             let _ = sender.send(craft_print::submit(&bytes, &job).map_err(|error| error.to_string()));
         });
         if let Ok(worker) = worker {
@@ -57,6 +65,16 @@ pub fn submit() -> Submit {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_local_job_uses_the_queues_default_paper_and_shrinks_to_fit() {
+        let settings = Settings { printer: "Queue".into(), copies: 2, duplex: None, grayscale: true };
+        let job = job(settings, true, Vec::new());
+        assert!(matches!(job.scaling, craft_print::Scaling::ShrinkToFit), "no exact scaling: a 13.33 x 7.5 in page needs no such paper");
+        assert!(job.grayscale);
+        assert_eq!(job.printer.as_deref(), Some("Queue"));
+    }
+
     #[test]
     fn shutdown_waits_for_pending_submission_workers() {
         let (release, wait) = std::sync::mpsc::channel();
