@@ -596,13 +596,28 @@ impl Totals {
     fn first_guess(sections: usize) -> Totals {
         Totals { pages: 1, sections: vec![1; sections] }
     }
-    /// The totals of laid-out `pages` (a section without a page of its own counts one, as in
-    /// headers and footers).
-    fn of(pages: &[Page], sections: usize) -> Totals {
-        let mut per = vec![0u32; sections];
-        for p in pages {
-            if let Some(n) = per.get_mut(p.section) {
-                *n = n.saturating_add(1);
+    /// Count each section on every page containing its body, including a shared continuous
+    /// start page. The page owner still selects headers and footers; empty sections count one.
+    fn of(pages: &[Page], sections: &[(usize, &SectionProps)]) -> Totals {
+        let mut per = vec![0u32; sections.len()];
+        for page in pages {
+            let mut present = HashSet::from([page.section]);
+            for item in &page.items {
+                let path = match item {
+                    Placed::Lines { story: StoryRef::Body, path, .. }
+                    | Placed::Image { story: StoryRef::Body, path, .. }
+                    | Placed::Graphic { story: StoryRef::Body, path, .. }
+                    | Placed::Object { story: StoryRef::Body, path, .. }
+                    | Placed::Cell { story: StoryRef::Body, table: path, .. } => path,
+                    _ => continue,
+                };
+                let Some(&block) = path.0.first() else { continue };
+                present.insert(sections.partition_point(|(end, _)| *end < block as usize));
+            }
+            for section in present {
+                if let Some(n) = per.get_mut(section) {
+                    *n = n.saturating_add(1);
+                }
             }
         }
         for n in &mut per {
@@ -2294,13 +2309,11 @@ fn layout_pass(
         p.h = bottom + 36.0;
     }
     ctx.grid = para::Grid::default();
-    if !reflow && ctx.uses_totals && may_repeat {
-        let found = Totals::of(&pages, sections.len());
-        if found != *totals {
+    if !reflow {
+        let found = Totals::of(&pages, &sections);
+        if ctx.uses_totals && may_repeat && found != *totals {
             return Pass::Again(found);
         }
-    }
-    if !reflow {
         ctx.track_totals = false;
         // Page references in headers and footers are filled in after pagination, like their page
         // totals: they don't make the body lay out again.
@@ -2309,7 +2322,7 @@ fn layout_pass(
             ctx.fields.bookmarks_key = marks_key(&marks);
             ctx.fields.bookmark_pages = Arc::new(marks);
         }
-        headers_footers(&mut ctx, &mut pages, &sections);
+        headers_footers(&mut ctx, &mut pages, &sections, &found);
         if doc.settings.mirror_margins {
             mirror_even_pages(&mut pages, &sections);
         }
@@ -4001,13 +4014,8 @@ fn marks_key(marks: &fields::BookmarkPages) -> u64 {
     hash_of(&v)
 }
 
-fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)]) {
+fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {
     let total = pages.len() as u32;
-    // Pages per section.
-    let mut per_section: HashMap<usize, u32> = HashMap::new();
-    for p in pages.iter() {
-        *per_section.entry(p.section).or_default() += 1;
-    }
     let even_odd = ctx.doc.settings.even_odd_headers;
     let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
     let mut first_of_section: HashSet<usize> = HashSet::new();
@@ -4042,7 +4050,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         ctx.fields.page = page.number;
         ctx.fields.page_format = sect.page_num_format;
         ctx.fields.pages = total;
-        ctx.fields.section_pages = per_section.get(&page.section).copied().unwrap_or(1);
+        ctx.fields.section_pages = totals.section(page.section);
         ctx.fields.section = page.section as u32 + 1;
         // STYLEREF: the body paragraphs on this page.
         ctx.fields.styleref = styles.as_ref().map(|ix| {
