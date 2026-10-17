@@ -23,7 +23,7 @@ mod textbox;
 mod vertical;
 pub mod wordart;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -661,6 +661,8 @@ struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     table_keys: Vec<(para::CellText, u64)>,
+    prior_wraps: &'a PriorBodyWraps,
+    back_wraps: &'a mut BackBodyWraps,
 }
 
 impl Ctx<'_> {
@@ -1096,6 +1098,7 @@ fn layout_box(
                     if left_out(oi) {
                         continue;
                     }
+                    let (w, h) = textbox::fit_size(ctx, o, w, h, depth);
                     let r = float_rect(frame, (0.0, width), y, w, h, float);
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
@@ -1947,8 +1950,25 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut note_passes = 1;
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
+    let mut back_passes = 0;
+    let mut back_wraps = BackBodyWraps::new();
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES) {
+        let mut prior = PriorBodyWraps::new();
+        for (&(block, _), (page, area)) in &back_wraps {
+            prior.entry(*page).or_default().push((block, area.clone()));
+        }
+        let mut found = BackBodyWraps::new();
+        let pass = layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, &prior, &mut found);
+        if found != back_wraps && back_passes < MAX_BACK_WRAP_PASSES {
+            back_wraps = found;
+            back_passes += 1;
+            if let Pass::Again(t) = pass {
+                totals = t;
+                passes += 1;
+            }
+            continue;
+        }
+        match pass {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
@@ -1981,6 +2001,8 @@ fn layout_pass(
     note_pages: &HashMap<u32, usize>,
     totals: &Totals,
     may_repeat: bool,
+    prior_wraps: &PriorBodyWraps,
+    back_wraps: &mut BackBodyWraps,
 ) -> Pass {
     let env = env_hash(doc, opts);
     if env != cache.env {
@@ -2024,6 +2046,8 @@ fn layout_pass(
         quiet_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        prior_wraps,
+        back_wraps,
     };
     let sections = doc.sections();
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
@@ -2722,6 +2746,31 @@ fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: f32, h: f32
     Rect::new(align_in(hx, float.x, w, h_align), align_in(vy, float.y, h, float.v_align), w, h)
 }
 
+const MODERN_FLOAT_MODE: u32 = 15;
+
+/// Native boundary proof covers unturned body textboxes; absolute modern anchors may overflow.
+fn body_float_bounds(o: &InlineObject, sect: &SectionProps, float: &Float, mode: u32) -> Option<(f32, f32)> {
+    if o.text_box().is_none() || float.spin().deg != 0.0 || matches!(float.wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText) {
+        return None;
+    }
+    let bounds = if mode < MODERN_FLOAT_MODE {
+        (0.0, sect.page_h)
+    } else if matches!(float.v_rel, Anchor::Paragraph | Anchor::Line) {
+        (sect.margin_top, sect.page_h - sect.margin_bottom)
+    } else {
+        return None;
+    };
+    (bounds.0.is_finite() && bounds.1.is_finite() && bounds.1 >= bounds.0).then_some(bounds)
+}
+
+fn oversized_body_float(o: &InlineObject, h: f32, sect: &SectionProps, mode: u32) -> bool {
+    if mode < MODERN_FLOAT_MODE {
+        return false;
+    }
+    let Some((_, _, float)) = floating(o) else { return false };
+    body_float_bounds(o, sect, float, mode).is_some_and(|(top, bottom)| h.clamp(1.0, 4000.0) > bottom - top)
+}
+
 /// Where an object of `size` starts on one axis of `area` (start, extent): at `offset` from the
 /// area's start, or aligned in it when `align` is set.
 fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<FloatAlign>) -> f32 {
@@ -2736,6 +2785,11 @@ fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<F
 /// An area text keeps clear of: its bounds, whether text may only go above and below it, and
 /// (Tight and Through wrapping) the outline text follows inside it, and the sides text may go on.
 type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText);
+
+// A corrected frame reaching earlier body text is supplied before that text on the next pass.
+type BackBodyWraps = BTreeMap<(usize, usize), (usize, WrapArea)>;
+type PriorBodyWraps = HashMap<usize, Vec<(usize, WrapArea)>>;
+const MAX_BACK_WRAP_PASSES: usize = 4;
 
 /// The area text keeps clear of around a floating object at `r` (its rectangle grown by the
 /// distances from text; Tight and Through: around `outline`, unit coordinates across `r`, when
@@ -2766,6 +2820,7 @@ fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
             left: r.x - x0,
             right: r.right() - x0,
             top_bottom: *tb,
+            word_fit: para::WordFit::Wait,
             contour: c.clone(),
             side: *side,
         })
@@ -2858,6 +2913,7 @@ fn anchor_floats(
     ctx: &mut Ctx,
     pb: &mut PageBuilder,
     p: &Paragraph,
+    block: usize,
     y0: f32,
     before: f32,
     excl_mark: usize,
@@ -2869,24 +2925,71 @@ fn anchor_floats(
     let mut rects = HashMap::new();
     if !pb.web {
         let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        let mode = ctx.doc.settings.compat_mode;
+        let mut anchor_height = None;
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
         for (oi, o) in p.objects.iter().enumerate() {
+            ctx.back_wraps.remove(&(block, oi));
             let Some((w, h, float)) = floating(o) else { continue };
             if left_out(oi) {
                 continue;
             }
+            let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
             // Positions relative to the paragraph start above its space before (Word for Windows).
-            let r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
+            let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
+            let original_y = r.y;
+            if ctx.opts.view == ViewMode::Print
+                && let Some((top, bottom)) = body_float_bounds(o, pb.sect, float, mode)
+            {
+                r.y = if oversized_body_float(o, r.h, pb.sect, mode) {
+                    let height = *anchor_height.get_or_insert_with(|| {
+                        let eq_start = ctx.eq_count;
+                        let pl = ctx.para_labelled(p, width, None, &[], label.clone());
+                        ctx.eq_count = eq_start;
+                        pl.lines.first().map_or(0.0, |line| line.top.max(0.0) + line.height)
+                    });
+                    y0 - before + height
+                } else {
+                    r.y.max(top).min((bottom - r.h).max(top))
+                };
+            }
             rects.insert(oi, r);
             let outline = ctx.wrap_outline(o);
             if let Some(area) = wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())) {
+                if (r.y - original_y).abs() > 0.01
+                    && r.y < y0 - before - 0.01
+                    && area.0.x < col_x + width
+                    && area.0.right() > col_x
+                    && pb.pages.last().is_some_and(|page| {
+                        page.items.iter().any(|item| {
+                            matches!(item, Placed::Lines { story: StoryRef::Body, path, .. } if path.0.first().is_some_and(|i| (*i as usize) < block))
+                                && {
+                                    let (top, bottom) = v_span(item);
+                                    top < area.0.bottom() && bottom > area.0.y
+                                }
+                        })
+                    })
+                {
+                    ctx.back_wraps.insert((block, oi), (pb.pages.len().saturating_sub(1), area.clone()));
+                }
                 pb.excl.push(area);
             }
         }
     }
-    let rel = rel_exclusions(&pb.excl, col_x, y0);
+    let mut rel = rel_exclusions(&pb.excl, col_x, y0);
+    if let Some(areas) = ctx.prior_wraps.get(&pb.pages.len().saturating_sub(1)) {
+        for (_, area) in areas.iter().filter(|(owner, _)| *owner > block) {
+            let mut earlier = rel_exclusions(std::slice::from_ref(area), col_x, y0);
+            if area.0.h > pb.sect.page_h {
+                for exclusion in &mut earlier {
+                    exclusion.word_fit = para::WordFit::Split;
+                }
+            }
+            rel.extend(earlier);
+        }
+    }
     let pl = ctx.para_labelled(p, width, None, &rel, label.clone());
     (rects, pl, rel)
 }
@@ -2949,7 +3052,10 @@ fn place_objects(
                 continue;
             }
             let rect = if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                floats.get(&oi).copied().unwrap_or_else(|| {
+                    let (w, h) = textbox::fit_size(ctx, obj, w, h, depth);
+                    float_rect(at.page, at.col, at.para_y, w, h, float)
+                })
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
@@ -3102,7 +3208,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let mut page_map: Vec<(usize, u32)> = Vec::new();
     // Where its automatic equation numbers start: each layout of it again counts from here.
     let eq_start = ctx.eq_count;
-    let (mut float_rects, mut pl, mut rel) = anchor_floats(ctx, pb, p, guess, space_before, excl_mark, &label);
+    let (mut float_rects, mut pl, mut rel) = anchor_floats(ctx, pb, p, block, guess, space_before, excl_mark, &label);
     // The page its fields were laid out for (and the width), and how many times it was laid out again for a later
     // page (bounded: a paragraph over hundreds of pages keeps the last number it got).
     let (mut laid_page, mut laid_width) = (pb.number, pb.col_w());
@@ -3116,6 +3222,15 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let broke_before = pl.rp.page_break_before && !pb.at_top() && !pb.web;
     if broke_before {
         pb.new_page(block, body_top);
+    }
+    // A frame taller than the body starts on a fresh column, after its anchor line.
+    if ctx.opts.view == ViewMode::Print
+        && !pb.at_top()
+        && float_rects
+            .iter()
+            .any(|(&i, rect)| p.objects.get(i).is_some_and(|o| oversized_body_float(o, rect.h, pb.sect, ctx.doc.settings.compat_mode)))
+    {
+        pb.advance(block, body_top);
     }
     // Same-style contextual spacing removes this paragraph's before-space, or subtracts the
     // previous paragraph's after-space from the merged gap (ISO/IEC 29500-1 §17.3.1.9).
@@ -3187,7 +3302,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // A different top only matters when there is something to wrap around.
     if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !pb.excl.is_empty()) {
         let y0 = pb.y;
-        (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, applied_before, excl_mark, &label));
+        (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, block, y0, applied_before, excl_mark, &label));
         (laid_page, laid_width) = (pb.number, pb.col_w());
         anchor_y = y0 - applied_before;
     }
@@ -3362,7 +3477,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 pb.advance(block, body_top);
                 if l0 == 0 {
                     let y0 = pb.y;
-                    (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, 0.0, excl_mark, &label));
+                    (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, block, y0, 0.0, excl_mark, &label));
                     (laid_page, laid_width) = (pb.number, pb.col_w());
                     anchor_y = y0;
                     n = pl.lines.len();
@@ -3473,8 +3588,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                     && let Some(resume) = pl.lines.get(l0).map(|l| l.start)
                 {
                     let y0 = pb.y;
-                    let (rects, relaid, relaid_rel) =
-                        with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, 0.0, excl_mark, &label)));
+                    let (rects, relaid, relaid_rel) = with_page_map(ctx, &mut page_map, |ctx| {
+                        again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, block, y0, 0.0, excl_mark, &label))
+                    });
                     if let Some(k) = relaid.lines.iter().position(|l| l.start == resume) {
                         (float_rects, pl, rel) = (rects, relaid, relaid_rel);
                         (laid_page, laid_width) = (pb.number, pb.col_w());

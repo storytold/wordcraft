@@ -481,6 +481,13 @@ fn snap_chars(b: &mut Builder, text: &str, grid: &Grid) {
     }
 }
 
+/// A long word waits for a wider row, unless the frame extends beyond this page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WordFit {
+    Wait,
+    Split,
+}
+
 /// An area text wraps around.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Exclusion {
@@ -490,6 +497,7 @@ pub struct Exclusion {
     pub right: f32,
     /// Text only above and below (no text beside it).
     pub top_bottom: bool,
+    pub word_fit: WordFit,
     /// Tight and Through wrapping: the outline text follows inside the area (relative to its
     /// top-left); `None` = the whole area.
     pub contour: Option<Arc<crate::contour::Contour>>,
@@ -1852,7 +1860,10 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                         .map(|c| c.adv)
                         .sum();
                     let full = base_right - row_lo;
-                    skip = narrowed && skipped < 50 && word <= full + 0.01;
+                    let must_split = exclusions
+                        .iter()
+                        .any(|e| e.word_fit == WordFit::Split && e.bottom > top && e.top < top + est_h && e.right > row_lo && e.left < base_right);
+                    skip = narrowed && skipped < 50 && word <= full + 0.01 && !must_split;
                 }
                 break;
             }

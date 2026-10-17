@@ -307,7 +307,7 @@ pub struct TextBody {
     /// (`wps:bodyPr` `lIns`… ECMA-376 Part 1 §21.1.2.1.1, or VML `v:textbox` `inset`);
     /// `None` is Word's defaults.
     pub inset: Option<[u32; 4]>,
-    /// Resize shape to fit text (`a:spAutoFit`, VML `mso-fit-shape-to-text`): Word grows the
+    /// Resize shape to fit text (`a:spAutoFit`, VML `mso-fit-shape-to-text`): Word resizes the
     /// box to its text, so none of the text is cut.
     pub auto_fit: bool,
 }
