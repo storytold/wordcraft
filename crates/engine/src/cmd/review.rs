@@ -407,6 +407,21 @@ fn resolve_cell(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, ac
     Ok(true)
 }
 
+/// Accept or reject the style-definition changes when the selection starts at the start of the
+/// document (where they sit, as in Word). Returns whether there were any.
+fn resolve_styles_sel(s: &mut Session, a: &Pos, accept: bool) -> Result<bool, CmdError> {
+    if a != &s.doc.start_of(StoryRef::Body) {
+        return Ok(false);
+    }
+    if !s.doc.styles.styles.iter().any(|st| st.fmt_change.is_some()) {
+        return Ok(false);
+    }
+    for st in &mut s.doc.styles.styles {
+        fmt_revisions::resolve_style(st, accept);
+    }
+    Ok(true)
+}
+
 /// A tracked change, for navigation and the Reviewing Pane: its range, kind (`insert`,
 /// `delete`, `format`), revision, and for a formatting change the properties it set.
 struct Change {
@@ -477,12 +492,15 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
             resolve_para(s, st, &path, 0, len, true, true, accept)?;
         }
     }
-    // Tables, rows, cells and sections.
+    // Tables, rows, cells, sections and style definitions.
     fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
     for part in s.doc.parts.values_mut() {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    for st in &mut s.doc.styles.styles {
+        fmt_revisions::resolve_style(st, accept);
+    }
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)
@@ -549,6 +567,9 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
                 (a.clone(), a)
             }
             None => {
+                if resolve_styles_sel(s, &a, accept)? {
+                    return sel_result(s);
+                }
                 if resolve_cell(s, a.story, &a.path, accept)? {
                     return sel_result(s);
                 }
@@ -573,6 +594,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
         }
     }
     super::moves::resolve(s, &moves, accept)?;
+    resolve_styles_sel(s, &a, accept)?;
     s.sel = Selection::caret(a);
     s.clamp_selection();
     sel_result(s)
@@ -581,6 +603,13 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
 fn changes(s: &Session) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
     let mk = |path: &wordcraft_doc::Path, off| Pos { story: StoryRef::Body, path: path.clone(), off };
+    // Style-definition changes sit at the start of the document, as Word shows them.
+    let start = s.doc.start_of(StoryRef::Body);
+    for st in &s.doc.styles.styles {
+        if let Some(ch) = &st.fmt_change {
+            out.push(Change::format(start.clone(), start.clone(), ch.rev, fmt_revisions::style_diff(st)));
+        }
+    }
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
         // A table's, row's and cell's changes sit at the start of the cell's first paragraph.
@@ -650,6 +679,9 @@ pub fn format_changes(s: &Session) -> Vec<(Pos, String, Vec<Value>)> {
 /// Whether the document has any tracked formatting change (cheap: stops at the first).
 pub fn has_format_changes(doc: &wordcraft_doc::Document) -> bool {
     if doc.last_section.fmt_change.is_some() {
+        return true;
+    }
+    if doc.styles.styles.iter().any(|st| st.fmt_change.is_some()) {
         return true;
     }
     doc.para_paths(StoryRef::Body).iter().any(|path| {

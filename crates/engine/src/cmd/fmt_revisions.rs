@@ -14,6 +14,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
+use wordcraft_doc::styles::Style;
 use wordcraft_doc::table::{Cell, Row, Table};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Revision, RevisionKind};
 
@@ -163,6 +164,19 @@ impl Recorder<'_> {
             }
         }
     }
+
+    /// Record the style-definition changes between `before` and `after` (the same style list):
+    /// a style `after` formats differently from `before` carries the style as it was.
+    fn styles(&mut self, before: &[Style], after: &mut [Style]) {
+        for (b, a) in before.iter().zip(after.iter_mut()) {
+            if b.id != a.id {
+                continue;
+            }
+            if let Some(want) = self.change(b, a, Style::formatting, |s| &s.fmt_change) {
+                a.fmt_change = want;
+            }
+        }
+    }
 }
 
 /// Keep the formatting changes the command `id` made to `s.doc` (compared with `before`) as
@@ -180,6 +194,7 @@ pub(crate) fn record(s: &mut Session, id: &str, before: &Document) {
             r.blocks(&pb.blocks, &mut pa.blocks, 0);
         }
     }
+    r.styles(&before.styles.styles, &mut doc.styles.styles);
 }
 
 /// Compare Documents: record how paragraph `new` (the revised version, same text) is formatted
@@ -215,6 +230,11 @@ pub fn char_diff(c: &CharProps) -> Vec<Value> {
 /// The properties a paragraph's change set.
 pub fn para_diff(p: &ParaProps) -> Vec<Value> {
     p.fmt_change.as_ref().map(|ch| diff(&ch.old.formatting(), &p.formatting())).unwrap_or_default()
+}
+
+/// A style definition change: the properties it set.
+pub fn style_diff(st: &Style) -> Vec<Value> {
+    st.fmt_change.as_ref().map(|ch| diff(&ch.old.formatting(), &st.formatting())).unwrap_or_default()
 }
 
 /// A section's change: the properties it set.
@@ -332,6 +352,13 @@ pub fn resolve_row(r: &mut Row, accept: bool) {
 pub fn resolve_cell(c: &mut Cell, accept: bool) {
     if let Some(ch) = c.props.fmt_change.take().filter(|_| !accept) {
         c.props = CellProps { fmt_change: None, span: c.props.span, vmerge: c.props.vmerge, ..ch.old };
+    }
+}
+
+/// Accept or reject a style definition change.
+pub fn resolve_style(st: &mut Style, accept: bool) {
+    if let Some(ch) = st.fmt_change.take().filter(|_| !accept) {
+        *st = ch.old;
     }
 }
 

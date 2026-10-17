@@ -385,7 +385,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     }
 
     rels.add(rt::STYLES, "styles.xml", false);
-    push_part(&mut entries, &mut overrides, "word/styles.xml", styles_xml(doc), &format!("{CT_WML}styles+xml"), PartRels::default());
+    push_part(&mut entries, &mut overrides, "word/styles.xml", styles_xml(&mut wr), &format!("{CT_WML}styles+xml"), PartRels::default());
     if !doc.numbering.nums.is_empty() || !doc.numbering.abstracts.is_empty() {
         rels.add(rt::NUMBERING, "numbering.xml", false);
         push_part(&mut entries, &mut overrides, "word/numbering.xml", numbering_xml(doc), &format!("{CT_WML}numbering+xml"), PartRels::default());
@@ -697,7 +697,8 @@ fn file_style_name(name: &str) -> String {
     name.to_string()
 }
 
-fn styles_xml(doc: &Document) -> Vec<u8> {
+fn styles_xml(wr: &mut Writer<'_>) -> Vec<u8> {
+    let doc = wr.doc;
     let s = &doc.styles;
     let mut w = W::new();
     let ns = xml::body_ns();
@@ -723,130 +724,141 @@ fn styles_xml(doc: &Document) -> Vec<u8> {
     // Kinds whose default style the file named (`w:default`); the English ids stand in otherwise.
     let flagged: Vec<StyleKind> = s.styles.iter().filter(|st| st.default).map(|st| st.kind).collect();
     for st in &s.styles {
-        style_xml(&mut w, st, &flagged);
+        wr.style_xml(&mut w, st, &flagged);
     }
     w.close("w:styles");
     w.into_bytes()
 }
 
-fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
-    let ty = match st.kind {
-        StyleKind::Paragraph => "paragraph",
-        StyleKind::Character => "character",
-        StyleKind::Table => "table",
-        StyleKind::Numbering => "numbering",
-    };
-    let english_default = matches!(
-        (st.kind, st.id.as_str()),
-        (StyleKind::Paragraph, "Normal")
-            | (StyleKind::Character, "DefaultParagraphFont")
-            | (StyleKind::Table, "TableNormal")
-            | (StyleKind::Numbering, "NoList")
-    );
-    let is_default = st.default || (english_default && !flagged.contains(&st.kind));
-    let mut a = vec![("w:type", ty), ("w:styleId", st.id.as_str())];
-    if is_default {
-        a.push(("w:default", "1"));
-    }
-    if !st.builtin {
-        a.push(("w:customStyle", "1"));
-    }
-    w.open("w:style", &a);
-    w.val("w:name", &file_style_name(if st.name.is_empty() { &st.id } else { &st.name }));
-    if let Some(b) = &st.based_on {
-        w.val("w:basedOn", b);
-    }
-    if let Some(b) = &st.next {
-        w.val("w:next", b);
-    }
-    if let Some(b) = &st.linked {
-        w.val("w:link", b);
-    }
-    if let Some(p) = st.priority {
-        w.val("w:uiPriority", &p.to_string());
-    }
-    if st.hidden {
-        w.empty("w:semiHidden", &[]);
-        w.empty("w:unhideWhenUsed", &[]);
-    }
-    if st.quick {
-        w.empty("w:qFormat", &[]);
-    }
-    if st.locked {
-        w.empty("w:locked", &[]);
-    }
-    if !st.para.is_empty() && st.kind != StyleKind::Character {
-        w.open("w:pPr", &[]);
-        props::ppr_inner(w, &st.para, false, None);
-        w.close("w:pPr");
-    }
-    if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {
-        w.open("w:rPr", &[]);
-        props::rpr_inner(w, &st.chr);
-        w.close("w:rPr");
-    }
-    if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() {
-            w.open("w:tblPr", &[]);
-            if let Some(n) = t.band_size {
-                w.val("w:tblStyleRowBandSize", &n.clamp(1, 1000).to_string());
-            }
-            if let Some(b) = &t.borders {
-                props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
-            }
-            if let Some(m) = &t.cell_margins {
-                props::margins(w, "w:tblCellMar", m);
-            }
-            w.close("w:tblPr");
+impl Writer<'_> {
+    /// One `w:style` element: the definition, and after it the change of the definition
+    /// (`w:stylePrChange`) — the style as it was, with the revision.
+    fn style_xml(&mut self, w: &mut W, st: &Style, flagged: &[StyleKind]) {
+        let ty = match st.kind {
+            StyleKind::Paragraph => "paragraph",
+            StyleKind::Character => "character",
+            StyleKind::Table => "table",
+            StyleKind::Numbering => "numbering",
+        };
+        let english_default = matches!(
+            (st.kind, st.id.as_str()),
+            (StyleKind::Paragraph, "Normal")
+                | (StyleKind::Character, "DefaultParagraphFont")
+                | (StyleKind::Table, "TableNormal")
+                | (StyleKind::Numbering, "NoList")
+        );
+        let is_default = st.default || (english_default && !flagged.contains(&st.kind));
+        let mut a = vec![("w:type", ty), ("w:styleId", st.id.as_str())];
+        if is_default {
+            a.push(("w:default", "1"));
         }
-        // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
-        // then cell borders, shading and vertical alignment. The whole table's text formatting
-        // is the style's own (above).
-        for part in TablePart::ALL {
-            let f = t.part(part);
-            let ppr = ParaProps { align: f.align, ..ParaProps::default() };
-            let has_rpr = props::has_rpr(&f.chr);
-            // The whole table's borders are its table borders (`w:tblPr` above).
-            let borders = f.borders.filter(|_| part != TablePart::WholeTable);
-            let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
-            if !has_rpr && !has_tc && f.align.is_none() {
-                continue;
-            }
-            w.open("w:tblStylePr", &[("w:type", part.ooxml())]);
-            if f.align.is_some() {
-                w.open("w:pPr", &[]);
-                props::ppr_inner(w, &ppr, false, None);
-                w.close("w:pPr");
-            }
-            if has_rpr {
-                w.open("w:rPr", &[]);
-                props::rpr_inner(w, &f.chr);
-                w.close("w:rPr");
-            }
-            if has_tc {
-                w.open("w:tcPr", &[]);
-                if let Some(bs) = borders {
-                    props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
-                }
-                if let Some(c) = f.fill {
-                    w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
-                }
-                if let Some(v) = f.v_align {
-                    w.val(
-                        "w:vAlign",
-                        match v {
-                            VAlign::Top => "top",
-                            VAlign::Center => "center",
-                            VAlign::Bottom => "bottom",
-                        },
-                    );
-                }
-                w.close("w:tcPr");
-            }
-            w.close("w:tblStylePr");
+        if !st.builtin {
+            a.push(("w:customStyle", "1"));
         }
+        w.open("w:style", &a);
+        w.val("w:name", &file_style_name(if st.name.is_empty() { &st.id } else { &st.name }));
+        if let Some(b) = &st.based_on {
+            w.val("w:basedOn", b);
+        }
+        if let Some(b) = &st.next {
+            w.val("w:next", b);
+        }
+        if let Some(b) = &st.linked {
+            w.val("w:link", b);
+        }
+        if let Some(p) = st.priority {
+            w.val("w:uiPriority", &p.to_string());
+        }
+        if st.hidden {
+            w.empty("w:semiHidden", &[]);
+            w.empty("w:unhideWhenUsed", &[]);
+        }
+        if st.quick {
+            w.empty("w:qFormat", &[]);
+        }
+        if st.locked {
+            w.empty("w:locked", &[]);
+        }
+        if !st.para.is_empty() && st.kind != StyleKind::Character {
+            w.open("w:pPr", &[]);
+            props::ppr_inner(w, &st.para, false, None);
+            w.close("w:pPr");
+        }
+        if props::has_rpr(&st.chr) && st.kind != StyleKind::Numbering {
+            w.open("w:rPr", &[]);
+            props::rpr_inner(w, &st.chr);
+            w.close("w:rPr");
+        }
+        if let Some(t) = &st.table {
+            if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() {
+                w.open("w:tblPr", &[]);
+                if let Some(n) = t.band_size {
+                    w.val("w:tblStyleRowBandSize", &n.clamp(1, 1000).to_string());
+                }
+                if let Some(b) = &t.borders {
+                    props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
+                }
+                if let Some(m) = &t.cell_margins {
+                    props::margins(w, "w:tblCellMar", m);
+                }
+                w.close("w:tblPr");
+            }
+            // The conditional formatting parts (ECMA-376 §17.7.6): paragraph and run properties,
+            // then cell borders, shading and vertical alignment. The whole table's text formatting
+            // is the style's own (above).
+            for part in TablePart::ALL {
+                let f = t.part(part);
+                let ppr = ParaProps { align: f.align, ..ParaProps::default() };
+                let has_rpr = props::has_rpr(&f.chr);
+                // The whole table's borders are its table borders (`w:tblPr` above).
+                let borders = f.borders.filter(|_| part != TablePart::WholeTable);
+                let has_tc = f.fill.is_some() || borders.is_some() || f.v_align.is_some();
+                if !has_rpr && !has_tc && f.align.is_none() {
+                    continue;
+                }
+                w.open("w:tblStylePr", &[("w:type", part.ooxml())]);
+                if f.align.is_some() {
+                    w.open("w:pPr", &[]);
+                    props::ppr_inner(w, &ppr, false, None);
+                    w.close("w:pPr");
+                }
+                if has_rpr {
+                    w.open("w:rPr", &[]);
+                    props::rpr_inner(w, &f.chr);
+                    w.close("w:rPr");
+                }
+                if has_tc {
+                    w.open("w:tcPr", &[]);
+                    if let Some(bs) = borders {
+                        props::borders(w, "w:tcBorders", &bs, Some("w:insideH"), &[]);
+                    }
+                    if let Some(c) = f.fill {
+                        w.empty("w:shd", &[("w:val", "clear"), ("w:color", "auto"), ("w:fill", &c.hex())]);
+                    }
+                    if let Some(v) = f.v_align {
+                        w.val(
+                            "w:vAlign",
+                            match v {
+                                VAlign::Top => "top",
+                                VAlign::Center => "center",
+                                VAlign::Bottom => "bottom",
+                            },
+                        );
+                    }
+                    w.close("w:tcPr");
+                }
+                w.close("w:tblStylePr");
+            }
+        }
+        // A tracked change of the definition (§17.13.5.25): the style as it was, with the revision.
+        if let Some(ch) = &st.fmt_change {
+            let a = self.change_attrs(ch.rev);
+            props::open_change(w, "w:stylePrChange", &a);
+            self.style_xml(w, &ch.old, flagged);
+            w.close("w:stylePrChange");
+        }
+        w.close("w:style");
     }
-    w.close("w:style");
 }
 
 fn numbering_xml(doc: &Document) -> Vec<u8> {
