@@ -22,6 +22,10 @@ fn has_object(s: &Session) -> Option<&'static str> {
     if selected(s).is_some() { None } else { Some("select a picture or shape first") }
 }
 fn has_floating(s: &Session) -> Option<&'static str> {
+    // A canvas member moves inside its canvas.
+    if super::canvas::selected_member(s).is_some() {
+        return None;
+    }
     match selected(s) {
         Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
         Some((_, o)) if o.is_floating() => None,
@@ -55,6 +59,14 @@ fn has_movable(s: &Session) -> Option<&'static str> {
         Some((_, InlineObject::Graphic { .. })) => Some(FROZEN),
         _ => has_object(s),
     }
+}
+/// `has_movable` for what places an object in the text (wrapping, position, alignment, Move with
+/// Text): not for a member picked inside a drawing canvas, which the canvas places.
+fn has_placeable(s: &Session) -> Option<&'static str> {
+    if super::canvas::selected_member(s).is_some() {
+        return Some("a shape inside a drawing canvas is placed by the canvas");
+    }
+    has_movable(s)
 }
 fn has_group(s: &Session) -> Option<&'static str> {
     match selected(s) {
@@ -272,17 +284,17 @@ pub fn specs() -> Vec<CommandSpec> {
             with_float(s, |f| f.wrap = wrap)
         })
         .params(r#"{"wrap": "inline|square|tight|through|topAndBottom|behindText|inFrontOfText"}"#)
-        .when(has_movable),
+        .when(has_placeable),
         CommandSpec::new("arrange.wrapText", "Wrap Text Sides", "Layout › Arrange", |s, v| {
             let side = p::str(v, "side").unwrap_or("bothSides");
             let side = WrapText::from_ooxml(side).ok_or_else(|| CmdError::Params(format!("unknown side {side:?}")))?;
             with_float(s, |f| f.wrap_text = side)
         })
         .params(r#"{"side": "bothSides|left|right|largest"}  (the sides of the selected Square, Tight or Through object text flows on; largest: the wider side, line by line)"#)
-        .when(has_movable),
+        .when(has_placeable),
         CommandSpec::new("arrange.moveWithText", "Move with Text", "Layout › Arrange › Wrap Text", |s, v| move_with_text(s, p::bool(v, "value").unwrap_or(true)))
             .params(r#"{"value": bool}  (true: Move with Text, the floating object's vertical position follows its paragraph; false: Fix Position on Page. It stays where it is)"#)
-            .when(has_floating),
+            .when(|s| has_placeable(s).or_else(|| has_floating(s))),
         CommandSpec::new("arrange.position", "Position", "Layout › Arrange", |s, v| {
             let preset = p::str(v, "preset").unwrap_or("middleCenter").to_string();
             let (x, y) = (p::f32(v, "x"), p::f32(v, "y"));
@@ -303,9 +315,9 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"preset"?: "topLeft|topCenter|topRight|middleLeft|middleCenter|middleRight|bottomLeft|bottomCenter|bottomRight", "x"?: pt, "y"?: pt}"#)
-        .when(has_movable),
-        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_movable),
-        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_movable),
+        .when(has_placeable),
+        CommandSpec::new("arrange.bringForward", "Bring Forward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::InFrontOfText)).when(has_placeable),
+        CommandSpec::new("arrange.sendBackward", "Send Backward", "Layout › Arrange", |s, _| with_float(s, |f| f.wrap = Wrap::BehindText)).when(has_placeable),
         CommandSpec::new("arrange.align", "Align", "Layout › Arrange", |s, v| {
             let h = p::str(v, "value").unwrap_or("center").to_string();
             let tw = super::page::sect(s).text_width();
@@ -324,17 +336,20 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         })
         .params(r#"{"value": "left|center|right"}"#)
-        .when(has_movable),
+        .when(has_placeable),
         CommandSpec::new("arrange.selectionPane", "Selection Pane", "Layout › Arrange", objects_list).pure(),
         CommandSpec::new("arrange.bounds", "Move or Resize", "Layout › Arrange", bounds)
             .params(r#"{"width"?: pt, "height"?: pt, "x"?: pt, "y"?: pt, "page"?: n}  (x/y: the top-left on page `page` (0-based, default its page); moving an inline object floats it)"#)
             .when(has_movable),
         CommandSpec::new("arrange.copyTo", "Copy to", "Layout › Arrange", copy_to)
             .params(r#"{"x": pt, "y": pt, "page"?: n}  (Ctrl+drag: a copy of the selected object lands with its top-left there and is selected; the original and the clipboard stay as they were)"#)
-            .when(has_movable),
+            .when(has_placeable),
         CommandSpec::new("arrange.nudge", "Nudge", "Layout › Arrange", |s, v| {
             let d = |k| p::f32(v, k).unwrap_or(0.0).clamp(-MAX_OFFSET, MAX_OFFSET);
             let (dx, dy) = (d("dx"), d("dy"));
+            if let Some(r) = super::canvas::member_nudge(s, dx, dy) {
+                return r;
+            }
             unalign(s)?;
             with_float(s, |f| {
                 f.x = (f.x + dx).clamp(-MAX_OFFSET, MAX_OFFSET);
@@ -541,7 +556,9 @@ pub fn object_selection(s: &Session) -> Option<(Pos, &InlineObject)> {
     o.is_drawing().then_some((a, o))
 }
 
-/// The first picture/shape in the selection, or just before a collapsed caret.
+/// The first picture/shape in the selection, or just before a collapsed caret. With a canvas
+/// member picked ([`super::canvas::selected_member`]), that member, at its canvas's position:
+/// the commands that change it go through [`edit_obj`], which changes the member.
 pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
     selected_all(s, 1).into_iter().next()
 }
@@ -549,6 +566,9 @@ pub fn selected(s: &Session) -> Option<(Pos, InlineObject)> {
 /// The pictures and shapes in the selection (at most `max`), or the one just before a collapsed
 /// caret.
 pub fn selected_all(s: &Session, max: usize) -> Vec<(Pos, InlineObject)> {
+    if let Some((pos, _, member)) = super::canvas::selected_member(s) {
+        return vec![(pos, member.clone())];
+    }
     let mut out = Vec::new();
     let (a, b) = s.sel.ordered();
     let max = if a == b { 1 } else { max };
@@ -675,6 +695,9 @@ const MAX_OFFSET: f32 = 4000.0;
 
 /// Resize and/or move the selected object (dragging its frame or handles).
 fn bounds(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(r) = super::canvas::member_bounds(s, v) {
+        return r;
+    }
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
     let to = match (p::f32(v, "x"), p::f32(v, "y")) {
         (Some(x), Some(y)) => Some((x, y)),
@@ -923,8 +946,12 @@ fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
 }
 
-/// Change the object at `pos`; returns it afterwards.
+/// Change the object at `pos`; returns it afterwards. With a member of the canvas at `pos`
+/// picked, the member changes.
 fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
+    if let Some(r) = super::canvas::edit_member_object(s, pos, &f) {
+        return r;
+    }
     let para = s.doc.para_mut(pos.story, &pos.path)?;
     let o = para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))?;
     f(o);

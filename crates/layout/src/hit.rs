@@ -58,6 +58,9 @@ pub struct ObjectHit {
     pub wrap: Wrap,
     /// Where column- and paragraph-relative offsets start (see [`Placed::Object`]).
     pub origin: Point,
+    /// A member of a Drawing Canvas, by its index in the canvas, when the hit is that member
+    /// (its frame inside the canvas at `pos`) rather than the canvas. Layout gives `None`.
+    pub member: Option<usize>,
 }
 
 impl ObjectHit {
@@ -105,6 +108,7 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
             text_box: *text_box,
             wrap: *wrap,
             origin: *origin,
+            member: None,
         }),
         _ => None,
     })
