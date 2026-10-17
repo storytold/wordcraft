@@ -40,6 +40,8 @@ static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
 ];
 
+static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
+
 #[derive(Clone)]
 enum FontBytes {
     Static(&'static [u8]),
@@ -894,10 +896,14 @@ impl FontDb {
     /// Arabic, so Arabic and Persian text draws without system fonts (#1652) (all empty without
     /// `CRAFT_FONTS_DIR`), whose system font scan reads `font_dirs`.
     pub fn with_font_dirs(font_dirs: Vec<std::path::PathBuf>) -> Self {
-        let mut faces = Vec::new();
         let others = crate::CRAFT_FONTS.iter().filter(|f| !f.scripts.contains(&"Jpan"));
         let craft = crate::japanese_document_fonts().into_iter().chain(others).map(|f| f.bytes);
-        for data in BUNDLED.iter().copied().chain(craft) {
+        Self::with_static_fonts(font_dirs, BUNDLED.iter().copied().chain(craft))
+    }
+
+    fn with_static_fonts(font_dirs: Vec<std::path::PathBuf>, fonts: impl Iterator<Item = &'static [u8]>) -> Self {
+        let mut faces = Vec::new();
+        for data in fonts {
             for f in enumerate_faces(data) {
                 if let Some(mut face) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {
                     face.local_names = f.local;
@@ -948,8 +954,26 @@ impl FontDb {
     /// first time a lookup by family name needs them (or ahead of time by
     /// [`FontDb::scan_in_background`]).
     pub fn global() -> &'static FontDb {
-        static DB: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
-        DB.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+        GLOBAL.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+    }
+
+    /// Initialize a test process with only the repository's pinned bundled fonts: no optional
+    /// craft-fonts, user fonts or system font directories. Call before any global font lookup.
+    /// Returns false if a normal global database was already initialized; never replaces it.
+    /// Repeated/concurrent calls are safe. Merely enabling `test-support` changes nothing.
+    #[cfg(feature = "test-support")]
+    pub fn init_test_fonts() -> bool {
+        static INIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *INIT.get_or_init(|| {
+            let mut installed = false;
+            GLOBAL.get_or_init(|| {
+                installed = true;
+                let db = Self::with_static_fonts(Vec::new(), BUNDLED.iter().copied());
+                db.set_system_fallback(false);
+                db
+            });
+            installed
+        })
     }
 
     fn read_faces(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<FontFace>>> {

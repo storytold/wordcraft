@@ -35,6 +35,7 @@ fn body_left(l: &DocLayout) -> Vec<f32> {
 
 #[test]
 fn mirrored_margins_put_the_inside_margin_toward_the_binding() {
+    crate::test_fonts();
     // #452: inside 108 (plus a 10pt gutter), outside 36. Odd pages: inside on the left; even
     // pages: on the right.
     let mut d = Document::from_text(&"Body line\n".repeat(90));
@@ -55,6 +56,7 @@ fn mirrored_margins_put_the_inside_margin_toward_the_binding() {
 
 #[test]
 fn inside_and_outside_floats_swap_sides_on_even_pages() {
+    crate::test_fonts();
     // #1181: shapes Word places in the outside margin of a book (mirrored margins) all came out
     // in the right margin. Inside 108 plus a 10pt gutter, outside 36; the paragraph on page 2
     // carries the same six shapes as page 1's, told apart by their widths.
@@ -124,6 +126,7 @@ fn inside_and_outside_floats_swap_sides_on_even_pages() {
 
 #[test]
 fn outside_floating_tables_swap_sides_on_even_pages() {
+    crate::test_fonts();
     // #1181, for a floating table (`w:tblpXSpec="outside"`): on page 2 of a book the outside is
     // the left. One positioned from the page edge stays there on both pages.
     use wordcraft_doc::para::{Anchor, FloatAlign};
@@ -159,6 +162,7 @@ fn outside_floating_tables_swap_sides_on_even_pages() {
 
 #[test]
 fn a_tall_footer_pushes_the_body_up() {
+    crate::test_fonts();
     // #453: an eight-line footer reaches far above the 72pt bottom margin.
     let mut d = Document::from_text(&"Body line\n".repeat(60));
     let id = d.add_part(PartKind::Footer, paras("Footer line", 8));
@@ -184,6 +188,7 @@ fn a_tall_footer_pushes_the_body_up() {
 
 #[test]
 fn a_linked_tall_header_pushes_the_next_sections_body_down() {
+    crate::test_fonts();
     // #454: section 2 has no header of its own and shows section 1's (link to previous).
     let mut d = Document::from_text("First section\nSecond section");
     let id = d.add_part(PartKind::Header, paras("Header line", 8));
@@ -203,6 +208,7 @@ fn a_linked_tall_header_pushes_the_next_sections_body_down() {
 
 #[test]
 fn long_endnotes_continue_on_new_pages() {
+    crate::test_fonts();
     // #456: an 80-paragraph endnote after a one-line body.
     let mut d = Document::from_text("Body");
     let id = d.add_part(PartKind::Endnote, paras("Endnote paragraph", 80));
@@ -230,6 +236,7 @@ fn long_endnotes_continue_on_new_pages() {
 
 #[test]
 fn caret_in_a_continued_footnote_is_found_on_its_page() {
+    crate::test_fonts();
     // #457: one long footnote paragraph split over pages 1 and 2.
     let mut d = Document::from_text(&"Body text line.\n".repeat(16));
     let id = d.add_part(
@@ -264,6 +271,7 @@ fn caret_in_a_continued_footnote_is_found_on_its_page() {
 /// own pages). The footer shows each letter's last page, not the file's stale result.
 #[test]
 fn page_references_in_footers_show_their_bookmarks_page() {
+    crate::test_fonts();
     let field =
         |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
     let footer = |d: &mut Document, mark: &str| {
@@ -379,6 +387,7 @@ fn mark(d: &mut Document, path: &Path, off: usize, name: &str) {
 /// section numbered in roman numerals are found on the page and in the format they land in.
 #[test]
 fn page_references_find_bookmarks_in_split_paragraphs_tables_and_roman_sections() {
+    crate::test_fonts();
     // One long paragraph over two pages, marked at its start and its end.
     let mut d = Document::from_text(&"Long paragraph text running on. ".repeat(160));
     let n = d.para(StoryRef::Body, &Path::top(0)).unwrap().len();
@@ -423,6 +432,7 @@ fn page_references_find_bookmarks_in_split_paragraphs_tables_and_roman_sections(
 /// A text box in a footer resolves its page references; one in the body keeps its result.
 #[test]
 fn page_references_in_footer_text_boxes_are_resolved() {
+    crate::test_fonts();
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
     let text_box = |d: &mut Document| {
         let mut p = Paragraph::new();
@@ -475,15 +485,17 @@ fn page_references_in_footer_text_boxes_are_resolved() {
 
 #[test]
 fn widow_control_moves_a_three_line_paragraph_whole() {
+    crate::test_fonts();
     // A three-line paragraph with room for two at the bottom of a page can't leave a widow (two
     // and one) nor an orphan (one and two): Word moves it whole. A four-line one splits two and
     // two. Sweep the paragraph down the page a point at a time and check every split.
+    // Shift the filler immediately before the probe, so the sweep tests partial-line room.
     let mut split4 = false;
     for (want, words) in [(3usize, 45usize), (4, 55)] {
         for (fill, shift) in (30usize..60).flat_map(|f| (0..15).step_by(2).map(move |s| (f, s))) {
             let filler = "Filler line.\n".repeat(fill);
             let mut d = Document::from_text(&format!("{filler}{}\nAfter.", "word ".repeat(words)));
-            d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+            d.format_paragraphs(&Pos::body(fill - 1, 0), &Pos::body(fill - 1, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
             let l = lay(&d);
             let pieces: Vec<(usize, usize)> = l
                 .pages

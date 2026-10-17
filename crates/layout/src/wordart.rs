@@ -294,6 +294,7 @@ mod tests {
 
     #[test]
     fn arch_baselines_lie_on_the_arc() {
+        crate::test_fonts();
         let frame = Rect::new(10.0, 20.0, 200.0, 100.0);
         let w = Warp::new(&TextWarp::new("textArchUp").unwrap(), frame, 0.25).unwrap();
         let (cx, cy, rx, ry) = (110.0, 70.0, 100.0, 50.0);
@@ -320,6 +321,7 @@ mod tests {
 
     #[test]
     fn flat_and_unknown_warps_draw_flat() {
+        crate::test_fonts();
         let frame = Rect::new(0.0, 0.0, 100.0, 50.0);
         assert!(Warp::new(&TextWarp::new("textPlain").unwrap(), frame, 0.2).is_none());
         assert!(Warp::new(&TextWarp::new("textCanUp").unwrap(), frame, 0.2).is_none());

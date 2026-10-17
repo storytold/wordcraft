@@ -222,6 +222,7 @@ mod tests {
 
     #[test]
     fn show_level_and_collapse_hide_what_is_under_a_heading() {
+        crate::test_fonts();
         // H1, body, H2, body, H1, body
         let levels = [1, BODY, 2, BODY, 1, BODY];
         let all = OutlineView::default();

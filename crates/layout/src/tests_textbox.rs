@@ -51,6 +51,7 @@ fn frame_of(l: &DocLayout, id: u32) -> Rect {
 
 #[test]
 fn align_text_and_text_direction_place_the_text_in_the_box() {
+    crate::test_fonts();
     let at = |body: TextBody| {
         let mut d = Document::from_text("x");
         let id = text_box(&mut d, 0, "Hi", 144.0, 144.0, body);
@@ -81,6 +82,7 @@ fn align_text_and_text_direction_place_the_text_in_the_box() {
 
 #[test]
 fn linked_boxes_continue_the_text() {
+    crate::test_fonts();
     let mut d = Document::from_text("one\ntwo");
     let text = "Words that run on well past the first little box. ".repeat(6);
     let a = text_box(&mut d, 0, &text, 144.0, 48.0, TextBody::default());
@@ -119,6 +121,7 @@ fn linked_boxes_continue_the_text() {
 
 #[test]
 fn hostile_link_chains_stay_bounded() {
+    crate::test_fonts();
     // Boxes linking in a circle show their own text; a box linking to itself too.
     let mut d = Document::from_text("one\ntwo\nthree");
     let a = text_box(&mut d, 0, "A", 72.0, 36.0, TextBody::default());
@@ -136,6 +139,7 @@ fn hostile_link_chains_stay_bounded() {
 
 #[test]
 fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
+    crate::test_fonts();
     // #743: a cover page's two-line box with no margins (`lIns="0"`…) is just tall enough for
     // its text; with Word's default margins its second line would be cut.
     let two = |h: f32, body: TextBody| {

@@ -25,3 +25,6 @@ log = { workspace = true }
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
 js-sys = "0.3"
+
+[dev-dependencies]
+wordcraft-fonts = { workspace = true, features = ["test-support"] }

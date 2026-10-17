@@ -1996,6 +1996,7 @@ mod tests {
 
     #[test]
     fn long_display_equations_wrap_before_operators_and_indent() {
+        crate::test_fonts();
         let sum = "y=a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w";
         let mp = MathProps::default();
         let full = lay_in(&Math::default(), sum, true, 1e4, &mp);
@@ -2036,6 +2037,7 @@ mod tests {
 
     #[test]
     fn manual_breaks_start_new_lines() {
+        crate::test_fonts();
         let mp = MathProps::default();
         let nodes = vec![MNode::Run(MRun::new("a=b")), MNode::Run(MRun { brk: Some(0), ..MRun::new("+c") })];
         let m = lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp);
@@ -2052,6 +2054,7 @@ mod tests {
 
     #[test]
     fn short_display_equations_stay_on_one_line() {
+        crate::test_fonts();
         let mp = MathProps::default();
         let one = lay_in(&Math::default(), "a+b=c", true, 400.0, &mp);
         assert_eq!(lines(&one).len(), 1);
@@ -2061,6 +2064,7 @@ mod tests {
 
     #[test]
     fn fraction_is_stacked_with_a_rule() {
+        crate::test_fonts();
         let flat = lay("ab", true);
         let f = lay("a/b", true);
         assert!(f.ascent > flat.ascent + 2.0 && f.descent > flat.descent + 2.0, "{f:?}");
@@ -2070,6 +2074,7 @@ mod tests {
 
     #[test]
     fn superscript_is_raised_and_smaller() {
+        crate::test_fonts();
         let m = lay("x^2", false);
         let sizes: Vec<(f32, f32)> = m
             .items
@@ -2085,6 +2090,7 @@ mod tests {
 
     #[test]
     fn operators_get_spaces_and_unary_minus_does_not() {
+        crate::test_fonts();
         let tight = lay("ab", false);
         let spaced = lay("a+b", false);
         let unary = lay("−b", false);
@@ -2095,6 +2101,7 @@ mod tests {
 
     #[test]
     fn display_operators_are_big_with_limits_over_and_under() {
+        crate::test_fonts();
         let d = lay("∑_(i=1)^n▒i", true);
         let t = lay("∑_(i=1)^n▒i", false);
         assert!(d.ascent + d.descent > t.ascent + t.descent, "display sum taller");
@@ -2103,6 +2110,7 @@ mod tests {
 
     #[test]
     fn delimiters_grow_around_tall_content() {
+        crate::test_fonts();
         let small = lay("(x)", true);
         let big = lay("((a)/(b))", true);
         let h = |m: &MathLayout| m.ascent + m.descent;
@@ -2111,6 +2119,7 @@ mod tests {
 
     #[test]
     fn every_structure_lays_out() {
+        crate::test_fonts();
         use wordcraft_doc::math::*;
         let x = || vec![MNode::Run(MRun::new("x"))];
         let nodes = vec![
@@ -2146,6 +2155,7 @@ mod tests {
 
     #[test]
     fn caret_slots_cover_every_position() {
+        crate::test_fonts();
         use wordcraft_doc::math_edit::{MathPos, move_right, units};
         let math = Math { nodes: wordcraft_doc::math::parse_linear("x=(-b±√(b^2-4ac))/2a+■(a&b@c&d)"), ..Default::default() };
         let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
@@ -2171,6 +2181,7 @@ mod tests {
 
     #[test]
     fn empty_slots_show_placeholders_on_screen_only() {
+        crate::test_fonts();
         let math = Math { nodes: wordcraft_doc::math::parse_linear("⬚/⬚"), ..Default::default() };
         let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!(m.items.iter().all(|i| matches!(i, MItem::ScreenOnly(_) | MItem::Rect { .. })), "{:?}", m.items);
@@ -2181,6 +2192,7 @@ mod tests {
 
     #[test]
     fn numbered_equations_fill_the_line_with_the_number_at_the_right() {
+        crate::test_fonts();
         let math = Math { nodes: wordcraft_doc::math::parse_linear("E=mc^2#(1)"), ..Default::default() };
         let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
         assert!((m.width - 400.0).abs() < 0.01, "{}", m.width);
@@ -2200,6 +2212,7 @@ mod tests {
 
     #[test]
     fn math_alphabets() {
+        crate::test_fonts();
         assert_eq!(math_alnum('x', false, true, MScr::Roman), '𝑥');
         assert_eq!(math_alnum('h', false, true, MScr::Roman), 'ℎ');
         assert_eq!(math_alnum('R', false, false, MScr::DoubleStruck), 'ℝ');
@@ -2210,6 +2223,7 @@ mod tests {
 
     #[test]
     fn hostile_trees_never_panic() {
+        crate::test_fonts();
         use wordcraft_doc::math::*;
         // Deep nesting.
         let mut n = vec![MNode::Run(MRun::new("x"))];

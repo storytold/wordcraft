@@ -58,6 +58,7 @@ fn at(s: &str, n: usize) -> usize {
 
 #[test]
 fn visual_order_follows_uax9_rule_l2() {
+    crate::test_fonts();
     // The example from UAX #9 / unicode-bidi: levels 0 0 0 1 1 1 2 2.
     assert_eq!(visual_order(&[0, 0, 0, 1, 1, 1, 2, 2]), vec![0, 1, 2, 6, 7, 5, 4, 3]);
     assert_eq!(visual_order(&[1, 1, 1]), vec![2, 1, 0]);
@@ -69,6 +70,7 @@ fn visual_order_follows_uax9_rule_l2() {
 
 #[test]
 fn levels_for_persian_with_latin_and_numbers() {
+    crate::test_fonts();
     assert!(bidi_levels("plain English", false).is_empty(), "pure LTR paragraphs skip the algorithm");
     let s = "سلام Word ۱۴۰۳";
     let lv = bidi_levels(s, true);
@@ -84,6 +86,7 @@ fn levels_for_persian_with_latin_and_numbers() {
 
 #[test]
 fn rtl_paragraph_is_right_aligned_and_reads_right_to_left() {
+    crate::test_fonts();
     let s = "سلام دنیا";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
@@ -100,6 +103,7 @@ fn rtl_paragraph_is_right_aligned_and_reads_right_to_left() {
 
 #[test]
 fn ltr_paragraph_with_embedded_persian_word() {
+    crate::test_fonts();
     let s = "Hello سلام world";
     let d = doc_of(&[(s, false)]);
     let l = lay(&d);
@@ -110,6 +114,7 @@ fn ltr_paragraph_with_embedded_persian_word() {
 
 #[test]
 fn numbers_and_latin_inside_persian_keep_their_order() {
+    crate::test_fonts();
     // "Price 250 toman" in Persian, with a Latin product name and Persian punctuation.
     let s = "قیمت 250 تومان برای Word، امسال ۱۴۰۳.";
     let d = doc_of(&[(s, true)]);
@@ -131,6 +136,7 @@ fn numbers_and_latin_inside_persian_keep_their_order() {
 
 #[test]
 fn caret_and_hit_agree_in_bidi_text() {
+    crate::test_fonts();
     for (s, rtl) in [("سلام world ۱۲۳", true), ("Hello سلام دنیا end", false), ("کتاب «WordCraft» (نسخه ۲)", true)] {
         let d = doc_of(&[(s, rtl)]);
         let l = lay(&d);
@@ -151,6 +157,7 @@ fn caret_and_hit_agree_in_bidi_text() {
 
 #[test]
 fn visual_steps_cover_the_line_in_order() {
+    crate::test_fonts();
     let s = "سلام world";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
@@ -181,6 +188,7 @@ fn visual_steps_cover_the_line_in_order() {
 
 #[test]
 fn selection_of_mixed_text_can_be_two_pieces() {
+    crate::test_fonts();
     // Logical range "lo wo" of "Hello سلام world"? Select across the Persian word's start:
     // "lo سل" is two visual pieces (the end of Hello, and the right part of سلام).
     let s = "Hello سلام world";
@@ -195,6 +203,7 @@ fn selection_of_mixed_text_can_be_two_pieces() {
 
 #[test]
 fn rtl_indents_and_alignment_are_measured_from_the_right() {
+    crate::test_fonts();
     let s = "متن فارسی";
     let mut d = doc_of(&[(s, true), (s, true), (s, true)]);
     let p0 = Pos::body(0, 0);
@@ -213,6 +222,7 @@ fn rtl_indents_and_alignment_are_measured_from_the_right() {
 
 #[test]
 fn rtl_list_label_sits_on_the_right() {
+    crate::test_fonts();
     let mut d = doc_of(&[("مورد اول", true), ("مورد دوم", true)]);
     let id = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p: &mut ParaProps| {
@@ -234,6 +244,7 @@ fn rtl_list_label_sits_on_the_right() {
 
 #[test]
 fn rtl_empty_and_trailing_lines_mirror() {
+    crate::test_fonts();
     let d = doc_of(&[("", true)]);
     let l = lay(&d);
     assert!((caret_x(&l, 0, 0) - 540.0).abs() < 0.5, "empty right-to-left paragraph: caret at the right margin");
@@ -247,6 +258,7 @@ fn rtl_empty_and_trailing_lines_mirror() {
 
 #[test]
 fn bidi_display_draws_every_glyph_inside_the_line() {
+    crate::test_fonts();
     let s = "این یک متن آزمایشی با English و عدد ۱۲۳ است. ".repeat(12);
     let d = doc_of(&[(&s, true)]);
     let l = lay(&d);
@@ -273,6 +285,7 @@ fn bidi_display_draws_every_glyph_inside_the_line() {
 
 #[test]
 fn hostile_bidi_text_never_panics() {
+    crate::test_fonts();
     // Explicit embeddings, isolates, unmatched pops, marks with no base, lone surrogates' stand-ins.
     let junk = [
         "\u{202B}\u{202B}\u{202C}\u{202C}\u{202C}abc\u{2067}سلام\u{2069}\u{2069}",
@@ -318,6 +331,7 @@ fn cluster_glyphs(glyphs: &[wordcraft_fonts::ShapedGlyph]) -> Vec<Vec<u32>> {
 
 #[test]
 fn persian_letters_join_and_brackets_mirror() {
+    crate::test_fonts();
     let Some(face) = arabic_face() else {
         eprintln!("skipped: no font with Persian letters installed");
         return;
@@ -347,6 +361,7 @@ fn persian_letters_join_and_brackets_mirror() {
 
 #[test]
 fn persian_text_in_a_latin_font_stays_in_one_fallback_face() {
+    crate::test_fonts();
     if arabic_face().is_none() {
         eprintln!("skipped: no font with Persian letters installed");
         return;
@@ -365,6 +380,7 @@ fn persian_text_in_a_latin_font_stays_in_one_fallback_face() {
 
 #[test]
 fn glyph_runs_carry_their_text_for_pdf_export() {
+    crate::test_fonts();
     let s = "سلام WordCraft می‌خواهم";
     let d = doc_of(&[(s, true)]);
     let l = lay(&d);
@@ -394,6 +410,7 @@ fn glyph_runs_carry_their_text_for_pdf_export() {
 
 #[test]
 fn character_border_boxes_a_whole_rtl_word() {
+    crate::test_fonts();
     let s = "کتاب خوب";
     let mut d = doc_of(&[(s, true)]);
     let b = wordcraft_doc::props::Border { space: 0.0, ..wordcraft_doc::props::Border::single(0.5) };
@@ -418,6 +435,7 @@ fn character_border_boxes_a_whole_rtl_word() {
 
 #[test]
 fn inline_picture_in_rtl_text_sits_in_its_place() {
+    crate::test_fonts();
     // "متن [picture] بیشتر": in a right-to-left paragraph the picture is drawn where its cluster
     // is on the line (left of the first word), not at its logical x.
     let s = "متن  بیشتر";
@@ -455,6 +473,7 @@ fn inline_picture_in_rtl_text_sits_in_its_place() {
 /// margin and border are drawn on its right. Clicks find cells by where they are drawn.
 #[test]
 fn rtl_table_lays_its_columns_out_right_to_left() {
+    crate::test_fonts();
     use wordcraft_doc::props::{Border, Borders};
     use wordcraft_doc::{Path, Table};
     let mut d = Document::from_text("before\nafter");
@@ -502,6 +521,7 @@ fn rtl_table_lays_its_columns_out_right_to_left() {
 /// first column at the right, and the line between them stays midway.
 #[test]
 fn rtl_section_puts_its_first_column_on_the_right() {
+    crate::test_fonts();
     use wordcraft_doc::section::Columns;
     let text = "Columns flow from the right edge in a right-to-left section. ".repeat(150);
     let mut d = Document::from_text(&text);
@@ -522,6 +542,7 @@ fn rtl_section_puts_its_first_column_on_the_right() {
 
 #[test]
 fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
+    crate::test_fonts();
     // Issue #1159: centring or end-aligning a list item moved the text and left the bullet at the
     // margin. In Word the label stays attached to the start of the text, in both directions.
     for (rtl, text) in [(false, "alpha beta"), (true, "مورد اول")] {

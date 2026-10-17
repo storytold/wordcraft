@@ -82,6 +82,7 @@ mod tests {
 
     #[test]
     fn kinsoku_and_word_wrap_break_opportunities() {
+        crate::test_fonts();
         let ja = "日本語、「漢字」。テスト";
         let on = breaks(ja, true, true);
         for c in ["、", "」", "。", "漢"] {

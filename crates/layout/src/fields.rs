@@ -177,6 +177,7 @@ mod tests {
 
     #[test]
     fn page_fields() {
+        crate::test_fonts();
         let ctx = FieldCtx { page: 4, pages: 12, ..Default::default() };
         assert_eq!(field_text("PAGE", "", &ctx), ("4".into(), true));
         assert_eq!(field_text(" PAGE \\* ROMAN ", "", &ctx).0, "IV");
@@ -191,6 +192,7 @@ mod tests {
 
     #[test]
     fn page_references_show_their_bookmarks_page() {
+        crate::test_fonts();
         let pages = HashMap::from([("End_1".to_string(), (3, NumFormat::Decimal)), ("Intro".to_string(), (4, NumFormat::LowerRoman))]);
         let ctx = FieldCtx { bookmark_pages: Arc::new(pages), bookmarks_key: 1, ..Default::default() };
         assert_eq!(field_text("PAGEREF End_1 \\* Arabic \\* MERGEFORMAT", "9", &ctx), ("3".into(), true));

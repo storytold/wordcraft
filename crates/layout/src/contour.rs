@@ -221,6 +221,7 @@ mod tests {
 
     #[test]
     fn occupied_follows_the_outline() {
+        crate::test_fonts();
         let c = diamond(false);
         let s = c.occupied(0.0, 10.0);
         assert_eq!(s.len(), 1);
@@ -235,6 +236,7 @@ mod tests {
 
     #[test]
     fn through_keeps_interior_gaps() {
+        crate::test_fonts();
         // A U: two prongs joined at the bottom.
         let u = [(0.0, 0.0), (20.0, 0.0), (20.0, 80.0), (80.0, 80.0), (80.0, 0.0), (100.0, 0.0), (100.0, 100.0), (0.0, 100.0)];
         let (_, tight) = Contour::new(&u, 0.0, 0.0, 0.0, false).unwrap();
@@ -246,6 +248,7 @@ mod tests {
 
     #[test]
     fn pictures_wrap_around_their_opaque_pixels() {
+        crate::test_fonts();
         let png = |img: image::DynamicImage| {
             let mut buf = Vec::new();
             img.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png).unwrap();
@@ -268,6 +271,7 @@ mod tests {
 
     #[test]
     fn hostile_points_are_dropped() {
+        crate::test_fonts();
         assert!(Contour::new(&[(f32::NAN, 0.0), (1.0, 1.0), (f32::INFINITY, 2.0)], 0.0, 0.0, 0.0, false).is_none());
         let c = diamond(true);
         assert!(c.occupied(f32::NAN, 1.0).is_empty());

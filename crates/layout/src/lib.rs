@@ -8,6 +8,13 @@
 //! - [`hit`]: point ↔ position, caret geometry, line navigation, selection rectangles.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+/// Every unit test calls this before any font lookup (including its fixture construction).
+/// A process-wide immutable choice keeps font and math caches consistent across test threads.
+#[cfg(test)]
+fn test_fonts() {
+    assert!(wordcraft_fonts::FontDb::init_test_fonts(), "layout tests must initialize fixed fonts before any global font lookup");
+}
+
 pub mod balloons;
 mod contour;
 pub mod display;

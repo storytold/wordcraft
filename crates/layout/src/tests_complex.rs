@@ -29,6 +29,7 @@ const MYANMAR: &str = "\u{1019}\u{103C}\u{1014}\u{103A}\u{1019}\u{102C}\u{1005}\
 
 #[test]
 fn myanmar_syllables_are_single_clusters() {
+    crate::test_fonts();
     let l = lay(&Document::from_text(MYANMAR));
     let pl = para_layout(&l, 0);
     let starts: Vec<usize> = pl.clusters.iter().map(|c| c.start).collect();
@@ -46,6 +47,7 @@ fn myanmar_syllables_are_single_clusters() {
 
 #[test]
 fn myanmar_without_spaces_wraps_between_syllables() {
+    crate::test_fonts();
     let text = MYANMAR.repeat(80);
     let l = lay(&Document::from_text(&text));
     let pl = para_layout(&l, 0);
@@ -71,6 +73,7 @@ fn myanmar_face() -> Option<wordcraft_fonts::FaceRef> {
 
 #[test]
 fn myanmar_prevowel_is_drawn_before_its_consonant() {
+    crate::test_fonts();
     let Some(face) = myanmar_face() else {
         eprintln!("skipped: no Myanmar font with OpenType tables installed");
         return;
@@ -92,6 +95,7 @@ fn myanmar_prevowel_is_drawn_before_its_consonant() {
 
 #[test]
 fn myanmar_in_a_latin_font_falls_back_to_a_regular_myanmar_face() {
+    crate::test_fonts();
     if myanmar_face().is_none() {
         eprintln!("skipped: no Myanmar font with OpenType tables installed");
         return;
