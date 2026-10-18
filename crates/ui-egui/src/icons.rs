@@ -263,19 +263,20 @@ fn paint_clipboard_to_insert(pen: &Pen, name: &str) -> bool {
             pen.fcircle(16.5, 13.5, 1.6, a);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
         }
-        "borders" => {
-            for y in [3.0, 10.0, 17.0] {
-                for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
-                    pen.fcircle(x, y, 0.6, c);
-                }
-            }
-            for x in [3.0, 10.0, 17.0] {
-                for y in [6.5, 13.5] {
-                    pen.fcircle(x, y, 0.6, c);
-                }
-            }
-            pen.line_c(&[(3.0, 17.0), (17.0, 17.0)], a);
-        }
+        // The Borders menu's choices (#2718): the dotted paragraph box with the chosen sides
+        // in accent, so each menu entry shows the border it applies. "borders" is the plain
+        // (bottom) icon the other callers keep using.
+        "borders" | "borders_bottom" => border_pictogram(&pen, [false, false, true, false], false),
+        "borders_top" => border_pictogram(&pen, [true, false, false, false], false),
+        "borders_left" => border_pictogram(&pen, [false, false, false, true], false),
+        "borders_right" => border_pictogram(&pen, [false, true, false, false], false),
+        // No Border: the box alone, no side drawn.
+        "borders_none" => border_pictogram(&pen, [false; 4], false),
+        // All Borders is the grid: every side and the inside cross; Outside is the sides only.
+        "borders_all" => border_pictogram(&pen, [true; 4], true),
+        "borders_outside" => border_pictogram(&pen, [true; 4], false),
+        // Inside Borders: the cross between paragraphs, no outer sides.
+        "borders_inside" => border_pictogram(&pen, [false; 4], true),
         // Editing
         "find" => {
             pen.circle(8.0, 8.0, 5.0, c);
@@ -1638,6 +1639,32 @@ fn shape(pen: &Pen, kind: &str) -> bool {
         _ => return false,
     }
     true
+}
+
+/// A Borders menu pictogram (#2718): the dotted box standing for the paragraphs, with the
+/// chosen outer sides (top, right, bottom, left) in the accent colour, and for the grid
+/// choices the inside cross drawn too. No side chosen: the box alone, as No Border.
+fn border_pictogram(pen: &Pen, sides: [bool; 4], inside: bool) {
+    for y in [3.0, 10.0, 17.0] {
+        for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
+            pen.fcircle(x, y, 0.6, pen.c);
+        }
+    }
+    for x in [3.0, 10.0, 17.0] {
+        for y in [6.5, 13.5] {
+            pen.fcircle(x, y, 0.6, pen.c);
+        }
+    }
+    let edges = [((3.0, 3.0), (17.0, 3.0)), ((17.0, 3.0), (17.0, 17.0)), ((17.0, 17.0), (3.0, 17.0)), ((3.0, 17.0), (3.0, 3.0))];
+    for (on, (a, b)) in sides.into_iter().zip(edges) {
+        if on {
+            pen.line_c(&[a, b], pen.a);
+        }
+    }
+    if inside {
+        pen.line_c(&[(10.0, 3.0), (10.0, 17.0)], pen.a);
+        pen.line_c(&[(3.0, 10.0), (17.0, 10.0)], pen.a);
+    }
 }
 
 trait ThenLines {

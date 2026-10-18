@@ -134,6 +134,9 @@ pub struct CanvasState {
     pub last_highlight: String,
     pub last_font_color: String,
     pub last_shading: String,
+    /// The border kind last chosen from the Home › Borders menu; the split button applies it
+    /// on a plain click (#2718), as Shading remembers its colour.
+    pub last_border: String,
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
@@ -361,6 +364,7 @@ impl Default for CanvasState {
             last_highlight: "yellow".into(),
             last_font_color: "C00000".into(),
             last_shading: "FFF2CC".into(),
+            last_border: "bottom".into(),
             open_url: None,
             page_rects: Vec::new(),
             scrollbar_page: None,
