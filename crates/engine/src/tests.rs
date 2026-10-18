@@ -7554,16 +7554,16 @@ fn drag_after_multi_click_extends_by_units() {
         run(s, "select.dragUnit", json!({"unit": unit, "start": start, "end": end, "pos": pos}));
         (s.sel.anchor.clone(), s.sel.focus.clone())
     };
-    // Double-click "beta" (6..11 with its trailing space).
+    // Double-click "beta" (6..10): the word alone, not the space after it (#2927).
     run(&mut s, "caret.set", json!({"pos": Pos::body(0, 7)}));
     run(&mut s, "select.word", json!({}));
     let (a, b) = s.sel.ordered();
-    assert_eq!((a.off, b.off), (6, 11));
+    assert_eq!((a.off, b.off), (6, 10));
     // Forward into the middle of "gamma": the whole word joins.
     assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 13)), (Pos::body(0, 6), Pos::body(0, 16)));
-    // Back into "Alpha": anchored at the end of "beta ", focus at the start of "Alpha".
-    assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 2)), (Pos::body(0, 11), Pos::body(0, 0)));
-    // Back inside the first word: just that word.
+    // Back into "Alpha": anchored at the end of "beta", focus at the start of "Alpha".
+    assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 2)), (Pos::body(0, 10), Pos::body(0, 0)));
+    // Back inside the first word: the word and its trailing space, as before the drag (#2927).
     assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(0, 8)), (Pos::body(0, 6), Pos::body(0, 11)));
     // Into the next paragraph: whole word there.
     assert_eq!(drag(&mut s, "word", a.clone(), b.clone(), Pos::body(1, 8)), (Pos::body(0, 6), Pos::body(1, 12)));
@@ -7594,6 +7594,33 @@ fn drag_after_multi_click_extends_by_units() {
         let _ = s.run("select.dragUnit", &v);
     }
     assert_eq!(text(&s), before);
+}
+
+/// #2927: a double-click selects the word alone, with no trailing space — before punctuation,
+/// at the end of a paragraph and mid-sentence alike (Word); a drag after it still takes whole
+/// words with the separators on the way.
+#[test]
+fn double_click_selects_the_word_without_its_trailing_space() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Alpha beta. \rTrailing space \rEnd."}));
+    let click = |s: &mut Session, pos: Pos| {
+        run(s, "caret.set", json!({"pos": pos}));
+        run(s, "select.word", json!({}));
+        s.sel.ordered()
+    };
+    // Before punctuation: "beta", neither the full stop nor the space after it.
+    assert_eq!(click(&mut s, Pos::body(0, 7)), (Pos::body(0, 6), Pos::body(0, 10)));
+    // A drag from it into the last word of the document takes the words whole, with the
+    // separators on the way (the space, the full stop and the two paragraph marks).
+    run(&mut s, "select.dragUnit", json!({"unit": "word", "start": Pos::body(0, 6), "end": Pos::body(0, 10), "pos": Pos::body(2, 1)}));
+    assert_eq!(s.sel.ordered(), (Pos::body(0, 6), Pos::body(2, 3)));
+    // At the end of a paragraph: "space", not the space before the mark.
+    assert_eq!(click(&mut s, Pos::body(1, 10)), (Pos::body(1, 9), Pos::body(1, 14)));
+    // The last word of a paragraph: "End", not the full stop.
+    assert_eq!(click(&mut s, Pos::body(2, 1)), (Pos::body(2, 0), Pos::body(2, 3)));
+    // Typing over the double-clicked word leaves the space behind it.
+    run(&mut s, "text.insert", json!({"text": "Omega"}));
+    assert_eq!(text(&s), "Alpha beta. \nTrailing space \nOmega.");
 }
 
 /// #856: a click in the selection bar selects the whole line (its trailing space; the

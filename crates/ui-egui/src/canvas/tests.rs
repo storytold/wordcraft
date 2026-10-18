@@ -642,7 +642,8 @@ fn multi_click_drag_extends_by_units() {
     multi_drag(&mut h, from, to, 3);
     let sel = h.state().session.sel.clone();
     assert_eq!((sel.anchor, sel.focus), (Pos::body(1, 0), Pos::body(2, 10)), "whole paragraphs");
-    // A plain double-click (no drag) still selects just the word.
+    // A plain double-click (no drag) selects just the word, without the space after it
+    // (#2927); only the drag extends with the separators.
     h.state_mut().run("select.collapse", json!({})).unwrap();
     for _ in 0..40 {
         h.step();
@@ -650,7 +651,7 @@ fn multi_click_drag_extends_by_units() {
     let at = screen(&mut h, Pos::body(0, 1));
     multi_drag(&mut h, at, at, 2);
     let (s, e) = h.state().session.sel.ordered();
-    assert_eq!((s, e), (Pos::body(0, 0), Pos::body(0, 6)));
+    assert_eq!((s, e), (Pos::body(0, 0), Pos::body(0, 5)));
 }
 
 /// #2551: dragging the vertical scrollbar shows the page at the top of the window beside the

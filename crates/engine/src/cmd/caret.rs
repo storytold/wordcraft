@@ -312,7 +312,9 @@ fn select_range(s: &mut Session, v: &Value) -> CmdResult {
 
 /// A unit a selection grows by: what a double-click (word), Ctrl/⌘+click (sentence) or
 /// triple-click (paragraph) selects, and what dragging after it extends by. A click in the
-/// selection bar (the left margin) selects a line; triple-click there the whole document.
+/// selection bar (the left margin) selects a line; triple-click there the whole document. A
+/// double-click selects the word alone; only the drag after it takes the spaces between words
+/// (`drag_unit`, #2927).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Unit {
     Word,
@@ -420,7 +422,8 @@ fn select_line(s: &mut Session, v: &Value) -> CmdResult {
 /// Drag after a double-click (words), triple-click (paragraphs) or Ctrl/⌘+click (sentences):
 /// the selection keeps the unit first selected (`start`..`end`) and grows by whole units to
 /// the one under `pos`. Dragging forward anchors at the unit's start; dragging back before it
-/// anchors at its end, as in Word.
+/// anchors at its end, as in Word. Words come with their trailing spaces, so the separators
+/// join the words the drag takes (#2927).
 fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     let unit = p::str(v, "unit")
         .and_then(Unit::parse)
@@ -432,7 +435,16 @@ fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     if at.story != start.story || end.story != start.story {
         return sel_result(s);
     }
-    let (us, ue) = unit_range(s, &at, unit);
+    let (us, ue) = match unit {
+        Unit::Word => match s.doc.para_at(&at) {
+            Some(p) => {
+                let (a, b) = p.word_with_spaces_at(at.off);
+                (Pos { off: a, ..at.clone() }, Pos { off: b, ..at.clone() })
+            }
+            None => (at.clone(), at.clone()),
+        },
+        _ => unit_range(s, &at, unit),
+    };
     s.sel = if unit == Unit::Document {
         Selection { anchor: us, focus: ue }
     } else if at >= start {

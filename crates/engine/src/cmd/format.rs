@@ -165,9 +165,7 @@ fn target(s: &Session) -> Option<(Pos, Pos)> {
     let after = p.text.get(a.off..)?.chars().next();
     if before.is_some_and(is_w) && after.is_some_and(is_w) {
         let (x, y) = p.word_at(a.off);
-        // word_at includes trailing spaces; Word formats just the word.
-        let word_end = p.text.get(x..y).map(|w| x + w.trim_end().len()).unwrap_or(y);
-        return Some((Pos { off: x, ..a.clone() }, Pos { off: word_end, ..a }));
+        return Some((Pos { off: x, ..a.clone() }, Pos { off: y, ..a }));
     }
     None
 }
