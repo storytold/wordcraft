@@ -1333,6 +1333,39 @@ fn a_missing_roman_font_with_its_own_substitute_keeps_it() {
 }
 
 #[test]
+fn a_missing_font_is_drawn_in_its_font_table_altname() {
+    // Measured in Word: a font that isn't installed is drawn in the font table's w:altName when
+    // that is available — before the family class (#1613) and the generic substitutes (#2702).
+    let face = |alt: Option<&str>, roman: bool| {
+        let mut d = Document::from_text("Alt");
+        if let Some(alt) = alt {
+            d.settings.alt_fonts = vec![("No Such Brand Font".into(), alt.into())];
+        }
+        if roman {
+            d.settings.roman_fonts = vec!["No Such Brand Font".into()];
+        }
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.runs[0].props.font = Some("No Such Brand Font".into());
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!("no text") };
+        let first = para.clusters.first().expect("a cluster");
+        para.styles[first.style as usize].face
+    };
+    // A missing font draws in its alternate.
+    let courier = wordcraft_fonts::word::resolve("Courier New", false, false).face;
+    assert_eq!(face(Some("Courier New"), false), courier);
+    // The alternate beats the roman family rule.
+    let tnr = wordcraft_fonts::word::resolve("Times New Roman", false, false).face;
+    assert_eq!(face(Some("Times New Roman"), true), tnr);
+    // Without an alternate the old rules hold: a roman font in Cambria, the rest in the generic
+    // substitute list.
+    let cambria = wordcraft_fonts::word::resolve("Cambria", false, false).face;
+    assert_eq!(face(None, true), cambria);
+    assert_ne!(face(None, false), cambria);
+}
+}
+
+#[test]
 fn an_empty_section_mark_stays_on_a_full_page() {
     use wordcraft_doc::section::SectionProps;
     // Measured in Word: a page filled to the bottom, then an empty paragraph carrying a next-page

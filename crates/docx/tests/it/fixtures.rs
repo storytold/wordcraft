@@ -3616,6 +3616,21 @@ fn roman_fonts_are_read_from_the_font_table() {
     assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
 }
 
+/// The font table's alternate names (`w:altName`, ECMA-376 §17.8.3.1): Word draws a font that
+/// isn't installed in its alternate when that is available, so the reader must keep them.
+#[test]
+fn the_font_tables_altnames_are_read_and_kept() {
+    let fonts = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:font w:name="Brand Mono"><w:altName w:val="Courier New"/><w:panose1 w:val="00000000000000000000"/><w:charset w:val="00"/><w:family w:val="modern"/><w:pitch w:val="variable"/></w:font><w:font w:name="Brand Serif"><w:family w:val="roman"/></w:font><w:font w:name="Brand Empty"><w:altName w:val=""/></w:font></w:fonts>"#;
+    let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/fontTable", "fontTable.xml")];
+    let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/fontTable.xml", fonts)])).unwrap();
+    // The empty alternate is dropped; entries without one never appear.
+    assert_eq!(d.settings.alt_fonts, vec![("Brand Mono".to_string(), "Courier New".to_string())]);
+    assert_eq!(d.settings.roman_fonts, ["Brand Serif"]);
+    // The font table rides along as an opaque part, so the alternate survives a save.
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(again.settings.alt_fonts, vec![("Brand Mono".to_string(), "Courier New".to_string())]);
+}
+
 /// `w:doNotUseHTMLParagraphAutoSpacing` in the settings' `w:compat`: paragraph spacing adds up.
 #[test]
 fn html_auto_spacing_off_is_read_and_kept() {

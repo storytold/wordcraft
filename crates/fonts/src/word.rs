@@ -192,6 +192,19 @@ pub fn charset_base_family(family: &str) -> &str {
         .map_or(family, str::trim_end)
 }
 
+/// Whether a document font can be drawn as `family` itself: the family is installed, a Windows
+/// charset alias names an installed font, or one of the family's own substitutes is. False only
+/// when drawing it would land on the last-resort fallback (`FALLBACK_FAMILY`), which is what
+/// lets a font table's alternate name (`w:altName`) count as available, or not, on its own.
+pub fn substitutes_available(family: &str) -> bool {
+    let db = FontDb::global();
+    let base = charset_base_family(family);
+    if db.has_family(family) || (base != family && db.has_family(base)) {
+        return true;
+    }
+    substitutes(base).iter().any(|s| db.has_family(s))
+}
+
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
 /// Persian font packs; matched by name only).
 fn is_persian_naskh(f: &str) -> bool {
@@ -486,6 +499,17 @@ mod tests {
         assert!(!b.synth_bold);
         let (a, d) = line_metrics(&b.face);
         assert!(a > 0.0 && d >= 0.0);
+    }
+
+    #[test]
+    fn an_alternate_is_available_when_it_or_its_own_substitutes_are_installed() {
+        // The family installed itself…
+        assert!(substitutes_available("Arial"));
+        assert!(substitutes_available("Times New Roman"));
+        // …or through one of its own substitutes: Carlito stands in for Calibri, a Windows
+        // charset alias names its font.
+        assert!(substitutes_available("Calibri"));
+        assert!(substitutes_available("Times New Roman Cyr"));
     }
 
     #[test]
