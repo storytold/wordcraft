@@ -218,6 +218,96 @@ fn word_default_shortcuts_resolve_function_keys() {
 }
 
 #[test]
+fn word_for_mac_default_shortcuts_resolve() {
+    // Commands that already existed but had no Word key: Word for Mac's documented defaults, plus
+    // Word for Windows' keys where Word for Mac's own key is already taken by another command.
+    let reg = cmd::registry();
+    let id = |k: &str| reg.by_shortcut(k).map(|c| c.id);
+    assert_eq!(id("Alt+F3"), Some("insert.autoText"));
+    if cfg!(target_os = "macos") {
+        assert_eq!(id("F1"), Some("edit.undo"));
+        assert_eq!(id("F2"), Some("edit.cut"));
+        assert_eq!(id("Mod+Ctrl+V"), Some("edit.pasteSpecial"));
+        assert_eq!(id("Mod+Alt+C"), Some("edit.copyFormat"));
+        assert_eq!(id("Ctrl+Shift+M"), Some("para.indent"));
+        assert_eq!(id("Alt+Space"), Some("text.nbsp"));
+        assert_eq!(id("Alt+Shift+-"), Some("outline.collapse"));
+        assert_eq!(id("Alt+G"), Some("text.copyright"));
+        assert_eq!(id("Alt+R"), Some("text.registered"));
+        assert_eq!(id("Alt+2"), Some("text.trademark"));
+        assert_eq!(id("Alt+;"), Some("text.ellipsis"));
+        assert_eq!(id("Mod+Ctrl+Alt+R"), Some("review.thesaurus"));
+        assert_eq!(id("Ctrl+Shift+="), Some("outline.expand"));
+        assert_eq!(id("Ctrl+Shift+-"), Some("outline.collapse"));
+        for (key, command) in [
+            ("Ctrl+Shift+1", "outline.showLevel1"),
+            ("Ctrl+Shift+2", "outline.showLevel2"),
+            ("Ctrl+Shift+3", "outline.showLevel3"),
+            ("Ctrl+Shift+4", "outline.showLevel4"),
+            ("Ctrl+Shift+5", "outline.showLevel5"),
+            ("Ctrl+Shift+6", "outline.showLevel6"),
+            ("Ctrl+Shift+7", "outline.showLevel7"),
+            ("Ctrl+Shift+8", "outline.showLevel8"),
+            ("Ctrl+Shift+9", "outline.showLevel9"),
+        ] {
+            assert_eq!(id(key), Some(command), "{key}");
+        }
+        assert_eq!(id("Ctrl+Shift+A"), Some("outline.showAll"));
+        assert_eq!(id("Ctrl+Shift+L"), Some("outline.firstLineOnly"));
+        assert_eq!(id("Ctrl+Shift+N"), Some("outline.demoteToBody"));
+        assert_eq!(id("Mod+Ctrl+I"), Some("table.insertRowAbove"));
+        assert_eq!(id("Ctrl+0"), Some("view.zoom100"));
+        assert_eq!(id("Ctrl+="), Some("view.zoomIn"));
+        assert_eq!(id("Ctrl+-"), Some("view.zoomOut"));
+        assert_eq!(id("Alt+Shift+Home"), Some("table.selectRow"));
+        assert_eq!(id("Alt+Shift+End"), Some("table.selectRow"));
+        assert_eq!(id("Alt+Shift+PageUp"), Some("table.selectColumn"));
+        assert_eq!(id("Alt+Shift+PageDown"), Some("table.selectColumn"));
+        // Word for Windows' outline keys stay as aliases on macOS.
+        assert_eq!(id("Alt+Shift+1"), Some("outline.showLevel1"));
+        assert_eq!(id("Alt+Shift+="), Some("outline.expand"));
+        assert_eq!(id("Alt+Shift+-"), Some("outline.collapse"));
+        assert_eq!(id("Alt+Shift+A"), Some("outline.showAll"));
+        assert_eq!(id("Alt+Shift+L"), None, "Word for Mac shows the first line with Control+Shift+L");
+        assert_eq!(id("Mod+Alt+S"), Some("view.split"));
+        assert_eq!(id("Alt+Shift+C"), None, "Word for Mac keeps Alt+Shift+C for the Reviewing Pane");
+    } else {
+        assert_eq!(id("F1"), None);
+        assert_eq!(id("F2"), None);
+        assert_eq!(id("Mod+Ctrl+V"), None);
+        assert_eq!(id("Mod+Alt+C"), Some("text.copyright"));
+        assert_eq!(id("Ctrl+Shift+M"), None);
+        assert_eq!(id("Alt+Space"), None);
+        assert_eq!(id("Alt+Shift+-"), Some("outline.collapse"));
+        assert_eq!(id("Alt+G"), None);
+        assert_eq!(id("Alt+R"), None);
+        assert_eq!(id("Alt+2"), None);
+        assert_eq!(id("Alt+;"), None);
+        assert_eq!(id("Mod+Ctrl+Alt+R"), None);
+        assert_eq!(id("Ctrl+Shift+="), None);
+        assert_eq!(id("Ctrl+Shift+-"), None);
+        assert_eq!(id("Ctrl+Shift+1"), None);
+        assert_eq!(id("Ctrl+Shift+A"), None);
+        assert_eq!(id("Ctrl+Shift+L"), None);
+        assert_eq!(id("Ctrl+Shift+N"), None);
+        assert_eq!(id("Mod+Ctrl+I"), None);
+        assert_eq!(id("Ctrl+0"), None);
+        assert_eq!(id("Ctrl+="), None);
+        assert_eq!(id("Ctrl+-"), None);
+        assert_eq!(id("Alt+Shift+Home"), Some("table.selectRow"));
+        assert_eq!(id("Alt+Shift+End"), Some("table.selectRow"));
+        assert_eq!(id("Alt+Shift+PageUp"), Some("table.selectColumn"));
+        assert_eq!(id("Alt+Shift+PageDown"), Some("table.selectColumn"));
+        assert_eq!(id("Alt+Shift+1"), Some("outline.showLevel1"));
+        assert_eq!(id("Alt+Shift+="), Some("outline.expand"));
+        assert_eq!(id("Alt+Shift+-"), Some("outline.collapse"));
+        assert_eq!(id("Alt+Shift+A"), Some("outline.showAll"));
+        assert_eq!(id("Alt+Shift+L"), Some("outline.firstLineOnly"));
+        assert_eq!(id("Alt+Shift+C"), Some("view.split"));
+    }
+}
+
+#[test]
 fn reset_shortcuts_remove_direct_formatting_but_keep_styles() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "Hello world"}));

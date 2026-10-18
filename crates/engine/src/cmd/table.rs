@@ -41,7 +41,9 @@ fn in_table(s: &Session) -> Option<&'static str> {
 pub fn specs() -> Vec<CommandSpec> {
     let t = |c: CommandSpec| c.when(in_table);
     vec![
-        t(CommandSpec::new("table.insertRowAbove", "Insert Above", "Table Layout › Rows & Columns", |s, _| row(s, false))),
+        // Word for Mac inserts a row above the caret with ⌘⌃I.
+        t(CommandSpec::new("table.insertRowAbove", "Insert Above", "Table Layout › Rows & Columns", |s, _| row(s, false))
+            .key(super::mac_or("Mod+Ctrl+I", ""))),
         t(CommandSpec::new("table.insertRowBelow", "Insert Below", "Table Layout › Rows & Columns", |s, _| row(s, true))),
         t(CommandSpec::new("table.insertColumnLeft", "Insert Left", "Table Layout › Rows & Columns", |s, _| col(s, false))),
         t(CommandSpec::new("table.insertColumnRight", "Insert Right", "Table Layout › Rows & Columns", |s, _| col(s, true))),
@@ -204,12 +206,17 @@ pub fn specs() -> Vec<CommandSpec> {
             select_cells(s, &tp, None)
         })
         .pure()),
+        // Word's select-row and select-column keys (Shift+Alt+Home/End and
+        // Shift+Alt+PageUp/PageDown, or Option on macOS).
         t(CommandSpec::new("table.selectRow", "Select Row", "Table Layout › Table › Select", |s, _| {
             let (tp, r, _) = cell(s)?;
             select_cells(s, &tp, Some((r, None)))
         })
+        .key("Alt+Shift+Home / Alt+Shift+End")
         .pure()),
-        t(CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", select_column).pure()),
+        t(CommandSpec::new("table.selectColumn", "Select Column", "Table Layout › Table › Select", select_column)
+            .key("Alt+Shift+PageUp / Alt+Shift+PageDown")
+            .pure()),
         t(CommandSpec::new("table.selectCell", "Select Cell", "Table Layout › Table › Select", |s, _| {
             let (tp, r, c) = cell(s)?;
             select_cells(s, &tp, Some((r, Some(c))))

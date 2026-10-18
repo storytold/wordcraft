@@ -46,7 +46,8 @@ pub fn specs() -> Vec<CommandSpec> {
             s.undo();
             sel_result(s)
         })
-        .key("Mod+Z")
+        // F1 is Word for Mac's other Undo key; Windows keeps F1 for Help.
+        .key(super::mac_or("Mod+Z / F1", "Mod+Z"))
         .pure(),
         CommandSpec::new("edit.undoTo", "Undo Actions", "Quick Access Toolbar", undo_to)
             .params(r#"{"count": n (1 = the newest step, like edit.undo; n undoes the newest n steps at once; at most the undo depth)}"#)
@@ -65,7 +66,11 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Mod+Y / Mod+Shift+Z")
         .pure(),
-        CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut).key("Mod+X").when(has_sel),
+        // F2 is Word for Mac's other Cut key (F3/F4, its Copy/Paste keys, stay with Find Next and
+        // Repeat here, so those two are skipped).
+        CommandSpec::new("edit.cut", "Cut", "Home › Clipboard", cut)
+            .key(super::mac_or("Mod+X / F2", "Mod+X"))
+            .when(has_sel),
         CommandSpec::new("edit.copy", "Copy", "Home › Clipboard", copy).key("Mod+C / Mod+Insert").pure(),
         // Word's Spike (Ctrl+F3, Ctrl+Shift+F3; ⌘ on the Mac): the AutoText entry "Spike", so Quick
         // Parts and AutoText insert it without emptying it, as in Word.
@@ -166,7 +171,9 @@ pub fn specs() -> Vec<CommandSpec> {
             painter_pick(s);
             sel_result(s)
         })
-        .key("Mod+Shift+C")
+        // Word for Mac also copies formatting with ⌘⌥C; its Paste Formatting key (⌘⌥V) stays with
+        // Paste Special, which already holds it.
+        .key(super::mac_or("Mod+Shift+C / Mod+Alt+C", "Mod+Shift+C"))
         .pure(),
         CommandSpec::new("edit.pasteFormat", "Paste Formatting", "Home › Clipboard", paste_format).key("Mod+Shift+V"),
     ]
