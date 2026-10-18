@@ -106,12 +106,13 @@ fn the_menu_lists_every_border_choice() {
 }
 
 /// The choice pictograms are drawn in code (icons::paint), not the letter fallback: each
-/// paints its dotted box and side lines, a good handful of shapes.
+/// paints its dotted box and side lines. Dots under accent strokes are skipped (PR #2861
+/// review), so the leanest, All Borders, draws 6 shapes against the fallback's 2.
 #[test]
 fn every_border_choice_has_a_pictogram() {
     for name in ["borders_bottom", "borders_top", "borders_left", "borders_right", "borders_none", "borders_all", "borders_outside", "borders_inside"]
     {
-        assert!(drawn_shapes(name) > 10, "{name} draws its dotted-box pictogram, not the letter fallback");
+        assert!(drawn_shapes(name) > 4, "{name} draws its dotted-box pictogram, not the letter fallback");
     }
     // The control: an unknown name draws the fallback only (a tile and a letter).
     assert!(drawn_shapes("borders_nope") <= 2, "unknown icons use the letter fallback");

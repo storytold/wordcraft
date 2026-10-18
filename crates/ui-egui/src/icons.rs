@@ -1645,14 +1645,24 @@ fn shape(pen: &Pen, kind: &str) -> bool {
 /// chosen outer sides (top, right, bottom, left) in the accent colour, and for the grid
 /// choices the inside cross drawn too. No side chosen: the box alone, as No Border.
 fn border_pictogram(pen: &Pen, sides: [bool; 4], inside: bool) {
+    // A dot marks an edge no accent line covers: a dot under an accent stroke would poke
+    // through it, so the grid skips every position a drawn side or the inside cross runs
+    // over (PR #2861 review).
+    let covered = |x: f32, y: f32| -> bool {
+        (sides[0] && y == 3.0) || (sides[1] && x == 17.0) || (sides[2] && y == 17.0) || (sides[3] && x == 3.0) || (inside && (x == 10.0 || y == 10.0))
+    };
     for y in [3.0, 10.0, 17.0] {
         for x in [3.0, 6.5, 10.0, 13.5, 17.0] {
-            pen.fcircle(x, y, 0.6, pen.c);
+            if !covered(x, y) {
+                pen.fcircle(x, y, 0.6, pen.c);
+            }
         }
     }
     for x in [3.0, 10.0, 17.0] {
         for y in [6.5, 13.5] {
-            pen.fcircle(x, y, 0.6, pen.c);
+            if !covered(x, y) {
+                pen.fcircle(x, y, 0.6, pen.c);
+            }
         }
     }
     let edges = [((3.0, 3.0), (17.0, 3.0)), ((17.0, 3.0), (17.0, 17.0)), ((17.0, 17.0), (3.0, 17.0)), ((3.0, 17.0), (3.0, 3.0))];
