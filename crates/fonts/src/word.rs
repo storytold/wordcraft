@@ -192,17 +192,16 @@ pub fn charset_base_family(family: &str) -> &str {
         .map_or(family, str::trim_end)
 }
 
-/// Whether a document font can be drawn as `family` itself: the family is installed, a Windows
-/// charset alias names an installed font, or one of the family's own substitutes is. False only
-/// when drawing it would land on the last-resort fallback (`FALLBACK_FAMILY`), which is what
-/// lets a font table's alternate name (`w:altName`) count as available, or not, on its own.
+/// Whether a document font can be drawn as `family` itself: the family is installed, or a
+/// Windows charset alias names an installed font. Whether a missing name lands on a generic
+/// substitute is `resolve`'s business, not this gate's: an unrecognized name must not count as
+/// available just because every machine has a sans, or a bogus font-table alternate name
+/// (`w:altName`) would hijack the resolution from the requested font's own class (PR #2862
+/// review).
 pub fn substitutes_available(family: &str) -> bool {
     let db = FontDb::global();
     let base = charset_base_family(family);
-    if db.has_family(family) || (base != family && db.has_family(base)) {
-        return true;
-    }
-    substitutes(base).iter().any(|s| db.has_family(s))
+    db.has_family(family) || (base != family && db.has_family(base))
 }
 
 /// Naskh-style Persian/Arabic document fonts (the "B …" family names come from the common
@@ -502,14 +501,15 @@ mod tests {
     }
 
     #[test]
-    fn an_alternate_is_available_when_it_or_its_own_substitutes_are_installed() {
-        // The family installed itself…
-        assert!(substitutes_available("Arial"));
-        assert!(substitutes_available("Times New Roman"));
-        // …or through one of its own substitutes: Carlito stands in for Calibri, a Windows
-        // charset alias names its font.
-        assert!(substitutes_available("Calibri"));
-        assert!(substitutes_available("Times New Roman Cyr"));
+    fn an_alternate_counts_when_it_is_installed_as_itself() {
+        // The family installed itself — the bundled faces count on every machine…
+        assert!(substitutes_available("Source Sans 3"));
+        // …or a Windows charset alias names an installed font.
+        assert!(substitutes_available("Source Sans 3 Baltic"));
+        // An unrecognized name is not available, however common the generic sans substitutes
+        // are: the altName gate judges the alternate itself, or a bogus name would hijack the
+        // resolution from the requested font's own substitute class.
+        assert!(!substitutes_available("No Such Brand Font"));
     }
 
     #[test]

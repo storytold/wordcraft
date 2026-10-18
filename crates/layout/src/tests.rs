@@ -2044,6 +2044,41 @@ fn wingdings_text_draws_and_reads_as_its_unicode_symbols() {
 }
 
 #[test]
+fn a_symbol_font_draws_its_unicode_symbols_even_when_its_altname_is_installed() {
+    // Word remaps a symbol font's characters to their Unicode equivalents whenever the font
+    // itself is missing — even when the font table's w:altName is installed and the run is
+    // drawn in it: the alternate is an ordinary text face, not the symbol encoding (#2702
+    // review: the alternate must not make the run skip the remap).
+    if wordcraft_fonts::word::substitutes_available("Wingdings") {
+        eprintln!("skipped: Wingdings is installed");
+        return;
+    }
+    let mut d = Document::from_text("Hi J\u{F0FC} ok");
+    d.format_range(&Pos::body(0, 3), &Pos::body(0, 7), &|c| c.font = Some("Wingdings".into())).unwrap();
+    d.settings.alt_fonts = vec![("Wingdings".into(), "Source Sans 3".into())];
+    let l = lay(&d);
+    let items = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
+    assert_eq!(text, "Hi \u{263A}\u{2713} ok");
+    // And the drawn glyphs are the Unicode characters' glyphs — never the raw code's letter
+    // glyph from the alternate face.
+    for want in ['\u{263A}', '\u{2713}'] {
+        let Some((face, glyphs)) = items.iter().find_map(|i| match i {
+            display::Draw::Glyphs { face, glyphs, text, .. } if text.contains(want) => Some((*face, glyphs.clone())),
+            _ => None,
+        }) else {
+            panic!("no run for {want}");
+        };
+        if face.covers(want) {
+            assert!(glyphs.iter().any(|g| g.0 == face.glyph_for(want)), "{want}");
+        } else {
+            // The alternate has no such glyph (a bare CI machine): never the letter J's glyph.
+            assert!(!glyphs.iter().any(|g| g.0 != 0 && g.0 == face.glyph_for('J')), "{want}");
+        }
+    }
+}
+
+#[test]
 fn tables_lay_out_cells() {
     let mut d = Document::from_text("before\nafter");
     let mut t = Table::new(2, 3, 468.0);
@@ -8158,6 +8193,49 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
         let face = para.styles[c.style as usize].face.id();
         let want = if ch.is_ascii() { latin_face } else { asian_face };
         assert_eq!(face, want, "{ch:?} in {}", if ch.is_ascii() { latin } else { &asian });
+    }
+}
+
+#[test]
+fn a_missing_east_asian_font_draws_in_its_altname() {
+    // The font table's w:altName covers the East Asian reference too (#2702 review): a missing
+    // w:eastAsia whose alternate is installed draws the Asian characters in the alternate, not
+    // in the generic fallback.
+    let resolve = |f: &str| wordcraft_fonts::word::resolve(f, false, false);
+    let fallback = wordcraft_fonts::FontDb::global().fallback_for('你', 0).map(|f| f.family.clone());
+    let mut fonts: Vec<String> = wordcraft_fonts::FontDb::global()
+        .east_asian_families()
+        .into_iter()
+        .filter(|f| {
+            let r = resolve(f);
+            !r.substituted && r.face.covers('你') && r.face.covers('好')
+        })
+        .collect();
+    // An alternate distinct from what the generic fallback picks anyway is the case that pins
+    // the gate: with it, the old code drew the characters in the fallback instead.
+    fonts.sort_by_key(|f| Some(f) == fallback.as_ref());
+    let Some(asian) = fonts.into_iter().find(|f| Some(f) != fallback.as_ref()) else {
+        eprintln!("skipped: no Chinese font beyond the fallback installed");
+        return;
+    };
+    let text = "Hello 你好";
+    let mut d = Document::from_text(text);
+    d.settings.alt_fonts = vec![("No Such CJK Font".into(), asian.clone())];
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+        c.font = Some(wordcraft_doc::styles::BODY_FONT.into());
+        c.font_ea = Some("No Such CJK Font".into());
+    })
+    .unwrap();
+    let l = lay(&d);
+    let para =
+        l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let asian_face = resolve(&asian).face.id();
+    for c in &para.clusters {
+        let Some(ch) = text.get(c.start..c.end).and_then(|s| s.chars().next()).filter(|ch| !ch.is_whitespace()) else { continue };
+        if ch.is_ascii() {
+            continue;
+        }
+        assert_eq!(para.styles[c.style as usize].face.id(), asian_face, "{ch:?} in the alternate {asian}");
     }
 }
 
