@@ -352,6 +352,9 @@ pub struct UiState {
     /// Read Aloud speed (1 = normal) and whether it skips citations and bibliographies.
     pub read_aloud_rate: f32,
     pub read_aloud_skip_citations: bool,
+    /// The Read Aloud voice the user chose (an id from `readAloud.voices`); `None` reads each
+    /// sentence in the voice of its language.
+    pub read_aloud_voice: Option<String>,
     /// Show ribbon and Quick Access Toolbar KeyTips on Alt/F10 (#620).
     pub keytips_enabled: bool,
     /// Digits entered for a multi-key Quick Access Toolbar badge; never persisted.
@@ -477,6 +480,7 @@ impl Default for UiState {
             editing: wordcraft_engine::Prefs::default(),
             read_aloud_rate: 1.0,
             read_aloud_skip_citations: true,
+            read_aloud_voice: None,
             keytips_enabled: true,
             keytip_prefix: String::new(),
             keytips: crate::keytips::Phase::Off,

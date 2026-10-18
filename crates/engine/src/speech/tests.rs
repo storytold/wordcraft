@@ -345,6 +345,62 @@ fn espeak_gets_the_language() {
 }
 
 #[test]
+fn installed_voices_are_read_from_each_listing() {
+    let espeak = " Pty Language       Age/Gender VoiceName          File                 Other Languages\n 5  hu              --/M      Hungarian          urj/hu               \n 2  en-gb           --/M      English_(Great_Britain) gmw/en               (en 2)\n 7  hu              --/F      hungarian-mbrola-1 mb/mb-hu1            \n\n";
+    let v = espeak_voices(espeak, false);
+    assert_eq!(v.len(), 2, "MBROLA voices need mbrola: {v:?}");
+    assert_eq!(v[0], Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak });
+    assert_eq!(v[1].name, "English (Great Britain)");
+    assert_eq!(espeak_voices(espeak, true).len(), 3);
+    let win = "Microsoft Szabolcs\thu-HU\r\nMicrosoft Zira Desktop\ten-US\r\n\tbroken\r\n";
+    let v = windows_voices(win);
+    assert_eq!(v.len(), 2);
+    assert_eq!((v[0].id.as_str(), v[0].lang.as_str()), ("Microsoft Szabolcs", "hu-HU"));
+    assert!(WINDOWS_VOICES.contains("GetInstalledVoices"));
+    assert!(espeak_voices("", false).is_empty() && windows_voices("").is_empty());
+}
+
+#[test]
+fn a_chosen_voice_reads_its_own_language() {
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hu), Some("hu-HU")), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), None), Some(&hu), "no language: the chosen voice");
+    assert_eq!(voice_for(Some(&hu), Some("ru-RU")), None, "a Russian quotation keeps the Russian voice");
+    assert_eq!(voice_for(Some(&hu), Some("x-none")), Some(&hu));
+    let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&gb), Some("en-US")), Some(&gb));
+    assert_eq!(voice_for(None, Some("hu")), None);
+}
+
+#[test]
+fn the_chosen_voice_is_kept_and_reported() {
+    let mut r = ReadAloud::default();
+    assert_eq!(r.status()["voice"], Value::Null);
+    r.set_voice(Some(" urj/hu "));
+    assert_eq!(r.voice().as_deref(), Some("urj/hu"));
+    assert_eq!(r.status()["voice"], "urj/hu");
+    r.set_voice(Some(""));
+    assert_eq!(r.voice(), None);
+    r.set_voice(Some(&"x".repeat(MAX_VOICE_ID + 1)));
+    assert_eq!(r.voice(), None, "an overlong id is dropped");
+    r.set_voice(None);
+    assert_eq!(r.voice(), None);
+}
+
+#[test]
+fn windows_speaks_with_the_chosen_voice() {
+    let w = windows_speech_with(None, 1.0, Some("ru"), Some("Microsoft Szabolcs"));
+    assert!(w.args[3].contains("$s.SelectVoice('Microsoft Szabolcs');"), "{}", w.args[3]);
+    assert!(!w.args[3].contains("GetInstalledVoices"), "the chosen voice replaces the choice by language");
+    let evil = windows_speech_with(None, 1.0, None, Some("x'); Remove-Item y; ('"));
+    assert!(evil.args[3].contains("SelectVoice('x''); Remove-Item y; (''');"), "{}", evil.args[3]);
+    // PowerShell ends a single-quoted string at a typographic quote too.
+    let curly = windows_speech_with(None, 1.0, None, Some("x\u{2019}); Remove-Item y; (\u{2018}"));
+    assert!(curly.args[3].contains("SelectVoice('x\u{2019}\u{2019}); Remove-Item y; (\u{2018}\u{2018}');"), "{}", curly.args[3]);
+    assert_eq!(powershell_literal("a\u{201A}b\u{201B}c\nd"), "a\u{201A}\u{201A}b\u{201B}\u{201B}cd");
+}
+
+#[test]
 fn speech_dispatcher_rate_follows_the_speed() {
     assert_eq!(spd_rate(1.0), 0);
     assert_eq!(spd_rate(MIN_RATE), -50);

@@ -7,7 +7,7 @@
 //! (`CANCEL self`), where `spd-say -C` would silence every client, a screen reader included.
 //!
 //! One connection speaks one sentence: it names the client, asks for the begin, end, cancel and
-//! pause events, sets the rate and language, sends the text, and waits for the sentence's end
+//! pause events, sets the rate, language and voice, sends the text, and waits for the sentence's end
 //! event. A sentence another client's message cancels (a screen reader's announcement) is sent
 //! again after a pause, twice at most; a sentence cancelled once more or paused by another
 //! client halts reading on it ([`Outcome::Halted`]), and so does one that never began
@@ -50,6 +50,8 @@ pub(super) struct Request<'a> {
     pub rate: i32,
     /// A plain language tag (`hu`, `pt-BR`); anything else is left out.
     pub lang: Option<&'a str>,
+    /// A synthesis voice name from Speech Dispatcher's own list.
+    pub voice: Option<&'a str>,
 }
 
 /// How a sentence ended.
@@ -294,6 +296,13 @@ pub(super) fn message_data(text: &str) -> String {
     format!("{dot}{line}\r\n.\r\n")
 }
 
+/// A voice name that is safe on an SSIP command line (no line breaks; the name comes from the
+/// server's list, but a saved choice is hostile input).
+fn plain_voice(name: &str) -> Option<&str> {
+    let n = name.trim();
+    (!n.is_empty() && n.len() <= 200 && !n.chars().any(char::is_control)).then_some(n)
+}
+
 /// Reads reply lines. Bytes wait in `pending` until their line is complete, so a character split
 /// across reads stays whole, and a line longer than [`MAX_LINE`] is an error, never a growing buffer.
 struct Lines<R> {
@@ -462,10 +471,13 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
         ok(self.command("SET SELF NOTIFICATION CANCEL on")?)?;
         ok(self.command("SET SELF NOTIFICATION PAUSE on")?)?;
         ok(self.command(&format!("SET SELF RATE {}", req.rate))?)?;
-        // A language the server doesn't know leaves its default: no error. The tag is checked
-        // again here, at the edge of the protocol: it goes on a command line.
+        // A language or voice the server doesn't know leaves its default: no error. The tag is
+        // checked again here, at the edge of the protocol: it goes on a command line.
         if let Some(lang) = req.lang.and_then(super::plain_tag) {
             self.command(&format!("SET SELF LANGUAGE {lang}"))?;
+        }
+        if let Some(voice) = req.voice.and_then(plain_voice) {
+            self.command(&format!("SET SELF SYNTHESIS_VOICE {voice}"))?;
         }
         let chars = u32::try_from(req.text.chars().count()).unwrap_or(u32::MAX);
         let limit = SENTENCE_BASE.saturating_add(SENTENCE_PER_CHAR.saturating_mul(chars));
@@ -487,6 +499,50 @@ impl<W: Write, R: Read> Conversation<'_, W, R> {
             }
         }
     }
+}
+
+/// Most voices kept from the server's list (it lists every variant of every voice: thousands).
+const MAX_VOICES: usize = 2000;
+
+/// The plain voices in a `LIST SYNTHESIS_VOICES` reply line (`249-name<TAB>lang<TAB>variant`), as
+/// (name, language); variants are left out, since each voice has dozens.
+fn voice_line(line: &str) -> Option<(String, String)> {
+    let mut f = line.strip_prefix("249-")?.split('\t');
+    let (name, lang, variant) = (f.next()?, f.next()?, f.next().unwrap_or("none"));
+    (variant == "none" && plain_voice(name).is_some() && !lang.is_empty()).then(|| (name.to_string(), lang.to_string()))
+}
+
+/// The server's synthesis voices, as (name, language).
+pub(super) fn list_voices(stream: &Stream) -> std::io::Result<Vec<(String, String)>> {
+    stream.set_timeouts()?;
+    let never = || false;
+    let mut c = Conversation { w: stream.try_clone()?, lines: Lines::new(stream.try_clone()?), event: None, begun: false, changed: &never };
+    ok(c.command("SET SELF CLIENT_NAME user:wordcraft:read-aloud")?)?;
+    c.w.write_all(b"LIST SYNTHESIS_VOICES\r\n")?;
+    let mut out = Vec::new();
+    let start = Instant::now();
+    loop {
+        match c.lines.next()? {
+            Some(line) => match final_code(&line) {
+                Some(code) if (700..800).contains(&code) => {}
+                Some(code) => {
+                    ok(code)?;
+                    break;
+                }
+                None => {
+                    if out.len() < MAX_VOICES
+                        && let Some(v) = voice_line(&line)
+                    {
+                        out.push(v);
+                    }
+                }
+            },
+            None if start.elapsed() > REPLY_TIMEOUT => return Err(ErrorKind::TimedOut.into()),
+            None => {}
+        }
+    }
+    let _ = c.w.write_all(b"QUIT\r\n");
+    Ok(out)
 }
 
 /// What became of a queued message.
@@ -557,6 +613,8 @@ mod tests {
         assert_eq!(final_code("225 OK MESSAGE QUEUED"), Some(225));
         assert_eq!(final_code("225-17"), None);
         assert_eq!(final_code("x"), None);
+        assert_eq!(plain_voice("Hungarian"), Some("Hungarian"));
+        assert_eq!(plain_voice("x\r\nCANCEL all"), None);
     }
 
     /// Hands out the given reads one by one, then reports a timeout.
@@ -692,12 +750,13 @@ mod tests {
     fn a_sentence_is_spoken_to_its_end() {
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::End);
-        let req = Request { text: "!-!QUIT", rate: 50, lang: Some("pt-BR") };
+        let req = Request { text: "!-!QUIT", rate: 50, lang: Some("pt-BR"), voice: Some("Hungarian") };
         assert_eq!(converse(&Stream::Unix(client), &req, &|| false).unwrap(), Outcome::Done);
         let got = h.join().unwrap();
         assert!(got.contains(&"SET SELF RATE 50".to_string()), "{got:?}");
         // The region stays: Speech Dispatcher's voices are per region (`en-GB`, `pt-BR`).
         assert!(got.contains(&"SET SELF LANGUAGE pt-BR".to_string()), "{got:?}");
+        assert!(got.contains(&"SET SELF SYNTHESIS_VOICE Hungarian".to_string()));
         let at = got.iter().position(|l| l == "SPEAK").unwrap();
         assert_eq!(got[at + 1..at + 3], ["!-!QUIT".to_string(), ".".to_string()], "the text went as data");
         assert_eq!(speaks(&got), 1);
@@ -710,7 +769,7 @@ mod tests {
         // One announcement: the sentence is said again once it has had time to end.
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::CancelledOnce);
-        let req = Request { text: "Interrupted by a screen reader.", rate: 0, lang: None };
+        let req = Request { text: "Interrupted by a screen reader.", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         assert_eq!(converse(&Stream::Unix(client), &req, &|| false).unwrap(), Outcome::Done);
         assert!(start.elapsed() >= RESEND_AFTER[0], "it waited before saying it again");
@@ -727,7 +786,7 @@ mod tests {
         for (ending, sent) in [(Ending::CancelledByOther, 1 + RESEND_AFTER.len()), (Ending::PausedByOther, 1)] {
             let (client, srv) = UnixStream::pair().unwrap();
             let h = server(srv, ending);
-            let req = Request { text: "Interrupted by a screen reader.", rate: 0, lang: None };
+            let req = Request { text: "Interrupted by a screen reader.", rate: 0, lang: None, voice: None };
             assert_eq!(converse(&Stream::Unix(client), &req, &|| false).unwrap(), Outcome::Halted);
             let got = h.join().unwrap();
             assert_eq!(speaks(&got), sent, "{got:?}");
@@ -765,7 +824,7 @@ mod tests {
         // bound, and reaching it halts reading (Play carries on) rather than stopping with an error.
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::NeverBegins);
-        let req = Request { text: "Queued behind another client.", rate: 0, lang: None };
+        let req = Request { text: "Queued behind another client.", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         assert_eq!(converse(&Stream::Unix(client), &req, &|| false).unwrap(), Outcome::NotStarted);
         assert!(start.elapsed() >= QUEUE_WAIT && start.elapsed() < QUEUE_WAIT + REPLY_TIMEOUT * 2, "{:?}", start.elapsed());
@@ -777,7 +836,7 @@ mod tests {
         // A stuck speech module: no end event ever. The wait is bounded by the sentence's length.
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::Hold);
-        let req = Request { text: "x", rate: 0, lang: None };
+        let req = Request { text: "x", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         assert_eq!(converse(&Stream::Unix(client), &req, &|| false).unwrap_err().kind(), ErrorKind::TimedOut);
         assert!(start.elapsed() < SENTENCE_BASE + SENTENCE_PER_CHAR + REPLY_TIMEOUT * 2, "{:?}", start.elapsed());
@@ -788,7 +847,7 @@ mod tests {
     fn moving_on_cancels_only_our_own_speech() {
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::Hold);
-        let req = Request { text: "Long sentence.", rate: 0, lang: None };
+        let req = Request { text: "Long sentence.", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         let changed = || start.elapsed() > Duration::from_millis(300);
         assert_eq!(converse(&Stream::Unix(client), &req, &changed).unwrap(), Outcome::Interrupted);
@@ -808,7 +867,7 @@ mod tests {
             let _ = srv.read_to_string(&mut all);
             all
         });
-        let req = Request { text: "x", rate: 0, lang: None };
+        let req = Request { text: "x", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         assert_eq!(converse(&Stream::Unix(client), &req, &|| true).unwrap(), Outcome::Interrupted);
         assert!(start.elapsed() < REPLY_TIMEOUT, "{:?}", start.elapsed());
@@ -823,7 +882,7 @@ mod tests {
         // Events and continuation lines are no reply: they can't keep a command waiting forever.
         let (client, mut srv) = UnixStream::pair().unwrap();
         let h = std::thread::spawn(move || while srv.write_all(b"701 BEGIN\r\n225-1\r\n").is_ok() {});
-        let req = Request { text: "x", rate: 0, lang: None };
+        let req = Request { text: "x", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         let client = Stream::Unix(client);
         assert_eq!(converse(&client, &req, &|| false).unwrap_err().kind(), ErrorKind::TimedOut);
@@ -836,10 +895,36 @@ mod tests {
     fn a_hostile_language_tag_is_never_sent() {
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::End);
-        let req = Request { text: "x", rate: 0, lang: Some("hu\r\nCANCEL all") };
+        let req = Request { text: "x", rate: 0, lang: Some("hu\r\nCANCEL all"), voice: None };
         assert_eq!(converse(&Stream::Unix(client), &req, &|| false).unwrap(), Outcome::Done);
         let got = h.join().unwrap();
         assert!(!got.iter().any(|l| l.starts_with("SET SELF LANGUAGE") || l.starts_with("CANCEL")), "{got:?}");
+    }
+
+    #[test]
+    fn the_voice_list_keeps_the_plain_voices() {
+        assert_eq!(voice_line("249-Hungarian\thu\tnone"), Some(("Hungarian".into(), "hu".into())));
+        assert_eq!(voice_line("249-Hungarian+Adam\thu\tAdam"), None, "a variant");
+        assert_eq!(voice_line("249 OK VOICE LIST SENT"), None);
+        assert_eq!(voice_line("249-\thu\tnone"), None);
+        let (client, mut srv) = UnixStream::pair().unwrap();
+        let h = std::thread::spawn(move || {
+            let mut r = BufReader::new(srv.try_clone().unwrap());
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            srv.write_all(b"208 OK CLIENT NAME SET\r\n").unwrap();
+            line.clear();
+            r.read_line(&mut line).unwrap();
+            assert_eq!(line, "LIST SYNTHESIS_VOICES\r\n");
+            srv.write_all(b"249-Afrikaans\taf\tnone\r\n249-Afrikaans+Adam\taf\tAdam\r\n249-Hungarian\thu\tnone\r\n249 OK VOICE LIST SENT\r\n")
+                .unwrap();
+            line.clear();
+            let _ = r.read_line(&mut line);
+            let _ = srv.write_all(b"231 HAPPY HACKING\r\n");
+        });
+        let v = list_voices(&Stream::Unix(client)).unwrap();
+        assert_eq!(v, [("Afrikaans".to_string(), "af".to_string()), ("Hungarian".to_string(), "hu".to_string())]);
+        h.join().unwrap();
     }
 
     #[test]
@@ -849,7 +934,7 @@ mod tests {
             let mut buf = [0u8; 64];
             let _ = srv.read(&mut buf);
         });
-        let req = Request { text: "x", rate: 0, lang: None };
+        let req = Request { text: "x", rate: 0, lang: None, voice: None };
         assert!(converse(&Stream::Unix(client), &req, &|| false).is_err());
         h.join().unwrap();
     }
