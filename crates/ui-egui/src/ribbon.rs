@@ -2952,6 +2952,5 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
-
 #[cfg(test)]
 mod tests;

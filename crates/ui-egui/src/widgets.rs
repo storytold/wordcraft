@@ -428,7 +428,6 @@ pub fn menu_button(
     });
 }
 
-
 #[cfg(test)]
 thread_local! {
     /// Groups drawn taller than [`CONTENT_H`] (title and height): their content runs into the

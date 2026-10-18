@@ -105,17 +105,70 @@ fn the_menu_lists_every_border_choice() {
     }
 }
 
-/// The choice pictograms are drawn in code (icons::paint), not the letter fallback: each
-/// paints its dotted box and side lines. Dots under accent strokes are skipped (PR #2861
-/// review), so the leanest, All Borders, draws 6 shapes against the fallback's 2.
+/// The choice pictograms are drawn in code (icons::paint), not the letter fallback, and each
+/// paints exactly the accent sides its name asks for. Asserting the segment geometry catches a
+/// swapped side, which shape counts cannot: Bottom, Top, Left and Right all draw 17 shapes
+/// (PR #2861 review).
 #[test]
-fn every_border_choice_has_a_pictogram() {
-    for name in ["borders_bottom", "borders_top", "borders_left", "borders_right", "borders_none", "borders_all", "borders_outside", "borders_inside"]
-    {
-        assert!(drawn_shapes(name) > 4, "{name} draws its dotted-box pictogram, not the letter fallback");
+fn every_border_choice_paints_its_own_sides() {
+    let top = vec![((3, 3), (17, 3))];
+    let bottom = vec![((3, 17), (17, 17))];
+    let left = vec![((3, 3), (3, 17))];
+    let right = vec![((17, 3), (17, 17))];
+    let inside = vec![((3, 10), (17, 10)), ((10, 3), (10, 17))];
+    let mut outside = [top.as_slice(), right.as_slice(), bottom.as_slice(), left.as_slice()].concat();
+    outside.sort();
+    let mut all = [outside.as_slice(), inside.as_slice()].concat();
+    all.sort();
+    for (name, want) in [
+        ("borders_bottom", bottom.clone()),
+        ("borders_top", top.clone()),
+        ("borders_left", left.clone()),
+        ("borders_right", right.clone()),
+        ("borders_none", vec![]),
+        ("borders_outside", outside.clone()),
+        ("borders_inside", inside.clone()),
+        ("borders_all", all),
+    ] {
+        assert_eq!(accent_segments(name), want, "{name} paints the wrong accent sides");
     }
+    // None has no accent, so the segments alone cannot tell it from the letter fallback: its
+    // pictogram is the full dotted grid.
+    assert_eq!(drawn_shapes("borders_none"), 21, "the None pictogram is the dotted grid");
     // The control: an unknown name draws the fallback only (a tile and a letter).
     assert!(drawn_shapes("borders_nope") <= 2, "unknown icons use the letter fallback");
+}
+
+/// The accent line segments an icon paints, normalized: each segment's endpoints sorted and the
+/// list sorted, drawn headless into a bare egui context.
+fn accent_segments(icon: &str) -> Vec<((i32, i32), (i32, i32))> {
+    let ctx = egui::Context::default();
+    let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+        wordcraft_ui_egui::icons::paint(
+            ui.painter(),
+            egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(20.0, 20.0)),
+            icon,
+            egui::Color32::WHITE,
+            egui::Color32::BLUE,
+        );
+    });
+    let mut segs: Vec<((i32, i32), (i32, i32))> = out
+        .shapes
+        .iter()
+        .filter_map(|s| match &s.shape {
+            egui::Shape::Path(path)
+                if !path.closed && path.stroke.color == egui::epaint::ColorMode::Solid(egui::Color32::BLUE) && path.points.len() == 2 =>
+            {
+                let (a, b) = ((path.points[0].x as i32, path.points[0].y as i32), (path.points[1].x as i32, path.points[1].y as i32));
+                Some(if a <= b { (a, b) } else { (b, a) })
+            }
+            _ => None,
+        })
+        .collect();
+    // The frame's texture deltas were never handed to a renderer; drop them on purpose.
+    out.drop_without_applying_deltas();
+    segs.sort();
+    segs
 }
 
 /// How many shapes an icon name paints, drawn headless into a bare egui context.
