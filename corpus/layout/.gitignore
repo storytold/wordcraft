@@ -1,0 +1,9 @@
+# The layout corpus keeps its original synthetic DOCX fixtures and expectations.
+# Everything else stays local: Word reference PDFs (case.word.pdf), WordCraft's generated
+# case.wordcraft.pdf, visual-diff maps and reports are never committed.
+*
+!.gitignore
+!README.md
+!*/
+!*/case.docx
+!*/case.expected.json

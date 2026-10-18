@@ -6,6 +6,7 @@
 mod assets;
 mod ico;
 mod layers;
+mod layout_corpus;
 mod parity;
 mod stats;
 mod version;
@@ -34,6 +35,9 @@ commands:
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
                   compare two PDFs of a document page by page (SSIM, line breaks, offsets);
                   needs poppler (pdftoppm, pdftotext)
+  layout-corpus --dir <corpus> [--out <dir>] [--private] [--dpi N]
+                  export each <case>/case.docx, compare with its local case.word.pdf through
+                  visual-diff, and write summary.json/summary.md (worst cases first)
   ico <out.ico> <in.png>...
                   pack square PNGs (<= 256 px) into a Windows .ico (see packaging/icons.sh)
 ";
@@ -53,6 +57,7 @@ fn main() -> ExitCode {
         Some("parity") => parity::run(&root()),
         Some("ico") => ico::run(&rest),
         Some("visual-diff") => visual_diff::run(&rest),
+        Some("layout-corpus") => layout_corpus::run(&root(), &rest),
         Some("version") => version::run(&root(), &rest),
         Some("-h" | "--help" | "help") | None => {
             print!("{USAGE}");
