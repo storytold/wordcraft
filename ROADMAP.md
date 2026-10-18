@@ -47,7 +47,9 @@ discounts and the user evidence (120 issues from outside users, 4 praise, 0 "swi
 
 **Why alpha:** the core workflows (write, format, styles, lists, tables, references, review, mail
 merge, open and save .docx) work end to end and ship as signed builds on every desktop platform
-and the web. **Why not beta:** DOCX has never been tested on real-world files; charts, SmartArt and
+and the web. **Why not beta:** DOCX has not been tested on a real-world corpus yet (the opt-in
+`cargo xtask docx-corpus` harness can now run one locally, but no corpus or Word comparison is
+checked in); charts, SmartArt and
 OLE objects are dropped silently; pagination differs from Word (no Aptos-metric font, no column
 balancing or footnote continuation); content controls are lost; there is open field evidence of
 a startup crash and several hangs; no native printing. Gaps #1–#7 in [`docs/gaps.md`](docs/gaps.md)

@@ -4,6 +4,7 @@
 //! invoked through `std::process::Command`.
 
 mod assets;
+mod docx_corpus;
 mod ico;
 mod layers;
 mod parity;
@@ -29,6 +30,8 @@ commands:
                   (stops at first failure)
   corpus [--download]
                   show where test corpora live; --download fetches PngSuite into corpus/pngsuite
+  docx-corpus --dir <path> [--out <report.json>]
+                  open, render and round-trip every .docx under a local corpus; writes JSON + Markdown
   stats [--exact] count tests and lines per crate (--exact: ask the test harness via `-- --list`)
   parity          recompute the Word feature-parity summary in docs/parity-checklist.md
   visual-diff <ref.pdf> <test.pdf> <outdir> [--private] [--dpi N]
@@ -49,6 +52,7 @@ fn main() -> ExitCode {
         Some("i18n-report") => cmd_i18n_report(),
         Some("ci") => cmd_ci(),
         Some("corpus") => cmd_corpus(rest.contains(&"--download")),
+        Some("docx-corpus") => docx_corpus::run(&rest),
         Some("stats") => stats::run(&root(), rest.contains(&"--exact")),
         Some("parity") => parity::run(&root()),
         Some("ico") => ico::run(&rest),
