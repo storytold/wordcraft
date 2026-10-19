@@ -78,6 +78,52 @@ fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> bool {
         })
 }
 
+/// Returns true if `c` is a Thai combining vowel (above or below the consonant).
+#[inline]
+fn is_thai_vowel(c: char) -> bool {
+    matches!(c,
+        '\u{0E31}'              // mai han akat (above)
+        | '\u{0E34}'..='\u{0E37}' // sara i – sara ue (above)
+        | '\u{0E38}'..='\u{0E3A}' // sara u – phinthu (below)
+    )
+}
+
+/// Render-only substitution: replace ญ (U+0E0D) and ฐ (U+0E10) with their WTT 2.0 PUA
+/// "without-base" forms (U+F70F and U+F700) when immediately followed by any Thai vowel
+/// (above or below), **only when the rendering face actually contains those glyphs**.
+///
+/// These PUA codepoints exist only in the old Microsoft Thai fonts (Angsana New,
+/// Browallia New, Cordia New, DilleniaUPC, …).  Modern OpenType Thai fonts (Thonburi,
+/// Noto Sans Thai, …) handle the short-tail variant through GSUB features that HarfBuzz
+/// applies automatically — no PUA substitution is needed or useful for them.
+/// When the face lacks U+F700/U+F70F we skip the substitution so ฐ/ญ remain visible
+/// (they render with their standard full-tail form instead of disappearing).
+///
+/// The document text is never touched; only the string sent to the shaper is modified.
+/// Both the original codepoints and the PUA forms are exactly 3 UTF-8 bytes, so cluster
+/// byte offsets are preserved.
+fn thai_short_tail(text: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
+    let has_f700 = face.covers('\u{F700}');
+    let has_f70f = face.covers('\u{F70F}');
+    // Fast path: skip if neither consonant is present or the face has neither PUA glyph.
+    if (!has_f700 && !has_f70f)
+        || (!text.contains('\u{0E10}') && !text.contains('\u{0E0D}'))
+    {
+        return None;
+    }
+    let mut out = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        let mapped = match c {
+            '\u{0E10}' if has_f700 && chars.peek().copied().is_some_and(is_thai_vowel) => '\u{F700}',
+            '\u{0E0D}' if has_f70f && chars.peek().copied().is_some_and(is_thai_vowel) => '\u{F70F}',
+            _ => c,
+        };
+        out.push(mapped);
+    }
+    Some(out)
+}
+
 /// A face at a size with the formatting needed to draw it.
 #[derive(Clone, Debug)]
 pub struct StyleRun {
@@ -1003,6 +1049,20 @@ impl<'a> Builder<'a> {
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 // The run's one substitute face for a missing Thai font (#1549).
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
+                // Complex-script chars (Thai, Indic…) need OpenType layout tables for correct
+                // shaping.  A generic font (e.g. Helvetica Neue) that merely contains the
+                // codepoints but lacks the script's GSUB lookups will produce unshaped text —
+                // e.g. ฐ/ญ tails overlapping sara u.  If the CS font is not in the preferred
+                // list for this script, prefer the script-specific fallback font.
+                _ if complex
+                    && wordcraft_fonts::needs_layout_tables(dc)
+                    && prim.covers(dc)
+                    && wordcraft_fonts::fallback_rank(dc, &prim.get().family)
+                        > wordcraft_fonts::script_fallbacks(dc).len() =>
+                {
+                    let (bold, italic) = (rc.bold_cs, rc.italic_cs);
+                    wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
+                }
                 _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
                 // Stay in the fallback face the word started in while it covers the letters.
                 Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
@@ -1066,6 +1126,14 @@ impl<'a> Builder<'a> {
                 orig_of.push(sub.len());
             }
             let shape_text = if substituted { mapped.as_str() } else { sub };
+            // Render-only: swap ญ/ฐ for their short-tail PUA forms when followed by a below-vowel.
+            let short_tail_buf;
+            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &st.face) {
+                short_tail_buf = buf;
+                short_tail_buf.as_str()
+            } else {
+                shape_text
+            };
             let map = |c: char| {
                 let d = show(c);
                 if d != c {
