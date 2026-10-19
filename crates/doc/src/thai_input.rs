@@ -30,7 +30,8 @@ pub enum ThaiCharClass {
     LowerVowel,
     /// Tone mark (TCT_THAITONE): ◌้ ◌่ ◌๊ ◌๋ ◌์ — occupies slot 2.
     Tone,
-    /// Diacritic (TCT_THAIDIAC): ◌็ — occupies slot 2.
+    /// Diacritic (TCT_THAIDIAC): ◌็ ◌ํ — occupies slot 2.
+    /// NIKHAHIT (U+0E4D) is included here; it combines with a following SARA_AA to form SARA_AM.
     Diacritic,
     /// Leading vowel (TCT_LEADINGVOWEL): เ แ โ ใ ไ — written before the consonant visually
     /// but typed/stored after; handled outside TCB logic.
@@ -108,8 +109,9 @@ pub fn thai_char_class(c: char) -> ThaiCharClass {
         0x0E38..=0x0E3A
         => ThaiCharClass::LowerVowel,
 
-        // Diacritic (TCT_THAIDIAC): ◌็ (maitaikhu)
-        0x0E47
+        // Diacritic (TCT_THAIDIAC): ◌็ (maitaikhu) and ◌ํ (nikhahit)
+        // NIKHAHIT occupies the above slot like a tone mark; it combines with SARA_AA → SARA_AM.
+        0x0E47 | 0x0E4D
         => ThaiCharClass::Diacritic,
 
         // Tone marks (TCT_THAITONE): ◌้ ◌่ ◌๊ ◌๋ ◌์
@@ -203,8 +205,22 @@ pub fn thai_input_action(tcb: &[(usize, char)], new_char: char, prev_char: Optio
             ThaiInputAction::Accept
         }
 
-        // Other non-Thai passes through unchanged.
-        ThaiCharClass::Other => ThaiInputAction::Accept,
+        // Other characters: pass through, with one exception —
+        // SARA_AA (า U+0E32) typed after a consonant+NIKHAHIT (ํ U+0E4D) combines
+        // the two characters into a single SARA_AM (ำ U+0E33).
+        ThaiCharClass::Other => {
+            if new_char == '\u{0E32}' {
+                if let Some(&(off, '\u{0E4D}')) = tcb.iter().find(|(_, c)| *c == '\u{0E4D}') {
+                    return ThaiInputAction::Replace {
+                        slot_offset: off,
+                        slot_bytes: '\u{0E4D}'.len_utf8(),
+                        cons_swap: None,
+                        replacement: Some('\u{0E33}'),
+                    };
+                }
+            }
+            ThaiInputAction::Accept
+        }
 
         // A consonant always starts a fresh TCB.
         ThaiCharClass::Consonant => ThaiInputAction::Accept,
@@ -429,5 +445,35 @@ mod tests {
         assert_eq!(action("\u{0E40}", '\u{0E41}'), ThaiInputAction::Accept); // เ+แ → Accept
 
         let _ = sara_ae;
+    }
+
+    #[test]
+    fn nikhahit_sara_aa_combines_to_sara_am() {
+        let nikhahit = '\u{0E4D}'; // ◌ํ
+        let sara_aa  = '\u{0E32}'; // า
+        let sara_am  = '\u{0E33}'; // ำ
+
+        // NIKHAHIT is classified as Diacritic so the TCB picks it up.
+        assert_eq!(cls(nikhahit), ThaiCharClass::Diacritic);
+
+        // Typing SARA_AA after consonant alone: plain Accept (no NIKHAHIT present).
+        assert_eq!(action("ก", sara_aa), ThaiInputAction::Accept);
+
+        // Typing SARA_AA after consonant+NIKHAHIT: Replace NIKHAHIT with SARA_AM.
+        // "กํ" = ก(0,3) + ํ(3,3); caret at 6.
+        let s = "กํ";
+        match action(s, sara_aa) {
+            ThaiInputAction::Replace {
+                slot_offset: 3,
+                slot_bytes: 3,
+                cons_swap: None,
+                replacement: Some(r),
+            } if r == sara_am => {}
+            other => panic!("expected Replace(NIKHAHIT→SARA_AM), got {other:?}"),
+        }
+
+        // SARA_AA on its own (no preceding Thai): Accept.
+        assert_eq!(action("hello", sara_aa), ThaiInputAction::Accept);
+        assert_eq!(action("", sara_aa), ThaiInputAction::Accept);
     }
 }
