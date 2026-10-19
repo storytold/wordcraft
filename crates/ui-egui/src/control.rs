@@ -139,10 +139,9 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
                 return err(e);
             }
             if id == "file.checkForUpdates" && crate::update::can_run_off_thread(app) {
-                if crate::update::queue_check_control(app, params, ctx, req.reply.clone()) {
-                    return Outcome::Deferred;
-                }
-                return err("update check could not start");
+                // Started or not, it answers on `reply` itself (one reply per request).
+                crate::update::queue_check_control(app, params, ctx, req.reply.clone());
+                return Outcome::Deferred;
             }
             match app.execute(id, params) {
                 Ok(v) => ok(v),

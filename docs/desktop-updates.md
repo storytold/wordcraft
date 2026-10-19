@@ -18,7 +18,7 @@ No account, identifier, document content, or telemetry is sent. GitHub sees a no
 
 ## One-click update
 
-For Windows `.msi` and Linux `.deb` packages, **Update** downloads the matching release asset, verifies it against `SHA256SUMS.txt` on the release, then starts the platform installer (`msiexec` or `dpkg` via `pkexec`). If the document has unsaved changes, WordCraft asks you to save first, and the download does not start until it is saved. WordCraft then quits cleanly so the installer can finish.
+For Windows `.msi` and Linux `.deb` packages, **Update** downloads the matching release asset, verifies it against `SHA256SUMS.txt` on the release, then starts the platform installer (`msiexec` or `dpkg` via `pkexec`). If the document has unsaved changes, WordCraft asks Save, Don't Save or Cancel first. **Save** saves the document, then the update starts. **Don't Save** starts the update without saving (an edit made after that answer asks again). **Cancel** leaves the document as it is and doesn't update. WordCraft then quits cleanly so the installer can finish.
 
 On Windows the MSI runs with `/norestart` and `MSIRESTARTMANAGERCONTROL=DisableShutdown`: the installer never restarts the computer and never closes WordCraft to replace in-use files, so an update started while you are editing cannot shut the editor down behind the save prompt. An install that still needs a restart (MSI return code `3010` or `1641`) counts as a success: WordCraft shows a restart instruction, waits for you to acknowledge it, then quits so the restart can finish the update.
 

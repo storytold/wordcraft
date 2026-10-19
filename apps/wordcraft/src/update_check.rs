@@ -26,7 +26,9 @@ pub fn http_get() -> HttpGet {
 }
 
 fn fetch_url(url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
+    // HTTPS only, redirects included: release assets redirect to GitHub's download host.
     let agent: ureq::Agent = ureq::Agent::config_builder()
+        .https_only(true)
         .timeout_connect(Some(CONNECT))
         .timeout_send_request(Some(CONNECT))
         .timeout_recv_response(Some(CONNECT))

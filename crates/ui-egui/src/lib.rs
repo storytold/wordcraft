@@ -1386,7 +1386,7 @@ impl WordApp {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
         }
-        if update::worker_busy(self) {
+        if update::install_busy(self) {
             self.status(tl!("Wait for the update to finish before closing."));
             return false;
         }
@@ -5904,7 +5904,22 @@ mod tests {
         }));
         update::queue_check(&mut a, json!({"force": true}), true, &ctx);
         assert!(update::worker_busy(&a));
-        assert!(!a.close_requested(), "install/check work must not be interrupted by closing");
+        assert!(a.close_requested(), "a plain check doesn't hold the window open");
+        a.quit_requested = false;
+        // Let the check finish, then start an install.
+        hold.store(false, Ordering::Relaxed);
+        for _ in 0..200 {
+            update::poll(&mut a, &ctx);
+            if !update::worker_busy(&a) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!update::worker_busy(&a));
+        hold.store(true, Ordering::Relaxed);
+        update::queue_check(&mut a, json!({"force": true, "apply": true}), false, &ctx);
+        assert!(update::install_busy(&a));
+        assert!(!a.close_requested(), "an install must not be interrupted by closing");
         hold.store(false, Ordering::Relaxed);
         for _ in 0..200 {
             update::poll(&mut a, &ctx);

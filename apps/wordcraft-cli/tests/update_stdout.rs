@@ -7,6 +7,8 @@
 use std::fs;
 use std::process::{Command, Stdio};
 
+/// Unix only: the fake probe is a `/bin/sh` script.
+#[cfg(unix)]
 #[test]
 fn update_check_subprocess_stdout_is_one_json_value() {
     let dir = std::env::temp_dir().join(format!("wordcraft-update-check-{}", std::process::id()));
@@ -21,17 +23,13 @@ fn update_check_subprocess_stdout_is_one_json_value() {
     let marker = dir.join("probe-ran");
     let dpkg = bin.join("dpkg-query");
     fs::write(&dpkg, format!("#!/bin/sh\necho wordcraft-capture-probe\ntouch '{}'\nexit 0\n", marker.display())).expect("fake dpkg-query");
-    #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
         fs::set_permissions(&dpkg, fs::Permissions::from_mode(0o755)).expect("chmod fake dpkg-query");
     }
 
-    let mut path = std::ffi::OsString::from(bin.as_os_str());
-    if let Some(existing) = std::env::var_os("PATH") {
-        path.push(":");
-        path.push(existing);
-    }
+    let existing = std::env::var_os("PATH").unwrap_or_default();
+    let path = std::env::join_paths(std::iter::once(bin.clone()).chain(std::env::split_paths(&existing))).expect("PATH");
 
     let out = Command::new(env!("CARGO_BIN_EXE_wordcraft-cli"))
         .args(["update", "--check"])

@@ -42,8 +42,9 @@ fn prefs(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn check(s: &mut Session, v: &Value) -> CmdResult {
-    let force = p::bool(v, "force").unwrap_or(false);
     let apply = p::bool(v, "apply").unwrap_or(false);
+    // An explicit install request is never throttled.
+    let force = p::bool(v, "force").unwrap_or(false) || apply;
     let startup = p::bool(v, "startup").unwrap_or(false);
     let current = parse_version(env!("CARGO_PKG_VERSION")).unwrap_or((0, 0, 0));
     let current_text = version_text(current);
@@ -390,6 +391,21 @@ mod tests {
         let r = check(&mut s, &json!({})).unwrap();
         assert_eq!(r["status"], "throttled");
         assert_eq!(*calls.lock().unwrap_or_else(|e| e.into_inner()), 0);
+    }
+
+    /// Installing is something the person asked for: the once-a-day limit doesn't hold it back.
+    #[test]
+    fn an_install_request_is_not_throttled() {
+        let calls = Arc::new(Mutex::new(0));
+        let c = Arc::clone(&calls);
+        let mut s = session_with(Arc::new(move |_, _| {
+            *c.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+            Ok(latest_linux_deb("x86_64").into_bytes())
+        }));
+        s.update_prefs.last_check_unix = 1_999_999_000;
+        let r = check(&mut s, &json!({"apply": true})).unwrap();
+        assert_ne!(r["status"], "throttled");
+        assert!(*calls.lock().unwrap_or_else(|e| e.into_inner()) > 0);
     }
 
     #[test]

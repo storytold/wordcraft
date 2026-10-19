@@ -121,7 +121,8 @@ pub fn queue_check(app: &mut WordApp, params: Value, manual: bool, ctx: &egui::C
     let _ = queue_check_inner(app, params, manual, ctx, None);
 }
 
-/// Like [`queue_check`], but completes a control-channel reply when the worker finishes.
+/// Like [`queue_check`], but completes a control-channel reply when the worker finishes. When the
+/// check can't start, the reply already carries the reason.
 pub fn queue_check_control(app: &mut WordApp, params: Value, ctx: &egui::Context, reply: std::sync::mpsc::Sender<Value>) -> bool {
     queue_check_inner(app, params, true, ctx, Some(reply))
 }
@@ -133,15 +134,23 @@ fn queue_check_inner(
     ctx: &egui::Context,
     control_reply: Option<std::sync::mpsc::Sender<Value>>,
 ) -> bool {
-    if app.update.worker.is_some() {
+    if let Some(w) = app.update.worker.as_mut() {
         if let Some(reply) = control_reply {
             let _ = reply.send(json!({"ok": false, "error": "an update check is already running"}));
+        } else if manual {
+            // A check the person asked for while another runs (the startup check, say): that
+            // one's answer is shown as this one's.
+            w.manual = true;
         }
         return false;
     }
     let Some(snapshot) = snapshot_from(app) else {
         if let Some(reply) = control_reply {
             let _ = reply.send(json!({"ok": false, "error": "update check is not available"}));
+        } else if manual {
+            // No update client to run it off the UI thread: run the command here and say how it went.
+            let r = app.run("file.checkForUpdates", params);
+            crate::backstage::report_update_check(app, r);
         }
         return false;
     };
@@ -304,6 +313,12 @@ pub fn worker_busy(app: &WordApp) -> bool {
     app.update.worker.is_some()
 }
 
+/// An update is downloading or handing off to the installer. Closing waits for that; a plain
+/// check may be left to finish on its own.
+pub fn install_busy(app: &WordApp) -> bool {
+    app.update.worker.as_ref().is_some_and(|w| w.apply)
+}
+
 /// Manual check or command-driven notice (`file.checkForUpdates` ui_request).
 pub fn apply_command_result(app: &mut WordApp, value: &Value) {
     if let Some(n) = notice_from_payload(value) {
@@ -386,14 +401,7 @@ pub fn bar(app: &mut WordApp, ui: &mut Ui) {
                     if (notice.one_click || notice.verified_update) && !notice.external_updater {
                         if ui.button(tl!("Update")).clicked() {
                             if app.update.unsaved_blocks(&app.session) {
-                                let name = app
-                                    .session
-                                    .path
-                                    .as_deref()
-                                    .map(|p| {
-                                        p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.to_string_lossy().to_string())
-                                    })
-                                    .unwrap_or_else(|| "Document".into());
+                                let name = app.prompt_name();
                                 app.dialog = Some(crate::dialogs::Dialog::SaveChanges {
                                     name,
                                     then: "file.checkForUpdates".into(),
@@ -590,6 +598,52 @@ mod tests {
     }
 
     /// The first-launch question and a manual check work before any document is open.
+    /// Check for updates while the startup check runs: that check's answer is shown for it, and
+    /// a control-channel request gets exactly one reply saying why it didn't start.
+    #[test]
+    fn a_check_asked_for_while_another_runs_still_answers() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::time::Duration;
+
+        let hold = Arc::new(AtomicBool::new(true));
+        let gate = Arc::clone(&hold);
+        let ctx = egui::Context::default();
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.session.update_http = Some(Arc::new(move |_, _| {
+            while gate.load(Ordering::Relaxed) {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            Err("offline".into())
+        }));
+        queue_check(&mut app, json!({"force": true}), false, &ctx);
+        assert!(worker_busy(&app));
+        queue_check(&mut app, json!({"force": true}), true, &ctx);
+        let (tx, rx) = std::sync::mpsc::channel();
+        assert!(!queue_check_control(&mut app, json!({}), &ctx, tx));
+        assert_eq!(rx.try_iter().count(), 1, "one reply");
+        hold.store(false, Ordering::Relaxed);
+        for _ in 0..400 {
+            poll_worker(&mut app);
+            if !worker_busy(&app) {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(!worker_busy(&app));
+        assert!(app.status_msg.is_some(), "the running check's answer is shown");
+    }
+
+    /// No update client to run the check off the UI thread: a manual check runs it here and answers.
+    #[test]
+    fn a_manual_check_without_an_update_client_still_answers() {
+        let ctx = egui::Context::default();
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert!(app.session.update_http.is_none());
+        queue_check(&mut app, json!({"force": true}), true, &ctx);
+        assert!(app.status_msg.is_some());
+    }
+
     #[test]
     fn update_settings_work_without_a_document() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
