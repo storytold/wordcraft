@@ -537,7 +537,9 @@ impl WordApp {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {
                     self.ui.backstage = true;
-                } else {
+                } else if !self.ui.backstage || self.leave_addin_page() {
+                    // Leaving File from an add-in's options page lets it save first; when it
+                    // can't, File stays open.
                     self.ui.tab = tab;
                     self.ui.backstage = false;
                 }

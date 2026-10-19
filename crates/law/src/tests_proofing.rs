@@ -147,6 +147,21 @@ fn confusion_issues_hook_into_review_proofing() {
     assert!(issues.as_array().is_some_and(|a| a.is_empty()), "without LawCraft the same text is quiet: {issues}");
 }
 
+/// Turning LawCraft on with a document already laid out: Review › Proofing reports its findings
+/// at once.
+#[test]
+fn turning_it_on_proofs_the_open_document_at_once() {
+    let mut s = Session::new(Document::new());
+    install(&mut s);
+    run(&mut s, "text.insert", json!({"text": "The statue of limitations has run."}));
+    let before = run(&mut s, "review.issues", json!({}));
+    assert!(before.as_array().is_some_and(|a| a.is_empty()), "{before}");
+    s.prefs.modules.insert(crate::MODULE.into(), true);
+    install(&mut s);
+    let after = run(&mut s, "review.issues", json!({}));
+    assert!(after.as_array().is_some_and(|a| !a.is_empty()), "{after}");
+}
+
 /// #5 blocking review: an interrupting appositive must not join two phrase words. The comma after
 /// `principle` separates it from `issue`, so the correctly used noun `principle` stays quiet
 /// instead of being flagged as `principal`; the same goes for a comma before `council for the

@@ -324,6 +324,23 @@ fn export_without_a_certificate_leaves_the_document_as_it_was() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An export while a macro is being recorded adds nothing to the macro, and Repeat still repeats
+/// what the person did.
+#[test]
+fn export_checks_stay_out_of_macros_and_repeat() {
+    let mut s = apply_session(MISSOURI, "brief");
+    run(&mut s, "text.insert", json!({"text": "Body text.\r"}));
+    s.recording = Some(("m".into(), Vec::new()));
+    run(&mut s, "text.insert", json!({"text": "More."}));
+    let dir = temp_dir("cert-export-macro");
+    run(&mut s, "file.exportPdf", json!({"path": dir.join("brief.pdf").to_string_lossy()}));
+    let steps = s.recording.as_ref().map(|(_, v)| v.clone()).unwrap_or_default();
+    assert!(steps.iter().any(|(id, _)| id == "text.insert"), "{steps:?}");
+    assert!(!steps.iter().any(|(id, _)| id.starts_with("law.")), "{steps:?}");
+    assert!(s.last_command.as_ref().is_some_and(|(id, _)| !id.starts_with("law.")), "{:?}", s.last_command);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// One Certificate of Compliance is one undo step.
 #[test]
 fn inserting_the_certificate_is_one_undo_step() {

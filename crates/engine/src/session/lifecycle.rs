@@ -283,13 +283,21 @@ impl Session {
                     self.rev,
                     self.typing_open,
                     self.undo_evicted,
-                    self.last_command.clone(),
                     self.edit_marks.clone(),
                 )
             });
-            match self.run(&id, &params) {
+            // An export runs these on its own: they aren't steps of a macro being recorded, and
+            // Repeat still repeats what the person last did.
+            let recording = self.recording.as_ref().map(|(_, steps)| steps.len());
+            let repeat = self.last_command.clone();
+            let result = self.run(&id, &params);
+            if let (Some(n), Some((_, steps))) = (recording, self.recording.as_mut()) {
+                steps.truncate(n);
+            }
+            self.last_command = repeat;
+            match result {
                 Ok(v) => {
-                    if let Some((doc, history, redo, dirty, rev, typing_open, undo_evicted, last_command, edit_marks)) = kept
+                    if let Some((doc, history, redo, dirty, rev, typing_open, undo_evicted, edit_marks)) = kept
                         && self.doc == doc
                     {
                         self.history = history;
@@ -298,7 +306,6 @@ impl Session {
                         self.rev = rev;
                         self.typing_open = typing_open;
                         self.undo_evicted = undo_evicted;
-                        self.last_command = last_command;
                         self.edit_marks = edit_marks;
                     }
                     // A check that failed on an earlier export and runs now drops that failure.
