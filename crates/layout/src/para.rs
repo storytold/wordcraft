@@ -1052,13 +1052,25 @@ impl<'a> Builder<'a> {
                 // Complex-script chars (Thai, Indic…) need OpenType layout tables for correct
                 // shaping.  A generic font (e.g. Helvetica Neue) that merely contains the
                 // codepoints but lacks the script's GSUB lookups will produce unshaped text —
-                // e.g. ฐ/ญ tails overlapping sara u.  If the CS font is not in the preferred
-                // list for this script, prefer the script-specific fallback font.
-                _ if complex
-                    && wordcraft_fonts::needs_layout_tables(dc)
-                    && prim.covers(dc)
-                    && wordcraft_fonts::fallback_rank(dc, &prim.get().family)
-                        > wordcraft_fonts::script_fallbacks(dc).len() =>
+                // e.g. ฐ/ญ tails overlapping sara u.
+                //
+                // For Thai specifically we check the font's actual GSUB: a font with the WTT 2.0
+                // PUA glyphs (U+F700/U+F70F) or a `blws` feature under the Thai script tag can
+                // render short-tails correctly; anything else (e.g. TH Sarabun New, which only
+                // carries `liga`) falls back to Thonburi / Noto Sans Thai.
+                //
+                // For all other complex scripts we use the name-based heuristic: if the CS font
+                // is not in the preferred list for this script, prefer the script-specific fallback.
+                _ if complex && wordcraft_fonts::needs_layout_tables(dc) && prim.covers(dc) && {
+                    // Thai: check actual GSUB capabilities (WTT 2.0 PUA or `blws`).
+                    // Other scripts: name-based heuristic (not in the preferred list).
+                    if matches!(u32::from(dc), 0x0E00..=0x0E7F) {
+                        !wordcraft_fonts::has_thai_short_tail_support(prim.get())
+                    } else {
+                        wordcraft_fonts::fallback_rank(dc, &prim.get().family)
+                            > wordcraft_fonts::script_fallbacks(dc).len()
+                    }
+                } =>
                 {
                     let (bold, italic) = (rc.bold_cs, rc.italic_cs);
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))

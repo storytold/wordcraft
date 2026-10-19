@@ -130,6 +130,21 @@ pub fn feature_value(tag: &[u8; 4], value: u32) -> Feature {
     Feature::new(Tag::new(tag), value, ..)
 }
 
+/// Does `face` contain native OpenType support for Thai short-tail rendering?
+///
+/// Returns `true` when:
+/// - The face has the WTT 2.0 PUA glyphs U+F700 / U+F70F (old Microsoft Thai fonts like Angsana
+///   New), which our render path substitutes manually, **or**
+/// - The face's Thai GSUB has the `blws` (below-base substitution) feature that HarfBuzz applies
+///   automatically (Thonburi, Noto Sans Thai, Leelawadee, …).
+///
+/// When this returns `false` the face either lacks Thai glyphs entirely or has a GSUB that is
+/// too limited to handle the ฐ/ญ + below-vowel combination (e.g. TH Sarabun New, which only
+/// carries `liga`). In that case the caller should prefer a font that does have the support.
+pub fn has_thai_short_tail_support(face: &FontFace) -> bool {
+    face.covers('\u{F700}') || face.has_gsub_feature(b"thai", b"blws")
+}
+
 /// A strong right-to-left character (Hebrew, Arabic, …)?
 pub fn is_rtl(c: char) -> bool {
     use unicode_bidi::BidiClass::{AL, R};
