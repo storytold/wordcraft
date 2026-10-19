@@ -218,6 +218,10 @@ pub struct CanvasState {
     /// A V (or Paste key) press reached the canvas since its last release. egui-winit keeps Mod+V
     /// presses, so a release without one was Mod+V even when Mod went up first.
     pub(crate) v_pressed: bool,
+    /// The modifiers the V (or Paste key) press arrived with. A modifier can go up before the V
+    /// release (or before the paste event), but the chord is still the one pressed: ⌘⌃V stays
+    /// Paste Special when Ctrl goes up first.
+    pub(crate) v_press_mods: Option<egui::Modifiers>,
     /// The modifiers last held with Mod, for a Mod+V whose Mod is released before V.
     pub(crate) paste_mods: Option<egui::Modifiers>,
     /// Draw Table or Eraser is on (`table_pen`): presses draw instead of moving the caret.
@@ -390,6 +394,7 @@ impl Default for CanvasState {
             mini_dismissed: None,
             pasted: false,
             v_pressed: false,
+            v_press_mods: None,
             paste_mods: None,
             swallow_text: false,
             ime_join_text: None,
