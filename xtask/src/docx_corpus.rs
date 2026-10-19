@@ -231,6 +231,17 @@ fn read_capped<R: Read>(mut reader: R, cap: usize) -> io::Result<(Vec<u8>, bool)
     Ok((out, false))
 }
 
+/// Cargo arguments that build `wordcraft-cli`. `--release` is a `build` option, not a cargo
+/// global one, so it must follow the subcommand: `cargo build --release`, never
+/// `cargo --release build`.
+fn cli_build_args(release: bool) -> Vec<&'static str> {
+    let mut args = vec!["build", "-p", "wordcraft-cli"];
+    if release {
+        args.push("--release");
+    }
+    args
+}
+
 fn resolve_cli(explicit: Option<&Path>) -> Result<PathBuf, String> {
     if let Some(path) = explicit {
         if path.is_file() {
@@ -246,12 +257,8 @@ fn resolve_cli(explicit: Option<&Path>) -> Result<PathBuf, String> {
         return Ok(candidate);
     }
     eprintln!("docx-corpus: building wordcraft-cli (once) ...");
-    let mut cargo = crate::cargo();
-    if dir.file_name().is_some_and(|n| n == "release") {
-        cargo.arg("--release");
-    }
-    cargo.args(["build", "-p", "wordcraft-cli"]);
-    let status = cargo.status().map_err(|e| format!("build wordcraft-cli: {e}"))?;
+    let release = dir.file_name().is_some_and(|n| n == "release");
+    let status = crate::cargo().args(cli_build_args(release)).status().map_err(|e| format!("build wordcraft-cli: {e}"))?;
     if !status.success() {
         return Err(format!("build wordcraft-cli failed ({status})"));
     }
@@ -879,6 +886,17 @@ mod tests {
         assert_eq!(report.failures.reopen, 0);
         assert_eq!(report.failures.save, 0);
         assert_eq!(report.failures.page_count_delta, 0);
+    }
+
+    #[test]
+    fn cli_build_args_put_the_subcommand_before_flags() {
+        // Regression: `--release` used to be appended first, producing the invalid
+        // `cargo --release build -p wordcraft-cli` and failing a release xtask run.
+        assert_eq!(cli_build_args(false), ["build", "-p", "wordcraft-cli"]);
+        assert_eq!(cli_build_args(true), ["build", "-p", "wordcraft-cli", "--release"]);
+        for release in [false, true] {
+            assert_eq!(cli_build_args(release).first().copied(), Some("build"));
+        }
     }
 
     #[test]
