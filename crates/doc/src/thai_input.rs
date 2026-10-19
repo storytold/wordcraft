@@ -2,8 +2,7 @@
 //!
 //! A TCB is the unit of Thai composition: one base consonant, optionally followed by one
 //! above or below vowel, optionally followed by one tone mark or diacritic. Maximum 3
-//! characters. These rules mirror the behaviour of Windows Thai IMEs and the original
-//! Thai edition of Internet Explorer / Word from 1996-2001 (Nusorn Photpipat, Algorithms Co.).
+//! characters.
 //!
 //! ## TCB structure
 //! ```text
@@ -17,6 +16,7 @@
 //! - Typing a tone/diacritic when slot 2 is already filled → replaces it.
 //! - Typing a consonant always starts a new TCB.
 //! - Typing a combining character with no preceding consonant → rejected.
+//!
 
 /// Classification of a Unicode Thai character for input-sequence purposes.
 /// Derived from `TBL_CHTYPE` in the original THAIFUNC.CPP (Algorithms Co., 2001).
@@ -39,14 +39,43 @@ pub enum ThaiCharClass {
     Other,
 }
 
+/// Describes an in-place consonant form swap (reserved for future use).
+/// Both the old and new character must have the same UTF-8 byte length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ConsSwap {
+    /// Absolute byte offset of the consonant in the paragraph text.
+    pub offset: usize,
+    /// Byte length of the existing consonant.
+    pub old_bytes: usize,
+    /// Replacement consonant character.
+    pub new_char: char,
+}
+
 /// What the engine must do when the user types `new_char` into a Thai context.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThaiInputAction {
-    /// Accept and append the character as-is.
+    /// Accept and append the character at the caret as-is.
     Accept,
-    /// Delete `bytes` bytes immediately before the caret, then insert the new character.
-    /// Used to replace an existing vowel or tone mark with the newly typed one.
-    Replace { bytes: usize },
+    /// Perform a slot operation at an absolute byte offset, then insert a character there.
+    ///
+    /// - `slot_offset`: absolute byte offset in the paragraph text where the char goes.
+    /// - `slot_bytes`: bytes to delete at `slot_offset` before inserting (0 = pure insert).
+    /// - `cons_swap`: optional same-size consonant swap applied *before* the slot operation.
+    /// - `replacement`: if `Some(c)`, insert `c` instead of the originally typed character.
+    ///   Used for character substitutions such as เ+เ→แ.
+    ///
+    /// Execution order in the engine:
+    /// 1. If `cons_swap` is `Some`, replace the consonant in-place (same byte length).
+    /// 2. Delete `slot_bytes` bytes at `slot_offset` (if > 0), moving caret there.
+    ///    Otherwise move the caret to `slot_offset`.
+    /// 3. Insert `replacement` (or the typed character if `None`) at the caret.
+    Replace {
+        slot_offset: usize,
+        slot_bytes: usize,
+        cons_swap: Option<ConsSwap>,
+        /// Character to insert instead of the typed character, or `None` to insert as typed.
+        replacement: Option<char>,
+    },
     /// The character is structurally invalid here; reject it (no insertion, optional beep).
     Reject,
 }
@@ -104,11 +133,7 @@ pub fn current_tcb(text: &str, caret_off: usize) -> Vec<(usize, char)> {
         None => return Vec::new(),
     };
     // Collect up to 3 chars before the caret, newest first.
-    let mut chars_rev: Vec<(usize, char)> = before
-        .char_indices()
-        .rev()
-        .take(3)
-        .collect();
+    let mut chars_rev: Vec<(usize, char)> = before.char_indices().rev().take(3).collect();
     chars_rev.reverse(); // back to logical order
 
     // Walk backwards to find a valid TCB ending at caret_off.
@@ -124,18 +149,14 @@ pub fn current_tcb(text: &str, caret_off: usize) -> Vec<(usize, char)> {
 
     let mut end = len; // exclusive index into chars_rev
     // Try to peel off slot 2 (tone/diac).
-    let slot2 = if end > 0
-        && matches!(classes[end - 1], ThaiCharClass::Tone | ThaiCharClass::Diacritic)
-    {
+    let slot2 = if end > 0 && matches!(classes[end - 1], ThaiCharClass::Tone | ThaiCharClass::Diacritic) {
         end -= 1;
         true
     } else {
         false
     };
     // Try to peel off slot 1 (vowel).
-    let slot1 = if end > 0
-        && matches!(classes[end - 1], ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel)
-    {
+    let slot1 = if end > 0 && matches!(classes[end - 1], ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel) {
         end -= 1;
         true
     } else {
@@ -155,16 +176,35 @@ pub fn current_tcb(text: &str, caret_off: usize) -> Vec<(usize, char)> {
 }
 
 /// Determine what action to take when the user types `new_char` given the current TCB
-/// (0–3 chars immediately before the caret, as returned by [`current_tcb`]).
+/// (0–3 chars immediately before the caret, as returned by [`current_tcb`]) and the
+/// character immediately before the caret (which may differ from the TCB when the caret
+/// sits after a leading vowel).
 ///
-/// `tcb` should only contain the current TCB chars — not the whole paragraph text.
-/// Pass the result of `current_tcb(text, caret_off)` directly.
-pub fn thai_input_action(tcb: &[(usize, char)], new_char: char) -> ThaiInputAction {
+/// - `tcb`: result of `current_tcb(text, caret_off)` — may be empty.
+/// - `prev_char`: `Some((byte_offset, char))` for the char immediately before the caret,
+///   or `None` if the caret is at the start of the paragraph.
+pub fn thai_input_action(tcb: &[(usize, char)], new_char: char, prev_char: Option<(usize, char)>) -> ThaiInputAction {
     let new_class = thai_char_class(new_char);
 
     match new_class {
-        // Non-Thai and leading vowels pass through; the engine handles them normally.
-        ThaiCharClass::Other | ThaiCharClass::LeadingVowel => ThaiInputAction::Accept,
+        // Leading vowel: check for เ+เ=แ substitution; otherwise pass through.
+        ThaiCharClass::LeadingVowel => {
+            // เ (U+0E40) typed immediately after another เ → replace with แ (U+0E41).
+            if new_char == '\u{0E40}' {
+                if let Some((off, '\u{0E40}')) = prev_char {
+                    return ThaiInputAction::Replace {
+                        slot_offset: off,
+                        slot_bytes: '\u{0E40}'.len_utf8(),
+                        cons_swap: None,
+                        replacement: Some('\u{0E41}'),
+                    };
+                }
+            }
+            ThaiInputAction::Accept
+        }
+
+        // Other non-Thai passes through unchanged.
+        ThaiCharClass::Other => ThaiInputAction::Accept,
 
         // A consonant always starts a fresh TCB.
         ThaiCharClass::Consonant => ThaiInputAction::Accept,
@@ -174,38 +214,36 @@ pub fn thai_input_action(tcb: &[(usize, char)], new_char: char) -> ThaiInputActi
 
         ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel => {
             // Find an existing vowel in the TCB (slot 1).
-            if let Some(&(_off, existing)) = tcb.iter().find(|(_, c)| {
-                matches!(thai_char_class(*c), ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel)
-            }) {
-                // Replace it.  Byte size of the existing vowel.
-                ThaiInputAction::Replace { bytes: existing.len_utf8() }
+            if let Some(&(vowel_off, existing_vowel)) =
+                tcb.iter().find(|(_, c)| matches!(thai_char_class(*c), ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel))
+            {
+                // Replace the existing vowel in-place at its absolute offset.
+                // The new char lands at vowel_off; any tone/diac after it shifts right.
+                ThaiInputAction::Replace { slot_offset: vowel_off, slot_bytes: existing_vowel.len_utf8(), cons_swap: None, replacement: None }
             } else {
-                // No vowel yet — only accept if the TCB is not already full (3 chars).
-                if tcb.len() < 3 {
+                // No existing vowel.  Insert before a tone/diac if present, else append.
+                let caret_pos = tcb.last().map(|&(o, c)| o + c.len_utf8()).unwrap_or(0);
+                let slot_offset = tcb
+                    .iter()
+                    .find(|(_, c)| matches!(thai_char_class(*c), ThaiCharClass::Tone | ThaiCharClass::Diacritic))
+                    .map(|&(o, _)| o)
+                    .unwrap_or(caret_pos);
+                if slot_offset == caret_pos {
                     ThaiInputAction::Accept
                 } else {
-                    // TCB is full with consonant + tone/diac (no vowel slot free in 3-char limit).
-                    // Per spec: replace is not defined here, so reject.
-                    ThaiInputAction::Reject
+                    ThaiInputAction::Replace { slot_offset, slot_bytes: 0, cons_swap: None, replacement: None }
                 }
             }
         }
 
         ThaiCharClass::Tone | ThaiCharClass::Diacritic => {
             // Find an existing tone/diacritic in the TCB (slot 2).
-            if let Some(&(_off, existing)) = tcb.iter().find(|(_, c)| {
-                matches!(thai_char_class(*c), ThaiCharClass::Tone | ThaiCharClass::Diacritic)
-            }) {
-                ThaiInputAction::Replace { bytes: existing.len_utf8() }
+            if let Some(&(tone_off, existing)) =
+                tcb.iter().find(|(_, c)| matches!(thai_char_class(*c), ThaiCharClass::Tone | ThaiCharClass::Diacritic))
+            {
+                ThaiInputAction::Replace { slot_offset: tone_off, slot_bytes: existing.len_utf8(), cons_swap: None, replacement: None }
             } else {
-                // No tone/diac yet — accept if TCB not full.
-                if tcb.len() < 3 {
-                    ThaiInputAction::Accept
-                } else {
-                    // 3-char TCB [consonant, vowel, tone] and user types another vowel-class char.
-                    // Shouldn't reach here for tone (covered above), but guard it.
-                    ThaiInputAction::Reject
-                }
+                ThaiInputAction::Accept
             }
         }
     }
@@ -215,7 +253,9 @@ pub fn thai_input_action(tcb: &[(usize, char)], new_char: char) -> ThaiInputActi
 mod tests {
     use super::*;
 
-    fn cls(c: char) -> ThaiCharClass { thai_char_class(c) }
+    fn cls(c: char) -> ThaiCharClass {
+        thai_char_class(c)
+    }
 
     #[test]
     fn thai_char_classification() {
@@ -223,6 +263,7 @@ mod tests {
         assert_eq!(cls('ก'), ThaiCharClass::Consonant); // U+0E01
         assert_eq!(cls('ป'), ThaiCharClass::Consonant); // U+0E1B upper-tail
         assert_eq!(cls('ฎ'), ThaiCharClass::Consonant); // U+0E0E lower-tail
+
         // Upper vowels
         assert_eq!(cls('\u{0E31}'), ThaiCharClass::UpperVowel); // mai han akat
         assert_eq!(cls('\u{0E35}'), ThaiCharClass::UpperVowel); // sara ii
@@ -265,18 +306,24 @@ mod tests {
 
     fn action(text: &str, new_char: char) -> ThaiInputAction {
         let tcb = current_tcb(text, text.len());
-        thai_input_action(&tcb, new_char)
+        let prev = text.char_indices().next_back().map(|(o, c)| (o, c));
+        thai_input_action(&tcb, new_char, prev)
     }
 
     #[test]
     fn tcb_input_rules() {
-        let kon = 'ก';          // consonant
+        let kon = 'ก'; // consonant
+        let yor_ying = 'ญ';
+        let tho_than = 'ฐ';
         let sara_i = '\u{0E34}'; // sara i  (upper vowel)
         let sara_ii = '\u{0E35}'; // sara ii (upper vowel)
         let sara_u = '\u{0E38}'; // sara u  (lower vowel)
+        let _sara_uu = '\u{0E39}'; // sara uu (lower vowel)
         let mai_ek = '\u{0E48}'; // mai ek  (tone)
         let mai_tho = '\u{0E49}'; // mai tho (tone)
         let maitaikhu = '\u{0E47}'; // maitaikhu (diacritic)
+
+        // ── Basic rules ─────────────────────────────────────────────────────────
 
         // Consonant after consonant: start new TCB (Accept).
         assert_eq!(action("ก", kon), ThaiInputAction::Accept);
@@ -284,12 +331,18 @@ mod tests {
         // Vowel after consonant: Accept (append to slot 1).
         assert_eq!(action("ก", sara_i), ThaiInputAction::Accept);
 
-        // Second vowel after consonant+vowel: Replace existing vowel.
-        let s = "กิ"; // ก + sara i
-        assert_eq!(action(s, sara_ii), ThaiInputAction::Replace { bytes: sara_i.len_utf8() });
+        // Second vowel after consonant+vowel: Replace existing vowel in-place.
+        let s = "กิ"; // ก(0) + sara_i(3)
+        match action(s, sara_ii) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected Replace at 3, got {other:?}"),
+        }
 
-        // Replacing upper vowel with a lower vowel.
-        assert_eq!(action(s, sara_u), ThaiInputAction::Replace { bytes: sara_i.len_utf8() });
+        // Replacing upper vowel with a lower vowel: same slot, no cons swap (ก has none).
+        match action(s, sara_u) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected Replace at 3, got {other:?}"),
+        }
 
         // Tone after consonant: Accept (slot 2 free).
         assert_eq!(action("ก", mai_ek), ThaiInputAction::Accept);
@@ -298,15 +351,43 @@ mod tests {
         assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
 
         // Second tone after consonant+vowel+tone: Replace existing tone.
-        let full = "กิ้"; // ก + sara i + mai ek
-        assert_eq!(action(full, mai_tho), ThaiInputAction::Replace { bytes: mai_ek.len_utf8() });
+        // กิ้ = ก(0) + sara_i(3) + mai_ek(6); caret at 9.
+        let full = "กิ้"; // mai ek U+0E49
+        match action(full, mai_tho) {
+            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected Replace at 6, got {other:?}"),
+        }
 
         // Diacritic replacing existing tone.
-        assert_eq!(action(full, maitaikhu), ThaiInputAction::Replace { bytes: mai_ek.len_utf8() });
+        match action(full, maitaikhu) {
+            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected Replace at 6, got {other:?}"),
+        }
 
         // Tone replacing existing diacritic.
-        let diac = "กิ็"; // ก + sara i + maitaikhu
-        assert_eq!(action(diac, mai_ek), ThaiInputAction::Replace { bytes: maitaikhu.len_utf8() });
+        // กิ็ = ก(0) + sara_i(3) + maitaikhu(6)
+        let diac = "กิ็";
+        match action(diac, mai_ek) {
+            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected Replace at 6, got {other:?}"),
+        }
+
+        // ── Bug: lower vowel must replace vowel, not tone mark ───────────────────
+        // กี้ = ก(0) + sara_ii(3) + mai_tho(6), caret at 9.
+        // Typing sara_u should replace sara_ii at offset 3 (not mai_tho at 6).
+        let cons_upper_vowel_tone = "กี้";
+        match action(cons_upper_vowel_tone, sara_u) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("lower vowel must replace vowel at 3, got {other:?}"),
+        }
+
+        // Symmetry: upper vowel also replaces the vowel slot, not the tone.
+        match action(cons_upper_vowel_tone, sara_i) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("upper vowel must replace vowel at 3, got {other:?}"),
+        }
+
+        // ── No-consonant rejection ───────────────────────────────────────────────
 
         // Vowel with no preceding consonant: Reject.
         assert_eq!(action("", sara_i), ThaiInputAction::Reject);
@@ -318,5 +399,35 @@ mod tests {
         // Non-Thai passes through.
         assert_eq!(action("ก", 'a'), ThaiInputAction::Accept);
         assert_eq!(action("ก", ' '), ThaiInputAction::Accept);
+
+        // ฐ and ญ with lower vowel: Accept (no short-tail swap).
+        assert_eq!(action(&yor_ying.to_string(), sara_u), ThaiInputAction::Accept);
+        assert_eq!(action(&tho_than.to_string(), sara_u), ThaiInputAction::Accept);
+        // ฐ and ญ with upper vowel: Accept.
+        assert_eq!(action(&yor_ying.to_string(), sara_i), ThaiInputAction::Accept);
+        assert_eq!(action(&tho_than.to_string(), sara_i), ThaiInputAction::Accept);
+    }
+
+    #[test]
+    fn leading_vowel_combinations() {
+        let sara_e = '\u{0E40}'; // เ
+        let sara_ae = '\u{0E41}'; // แ (U+0E41)
+
+        // First เ: no previous leading vowel → Accept normally.
+        assert_eq!(action("", sara_e), ThaiInputAction::Accept);
+        assert_eq!(action("ก", sara_e), ThaiInputAction::Accept);
+
+        // Second เ immediately after first เ → Replace the เ with แ.
+        // "เ" = U+0E40 at byte offset 0, length 3.
+        match action("\u{0E40}", sara_e) {
+            ThaiInputAction::Replace { slot_offset: 0, slot_bytes: 3, cons_swap: None, replacement: Some('\u{0E41}') } => {}
+            other => panic!("เ+เ must Replace to produce แ, got {other:?}"),
+        }
+
+        // Other leading vowels do not trigger the combination.
+        assert_eq!(action("\u{0E41}", sara_e), ThaiInputAction::Accept); // แ+เ → Accept
+        assert_eq!(action("\u{0E40}", '\u{0E41}'), ThaiInputAction::Accept); // เ+แ → Accept
+
+        let _ = sara_ae;
     }
 }
