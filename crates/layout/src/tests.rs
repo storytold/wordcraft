@@ -11047,6 +11047,37 @@ fn kept_row_moves_with_next() {
     }
 }
 
+/// A row that a vertical merge in a later column runs on into still takes its keep-with-next
+/// flag from its own first cell: the merged text carried into it does not hide that cell.
+#[test]
+fn kept_row_under_a_merge_in_a_later_column_moves_with_next() {
+    use wordcraft_doc::props::{HeightRule, VMerge};
+    let mut d = row_keep_doc();
+    let plain = d.para(StoryRef::Body, &Path(vec![1, 1, 0, 1])).unwrap().props.clone();
+    let para = |text: &str| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = plain.clone();
+        wordcraft_doc::para_block(p)
+    };
+    let t = d.table_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    let mut top = t.rows[0].clone();
+    top.props.height = Some(12.0);
+    top.props.height_rule = HeightRule::AtLeast;
+    top.cells[0].blocks = vec![para("Top")];
+    t.rows.insert(0, top);
+    t.grid = vec![164.0, 164.0];
+    for (ri, row) in t.rows.iter_mut().enumerate() {
+        let mut cell = row.cells[0].clone();
+        cell.blocks = vec![para(if ri == 0 { "Merged one\nMerged two\nMerged three" } else { "" })];
+        cell.props.vmerge = if ri == 0 { VMerge::Restart } else { VMerge::Continue };
+        row.cells[0].props.width = Some(164.0);
+        cell.props.width = Some(164.0);
+        row.cells.push(cell);
+    }
+    let pages = row_keep_pages(&d);
+    assert_eq!(pages, [0, 1, 1], "the kept row moves with the next one");
+}
+
 #[test]
 fn kept_row_allows_next_split() {
     let mut d = row_keep_doc();

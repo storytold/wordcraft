@@ -786,8 +786,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         let exact = t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::Exact && r.props.height.is_some_and(|h| h > 0.0));
         let Carry { mut items, lead, cells: run_on } = carry.get_mut(ri).map(std::mem::take).unwrap_or_default();
         let carried = items.len();
-        let mut parts: Vec<CellPart> = run_on.into_iter().map(|(_, p)| p).collect();
-        parts.reserve(cells.len());
+        let mut parts: Vec<CellPart> = Vec::with_capacity(cells.len() + run_on.len());
         let mut open = Vec::new();
         for (ci, c) in cells.into_iter().enumerate() {
             let first = items.len();
@@ -928,6 +927,8 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
             let end_here = end.filter(|(band, _)| *band == 0).map(|(_, e)| e);
             parts.push(CellPart { top, items: first..items.len(), end: end_here, align });
         }
+        // The row's own cells come first: `row_keeps_next` reads the first cell's paragraph.
+        parts.extend(run_on.into_iter().map(|(_, p)| p));
         out.push(RowLayout { height: rh, items, bottom: bottoms.get(ri).copied().unwrap_or(0.0), edge: edges.get(ri).copied().unwrap_or(0.0), cells: parts, carried, lead, open });
     }
     TableLayout { x, width: total, rows: out }
