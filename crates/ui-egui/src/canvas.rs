@@ -316,6 +316,17 @@ impl CanvasState {
         self.unit_drag = None;
     }
 
+    /// The press belongs to a finger: no pointer drag it started may go on — not text
+    /// selection, an object move or crop, or a table border or selection-area drag (#1503,
+    /// #2155). A web press is cleaned here when its `Touch Start` adopts it a frame later.
+    pub(crate) fn cancel_pointer_drags(&mut self) {
+        self.cancel_text_drag();
+        self.obj_drag = None;
+        self.crop_drag = None;
+        self.table_resize = None;
+        self.table_drag = None;
+    }
+
     /// The object a drag has taken off its page: which page, and which object. `None` unless an
     /// object is being **moved** (resizing and turning show the object itself where it is).
     ///
@@ -637,8 +648,12 @@ fn scroll_motion(app: &mut WordApp, ui: &Ui, full: Rect, view: &CanvasView) -> S
     let long_press = ui.ctx().options(|o| o.input_options).max_click_duration;
     let mut touch_delta = ui.input(|i| app.canvas.touch.advance(i, i.unstable_dt, long_press, !app.session.view.read_mode));
     let wheel_delta = if app.session.view.read_mode {
-        // A finger's horizontal travel turns reading columns like a touchpad's.
-        if touch_delta != egui::Vec2::ZERO {
+        // A finger's horizontal travel turns reading columns like a touchpad's — but a dialog
+        // owns the pointer, and a swipe must not turn the page behind it.
+        if app.dialog.is_some() {
+            app.canvas.touch.cancel();
+            touch_delta = egui::Vec2::ZERO;
+        } else if touch_delta != egui::Vec2::ZERO {
             let turns = read_touch_turns(touch_delta.x, &mut app.canvas.read_wheel_accum);
             for _ in 0..turns.unsigned_abs() {
                 turn_read_page(app, turns.signum() as f32);
