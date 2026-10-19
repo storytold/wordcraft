@@ -321,6 +321,8 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
 #[test]
 fn animation_effects_is_an_accessibility_option() {
     use crate::theme::Animations;
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
     let services = Services { animations_enabled: Some(Box::new(|| Some(false))), ..Default::default() };
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
     a.run("file.options", json!({"pane": "accessibility"})).unwrap();
@@ -344,6 +346,34 @@ fn animation_effects_is_an_accessibility_option() {
     assert_eq!(h.state().ui.animations, Animations::On);
     assert!(h.state().animations_on());
     assert!(h.query_by_label("Your system has animation effects turned off.").is_none(), "only said while the system is followed");
+}
+
+/// File › Options › Accessibility › Voice: a saved voice that isn't installed shows by its
+/// id, and Automatic clears it from the session and the saved settings.
+#[test]
+fn read_aloud_voice_picker_shows_and_clears_the_voice() {
+    use egui::accesskit::Role;
+    use egui_kittest::kittest::{By, Queryable};
+    let mut a = app();
+    a.run("readAloud.voice", json!({"value": "test-voice-not-installed"})).unwrap();
+    assert_eq!(a.prefs().read_aloud_voice.as_deref(), Some("test-voice-not-installed"));
+    a.run("file.options", json!({"pane": "accessibility"})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(4);
+    h.get(By::new().role(Role::ComboBox).value("test-voice-not-installed")).click();
+    h.run_steps(4);
+    h.get(By::new().label("Automatic")).click();
+    h.run_steps(4);
+    assert_eq!(h.state().session.read_aloud.voice(), None);
+    assert_eq!(h.state().prefs().read_aloud_voice, None);
+    assert!(h.query(By::new().role(Role::ComboBox).value("Automatic")).is_some(), "the list now shows Automatic");
 }
 
 /// File › Options › General › Start-up (#766): the checkbox is the `ui.startScreen` setting.
