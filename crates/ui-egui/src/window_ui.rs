@@ -164,6 +164,8 @@ impl WordApp {
             control_rx: _,
             updates_rt: _,
             addins: _,
+            addins_out: _,
+            addin_picks: _,
             // The control channel's screenshots and input go to the active window, whichever it is.
             shots: _,
             capture_epoch: _,

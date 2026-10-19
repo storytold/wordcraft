@@ -511,7 +511,8 @@ fn known_core(w: &str, module: ModuleEn) -> bool {
     if in_user_dictionary(w) || in_module_spelling(w, module) {
         return true;
     }
-    // Inflections.
+    // Inflections (of the module's words too: `tortfeasors`, `movants`).
+    let base = |s: &str| base_known(d, s) || in_module_spelling(s, module);
     let stems: [(&str, &[&str]); 13] = [
         ("'s", &[""]),
         ("s", &[""]),
@@ -534,7 +535,7 @@ fn known_core(w: &str, module: ModuleEn) -> bool {
         {
             for a in adds {
                 let s = format!("{stem}{a}");
-                if base_known(d, &s) {
+                if base(&s) {
                     return true;
                 }
             }
@@ -544,7 +545,7 @@ fn known_core(w: &str, module: ModuleEn) -> bool {
                 && b.len() >= 3
                 && b.last() == b.get(b.len() - 2)
                 && let Some(s) = stem.get(..stem.len() - 1)
-                && base_known(d, s)
+                && base(s)
             {
                 return true;
             }
@@ -554,7 +555,7 @@ fn known_core(w: &str, module: ModuleEn) -> bool {
     for pre in ["un", "re", "non", "pre", "over", "under", "co", "mis"] {
         if let Some(rest) = w.strip_prefix(pre)
             && rest.len() >= 3
-            && base_known(d, rest)
+            && base(rest)
         {
             return true;
         }

@@ -488,12 +488,14 @@ fn main() -> eframe::Result {
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
+            // LawCraft, an add-in off until the user turns it on (File › Options › Add-ins): its
+            // profiles live in the settings folder (memory only in runs without preferences) and
+            // its commands come with it. It goes in before the preferences are applied, so the
+            // shortcuts and toolbar entries saved for its commands are kept.
+            wordcraft_law::set_profiles_dir(if prefs_enabled() { wordcraft_law::settings_dir() } else { None });
+            app.add_addin(Box::new(wordcraft_law_ui::LawAddIn::default()));
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
-            // LawCraft, an add-in off until the user turns it on (File › Options › Add-ins): its
-            // profiles live in the settings folder and its commands come with it.
-            wordcraft_law::set_profiles_dir(wordcraft_law::settings_dir());
-            app.add_addin(Box::new(wordcraft_law_ui::LawAddIn::default()));
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
