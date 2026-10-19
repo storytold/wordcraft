@@ -207,7 +207,9 @@ fn with_law(mut s: Session) -> Session {
 /// [`with_law`] for a session that already exists (the MCP bridge's headless backend).
 fn enable_law(s: &mut Session) {
     if law_enabled() {
-        wordcraft_law::set_profiles_dir(wordcraft_law::settings_dir());
+        // Runs without preferences (`WORDCRAFT_NO_PREFS`) keep profiles in memory only.
+        let dir = if std::env::var_os("WORDCRAFT_NO_PREFS").is_some() { None } else { wordcraft_law::settings_dir() };
+        wordcraft_law::set_profiles_dir(dir);
         // A headless session keeps no saved preferences, so the flag or the setting decides here.
         s.prefs.modules.insert(wordcraft_law::MODULE.into(), true);
         wordcraft_law::install(s);

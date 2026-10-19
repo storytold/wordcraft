@@ -1270,9 +1270,13 @@ mod tests {
             CALLED.store(true, std::sync::atomic::Ordering::SeqCst);
             Ok(())
         }
+        let _lock = crate::hooks::HOOK_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        crate::hooks::reset_for_test();
         crate::hooks::register_on_update_fields(mark);
         let mut s = Session::new(wordcraft_doc::Document::new());
-        s.run("references.updateFields", &json!({})).unwrap();
+        let r = s.run("references.updateFields", &json!({}));
+        crate::hooks::reset_for_test();
+        r.unwrap();
         assert!(CALLED.load(std::sync::atomic::Ordering::SeqCst));
     }
 

@@ -76,9 +76,36 @@ impl WordApp {
     pub fn with_addin<R>(&mut self, id: &str, f: impl FnOnce(&mut dyn AddIn, &mut WordApp) -> R) -> Option<R> {
         let i = self.addins.iter().position(|a| a.id() == id)?;
         let mut addin = self.addins.remove(i);
+        let key = addin.id();
+        self.addins_out.push(key);
         let r = f(addin.as_mut(), self);
+        self.addins_out.retain(|k| *k != key);
         self.addins.insert(i.min(self.addins.len()), addin);
+        self.deliver_addin_picks(key);
         Some(r)
+    }
+
+    /// Hand the add-in `key` the files that came back for it while it was out.
+    fn deliver_addin_picks(&mut self, key: &'static str) {
+        while let Some(n) = self.addin_picks.iter().position(|(k, ..)| *k == key) {
+            let (_, tag, picked) = self.addin_picks.remove(n);
+            let Some(i) = self.addins.iter().position(|a| a.id() == key) else { return };
+            let mut addin = self.addins.remove(i);
+            self.addins_out.push(key);
+            let _ = addin.file_picked(self, &tag, picked);
+            self.addins_out.retain(|k| *k != key);
+            self.addins.insert(i.min(self.addins.len()), addin);
+        }
+    }
+
+    /// A file picked for the add-in `id` ([`WordApp::addin_ask_file`]): hand it over now, or once
+    /// the add-in is back when the pick came back during one of its own calls.
+    pub(crate) fn addin_file_picked(&mut self, id: &str, tag: String, picked: Option<String>) -> Result<Value, String> {
+        if let Some(key) = self.addins_out.iter().copied().find(|k| *k == id) {
+            self.addin_picks.push((key, tag, picked));
+            return Ok(json!({"pending": true}));
+        }
+        self.with_addin(id, |a, app| a.file_picked(app, &tag, picked)).unwrap_or_else(|| Ok(json!({"cancelled": true})))
     }
 
     /// The add-in `id` as its own type (tests, hosts).
@@ -276,6 +303,34 @@ mod tests {
         }
     }
 
+    /// An add-in with a command of its own while it is on.
+    struct Cmds;
+
+    impl AddIn for Cmds {
+        fn id(&self) -> &'static str {
+            "cmds"
+        }
+        fn name(&self) -> &str {
+            "Cmds"
+        }
+        fn description(&self) -> &str {
+            "A test add-in with a command."
+        }
+        fn install(&mut self, session: &mut Session) {
+            if session.module_enabled("cmds") {
+                session.install_commands(vec![wordcraft_engine::CommandSpec::new("cmds.go", "Go", "Cmds", |_, _| Ok(json!({})))]);
+            } else {
+                session.uninstall_commands(&["cmds.go"]);
+            }
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
     fn app() -> WordApp {
         let mut a = WordApp::new(Session::new(Document::new()), Services::default());
         a.add_addin(Box::new(Probe::default()));
@@ -327,6 +382,46 @@ mod tests {
         a.add_addin(Box::new(Probe::default()));
         a.addin_ask_file("probe", FileDialogRequest::Open { purpose: "json".into() }, "import");
         assert_eq!(probe(&mut a).picked, Some(("import".to_string(), Some("/tmp/x.json".to_string()))));
+    }
+
+    /// A host that answers at once, asked from inside one of the add-in's own calls (its options
+    /// page's Import button): the file still reaches it.
+    #[test]
+    fn a_file_it_asks_for_from_its_own_page_comes_back_to_it() {
+        let mut a =
+            WordApp::new(Session::new(Document::new()), Services { pick_open: Some(Box::new(|_| Some("/tmp/x.json".into()))), ..Default::default() });
+        a.add_addin(Box::new(Probe::default()));
+        a.with_addin("probe", |_, app| app.addin_ask_file("probe", FileDialogRequest::Open { purpose: "json".into() }, "import"));
+        assert_eq!(probe(&mut a).picked, Some(("import".to_string(), Some("/tmp/x.json".to_string()))));
+    }
+
+    /// Scripts and agents turn it on and off as the Add-ins page does.
+    #[test]
+    fn a_script_turning_it_on_or_off_applies_it() {
+        let mut a = app();
+        a.execute("file.options", json!({"modules": {"probe": true}})).unwrap();
+        assert_eq!(probe(&mut a).installs, 2, "turned on: installed");
+        probe(&mut a).refuse_leave = true;
+        assert!(a.execute("file.options", json!({"modules": {"probe": false}})).is_err(), "its pending changes come first");
+        assert!(a.session.module_enabled("probe"));
+        probe(&mut a).refuse_leave = false;
+        a.execute("file.options", json!({"modules": {"probe": false}})).unwrap();
+        assert_eq!(probe(&mut a).installs, 3, "turned off: taken out");
+    }
+
+    /// Keys and toolbar entries saved for an add-in's commands survive the next start.
+    #[test]
+    fn saved_keys_and_toolbar_entries_for_its_commands_are_kept() {
+        let mut a = WordApp::new(Session::new(Document::new()), Services::default());
+        a.add_addin(Box::new(Cmds));
+        let mut ui = crate::UiState::default();
+        ui.editing.modules.insert("cmds".into(), true);
+        ui.keyboard = wordcraft_engine::KeyMap::from_value(&json!({"assigned": {"Ctrl+Alt+G": "cmds.go"}}));
+        ui.ribbon.qat = Some(vec!["cmds.go".into()]);
+        a.apply_prefs(ui);
+        let reg = a.session.registry.clone();
+        assert_eq!(a.session.keymap.resolve(&reg, "Ctrl+Alt+G").map(|c| c.id), Some("cmds.go"));
+        assert!(a.session.ribbon.qat().contains(&"cmds.go"));
     }
 
     #[test]

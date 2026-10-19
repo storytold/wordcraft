@@ -649,6 +649,11 @@ pub struct WordApp {
     file_dialog: Option<file_dialogs::PendingDialog>,
     /// The add-ins the host gave the app ([`addins`]), in File › Options › Add-ins order.
     addins: Vec<Box<dyn addins::AddIn>>,
+    /// Add-ins taken out of `addins` while one of their calls runs ([`WordApp::with_addin`]).
+    addins_out: Vec<&'static str>,
+    /// Files picked for an add-in while it was out (a host that answers at once): (add-in, tag,
+    /// path), handed to it once it is back.
+    addin_picks: Vec<(&'static str, String, Option<String>)>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -761,6 +766,8 @@ impl WordApp {
             dialog_pick: None,
             file_dialog: None,
             addins: Vec::new(),
+            addins_out: Vec::new(),
+            addin_picks: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: file_browser::State::default(),
             info_editing: None,
@@ -858,12 +865,15 @@ impl WordApp {
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.proofing = self.ui.check_spelling;
-        // Keys for commands this version doesn't have are dropped.
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
+        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
+        // The add-ins the saved setting turns on bring their commands (and ribbon tabs) first, so
+        // the keys and toolbar entries saved for those commands are kept.
+        self.sync_addins();
+        // Keys for commands this version doesn't have are dropped.
         let reg = self.session.registry.clone();
         self.session.keymap.retain_known(&reg);
         // So are ribbon and toolbar commands.
-        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
     }
@@ -942,17 +952,11 @@ impl WordApp {
         {
             return r;
         }
-        // An add-in being turned off first saves what its options page has pending.
-        self.guard_addin_off(id, &params)?;
-        let modules_changed = id == "file.options" && params.get("modules").is_some();
         let applied = applied_font(id, &params);
         let r = self.execute_user(id, params);
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
-        }
-        if modules_changed && r.is_ok() {
-            self.sync_addins();
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
             push_recent_font(&mut self.ui.recent_fonts, &name);
@@ -985,8 +989,22 @@ impl WordApp {
     }
 
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
-    /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
+    /// UI-level commands (`ui.*`) are handled here, the rest by the engine. Turning an add-in on
+    /// or off (`file.options {"modules": …}`) applies it here, for scripts and the interface
+    /// alike: one being turned off first saves what its options page has pending.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if id == "file.options" && params.get("modules").is_some() {
+            self.guard_addin_off(id, &params)?;
+            let r = self.execute_inner(id, params);
+            if r.is_ok() {
+                self.sync_addins();
+            }
+            return r;
+        }
+        self.execute_inner(id, params)
+    }
+
+    fn execute_inner(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;

@@ -288,9 +288,7 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
             }
-            AfterPick::AddIn { id, tag } => {
-                self.with_addin(&id, |a, app| a.file_picked(app, &tag, picked)).unwrap_or_else(|| Ok(json!({"cancelled": true})))
-            }
+            AfterPick::AddIn { id, tag } => self.addin_file_picked(&id, tag, picked),
             AfterPick::ComparePath { revised } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 crate::dialogs_review::set_compare_path(self, revised, path);

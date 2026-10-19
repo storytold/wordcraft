@@ -82,10 +82,12 @@ pub(crate) fn find_entries_limited(
             if para.props.style.as_deref() == Some(wordcraft_engine::cmd::citations::ENTRY_STYLE) {
                 continue;
             }
-            let text = &para.text;
-            if text.is_empty() {
+            if para.text.is_empty() {
                 continue;
             }
+            let plain = plain_spaces(&para.text);
+            let text = plain.as_ref().map_or(para.text.as_str(), |(t, _)| t.as_str());
+            let orig = |off: usize| plain.as_ref().map_or(off, |(_, map)| map[off]);
             for rule in &pack.rules {
                 if !rule.finder {
                     continue;
@@ -96,8 +98,8 @@ pub(crate) fn find_entries_limited(
                     if rule.valid.as_ref().is_some_and(|v| !v.is_match(slice)) {
                         continue;
                     }
-                    let start = Pos { story, path: path.clone(), off: m.start() };
-                    let end_pos = Pos { story, path: path.clone(), off: end };
+                    let start = Pos { story, path: path.clone(), off: orig(m.start()) };
+                    let end_pos = Pos { story, path: path.clone(), off: orig(end) };
                     raw.push(RawHit { kind: rule.kind.clone(), text: slice.to_string(), start, end: end_pos });
                     if raw.len() > max_occurrences {
                         return Err(too_many("citation occurrences", raw.len(), max_occurrences));

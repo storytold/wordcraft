@@ -308,6 +308,33 @@ fn export_succeeds_when_profile_has_no_word_limit_and_no_certificate_field() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Exporting a document with a profile applied and no certificate changes nothing: no undo step,
+/// still saved.
+#[test]
+fn export_without_a_certificate_leaves_the_document_as_it_was() {
+    let mut s = apply_session(MISSOURI, "brief");
+    run(&mut s, "text.insert", json!({"text": "Body text without a certificate.\r"}));
+    let dir = temp_dir("cert-export-noop");
+    run(&mut s, "file.save", json!({"path": dir.join("brief.docx").to_string_lossy()}));
+    assert!(!s.dirty);
+    let undo = s.undo_labels();
+    run(&mut s, "file.exportPdf", json!({"path": dir.join("brief.pdf").to_string_lossy()}));
+    assert!(!s.dirty, "exporting doesn't mark it changed");
+    assert_eq!(s.undo_labels(), undo, "and leaves no undo step");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// One Certificate of Compliance is one undo step.
+#[test]
+fn inserting_the_certificate_is_one_undo_step() {
+    let profile = store().get(MISSOURI).expect("profile").clone();
+    let mut s = apply_session(MISSOURI, "brief");
+    write_skeleton(&mut s, &profile, "brief");
+    let before = s.undo_labels().len();
+    compliance(&mut s, MISSOURI, "brief");
+    assert_eq!(s.undo_labels().len(), before + 1, "{:?}", s.undo_labels());
+}
+
 /// With Track Changes on, replacing the certificate is a tracked change: Reject All brings the old
 /// certificate back, Accept All keeps the new one.
 #[test]

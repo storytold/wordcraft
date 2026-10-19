@@ -60,6 +60,16 @@ fn citations_get_word_marks_and_a_table_per_category() {
     assert!(!t[cases..statutes].contains(STATUTE), "a statute isn't listed under Cases: {t}");
 }
 
+/// A cite typed with nonbreaking spaces (as § AutoFormat leaves them) is listed like any other.
+#[test]
+fn citations_with_nonbreaking_spaces_are_listed() {
+    let mut s = law();
+    insert(&mut s, "Smith v. Jones, 100 F.\u{a0}Supp.\u{a0}3d 200,\u{a0}205 (D.\u{a0}Mo. 2015), says so.");
+    run(&mut s, "caret.docStart", json!({}));
+    let r = run(&mut s, "law.toa.build", json!({"pack": "federal"}));
+    assert_eq!(r["marked"], json!(1), "{r}");
+}
+
 #[test]
 fn building_again_updates_without_marking_twice() {
     let mut s = brief();
