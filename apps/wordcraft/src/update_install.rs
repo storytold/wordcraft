@@ -80,11 +80,15 @@ fn is_staging_name(name: &str) -> bool {
 }
 
 fn install_into(job: &InstallHandoff, staging: &Path) -> Result<InstallOutcome, String> {
+    // A `.deb` never touches a path this user can write: it goes to root over a pipe.
+    if matches!(job.kind, InstallKind::LinuxDeb) {
+        return linux_deb(&job.bytes);
+    }
     let file_name = safe_name(&job.file_name);
     let path = write_exclusive_file(staging, &file_name, &job.bytes)?;
     match job.kind {
         InstallKind::WindowsMsi => windows_msi(&path),
-        InstallKind::LinuxDeb => linux_deb(&path),
+        InstallKind::LinuxDeb => linux_deb(&job.bytes),
         InstallKind::MacDmg | InstallKind::MacApp => mac_open_dmg(&path),
         InstallKind::WindowsPortableZip | InstallKind::Flatpak | InstallKind::AppImage | InstallKind::Unknown => {
             Err("This install type must use the release page.".into())
@@ -238,16 +242,51 @@ fn windows_msi(_path: &Path) -> Result<InstallOutcome, String> {
     Err("MSI install is only on Windows".into())
 }
 
+/// Run as root once `pkexec` has the person's approval: read the package from standard input into
+/// a directory only root can reach, check it against the hash this process verified (`$1`), and
+/// install that copy. Nothing the user's other programs can write is opened by root, so a file
+/// swapped while the password prompt is up can't reach `dpkg`.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn linux_deb(path: &Path) -> Result<InstallOutcome, String> {
-    let p = path.to_str().ok_or("bad path")?;
-    let child = Command::new("pkexec").args(["dpkg", "-i", p]).spawn().map_err(|e| e.to_string())?;
-    let status = wait_child(child, INSTALLER_WAIT_SECS)?;
+const DEB_INSTALL_SCRIPT: &str = r#"set -eu
+umask 077
+d=$(mktemp -d)
+trap 'rm -rf "$d"' EXIT
+cat > "$d/update.deb"
+printf '%s  %s\n' "$1" "$d/update.deb" | sha256sum -c --status
+dpkg -i "$d/update.deb"
+"#;
+
+/// The `sh` arguments that run [`DEB_INSTALL_SCRIPT`] for a package with SHA-256 `sha`.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn deb_install_args(sha: &str) -> Vec<String> {
+    vec!["-c".into(), DEB_INSTALL_SCRIPT.into(), "wordcraft-update".into(), sha.into()]
+}
+
+/// Start the install script as root through `pkexec` and write `bytes` to
+/// it. A cancelled prompt closes the pipe; that write error is the cancel's, reported by its status.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn run_deb_install(bytes: &[u8], wait_secs: u64) -> Result<std::process::ExitStatus, String> {
+    let sha = wordcraft_engine::update::sha256_hex(bytes);
+    let mut child =
+        Command::new("pkexec").arg("/bin/sh").args(deb_install_args(&sha)).stdin(std::process::Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+    let mut stdin = child.stdin.take().ok_or("no installer input")?;
+    let data = bytes.to_vec();
+    let writer = std::thread::spawn(move || {
+        let _ = stdin.write_all(&data);
+    });
+    let status = wait_child(child, wait_secs);
+    let _ = writer.join();
+    status
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_deb(bytes: &[u8]) -> Result<InstallOutcome, String> {
+    let status = run_deb_install(bytes, INSTALLER_WAIT_SECS)?;
     if status.success() { Ok(InstallOutcome::default()) } else { Err("dpkg install was cancelled or failed.".into()) }
 }
 
 #[cfg(not(all(unix, not(target_os = "macos"))))]
-fn linux_deb(_path: &Path) -> Result<InstallOutcome, String> {
+fn linux_deb(_bytes: &[u8]) -> Result<InstallOutcome, String> {
     Err(".deb install is only on Linux".into())
 }
 
@@ -294,6 +333,37 @@ mod tests {
     use std::cell::RefCell;
 
     use super::*;
+
+    /// The install script gets the package over its input, checks it against the hash it was
+    /// given, and hands `dpkg` its own private copy; a mismatch never reaches `dpkg`.
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn deb_install_reads_the_package_from_its_input_and_checks_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(format!("wordcraft-deb-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let got = dir.join("got.deb");
+        let fake = dir.join("dpkg");
+        std::fs::write(&fake, format!("#!/bin/sh\ncp \"$2\" '{}'\n", got.display())).unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let existing = std::env::var_os("PATH").unwrap_or_default();
+        let path = std::env::join_paths(std::iter::once(dir.clone()).chain(std::env::split_paths(&existing))).unwrap();
+        let bytes = b"not really a package".to_vec();
+        let sha = wordcraft_engine::update::sha256_hex(&bytes);
+
+        let run = |sha: &str| {
+            let mut child = Command::new("sh").args(deb_install_args(sha)).env("PATH", &path).stdin(std::process::Stdio::piped()).spawn().unwrap();
+            child.stdin.take().unwrap().write_all(&bytes).unwrap();
+            child.wait().unwrap()
+        };
+        assert!(run(&sha).success());
+        assert_eq!(std::fs::read(&got).unwrap(), bytes, "dpkg got the bytes that were sent");
+        std::fs::remove_file(&got).unwrap();
+        assert!(!run(&"0".repeat(64)).success(), "a hash mismatch fails");
+        assert!(!got.exists(), "and never reaches dpkg");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn exclusive_file_refuses_existing() {

@@ -537,15 +537,19 @@ pub fn verify_sha256(data: &[u8], expected: &str) -> bool {
     if expected.len() != 64 || !expected.bytes().all(|b| b.is_ascii_hexdigit()) {
         return false;
     }
+    sha256_hex(data) == expected
+}
+
+/// The lowercase hex SHA-256 of `data`.
+pub fn sha256_hex(data: &[u8]) -> String {
     let mut h = Sha256::new();
     h.update(data);
-    let got = h.finalize();
     let mut hex = String::with_capacity(64);
-    for b in got {
+    for b in h.finalize() {
         hex.push(hex_char(b >> 4));
         hex.push(hex_char(b & 0xf));
     }
-    hex == expected
+    hex
 }
 
 fn hex_char(n: u8) -> char {
