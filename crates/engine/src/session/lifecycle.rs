@@ -271,8 +271,36 @@ impl Session {
                 obj.insert("markup".into(), serde_json::json!(opts.markup));
                 obj.insert("format".into(), serde_json::json!(format));
             }
+            // A check that may change the document (a word count kept current) and finds nothing
+            // to change leaves no undo step and doesn't mark the document changed.
+            let mutates = self.registry.get(&id).is_some_and(|c| c.mutates);
+            let kept = mutates.then(|| {
+                (
+                    self.doc.clone(),
+                    self.history.clone(),
+                    self.redo.clone(),
+                    self.dirty,
+                    self.rev,
+                    self.typing_open,
+                    self.undo_evicted,
+                    self.last_command.clone(),
+                    self.edit_marks.clone(),
+                )
+            });
             match self.run(&id, &params) {
                 Ok(v) => {
+                    if let Some((doc, history, redo, dirty, rev, typing_open, undo_evicted, last_command, edit_marks)) = kept
+                        && self.doc == doc
+                    {
+                        self.history = history;
+                        self.redo = redo;
+                        self.dirty = dirty;
+                        self.rev = rev;
+                        self.typing_open = typing_open;
+                        self.undo_evicted = undo_evicted;
+                        self.last_command = last_command;
+                        self.edit_marks = edit_marks;
+                    }
                     // A check that failed on an earlier export and runs now drops that failure.
                     self.set_lint_findings(&format!("export:{id}"), Vec::new());
                     if let Some(arr) = v.get("findings").and_then(serde_json::Value::as_array) {

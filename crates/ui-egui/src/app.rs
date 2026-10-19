@@ -138,6 +138,8 @@ impl WordApp {
             saves_in_flight: Vec::new(),
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             addins: Vec::new(),
+            addins_out: Vec::new(),
+            addin_picks: Vec::new(),
             recovery_seen: false,
             no_document: None,
             comment_drafts: Default::default(),

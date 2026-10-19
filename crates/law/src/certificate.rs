@@ -41,7 +41,6 @@ pub fn insert_or_refresh(session: &mut Session, profile: &Profile, doc_type: &st
         .ok_or_else(|| LawError::Failed(format!("profile `{}` / `{doc_type}` has no `{CERT_SECTION_ID}` section", profile.id)))?;
     let template = resolve_template(profile, spec)?;
     let values = template_values(&session.doc, profile, doc_type, spec, &template)?;
-    session.checkpoint("Certificate of Compliance");
     write_certificate(session, spec, sec, &template, &values)?;
     // Persist the profile/document binding the certificate was built for, even when the command
     // was given explicit `id`/`doc` on a document that had no profile applied. Field rebuilds and

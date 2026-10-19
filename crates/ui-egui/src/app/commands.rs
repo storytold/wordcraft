@@ -78,17 +78,11 @@ impl WordApp {
         {
             return r;
         }
-        // An add-in being turned off first saves what its options page has pending.
-        self.guard_addin_off(id, &params)?;
-        let modules_changed = id == "file.options" && params.get("modules").is_some();
         let applied = applied_font(id, &params);
         let r = self.execute_user(id, params);
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
-        }
-        if modules_changed && r.is_ok() {
-            self.sync_addins();
         }
         if let (Ok(_), Some(name)) = (&r, applied) {
             push_recent_font(&mut self.ui.recent_fonts, &name);
@@ -121,8 +115,22 @@ impl WordApp {
     }
 
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
-    /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
+    /// UI-level commands (`ui.*`) are handled here, the rest by the engine. Turning an add-in on
+    /// or off (`file.options {"modules": …}`) applies it here, for scripts and the interface
+    /// alike: one being turned off first saves what its options page has pending.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if id == "file.options" && params.get("modules").is_some() {
+            self.guard_addin_off(id, &params)?;
+            let r = self.execute_inner(id, params);
+            if r.is_ok() {
+                self.sync_addins();
+            }
+            return r;
+        }
+        self.execute_inner(id, params)
+    }
+
+    fn execute_inner(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {
             return Err(error);

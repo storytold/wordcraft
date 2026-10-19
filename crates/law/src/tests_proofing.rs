@@ -29,6 +29,16 @@ fn legal_terms_spell_check_depends_on_lawcraft() {
     assert!(is_correct_with_module("rsmo", &opts, s.module_en));
 }
 
+/// The legal list's words take English inflections like any other word.
+#[test]
+fn legal_words_take_inflections() {
+    let opts = Options::default();
+    let s = law();
+    for w in ["tortfeasors", "movants", "affiants", "deponents", "litigants"] {
+        assert!(is_correct_with_module(w, &opts, s.module_en), "{w}");
+    }
+}
+
 /// Reporter and court abbreviations (`S.W.3d`, `F.4th`, `Mo. App.`) reach proofing through the
 /// real spelling path: the tokenizer splits them at their periods, and the resulting pieces are
 /// recognised — single letters and digit-bearing tokens by the defaults, the rest by the

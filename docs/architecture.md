@@ -33,6 +33,7 @@ crate name links to its source tree.
 | L5 | [`mcp`](../crates/mcp/src) | 1,822 | MCP server exposing commands as tools; headless or bridged to the running app |
 | L5 | [`zotero`](../crates/zotero/src) | 2,372 | Zotero word-processor integration protocol answered against a `Session` |
 | L5 | [`law`](../crates/law/src) | 9,212 | LawCraft: court profiles as JSON data (`law.profiles.*`) and the checks engine (`law.checks.run`), applied through the engine's own style and layout commands ([`law.md`](law.md)) |
+| L6 | [`law-ui`](../crates/law-ui/src) | 3,134 | LawCraft's interface: its File › Options page (profiles, firm details) and the New Pleading window |
 | L6 | [`ui-egui`](../crates/ui-egui/src) | 81,759 | Front end: ribbon, keytips, mini-toolbar, Backstage, canvas, rulers, panes, dialogs, i18n, themes, control channel and headless `ui_shot` example |
 | apps | [`wordcraft`](../apps/wordcraft/src) | 3,740 | Desktop app (eframe + wgpu; logging, window geometry and file associations) |
 | apps | [`wordcraft-cli`](../apps/wordcraft-cli/src) | 1,901 | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp` and `zotero` |
