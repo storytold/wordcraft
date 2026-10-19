@@ -55,6 +55,49 @@ struct Options {
     root: PathBuf,
 }
 
+/// The `wordcraft-cli` the harness will run, resolved once so the report names the exact binary.
+#[derive(Clone, Debug)]
+enum Cli {
+    Binary(PathBuf),
+    CargoRun,
+}
+
+impl Cli {
+    fn resolve(opts: &Options) -> Self {
+        if let Some(path) = &opts.cli {
+            return Cli::Binary(path.clone());
+        }
+        if let Some(path) = std::env::var_os("WORDCRAFT_CLI") {
+            return Cli::Binary(PathBuf::from(path));
+        }
+        let exe = format!("wordcraft-cli{}", std::env::consts::EXE_SUFFIX);
+        let candidates = [opts.root.join("target/release").join(&exe), opts.root.join("target/debug").join(&exe)];
+        match candidates.iter().find(|path| path.is_file()) {
+            Some(path) => Cli::Binary(path.clone()),
+            None => Cli::CargoRun,
+        }
+    }
+
+    fn describe(&self, opts: &Options) -> String {
+        match self {
+            Cli::Binary(path) => path.display().to_string(),
+            Cli::CargoRun => format!("cargo run -p wordcraft-cli (in {})", opts.root.display()),
+        }
+    }
+
+    fn command(&self, opts: &Options) -> Command {
+        match self {
+            Cli::Binary(path) => Command::new(path),
+            Cli::CargoRun => {
+                let mut cargo = crate::cargo();
+                cargo.current_dir(&opts.root);
+                cargo.args(["run", "--quiet", "-p", "wordcraft-cli", "--"]);
+                cargo
+            }
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct Case {
     name: String,
@@ -130,11 +173,13 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
     let opts = parse_args(root, args)?;
     let cases = discover(&opts.dir)?;
     std::fs::create_dir_all(&opts.out).map_err(|e| format!("create {}: {e}", opts.out.display()))?;
+    let cli = Cli::resolve(&opts);
+    eprintln!("layout-corpus: wordcraft-cli: {}", cli.describe(&opts));
 
     let mut records = Vec::with_capacity(cases.len());
     let mut failures = Vec::new();
     for case in &cases {
-        let export = |docx: &Path, pdf: &Path| export_pdf(&opts, docx, pdf);
+        let export = |docx: &Path, pdf: &Path| export_pdf(&cli, &opts, docx, pdf);
         let run = evaluate_case(case, &opts, &export, &diff_pdf);
         let label = if opts.private { run.label.clone() } else { run.name.clone() };
         match run.status {
@@ -153,7 +198,7 @@ pub fn run(root: &Path, args: &[&str]) -> Result<(), String> {
         records.push(case_json(&run, &opts, case));
     }
 
-    let report = build_report(records, &opts);
+    let report = build_report(records, &opts, &cli);
     write_report(&opts.out, &report)?;
     let aggregate = &report["aggregate"];
     println!(
@@ -415,28 +460,11 @@ fn validate_pdf(path: &Path) -> Result<(), String> {
     if bytes.windows(5).any(|w| w == b"%PDF-") { Ok(()) } else { Err("missing %PDF- header".into()) }
 }
 
-fn export_pdf(opts: &Options, docx: &Path, pdf: &Path) -> Result<(), String> {
+fn export_pdf(cli: &Cli, opts: &Options, docx: &Path, pdf: &Path) -> Result<(), String> {
     if let Some(parent) = pdf.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("create {}: {e}", parent.display()))?;
     }
-    let mut command = match &opts.cli {
-        Some(path) => Command::new(path),
-        None => match std::env::var_os("WORDCRAFT_CLI") {
-            Some(path) => Command::new(path),
-            None => {
-                let candidates = [opts.root.join("target/release/wordcraft-cli"), opts.root.join("target/debug/wordcraft-cli")];
-                match candidates.iter().find(|path| path.is_file()) {
-                    Some(path) => Command::new(path),
-                    None => {
-                        let mut cargo = Command::new("cargo");
-                        cargo.current_dir(&opts.root);
-                        cargo.args(["run", "--quiet", "-p", "wordcraft-cli", "--"]);
-                        cargo
-                    }
-                }
-            }
-        },
-    };
+    let mut command = cli.command(opts);
     command.arg("convert").arg(docx).arg(pdf);
     let output = command.output().map_err(|e| format!("could not start wordcraft-cli: {e}"))?;
     if output.status.success() {
@@ -661,7 +689,7 @@ fn page_json(page: &PageMetric) -> Value {
     })
 }
 
-fn build_report(mut records: Vec<Value>, opts: &Options) -> Value {
+fn build_report(mut records: Vec<Value>, opts: &Options, cli: &Cli) -> Value {
     // Worst first in the JSON too: failures, then compared cases by mismatch, then skipped ones.
     records.sort_by(|a, b| {
         let (sa, sb) = (status_order(a), status_order(b));
@@ -695,6 +723,7 @@ fn build_report(mut records: Vec<Value>, opts: &Options) -> Value {
         "private": opts.private,
         "dpi": opts.dpi,
         "directory": if opts.private { Value::Null } else { json!(opts.dir.to_string_lossy()) },
+        "wordcraft_cli": if opts.private { Value::Null } else { json!(cli.describe(opts)) },
         "cases": records,
         "aggregate": aggregate,
         "ranked": ranked,
@@ -832,7 +861,7 @@ fn markdown(report: &Value) -> String {
     if ranked.is_empty() {
         out.push_str("No cases were compared.\n");
     } else {
-        out.push_str("| # | Case | Mismatch | Pages (Word → WordCraft) | Δ pages | Same breaks | Median |Δy| | SSIM | Worst page |\n");
+        out.push_str("| # | Case | Mismatch | Pages (Word → WordCraft) | Δ pages | Same breaks | Median \\|Δy\\| | SSIM | Worst page |\n");
         out.push_str("|---|---|---:|---:|---:|---:|---:|---:|---|\n");
         for (index, entry) in ranked.iter().enumerate() {
             let name = entry.get("name").and_then(Value::as_str).unwrap_or("case");
@@ -1062,8 +1091,9 @@ mod tests {
         let bad = metrics_from_result(&result(2, 4, 0.60, 40.0, 20.0)).unwrap();
         let records =
             vec![record("good", Status::Compared, Some(good)), record("bad", Status::Compared, Some(bad)), record("empty", Status::Skipped, None)];
-        let report = build_report(records, &options(Path::new("corpus/layout"), false));
+        let report = build_report(records, &options(Path::new("corpus/layout"), false), &Cli::Binary(PathBuf::from("wordcraft-cli")));
         assert_eq!(report["schema"], SCHEMA);
+        assert_eq!(report["wordcraft_cli"], "wordcraft-cli");
         assert_eq!(report["aggregate"]["cases"], 3);
         assert_eq!(report["aggregate"]["compared"], 2);
         assert_eq!(report["aggregate"]["skipped"], 1);
@@ -1081,6 +1111,42 @@ mod tests {
         assert!(markdown.find("`bad`").unwrap() < markdown.find("`good`").unwrap());
         assert!(markdown.contains("Ranked by layout mismatch"));
         assert!(markdown.contains("signed +2"));
+    }
+
+    fn table_columns(row: &str) -> usize {
+        let mut pipes: usize = 0;
+        let mut escaped = false;
+        for ch in row.chars() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match ch {
+                '\\' => escaped = true,
+                '|' => pipes += 1,
+                _ => {}
+            }
+        }
+        pipes.saturating_sub(1)
+    }
+
+    #[test]
+    fn markdown_ranked_table_has_one_cell_per_column() {
+        let good = metrics_from_result(&result(2, 2, 0.98, 98.0, 1.0)).unwrap();
+        let bad = metrics_from_result(&result(2, 4, 0.60, 40.0, 20.0)).unwrap();
+        let records = vec![record("good", Status::Compared, Some(good)), record("bad", Status::Compared, Some(bad))];
+        let report = build_report(records, &options(Path::new("corpus/layout"), false), &Cli::CargoRun);
+        let markdown = markdown(&report);
+        let mut rows = markdown.lines().skip_while(|line| !line.starts_with("| # | Case |"));
+        let header = rows.next().unwrap();
+        let delimiter = rows.next().unwrap();
+        assert!(header.contains("Median \\|Δy\\|"));
+        let columns = table_columns(header);
+        assert_eq!(columns, 9);
+        assert_eq!(table_columns(delimiter), columns);
+        for row in rows.take_while(|line| line.starts_with('|')) {
+            assert_eq!(table_columns(row), columns, "row: {row}");
+        }
     }
 
     #[test]
@@ -1130,6 +1196,7 @@ mod tests {
         let summary: Value = serde_json::from_slice(&std::fs::read(out.join("summary.json")).unwrap()).unwrap();
         assert_eq!(summary["cases"][0]["status"], "skipped");
         assert_eq!(summary["cases"][0]["reason"], "no Word reference");
+        assert!(summary["wordcraft_cli"].as_str().unwrap().contains("wordcraft-cli"));
         assert_eq!(summary["aggregate"]["skipped"], 1);
         let markdown = std::fs::read_to_string(out.join("summary.md")).unwrap();
         assert!(markdown.contains("no Word reference"));
@@ -1173,6 +1240,7 @@ mod tests {
         assert!(result.is_err());
         let summary: Value = serde_json::from_slice(&std::fs::read(out.join("summary.json")).unwrap()).unwrap();
         assert_eq!(summary["private"], true);
+        assert!(summary["wordcraft_cli"].is_null());
         assert_eq!(summary["cases"][0]["status"], "failed");
         assert_eq!(summary["cases"][0]["reason"], "invalid Word reference");
         assert!(summary["cases"][0].get("source").is_none());
