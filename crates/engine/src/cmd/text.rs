@@ -109,6 +109,8 @@ fn thai_tcb_action(s: &Session, ch: char) -> Option<wordcraft_doc::thai_input::T
         | ThaiCharClass::Tone
         | ThaiCharClass::Diacritic
         | ThaiCharClass::LeadingVowel => {}
+        // SARA_AA (า U+0E32) can combine with a preceding NIKHAHIT into SARA_AM.
+        ThaiCharClass::Other if ch == '\u{0E32}' => {}
         _ => return None,
     }
     let focus = &s.sel.focus;
