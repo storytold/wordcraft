@@ -92,7 +92,9 @@ impl WordApp {
             let Some(i) = self.addins.iter().position(|a| a.id() == key) else { return };
             let mut addin = self.addins.remove(i);
             self.addins_out.push(key);
-            let _ = addin.file_picked(self, &tag, picked);
+            if let Err(e) = addin.file_picked(self, &tag, picked) {
+                self.status(e);
+            }
             self.addins_out.retain(|k| *k != key);
             self.addins.insert(i.min(self.addins.len()), addin);
         }
@@ -120,7 +122,11 @@ impl WordApp {
 
     /// Ask for a file for the add-in `id`; its [`AddIn::file_picked`] gets the answer with `tag`.
     pub fn addin_ask_file(&mut self, id: &str, req: FileDialogRequest, tag: &str) {
-        let _ = self.ask_file(req, crate::file_dialogs::AfterPick::AddIn { id: id.to_string(), tag: tag.to_string() });
+        if let crate::file_dialogs::Asked::Done(Err(e)) =
+            self.ask_file(req, crate::file_dialogs::AfterPick::AddIn { id: id.to_string(), tag: tag.to_string() })
+        {
+            self.status(e);
+        }
     }
 
     /// The add-in whose options page is showing, if any.
@@ -284,6 +290,9 @@ mod tests {
         }
         fn file_picked(&mut self, _app: &mut WordApp, tag: &str, picked: Option<String>) -> Result<Value, String> {
             self.picked = Some((tag.to_string(), picked));
+            if tag == "bad" {
+                return Err("that file isn't a profile".into());
+            }
             Ok(json!({"done": true}))
         }
         fn open(&mut self, what: &str) {
@@ -393,6 +402,36 @@ mod tests {
         a.add_addin(Box::new(Probe::default()));
         a.with_addin("probe", |_, app| app.addin_ask_file("probe", FileDialogRequest::Open { purpose: "json".into() }, "import"));
         assert_eq!(probe(&mut a).picked, Some(("import".to_string(), Some("/tmp/x.json".to_string()))));
+    }
+
+    /// A file it can't use says why on the status line, picked at once or handed over later.
+    #[test]
+    fn a_file_it_cant_use_says_why() {
+        let mut a =
+            WordApp::new(Session::new(Document::new()), Services { pick_open: Some(Box::new(|_| Some("/tmp/x.json".into()))), ..Default::default() });
+        a.add_addin(Box::new(Probe::default()));
+        let req = || FileDialogRequest::Open { purpose: "json".into() };
+        a.addin_ask_file("probe", req(), "bad");
+        assert_eq!(a.status_msg.take().map(|(m, _)| m).as_deref(), Some("that file isn't a profile"));
+        a.with_addin("probe", |_, app| app.addin_ask_file("probe", req(), "bad"));
+        assert_eq!(a.status_msg.take().map(|(m, _)| m).as_deref(), Some("that file isn't a profile"));
+    }
+
+    /// Picking another ribbon tab from its options page lets it save first, as closing File does.
+    #[test]
+    fn another_tab_waits_for_its_page_too() {
+        let mut a = app();
+        a.run("file.options", json!({"modules": {"probe": true}})).unwrap();
+        a.run("file.options", json!({"pane": "addin:probe"})).unwrap();
+        a.ui.backstage = true;
+        a.ui.backstage_page = "options".into();
+        probe(&mut a).refuse_leave = true;
+        a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
+        assert!(a.ui.backstage, "File stays open");
+        probe(&mut a).refuse_leave = false;
+        a.run("ui.tab", json!({"tab": "Insert"})).unwrap();
+        assert!(!a.ui.backstage);
+        assert_eq!(a.ui.tab, "Insert");
     }
 
     /// Scripts and agents turn it on and off as the Add-ins page does.
