@@ -698,7 +698,6 @@ impl Default for Settings {
     }
 }
 
-
 /// A document.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]

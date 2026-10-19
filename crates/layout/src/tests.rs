@@ -1363,7 +1363,6 @@ fn a_missing_font_is_drawn_in_its_font_table_altname() {
     assert_eq!(face(None, true), cambria);
     assert_ne!(face(None, false), cambria);
 }
-}
 
 #[test]
 fn an_empty_section_mark_stays_on_a_full_page() {
@@ -2049,7 +2048,7 @@ fn a_symbol_font_draws_its_unicode_symbols_even_when_its_altname_is_installed() 
     // itself is missing — even when the font table's w:altName is installed and the run is
     // drawn in it: the alternate is an ordinary text face, not the symbol encoding (#2702
     // review: the alternate must not make the run skip the remap).
-    if wordcraft_fonts::word::substitutes_available("Wingdings") {
+    if wordcraft_fonts::word::installed_as_itself("Wingdings") {
         eprintln!("skipped: Wingdings is installed");
         return;
     }

@@ -17,32 +17,26 @@ use wordcraft_fonts::FaceRef;
 use crate::NumeralMode;
 use crate::fields::{FIELD_SHADING, FieldCtx, field_code_text, field_text_on, reference_link};
 
-mod bidi;
-mod builder;
-mod chars;
-mod grid;
-mod justify;
-mod lines;
-mod model;
-mod paragraph;
-mod proof;
-mod tabs;
+/// How a run set in one of Word's symbol fonts (Symbol, Wingdings, Wingdings 2/3, Webdings)
+/// shows its characters. Those fonts are proprietary and usually missing: a substitute has other
+/// glyphs, or none, at their codes, so each character is drawn as its Unicode equivalent
+/// ([`wordcraft_doc::symbol_fonts`]) from a face that has it. The text itself is unchanged.
+#[derive(Clone, Copy)]
+struct SymbolRun<'a> {
+    family: &'a str,
+    /// The symbol font itself is installed (`face` is it).
+    installed: bool,
+    face: FaceRef,
+}
 
-pub use bidi::{bidi_levels, visual_order};
-pub(crate) use builder::left_out;
-#[cfg(test)]
-use chars::{MISSING_ROMAN_FONT, lookup_family};
-pub(crate) use chars::{caps_char, push_caps};
-#[cfg(test)]
-pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
-pub use grid::{Exclusion, Grid, is_east_asian};
-#[cfg(test)]
-use lines::break_lines;
-pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
-pub use paragraph::layout_para;
-#[cfg(test)]
-pub(crate) use paragraph::word_widths;
-pub use proof::{ProofRun, is_list_item, paragraph_issues, proof_runs, proof_text};
+impl<'a> SymbolRun<'a> {
+    fn of(family: &'a str, r: &wordcraft_fonts::word::Resolved) -> Option<Self> {
+        wordcraft_doc::symbol_fonts::is_symbol_font(family).then_some(SymbolRun { family, installed: !r.substituted, face: r.face })
+    }
+
+    /// The character drawn for `c`.
+    fn show(&self, c: char) -> char {
+        if self.installed {
             if self.face.covers(c) {
                 return c;
             }
@@ -339,7 +333,6 @@ pub struct LabelRun {
     pub text: String,
 }
 
-
 /// A laid-out paragraph.
 #[derive(Clone, Debug)]
 pub struct ParaLayout {
@@ -352,9 +345,6 @@ pub struct ParaLayout {
     /// Sum of line heights (without space before/after).
     pub height: f32,
     pub text_len: usize,
-    /// Drawing segments that start inside a whole-paragraph grapheme/complex-script cluster.
-    /// Font or run formatting can split the drawing, but cannot introduce an edit/wrap stop.
-    joined_cluster_starts: Vec<usize>,
     /// Paragraph contains fields whose text depends on the page.
     pub has_page_fields: bool,
     /// Note references (part id) in this paragraph, by cluster index.
@@ -789,26 +779,21 @@ fn east_asian(c: char) -> bool {
 /// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
 const MISSING_ROMAN_FONT: &str = "Cambria";
 
-/// The family to look `font` up as: the font table's alternate name when the font isn't installed
-/// and the alternate is (`w:altName`, ECMA-376 §17.8.3.1 — Word draws the alternate before the
-/// family class and the generic substitutes, #2702), [`MISSING_ROMAN_FONT`] for a missing roman
-/// font, else `font`. A missing Thai font keeps its name: it is drawn in a Thai face, not in Cambria (#1549).
-fn lookup_family<'f>(doc: &Document, font: &'f str) -> Cow<'f, str> {
+/// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
+/// A missing Thai font keeps its name: it is drawn in a Thai face, not in Cambria (#1549).
+fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
     let db = wordcraft_fonts::FontDb::global();
-    if db.has_family(font) || db.has_family(wordcraft_fonts::word::charset_base_family(font)) {
-        return Cow::Borrowed(font);
-    }
-    // The alternate itself, or one of its own substitutes, installed: the run is drawn in it.
-    if let Some(alt) = doc.settings.alt_fonts.iter().find(|(n, _)| n.eq_ignore_ascii_case(font)).map(|(_, a)| a.as_str())
-        && wordcraft_fonts::word::substitutes_available(alt)
-    {
-        return Cow::Owned(alt.to_owned());
-    }
     let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman && !wordcraft_fonts::word::is_thai_family(font) && !wordcraft_doc::symbol_fonts::is_symbol_font(font) {
-        return Cow::Borrowed(MISSING_ROMAN_FONT);
+    if roman
+        && !wordcraft_fonts::word::is_thai_family(font)
+        && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
+        && !db.has_family(font)
+        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
+    {
+        MISSING_ROMAN_FONT
+    } else {
+        font
     }
-    Cow::Borrowed(font)
 }
 
 /// One face for a run in a Thai font that isn't installed (#1549): Word substitutes one font
@@ -845,7 +830,7 @@ impl<'a> Builder<'a> {
 
     /// Style index for a resolved char in `face` (caps-scaled `size` override for small caps).
     fn style(&mut self, rc: &Arc<ResolvedChar>, face_override: Option<FaceRef>, small: bool) -> u32 {
-        let r = wordcraft_fonts::word::resolve(&lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let r = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
         let face = face_override.unwrap_or(r.face);
         // The display list reads every run's format (link target, strike kind, underline colour,
         // baseline shift…) from its StyleRun, so runs share one only when their formats are equal.
@@ -910,20 +895,19 @@ impl<'a> Builder<'a> {
         // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
         // bold and italic.
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
-        let resolved = wordcraft_fonts::word::resolve(&lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let resolved = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
-        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(&lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
+        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
-        // it is installed and has them — itself, or through the font table's `w:altName`, like the
-        // other font references in the run (#2702 review).
+        // it is installed and has them.
         let primary_ea = rc
             .font_ea
             .as_ref()
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(&lookup_family(self.env.doc, f), rc.bold, rc.italic))
+            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
             .filter(|r| !r.substituted)
             .map(|r| r.face);
         // The levels by byte of `text`, from `lbase` on.
@@ -2897,31 +2881,7 @@ fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>,
     }
 }
 
-
 impl ParaLayout {
-    /// Returns whether `off` is a legal caret and edit boundary, that is, not the interior start of a
-    /// joined grapheme cluster.
-    fn is_edit_boundary(&self, off: usize) -> bool {
-        self.joined_cluster_starts.binary_search(&off).is_err()
-    }
-
-    /// At a legal group start, include every following drawing segment of that grapheme.
-    /// Interior segments keep their own advance; they are never independent wrap candidates.
-    fn atomic_advance(&self, k: usize) -> f32 {
-        let Some(c) = self.clusters.get(k) else { return 0.0 };
-        let mut advance = c.adv;
-        if self.joined_cluster_starts.is_empty() || !self.is_edit_boundary(c.start) {
-            return advance;
-        }
-        for next in self.clusters.get(k + 1..).into_iter().flatten() {
-            if self.is_edit_boundary(next.start) {
-                break;
-            }
-            advance += next.adv;
-        }
-        advance
-    }
-
     /// The automatic space in cluster `k`'s advance ([`auto_space`]), 0 without one.
     fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)
@@ -2939,49 +2899,19 @@ impl ParaLayout {
     /// x of byte offset `off` within line `li` (clamped to the line).
     pub fn x_of(&self, li: usize, off: usize) -> Option<f32> {
         let l = self.lines.get(li)?;
-        let off = if self.is_edit_boundary(off) {
-            off
-        } else {
-            // Explicit offsets at a font boundary inside a grapheme use its leading edge too.
-            let k = self.clusters.partition_point(|c| c.start < off);
-            self.clusters.get(..k).into_iter().flatten().rev().find(|c| self.is_edit_boundary(c.start)).map_or(0, |c| c.start)
-        };
-        let mut from = l.c0;
-        self.x_from(l, off, &mut from)
-    }
-    /// [`Self::x_of`] on line `l`, looking for the cluster at `off` from cluster `*from` on (the
-    /// clusters before it must all end at or before `off`: so they do when `from` was left there
-    /// by an offset no greater), and leaving `from` at the cluster found. Walks a line's carets
-    /// in order in one pass over its clusters.
-    fn x_from(&self, l: &Line, off: usize, from: &mut usize) -> Option<f32> {
         if !l.vis.is_empty() {
-            return self.x_of_bidi(l, off, from);
+            return self.x_of_bidi(l, off);
         }
-        for k in *from..l.c1 {
-            crate::work::steps(1);
+        for k in l.c0..l.c1 {
             let c = self.clusters.get(k)?;
-            if off <= c.start || off < c.end {
-                *from = k;
+            if off <= c.start {
+                return l.xs.get(k - l.c0).copied();
+            }
+            if off < c.end {
                 return l.xs.get(k - l.c0).copied();
             }
         }
-        *from = l.c1;
         l.xs.last().copied()
-    }
-    /// Each caret offset on line `li` ([`Self::line_offsets`]) with its x ([`Self::x_of`]).
-    pub fn line_carets(&self, li: usize) -> Vec<(usize, Option<f32>)> {
-        let Some(l) = self.lines.get(li) else { return Vec::new() };
-        let (mut from, mut last) = (l.c0, 0);
-        self.line_offsets(li)
-            .into_iter()
-            .map(|off| {
-                if off < last {
-                    from = l.c0;
-                }
-                last = off;
-                (off, self.x_from(l, off, &mut from))
-            })
-            .collect()
     }
     /// The farthest right a caret goes on left-to-right line `li`: spaces at the end of a line
     /// hang past its right edge, but the caret after them stays at the edge, as in Word (#2146);
@@ -3017,12 +2947,8 @@ impl ParaLayout {
     /// edge of right-to-left text), except where `off` leaves an embedded run (the cluster before
     /// it has the higher level), which keeps the caret at that run's trailing edge, so each
     /// visual boundary of the common mixed cases has its own offset.
-    fn x_of_bidi(&self, l: &Line, off: usize, from: &mut usize) -> Option<f32> {
-        let k = (*from..l.c1).find(|&k| {
-            crate::work::steps(1);
-            self.clusters.get(k).is_some_and(|c| off < c.end || off <= c.start)
-        });
-        *from = k.unwrap_or(l.c1);
+    fn x_of_bidi(&self, l: &Line, off: usize) -> Option<f32> {
+        let k = (l.c0..l.c1).find(|&k| self.clusters.get(k).is_some_and(|c| off < c.end || off <= c.start));
         let Some(k) = k else { return Some(l.end_x()) };
         let c = self.clusters.get(k)?;
         let here = l.vis.get(k - l.c0)?;
@@ -3050,12 +2976,11 @@ impl ParaLayout {
         }
     }
 
-    /// Caret offsets a click or arrow key can reach on line `li`: whole-grapheme starts and the
-    /// line end, except after a line-ending break or past a wrapped line's trailing space.
+    /// Caret offsets a click or arrow key can reach on line `li`: each cluster start and the line
+    /// end, except after a line-ending break or past a wrapped line's trailing space.
     pub fn line_offsets(&self, li: usize) -> Vec<usize> {
         let Some(l) = self.lines.get(li) else { return Vec::new() };
-        let mut v: Vec<usize> =
-            (l.c0..l.c1).filter_map(|k| self.clusters.get(k).filter(|c| self.is_edit_boundary(c.start)).map(|c| c.start)).collect();
+        let mut v: Vec<usize> = (l.c0..l.c1).filter_map(|k| self.clusters.get(k).map(|c| c.start)).collect();
         let last_break =
             l.c1 > l.c0 && self.clusters.get(l.c1 - 1).is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
         let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some();
@@ -3070,8 +2995,8 @@ impl ParaLayout {
         let Some(l) = self.lines.get(li) else { return self.text_len };
         if !l.vis.is_empty() {
             let mut best = (l.start, f32::MAX);
-            for (off, cx) in self.line_carets(li) {
-                let d = cx.map_or(f32::MAX, |cx| (cx - x).abs());
+            for off in self.line_offsets(li) {
+                let d = self.x_of(li, off).map_or(f32::MAX, |cx| (cx - x).abs());
                 if d < best.1 {
                     best = (off, d);
                 }
@@ -3083,9 +3008,6 @@ impl ParaLayout {
         for k in l.c0..=l.c1 {
             let Some(cx) = l.xs.get(k - l.c0) else { break };
             let off = if k < l.c1 { self.clusters.get(k).map(|c| c.start).unwrap_or(l.stop) } else { l.stop };
-            if !self.is_edit_boundary(off) {
-                continue;
-            }
             // Don't place the caret after a line-ending break or wrap-trailing space on a wrapped line.
             if k == l.c1 && k > l.c0 {
                 let lastc = self.clusters.get(k - 1);
@@ -3109,6 +3031,93 @@ impl ParaLayout {
         let Some(l) = self.lines.get(li) else { return (10.0, 3.0) };
         (l.text_asc.min(l.baseline - l.top), l.text_desc.min(l.top + l.height - l.baseline))
     }
+}
+
+/// One run's proofing: its bytes in the paragraph, its language (`w:lang`, resolved through the
+/// styles: the document default, paragraph and character styles, direct formatting) and whether
+/// it is left unchecked ("Do not check spelling or grammar", hidden text, hyperlinks).
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProofRun {
+    pub range: std::ops::Range<usize>,
+    pub lang: wordcraft_proof::ProofLang,
+    pub skip: bool,
+}
+
+impl ProofRun {
+    fn of(range: std::ops::Range<usize>, rc: &ResolvedChar) -> ProofRun {
+        ProofRun { range, lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()), skip: rc.no_proof || rc.hidden || rc.link.is_some() }
+    }
+}
+
+/// The proofing runs of a paragraph, in order. `table` is the cell's table-style character
+/// formatting ([`CellText::chr`]) for a paragraph in a table, as layout resolves it.
+pub fn proof_runs(doc: &Document, p: &Paragraph, table: Option<&CharProps>) -> Vec<ProofRun> {
+    let style = p.props.style.as_deref();
+    p.run_ranges().map(|(r, c)| ProofRun::of(r, &doc.styles.resolve_char_in(style, table, c))).collect()
+}
+
+/// The language of the run holding byte `off` (English past the last run).
+fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLang {
+    let k = runs.partition_point(|r| r.range.end <= off);
+    runs.get(k).filter(|r| r.range.start <= off).map(|r| r.lang).unwrap_or_default()
+}
+
+/// Spelling and grammar issues in a paragraph, in order: each word in its run's language
+/// ([`wordcraft_proof::check_text_with`]: what spelling skips, and grammar only with `grammar`),
+/// and none touching a run left unchecked.
+///
+/// `list_item` (see [`is_list_item`]) turns off the capital-first-word grammar rule.
+pub fn paragraph_issues(
+    p: &Paragraph,
+    runs: &[ProofRun],
+    spelling: &wordcraft_proof::Options,
+    grammar: bool,
+    list_item: bool,
+) -> Vec<wordcraft_proof::Issue> {
+    if p.text.trim().is_empty() || p.text.len() > 100_000 {
+        return Vec::new();
+    }
+    let text = proof_text(p);
+    let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
+    let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
+    wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item).into_iter().filter(|i| !skip(i.start, i.end)).collect()
+}
+
+/// Whether the paragraph is a list item: its own numbering, or its style's, names a list (not 0).
+pub fn is_list_item(doc: &Document, p: &Paragraph) -> bool {
+    p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).is_some_and(|n| n.num != 0)
+}
+
+/// Spelling and grammar issues as squiggles (start, end, is grammar), less spelling issues overlapping `typing`.
+fn proof_issues(
+    p: &Paragraph,
+    runs: &[ProofRun],
+    opts: &crate::ProofOptions,
+    typing: Option<(usize, usize)>,
+    list_item: bool,
+) -> Vec<(usize, usize, bool)> {
+    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
+        .into_iter()
+        .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
+        .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))
+        .collect()
+}
+
+/// Text for proofing with the same byte offsets: inline objects and tracked deletions become
+/// U+0001 bytes (neither words nor spaces).
+pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
+    let mut out = String::with_capacity(p.text.len());
+    for (i, c) in p.text.char_indices() {
+        let deleted = c == wordcraft_doc::para::OBJ || p.props_of_char(i).del.is_some();
+        if deleted {
+            for _ in 0..c.len_utf8() {
+                out.push('\u{1}');
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -3224,22 +3233,6 @@ mod label_spacing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// The ASCII shortcuts give the bidi class's answer for every character.
-    #[test]
-    fn strong_and_mark_shortcuts_match_the_bidi_class() {
-        use unicode_bidi::BidiClass::{AL, BN, L, NSM, R};
-        for c in (0..=0x10ffff).filter_map(char::from_u32) {
-            let class = unicode_bidi::bidi_class(c);
-            let strong = match class {
-                R | AL => Some(true),
-                L => Some(false),
-                _ => None,
-            };
-            assert_eq!(bidi::strong_rtl(c), strong, "{:04x}", c as u32);
-            assert_eq!(chars::is_mark(c), matches!(class, NSM | BN) && !c.is_control(), "{:04x}", c as u32);
-        }
-    }
 
     #[test]
     fn symbols_ignore_roman_hint() {
