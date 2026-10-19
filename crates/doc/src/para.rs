@@ -172,17 +172,13 @@ impl Paragraph {
     /// deletions become U+0001 bytes (neither words nor spaces), matching layout proofing.
     pub fn proof_text(&self) -> String {
         let mut out = String::with_capacity(self.text.len());
-        // The run holding each character ([`Self::props_of_char`]), found by walking the runs
-        // along with the text rather than from the first run for every character.
-        let mut runs = self.runs.iter();
-        let mut run = runs.next();
-        let mut end = run.map_or(0, |r| r.len);
+        // The runs in step with the text (as `props_of_char`, without rescanning for each char).
+        let mut runs = self.run_ranges().peekable();
         for (i, c) in self.text.char_indices() {
-            while run.is_some() && i >= end {
-                run = runs.next();
-                end = end.saturating_add(run.map_or(0, |r| r.len));
+            while runs.peek().is_some_and(|(r, _)| i >= r.end) {
+                runs.next();
             }
-            let props = run.map_or(&self.mark, |r| &r.props);
+            let props = runs.peek().map_or(&self.mark, |(_, p)| *p);
             let deleted = c == OBJ || props.del.is_some();
             if deleted {
                 for _ in 0..c.len_utf8() {
