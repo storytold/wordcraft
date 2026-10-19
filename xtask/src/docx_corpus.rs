@@ -48,7 +48,7 @@ options:
                      the Markdown summary is written beside it with an .md extension
   --all-pages        render every page, not only page 1 (capped at 2000 pages)
   --timeout <secs>   timeout for each child process (default: 60, max: 3600)
-  --cli <path>       wordcraft-cli binary (default: beside this xtask binary, building it if absent)
+  --cli <path>       wordcraft-cli binary (default: build it and use the one beside this xtask binary)
   -h, --help         this help
 ";
 
@@ -251,18 +251,32 @@ fn resolve_cli(explicit: Option<&Path>) -> Result<PathBuf, String> {
     }
     let exe = std::env::current_exe().map_err(|e| format!("current exe: {e}"))?;
     let dir = exe.parent().ok_or_else(|| format!("{} has no parent directory", exe.display()))?;
-    let name = if cfg!(windows) { "wordcraft-cli.exe" } else { "wordcraft-cli" };
-    let candidate = dir.join(name);
-    if candidate.is_file() {
-        return Ok(candidate);
-    }
-    eprintln!("docx-corpus: building wordcraft-cli (once) ...");
+    resolve_cli_beside(dir, build_cli)
+}
+
+/// Build `wordcraft-cli` beside the running xtask binary and return its path.
+///
+/// The build runs on every invocation: cargo is a no-op when the binary is current, and
+/// returning an existing candidate would let a stale binary produce a stale report.
+fn resolve_cli_beside(dir: &Path, build: impl FnOnce(&Path) -> Result<(), String>) -> Result<PathBuf, String> {
+    eprintln!("docx-corpus: building wordcraft-cli ...");
+    build(dir)?;
+    let candidate = dir.join(cli_name());
+    if candidate.is_file() { Ok(candidate) } else { Err(format!("{} was not built; pass --cli", candidate.display())) }
+}
+
+fn cli_name() -> &'static str {
+    if cfg!(windows) { "wordcraft-cli.exe" } else { "wordcraft-cli" }
+}
+
+/// Build `wordcraft-cli` in the xtask binary's directory (cargo is a no-op when it is current).
+fn build_cli(dir: &Path) -> Result<(), String> {
     let release = dir.file_name().is_some_and(|n| n == "release");
     let status = crate::cargo().args(cli_build_args(release)).status().map_err(|e| format!("build wordcraft-cli: {e}"))?;
     if !status.success() {
         return Err(format!("build wordcraft-cli failed ({status})"));
     }
-    if candidate.is_file() { Ok(candidate) } else { Err(format!("{} was not built; pass --cli", candidate.display())) }
+    Ok(())
 }
 
 /// Run one corpus. `None` means the directory is missing, which is not an error.
@@ -897,6 +911,51 @@ mod tests {
         for release in [false, true] {
             assert_eq!(cli_build_args(release).first().copied(), Some("build"));
         }
+    }
+
+    #[test]
+    fn resolve_cli_builds_every_run_even_when_the_binary_exists() {
+        // Regression: an existing binary used to be returned without rebuilding, so a report
+        // could describe stale code.
+        let dir = temp_case("resolve-cli-rebuild");
+        let candidate = dir.join(cli_name());
+        fs::write(&candidate, b"stale").unwrap();
+        let builds = RefCell::new(Vec::new());
+        let resolved = resolve_cli_beside(&dir, |dir| {
+            builds.borrow_mut().push(dir.to_path_buf());
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(resolved, candidate);
+        assert_eq!(builds.borrow().as_slice(), std::slice::from_ref(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_cli_uses_an_explicit_binary_without_building() {
+        let dir = temp_case("resolve-cli-explicit");
+        let binary = dir.join("my-cli");
+        fs::write(&binary, b"cli").unwrap();
+        assert_eq!(resolve_cli(Some(&binary)).unwrap(), binary);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_cli_rejects_a_missing_explicit_binary() {
+        let dir = temp_case("resolve-cli-missing");
+        let err = resolve_cli(Some(&dir.join("absent"))).unwrap_err();
+        assert!(err.contains("is not a file"), "{err}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn resolve_cli_reports_build_problems() {
+        let dir = temp_case("resolve-cli-build-errors");
+        let err = resolve_cli_beside(&dir, |_| Err("build wordcraft-cli failed (exit status: 1)".into())).unwrap_err();
+        assert!(err.contains("build wordcraft-cli failed"), "{err}");
+        let err = resolve_cli_beside(&dir, |_| Ok(())).unwrap_err();
+        assert!(err.contains("pass --cli"), "{err}");
+        let _ = fs::remove_dir_all(&dir);
     }
 
     #[test]

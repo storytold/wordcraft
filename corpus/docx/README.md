@@ -31,9 +31,7 @@ manifest and the harness report, not the documents.
 ## Run it
 
 ```sh
-# Build wordcraft-cli once (the runner also does this automatically if it is absent)
-cargo build -p wordcraft-cli
-
+# The runner builds wordcraft-cli before every run (a no-op when it is current).
 cargo xtask docx-corpus --dir corpus/docx
 cargo xtask docx-corpus --dir corpus/docx --out target/docx-corpus/report.json
 cargo xtask docx-corpus --dir corpus/docx --all-pages
