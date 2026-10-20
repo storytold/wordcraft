@@ -226,9 +226,18 @@ pub fn thai_word_start(text: &str, off: usize) -> usize {
 }
 
 /// End of the Thai/Lao word after `off` using ICU4X dictionary word segmentation
-/// (Ctrl+Right / Option+Right inside a Thai/Lao run). `off` must be ≤ `text.len()`.
+/// (Ctrl+Right / Option+Right inside a Thai/Lao run), including any trailing spaces or
+/// non-breaking spaces — matching the behaviour of the generic `word_end`. `off` must be
+/// ≤ `text.len()`.
 pub fn thai_word_end(text: &str, off: usize) -> usize {
-    word_segmenter().segment_str(text).find(|&b| b > off).unwrap_or(text.len())
+    let mut end = word_segmenter().segment_str(text).find(|&b| b > off).unwrap_or(text.len());
+    while let Some(c) = text.get(end..).and_then(|s| s.chars().next()) {
+        if !matches!(c, ' ' | '\u{00A0}') {
+            break;
+        }
+        end += c.len_utf8();
+    }
+    end
 }
 
 /// The Thai/Lao word around `off` for double-click selection: (start, end).
@@ -388,20 +397,25 @@ mod tests {
 
     #[test]
     fn thai_word_movement_uses_icu4x_segmenter() {
-        // "แมวกินปลา" = แมว (cat) + กิน (eat) + ปลา (fish): 9 + 9 + 9 = 27 bytes, three words.
-        let s = "แมวกินปลา";
-        let len = s.len(); // 27
-        assert_eq!(len, 27);
+        // "อนุรักษ์ภาษาไทย" = อนุรักษ์ (24 B) + ภาษา (12 B) + ไทย (9 B) = 45 bytes, three words.
+        let s = "อนุรักษ์ภาษาไทย";
+        let len = s.len(); // 45
+        assert_eq!(len, 45);
 
-        // word_end from offset 0 must point to the end of "แมว" (byte 9).
+        // word_end from offset 0 must point to the end of "อนุรักษ์" (byte 24).
         let end0 = thai_word_end(s, 0);
-        assert_eq!(end0, 9, "first word end: {end0}");
+        assert_eq!(end0, 24, "first word end: {end0}");
 
         // word_start from the boundary between word 1 and word 2 returns the start of word 1.
-        assert_eq!(thai_word_start(s, 9), 0, "start of word at boundary 9");
+        assert_eq!(thai_word_start(s, 24), 0, "start of word at boundary 24");
 
-        // word_start from inside word 2 (byte 12) returns the start of word 2 (byte 9).
-        assert_eq!(thai_word_start(s, 12), 9, "start of กิน");
+        // word_start from inside word 2 (byte 28) returns the start of word 2 (byte 24).
+        assert_eq!(thai_word_start(s, 28), 24, "start of ภาษา");
+
+        // word_end includes a trailing space (matching generic word_end behaviour).
+        // "วัฒนธรรม ไทย": วัฒนธรรม (24 B) + space (1 B) + ไทย (9 B) = 34 B.
+        let spaced = "วัฒนธรรม ไทย";
+        assert_eq!(thai_word_end(spaced, 0), 25, "word_end includes trailing space after วัฒนธรรม");
 
         // word_end chained must traverse all three words.
         let mut off = 0;
@@ -415,12 +429,12 @@ mod tests {
         }
         assert_eq!(steps, 3, "expected 3 words, got {steps}");
 
-        // word_at: click inside word 2 (byte 12) → (9, 18).
-        assert_eq!(thai_word_at(s, 12), (9, 18), "click inside กิน");
+        // word_at: click inside word 2 (byte 28) → (24, 36).
+        assert_eq!(thai_word_at(s, 28), (24, 36), "click inside ภาษา");
 
-        // word_at: click at the boundary between word 1 and word 2 (byte 9) → word 1 (0, 9),
+        // word_at: click at the boundary between word 1 and word 2 (byte 24) → word 1 (0, 24),
         // not word 2.  A boundary click lands the caret at the end of the preceding word.
-        assert_eq!(thai_word_at(s, 9), (0, 9), "boundary click at 9 selects แมว, not กิน");
+        assert_eq!(thai_word_at(s, 24), (0, 24), "boundary click at 24 selects อนุรักษ์, not ภาษา");
 
         // word_at: click at offset 0 → first word.
         let (a0, b0) = thai_word_at(s, 0);
@@ -428,7 +442,7 @@ mod tests {
         assert!(b0 > 0 && b0 <= len);
 
         // word_at: click at end of text → last word.
-        assert_eq!(thai_word_at(s, len), (18, 27), "click at end → ปลา");
+        assert_eq!(thai_word_at(s, len), (36, 45), "click at end → ไทย");
     }
 
     #[test]
