@@ -13,9 +13,11 @@
 //!   GTK's defaults, not KDE's setting, so KDE's come first.
 //!
 //! Running through XWayland (the default) the X resources are asked first and the portal when
-//! they say nothing; on native Wayland the portal first, so as not to start an on-demand XWayland
-//! (GNOME's) just to read a setting. A thread asks every two seconds, so a change in the desktop's
-//! settings shows without a restart. Elsewhere the desktop isn't asked: page text is greyscale.
+//! they say nothing; on native Wayland only the portal, so an on-demand XWayland (GNOME's, sway's
+//! `xwayland lazy`) is never started to read a setting: where the portal has no font keys
+//! (xdg-desktop-portal-wlr), page text stays greyscale unless File › Options says otherwise. A
+//! thread asks every two seconds, so a change in the desktop's settings shows without a restart.
+//! Elsewhere the desktop isn't asked: page text is greyscale.
 
 use wordcraft_ui_egui::Subpixel;
 
@@ -131,7 +133,9 @@ mod desktop {
                     }
                     bus.as_ref().and_then(portal)
                 };
-                let answer = if native_wayland { from_portal().or_else(from_x) } else { from_x().or_else(from_portal) }.flatten();
+                // On native Wayland only the portal: asking X there could start an on-demand
+                // XWayland (GNOME's, sway's `xwayland lazy`) and keep it running.
+                let answer = if native_wayland { from_portal() } else { from_x().or_else(from_portal) }.flatten();
                 let code = match answer {
                     Some(Subpixel::Rgb) => RGB,
                     Some(Subpixel::Bgr) => BGR,
