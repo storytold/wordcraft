@@ -185,7 +185,8 @@ pub fn is_thai_lao(c: char) -> bool {
 /// of or below the base consonant. These are Unicode `Extend` (UAX #29) so UAX #29 grapheme
 /// clusters already keep them attached to their base — the caret never stops on one alone.
 /// This predicate exists to make the rule explicit and to drive tests.
-pub fn is_thai_combining(c: char) -> bool {
+#[cfg(test)]
+fn is_thai_combining(c: char) -> bool {
     matches!(u32::from(c),
         0x0E31              // mai han akat (above short vowel marker)
         | 0x0E34..=0x0E37  // sara i, sara ii, sara ue, sara uee (above)
@@ -193,14 +194,29 @@ pub fn is_thai_combining(c: char) -> bool {
         | 0x0E47..=0x0E4E) // maitaikhu, mai ek–chattawa (tone), thanthakhat, nikhahit, yamakkan
 }
 
+fn word_segmenter() -> &'static icu_segmenter::WordSegmenterBorrowed<'static> {
+    static S: OnceLock<icu_segmenter::WordSegmenterBorrowed<'static>> = OnceLock::new();
+    S.get_or_init(|| {
+        icu_segmenter::WordSegmenter::new_auto(
+            icu_segmenter::options::WordBreakInvariantOptions::default(),
+        )
+    })
+}
+
+fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
+    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
+    S.get_or_init(|| {
+        icu_segmenter::LineSegmenter::new_dictionary(
+            icu_segmenter::options::LineBreakOptions::default(),
+        )
+    })
+}
+
 /// Start of the Thai/Lao word at or before `off` using ICU4X dictionary word segmentation
 /// (Ctrl+Left / Option+Left inside a Thai/Lao run). `off` must be ≤ `text.len()`.
 pub fn thai_word_start(text: &str, off: usize) -> usize {
-    let segmenter = icu_segmenter::WordSegmenter::new_auto(
-        icu_segmenter::options::WordBreakInvariantOptions::default(),
-    );
     let mut prev = 0usize;
-    for b in segmenter.segment_str(text) {
+    for b in word_segmenter().segment_str(text) {
         if b >= off {
             break;
         }
@@ -212,27 +228,27 @@ pub fn thai_word_start(text: &str, off: usize) -> usize {
 /// End of the Thai/Lao word after `off` using ICU4X dictionary word segmentation
 /// (Ctrl+Right / Option+Right inside a Thai/Lao run). `off` must be ≤ `text.len()`.
 pub fn thai_word_end(text: &str, off: usize) -> usize {
-    let segmenter = icu_segmenter::WordSegmenter::new_auto(
-        icu_segmenter::options::WordBreakInvariantOptions::default(),
-    );
-    segmenter.segment_str(text).find(|&b| b > off).unwrap_or(text.len())
+    word_segmenter().segment_str(text).find(|&b| b > off).unwrap_or(text.len())
 }
 
 /// The Thai/Lao word around `off` for double-click selection: (start, end).
+///
+/// When `off` is exactly on a word boundary (and not at position 0), returns the word to the
+/// *left* of the boundary — consistent with how a click on the right half of the last glyph of
+/// a word lands the caret at the word's end offset.  When `off` is inside a word, returns that
+/// word.  When `off` is 0, returns the first word.
 pub fn thai_word_at(text: &str, off: usize) -> (usize, usize) {
-    let segmenter = icu_segmenter::WordSegmenter::new_auto(
-        icu_segmenter::options::WordBreakInvariantOptions::default(),
-    );
-    let bounds: Vec<usize> = segmenter.segment_str(text).collect();
+    let bounds: Vec<usize> = word_segmenter().segment_str(text).collect();
+    // An exact boundary hit (other than the very start) selects the word whose right edge is
+    // here; its left edge is the preceding boundary.
+    if off > 0 && let Ok(i) = bounds.binary_search(&off) {
+        let a = if i > 0 { bounds[i - 1] } else { 0 };
+        return (a, off);
+    }
     let a = bounds.iter().copied().rev().find(|&b| b <= off).unwrap_or(0);
     let b = bounds.iter().copied().find(|&b| b > off).unwrap_or(text.len());
     (a, b)
 }
-
-/// Returns the shared ICU4X dictionary `LineSegmenter`, built once on first use.
-fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
-    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
-    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
 
 /// Line-break opportunities within Thai and Lao text, which have no spaces between words.
 ///
@@ -372,18 +388,22 @@ mod tests {
 
     #[test]
     fn thai_word_movement_uses_icu4x_segmenter() {
-        // "สวัสดีชาวโลก" = สวัสดี + ชาว + โลก (three words, no spaces).
-        let s = "สวัสดีชาวโลก";
-        let len = s.len();
+        // "แมวกินปลา" = แมว (cat) + กิน (eat) + ปลา (fish): 9 + 9 + 9 = 27 bytes, three words.
+        let s = "แมวกินปลา";
+        let len = s.len(); // 27
+        assert_eq!(len, 27);
 
-        // word_end from offset 0 must NOT return the full string length.
+        // word_end from offset 0 must point to the end of "แมว" (byte 9).
         let end0 = thai_word_end(s, 0);
-        assert!(end0 > 0 && end0 < len, "first word end must be inside the string: got {end0}");
+        assert_eq!(end0, 9, "first word end: {end0}");
 
-        // word_start from `end0` must return 0 (back to the beginning of the first word).
-        assert_eq!(thai_word_start(s, end0), 0);
+        // word_start from the boundary between word 1 and word 2 returns the start of word 1.
+        assert_eq!(thai_word_start(s, 9), 0, "start of word at boundary 9");
 
-        // word_end chained must reach the end within a bounded number of steps.
+        // word_start from inside word 2 (byte 12) returns the start of word 2 (byte 9).
+        assert_eq!(thai_word_start(s, 12), 9, "start of กิน");
+
+        // word_end chained must traverse all three words.
         let mut off = 0;
         let mut steps = 0usize;
         while off < len {
@@ -393,12 +413,22 @@ mod tests {
             steps += 1;
             assert!(steps <= len, "infinite loop guard");
         }
-        assert!(steps >= 2, "expected at least 2 words, got {steps}");
+        assert_eq!(steps, 3, "expected 3 words, got {steps}");
 
-        // word_at for a click inside the first word must not span the whole string.
-        let (a, b) = thai_word_at(s, 3);
-        assert!(b < len || a > 0, "word_at must not return the whole string: ({a}, {b})");
-        assert!(a <= 3 && b > 3, "word_at must straddle the click offset");
+        // word_at: click inside word 2 (byte 12) → (9, 18).
+        assert_eq!(thai_word_at(s, 12), (9, 18), "click inside กิน");
+
+        // word_at: click at the boundary between word 1 and word 2 (byte 9) → word 1 (0, 9),
+        // not word 2.  A boundary click lands the caret at the end of the preceding word.
+        assert_eq!(thai_word_at(s, 9), (0, 9), "boundary click at 9 selects แมว, not กิน");
+
+        // word_at: click at offset 0 → first word.
+        let (a0, b0) = thai_word_at(s, 0);
+        assert_eq!(a0, 0);
+        assert!(b0 > 0 && b0 <= len);
+
+        // word_at: click at end of text → last word.
+        assert_eq!(thai_word_at(s, len), (18, 27), "click at end → ปลา");
     }
 
     #[test]
