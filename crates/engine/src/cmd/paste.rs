@@ -269,9 +269,12 @@ pub enum Pasted {
 /// another program's formatted copy (HTML, RTF), else the system clipboard's text.
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
+    // The system clipboard holds our own copy while its text or its HTML is ours: a copy of a
+    // picture has no text, only the HTML with the picture in it (#2909).
+    let html_is_ours = p::str(v, "html").is_none_or(|h| h == s.clipboard_html);
     if let Some(f) = &s.clipboard
         && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
-        && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
+        && (text.is_some() || (html_is_ours && p::str(v, "rtf").is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));
     }

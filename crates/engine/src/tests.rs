@@ -1222,6 +1222,58 @@ fn copying_an_equation_puts_mathml_on_the_clipboard() {
     assert!(r["html"].as_str().is_some_and(|h| h.contains("Speed") && !h.contains("<math")), "{r}");
 }
 
+/// #2909: a copied picture goes on the clipboard as HTML with the picture in it, so another
+/// document (or another program) pastes the picture, not its alt text.
+#[test]
+fn copying_a_picture_puts_it_on_the_clipboard_as_html() {
+    let mut s = s();
+    // A picture 20 × 10 pixels, so 15 × 7.5 points.
+    let img = image::RgbaImage::from_fn(20, 10, |_, _| image::Rgba([200, 30, 30, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let data = crate::cmd::insert::base64_encode(&png);
+    run(&mut s, "insert.picture", json!({"data": data}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+    assert!(html.contains("<img src=\"data:image/png;base64,"), "the picture is in the HTML: {html}");
+    assert!(html.contains("style=\"width:15pt;height:7.5pt\""), "with its size: {html}");
+
+    // Another document: it holds no copy of its own, so the HTML is the way in.
+    let mut t = Session::new(wordcraft_doc::Document::new());
+    run(&mut t, "edit.paste", json!({"html": html}));
+    assert_eq!(t.doc.media.len(), 1, "the picture is in the other document");
+    assert_eq!(wordcraft_render::image_size(t.doc.media.values().next().unwrap()), Some((20, 10)), "the picture itself");
+    let mut size = None;
+    t.doc.objects_in_reading_order(&mut |o| {
+        if let wordcraft_doc::para::InlineObject::Image { w, h, .. } = o {
+            size = Some((*w, *h));
+        }
+    });
+    assert_eq!(size, Some((15.0, 7.5)), "at the size it had");
+}
+
+/// #2909: a copy belongs to the document it was copied from: the next document holds neither
+/// its text nor its pictures, so the paste takes the system clipboard's HTML instead.
+#[test]
+fn a_copy_does_not_outlive_the_document_it_came_from() {
+    let mut s = s();
+    let img = image::RgbaImage::from_fn(20, 10, |_, _| image::Rgba([200, 30, 30, 255]));
+    let mut png = Vec::new();
+    image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+    let data = crate::cmd::insert::base64_encode(&png);
+    run(&mut s, "insert.picture", json!({"data": data}));
+    run(&mut s, "select.all", json!({}));
+    let r = run(&mut s, "edit.copy", json!({}));
+    let html = r["html"].as_str().unwrap_or_default().to_string();
+
+    run(&mut s, "file.new", json!({}));
+    assert!(s.clipboard.is_none(), "our own copy is gone with the document");
+    // The picture still pastes, from the system clipboard.
+    run(&mut s, "edit.paste", json!({"html": html}));
+    assert_eq!(s.doc.media.len(), 1, "the picture is pasted from the system clipboard");
+}
+
 /// Whether `xml` is one element whose tags all nest and close (enough to check a clipboard
 /// payload without an XML parser in the engine's tests).
 fn one_balanced_element(xml: &str) -> bool {

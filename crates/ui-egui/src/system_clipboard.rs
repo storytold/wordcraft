@@ -72,15 +72,20 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// set it, else the text through egui. egui sets its text at the end of the frame, which would
 /// replace the HTML, so only one of them runs.
 pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
+    // The HTML goes on the clipboard with the text beside it: the formatting, and the text —
+    // empty for a copied picture or shape, which has no text but an HTML with the picture in
+    // it (#2909).
+    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
+        return;
+    }
     if text.is_empty() {
         // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
         // else Paste would find the text copied before it and paste that instead of our copy.
         if !html.is_empty() {
+            // The host cannot set the HTML, so the picture is on nobody's clipboard: it is lost
+            // to every other document and every other program (#2909).
             ctx.copy_text(String::new());
         }
-        return;
-    }
-    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
         return;
     }
     ctx.copy_text(text.to_string());

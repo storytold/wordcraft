@@ -183,7 +183,13 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
 /// and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
     s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
+        Some(f) => {
+            // The copy's pictures are in this document's media: without it the export writes
+            // the picture's alt text instead of the picture (#2909).
+            let mut d = f.to_document();
+            d.media = s.doc.media.clone();
+            wordcraft_formats::html::export_fragment(&d)
+        }
         None => String::new(),
     };
     let mut r = json!({"text": s.clipboard_text});

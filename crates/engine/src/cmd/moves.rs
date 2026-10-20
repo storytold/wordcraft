@@ -207,6 +207,23 @@ mod tests {
         ch.as_array().unwrap().iter().map(|c| (c["kind"].as_str().unwrap().to_string(), c["move"].clone())).collect()
     }
 
+    /// #2909: a tracked cut waiting to become a move belongs to the document it was cut in.
+    /// `file.open` is a pure command, so the dispatcher's reset of the waiting move skips it,
+    /// and the document it opens must not inherit the old one's cut.
+    #[test]
+    fn a_new_document_does_not_inherit_the_cut_waiting_to_become_a_move() {
+        let mut s = Session::new(Document::new());
+        s.run("document.setText", &json!({"text": "First one.\nSecond one.\nThird one."})).unwrap();
+        s.run("file.setAuthor", &json!({"name": "Ana"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 2, "off": 0}})).unwrap();
+        s.run("edit.cut", &json!({})).unwrap();
+        assert!(s.pending_move.is_some(), "the cut waits to become a move");
+
+        // The document is replaced (as `file.open` does): the cut belonged to the old one.
+        s.set_document(Document::new());
+        assert!(s.pending_move.is_none(), "the new document does not wait for the old cut");
+    }
     #[test]
     fn a_tracked_cut_and_paste_of_a_paragraph_is_a_move() {
         let mut s = moved();
