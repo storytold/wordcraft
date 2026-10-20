@@ -1870,7 +1870,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         found.dedup();
     }
     // Asian typography: kinsoku and breaking Latin words anywhere.
-    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap);
+    crate::kinsoku::apply(&text, &mut found, rp.kinsoku, rp.word_wrap, rp.force_char_break);
     let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
