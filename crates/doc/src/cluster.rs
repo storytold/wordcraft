@@ -7,6 +7,8 @@
 //! consonants after the coeng. A caret between those would sit inside a glyph cluster, so the
 //! caret steps and layout clusters both use [`joins_cluster`] on top of the grapheme rules.
 
+use std::sync::OnceLock;
+
 use unicode_segmentation::UnicodeSegmentation;
 
 /// Invisible stackers: the next consonant is drawn under this one (Myanmar virama, Khmer coeng,
@@ -188,9 +190,17 @@ pub fn is_thai_lao(c: char) -> bool {
 /// Thai/Lao spans.
 ///
 /// Returns sorted byte offsets into `text`.
+fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
+    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
+    S.get_or_init(|| {
+        icu_segmenter::LineSegmenter::new_dictionary(
+            icu_segmenter::options::LineBreakOptions::default(),
+        )
+    })
+}
+
 pub fn thai_lao_breaks(text: &str) -> Vec<usize> {
-    let segmenter = icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default());
-    segmenter
+    line_segmenter()
         .segment_str(text)
         .filter(|&i| {
             i < text.len()
@@ -295,11 +305,12 @@ mod tests {
 
     #[test]
     fn thai_wraps_at_word_boundaries() {
-        // "สวัสดีชาวโลก" = สวัสดี + ชาว + โลก (Hello + world people + world).
-        // The ICU4X dictionary segmenter should find the word boundaries between them.
-        let thai = "สวัสดีชาวโลก";
+        // "ภาคภูมิใจในภาษาไทย" = ภาค (9 B) + ภูมิใจ (18 B) + ใน (6 B) + ภาษาไทย (12 B) + ไทย (9 B) = 54 B.
+        // ICU4X dictionary breaks: [9, 27, 33, 45] (before ภูมิ, ใน, ภาษา, ไทย).
+        let thai = "ภาคภูมิใจในภาษาไทย";
+        assert_eq!(thai.len(), 54);
         let breaks = thai_lao_breaks(thai);
-        assert!(!breaks.is_empty(), "should find at least one word boundary in Thai text");
+        assert_eq!(breaks, vec![9, 27, 33, 45], "expected breaks at word boundaries: {breaks:?}");
         // Every break must fall on a char boundary.
         for &b in &breaks {
             assert!(thai.is_char_boundary(b), "break at {b} is not a char boundary");
@@ -318,11 +329,27 @@ mod tests {
         // Empty input is fine.
         assert!(thai_lao_breaks("").is_empty());
         // Mixed: breaks are only between Thai characters, not at the Thai–Latin boundary.
-        let mixed = "testสวัสดีtest";
+        let mixed = "testภาษาไทยtest";
         for &b in &thai_lao_breaks(mixed) {
             let prev = mixed.get(..b).and_then(|s| s.chars().next_back()).unwrap();
             let next = mixed.get(b..).and_then(|s| s.chars().next()).unwrap();
             assert!(is_thai_lao(prev) && is_thai_lao(next), "break at {b} crosses script boundary");
         }
+    }
+
+    #[test]
+    fn lao_wraps_at_word_boundaries() {
+        // "ໂລກໃໝ່" = ໂລກ (world, 9 B) + ໃໝ່ (new, 9 B); ICU4X break at [9].
+        let lao = "ໂລກໃໝ່";
+        assert_eq!(lao.len(), 18);
+        let breaks = thai_lao_breaks(lao);
+        assert_eq!(breaks, vec![9], "expected one Lao word break: {breaks:?}");
+        for &b in &breaks {
+            assert!(lao.is_char_boundary(b));
+            let prev = lao.get(..b).and_then(|s| s.chars().next_back()).unwrap();
+            let next = lao.get(b..).and_then(|s| s.chars().next()).unwrap();
+            assert!(is_thai_lao(prev) && is_thai_lao(next));
+        }
+        assert!(thai_lao_breaks("").is_empty());
     }
 }
