@@ -81,6 +81,7 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
                 Block::Para(p) => {
                     let mut p = p.clone();
                     p.props.word_wrap = Some(false);
+                    p.props.force_char_break = true;
                     for r in &mut p.runs {
                         r.props.spacing = Some(STACK_WIDTH);
                     }
