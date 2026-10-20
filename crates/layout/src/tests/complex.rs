@@ -291,3 +291,22 @@ fn khmer_ignores_the_ligature_setting() {
     assert_eq!(gids(Some(hd)), gids(None));
     assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
 }
+
+#[test]
+fn thai_without_spaces_wraps_between_words_not_inside_them() {
+    // Repeat "งดงามด้วยวัฒนธรรมไทย" (beautiful with Thai culture, 60 B, ICU4X breaks at [15, 27, 51])
+    // 30× to force multiple line breaks.
+    let word = "งดงามด้วยวัฒนธรรมไทย";
+    let text = word.repeat(30);
+    let l = lay(&Document::from_text(&text));
+    let pl = para_layout(&l, 0);
+    assert!(pl.lines.len() > 1, "a long Thai paragraph must wrap");
+    let breaks = wordcraft_doc::cluster::thai_lao_breaks(&text);
+    assert!(!breaks.is_empty(), "repeated Thai text has word boundaries");
+    for line in pl.lines.iter().skip(1) {
+        let start = pl.clusters[line.c0].start;
+        assert!(breaks.contains(&start), "line starts mid-word at byte {start}");
+    }
+    // Lines are full: more than one cluster per line (not emergency breaks after single clusters).
+    assert!(pl.lines[0].c1 - pl.lines[0].c0 > 2);
+}
