@@ -114,6 +114,23 @@ impl WordApp {
         self.system_animations = self.services.animations_enabled.as_ref().and_then(|ask| ask());
     }
 
+    /// The subpixel order the pages' text is drawn with: the Subpixel text setting, where
+    /// `System` follows what the desktop last asked for. Linux and the BSDs only; elsewhere, and
+    /// with `None`, text is greyscale.
+    pub fn subpixel_order(&self) -> Option<crate::Subpixel> {
+        if cfg!(all(unix, not(target_os = "macos"))) { self.ui.subpixel_text.order(self.system_subpixel) } else { None }
+    }
+
+    /// What the desktop last asked text to be drawn with (`None`: greyscale, or it doesn't say).
+    pub fn system_subpixel(&self) -> Option<crate::Subpixel> {
+        self.system_subpixel
+    }
+
+    /// Ask the host for the desktop's subpixel setting.
+    pub(super) fn read_system_subpixel(&mut self) {
+        self.system_subpixel = self.services.subpixel_order.as_ref().and_then(|ask| ask());
+    }
+
     /// Carry View › Full Screen (`view.fullScreen`, F11), Focus and Full Screen View (#1678) to
     /// the window, and follow the window when the system takes it in or out of full screen (the
     /// macOS title bar button, the window manager): in is Full Screen, out ends all three. Leaving

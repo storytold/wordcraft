@@ -108,6 +108,7 @@ pub use dialogs::dialogs_smart_art;
 pub use dialogs::dialogs_table_style;
 pub use dialogs::dialogs_templates;
 pub use file_dialogs::{FileDialogAnswer, FileDialogRequest, open_filters};
+pub use wordcraft_render::Subpixel;
 
 mod app;
 mod clock;
@@ -323,6 +324,9 @@ pub struct UiState {
     /// Animation effects (smooth scrolling, fades): on, off, or follow the system's setting, which
     /// is the default. An unknown saved value reads as the default.
     pub animations: theme::Animations,
+    /// Subpixel text on the pages (Linux and the BSDs): follow the desktop's font settings (the
+    /// default), off, RGB or BGR. An unknown saved value reads as the default.
+    pub subpixel_text: theme::SubpixelText,
     /// The dark-mode switch `ui.json` held before `theme` (#115): read once to migrate, never written.
     #[serde(rename = "dark", skip_serializing)]
     pub(crate) legacy_dark: Option<bool>,
@@ -502,6 +506,7 @@ impl Default for UiState {
             interface_size: theme::InterfaceSize::default(),
             legacy_interface_size: None,
             animations: theme::Animations::default(),
+            subpixel_text: theme::SubpixelText::default(),
             legacy_dark: None,
             nav_tab: "headings".into(),
             nav_pane: false,
@@ -783,6 +788,8 @@ pub struct WordApp {
     system_animations: Option<bool>,
     /// Whether egui's own animations were last switched on or off ([`theme::apply_animations`]).
     applied_animations: Option<bool>,
+    /// What the desktop last asked text to be drawn with ([`Services::subpixel_order`]).
+    system_subpixel: Option<Subpixel>,
     pub frame_ms: f64,
     /// The window title last sent; a viewport command schedules a repaint, so only send changes.
     sent_title: String,

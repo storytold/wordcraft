@@ -1050,6 +1050,12 @@ struct PagePaintOutput {
     rendered: usize,
 }
 
+/// The view part of the pages' texture key at rest, for tests elsewhere in the crate.
+#[cfg(test)]
+pub(crate) fn tests_view_key(app: &WordApp) -> u64 {
+    pages::view_key(app, false, None, true)
+}
+
 /// Are pages drawn hinted this frame (as [`screen_render_options`] says)? Not while a pointer
 /// zoom moving over several frames ([`pointer_zoom`]) changes the scale: each such frame is a new
 /// size shown for a moment, and hinting every one would cost each page about 1.5 ms more and fill
@@ -1146,6 +1152,9 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         let width_scale = (geo.scale * ppp).min(max_tex / page.w.max(1.0)).max(0.05);
         let tiled = page.h.clamp(1.0, 1e6) * width_scale > max_tex;
         let scale_px = if tiled { width_scale } else { width_scale.min(max_tex / page.h.clamp(1.0, 1e6)).max(0.05) };
+        // Subpixel text only where the raster is shown one texel per screen pixel: not on a
+        // page shrunk to the GPU's texture size, where it would be scaled.
+        let one_to_one = (scale_px - geo.scale * ppp).abs() <= 1e-4 * scale_px.abs().max(1.0);
         let tile_height_px = TILE_HEIGHT_PX.min(max_tex as usize).max(1);
         // Hide White Space shows only a band of the page; everything below paints into it.
         let band_of = |r: Rect| Rect::from_min_max(pos2(r.min.x - 4.0, r.min.y + band_top), pos2(r.max.x + 4.0, r.min.y + band_bot));
@@ -1172,6 +1181,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
         if visible && !tiled && !fresh && !stretched && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
             let mut opts = page_render_options(app, dim_body);
             opts.hinting &= hinted;
+            opts.subpixel = opts.subpixel.filter(|_| one_to_one);
             // Only on the page it is on: the `Pos` can't match an object of another page.
             opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
             let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
@@ -1228,6 +1238,7 @@ fn paint_pages(pass: PagePaint<'_>) -> PagePaintOutput {
                 if !fresh && rendered < 4 {
                     let mut opts = page_render_options(app, dim_body);
                     opts.hinting &= hinted;
+                    opts.subpixel = opts.subpixel.filter(|_| one_to_one);
                     // Only on the page it is on: the `Pos` can't match an object of another page.
                     opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                     // The tiny subtraction avoids a 1px overshoot from round-tripping f32

@@ -5947,3 +5947,39 @@ fn a_linked_text_box_shows_and_follows_its_link_from_inside() {
     let (start, _) = wordcraft_engine::cmd::insert::bookmark_range(&s.doc, "Spot").unwrap();
     assert!(s.sel.is_collapsed() && s.sel.focus == start, "the caret went to the bookmark: {:?}", s.sel);
 }
+
+/// A real page (tables with banded fills, shading, coloured headings): with subpixel text it
+/// differs from the greyscale page only along the edges of its text; every fill under and
+/// around the text is where it was, in its colour.
+#[test]
+fn a_page_with_subpixel_text_differs_from_greyscale_only_at_text_edges() {
+    let doc = wordcraft_engine::sample::sample_document();
+    let l = wordcraft_layout::layout(&doc, &mut wordcraft_layout::LayoutCache::new(), &wordcraft_layout::LayoutOptions::default());
+    let grey = wordcraft_render::RenderOptions { hinting: true, ..Default::default() };
+    let sub = wordcraft_render::RenderOptions { subpixel: Some(wordcraft_render::Subpixel::Rgb), ..grey.clone() };
+    for page in &l.pages {
+        let a = wordcraft_render::render_page(&doc, page, 1.93, &grey);
+        let b = wordcraft_render::render_page(&doc, page, 1.93, &sub);
+        let (pa, pb) = (a.pixels.as_chunks::<4>().0, b.pixels.as_chunks::<4>().0);
+        // Each pixel's brightness: greyscale and subpixel text cover about the same.
+        let lum = |p: &[u8; 4]| (u32::from(p[0]) + u32::from(p[1]) + u32::from(p[2])) / 3;
+        let far = pa.iter().zip(pb).filter(|(x, y)| lum(x).abs_diff(lum(y)) > 90).count();
+        assert!(far * 1000 < pa.len(), "{far} of {} pixels far apart", pa.len());
+        // Inside every area of one colour (paper, fills, shading, a thick stroke), two pixels
+        // from any edge, the pages are the same pixel for pixel: subpixel text changes only
+        // the pixels at the edges of text, and nothing is drawn out of order.
+        let (w, h) = (a.width as usize, a.height as usize);
+        let at = |x: usize, y: usize| pa[y * w + x];
+        let mut inside = 0;
+        for y in 2..h.saturating_sub(2) {
+            for x in 2..w.saturating_sub(2) {
+                let c = at(x, y);
+                if (y - 2..=y + 2).all(|yy| (x - 2..=x + 2).all(|xx| at(xx, yy) == c)) {
+                    inside += 1;
+                    assert_eq!(pb[y * w + x], c, "({x}, {y}) inside an area of {c:?}");
+                }
+            }
+        }
+        assert!(inside * 2 > pa.len(), "most of a page is inside areas: {inside} of {}", pa.len());
+    }
+}

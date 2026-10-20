@@ -64,6 +64,11 @@ pub struct Services {
     /// Asked every frame, so a change in the system's settings shows at once: the host answers
     /// from memory and does any slow asking elsewhere. Without the hook, animation effects stay on.
     pub animations_enabled: Option<Box<dyn Fn() -> Option<bool>>>,
+    /// Linux and the BSDs: the subpixel order the desktop's font settings ask text to be drawn
+    /// with (KDE Plasma's and GNOME's, as fontconfig-based apps such as Firefox follow them), or
+    /// `None` for greyscale text or when it doesn't say. What "Use system setting" follows
+    /// ([`crate::theme::SubpixelText`]). Asked every frame, answered from memory.
+    pub subpixel_order: Option<Box<dyn Fn() -> Option<crate::Subpixel>>>,
     /// Desktop: the text on the system clipboard, if any. Ctrl+V gets it from egui's paste event;
     /// the ribbon and context-menu Paste read it here (#584).
     pub clipboard_text: Option<Box<dyn Fn() -> Option<String>>>,

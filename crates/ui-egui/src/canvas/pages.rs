@@ -6,8 +6,10 @@ use super::{DocLayout, Hash, Hasher, Page, Placed, Pos, Pos2, Rect, StoryRef, Wo
 /// Taken once per frame.
 pub(super) fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, hinted: bool) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
-    // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]).
+    // A page drawn unhinted mid-zoom must not pass for the hinted page (see [`hint_pages`]), nor
+    // one with greyscale text for one with subpixel text.
     hinted.hash(&mut h);
+    app.subpixel_order().hash(&mut h);
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color, app.session.prefs.paper_color).hash(&mut h);
@@ -323,6 +325,8 @@ pub(crate) fn dark_page(app: &WordApp) -> bool {
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
 pub(super) fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
+    // The canvas pages only: thumbnails and previews are shown scaled.
+    opts.subpixel = app.subpixel_order();
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
     opts.display.placeholders = true;

@@ -710,6 +710,19 @@ impl WordApp {
                 self.read_system_animations();
                 json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
             }
+            "ui.subpixelText" => {
+                // `system` (follow the desktop's font settings), `off`, `rgb` or `bgr`; no value
+                // reads it. `order` is what that comes to now, `system` what the desktop asks for.
+                if let Some(v) = s("value") {
+                    match theme::SubpixelText::from_code(v) {
+                        Some(a) => self.ui.subpixel_text = a,
+                        None => return Some(Err(format!("unknown subpixel text setting {v:?}; use system, off, rgb or bgr"))),
+                    }
+                }
+                self.read_system_subpixel();
+                let code = |o: Option<crate::Subpixel>| o.map(|o| if o == crate::Subpixel::Rgb { "rgb" } else { "bgr" });
+                json!({"subpixelText": self.ui.subpixel_text.code(), "order": code(self.subpixel_order()), "system": code(self.system_subpixel)})
+            }
             "ui.statusCount" => {
                 // `words` (the default), `characters` or `charactersNoSpaces`: what the status
                 // bar's live count shows; no value reads it (#2797).
@@ -1172,6 +1185,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.theme"
             | "ui.interfaceSize"
             | "ui.animations"
+            | "ui.subpixelText"
             | "ui.language"
             | "ui.saveChanges"
             | "ui.openFileDialog"

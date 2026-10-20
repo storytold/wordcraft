@@ -145,6 +145,7 @@ impl WordApp {
             applied_editing: None,
             system_animations: None,
             applied_animations: None,
+            system_subpixel: None,
             frame_ms: 0.0,
             quit_requested: false,
             autosave: true,
@@ -345,6 +346,7 @@ impl WordApp {
         // Animation effects: the host is asked every frame what the system says (it answers from
         // memory), so a change made in the system's settings is followed without a restart.
         self.read_system_animations();
+        self.read_system_subpixel();
         let animate = self.animations_on();
         if self.applied_animations != Some(animate) {
             theme::apply_animations(ctx, animate);

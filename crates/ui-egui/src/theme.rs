@@ -269,6 +269,71 @@ impl From<Animations> for String {
     }
 }
 
+/// Subpixel (LCD) text on the pages, Linux and the BSDs (File › Options › Advanced): follow the
+/// desktop's font settings (the default), off, or a subpixel order. Elsewhere pages are greyscale.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum SubpixelText {
+    #[default]
+    System,
+    Off,
+    Rgb,
+    Bgr,
+}
+
+impl SubpixelText {
+    /// In menu order.
+    pub const ALL: [SubpixelText; 4] = [SubpixelText::System, SubpixelText::Off, SubpixelText::Rgb, SubpixelText::Bgr];
+
+    /// The value used in `ui.json` and by the `ui.subpixelText` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            SubpixelText::System => "system",
+            SubpixelText::Off => "off",
+            SubpixelText::Rgb => "rgb",
+            SubpixelText::Bgr => "bgr",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<SubpixelText> {
+        SubpixelText::ALL.into_iter().find(|a| a.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label (translated with `tl!` where shown).
+    pub fn label(self) -> &'static str {
+        match self {
+            SubpixelText::System => "Use system setting",
+            SubpixelText::Off => "Off",
+            SubpixelText::Rgb => "RGB",
+            SubpixelText::Bgr => "BGR",
+        }
+    }
+
+    /// The subpixel order pages are drawn with, given what the desktop asks for (`None`:
+    /// greyscale, or it doesn't say).
+    pub fn order(self, system: Option<wordcraft_render::Subpixel>) -> Option<wordcraft_render::Subpixel> {
+        match self {
+            SubpixelText::System => system,
+            SubpixelText::Off => None,
+            SubpixelText::Rgb => Some(wordcraft_render::Subpixel::Rgb),
+            SubpixelText::Bgr => Some(wordcraft_render::Subpixel::Bgr),
+        }
+    }
+}
+
+/// An unknown saved value reads as the default rather than discarding the whole `ui.json`.
+impl From<String> for SubpixelText {
+    fn from(s: String) -> Self {
+        SubpixelText::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<SubpixelText> for String {
+    fn from(a: SubpixelText) -> Self {
+        a.code().to_string()
+    }
+}
+
 /// Every colour the UI uses; widgets never hard-code colours.
 #[derive(Clone, Copy, Debug)]
 pub struct Tokens {
