@@ -42,7 +42,11 @@ pub fn is_east_asian(c: char) -> bool {
 
 /// Adjust the break opportunities `opps` (byte offsets into `text`: a line may start there) for
 /// the paragraph's kinsoku and word-wrap settings. The result is sorted and has no duplicates.
-pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) {
+///
+/// `force_char_break` is set only for vertically stacked text (every character on its own line);
+/// it extends the `!word_wrap` breaks to Thai and Lao characters as well. For ordinary paragraphs
+/// with `word_wrap = false`, Thai/Lao text keeps its ICU4X dictionary boundaries instead.
+pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, force_char_break: bool) {
     let next_char = |i: usize| text.get(i..).and_then(|t| t.chars().next());
     let prev_char = |i: usize| text.get(..i).and_then(|t| t.chars().next_back());
     if kinsoku {
@@ -55,10 +59,16 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
             }
         }
     }
-    if !word_wrap {
+    if !word_wrap || force_char_break {
         // Between any two letters or digits that are not East Asian (whole graphemes, so accents
-        // stay with their letters).
-        let latin = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c));
+        // stay with their letters). Thai/Lao are excluded from the ordinary word_wrap=false path
+        // so ICU4X dictionary boundaries are preserved; force_char_break (stacked text) includes
+        // them to get one character per line.
+        let latin = |g: &str| g.chars().next().is_some_and(|c| {
+            c.is_alphanumeric()
+                && !is_east_asian(c)
+                && (force_char_break || !wordcraft_doc::cluster::is_thai_lao(c))
+        });
         let mut prev: Option<&str> = None;
         for (i, g) in text.grapheme_indices(true) {
             if prev.is_some_and(latin) && latin(g) {
@@ -125,7 +135,7 @@ mod tests {
     /// Where a line may start, as the text from there to the next opportunity.
     fn breaks(text: &str, kinsoku: bool, word_wrap: bool) -> Vec<String> {
         let mut opps: Vec<usize> = unicode_linebreak::linebreaks(text).map(|(i, _)| i).filter(|&i| i < text.len()).collect();
-        apply(text, &mut opps, kinsoku, word_wrap);
+        apply(text, &mut opps, kinsoku, word_wrap, false);
         opps.iter().map(|&i| text.get(i..).and_then(|t| t.chars().next()).map(String::from).unwrap_or_default()).collect()
     }
 
@@ -148,5 +158,42 @@ mod tests {
         assert_eq!(breaks(en, true, true), ["w", "(", "5"]);
         let any = breaks("Hello café", true, false);
         assert_eq!(any, ["e", "l", "l", "o", "c", "a", "f", "é"]);
+    }
+
+    #[test]
+    fn word_wrap_false_preserves_thai_icu4x_boundaries() {
+        // word_wrap=false (the OOXML `w:wordWrap` property) means Latin words may break
+        // mid-character.  Thai/Lao characters are alphanumeric and non-East-Asian, so they would
+        // fall into the Latin break category — incorrectly inserting a break between every Thai
+        // character and discarding the ICU4X dictionary boundaries.  The fix: Thai/Lao chars are
+        // excluded from the !word_wrap path; their breaks come from thai_lao_breaks() only.
+        let thai = "อนุรักษ์ภาษาไทย"; // ICU4X dictionary breaks at bytes 24 and 36
+        let mut opps: Vec<usize> = unicode_linebreak::linebreaks(thai).map(|(i, _)| i).filter(|&i| i < thai.len()).collect();
+        apply(thai, &mut opps, true, false, false); // word_wrap=false, NOT stacked
+        // Every opportunity must be an ICU4X word boundary, not a grapheme or char boundary.
+        for &o in &opps {
+            let prev = thai.get(..o).and_then(|s| s.chars().next_back());
+            let next = thai.get(o..).and_then(|s| s.chars().next());
+            let both_thai = matches!((prev, next), (Some(p), Some(n))
+                if wordcraft_doc::cluster::is_thai_lao(p) && wordcraft_doc::cluster::is_thai_lao(n));
+            assert!(
+                !both_thai || matches!(o, 24 | 36),
+                "Thai break at {o} is not an ICU4X word boundary (expected 24 or 36): {opps:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn force_char_break_breaks_between_every_thai_char() {
+        // force_char_break is set by textbox::lay for stacked (vertical CJK-style) text:
+        // every character must be on its own line.  For Thai, this means a break between
+        // every adjacent Thai grapheme, overriding the ICU4X-only restriction.
+        let thai = "ภาษา"; // 4 Thai chars, 12 bytes, 3 inter-char positions
+        let mut opps: Vec<usize> = unicode_linebreak::linebreaks(thai).map(|(i, _)| i).filter(|&i| i < thai.len()).collect();
+        apply(thai, &mut opps, true, false, true); // force_char_break=true
+        // All three inter-character positions must be present.
+        assert!(opps.contains(&3), "break after ภ: {opps:?}");
+        assert!(opps.contains(&6), "break after า: {opps:?}");
+        assert!(opps.contains(&9), "break after ษ: {opps:?}");
     }
 }
