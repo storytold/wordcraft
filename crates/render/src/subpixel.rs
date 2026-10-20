@@ -30,8 +30,11 @@ pub enum Subpixel {
 /// neighbours on each side, which keeps the colour fringes faint. Sums to 256.
 const LCD_FILTER: [u32; 5] = [8, 77, 86, 77, 8];
 
-/// Glyph masks kept (per face, glyph, size, third of a pixel, style).
+/// Glyph masks kept (per face, glyph, size, third of a pixel, style), and glyph coverages.
 const MASK_CACHE_MAX: usize = 20_000;
+/// Bytes of masks, and of coverages, kept: large glyphs at a high zoom take tens of kilobytes
+/// each, so a count alone could let either cache grow to hundreds of megabytes.
+const MASK_CACHE_BYTES: usize = 32 * 1024 * 1024;
 /// Largest glyph mask side, in pixels: larger glyphs (display sizes) stay greyscale.
 const MASK_SIDE_MAX: f64 = 512.0;
 
@@ -468,17 +471,45 @@ pub(crate) struct Mask {
 type MaskKey = (u32, u32, u32, u8, bool, u64);
 type CoverageKey = (u32, u32, u32, bool, u64);
 
-fn mask_cache() -> &'static Mutex<HashMap<MaskKey, Option<Arc<Mask>>>> {
-    static CACHE: OnceLock<Mutex<HashMap<MaskKey, Option<Arc<Mask>>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+/// A glyph cache bounded by entries ([`MASK_CACHE_MAX`]) and bytes ([`MASK_CACHE_BYTES`]): past
+/// either it starts over.
+struct GlyphCache<K, V> {
+    map: HashMap<K, Option<Arc<V>>>,
+    bytes: usize,
+}
+
+impl<K: std::hash::Hash + Eq, V> GlyphCache<K, V> {
+    fn new() -> Self {
+        GlyphCache { map: HashMap::new(), bytes: 0 }
+    }
+
+    fn get(&self, key: &K) -> Option<Option<Arc<V>>> {
+        self.map.get(key).cloned()
+    }
+
+    /// Keep `value` (`bytes` large) under `key`.
+    fn insert(&mut self, key: K, value: Option<Arc<V>>, bytes: usize) {
+        if self.map.len() >= MASK_CACHE_MAX || self.bytes.saturating_add(bytes) > MASK_CACHE_BYTES {
+            self.map.clear();
+            self.bytes = 0;
+        }
+        if self.map.insert(key, value).is_none() {
+            self.bytes = self.bytes.saturating_add(bytes);
+        }
+    }
+}
+
+fn mask_cache() -> &'static Mutex<GlyphCache<MaskKey, Mask>> {
+    static CACHE: OnceLock<Mutex<GlyphCache<MaskKey, Mask>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(GlyphCache::new()))
 }
 
 /// Glyph coverages (one per glyph, size and style), from which its masks at each third of a pixel
 /// are filtered: a third of a pixel is one column of the coverage, so rasterising once serves all
 /// three.
-fn coverage_cache() -> &'static Mutex<HashMap<CoverageKey, Option<Arc<Coverage>>>> {
-    static CACHE: OnceLock<Mutex<HashMap<CoverageKey, Option<Arc<Coverage>>>>> = OnceLock::new();
-    CACHE.get_or_init(|| Mutex::new(HashMap::new()))
+fn coverage_cache() -> &'static Mutex<GlyphCache<CoverageKey, Coverage>> {
+    static CACHE: OnceLock<Mutex<GlyphCache<CoverageKey, Coverage>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(GlyphCache::new()))
 }
 
 /// A glyph's coverage at three times the horizontal resolution (0–255 per subpixel, `width`×
@@ -497,28 +528,22 @@ pub(crate) struct Coverage {
 fn glyph_mask(face: FaceRef, gid: u32, ppem: f32, phase: u8, italic: bool, stroke_px: f64) -> Option<Arc<Mask>> {
     let key = (face.id(), gid, ppem.to_bits(), phase, italic, stroke_px.to_bits());
     if let Some(m) = mask_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
-        return m.clone();
+        return m;
     }
     let ckey = (face.id(), gid, ppem.to_bits(), italic, stroke_px.to_bits());
-    let known = coverage_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&ckey).cloned();
+    let known = coverage_cache().lock().unwrap_or_else(|e| e.into_inner()).get(&ckey);
     let coverage = match known {
         Some(c) => c,
         None => {
             let c = FontDb::global().hinted_outline(&face, gid, ppem).and_then(|o| raster(&o, italic, stroke_px)).map(Arc::new);
-            let mut cache = coverage_cache().lock().unwrap_or_else(|e| e.into_inner());
-            if cache.len() >= MASK_CACHE_MAX {
-                cache.clear();
-            }
-            cache.insert(ckey, c.clone());
+            let bytes = c.as_ref().map_or(0, |c| c.cov.len());
+            coverage_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(ckey, c.clone(), bytes);
             c
         }
     };
     let mask = coverage.map(|c| Arc::new(filtered(&c, phase)));
-    let mut cache = mask_cache().lock().unwrap_or_else(|e| e.into_inner());
-    if cache.len() >= MASK_CACHE_MAX {
-        cache.clear();
-    }
-    cache.insert(key, mask.clone());
+    let bytes = mask.as_ref().map_or(0, |m| m.cov.len() * 3);
+    mask_cache().lock().unwrap_or_else(|e| e.into_inner()).insert(key, mask.clone(), bytes);
     mask
 }
 
@@ -683,6 +708,27 @@ mod tests {
                 assert!(vello == ours, "({x0}, {y0})–({x1}, {y1}) {rgb:?} over {bg:?}");
             }
         }
+    }
+
+    #[test]
+    fn glyph_caches_stay_within_their_byte_budget() {
+        // Large glyphs at a high zoom: a count of entries alone would keep hundreds of megabytes.
+        let mut cache: GlyphCache<u32, Vec<u8>> = GlyphCache::new();
+        let big = 40 * 1024;
+        for k in 0..5_000u32 {
+            cache.insert(k, Some(Arc::new(vec![0; 16])), big);
+            assert!(cache.bytes <= MASK_CACHE_BYTES, "{} bytes after {k}", cache.bytes);
+        }
+        assert!(cache.map.len() < 5_000, "it started over");
+        // A key kept again doesn't count twice; entries past the count limit start over too.
+        let mut cache: GlyphCache<u32, Vec<u8>> = GlyphCache::new();
+        cache.insert(1, None, 10);
+        cache.insert(1, None, 10);
+        assert_eq!(cache.bytes, 10);
+        for k in 0..(MASK_CACHE_MAX as u32 + 10) {
+            cache.insert(k, None, 0);
+        }
+        assert!(cache.map.len() <= MASK_CACHE_MAX);
     }
 
     #[test]
