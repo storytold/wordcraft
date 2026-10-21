@@ -183,6 +183,15 @@ fn open(address: &Address, changed: &dyn Fn() -> bool) -> std::io::Result<Stream
     }
 }
 
+/// The user's Speech Dispatcher, if it is running: nothing is started (listing voices mustn't
+/// start a server).
+pub(super) fn connect_running() -> Option<Stream> {
+    let env = |k: &str| std::env::var_os(k).map(PathBuf::from);
+    let spec = std::env::var("SPEECHD_ADDRESS").ok();
+    let address = address(spec.as_deref(), env("XDG_RUNTIME_DIR"), env("XDG_CACHE_HOME"), env("HOME"))?;
+    open(&address, &|| false).ok()
+}
+
 /// How [`connect`] went.
 pub(super) enum Connection {
     Open(Stream),
@@ -299,8 +308,7 @@ pub(super) fn message_data(text: &str) -> String {
 /// A voice name that is safe on an SSIP command line (no line breaks; the name comes from the
 /// server's list, but a saved choice is hostile input).
 fn plain_voice(name: &str) -> Option<&str> {
-    let n = name.trim();
-    (!n.is_empty() && n.len() <= super::MAX_VOICE_ID && !n.chars().any(char::is_control)).then_some(n)
+    super::voice_id(name)
 }
 
 /// Reads reply lines. Bytes wait in `pending` until their line is complete, so a character split
@@ -509,7 +517,8 @@ const MAX_VOICES: usize = 2000;
 fn voice_line(line: &str) -> Option<(String, String)> {
     let mut f = line.strip_prefix("249-")?.split('\t');
     let (name, lang, variant) = (f.next()?, f.next()?, f.next().unwrap_or("none"));
-    (variant == "none" && plain_voice(name).is_some() && !lang.is_empty()).then(|| (name.to_string(), lang.to_string()))
+    let name = plain_voice(name)?;
+    (variant == "none" && !lang.is_empty()).then(|| (name.to_string(), lang.to_string()))
 }
 
 /// The server's synthesis voices, as (name, language).

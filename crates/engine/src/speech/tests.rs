@@ -362,9 +362,22 @@ fn installed_voices_are_read_from_each_listing() {
     assert_eq!(v.len(), 2);
     assert_eq!((v[0].id.as_str(), v[0].lang.as_str()), ("Microsoft Szabolcs", "hu-HU"));
     assert!(WINDOWS_VOICES.contains("GetInstalledVoices"));
-    // Voice names arrive in UTF-8, not in the console's code page.
-    assert!(WINDOWS_VOICES.starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"), "{WINDOWS_VOICES}");
+    // Voice names arrive in UTF-8 without a byte order mark; a mark that comes anyway is dropped.
+    assert!(WINDOWS_VOICES.starts_with("[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false;"), "{WINDOWS_VOICES}");
+    let v = windows_voices("\u{FEFF}Microsoft Szabolcs\thu-HU\r\n  Padded  \ten-US\r\n");
+    assert_eq!(v.iter().map(|v| v.id.as_str()).collect::<Vec<_>>(), ["Microsoft Szabolcs", "Padded"]);
     assert!(espeak_voices("", &|_| true).is_empty() && windows_voices("").is_empty());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_voice_listing_program_that_hangs_is_stopped() {
+    assert_eq!(run_listing("sh".as_ref(), &["-c", "echo hu"]).as_deref(), Some("hu\n"));
+    assert_eq!(run_listing("sh".as_ref(), &["-c", "exit 3"]), None, "a failure lists nothing");
+    let start = std::time::Instant::now();
+    assert_eq!(run_listing("sh".as_ref(), &["-c", "echo partial; sleep 30"]), None);
+    assert!(start.elapsed() < LIST_TIMEOUT * 4, "{:?}", start.elapsed());
+    assert_eq!(run_listing("no-such-program-for-wordcraft".as_ref(), &[]), None);
 }
 
 #[test]
@@ -385,27 +398,43 @@ fn an_mbrola_voice_is_listed_only_with_its_database() {
     let listing = " Pty Language Age/Gender VoiceName File Other\n 7 hu --/F hungarian-mbrola-1 mb/mb-hu1\n 6 en --/M german-mbrola-4-en mb/mb-de4-en\n 5 en --/M english-mb-en1 mb/mb-en1\n 5 xx --/M odd mb/../../x\n";
     let ids: Vec<String> = espeak_voices(listing, &|db| mbrola_database(db, Some(&dirs))).into_iter().map(|v| v.id).collect();
     assert_eq!(ids, ["mb/mb-hu1", "mb/mb-de4-en"]);
+    // espeak-ng 1.52's `--voices` has no MBROLA lines at all; `--voices=mb` lists them.
+    let plain = " Pty Language Age/Gender VoiceName File Other\n 5 hu --/M Hungarian urj/hu\n";
+    let mb = " Pty Language Age/Gender VoiceName File Other\n 7 hu --/F hungarian-mbrola-1 mb/mb-hu1\n 6 en --/M english-mb-en1 mb/mb-en1\n";
+    let ids: Vec<String> = espeak_all_voices(plain, Some(mb), &|db| mbrola_database(db, Some(&dirs))).into_iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["urj/hu", "mb/mb-hu1"]);
+    assert_eq!(espeak_all_voices(plain, None, &|_| true).len(), 1, "no mbrola program: no listing asked for");
     let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
 fn a_chosen_voice_reads_its_own_language() {
     let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
-    assert_eq!(voice_for(Some(&hu), Some("hu-HU")), Some(&hu));
-    assert_eq!(voice_for(Some(&hu), None), Some(&hu), "no language: the chosen voice");
-    assert_eq!(voice_for(Some(&hu), Some("ru-RU")), None, "a Russian quotation keeps the Russian voice");
-    assert_eq!(voice_for(Some(&hu), Some("x-none")), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), Some("hu-HU"), "Jó reggelt"), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), None, "Jó reggelt"), Some(&hu), "no language: the chosen voice");
+    assert_eq!(voice_for(Some(&hu), Some("ru-RU"), "Привет"), None, "a Russian quotation keeps the Russian voice");
+    assert_eq!(voice_for(Some(&hu), Some("x-none"), "x"), Some(&hu));
     let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
-    assert_eq!(voice_for(Some(&gb), Some("en-US")), Some(&gb));
-    assert_eq!(voice_for(None, Some("hu")), None);
+    assert_eq!(voice_for(Some(&gb), Some("en-US"), "Hello"), Some(&gb));
+    assert_eq!(voice_for(None, Some("hu"), "Szia"), None);
     // Text in another script than the voice's keeps its language's voice, either way round.
     let ru = Voice { id: "Milena".into(), name: "Milena".into(), lang: "ru_RU".into(), kind: VoiceKind::Mac };
-    assert_eq!(voice_for(Some(&ru), Some("ru")), Some(&ru));
-    assert_eq!(voice_for(Some(&ru), Some("uk-UA")), Some(&ru), "the same script");
-    assert_eq!(voice_for(Some(&ru), Some("en-US")), None, "English text keeps an English voice");
+    assert_eq!(voice_for(Some(&ru), Some("ru"), "Привет"), Some(&ru));
+    assert_eq!(voice_for(Some(&ru), Some("uk-UA"), "Привіт"), Some(&ru), "the same script");
+    assert_eq!(voice_for(Some(&ru), Some("en-US"), "Hello"), None, "English text keeps an English voice");
     let cmn = Voice { id: "sit/cmn".into(), name: "Chinese (Mandarin)".into(), lang: "cmn".into(), kind: VoiceKind::Espeak };
-    assert_eq!(voice_for(Some(&cmn), Some("zh")), Some(&cmn));
-    assert_eq!(voice_for(Some(&cmn), Some("en-US")), None);
+    assert_eq!(voice_for(Some(&cmn), Some("zh"), "你好"), Some(&cmn));
+    assert_eq!(voice_for(Some(&cmn), Some("en-US"), "Hello"), None);
+    // Scripts the detection doesn't know aren't taken for Latin, either way round.
+    assert_eq!(voice_for(Some(&hu), Some("hi"), "नमस्ते दुनिया"), None, "Hindi keeps the Hindi voice");
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "नमस्ते दुनिया"), None, "Devanagari tagged en-US too");
+    let hi = Voice { id: "inc/hi".into(), name: "Hindi".into(), lang: "hi".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hi), Some("hi-IN"), "नमस्ते"), Some(&hi));
+    assert_eq!(voice_for(Some(&hi), Some("en-US"), "Hello"), None, "a Hindi voice doesn't read English");
+    let ka = Voice { id: "ccs/ka".into(), name: "Georgian".into(), lang: "ka".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&ka), Some("en-US"), "Hello"), None);
+    assert!(is_latin_text("Árvíztűrő tükörfúrógép, Ñandú, Łódź 123"));
+    assert!(!is_latin_text("Hello мир"));
 }
 
 #[test]
@@ -416,8 +445,8 @@ fn a_chosen_voice_reads_text_tagged_with_the_default_language() {
     let s = sentences(&doc, &Pos::body(0, 0), None, true);
     assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("en-US"), Some("ru")]);
     let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
-    assert_eq!(voice_for(Some(&hu), s[0].lang.as_deref()), Some(&hu));
-    assert_eq!(voice_for(Some(&hu), s[1].lang.as_deref()), None);
+    assert_eq!(voice_for(Some(&hu), s[0].lang.as_deref(), &s[0].text), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), s[1].lang.as_deref(), &s[1].text), None);
 }
 
 #[test]

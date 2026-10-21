@@ -101,9 +101,12 @@ fn voice(s: &mut Session, v: &Value) -> CmdResult {
     match v.get("value") {
         None => {}
         Some(Value::Null) => s.read_aloud.set_voice(None),
-        Some(Value::String(id)) if !id.trim().is_empty() && id.trim().len() <= speech::MAX_VOICE_ID => s.read_aloud.set_voice(Some(id)),
+        Some(Value::String(id)) if speech::voice_id(id).is_some() => s.read_aloud.set_voice(Some(id)),
         Some(_) => {
-            return Err(CmdError::Params(format!("`value` must be a voice id from the list (1 to {} bytes) or null", speech::MAX_VOICE_ID)));
+            return Err(CmdError::Params(format!(
+                "`value` must be a voice id from the list (1 to {} bytes, no control characters) or null",
+                speech::MAX_VOICE_ID
+            )));
         }
     }
     let list = s.read_aloud.voices();
@@ -249,7 +252,7 @@ mod tests {
         assert_eq!(s.run("readAloud.voice", &json!({"value": null})).unwrap()["voice"], serde_json::Value::Null);
         assert!(s.run("readAloud.voice", &json!({"value": 7})).is_err());
         // A blank or overlong id is an error, not a silent switch to Automatic.
-        for bad in [json!(" "), json!("x".repeat(201))] {
+        for bad in [json!(" "), json!("x".repeat(201)), json!("a\nb")] {
             assert!(s.run("readAloud.voice", &json!({"value": bad})).is_err());
         }
         assert_eq!(s.run("readAloud.voice", &json!({"voice": "urj/hu"})).unwrap()["voice"], serde_json::Value::Null, "only `value` sets it");
