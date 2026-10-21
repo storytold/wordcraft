@@ -442,6 +442,10 @@ fn margin_sides(e: &El) -> [Option<f32>; 4] {
 }
 
 impl PropCtx {
+    pub fn row_tblpr(&self, e: &El) -> TableProps {
+        self.tblpr(e)
+    }
+
     pub fn tblpr(&self, e: &El) -> TableProps {
         let mut t = TableProps::default();
         for k in e.els() {
@@ -466,7 +470,11 @@ impl PropCtx {
                 "w:shd" => t.shading = self.shd_fill(k),
                 "w:tblLayout" => t.fixed = k.attr("w:type") == Some("fixed"),
                 "w:bidiVisual" => t.bidi_visual = on_off(k),
-                "w:tblCellMar" => t.cell_margins = Some(margins(k)),
+                "w:tblCellMar" => {
+                    let sides = margin_sides(k);
+                    t.cell_margins = sides.iter().all(Option::is_some).then(|| sides.map(|side| side.unwrap_or(0.0)));
+                    t.partial_cell_margins = t.cell_margins.is_none().then_some(sides);
+                }
                 "w:tblLook" => t.look = look(k),
                 "w:tblpPr" => t.float = Some(table_float(k)),
                 "w:tblOverlap" => {

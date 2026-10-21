@@ -1127,6 +1127,9 @@ pub struct TableProps {
     pub borders: Option<Borders>,
     /// Default cell margins (top, left, bottom, right), points.
     pub cell_margins: Option<[f32; 4]>,
+    /// Per-side table or row margins; omitted sides inherit the style or table defaults.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub partial_cell_margins: Option<[Option<f32>; 4]>,
     /// Fixed column widths (no auto-fit).
     pub fixed: bool,
     /// Table style options ("look"): header row, total row, banded rows, first column, last

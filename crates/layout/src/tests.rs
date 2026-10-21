@@ -3,6 +3,9 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextDirection};
 use wordcraft_doc::{Pos, Table};
 
+// Geometry probes use a bundled face instead of a platform-dependent Aptos substitute.
+const GEOMETRY_FONT: &str = "Source Sans 3";
+
 fn lay(doc: &Document) -> DocLayout {
     let mut c = LayoutCache::new();
     layout(doc, &mut c, &LayoutOptions::default())
@@ -454,6 +457,7 @@ fn deleted_text_adds_no_line_break_opportunity_without_markup() {
     // "xx ab\u{ad}cdef" in a column where "xx ab-" and "abcdef" fit but "xx abcdef" does not; only
     // the soft hyphen (5..7) is track-deleted.
     let mut d = Document::from_text("xx ab\u{ad}cdef");
+    d.styles.default_chr.font = Some(GEOMETRY_FONT.into());
     d.format_range(&Pos::body(0, 5), &Pos::body(0, 7), &|c| c.del = Some(0)).unwrap();
     d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
     let line_starts = |hide_deleted: bool| {
@@ -490,6 +494,7 @@ fn hidden_text_adds_no_line_break_opportunity_when_not_shown() {
     // but "xx abcdef" does not. Measured in Word (hidden text not printed): "xx" / "abcdef" both times.
     for hidden in ["\u{ad}", " "] {
         let mut d = Document::from_text(&format!("xx ab{hidden}cdef"));
+        d.styles.default_chr.font = Some(GEOMETRY_FONT.into());
         let end = 5 + hidden.len();
         d.format_range(&Pos::body(0, 5), &Pos::body(0, end), &|c| c.hidden = Some(true)).unwrap();
         d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.indent_right = Some(468.0 - 40.0)).unwrap();
@@ -3871,6 +3876,94 @@ fn cell_margins_are_where_cell_text_starts() {
     }
 }
 
+#[test]
+fn row_margin_exceptions_layout() {
+    let mut doc = Document::new();
+    doc.styles.default_chr.font = Some(GEOMETRY_FONT.into());
+    let mut table = Table::new(3, 2, 300.0);
+    table.props.fixed = true;
+    table.props.style = None;
+    table.props.cell_margins = Some([12.0, 10.0, 8.0, 10.0]);
+    for (ri, row) in table.rows.iter_mut().enumerate() {
+        if ri > 0 {
+            row.props.exceptions =
+                Some(Box::new(wordcraft_doc::props::TableProps { cell_margins: Some([3.0, 2.0, 1.0, 2.0]), ..Default::default() }));
+        }
+        for cell in &mut row.cells {
+            let mut para = Paragraph::with_text("Original margin control", Default::default());
+            para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(12.0));
+            para.props.space_before = Some(0.0);
+            para.props.space_after = Some(0.0);
+            cell.blocks = vec![wordcraft_doc::para_block(para)];
+            if ri == 2 {
+                cell.props.margins = Some([6.0, 5.0, 2.0, 2.0]);
+            }
+        }
+    }
+    assert_eq!(cell_margins(&doc, &table, 1, 0), [3.0, 2.0, 1.0, 2.0]);
+    assert_eq!(cell_margins(&doc, &table, 2, 0), [6.0, 5.0, 2.0, 2.0]);
+    doc.body = vec![Arc::new(Block::Table(table))];
+    let laid = lay(&doc);
+    let cells: Vec<_> = laid.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Placed::Cell { cell: 0, rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .collect();
+    for (rect, expected) in cells.iter().zip([32.0, 16.0, 20.0]) {
+        assert!((rect.h - expected).abs() < 0.01, "{rect:?} expected height {expected}");
+    }
+    assert_eq!(cells.len(), 3);
+}
+
+#[test]
+fn row_margin_exceptions_measure() {
+    let doc = Document::new();
+    let mut table = Table::new(1, 1, 100.0);
+    table.props.style = None;
+    table.props.cell_margins = Some([0.0, 20.0, 0.0, 20.0]);
+    table.rows[0].props.exceptions =
+        Some(Box::new(wordcraft_doc::props::TableProps { cell_margins: Some([0.0, 2.0, 0.0, 3.0]), ..Default::default() }));
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Probe", Default::default()))];
+    let actual = measure_table_columns(&doc, &table);
+    table.rows[0].props.exceptions = None;
+    table.rows[0].cells[0].props.margins = Some([0.0, 2.0, 0.0, 3.0]);
+    assert_eq!(actual, measure_table_columns(&doc, &table));
+}
+
+#[test]
+fn row_margin_sides_inherit() {
+    let mut doc = Document::new();
+    let mut table = Table::new(1, 1, 300.0);
+    table.props.fixed = true;
+    table.props.style = None;
+    table.props.cell_margins = Some([12.0, 10.0, 8.0, 10.0]);
+    table.rows[0].props.exceptions =
+        Some(Box::new(wordcraft_doc::props::TableProps { partial_cell_margins: Some([Some(3.0), Some(0.0), None, None]), ..Default::default() }));
+    let cell = &mut table.rows[0].cells[0];
+    let mut para = Paragraph::with_text("Original inherited margin control", Default::default());
+    para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(12.0));
+    para.props.space_before = Some(0.0);
+    para.props.space_after = Some(0.0);
+    cell.blocks = vec![wordcraft_doc::para_block(para)];
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [3.0, 0.0, 8.0, 10.0]);
+    table.props.cell_margins = Some([12.0, 10.0, 9.0, 10.0]);
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [3.0, 0.0, 9.0, 10.0]);
+    doc.body = vec![Arc::new(Block::Table(table))];
+    let laid = lay(&doc);
+    let height = laid.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Cell { rect, .. } => Some(rect.h),
+            _ => None,
+        })
+        .unwrap();
+    assert!((height - 24.0).abs() < 0.01, "row height {height}");
+}
+
 /// Line count and, per line, how far the text (trailing spaces excluded) reaches.
 fn justified_lines(text: &str, compat_mode: u32, align: Align) -> (usize, Vec<f32>) {
     let mut d = Document::from_text(text);
@@ -5704,7 +5797,11 @@ fn wrapped_shape_doc(kind: wordcraft_doc::para::ShapeKind, w: f32, h: f32, float
 #[test]
 fn tight_wrap_follows_an_ellipse() {
     use wordcraft_doc::para::{Float, ShapeKind, Wrap};
-    let spans = |wrap| line_spans(&lay(&wrapped_shape_doc(ShapeKind::Ellipse, 160.0, 160.0, Float { wrap, ..Default::default() })));
+    let spans = |wrap| {
+        let mut d = wrapped_shape_doc(ShapeKind::Ellipse, 160.0, 160.0, Float { wrap, ..Default::default() });
+        d.styles.default_chr.font = Some(GEOMETRY_FONT.into());
+        line_spans(&lay(&d))
+    };
     let (square, tight, through) = (spans(Wrap::Square), spans(Wrap::Tight), spans(Wrap::Through));
     // Square: every line beside the shape starts past its frame and distance from text.
     assert!(square.iter().filter(|l| l.0 < 160.0).all(|l| l.2 >= 169.0 - 0.01), "{square:?}");
@@ -8613,6 +8710,32 @@ fn kept_prefix_stays_together() {
     assert_eq!(row_keep_pages(&d), [1, 1, 2], "an oversized follower cannot separate an already placed kept prefix");
 }
 
+#[test]
+fn table_margin_sides_inherit() {
+    let mut doc = Document::new();
+    let mut table = Table::new(1, 1, 100.0);
+    table.props.style = None;
+    table.props.cell_margins = None;
+    table.props.partial_cell_margins = Some([None, None, None, Some(0.0)]);
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [0.0, 5.4, 0.0, 0.0]);
+    table.props.style = Some("OriginalMargins".into());
+    doc.styles.upsert(wordcraft_doc::Style {
+        id: "OriginalMargins".into(),
+        name: "Original margins".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        table: Some(wordcraft_doc::styles::TableStyleParts { cell_margins: Some([2.0, 7.0, 3.0, 8.0]), ..Default::default() }),
+        ..Default::default()
+    });
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [2.0, 7.0, 3.0, 0.0]);
+    table.rows[0].props.exceptions =
+        Some(Box::new(wordcraft_doc::props::TableProps { partial_cell_margins: Some([None, Some(1.0), None, None]), ..Default::default() }));
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [2.0, 1.0, 3.0, 0.0]);
+    table.props.cell_margins = Some([9.0; 4]);
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [9.0, 1.0, 9.0, 9.0]);
+    table.rows[0].cells[0].props.margins = Some([0.0, 2.0, 3.0, 4.0]);
+    assert_eq!(cell_margins(&doc, &table, 0, 0), [0.0, 2.0, 3.0, 4.0]);
+}
+
 /// Word and Adobe: a behind-text frame participates in a cell's vertical alignment,
 /// even when its anchor paragraph has no inline picture (synthetic two-cell probe).
 #[test]
@@ -9403,6 +9526,31 @@ fn shared_band_grid_spans() {
         })
         .unwrap();
     assert_eq!(height, 27.0);
+}
+
+/// A measured cell already includes its resolved margins; only unstarted columns need a floor.
+#[test]
+fn row_margins_keep_cell_floor() {
+    use wordcraft_doc::props::TableProps;
+
+    let doc = Document::new();
+    let mut table = Table::new(1, 1, 100.0);
+    table.props.style = None;
+    table.props.cell_margins = Some([0.0, 20.0, 0.0, 20.0]);
+    table.rows[0].cells[0].blocks.clear();
+    table.rows[0].props.exceptions = Some(Box::new(TableProps { cell_margins: Some([0.0; 4]), ..Default::default() }));
+    assert_eq!(measure_table_columns(&doc, &table), vec![(12.0, 12.0)]);
+    table.rows[0].props.exceptions = Some(Box::new(TableProps { partial_cell_margins: Some([None, Some(0.0), None, None]), ..Default::default() }));
+    assert_eq!(measure_table_columns(&doc, &table), vec![(32.0, 32.0)]);
+    table.rows[0].props.exceptions = None;
+    table.rows[0].cells[0].props.margins = Some([0.0; 4]);
+    assert_eq!(measure_table_columns(&doc, &table), vec![(12.0, 12.0)]);
+    table.rows[0].cells[0].props.margins = None;
+    assert_eq!(measure_table_columns(&doc, &table), vec![(52.0, 52.0)]);
+    table.rows[0].props.exceptions = Some(Box::new(TableProps { cell_margins: Some([0.0; 4]), ..Default::default() }));
+    table.grid.push(100.0);
+    let columns = measure_table_columns(&doc, &table);
+    assert_eq!(columns, vec![(12.0, 12.0), (52.0, 52.0)]);
 }
 
 #[test]
