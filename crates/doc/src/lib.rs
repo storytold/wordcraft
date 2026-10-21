@@ -129,7 +129,7 @@ pub const MAX_TEXT_BOX_DEPTH: usize = 4;
 /// shapes all show that same box, or chains of boxes each showing the next many times, would
 /// otherwise grow exponentially.) Outermost boxes aren't capped: their number is the document's
 /// (or its pages', for headers), so the work stays linear and no box is left blank for budget.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct BoxBudget {
     open: Vec<u32>,
     nested: usize,
@@ -309,7 +309,7 @@ pub struct TextBody {
     /// (`wps:bodyPr` `lIns`… ECMA-376 Part 1 §21.1.2.1.1, or VML `v:textbox` `inset`);
     /// `None` is Word's defaults.
     pub inset: Option<[u32; 4]>,
-    /// Resize shape to fit text (`a:spAutoFit`, VML `mso-fit-shape-to-text`): Word grows the
+    /// Resize shape to fit text (`a:spAutoFit`, VML `mso-fit-shape-to-text`): Word resizes the
     /// box to its text, so none of the text is cut.
     pub auto_fit: bool,
     /// The colour the shape's style gives its text (`wps:style/a:fontRef`): what automatic text

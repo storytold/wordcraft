@@ -802,8 +802,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
     Ok(at)
 }
 
-/// Turn the selected floating object's alignment (left, centred, …) into an offset from its
-/// column / paragraph that keeps it where it is, so it can be moved by an offset.
+/// Turn alignment into explicit offsets, keeping page-fixed drawings fixed.
 fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
@@ -812,7 +811,9 @@ fn unalign(s: &mut Session) -> Result<(), CmdError> {
         return Ok(());
     }
     let hit = s.layout().object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the object isn't laid out".into()))?;
-    let (ox, oy) = (hit.rect.x - hit.origin.x, hit.rect.y - hit.origin.y);
+    let v_rel = if moves_with_text(float) { Anchor::Paragraph } else { Anchor::Page };
+    let ox = hit.rect.x - hit.origin.x;
+    let oy = if v_rel == Anchor::Page { hit.rect.y } else { hit.rect.y - hit.origin.y };
     edit_float(s, &pos, |f| {
         if f.h_align.is_some() {
             f.h_align = None;
@@ -821,7 +822,7 @@ fn unalign(s: &mut Session) -> Result<(), CmdError> {
         }
         if f.v_align.is_some() {
             f.v_align = None;
-            f.v_rel = Anchor::Paragraph;
+            f.v_rel = v_rel;
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
     })?;
