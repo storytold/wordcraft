@@ -1,5 +1,7 @@
 # WordCraft roadmap: milestones and what's next
 
+> **Table shading update:** 2026-10-21. Bounded source/model coverage; global assessment unchanged.
+
 > **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** trivial (M6: Manage Sources imports Word's `Sources.xml`, #2640; previously minor: Czech proofing review fixes; previously minor: Portuguese proofing; previously minor: Polish interface and Polish proofing; previously trivial: M7: formatting revisions landed, #41; previously trivial: M5: Draw Table and Eraser landed, #303; previously minor: beta distance restated: ~15 points, ~150–230 h; previously: alpha gate checked: six core workflows pass; previously major: milestones moved here from ROADMAP.md; Current focus set from the re-measured gaps) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked work list is
@@ -7,6 +9,10 @@ Forward-looking plan. The summary is [`ROADMAP.md`](../ROADMAP.md); the ranked w
 Opus 5.5 agent wall-clock.
 
 ## Current focus (toward beta, ~150–230 h)
+
+Original or adjusted center/merge metadata keeps a cell on prior fill routing. This guard covers the current split input. A prior split clears center/merge metadata. Original synthetic controls only; no new Word comparison.
+
+Matched paragraph shading in direct horizontal body-table cells follows moved or split text; cell backgrounds keep their cell bounds. Source/model checks only; no new Word comparison. The pagination gap remains open.
 
 1. **Merge or close the ~45 open PRs** before starting overlapping work: many close catalog gaps
    (Clipboard pane #264, Manage Styles #270, Group #267), fix field bugs (Hebrew RTL #20, IME
@@ -74,6 +80,8 @@ languages, screen-reader access, ecosystem decisions (VBA, add-ins, cloud), an i
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-21 | trivial | Preserve per-cell center/merge exclusions during shading adjustment. Current-input metadata scope; original synthetic controls, no new native comparison. |
+| 2026-10-21 | minor | Bounded paragraph shading ownership across table-row fragments; source/model coverage only |
 | 2026-10-18 | trivial | M6: Manage Sources imports Word's `Sources.xml` (#2640) |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |
