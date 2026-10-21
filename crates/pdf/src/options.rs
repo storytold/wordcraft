@@ -57,6 +57,10 @@ pub struct PdfOptions {
     /// interface language (`None`: Word's English "Error! Bookmark not defined."). [`export_layout`]
     /// keeps the layout it is given.
     pub bookmark_error: Option<std::sync::Arc<str>>,
+    /// Fillable form fields (AcroForm) for the document's form fields: legacy form fields and
+    /// content controls that may be edited, with their values. None on pages drawn scaled or moved
+    /// (`comments`, `paper`).
+    pub form_fields: bool,
 }
 
 /// How many characters of the watermark text the PDF draws.
@@ -112,6 +116,7 @@ impl Default for PdfOptions {
             numeral: NumeralMode::Arabic,
             revisions: wordcraft_layout::display::MarkupOptions::default(),
             bookmark_error: None,
+            form_fields: false,
         }
     }
 }

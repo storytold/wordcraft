@@ -199,6 +199,7 @@ pub(crate) fn pdf_options(opts: &ExportOptions) -> wordcraft_pdf::PdfOptions {
         numeral: opts.numeral,
         revisions: opts.revisions.clone(),
         bookmark_error: crate::locale::bookmark_error(),
+        form_fields: opts.form_fields,
         ..Default::default()
     }
 }
