@@ -884,13 +884,33 @@ fn media_ext(key: &str, data: &[u8]) -> String {
 /// A document paragraph as flow paragraphs: a page break character inside the text ends the
 /// paragraph, and the text after it starts a new one that carries `page_break`.
 pub fn flow_paras(doc: &Document, p: &Paragraph) -> Vec<Para> {
-    flow_paras_in(doc, p, false)
+    flow_paras_in(doc, p, false, None)
+}
+
+/// A paragraph's spacing, line spacing and indents as they resolve in its document (defaults,
+/// the table style's paragraph formatting in a table cell, style chain, its own formatting),
+/// points: what formats that don't carry the document's styles (HTML, RTF) need to show it the
+/// same. A list paragraph leaves its indents to the list.
+fn resolved_spacing(doc: &Document, p: &Paragraph, listed: bool, table: Option<&ParaProps>) -> Spacing {
+    let r = doc.styles.resolve_para_in(&p.props, table);
+    let pt = |v: f32| v.is_finite().then(|| v.clamp(-1584.0, 1584.0));
+    let indent = |v: f32| if listed { None } else { pt(v) };
+    Spacing {
+        before: pt(r.space_before),
+        after: pt(r.space_after),
+        line: Some(r.line_spacing),
+        left: indent(r.indent_left),
+        right: indent(r.indent_right),
+        first: indent(r.indent_first),
+    }
 }
 
 /// [`flow_paras`]; `tracked` keeps tracked changes: deleted text stays, and text carries its
-/// insertion and deletion marks.
-fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
+/// insertion and deletion marks. `table` is the paragraph formatting of the table style of the
+/// table the paragraph is in.
+fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool, table: Option<&ParaProps>) -> Vec<Para> {
     let (kind, list) = para_kind(doc, p);
+    let spacing = resolved_spacing(doc, p, list.is_some(), table);
     let mut done: Vec<Para> = Vec::new();
     let borders = if kind == Kind::Rule { None } else { p.props.borders.filter(|b| b.any_visible()) };
     let mut out = Para {
@@ -900,7 +920,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
-        spacing: Spacing::default(),
+        spacing,
         borders,
         section: None,
         mark_ins: None,
@@ -931,7 +951,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),
-                        spacing: Spacing::default(),
+                        spacing,
                         borders,
                         section: None,
                         mark_ins: None,
@@ -1019,16 +1039,18 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
     done
 }
 
-fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool) -> Vec<FBlock> {
+/// `table` is the paragraph formatting of the table style of the table the blocks are in.
+fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool, table: Option<&ParaProps>) -> Vec<FBlock> {
     let mut out = Vec::new();
     for b in bl {
         match &**b {
-            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked).into_iter().map(FBlock::Para)),
+            Block::Para(p) => out.extend(flow_paras_in(doc, p, tracked, table).into_iter().map(FBlock::Para)),
             Block::Table(t) if depth < MAX_DEPTH => out.push(FBlock::Table(flow_table(doc, t, depth, tracked))),
             Block::Table(t) => {
+                let style = table_style_para(doc, t);
                 for r in &t.rows {
                     for c in &r.cells {
-                        out.extend(flow_blocks(doc, &c.blocks, depth, tracked));
+                        out.extend(flow_blocks(doc, &c.blocks, depth, tracked, style.as_ref()));
                     }
                 }
             }
@@ -1037,7 +1059,13 @@ fn flow_blocks(doc: &Document, bl: &Blocks, depth: usize, tracked: bool) -> Vec<
     out
 }
 
+/// The paragraph formatting `t`'s table style gives its cells, if it has a table style.
+fn table_style_para(doc: &Document, t: &Table) -> Option<ParaProps> {
+    t.props.style.as_deref().and_then(|id| doc.styles.table_style(id)).map(|s| s.para)
+}
+
 fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable {
+    let style = table_style_para(doc, t);
     let mut rows = Vec::new();
     for (ri, r) in t.rows.iter().enumerate() {
         let header = r.props.header || (ri == 0 && t.props.look.header_row && t.rows.len() > 1);
@@ -1055,7 +1083,7 @@ fn flow_table(doc: &Document, t: &Table, depth: usize, tracked: bool) -> FTable 
                 }
             }
             cells.push(Cell {
-                blocks: flow_blocks(doc, &c.blocks, depth + 1, tracked),
+                blocks: flow_blocks(doc, &c.blocks, depth + 1, tracked, style.as_ref()),
                 colspan: c.span() as u32,
                 rowspan,
                 covered: c.props.vmerge == VMerge::Continue,
@@ -1087,7 +1115,7 @@ pub fn from_doc_tracked(doc: &Document) -> Flow {
 fn flow_of(doc: &Document, tracked: bool) -> Flow {
     let c = &doc.core;
     Flow {
-        blocks: flow_blocks(doc, &doc.body, 0, tracked),
+        blocks: flow_blocks(doc, &doc.body, 0, tracked, None),
         meta: Meta {
             title: c.title.clone(),
             author: c.creator.clone(),

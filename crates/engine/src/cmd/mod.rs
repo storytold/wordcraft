@@ -25,6 +25,7 @@ pub mod inspector;
 pub mod lists;
 pub mod mailings;
 pub mod moves;
+pub mod native_clip;
 pub mod objects;
 pub mod options;
 pub mod outline;

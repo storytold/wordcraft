@@ -18,7 +18,13 @@
 //! they paste math (learn.microsoft.com/office/math/mathml, "Clipboard support"). Pasting into
 //! Word and LibreOffice is not yet verified. Linux and the BSDs have no Word, and arboard can't
 //! add MIME types of other names, so there the HTML carries the MathML alone.
+//!
+//! A copy also goes on the clipboard as a WordCraft Fragment (`wordcraft_engine::cmd::native_clip`)
+//! where we can add it — on Windows the registered format "WordCraft Fragment", beside arboard's —
+//! so another WordCraft window pastes it with its styles, lists and pictures. Paste reads it on
+//! Windows and, as `application/x-wordcraft-fragment`, on Wayland.
 
+use wordcraft_engine::cmd::native_clip::MAX_NATIVE_BYTES;
 use wordcraft_engine::cmd::paste::MAX_PASTE_BYTES;
 use wordcraft_ui_egui::paste_picture::ClipboardPicture;
 
@@ -36,14 +42,18 @@ thread_local! {
 /// the HTML and text couldn't be set (the caller copies the text alone), including a Wayland
 /// session without the data-control protocol, where arboard would fall back to X11 and native
 /// Wayland programs might not see it. MathML that can't be added is logged: the HTML still
-/// carries it.
-pub fn set_html(html: &str, text: &str, mathml: &str) -> bool {
+/// carries it. `native` is the copy as a WordCraft Fragment (empty: none), added where the
+/// platform takes it.
+pub fn set_html(html: &str, text: &str, mathml: &str, native: &str) -> bool {
     if !platform::can_set() {
         return false;
     }
     let set = set_html_text(html, text);
     if set && !mathml.is_empty() && mathml.len() <= MAX_PASTE_BYTES {
         platform::add_mathml(mathml);
+    }
+    if set && !native.is_empty() && native.len() <= MAX_NATIVE_BYTES {
+        platform::add_native(native);
     }
     set
 }
@@ -86,6 +96,17 @@ pub fn rtf() -> Option<String> {
     // RTF is 7-bit by the spec; stray 8-bit bytes become replacement characters.
     let s = String::from_utf8_lossy(&bytes).trim_end_matches('\0').to_string();
     s.trim_start().starts_with("{\\rtf").then_some(s)
+}
+
+/// Another WordCraft window's copy: the clipboard's WordCraft Fragment (Windows, Wayland), if
+/// not too large.
+pub fn native() -> Option<String> {
+    let bytes = platform::native()?;
+    if bytes.len() > MAX_NATIVE_BYTES {
+        return None;
+    }
+    let s = String::from_utf8(bytes).ok()?;
+    Some(s.trim_end_matches('\0').to_string())
 }
 
 /// The names of the formats on the clipboard, where the platform lists them (Wayland, Windows).
@@ -165,6 +186,18 @@ mod platform {
     /// arboard serves its own MIME types only; Word, which reads the MathML formats, isn't here.
     pub fn add_mathml(_mathml: &str) {}
 
+    /// arboard serves its own MIME types only: another WordCraft window gets the HTML.
+    pub fn add_native(_native: &str) {}
+
+    /// The WordCraft Fragment another program put on a Wayland clipboard.
+    pub fn native() -> Option<Vec<u8>> {
+        let mime = wordcraft_engine::cmd::native_clip::MIME;
+        if !wayland() || !formats().iter().any(|o| o == mime) {
+            return None;
+        }
+        read(mime, super::MAX_NATIVE_BYTES as u64)
+    }
+
     pub fn rtf() -> Option<Vec<u8>> {
         if !wayland() {
             return None;
@@ -213,6 +246,31 @@ mod platform {
         true
     }
 
+    /// Add the WordCraft Fragment (UTF-8 JSON) to what arboard just set, as the registered format
+    /// "WordCraft Fragment".
+    pub fn add_native(native: &str) {
+        let Some(format) = raw::register_format(wordcraft_engine::cmd::native_clip::FORMAT_NAME) else { return };
+        let Ok(_open) = Clipboard::new_attempts(10) else {
+            log::warn!("clipboard: couldn't open it to add the WordCraft Fragment");
+            return;
+        };
+        if let Err(e) = raw::set_without_clear(format.get(), native.as_bytes()) {
+            log::warn!("clipboard WordCraft Fragment: {e}");
+        }
+    }
+
+    /// Another WordCraft window's copy, from the "WordCraft Fragment" format.
+    pub fn native() -> Option<Vec<u8>> {
+        let format = raw::register_format(wordcraft_engine::cmd::native_clip::FORMAT_NAME)?;
+        let _open = Clipboard::new_attempts(10).ok()?;
+        if raw::size(format.get()).is_none_or(|n| n.get() > super::MAX_NATIVE_BYTES) {
+            return None;
+        }
+        let mut out = Vec::new();
+        raw::get_vec(format.get(), &mut out).ok()?;
+        Some(out)
+    }
+
     /// Add the MathML to what arboard just set, as "MathML" and "MathML Presentation": UTF-16LE
     /// text (with its terminating NUL, as Windows text formats have).
     pub fn add_mathml(mathml: &str) {
@@ -256,6 +314,13 @@ mod platform {
         true
     }
 
+    /// No WordCraft Fragment on the pasteboard yet: another window pastes the HTML.
+    pub fn add_native(_native: &str) {}
+
+    pub fn native() -> Option<Vec<u8>> {
+        None
+    }
+
     /// Add the MathML to the pasteboard item arboard just wrote, as the MathML types (W3C MathML 3
     /// §6.2.4): presentation markup, and the generic type for readers that only know that one.
     pub fn add_mathml(mathml: &str) {
@@ -292,4 +357,10 @@ mod platform {
     }
 
     pub fn add_mathml(_mathml: &str) {}
+
+    pub fn add_native(_native: &str) {}
+
+    pub fn native() -> Option<Vec<u8>> {
+        None
+    }
 }

@@ -73,12 +73,12 @@ pub fn specs() -> Vec<CommandSpec> {
                 Some("the Spike is empty")
             }
         }),
-        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+        CommandSpec::new("edit.paste", "Paste", "Home › Clipboard", paste).key("Mod+V / Shift+Insert").params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "wordcraft"?: string (WordCraft Fragment)}"#),
         CommandSpec::new("edit.pasteText", "Paste: Keep Text Only", "Home › Clipboard › Paste", paste_text)
             .params(r#"{"text"?: string}"#)
             .key("Mod+Shift+Alt+V"),
         CommandSpec::new("edit.pasteMerge", "Paste: Merge Formatting", "Home › Clipboard › Paste", paste_merge)
-            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string}"#),
+            .params(r#"{"text"?: string, "html"?: string, "rtf"?: string, "wordcraft"?: string (WordCraft Fragment)}"#),
         CommandSpec::new("edit.clipboardPane", "Clipboard Pane", "Home › Clipboard", |s, v| {
             let on = p::bool(v, "value").unwrap_or(!s.view.clipboard_pane);
             s.view.clipboard_pane = on;
@@ -175,20 +175,26 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
     s.clipboard_text = f.clipboard_text();
     s.clip_history.push(&f, &s.clipboard_text);
     s.clipboard = Some(f);
+    s.clipboard_whole = a.off == 0 && s.doc.para_at(&b).is_some_and(|p| b.off >= p.text.len());
     Ok(copy_result(s))
 }
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
 /// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
-/// and for a copy of one equation alone, its MathML (#1297).
+/// for a copy of one equation alone, its MathML (#1297); and the copy as a WordCraft Fragment
+/// (`wordcraft`), so another WordCraft window pastes it as it is here. The HTML is exported with
+/// this document's styles, lists and pictures, so it looks there as it does here.
 pub(crate) fn copy_result(s: &mut Session) -> Value {
-    s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
-        None => String::new(),
-    };
+    let doc = super::native_clip::copy_document(s);
+    s.clipboard_html = doc.as_ref().map(wordcraft_formats::html::export_fragment).unwrap_or_default();
+    let native = super::native_clip::encode(s, doc.as_ref());
+    s.clipboard_native_id = native.as_deref().map_or(0, super::native_clip::id);
     let mut r = json!({"text": s.clipboard_text});
     if !s.clipboard_html.is_empty() {
         r["html"] = json!(s.clipboard_html);
+    }
+    if let Some(n) = native {
+        r["wordcraft"] = json!(n);
     }
     // A copy of one equation alone, as MathML for the clipboard formats equation editors read
     // ("MathML" on Windows, `public.mathml.presentation` on macOS; #1297). Word looks for them
@@ -239,10 +245,11 @@ fn insert_spike(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 /// Paste keeps the source formatting: our own copy while the system clipboard still holds it,
-/// else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
+/// another WordCraft window's (its WordCraft Fragment), else another program's HTML or RTF (#687). The system clipboard's text has none, so it pastes
 /// as Keep Text Only does.
 fn paste(s: &mut Session, v: &Value) -> CmdResult {
     match super::paste::paste_content(s, v)? {
+        super::paste::Pasted::Own(frag, whole) => super::paste::insert_own(s, frag, whole)?,
         super::paste::Pasted::Fragment(frag) => super::paste::insert(s, frag)?,
         super::paste::Pasted::Text(text) => super::paste::insert_text(s, &text)?,
     }
@@ -368,10 +375,13 @@ fn clip_index(s: &Session, v: &Value) -> Result<usize, CmdError> {
 }
 
 /// Paste a collected item through the normal paste path. The clipboard itself stays as it was.
+/// Whether the item is whole paragraphs isn't kept, so it pastes as a piece of one would.
 fn paste_clip(s: &mut Session, f: Fragment) -> CmdResult {
     let saved = s.clipboard.replace(f);
+    let whole = std::mem::replace(&mut s.clipboard_whole, false);
     let r = paste(s, &json!({}));
     s.clipboard = saved;
+    s.clipboard_whole = whole;
     r
 }
 

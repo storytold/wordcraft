@@ -7,6 +7,7 @@
 //! comes from other programs: sizes are capped before it reaches the engine.
 
 use serde_json::Value;
+use wordcraft_engine::cmd::native_clip::MAX_NATIVE_BYTES;
 use wordcraft_engine::cmd::paste::{MAX_PASTE_BYTES, MAX_PICTURE_BYTES};
 
 use crate::{WordApp, paste_picture};
@@ -46,8 +47,12 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
     }
     // Keep Text Only needs nothing more; a caller that passed formats of its own (an agent, Paste
     // Special's OK) has them already.
-    if id == "edit.pasteText" || ["html", "rtf", "picture"].iter().any(|k| o.contains_key(*k)) {
+    if id == "edit.pasteText" || ["html", "rtf", "picture", "wordcraft"].iter().any(|k| o.contains_key(*k)) {
         return None;
+    }
+    // Another WordCraft window's copy, with its styles, lists and pictures.
+    if let Some(native) = app.services.clipboard_native.as_ref().and_then(|f| f()).filter(|n| !n.is_empty() && n.len() <= MAX_NATIVE_BYTES) {
+        o.insert("wordcraft".into(), Value::String(native));
     }
     let fits = |t: &String| !t.trim().is_empty() && t.len() <= MAX_PASTE_BYTES;
     if let Some(html) = app.services.clipboard_html.as_ref().and_then(|f| f()).filter(fits) {
@@ -71,7 +76,7 @@ pub(crate) fn fill(app: &mut WordApp, id: &str, params: &mut Value) -> Option<Re
 /// equations as MathML, #816; a lone equation in the MathML formats too, #1297) when the host can
 /// set it, else the text through egui. egui sets its text at the end of the frame, which would
 /// replace the HTML, so only one of them runs.
-pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str) {
+pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, mathml: &str, native: &str) {
     if text.is_empty() {
         // A copied picture or shape has no text, only HTML (#2276): empty the clipboard's text,
         // else Paste would find the text copied before it and paste that instead of our copy.
@@ -80,7 +85,7 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, ma
         }
         return;
     }
-    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml)) {
+    if !html.is_empty() && app.services.set_clipboard_html.as_ref().is_some_and(|f| f(html, text, mathml, native)) {
         return;
     }
     ctx.copy_text(text.to_string());
@@ -89,7 +94,7 @@ pub(crate) fn put(app: &WordApp, ctx: &egui::Context, text: &str, html: &str, ma
 /// Put what Copy or Cut returned on the system clipboard (see [`put`]).
 pub(crate) fn put_result(app: &WordApp, ctx: &egui::Context, r: &Value) {
     let s = |k: &str| r.get(k).and_then(Value::as_str).unwrap_or("");
-    put(app, ctx, s("text"), s("html"), s("mathml"));
+    put(app, ctx, s("text"), s("html"), s("mathml"), s("wordcraft"));
 }
 
 /// Format names worth showing: not the clipboard protocol's own bookkeeping targets.
@@ -253,7 +258,7 @@ mod tests {
         let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::<(String, String, String)>::new()));
         let sink = got.clone();
         let mut a = app(Services {
-            set_clipboard_html: Some(Box::new(move |h, t, m| {
+            set_clipboard_html: Some(Box::new(move |h, t, m, _| {
                 sink.borrow_mut().push((h.to_string(), t.to_string(), m.to_string()));
                 true
             })),
@@ -286,5 +291,59 @@ mod tests {
         let got_now = got.borrow().clone();
         assert_eq!(got_now.len(), 3);
         assert!(got_now[2].2.starts_with("<math") && got_now[2].2.contains("<msub>") && got_now[2].1 == "y=2x_s", "{got_now:?}");
+    }
+
+    /// Two WordCraft windows: a copy in one goes on the system clipboard as a WordCraft Fragment
+    /// too, and Paste in the other keeps its formatting as it was there — the source's Normal
+    /// font and size, though the other document's Normal is another one.
+    #[test]
+    fn a_copy_pastes_with_its_formatting_in_another_window() {
+        let clipboard = std::rc::Rc::new(std::cell::RefCell::new((String::new(), String::new())));
+        let sink = clipboard.clone();
+        let mut doc = wordcraft_doc::Document::from_text("Résumé line");
+        if let Some(n) = doc.styles.get_mut("Normal") {
+            n.chr.font = Some("Georgia".into());
+            n.chr.size = Some(15.0);
+        }
+        let mut a = WordApp::new(
+            Session::new(doc),
+            Services {
+                set_clipboard_html: Some(Box::new(move |_h, t, _m, n| {
+                    *sink.borrow_mut() = (t.to_string(), n.to_string());
+                    true
+                })),
+                ..Default::default()
+            },
+        );
+        a.run("select.all", json!({})).unwrap();
+        let r = a.run("edit.copy", json!({})).unwrap();
+        put_result(&a, &egui::Context::default(), &r);
+        let (text, native) = clipboard.borrow().clone();
+        assert!(native.starts_with("{\"format\":\"wordcraft-fragment\""), "the host got the WordCraft Fragment");
+        let (t2, n2) = (text.clone(), native.clone());
+        let mut b = app(Services {
+            clipboard_text: Some(Box::new(move || Some(t2.clone()))),
+            clipboard_native: Some(Box::new(move || Some(n2.clone()))),
+            ..Default::default()
+        });
+        // The ribbon's Paste sends nothing: the text and the fragment come from the clipboard.
+        b.run("edit.paste", json!({})).unwrap();
+        assert_eq!(first_para(&b), "Résumé line");
+        let focus = b.session.sel.focus.clone();
+        let p = b.session.doc.para_at(&focus).cloned().unwrap();
+        let c = b.session.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0));
+        assert_eq!((c.font.as_str(), c.size), ("Georgia", 15.0));
+        // Paste Special offers it as Formatted Text.
+        let r = b.run("edit.pasteSpecial", json!({})).unwrap();
+        let ids: Vec<&str> = r["formats"].as_array().unwrap().iter().filter_map(|f| f["id"].as_str()).collect();
+        assert_eq!(ids.first(), Some(&"formatted"), "{ids:?}");
+        // The dialog keeps the fragment, so its OK pastes it as Formatted Text.
+        match &b.dialog {
+            Some(crate::dialogs::Dialog::PasteSpecial { formats, payload, .. }) => {
+                assert_eq!(formats.first().map(String::as_str), Some("formatted"));
+                assert!(payload.get("wordcraft").and_then(Value::as_str).is_some_and(|n| n.starts_with("{\"format\"")), "{payload}");
+            }
+            _ => panic!("Paste Special's dialog isn't open"),
+        }
     }
 }

@@ -1297,7 +1297,7 @@ impl Dialog {
     pub fn paste_special(app: &WordApp, payload: &Value) -> Dialog {
         let formats: Vec<String> = wordcraft_engine::cmd::paste::available(&app.session, payload).into_iter().map(str::to_string).collect();
         let mut kept = json!({});
-        for k in ["text", "html", "rtf", "picture"] {
+        for k in ["text", "html", "rtf", "picture", "wordcraft"] {
             if let Some(t) = payload.get(k).and_then(Value::as_str) {
                 kept[k] = json!(t);
             }

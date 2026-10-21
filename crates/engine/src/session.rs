@@ -374,6 +374,13 @@ pub struct Session {
     /// HTML for the system clipboard beside [`Self::clipboard_text`]: the copy's formatting for
     /// programs that read HTML, equations as MathML (#816); empty when nothing was copied.
     pub clipboard_html: String,
+    /// The WordCraft Fragment payload Copy last put on the system clipboard, as
+    /// `cmd::native_clip::id` (0: none), so a paste tells this window's copy from another's.
+    pub clipboard_native_id: u64,
+    /// The copy in [`Self::clipboard`] runs from a paragraph's start to the end of a paragraph:
+    /// whole paragraphs, whose paragraph formatting a paste brings along (Word's smart paragraph
+    /// selection takes their marks too).
+    pub clipboard_whole: bool,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
     pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
@@ -641,6 +648,8 @@ impl Session {
             pending_move: None,
             clipboard_text: String::new(),
             clipboard_html: String::new(),
+            clipboard_native_id: 0,
+            clipboard_whole: false,
             clip_history: Default::default(),
             find: FindState::default(),
             goal_x: None,
@@ -1159,6 +1168,8 @@ impl Session {
             pending_move: _,
             clipboard_text: _,
             clipboard_html: _,
+            clipboard_native_id: _,
+            clipboard_whole: _,
             clip_history: _,
             find: _,
             goal_x: _,

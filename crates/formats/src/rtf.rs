@@ -488,6 +488,9 @@ impl Writer {
             Kind::Title => out.push_str("\\sa80\\fs56"),
             Kind::Normal => {}
         }
+        // The paragraph's own spacing and indents (as it resolves in its document) win over the
+        // kind's: later control words replace earlier ones.
+        out.push_str(&spacing_words(&p.spacing));
         out
     }
 
@@ -632,6 +635,27 @@ impl Writer {
             out.push_str("\\row\n");
         }
     }
+}
+
+/// A paragraph's spacing, line spacing and indents as RTF control words (twips).
+fn spacing_words(sp: &model::Spacing) -> String {
+    use wordcraft_doc::props::LineSpacing;
+    let tw = |pt: f32| (pt.clamp(-1584.0, 1584.0) * 20.0).round() as i64;
+    let mut out = String::new();
+    for (word, v) in [("sb", sp.before), ("sa", sp.after), ("li", sp.left), ("ri", sp.right), ("fi", sp.first)] {
+        if let Some(v) = v.filter(|v| v.is_finite()) {
+            out.push_str(&format!("\\{word}{}", tw(v)));
+        }
+    }
+    match sp.line {
+        Some(LineSpacing::Multiple(m)) if m.is_finite() && m > 0.0 => {
+            out.push_str(&format!("\\sl{}\\slmult1", (m.min(132.0) * 240.0).round() as i64));
+        }
+        Some(LineSpacing::Exactly(v)) if v.is_finite() && v > 0.0 => out.push_str(&format!("\\sl-{}\\slmult0", tw(v))),
+        Some(LineSpacing::AtLeast(v)) if v.is_finite() && v > 0.0 => out.push_str(&format!("\\sl{}\\slmult0", tw(v))),
+        _ => {}
+    }
+    out
 }
 
 fn level_def(ordered: bool, l: usize) -> String {

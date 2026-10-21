@@ -1580,14 +1580,40 @@ fn trim_num(v: f32) -> String {
 }
 
 fn para_attrs(p: &Para) -> String {
-    let mut css: Vec<&str> = Vec::new();
+    let mut css: Vec<String> = Vec::new();
     if let Some(a) = align_css(p.align) {
-        css.push(a);
+        css.push(a.to_string());
     }
     if p.page_break {
-        css.push("break-before:page;page-break-before:always");
+        css.push("break-before:page;page-break-before:always".to_string());
     }
+    css.extend(spacing_css(&p.spacing));
     if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+}
+
+/// A paragraph's spacing, line spacing and indents as CSS, in points; Word reads its
+/// `mso-line-height-rule` for exact and at-least line spacing.
+fn spacing_css(sp: &model::Spacing) -> Vec<String> {
+    use wordcraft_doc::props::LineSpacing;
+    let n = |v: f32| {
+        let s = format!("{:.2}", v);
+        s.trim_end_matches('0').trim_end_matches('.').to_string()
+    };
+    let mut css = Vec::new();
+    for (name, v) in
+        [("margin-top", sp.before), ("margin-bottom", sp.after), ("margin-left", sp.left), ("margin-right", sp.right), ("text-indent", sp.first)]
+    {
+        if let Some(v) = v.filter(|v| v.is_finite()) {
+            css.push(format!("{name}:{}pt", n(v)));
+        }
+    }
+    match sp.line {
+        Some(LineSpacing::Multiple(m)) if m.is_finite() && m > 0.0 => css.push(format!("line-height:{}%", n(m * 100.0))),
+        Some(LineSpacing::Exactly(v)) if v.is_finite() && v > 0.0 => css.push(format!("line-height:{}pt;mso-line-height-rule:exactly", n(v))),
+        Some(LineSpacing::AtLeast(v)) if v.is_finite() && v > 0.0 => css.push(format!("line-height:{}pt;mso-line-height-rule:at-least", n(v))),
+        _ => {}
+    }
+    css
 }
 
 fn para_html(p: &Para) -> String {

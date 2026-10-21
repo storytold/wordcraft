@@ -749,3 +749,56 @@ fn hidden_drawings_are_left_out_of_exports() {
     // Two pictures, one hidden: one comes out.
     assert_eq!(crate::html::export(&d).matches("<img").count(), 1);
 }
+
+/// A paragraph's spacing before and after, line spacing and indents reach HTML and RTF as they
+/// resolve in its document, so a copy pasted into another program keeps them: they used to be
+/// left out (HTML) or fixed per kind of paragraph (RTF).
+#[test]
+fn html_and_rtf_carry_paragraph_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::from_text("Spaced\nExact");
+    if let Some(Block::Para(p)) = d.body.get_mut(0).map(Arc::make_mut) {
+        p.props.space_before = Some(18.0);
+        p.props.space_after = Some(30.0);
+        p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        p.props.indent_left = Some(36.0);
+        p.props.indent_first = Some(-18.0);
+    }
+    if let Some(Block::Para(p)) = d.body.get_mut(1).map(Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Exactly(14.0));
+    }
+    let html = crate::html::export_fragment(&d);
+    for css in ["margin-top:18pt", "margin-bottom:30pt", "line-height:200%", "margin-left:36pt", "text-indent:-18pt"] {
+        assert!(html.contains(css), "{css} in {html}");
+    }
+    assert!(html.contains("line-height:14pt;mso-line-height-rule:exactly"), "{html}");
+    let rtf = crate::rtf::export(&d);
+    for word in ["\\sb360", "\\sa600", "\\sl480\\slmult1", "\\li720", "\\fi-360", "\\sl-280\\slmult0"] {
+        assert!(rtf.contains(word), "{word} in {rtf}");
+    }
+    // Read back, the RTF gives the same spacing.
+    let back = crate::rtf::import(rtf.as_bytes()).unwrap();
+    let first = back.body.iter().find_map(|b| if let Block::Para(p) = &**b { Some(p.clone()) } else { None }).unwrap();
+    let r = back.styles.resolve_para(&first.props);
+    assert_eq!((r.space_before, r.space_after, r.line_spacing), (18.0, 30.0, LineSpacing::Multiple(2.0)));
+}
+
+/// A table cell's paragraph takes its table style's paragraph formatting over the document
+/// defaults in HTML and RTF, as layout does: Table Grid's no space after and single spacing.
+#[test]
+fn table_cells_take_their_table_style_spacing() {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::new();
+    let mut t = Table::new(1, 1, 200.0);
+    t.props.style = Some("TableGrid".into());
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("cell", CharProps::default()))];
+    d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("after", CharProps::default()))];
+    let flow = model::from_doc(&d);
+    let Some(FBlock::Table(ft)) = flow.blocks.first() else { panic!("no table") };
+    let Some(FBlock::Para(cell)) = ft.rows[0][0].blocks.first() else { panic!("no cell paragraph") };
+    assert_eq!((cell.spacing.after, cell.spacing.line), (Some(0.0), Some(LineSpacing::Multiple(1.0))), "the table style's");
+    let Some(FBlock::Para(body)) = flow.blocks.get(1) else { panic!("no body paragraph") };
+    assert_ne!(body.spacing, cell.spacing, "the document defaults outside the table");
+    let rtf = crate::rtf::export(&d);
+    assert!(rtf.contains("\\sa0") && rtf.contains("\\sl240\\slmult1"), "{rtf}");
+}
