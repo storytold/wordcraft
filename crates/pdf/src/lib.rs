@@ -29,6 +29,7 @@ mod extract;
 #[cfg(not(target_arch = "wasm32"))]
 pub use extract::{Verdict, VerdictDetail, extract_page_text, extract_verdict_detail};
 
+/// Always an error: the web build can't read PDFs.
 #[cfg(target_arch = "wasm32")]
 pub fn extract_page_text(_bytes: &[u8]) -> Result<Vec<String>, String> {
     Err("PDF text extraction is not available on wasm".into())
@@ -75,6 +76,7 @@ pub fn searchability_verdict(extracted_text: Option<bool>) -> TextSearchability 
     }
 }
 
+/// Whether `bytes` is a PDF with searchable text, judged page by page.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn text_searchability(bytes: &[u8]) -> TextSearchability {
     if bytes.len() < 8 || !bytes.starts_with(b"%PDF") {
@@ -87,6 +89,7 @@ pub fn text_searchability(bytes: &[u8]) -> TextSearchability {
     }
 }
 
+/// Always [`TextSearchability::Unavailable`]: the web build can't read PDFs.
 #[cfg(target_arch = "wasm32")]
 pub fn text_searchability(_bytes: &[u8]) -> TextSearchability {
     searchability_verdict(None)

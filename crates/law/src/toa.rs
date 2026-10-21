@@ -101,6 +101,7 @@ fn mark(s: &mut Session, entries: &[CitationEntry]) -> Result<usize, CmdError> {
     Ok(added)
 }
 
+/// Whether `o` is a TA (table of authorities entry) field.
 fn is_ta(o: &InlineObject) -> bool {
     matches!(o, InlineObject::Field { instr, .. } if instr.trim_start().starts_with("TA "))
 }
@@ -170,6 +171,7 @@ fn caret_block(s: &Session) -> Result<usize, CmdError> {
     focus.path.0.first().map(|b| *b as usize).ok_or_else(|| CmdError::Failed("caret path is invalid".into()))
 }
 
+/// The citation pack to use: `pack`, else the applied profile's `citationPack`.
 fn pack_id(s: &Session, v: &Value) -> Result<String, CmdError> {
     if let Some(id) = p::str(v, "pack") {
         return Ok(id.to_string());
@@ -183,6 +185,7 @@ fn pack_id(s: &Session, v: &Value) -> Result<String, CmdError> {
     profile.citation_pack.clone().ok_or_else(|| CmdError::Params(format!("court profile `{profile_id}` has no `citationPack`")))
 }
 
+/// The profile and document type to use: `id` and `doc`, else the document's applied ones.
 fn applied_profile(s: &Session, v: &Value) -> (Option<Profile>, Option<String>) {
     let profile_id = p::str(v, "id").map(str::to_string).or_else(|| s.doc.custom_prop(checks::PROP_PROFILE).map(str::to_string));
     let doc_type = p::str(v, "doc").map(str::to_string).or_else(|| s.doc.custom_prop(checks::PROP_DOC_TYPE).map(str::to_string));

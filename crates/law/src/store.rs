@@ -36,6 +36,7 @@ pub enum LawError {
 }
 
 impl LawError {
+    /// A profile that failed validation, with every problem on its own line.
     pub fn invalid(problems: &[String]) -> Self {
         LawError::Invalid(problems.join("\n  "))
     }
@@ -55,6 +56,7 @@ pub struct Store {
 }
 
 impl Default for Store {
+    /// A store with the bundled profiles that keeps the user's in memory only.
     fn default() -> Self {
         Store { bundled: bundled(), dir: None, user: BTreeMap::new(), firm: BTreeMap::new() }
     }
@@ -195,6 +197,7 @@ impl Store {
         Ok(())
     }
 
+    /// Load the saved firm details from `path`, ignoring a file that isn't valid.
     fn load_firm(&mut self, path: &Path) {
         let firm = read_file(path)
             .ok()
@@ -228,10 +231,12 @@ pub fn bundled() -> Vec<Profile> {
     .collect()
 }
 
+/// `path` as a string, or an error when it isn't UTF-8.
 fn path_str(path: &Path) -> Result<String, LawError> {
     path.to_str().map(str::to_string).ok_or_else(|| LawError::Io(format!("path is not UTF-8: {}", path.display())))
 }
 
+/// Read a profile or firm file as UTF-8 text, capped at [`MAX_PROFILE_BYTES`].
 fn read_file(path: &Path) -> Result<String, LawError> {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -246,6 +251,7 @@ fn read_file(path: &Path) -> Result<String, LawError> {
     }
 }
 
+/// Write a profile or firm file, creating its folder first; refused where file access is confined.
 fn write_file(path: &Path, text: &str) -> Result<(), LawError> {
     #[cfg(not(target_arch = "wasm32"))]
     {

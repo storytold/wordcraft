@@ -35,10 +35,12 @@ const TOA_LOC: &str = "Law › Table of Authorities";
 
 static PACKS: OnceLock<BTreeMap<String, CompiledPack>> = OnceLock::new();
 
+/// The bundled citation packs, compiled once.
 fn packs() -> &'static BTreeMap<String, CompiledPack> {
     PACKS.get_or_init(crate::citation_pack::bundled_map)
 }
 
+/// The bundled citation pack `id`, or an error naming it.
 pub(crate) fn pack_by_id(id: &str) -> Result<&'static CompiledPack, CmdError> {
     packs().get(id).ok_or_else(|| CmdError::Failed(format!("no citation pack `{id}`")))
 }
@@ -282,6 +284,7 @@ pub fn specs() -> Vec<CommandSpec> {
     v
 }
 
+/// The profile and document type a command works on: from `id` and `doc`, else from the profile the document has applied.
 fn profile_and_doc(s: &Session, v: &Value) -> Result<(Profile, String), CmdError> {
     let profile_id = match p::str(v, "id") {
         Some(id) => id.to_string(),
@@ -307,6 +310,7 @@ fn profile_and_doc(s: &Session, v: &Value) -> Result<(Profile, String), CmdError
     Ok((profile, doc_type))
 }
 
+/// The error for a profile id the store doesn't have.
 fn not_found(id: &str) -> CmdError {
     CmdError::Failed(format!("no court profile `{id}`"))
 }
