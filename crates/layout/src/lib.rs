@@ -724,9 +724,17 @@ struct Ctx<'a> {
     pin: Option<Pin>,
     footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
+    /// Extents of source-stable outer floating boxes for this pass.
+    frames: textbox::FrameCache,
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     fitted: HashMap<(u32, u32), Option<f32>>,
+    /// Insertion order permits rolling back speculative fitted heights without copying the cache.
+    fitted_order: Vec<(u32, u32)>,
+    /// Monotonic speculative work within one outer box, independent of placement allowance.
+    measure_left: usize,
+    measure_depth: usize,
+    measure_exhausted: bool,
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -909,8 +917,12 @@ impl Ctx<'_> {
             let h = match self.fitted.get(&key) {
                 Some(h) => *h,
                 None => {
+                    let fresh = self.measure_depth == 0 && !self.boxes.inside();
                     let h = textbox::fitted_height(self, *id, *w);
-                    self.fitted.insert(key, h);
+                    if fresh || !self.measure_exhausted {
+                        self.fitted.insert(key, h);
+                        self.fitted_order.push(key);
+                    }
                     h
                 }
             };
@@ -1262,6 +1274,7 @@ fn layout_box(
                     if left_out(oi) {
                         continue;
                     }
+                    let (w, h) = textbox::fit_size(ctx, o, w, h, depth);
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), y, w, h, float));
@@ -2209,7 +2222,12 @@ fn layout_pass(
         quiet_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        frames: Default::default(),
         fitted: HashMap::new(),
+        fitted_order: Vec::new(),
+        measure_left: 0,
+        measure_depth: 0,
+        measure_exhausted: false,
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
         pin: None,
@@ -3102,6 +3120,7 @@ fn anchor_floats(
             if left_out(oi) {
                 continue;
             }
+            let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             rects.insert(oi, r);
@@ -3249,7 +3268,10 @@ fn place_objects(
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                floats.get(&oi).copied().unwrap_or_else(|| {
+                    let (w, h) = textbox::fit_size(ctx, obj, w, h, depth);
+                    float_rect(at.page, at.col, at.para_y, w, h, float)
+                })
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
@@ -3293,7 +3315,8 @@ fn place_objects(
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
             for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+                let parent = if text_box == Some(id) { Some(obj) } else { None };
+                let items = textbox::box_items(ctx, id, rect, depth, parent);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }
