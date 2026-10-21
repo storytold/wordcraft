@@ -909,7 +909,9 @@ impl WordApp {
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
-        let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        // A module's command that opens a new document in place of this one counts it too.
+        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
+        let refused = if replaces || flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -925,7 +927,6 @@ impl WordApp {
             return Ok(json!({"pending": what}));
         }
         // A module's command that opens a new document in place of this one asks too.
-        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
         if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && (replaces || discards_document(id, &params)) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
@@ -1388,6 +1389,11 @@ impl WordApp {
     pub fn close_requested(&mut self) -> bool {
         if self.printing.busy() {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
+            return false;
+        }
+        // An add-in's options page saves what it has pending first; when it can't, the window
+        // stays open and the page shows why.
+        if !self.leave_addin_page() {
             return false;
         }
         if self.quit_requested {
