@@ -17,7 +17,7 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc] [--form-fields]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc] [--form-fields] [--blank-fields]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
@@ -25,7 +25,8 @@ USAGE:
                                               --markup (Print Markup): comments beside each page and
                                               tracked changes in pdf/png, a comment list in html/md/txt
                                               --form-fields: a pdf gets fillable fields for the form
-                                              fields and content controls
+                                              fields and content controls; --blank-fields: fillable
+                                              text fields over blanks drawn with underscores (____)
   wordcraft-cli info <file>                   pages, words, paragraphs, properties (JSON)
   wordcraft-cli text <file>                   plain text
   wordcraft-cli inspect <file>                document structure (JSON)
@@ -302,6 +303,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
     OptionSpec { name: "--form-fields", takes_value: false },
+    OptionSpec { name: "--blank-fields", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -449,6 +451,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     "path": o,
                     "markup": markup,
                     "formFields": rest.iter().any(|a| a == "--form-fields"),
+                    "blankFields": rest.iter().any(|a| a == "--blank-fields"),
                 });
                 if let Some(f) = format {
                     params["format"] = json!(f);
