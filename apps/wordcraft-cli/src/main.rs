@@ -17,13 +17,15 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--strict] [--format wordml2003|flatopc] [--form-fields]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
                                               tracked changes in pdf/png, a comment list in html/md/txt;
+                                              --form-fields: a pdf gets fillable fields for the form
+                                              fields and content controls;
                                               --strict (pdf or png output only) writes nothing and exits 3
                                               if a character can't be drawn or a picture is missing or
                                               undecodable; the report is on stderr, with one JSON line
@@ -325,6 +327,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
     OptionSpec { name: "--strict", takes_value: false },
+    OptionSpec { name: "--form-fields", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -478,7 +481,7 @@ fn run_convert(rest: &[String], open: impl Fn(&str, Option<&str>) -> Result<Sess
     let r = if to_png {
         s.run("file.exportPng", &json!({"path": o, "page": 1, "markup": markup, "strict": strict}))
     } else {
-        let mut params = json!({"path": o, "markup": markup, "strict": strict});
+        let mut params = json!({"path": o, "markup": markup, "strict": strict, "formFields": rest.iter().any(|a| a == "--form-fields")});
         if let Some(f) = format {
             params["format"] = json!(f);
         }
