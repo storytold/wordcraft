@@ -512,7 +512,6 @@ struct Key {
     eq: u32,
     read_spacing: Option<u32>,
     grid: (u32, u32, u32, bool),
-    fit: bool,
     /// Heights of the paragraph's inline boxes that resize to fit their text.
     fitted: u64,
     hide_deleted: HideDeleted,
@@ -824,7 +823,6 @@ impl Ctx<'_> {
             eq_number: 0,
             read_line_spacing: None,
             grid: para::Grid::default(),
-            fit_objects: false,
             fitted: &[],
         };
         let pl = Arc::new(para::layout_para(&p, &env));
@@ -959,7 +957,6 @@ impl Ctx<'_> {
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
             grid: self.grid.key(),
-            fit: self.boxes.inside(),
             fitted: if fitted.is_empty() { 0 } else { hash_of(&format!("{fitted:?}")) },
             hide_deleted: self.hide_deleted,
             sref: if self.fields.styleref.is_some() && styleref::has_styleref(p) { self.fields.styleref_key(p) } else { 0 },
@@ -1009,7 +1006,6 @@ impl Ctx<'_> {
             eq_number,
             read_line_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing } else { None },
             grid: self.grid,
-            fit_objects: self.boxes.inside(),
             fitted,
         }
     }
@@ -3949,7 +3945,6 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
                 eq_number: ctx.eq_count,
                 read_line_spacing: if ctx.opts.view == ViewMode::Read { ctx.opts.read_line_spacing } else { None },
                 grid: ctx.grid,
-                fit_objects: false,
                 fitted: &[],
             };
             let _ = rp;

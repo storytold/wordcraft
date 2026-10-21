@@ -4868,9 +4868,8 @@ fn graphic_items_scale_with_their_frame() {
 }
 
 #[test]
-fn inline_picture_wider_than_a_text_box_is_fitted_to_it() {
-    // Text boxes don't clip what runs past their sides, so a 400 x 100 pt picture in a 144 pt box
-    // is fitted to the box's 129.6 pt inside its margins instead of spilling over the page.
+fn box_picture_keeps_its_size() {
+    // Inline pictures keep their requested size even past a text box's internal margins.
     let mut d = Document::from_text("Before");
     let mut p = wordcraft_doc::Paragraph::with_text("", Default::default());
     p.insert_object(0, picture(400.0, 100.0, Default::default()), &Default::default()).unwrap();
@@ -4898,7 +4897,7 @@ fn inline_picture_wider_than_a_text_box_is_fitted_to_it() {
             _ => None,
         })
         .expect("the picture");
-    assert!((r.w - 129.6).abs() < 0.1 && (r.h - 32.4).abs() < 0.1, "{r:?}");
+    assert!((r.w - 400.0).abs() < 0.1 && (r.h - 100.0).abs() < 0.1, "{r:?}");
 }
 
 #[test]
