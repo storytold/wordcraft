@@ -15,16 +15,23 @@
 //! language of every sentence.
 //!
 //! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak-ng`
-//! / `espeak` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current sentence,
-//! or talks to Speech Dispatcher over its socket when neither espeak is installed, and moves on when
-//! the sentence ends. Commands only change the shared state and wake the worker, which stops the
-//! running sentence when the state changed under it.
+//! / `espeak` (Linux, BSD) or the Windows speech synthesizer for the current sentence, or talks
+//! to Speech Dispatcher over its socket when neither espeak is installed, and moves on when the
+//! sentence ends. On Windows one PowerShell host stays alive for the whole reading and loads
+//! System.Speech once; if it cannot start, or fails at any point, the reading falls back to a
+//! fresh PowerShell process per sentence. A failure after a sentence starts repeats that sentence
+//! on the fallback path, so no text is dropped, though the part already spoken may be heard twice.
+//! The next reading tries the host again. Commands only change the shared state and wake the
+//! worker, which stops the running sentence when the state changed under it.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{COLUMN_BREAK, LINE_BREAK, OBJ, PAGE_BREAK};
 use wordcraft_doc::{Document, InlineObject, Pos};
+
+#[cfg(any(target_os = "windows", test))]
+mod windows_host;
 
 /// Longest sentence handed to the speech program (longer ones are split at a space).
 const MAX_SENTENCE: usize = 600;
@@ -861,9 +868,61 @@ enum Spoken {
     Failed(String),
 }
 
+/// The system voice for one reading. On Windows it keeps one PowerShell host alive from the
+/// first system sentence; if the host cannot start, it falls back to a process per sentence.
+#[cfg(not(target_arch = "wasm32"))]
+struct SystemSpeaker {
+    #[cfg(target_os = "windows")]
+    host: Option<windows_host::Host>,
+    #[cfg(target_os = "windows")]
+    started: bool,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl SystemSpeaker {
+    fn new() -> Self {
+        Self {
+            #[cfg(target_os = "windows")]
+            host: None,
+            #[cfg(target_os = "windows")]
+            started: false,
+        }
+    }
+
+    fn speak(&mut self, text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
+        #[cfg(target_os = "windows")]
+        {
+            if !self.started {
+                self.started = true;
+                self.host = windows_host::Host::start(changed).ok();
+                if changed() {
+                    if self.host.is_none() {
+                        self.started = false;
+                    }
+                    return Spoken::Interrupted;
+                }
+            }
+            if let Some(host) = self.host.as_mut() {
+                match host.speak(text, lang, rate, changed) {
+                    Ok(spoken) => return spoken,
+                    Err(windows_host::HostError::Voice) => {
+                        if let Ok(spoken) = host.speak(text, None, rate, changed) {
+                            return spoken;
+                        }
+                    }
+                    Err(windows_host::HostError::Unavailable) => {}
+                }
+                self.host = None;
+            }
+        }
+        speak(text, lang, rate, changed)
+    }
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
+    let mut speaker = SystemSpeaker::new();
     let mut reading = None;
     loop {
         let (text, lang, generation, rate, readings) = {
@@ -884,15 +943,17 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 }
             }
         };
-        // A new reading asks the system afresh which speech programs it has.
+        // A new reading asks the system afresh which speech programs it has, and gets a fresh
+        // Windows host: a failed host is retried and the default voice is captured again.
         if reading != Some(readings) {
             reading = Some(readings);
+            speaker = SystemSpeaker::new();
             #[cfg(all(unix, not(target_os = "macos")))]
             NO_ESPEAK.set(false);
         }
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
-            Backend::System => speak(&text, lang.as_deref(), rate, &changed),
+            Backend::System => speaker.speak(&text, lang.as_deref(), rate, &changed),
             Backend::Instant => Spoken::Done,
             Backend::Hold => {
                 let mut s = lock(m);
@@ -953,10 +1014,15 @@ struct WindowsSpeech {
     creation_flags: u32,
 }
 
+/// SAPI rate: -10 (a third of normal speed) … 10 (three times).
+#[cfg(any(target_os = "windows", test))]
+fn sapi_rate(rate: f32) -> i64 {
+    ((rate.ln() / 3f32.ln()) * 10.0).round().clamp(-10.0, 10.0) as i64
+}
+
 #[cfg(any(target_os = "windows", test))]
 fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Option<&str>) -> WindowsSpeech {
-    // SAPI rate: -10 (a third of normal speed) … 10 (three times).
-    let r = ((rate.ln() / 3f32.ln()) * 10.0).round().clamp(-10.0, 10.0) as i64;
+    let r = sapi_rate(rate);
     // The voice of the sentence's language, when one is installed (the default voice would spell
     // out Cyrillic, Greek… letters one by one), but only when the user's default voice doesn't
     // speak that language already, in any region. The tag is `primary_tag`-clean, so it can't end
