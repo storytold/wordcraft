@@ -12,6 +12,8 @@ pagination and object placement in `crates/layout`. Typing behaviour is in
 rules, but nothing has been compared page-for-page with Word on real documents, and the default
 font can't match Word's metrics.
 
+Empty cell struts include the row's largest top border band. Paragraph spacing is not added twice. A row moves whole when only single empty cell marks would continue; text, labels, paragraph borders and multiple paragraphs still split. Original controls: `shared_top_band_sets_height`, `empty_marks_dont_split_row`, `real_text_can_continue`, `empty_spacing_covers_band`.
+
 Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. Synthetic control: `layout::tests::section_start_summed_spacing`.
 
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Synthetic control: `layout::tests::exact_math_keeps_run_baseline`.
@@ -231,6 +233,7 @@ Page-relative footer tables keep their physical wrap bounds without adding to fo
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
 | 2026-10-16 | trivial | `w:autoSpaceDE` and `w:autoSpaceDN` are laid out: a quarter em between Asian text and Latin text or digits (#2358) |
 | 2026-10-16 | trivial | AutoFit donors lose equal widths, bounded by content minima |
+| 2026-10-18 | trivial | Empty cell struts clear the row's largest top border band without adding paragraph spacing twice. Single empty marks alone no longer split a row; real content still continues. |
 | 2026-10-16 | trivial | Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height. |
 | 2026-10-15 | trivial | Absent or zero DrawingML effect extents remain zero on rotated pictures; contracted axes no longer reserve invented effects room. Synthetic quarter-turn import regression (`zero_effects_stay_zero_rotated`). |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |

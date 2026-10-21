@@ -100,6 +100,8 @@ The same gaps grouped the way the parity documents are, for agents working in on
 
 The Language dialog reads effective character formatting, including document defaults, paragraph styles and character styles. Accepting it unchanged keeps inherited language and no-proof choices (#2717); explicit direct formatting still takes precedence. Other proofing and Windows-specific reports remain separate.
 
+Gap #4 narrows for sparse tables: empty cell struts clear shared top border bands, and single empty marks alone do not force a split. Broader table pagination remains open.
+
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
 ## Revision history
@@ -119,6 +121,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-16 | trivial | #24: the Spike (Ctrl+F3, Ctrl+Shift+F3) |
 | 2026-10-17 | trivial | Glossary/building blocks closed (DOCX glossary read, kept and written); `w:altChunk` and sub-documents remain |
 | 2026-10-15 | trivial | #5 narrowed: Track Changes Options › Moves (Moved from / Moved to marks and colours) and Track moves (`w:doNotTrackMoves`) landed; drag-and-drop moves remain |
+| 2026-10-18 | trivial | Empty cell struts clear the row's largest top border band without adding paragraph spacing twice. Single empty marks alone no longer split a row; real content still continues. |
 | 2026-10-17 | trivial | Language dialog keeps inherited proofing language and no-proof choices (#2717); readiness estimates unchanged |
 | 2026-10-15 | trivial | Gap 19: RTF tracked paragraph marks and character/paragraph formatting revisions read and written; RTF section/table and ODT formatting revisions remain |
 | 2026-10-14 | trivial | #19 narrowed: ODT export done (master page and page layout per section, columned `text:section`s) |

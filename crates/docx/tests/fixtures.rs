@@ -80,6 +80,63 @@ fn paragraph_default_presence_survives_repeated_saves() {
 }
 
 #[test]
+fn zero_frame_keeps_normal_flow() {
+    let zero = r#"<w:framePr w:w="0" w:h="0" w:xAlign="left" w:y="0" w:hRule="exact" w:vAnchor="margin"/>"#;
+    let sized = r#"<w:framePr w:w="2400" w:h="1200" w:x="1440" w:y="2880" w:hAnchor="page" w:vAnchor="page" w:hRule="exact"/>"#;
+    for (frame, active) in [(zero, false), (sized, true)] {
+        let styles = format!(
+            r#"<w:styles {W_NS}><w:docDefaults><w:pPrDefault><w:pPr>{frame}<w:spacing w:after="160"/></w:pPr></w:pPrDefault></w:docDefaults>
+            <w:style w:type="paragraph" w:styleId="Framed"><w:name w:val="Framed"/><w:pPr>{sized}</w:pPr></w:style></w:styles>"#
+        );
+        let header = format!(r#"<w:hdr {W_NS}><w:p><w:r><w:t>Header alpha</w:t></w:r></w:p><w:p><w:r><w:t>Header beta</w:t></w:r></w:p></w:hdr>"#);
+        let footer = format!(r#"<w:ftr {W_NS}><w:p><w:r><w:t>Footer delta</w:t></w:r></w:p></w:ftr>"#);
+        let body = format!(
+            r#"<w:p><w:r><w:t>Body one</w:t></w:r></w:p>
+            <w:p><w:pPr>{sized}</w:pPr><w:r><w:t>Direct frame</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Framed"/></w:pPr><w:r><w:t>Styled frame</w:t></w:r></w:p>
+            <w:p><w:pPr><w:pStyle w:val="Framed"/>{zero}</w:pPr><w:r><w:t>Frame reset</w:t></w:r></w:p>
+            <w:sectPr><w:headerReference w:type="default" r:id="header"/><w:footerReference w:type="default" r:id="footer"/></w:sectPr>"#
+        );
+        let mut document = wordcraft_docx::read(&docx(
+            &body,
+            &[("styles", "styles", "styles.xml"), ("header", "header", "header1.xml"), ("footer", "footer", "footer1.xml")],
+            &[("word/styles.xml", &styles), ("word/header1.xml", &header), ("word/footer1.xml", &footer)],
+        ))
+        .unwrap();
+        for _ in 0..2 {
+            let body = paras(&document);
+            let resolved = document.styles.resolve_para(&body[0].props);
+            assert_eq!(resolved.frame.is_some(), active);
+            let stored = document.styles.default_para.frame.as_ref().unwrap();
+            assert_eq!((stored.w, stored.h), if active { (Some(120.0), Some(60.0)) } else { (Some(0.0), Some(0.0)) });
+            assert_eq!(resolved.space_after, 8.0);
+            assert!(document.styles.resolve_para(&body[1].props).frame.is_some());
+            assert!(document.styles.resolve_para(&body[2].props).frame.is_some());
+            assert!(document.styles.resolve_para(&body[3].props).frame.is_none());
+            for id in [document.last_section.headers.default, document.last_section.footers.default] {
+                for block in &document.parts.get(&id.unwrap()).unwrap().blocks {
+                    let paragraph = block.as_para().unwrap();
+                    assert_eq!(document.styles.resolve_para(&paragraph.props).frame.is_some(), active);
+                }
+            }
+            document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
+fn frame_zero_side_is_automatic() {
+    for (attrs, width, height) in
+        [(r#"w:w="0" w:h="1200""#, None, Some(60.0)), (r#"w:w="2400" w:h="0" w:hRule="exact""#, Some(120.0), None), ("", None, None)]
+    {
+        let document = read_body(&format!(r#"<w:p><w:pPr><w:framePr {attrs}/></w:pPr><w:r><w:t>Original automatic frame</w:t></w:r></w:p>"#));
+        let paragraph = paras(&document)[0];
+        let frame = document.styles.resolve_para(&paragraph.props).frame.unwrap();
+        assert_eq!((frame.w, frame.h), (width, height));
+    }
+}
+
+#[test]
 fn omitted_paragraph_defaults_can_be_edited() {
     let styles =
         format!(r#"<w:styles {W_NS}><w:style w:type="paragraph" w:styleId="Normal" w:default="1"><w:name w:val="Normal"/></w:style></w:styles>"#);

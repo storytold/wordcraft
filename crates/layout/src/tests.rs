@@ -9423,3 +9423,350 @@ fn caret_height_ignores_line_spacing() {
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
 }
+
+fn sparse_border_rows() -> Document {
+    use wordcraft_doc::props::LineSpacing;
+    let mut d = Document::new();
+    let mut table = Table::new(2, 2, 200.0);
+    table.props.style = None;
+    table.props.borders = Some(Borders::default());
+    table.props.cell_margins = Some([4.0; 4]);
+    for row in &mut table.rows {
+        for (ci, cell) in row.cells.iter_mut().enumerate() {
+            let mut p = wordcraft_doc::Paragraph::with_text(if ci == 0 { "" } else { "Probe" }, Default::default());
+            p.props = ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                line_spacing: Some(LineSpacing::Exactly(if ci == 0 { 14.0 } else { 10.0 })),
+                ..Default::default()
+            };
+            cell.blocks = vec![wordcraft_doc::para_block(p)];
+            cell.props.borders = Some(Borders {
+                top: (ci == 1).then_some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 }),
+                ..Default::default()
+            });
+        }
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))];
+    d
+}
+
+#[test]
+fn shared_top_band_sets_height() {
+    let d = sparse_border_rows();
+    let l = lay(&d);
+    let heights: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Cell { rect, cell: 0, .. } => Some(rect.h),
+            _ => None,
+        })
+        .collect();
+    // A shorter neighbouring cell supplies the row's top border band, even when the
+    // tallest cell is empty and has no top border of its own.
+    assert_eq!(heights.len(), 2);
+    for height in heights {
+        assert!((height - 22.5).abs() < 0.01, "row height {height}");
+    }
+}
+
+#[test]
+fn shared_band_moves_row() {
+    let mut d = sparse_border_rows();
+    d.last_section.page_h = 188.5;
+    d.last_section.margin_top = 72.0;
+    d.last_section.margin_bottom = 72.0;
+    let l = lay(&d);
+    let pages: Vec<_> = l
+        .pages
+        .iter()
+        .enumerate()
+        .filter_map(|(page, p)| p.items.iter().any(|it| matches!(it, Placed::Cell { row: 1, .. })).then_some(page))
+        .collect();
+    assert_eq!(pages, vec![1], "44.5 pt cannot hold two 22.5 pt rows");
+}
+
+#[test]
+fn sparse_band_exact_minimum() {
+    use wordcraft_doc::props::HeightRule;
+    for (rule, expected) in [(HeightRule::Exact, 34.0), (HeightRule::AtLeast, 38.5)] {
+        let mut d = sparse_border_rows();
+        let Block::Table(table) = std::sync::Arc::make_mut(&mut d.body[0]) else { panic!("table") };
+        for row in &mut table.rows {
+            row.props.height = Some(30.0);
+            row.props.height_rule = rule;
+        }
+        let l = lay(&d);
+        for item in &l.pages[0].items {
+            if let Placed::Cell { rect, .. } = item {
+                assert!((rect.h - expected).abs() < 0.01, "{rule:?}: {}", rect.h);
+            }
+        }
+    }
+}
+
+#[test]
+fn sparse_band_borderless() {
+    let mut d = sparse_border_rows();
+    let Block::Table(table) = std::sync::Arc::make_mut(&mut d.body[0]) else { panic!("table") };
+    for row in &mut table.rows {
+        row.cells[1].props.borders = Some(Borders::default());
+    }
+    let l = lay(&d);
+    for item in &l.pages[0].items {
+        if let Placed::Cell { rect, .. } = item {
+            assert!((rect.h - 22.0).abs() < 0.01, "borderless row height {}", rect.h);
+        }
+    }
+}
+
+#[test]
+fn empty_marks_dont_split_row() {
+    let mut d = sparse_border_rows();
+    d.last_section.page_h = 187.5;
+    d.last_section.margin_top = 72.0;
+    d.last_section.margin_bottom = 72.0;
+    let l = lay(&d);
+    let pages: Vec<_> = l
+        .pages
+        .iter()
+        .enumerate()
+        .filter_map(|(page, p)| p.items.iter().any(|it| matches!(it, Placed::Cell { row: 1, .. })).then_some(page))
+        .collect();
+    // The short label fits, but only empty paragraph marks would continue. Move the
+    // row whole rather than separating its label from its empty cells.
+    assert_eq!(pages, vec![1]);
+}
+
+#[test]
+fn real_text_can_continue() {
+    let mut d = sparse_border_rows();
+    let Block::Table(table) = std::sync::Arc::make_mut(&mut d.body[0]) else { panic!("table") };
+    table.rows.truncate(1);
+    let mut p = Paragraph::with_text("First\nSecond", Default::default());
+    p.props = table.rows[0].cells[0].blocks[0].as_para().unwrap().props.clone();
+    p.props.widow_control = Some(false);
+    table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    d.last_section.page_h = 168.0;
+    d.last_section.margin_top = 72.0;
+    d.last_section.margin_bottom = 72.0;
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 2);
+    for page in &l.pages {
+        assert!(page.items.iter().any(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [0, 0, 0, 0])));
+    }
+}
+
+#[test]
+fn text_uses_own_top_band() {
+    let mut d = sparse_border_rows();
+    let Block::Table(table) = std::sync::Arc::make_mut(&mut d.body[0]) else { panic!("table") };
+    for row in &mut table.rows {
+        let mut p = Paragraph::with_text("Tall content", Default::default());
+        p.props = row.cells[0].blocks[0].as_para().unwrap().props.clone();
+        row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    let l = lay(&d);
+    let heights: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Cell { rect, cell: 0, .. } => Some(rect.h),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heights, vec![22.0; 2], "nonempty content keeps its own top border inset");
+}
+
+#[test]
+fn empty_spacing_covers_band() {
+    let mut d = sparse_border_rows();
+    let Block::Table(table) = std::sync::Arc::make_mut(&mut d.body[0]) else { panic!("table") };
+    for row in &mut table.rows {
+        let mut p = row.cells[0].blocks[0].as_para().unwrap().clone();
+        p.props.space_after = Some(8.0);
+        row.cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    let l = lay(&d);
+    let heights: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Cell { rect, cell: 0, .. } => Some(rect.h),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(heights, vec![30.0; 2], "paragraph spacing already exceeds the shared band minimum");
+}
+
+fn inline_content_row() -> crate::table::RowLayout {
+    use crate::table::{CellPart, RowLayout};
+    let mut d = Document::new();
+    let mut p = Paragraph::new();
+    p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), widow_control: Some(false), ..Default::default() };
+    p.insert_object(
+        0,
+        InlineObject::Image {
+            media: "synthetic-inline-content".into(),
+            w: 30.0,
+            h: 30.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let mut moved = lay(&d).pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })).unwrap().clone();
+    let Placed::Lines { y, para, .. } = &mut moved else { panic!("lines") };
+    *y = 150.0;
+    assert_eq!(para.text_len, wordcraft_doc::para::OBJ.len_utf8(), "normal object paragraphs include their placeholder");
+    assert!(para.clusters.iter().any(|c| matches!(c.kind, para::ClKind::Object(_)) && c.adv > 0.0 && c.obj_h > 0.0));
+    let mut kept = lay(&Document::from_text("Kept")).pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })).unwrap().clone();
+    let Placed::Lines { y, .. } = &mut kept else { panic!("lines") };
+    *y = 0.0;
+    RowLayout {
+        height: 200.0,
+        bottom: 0.0,
+        items: vec![kept, moved],
+        cells: vec![CellPart { top: 0.0, items: 0..1, end: Some(30.0) }, CellPart { top: 0.0, items: 1..2, end: Some(180.0) }],
+    }
+}
+
+#[test]
+fn inline_object_can_continue() {
+    use crate::table::split_row;
+    let row = inline_content_row();
+    assert!(split_row(&row, 100.0).is_some(), "normal model object layout already counts as content");
+    // Public ParaLayout can carry object clusters with no source text. Pin that defensive case separately.
+    for (advance, height) in [(30.0, 30.0), (0.0, 30.0), (30.0, 0.0)] {
+        let mut row = inline_content_row();
+        let Placed::Lines { para, .. } = &mut row.items[1] else { panic!("lines") };
+        let p = std::sync::Arc::make_mut(para);
+        p.text_len = 0;
+        for c in &mut p.clusters {
+            if matches!(c.kind, para::ClKind::Object(_)) {
+                c.adv = advance;
+                c.obj_h = height;
+            }
+        }
+        let expected = p.clusters.clone();
+        let (first, rest) = split_row(&row, 100.0).expect("visible inline object creates a continuation");
+        assert_eq!(first.items.len(), 1, "the other cell stays on the first page");
+        let Placed::Lines { para, y, l0, l1, .. } = &rest.items[0] else { panic!("continued lines") };
+        assert_eq!((*y, *l0, *l1), (0.0, 0, 1));
+        assert_eq!(para.clusters.len(), expected.len());
+        for (actual, original) in para.clusters.iter().zip(&expected) {
+            assert_eq!((actual.start, actual.end, actual.adv, actual.obj_h), (original.start, original.end, original.adv, original.obj_h));
+        }
+    }
+}
+
+#[test]
+fn inline_zero_marks_stay_empty() {
+    use crate::table::split_row;
+    for kind in [para::ClKind::Object(0), para::ClKind::Marker] {
+        let mut row = inline_content_row();
+        let Placed::Lines { para, .. } = &mut row.items[1] else { panic!("lines") };
+        let p = std::sync::Arc::make_mut(para);
+        p.text_len = 0;
+        for c in &mut p.clusters {
+            c.kind = kind;
+            c.adv = 0.0;
+            c.obj_h = 0.0;
+        }
+        assert!(split_row(&row, 100.0).is_none(), "zero-size marks alone do not split the row: {kind:?}");
+    }
+}
+
+#[test]
+fn inline_piece_range_is_local() {
+    use crate::table::split_row;
+    for line_range in [0..1, 1..2] {
+        let mut row = inline_content_row();
+        let Placed::Lines { para, l0, l1, .. } = &mut row.items[1] else { panic!("lines") };
+        let p = std::sync::Arc::make_mut(para);
+        p.text_len = 0;
+        let visible = p.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap().clone();
+        let mut mark = visible.clone();
+        mark.adv = 0.0;
+        mark.obj_h = 0.0;
+        p.clusters = vec![visible, mark];
+        let mut empty = p.lines[0].clone();
+        empty.c0 = 1;
+        empty.c1 = 2;
+        empty.xs = vec![0.0, 0.0];
+        if line_range.start == 0 {
+            // A visible object outside this line's cluster range does not count.
+            p.lines = vec![empty];
+        } else {
+            // A visible object on an earlier, unplaced line does not count either.
+            let mut earlier = empty.clone();
+            earlier.c0 = 0;
+            earlier.c1 = 1;
+            earlier.top = 0.0;
+            empty.top = 30.0;
+            p.lines = vec![earlier, empty];
+        }
+        *l0 = line_range.start;
+        *l1 = line_range.end;
+        assert!(split_row(&row, 100.0).is_none(), "only current piece clusters decide moved content");
+    }
+}
+
+#[test]
+fn kept_inline_empty_suffix() {
+    use crate::table::split_row;
+    for kind in [para::ClKind::Object(0), para::ClKind::Marker] {
+        let mut row = inline_content_row();
+        let Placed::Lines { para, y, l0, l1, .. } = &mut row.items[1] else { panic!("lines") };
+        let p = std::sync::Arc::make_mut(para);
+        p.text_len = 0;
+        p.rp.widow_control = false;
+        let visible = p.clusters.iter().find(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap().clone();
+        let mut mark = visible.clone();
+        mark.kind = kind;
+        mark.start = visible.end;
+        mark.end = visible.end;
+        mark.adv = 0.0;
+        mark.obj_h = 0.0;
+        mark.obj_d = 0.0;
+        p.clusters = vec![visible, mark];
+        let mut kept = p.lines[0].clone();
+        kept.top = 0.0;
+        kept.height = 30.0;
+        kept.c0 = 0;
+        kept.c1 = 1;
+        kept.xs = vec![0.0, 30.0];
+        kept.end = para::LineEnd::Wrap;
+        let mut moved = kept.clone();
+        moved.top = 150.0;
+        moved.c0 = 1;
+        moved.c1 = 2;
+        moved.start = p.clusters[1].start;
+        moved.stop = p.clusters[1].end;
+        moved.xs = vec![0.0, 0.0];
+        moved.end = para::LineEnd::Para;
+        p.lines = vec![kept, moved];
+        p.height = 180.0;
+        *y = 0.0;
+        (*l0, *l1) = (0, 2);
+        assert!(crate::item_bottom(*y, p, *l0, 1).unwrap() < 100.0, "visible object line fits before cut");
+        assert!(crate::item_bottom(*y, p, *l0, 2).unwrap() > 100.0, "only the empty suffix is past cut");
+        assert!(split_row(&row, 100.0).is_none(), "kept object cannot make an empty moved suffix content: {kind:?}");
+
+        // The same geometry must continue when the moved suffix contains a visible object.
+        let Placed::Lines { para, .. } = &mut row.items[1] else { panic!("lines") };
+        let p = std::sync::Arc::make_mut(para);
+        p.clusters[1].kind = para::ClKind::Object(1);
+        p.clusters[1].obj_h = 30.0;
+        let (first, rest) = split_row(&row, 100.0).expect("a visible moved suffix is content");
+        assert_eq!(first.items.len(), 2, "both cells retain fitting lines");
+        assert!(matches!(&first.items[1], Placed::Lines { l0: 0, l1: 1, .. }));
+        assert_eq!(rest.items.len(), 1);
+        assert!(matches!(&rest.items[0], Placed::Lines { l0: 1, l1: 2, y, .. } if *y == 0.0));
+    }
+}
