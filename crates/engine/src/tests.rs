@@ -1924,6 +1924,312 @@ fn table_properties_apply_in_one_step() {
     assert!(s.run("table.properties", &json!({"valign": "middle"})).is_err());
 }
 
+/// Table Properties' Measure in Percent, automatic columns, Cell Options and Text wrapping with
+/// Positioning (#2428): each is one more setting of `table.properties`; bad values are refused.
+#[test]
+fn table_properties_set_percentages_cell_options_and_wrapping() {
+    use wordcraft_doc::para::{Anchor, FloatAlign};
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let table = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    let total: f32 = table(&s).grid.iter().sum();
+    run(&mut s, "table.properties", json!({"columnWidthPct": 25.0, "cellMargins": [1.0, 2.0, 3.0, 4.0], "cellWrap": false}));
+    let t = table(&s);
+    let now: f32 = t.grid.iter().sum();
+    assert!((now - total).abs() < 0.01 && (t.grid[0] - total / 4.0).abs() < 0.01, "a quarter of the same table: {:?}", t.grid);
+    for r in 0..2 {
+        assert_eq!((t.rows[r].cells[0].props.width, t.rows[r].cells[0].props.width_pct), (None, Some(25.0)), "row {r}");
+    }
+    assert_eq!((t.rows[0].cells[0].props.margins, t.rows[0].cells[0].props.no_wrap), (Some([1.0, 2.0, 3.0, 4.0]), true));
+    run(&mut s, "table.properties", json!({"columnWidth": null, "cellMargins": null, "cellWidthPct": 30.0}));
+    let t = table(&s);
+    assert_eq!((t.rows[0].cells[0].props.width_pct, t.rows[1].cells[0].props.width_pct), (Some(30.0), None), "automatic, then the cell's own");
+    assert_eq!(t.rows[0].cells[0].props.margins, None);
+    // Around floats the table where it is, on its alignment's side, 0.25 cm from the text.
+    run(&mut s, "table.properties", json!({"wrap": "around"}));
+    let f = table(&s).props.float.unwrap();
+    assert_eq!((f.h_align, f.h_rel, f.v_align, f.v_rel, f.overlap), (Some(FloatAlign::Start), Anchor::Column, None, Anchor::Paragraph, false));
+    assert_eq!(f.dist, [crate::cmd::table::WRAP_GAP, 0.0, crate::cmd::table::WRAP_GAP, 0.0]);
+    run(
+        &mut s,
+        "table.properties",
+        json!({"position": {"x": 36.0, "hRel": "page", "vAlign": "bottom", "vRel": "margin", "dist": [1, 2, 3, 4], "overlap": true}}),
+    );
+    let f = table(&s).props.float.unwrap();
+    assert_eq!(
+        (f.h_align, f.x, f.h_rel, f.v_align, f.v_rel, f.dist, f.overlap),
+        (None, 36.0, Anchor::Page, Some(FloatAlign::End), Anchor::Margin, [1.0, 2.0, 3.0, 4.0], true)
+    );
+    run(&mut s, "table.properties", json!({"wrap": "none"}));
+    assert!(table(&s).props.float.is_none());
+    // In one call, as the dialog's OK sends them: Around takes the alignment set with it,
+    // and None keeps the table in line even with a position.
+    for (align, side) in [("center", FloatAlign::Center), ("right", FloatAlign::End), ("left", FloatAlign::Start)] {
+        run(&mut s, "table.properties", json!({"align": align, "wrap": "around"}));
+        assert_eq!(table(&s).props.float.and_then(|f| f.h_align), Some(side), "{align}");
+        run(&mut s, "table.properties", json!({"wrap": "none", "position": {"x": 36.0, "hRel": "page"}}));
+        assert!(table(&s).props.float.is_none(), "None with a position, after {align}");
+    }
+    for bad in [
+        json!({"cellMargins": [1, 2]}),
+        json!({"cellMargins": [1, "a", 2, 3]}),
+        json!({"wrap": "square"}),
+        json!({"position": {"hRel": "paragraph"}}),
+        json!({"position": {"vAlign": "left"}}),
+        json!({"position": {"dist": 3}}),
+        json!({"position": {}}),
+        json!({"position": {"horizontal": "center"}}),
+        json!({"position": {"x": "36"}}),
+    ] {
+        assert!(s.run("table.properties", &bad).is_err(), "{bad}");
+    }
+}
+
+/// Table Properties (#2428): a column in Percent is that share of the drawn table, which keeps
+/// its width; a column in points, automatic or a share leaves the other columns' kinds; a merged
+/// cell that only covers the column keeps its own width; Same as the whole table drops the sides
+/// a .docx set one by one.
+#[test]
+fn table_properties_columns_keep_their_kinds_and_shares() {
+    let mut s = props_table();
+    let table = |s: &Session| s.doc.body.iter().find_map(|b| b.as_table()).unwrap().clone();
+    let at = |s: &mut Session, r: u32, c: u32| {
+        s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![0, r, c, 0]), off: 0 })
+    };
+    let drawn = |s: &mut Session| {
+        let l = s.layout();
+        let w = |c: usize| {
+            l.pages[0].items.iter().find_map(|it| match it {
+                wordcraft_layout::Placed::Cell { rect, row: 0, cell, table, .. } if *cell == c && table.0.len() == 1 => Some(rect.w),
+                _ => None,
+            })
+        };
+        (w(0).unwrap(), w(1).unwrap())
+    };
+    let (a, b) = drawn(&mut s);
+    run(&mut s, "table.properties", json!({"columnWidthPct": 25.0}));
+    let (a2, b2) = drawn(&mut s);
+    assert!((a2 + b2 - (a + b)).abs() < 1.0 && (a2 / (a2 + b2) - 0.25).abs() < 0.01, "a quarter of the same table: {a2} + {b2}");
+    assert_eq!(table(&s).props.width, Some(240.0), "the table keeps its preferred width");
+    // In points: the column's cells drop the share, the other column keeps its kind of width.
+    let fixed = table(&s).rows[0].cells[1].props.width.is_some();
+    run(&mut s, "table.properties", json!({"columnWidth": 90.0}));
+    let t = table(&s);
+    assert_eq!((t.rows[0].cells[0].props.width, t.rows[0].cells[0].props.width_pct), (Some(90.0), None));
+    assert_eq!(t.rows[0].cells[1].props.width.is_some(), fixed);
+    // Column 2 automatic stays automatic when column 1 changes, and keeps a cell's own share.
+    at(&mut s, 0, 1);
+    run(&mut s, "table.properties", json!({"columnWidth": null}));
+    at(&mut s, 1, 1);
+    run(&mut s, "table.properties", json!({"cellWidthPct": 40.0}));
+    at(&mut s, 0, 0);
+    run(&mut s, "table.properties", json!({"columnWidth": 100.0}));
+    run(&mut s, "table.properties", json!({"columnWidthPct": 30.0}));
+    let t = table(&s);
+    assert_eq!((t.rows[0].cells[1].props.width, t.rows[0].cells[1].props.width_pct), (None, None), "still automatic");
+    assert_eq!((t.rows[1].cells[1].props.width, t.rows[1].cells[1].props.width_pct), (None, Some(40.0)), "the cell's own share");
+    // A cell merged across both columns isn't one of column 2's.
+    let merged = s.doc.body.iter_mut().find_map(|b| match std::sync::Arc::make_mut(b) {
+        wordcraft_doc::Block::Table(t) => Some(t),
+        _ => None,
+    });
+    let merged = merged.unwrap();
+    let total: f32 = merged.grid.iter().sum();
+    merged.rows[0].cells.truncate(1);
+    merged.rows[0].cells[0].props.span = 2;
+    merged.rows[0].cells[0].props.width = Some(total);
+    merged.rows[0].cells[0].props.partial_margins = Some([Some(0.0), None, None, None]);
+    s.touch();
+    at(&mut s, 1, 1);
+    run(&mut s, "table.properties", json!({"columnWidthPct": 50.0}));
+    run(&mut s, "table.properties", json!({"columnWidth": null}));
+    let t = table(&s);
+    let m = &t.rows[0].cells[0].props;
+    assert!(m.width.is_some_and(|w| (w - total).abs() < 0.01) && m.width_pct.is_none(), "the merged cell keeps the table's width: {m:?}");
+    assert_eq!((t.rows[1].cells[1].props.width, t.rows[1].cells[1].props.width_pct), (None, None), "column 2 automatic");
+    at(&mut s, 0, 0);
+    run(&mut s, "table.properties", json!({"cellMargins": null}));
+    let t = table(&s);
+    let cell = &t.rows[0].cells[0].props;
+    assert_eq!((cell.margins, cell.partial_margins), (None, None), "the table's margins, no side from the file");
+}
+
+/// Table Properties (#2428): an alignment moves a table that already wraps, and a position alone
+/// floats an in-line table where its alignment put it.
+#[test]
+fn table_properties_alignment_moves_a_floating_table() {
+    use wordcraft_doc::para::FloatAlign;
+    let mut s = props_table();
+    let body = s.layout().pages[0].body;
+    run(&mut s, "table.properties", json!({"wrap": "around"}));
+    run(&mut s, "table.properties", json!({"align": "center"}));
+    let (l, _, r, _) = table_box(&mut s);
+    assert!(((l - body.x) - (body.right() - r)).abs() < 2.0, "centred: {l}..{r} in {body:?}");
+    run(&mut s, "table.properties", json!({"align": "right"}));
+    let (_, _, r, _) = table_box(&mut s);
+    assert!((r - body.right()).abs() < 7.0, "at the right: {r} vs {}", body.right());
+    // An explicit position in the same call wins over the alignment.
+    run(&mut s, "table.properties", json!({"align": "left", "position": {"hAlign": "center"}}));
+    let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+    assert_eq!((t.props.align, t.props.float.and_then(|f| f.h_align)), (Some(wordcraft_doc::props::Align::Left), Some(FloatAlign::Center)));
+    // In line and centred, then only a vertical position: it floats centred, not at the left.
+    run(&mut s, "table.properties", json!({"wrap": "none", "align": "center"}));
+    run(&mut s, "table.properties", json!({"position": {"vAlign": "top", "vRel": "margin"}}));
+    let (l, _, r, _) = table_box(&mut s);
+    assert!(((l - body.x) - (body.right() - r)).abs() < 2.0, "still centred: {l}..{r}");
+}
+
+/// Junk for every `table.properties` setting with the caret in a table (#2428): an error or a
+/// change, never a panic; the document still lays out and saves.
+#[test]
+fn table_properties_junk_never_panics() {
+    let mut s = props_table();
+    let keys = [
+        "align",
+        "rtl",
+        "width",
+        "widthPct",
+        "indent",
+        "rowHeight",
+        "rowHeightRule",
+        "allowBreak",
+        "headerRow",
+        "columnWidth",
+        "columnWidthPct",
+        "cellWidth",
+        "cellWidthPct",
+        "valign",
+        "cellMargins",
+        "cellWrap",
+        "wrap",
+        "position",
+    ];
+    let junk = [
+        json!(null),
+        json!(true),
+        json!(-1e30),
+        json!(1e30),
+        json!(0),
+        json!(-0.0),
+        json!("x"),
+        json!([]),
+        json!([1e30, -1e30, 0, 1]),
+        json!({}),
+        json!({"x": 1e30, "y": -1e30, "dist": [1e30, -1, 0, 1e30], "hRel": "page", "overlap": "yes"}),
+    ];
+    for k in keys {
+        for j in &junk {
+            let mut v = serde_json::Map::new();
+            v.insert(k.to_string(), j.clone());
+            let _ = s.run("table.properties", &serde_json::Value::Object(v));
+            assert!(!s.layout().pages.is_empty(), "{k}: {j}");
+        }
+    }
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+    assert!(back.body.iter().any(|b| b.as_table().is_some()));
+}
+
+/// A 2×2 table 240pt wide with text in every cell, and a long paragraph after it (#2428).
+fn props_table() -> Session {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let t = s.doc.body.iter_mut().find_map(|b| match std::sync::Arc::make_mut(b) {
+        wordcraft_doc::Block::Table(t) => Some(t),
+        _ => None,
+    });
+    for (r, row) in t.unwrap().rows.iter_mut().enumerate() {
+        for (c, cell) in row.cells.iter_mut().enumerate() {
+            let text = format!("{}{} some words", ["A", "B"][c], r + 1);
+            cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&text, Default::default()))];
+        }
+    }
+    let after = s.doc.body.iter().position(|b| b.as_para().is_some()).unwrap();
+    s.doc.body[after] = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"Text beside the table. ".repeat(30), Default::default()));
+    s.touch();
+    run(&mut s, "table.properties", json!({"width": 240.0}));
+    s
+}
+
+/// The left, top, right and bottom of the body's first table on page 1.
+fn table_box(s: &mut Session) -> (f32, f32, f32, f32) {
+    let l = s.layout();
+    let mut b = (f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY);
+    for it in &l.pages[0].items {
+        if let wordcraft_layout::Placed::Cell { rect, table, .. } = it
+            && table.0.len() == 1
+        {
+            b = (b.0.min(rect.x), b.1.min(rect.y), b.2.max(rect.right()), b.3.max(rect.bottom()));
+        }
+    }
+    b
+}
+
+/// Table Properties (#2428): alignment puts the table at the left margin, in the middle or at
+/// the right margin; an indent moves a left-aligned table right by that much.
+#[test]
+fn table_properties_alignment_and_indent_move_the_table() {
+    let mut s = props_table();
+    let body = s.layout().pages[0].body;
+    run(&mut s, "table.properties", json!({"align": "center"}));
+    let (l, _, r, _) = table_box(&mut s);
+    assert!(((l - body.x) - (body.right() - r)).abs() < 2.0, "centred: {l}..{r} in {body:?}");
+    run(&mut s, "table.properties", json!({"align": "right"}));
+    let (_, _, r, _) = table_box(&mut s);
+    assert!((r - body.right()).abs() < 7.0, "at the right margin: {r} vs {}", body.right());
+    run(&mut s, "table.properties", json!({"align": "left"}));
+    let (l0, ..) = table_box(&mut s);
+    assert!((l0 - body.x).abs() < 7.0, "at the left margin: {l0} vs {}", body.x);
+    run(&mut s, "table.properties", json!({"indent": 36.0}));
+    let (l1, ..) = table_box(&mut s);
+    assert!((l1 - l0 - 36.0).abs() < 1.0, "indented: {l0} → {l1}");
+}
+
+/// Table Properties (#2428): with wrapping "around" the text after the table runs beside it;
+/// "none" puts the table back in line, the text under it.
+#[test]
+fn table_properties_wrap_around_lets_text_beside_the_table() {
+    let mut s = props_table();
+    let first_line = |s: &mut Session| {
+        let (_, _, _, bottom) = table_box(s);
+        let l = s.layout();
+        let y = l.pages[0].items.iter().find_map(|it| match it {
+            wordcraft_layout::Placed::Lines { path, y, .. } if path.0 == [1] => Some(*y),
+            _ => None,
+        });
+        (y.unwrap_or(f32::NAN), bottom)
+    };
+    let (y, bottom) = first_line(&mut s);
+    assert!(y >= bottom - 0.5, "in line: the text starts under the table ({y} vs {bottom})");
+    run(&mut s, "table.properties", json!({"wrap": "around"}));
+    let (y, bottom) = first_line(&mut s);
+    assert!(y < bottom - 5.0, "around: the text starts beside the table ({y} vs {bottom})");
+    run(&mut s, "table.properties", json!({"wrap": "none"}));
+    let (y, bottom) = first_line(&mut s);
+    assert!(y >= bottom - 0.5, "none again: under the table ({y} vs {bottom})");
+}
+
+/// Table Properties › Positioning (#2428): from the page the table stands at x, y; centred on
+/// the margin it sits in the middle; the position survives saving to .docx and opening again.
+#[test]
+fn table_properties_position_places_the_table_and_is_saved() {
+    let mut s = props_table();
+    run(
+        &mut s,
+        "table.properties",
+        json!({"wrap": "around", "position": {"x": 150.0, "hRel": "page", "y": 300.0, "vRel": "page", "dist": [5, 6, 7, 8]}}),
+    );
+    let (l, t, ..) = table_box(&mut s);
+    assert!((l - 150.0).abs() < 7.0 && (t - 300.0).abs() < 2.0, "at (150, 300): ({l}, {t})");
+    let float = s.doc.body.iter().find_map(|b| b.as_table()).and_then(|t| t.props.float);
+    let mut back = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+    assert_eq!(back.doc.body.iter().find_map(|b| b.as_table()).and_then(|t| t.props.float), float, "saved and opened again");
+    assert_eq!(table_box(&mut back), table_box(&mut s));
+    run(&mut s, "table.properties", json!({"position": {"hAlign": "center", "hRel": "margin"}}));
+    let body = s.layout().pages[0].body;
+    let (l, _, r, _) = table_box(&mut s);
+    assert!(((l - body.x) - (body.right() - r)).abs() < 2.0, "centred on the margin: {l}..{r}");
+}
+
 /// Table Layout › Text Direction (#226) cycles the selected cells' text through horizontal,
 /// top-to-bottom and bottom-to-top, and the layout turns the text.
 #[test]

@@ -1144,6 +1144,29 @@
 	At least	Tối thiểu
 	Allow row to break across pages	Cho phép ngắt hàng sang trang sau
 	Repeat as header row on each page	Lặp lại làm hàng tiêu đề trên mỗi trang
+	Row {n}:	Hàng {n}:
+	Column {n}:	Cột {n}:
+	Measure in:	Đo bằng:
+	Percent	Phần trăm
+	Previous Row	Hàng trước
+	Next Row	Hàng sau
+	Previous Column	Cột trước
+	Next Column	Cột sau
+	Cell Options	Tùy chọn ô
+	Cell margins	Lề ô
+	Same as the whole table	Giống toàn bảng
+	Wrap text	Ngắt dòng văn bản
+	Text wrapping	Ngắt dòng quanh bảng
+	Around	Xung quanh
+	Positioning…	Định vị…
+	Table Positioning	Định vị bảng
+	Relative to:	So với:
+	Margin	Lề
+	Distance from surrounding text	Khoảng cách tới văn bản xung quanh
+	Move with text	Di chuyển theo văn bản
+	Allow overlap	Cho phép chồng lên nhau
+	Inside	Bên trong
+	Outside	Bên ngoài
 	Vertical alignment:	Căn chỉnh dọc:
 	Top	Trên
 	Bottom	Dưới

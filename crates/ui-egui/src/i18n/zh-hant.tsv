@@ -1209,6 +1209,29 @@
 	At least	最小
 	Allow row to break across pages	允許列跨頁中斷
 	Repeat as header row on each page	在每頁重複作為標題列
+	Row {n}:	第 {n} 列：
+	Column {n}:	第 {n} 欄：
+	Measure in:	度量單位：
+	Percent	百分比
+	Previous Row	上一列
+	Next Row	下一列
+	Previous Column	上一欄
+	Next Column	下一欄
+	Cell Options	儲存格選項
+	Cell margins	儲存格邊界
+	Same as the whole table	與整個表格相同
+	Wrap text	自動換行
+	Text wrapping	文繞圖
+	Around	環繞
+	Positioning…	位置…
+	Table Positioning	表格位置
+	Relative to:	相對於：
+	Margin	邊界
+	Distance from surrounding text	與周圍文字距離
+	Move with text	隨文字移動
+	Allow overlap	允許重疊
+	Inside	內側
+	Outside	外側
 	Vertical alignment:	垂直對齊方式：
 	Top	上
 	Bottom	下

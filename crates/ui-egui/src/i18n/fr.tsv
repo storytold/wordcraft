@@ -1147,6 +1147,29 @@
 	At least	Au moins
 	Allow row to break across pages	Autoriser le fractionnement des lignes sur plusieurs pages
 	Repeat as header row on each page	Répéter en tant que ligne d’en-tête sur chaque page
+	Row {n}:	Ligne {n} :
+	Column {n}:	Colonne {n} :
+	Measure in:	Mesurer en :
+	Percent	Pourcentage
+	Previous Row	Ligne précédente
+	Next Row	Ligne suivante
+	Previous Column	Colonne précédente
+	Next Column	Colonne suivante
+	Cell Options	Options de cellule
+	Cell margins	Marges de la cellule
+	Same as the whole table	Identiques à l'ensemble du tableau
+	Wrap text	Renvoyer le texte à la ligne
+	Text wrapping	Habillage du texte
+	Around	Autour
+	Positioning…	Positionnement…
+	Table Positioning	Positionnement du tableau
+	Relative to:	Par rapport à :
+	Margin	Marge
+	Distance from surrounding text	Distance du texte environnant
+	Move with text	Déplacer avec le texte
+	Allow overlap	Autoriser le chevauchement
+	Inside	Intérieur
+	Outside	Extérieur
 	Vertical alignment:	Alignement vertical :
 	Top	Haut
 	Bottom	Bas

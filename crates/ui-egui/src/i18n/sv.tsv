@@ -1236,6 +1236,29 @@
 	At least	Minst
 	Allow row to break across pages	Tillåt att raden bryts över sidor
 	Repeat as header row on each page	Upprepa som rubrikrad på varje sida
+	Row {n}:	Rad {n}:
+	Column {n}:	Kolumn {n}:
+	Measure in:	Mät i:
+	Percent	Procent
+	Previous Row	Föregående rad
+	Next Row	Nästa rad
+	Previous Column	Föregående kolumn
+	Next Column	Nästa kolumn
+	Cell Options	Cellalternativ
+	Cell margins	Cellmarginaler
+	Same as the whole table	Samma som hela tabellen
+	Wrap text	Radbryt text
+	Text wrapping	Textbrytning
+	Around	Runt
+	Positioning…	Placering…
+	Table Positioning	Tabellplacering
+	Relative to:	I förhållande till:
+	Margin	Marginal
+	Distance from surrounding text	Avstånd från omgivande text
+	Move with text	Flytta med text
+	Allow overlap	Tillåt överlappning
+	Inside	Inuti
+	Outside	Utanför
 	Vertical alignment:	Lodrät justering:
 	Top	Upptill
 	Bottom	Nedtill

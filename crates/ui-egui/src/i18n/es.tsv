@@ -1246,6 +1246,29 @@
 	At least	Al menos
 	Allow row to break across pages	Permitir dividir la fila entre páginas
 	Repeat as header row on each page	Repetir como fila de encabezado en cada página
+	Row {n}:	Fila {n}:
+	Column {n}:	Columna {n}:
+	Measure in:	Medir en:
+	Percent	Porcentaje
+	Previous Row	Fila anterior
+	Next Row	Fila siguiente
+	Previous Column	Columna anterior
+	Next Column	Columna siguiente
+	Cell Options	Opciones de celda
+	Cell margins	Márgenes de celda
+	Same as the whole table	Igual que toda la tabla
+	Wrap text	Ajustar texto
+	Text wrapping	Ajuste de texto
+	Around	Alrededor
+	Positioning…	Posición…
+	Table Positioning	Posición de tabla
+	Relative to:	Con relación a:
+	Margin	Margen
+	Distance from surrounding text	Distancia del texto circundante
+	Move with text	Mover con el texto
+	Allow overlap	Permitir superposición
+	Inside	Interior
+	Outside	Exterior
 	Vertical alignment:	Alineación vertical:
 	Top	Arriba
 	Bottom	Abajo

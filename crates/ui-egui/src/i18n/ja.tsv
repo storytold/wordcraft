@@ -1208,6 +1208,29 @@
 	At least	最小値
 	Allow row to break across pages	ページ間で行を分割する
 	Repeat as header row on each page	各ページに見出し行として繰り返す
+	Row {n}:	{n} 行目:
+	Column {n}:	{n} 列目:
+	Measure in:	単位:
+	Percent	パーセント
+	Previous Row	前の行
+	Next Row	次の行
+	Previous Column	前の列
+	Next Column	次の列
+	Cell Options	セルのオプション
+	Cell margins	セルの余白
+	Same as the whole table	表全体と同じ
+	Wrap text	文字列を折り返す
+	Text wrapping	文字列の折り返し
+	Around	する
+	Positioning…	位置…
+	Table Positioning	表の位置
+	Relative to:	基準:
+	Margin	余白
+	Distance from surrounding text	周囲の文字列との間隔
+	Move with text	文字列と一緒に移動する
+	Allow overlap	重なりを許可する
+	Inside	内側
+	Outside	外側
 	Vertical alignment:	垂直方向の配置:
 	Top	上
 	Bottom	下

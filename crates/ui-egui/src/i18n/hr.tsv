@@ -1780,6 +1780,29 @@ template	Letter	Pismo
 	Repeat	Ponovi
 	Repeat Header Rows	Ponovi retke zaglavlja
 	Repeat as header row on each page	Ponovi kao redak zaglavlja na svakoj stranici
+	Row {n}:	Redak {n}:
+	Column {n}:	Stupac {n}:
+	Measure in:	Mjerna jedinica:
+	Percent	Postotak
+	Previous Row	Prethodni redak
+	Next Row	Sljedeći redak
+	Previous Column	Prethodni stupac
+	Next Column	Sljedeći stupac
+	Cell Options	Mogućnosti ćelije
+	Cell margins	Margine ćelije
+	Same as the whole table	Isto kao cijela tablica
+	Wrap text	Prelomi tekst
+	Text wrapping	Prelamanje teksta
+	Around	Okolo
+	Positioning…	Položaj…
+	Table Positioning	Položaj tablice
+	Relative to:	U odnosu na:
+	Margin	Margina
+	Distance from surrounding text	Udaljenost od okolnog teksta
+	Move with text	Premjesti s tekstom
+	Allow overlap	Dopusti preklapanje
+	Inside	Unutra
+	Outside	Izvana
 	Repeating Section Content Control	Kontrola sadržaja s ponavljajućim odjeljkom
 	Replace	Zamijeni
 	Replace All	Zamijeni sve

@@ -1094,6 +1094,29 @@ preview	Title	Пример
 	At least	Минимум
 	Allow row to break across pages	Разрешить перенос строки на следующую страницу
 	Repeat as header row on each page	Повторять как заголовок на каждой странице
+	Row {n}:	Строка {n}:
+	Column {n}:	Столбец {n}:
+	Measure in:	Единица:
+	Percent	Проценты
+	Previous Row	Предыдущая строка
+	Next Row	Следующая строка
+	Previous Column	Предыдущий столбец
+	Next Column	Следующий столбец
+	Cell Options	Параметры ячейки
+	Cell margins	Поля ячейки
+	Same as the whole table	Как во всей таблице
+	Wrap text	Переносить текст
+	Text wrapping	Обтекание текстом
+	Around	Вокруг
+	Positioning…	Размещение…
+	Table Positioning	Размещение таблицы
+	Relative to:	Относительно:
+	Margin	Поле
+	Distance from surrounding text	Расстояние до окружающего текста
+	Move with text	Перемещать с текстом
+	Allow overlap	Разрешить перекрытие
+	Inside	Внутри
+	Outside	Снаружи
 	Vertical alignment:	Вертикальное выравнивание:
 	Top	Сверху
 	Bottom	Снизу

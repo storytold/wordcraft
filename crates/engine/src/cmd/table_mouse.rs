@@ -425,7 +425,7 @@ fn insert_at(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 /// Where table `table` of `story` is first drawn: its page and top-left corner.
-fn corner(l: &DocLayout, story: StoryRef, table: &Path) -> Option<(usize, f32, f32)> {
+pub fn corner(l: &DocLayout, story: StoryRef, table: &Path) -> Option<(usize, f32, f32)> {
     l.pages.iter().enumerate().find_map(|(pi, pg)| {
         let cells = pg.items.iter().filter_map(|it| match it {
             Placed::Cell { rect, table: t, story: st, .. } if *st == story && t == table => Some(*rect),

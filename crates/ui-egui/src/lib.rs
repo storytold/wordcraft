@@ -3134,6 +3134,45 @@ mod tests {
         assert!(a.selected_picture_media().is_some());
     }
 
+    /// Table Properties has Word's Table, Row, Column, Cell and Alt Text tabs (#2428): the Row
+    /// and Column tabs name the caret's row and column, a row may repeat as a header only under
+    /// header rows, and OK sets the properties and the alt text as one undo step.
+    #[test]
+    fn table_properties_tabs_name_the_row_and_set_alt_text() {
+        let mut a = app();
+        a.run("insert.table", json!({"rows": 3, "cols": 3})).unwrap();
+        let f = dialogs::TableForm::read(&a).unwrap();
+        assert_eq!((f.tab, f.row, f.column, f.header_allowed), (0, 1, 1, true), "the first row can always repeat");
+        a.run("table.properties", json!({"headerRow": true})).unwrap();
+        a.run("caret.down", json!({})).unwrap();
+        a.run("caret.right", json!({})).unwrap();
+        let f = dialogs::TableForm::read(&a).unwrap();
+        assert_eq!((f.row, f.column, f.header_allowed), (2, 2, true), "under the header row");
+        a.run("caret.down", json!({})).unwrap();
+        let f = dialogs::TableForm::read(&a).unwrap();
+        assert_eq!((f.row, f.column, f.header_allowed), (3, 2, false), "row 2 doesn't repeat");
+        // Cell and Alt Text edits: one step each command, joined into one undo step.
+        let basis = f.clone();
+        let mut g = f;
+        g.tab = 4;
+        g.valign = "center".into();
+        g.alt_title = "Prices".into();
+        g.alt_text = "Fruit by colour".into();
+        assert_eq!(
+            g.commands(&basis),
+            vec![("table.properties", json!({"valign": "center"})), ("table.altText", json!({"title": "Prices", "text": "Fruit by colour"}))]
+        );
+        let undo_before = a.session.undo_labels().len();
+        g.apply(&basis, &mut a).unwrap();
+        assert_eq!(a.session.undo_labels().len(), undo_before + 1, "one undo step");
+        let reopened = dialogs::TableForm::read(&a).unwrap();
+        assert_eq!((reopened.alt_title.as_str(), reopened.alt_text.as_str(), reopened.valign.as_str()), ("Prices", "Fruit by colour", "center"));
+        a.run("edit.undo", json!({})).unwrap();
+        let back = dialogs::TableForm::read(&a).unwrap();
+        assert_eq!((back.alt_title.as_str(), back.valign.as_str()), ("", "top"), "one undo takes both back");
+        assert!(dialogs::TableForm::read(&a).unwrap().commands(&back).is_empty(), "untouched, OK runs nothing");
+    }
+
     /// Table Layout › Properties (#44) opens the dialog from the ribbon; OK sends only what
     /// changed, as one `table.properties` step. Scripts with settings never see the dialog.
     #[test]

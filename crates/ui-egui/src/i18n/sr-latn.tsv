@@ -1274,6 +1274,29 @@
 	At least	Najmanje
 	Allow row to break across pages	Dozvoli prelom reda između stranica
 	Repeat as header row on each page	Ponovi kao red zaglavlja na svakoj stranici
+	Row {n}:	Red {n}:
+	Column {n}:	Kolona {n}:
+	Measure in:	Merna jedinica:
+	Percent	Procenat
+	Previous Row	Prethodni red
+	Next Row	Sledeći red
+	Previous Column	Prethodna kolona
+	Next Column	Sledeća kolona
+	Cell Options	Opcije ćelije
+	Cell margins	Margine ćelije
+	Same as the whole table	Isto kao cela tabela
+	Wrap text	Prelomi tekst
+	Text wrapping	Prelamanje teksta
+	Around	Okolo
+	Positioning…	Pozicioniranje…
+	Table Positioning	Pozicioniranje tabele
+	Relative to:	U odnosu na:
+	Margin	Margina
+	Distance from surrounding text	Rastojanje od okolnog teksta
+	Move with text	Premesti sa tekstom
+	Allow overlap	Dozvoli preklapanje
+	Inside	Unutra
+	Outside	Spolja
 	Vertical alignment:	Vertikalno poravnanje:
 	Top	Gore
 	Bottom	Dole

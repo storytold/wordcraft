@@ -1129,6 +1129,29 @@
 	Height:	Kõrgus:
 	Left Margin	Vasak veeris
 	Repeat as header row on each page	Korda päisereana igal lehel
+	Row {n}:	Rida {n}:
+	Column {n}:	Veerg {n}:
+	Measure in:	Mõõtühik:
+	Percent	Protsent
+	Previous Row	Eelmine rida
+	Next Row	Järgmine rida
+	Previous Column	Eelmine veerg
+	Next Column	Järgmine veerg
+	Cell Options	Lahtri suvandid
+	Cell margins	Lahtri veerised
+	Same as the whole table	Sama mis kogu tabelil
+	Wrap text	Murra teksti
+	Text wrapping	Teksti mähkimine
+	Around	Ümber
+	Positioning…	Paigutus…
+	Table Positioning	Tabeli paigutus
+	Relative to:	Suhtes:
+	Margin	Veeris
+	Distance from surrounding text	Kaugus ümbritsevast tekstist
+	Move with text	Liigu koos tekstiga
+	Allow overlap	Luba kattumine
+	Inside	Sees
+	Outside	Väljas
 	Insert a new equation (Alt+=)	Lisa uus võrrand (Alt+=)
 	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
 	Bottom Margin	Alumine veeris

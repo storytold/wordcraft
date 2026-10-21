@@ -1094,6 +1094,29 @@ preview	Title	Örnek
 	At least	En az
 	Allow row to break across pages	Satırın sayfalar arasında bölünmesine izin ver
 	Repeat as header row on each page	Her sayfada başlık satırı olarak tekrarla
+	Row {n}:	Satır {n}:
+	Column {n}:	Sütun {n}:
+	Measure in:	Ölçü birimi:
+	Percent	Yüzde
+	Previous Row	Önceki Satır
+	Next Row	Sonraki Satır
+	Previous Column	Önceki Sütun
+	Next Column	Sonraki Sütun
+	Cell Options	Hücre Seçenekleri
+	Cell margins	Hücre kenar boşlukları
+	Same as the whole table	Tüm tabloyla aynı
+	Wrap text	Metni kaydır
+	Text wrapping	Metin kaydırma
+	Around	Çevresinde
+	Positioning…	Konumlandırma…
+	Table Positioning	Tablo Konumlandırma
+	Relative to:	Göre:
+	Margin	Kenar boşluğu
+	Distance from surrounding text	Çevreleyen metinden uzaklık
+	Move with text	Metinle taşı
+	Allow overlap	Çakışmaya izin ver
+	Inside	İçeride
+	Outside	Dışarıda
 	Vertical alignment:	Dikey hizalama:
 	Top	Üst
 	Bottom	Alt

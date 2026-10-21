@@ -1152,6 +1152,29 @@
 	At least	Най-малко
 	Allow row to break across pages	Разрешаване на разделяне на реда между страници
 	Repeat as header row on each page	Повтаряне като заглавен ред на всяка страница
+	Row {n}:	Ред {n}:
+	Column {n}:	Колона {n}:
+	Measure in:	Мерна единица:
+	Percent	Процент
+	Previous Row	Предишен ред
+	Next Row	Следващ ред
+	Previous Column	Предишна колона
+	Next Column	Следваща колона
+	Cell Options	Опции за клетка
+	Cell margins	Полета на клетката
+	Same as the whole table	Като цялата таблица
+	Wrap text	Пренасяне на текста
+	Text wrapping	Обтичане на текста
+	Around	Около
+	Positioning…	Позициониране…
+	Table Positioning	Позициониране на таблица
+	Relative to:	Спрямо:
+	Margin	Поле
+	Distance from surrounding text	Разстояние от околния текст
+	Move with text	Премести с текста
+	Allow overlap	Разреши застъпване
+	Inside	Отвътре
+	Outside	Отвън
 	Vertical alignment:	Вертикално подравняване:
 	Top	Горе
 	Bottom	Долу

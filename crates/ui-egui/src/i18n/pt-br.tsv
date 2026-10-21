@@ -1220,6 +1220,29 @@
 	At least	Pelo menos
 	Allow row to break across pages	Permitir quebra de linha entre páginas
 	Repeat as header row on each page	Repetir como linha de cabeçalho em cada página
+	Row {n}:	Linha {n}:
+	Column {n}:	Coluna {n}:
+	Measure in:	Medir em:
+	Percent	Porcentagem
+	Previous Row	Linha anterior
+	Next Row	Próxima linha
+	Previous Column	Coluna anterior
+	Next Column	Próxima coluna
+	Cell Options	Opções de célula
+	Cell margins	Margens da célula
+	Same as the whole table	Igual à tabela inteira
+	Wrap text	Quebrar texto
+	Text wrapping	Quebra automática de texto
+	Around	Ao redor
+	Positioning…	Posicionamento…
+	Table Positioning	Posicionamento da tabela
+	Relative to:	Relativo a:
+	Margin	Margem
+	Distance from surrounding text	Distância do texto ao redor
+	Move with text	Mover com o texto
+	Allow overlap	Permitir sobreposição
+	Inside	Interno
+	Outside	Externo
 	Vertical alignment:	Alinhamento vertical:
 	Top	Superior
 	Bottom	Inferior

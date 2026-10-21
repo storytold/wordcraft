@@ -948,6 +948,29 @@
 	Reopen	Znovu otevřít
 	Repeat	Opakovat
 	Repeat as header row on each page	Opakovat jako řádek záhlaví na každé stránce
+	Row {n}:	Řádek {n}:
+	Column {n}:	Sloupec {n}:
+	Measure in:	Jednotky:
+	Percent	Procenta
+	Previous Row	Předchozí řádek
+	Next Row	Další řádek
+	Previous Column	Předchozí sloupec
+	Next Column	Další sloupec
+	Cell Options	Možnosti buňky
+	Cell margins	Okraje buňky
+	Same as the whole table	Stejné jako celá tabulka
+	Wrap text	Zalamovat text
+	Text wrapping	Obtékání textu
+	Around	Kolem
+	Positioning…	Umístění…
+	Table Positioning	Umístění tabulky
+	Relative to:	Vzhledem k:
+	Margin	Okraj
+	Distance from surrounding text	Vzdálenost od okolního textu
+	Move with text	Přesunout s textem
+	Allow overlap	Povolit překrývání
+	Inside	Uvnitř
+	Outside	Vně
 	Repeat Header Rows	Opakovat řádky záhlaví
 	Replace	Nahradit
 	Replace All	Nahradit vše

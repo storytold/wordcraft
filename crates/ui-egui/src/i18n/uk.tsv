@@ -1220,6 +1220,29 @@
 	At least	Принаймні
 	Allow row to break across pages	Дозволити розрив рядка між сторінками
 	Repeat as header row on each page	Повторювати як рядок заголовка на кожній сторінці
+	Row {n}:	Рядок {n}:
+	Column {n}:	Стовпець {n}:
+	Measure in:	Одиниця:
+	Percent	Відсотки
+	Previous Row	Попередній рядок
+	Next Row	Наступний рядок
+	Previous Column	Попередній стовпець
+	Next Column	Наступний стовпець
+	Cell Options	Параметри клітинки
+	Cell margins	Поля клітинки
+	Same as the whole table	Як у всій таблиці
+	Wrap text	Переносити текст
+	Text wrapping	Обтікання текстом
+	Around	Навколо
+	Positioning…	Розташування…
+	Table Positioning	Розташування таблиці
+	Relative to:	Відносно:
+	Margin	Поле
+	Distance from surrounding text	Відстань до навколишнього тексту
+	Move with text	Переміщувати з текстом
+	Allow overlap	Дозволити перекриття
+	Inside	Всередині
+	Outside	Ззовні
 	Vertical alignment:	Вертикальне вирівнювання:
 	Top	Угорі
 	Bottom	Унизу

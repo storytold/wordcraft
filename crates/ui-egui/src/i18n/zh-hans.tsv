@@ -1220,6 +1220,29 @@
 	At least	最小值
 	Allow row to break across pages	允许跨页断行
 	Repeat as header row on each page	在各页重复作为标题行
+	Row {n}:	第 {n} 行：
+	Column {n}:	第 {n} 列：
+	Measure in:	度量单位：
+	Percent	百分比
+	Previous Row	上一行
+	Next Row	下一行
+	Previous Column	上一列
+	Next Column	下一列
+	Cell Options	单元格选项
+	Cell margins	单元格边距
+	Same as the whole table	与整张表格相同
+	Wrap text	自动换行
+	Text wrapping	文字环绕
+	Around	环绕
+	Positioning…	定位…
+	Table Positioning	表格定位
+	Relative to:	相对于：
+	Margin	边距
+	Distance from surrounding text	距正文
+	Move with text	随文字移动
+	Allow overlap	允许重叠
+	Inside	内侧
+	Outside	外侧
 	Vertical alignment:	垂直对齐方式：
 	Top	顶端
 	Bottom	底端

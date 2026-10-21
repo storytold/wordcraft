@@ -1045,6 +1045,29 @@
 	At least	Co najmniej
 	Allow row to break across pages	Zezwalaj na dzielenie wiersza między stronami
 	Repeat as header row on each page	Powtarzaj jako wiersz nagłówka na każdej stronie
+	Row {n}:	Wiersz {n}:
+	Column {n}:	Kolumna {n}:
+	Measure in:	Mierzona w:
+	Percent	Procent
+	Previous Row	Poprzedni wiersz
+	Next Row	Następny wiersz
+	Previous Column	Poprzednia kolumna
+	Next Column	Następna kolumna
+	Cell Options	Opcje komórek
+	Cell margins	Marginesy komórki
+	Same as the whole table	Takie same jak całej tabeli
+	Wrap text	Zawijaj tekst
+	Text wrapping	Zawijanie tekstu
+	Around	Wokoło
+	Positioning…	Pozycjonowanie…
+	Table Positioning	Pozycjonowanie tabeli
+	Relative to:	Względem:
+	Margin	Margines
+	Distance from surrounding text	Odległość od otaczającego tekstu
+	Move with text	Przenieś z tekstem
+	Allow overlap	Zezwalaj na zachodzenie
+	Inside	Do wewnątrz
+	Outside	Zewnętrzne
 	Vertical alignment:	Wyrównanie w pionie:
 	Top	Do góry
 	Bottom	Do dołu

@@ -1131,6 +1131,29 @@
 	At least	Mindestens
 	Allow row to break across pages	Zeilenumbruch über Seiten zulassen
 	Repeat as header row on each page	Auf jeder Seite als Kopfzeile wiederholen
+	Row {n}:	Zeile {n}:
+	Column {n}:	Spalte {n}:
+	Measure in:	Maßeinheit:
+	Percent	Prozent
+	Previous Row	Vorherige Zeile
+	Next Row	Nächste Zeile
+	Previous Column	Vorherige Spalte
+	Next Column	Nächste Spalte
+	Cell Options	Zellenoptionen
+	Cell margins	Zellenbegrenzungen
+	Same as the whole table	Wie gesamte Tabelle
+	Wrap text	Zeilenumbruch
+	Text wrapping	Textumbruch
+	Around	Umgebend
+	Positioning…	Positionierung…
+	Table Positioning	Tabellenpositionierung
+	Relative to:	Relativ zu:
+	Margin	Rand
+	Distance from surrounding text	Abstand vom umgebenden Text
+	Move with text	Mit Text verschieben
+	Allow overlap	Überlappen zulassen
+	Inside	Innen
+	Outside	Außen
 	Vertical alignment:	Vertikale Ausrichtung:
 	Top	Oben
 	Bottom	Unten

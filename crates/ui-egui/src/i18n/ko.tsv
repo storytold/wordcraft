@@ -1202,6 +1202,29 @@
 	At least	최소
 	Allow row to break across pages	행이 여러 페이지에 걸쳐 나뉘도록 허용
 	Repeat as header row on each page	각 페이지에서 머리글 행으로 반복
+	Row {n}:	{n}행:
+	Column {n}:	{n}열:
+	Measure in:	측정 단위:
+	Percent	백분율
+	Previous Row	이전 행
+	Next Row	다음 행
+	Previous Column	이전 열
+	Next Column	다음 열
+	Cell Options	셀 옵션
+	Cell margins	셀 여백
+	Same as the whole table	전체 표와 동일
+	Wrap text	텍스트 줄 바꿈
+	Text wrapping	텍스트 배치
+	Around	주위
+	Positioning…	위치…
+	Table Positioning	표 위치
+	Relative to:	기준:
+	Margin	여백
+	Distance from surrounding text	주변 텍스트와의 간격
+	Move with text	텍스트와 함께 이동
+	Allow overlap	겹치기 허용
+	Inside	안쪽
+	Outside	바깥쪽
 	Vertical alignment:	세로 맞춤:
 	Top	위쪽
 	Bottom	아래쪽

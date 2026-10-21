@@ -1084,6 +1084,29 @@
 	At least	Legalább
 	Allow row to break across pages	A sor átnyúlhat a következő oldalra
 	Repeat as header row on each page	Ismétlés fejlécsorként minden oldalon
+	Row {n}:	{n}. sor:
+	Column {n}:	{n}. oszlop:
+	Measure in:	Mértékegység:
+	Percent	Százalék
+	Previous Row	Előző sor
+	Next Row	Következő sor
+	Previous Column	Előző oszlop
+	Next Column	Következő oszlop
+	Cell Options	Cellabeállítások
+	Cell margins	Cellamargók
+	Same as the whole table	Mint a teljes táblázat
+	Wrap text	Szöveg tördelése
+	Text wrapping	Szöveg körbefuttatása
+	Around	Körbefuttatás
+	Positioning…	Elhelyezés…
+	Table Positioning	Táblázat elhelyezése
+	Relative to:	Viszonyítási alap:
+	Margin	Margó
+	Distance from surrounding text	Távolság a környező szövegtől
+	Move with text	Mozgatás a szöveggel
+	Allow overlap	Átfedés engedélyezése
+	Inside	Belül
+	Outside	Kívül
 	Vertical alignment:	Függőleges igazítás:
 	Top	Fent
 	Bottom	Lent

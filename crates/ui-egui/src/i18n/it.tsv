@@ -1137,6 +1137,29 @@
 	At least	Almeno
 	Allow row to break across pages	Consenti la divisione della riga tra le pagine
 	Repeat as header row on each page	Ripeti come riga di intestazione in ogni pagina
+	Row {n}:	Riga {n}:
+	Column {n}:	Colonna {n}:
+	Measure in:	Misura in:
+	Percent	Percentuale
+	Previous Row	Riga precedente
+	Next Row	Riga successiva
+	Previous Column	Colonna precedente
+	Next Column	Colonna successiva
+	Cell Options	Opzioni cella
+	Cell margins	Margini cella
+	Same as the whole table	Come tutta la tabella
+	Wrap text	Testo a capo
+	Text wrapping	Disposizione testo
+	Around	Intorno
+	Positioning…	Posizione…
+	Table Positioning	Posizione tabella
+	Relative to:	Rispetto a:
+	Margin	Margine
+	Distance from surrounding text	Distanza dal testo circostante
+	Move with text	Sposta con il testo
+	Allow overlap	Consenti sovrapposizione
+	Inside	Interno
+	Outside	Esterno
 	Vertical alignment:	Allineamento verticale:
 	Top	In alto
 	Bottom	In basso
