@@ -681,7 +681,24 @@ const MAX_TOTAL_PASSES: usize = 3;
 enum Pass {
     Done(DocLayout),
     Again(Totals),
+    FloatReplay,
 }
+
+#[derive(Clone, Debug, PartialEq)]
+struct TableWrap {
+    block: usize,
+    page: usize,
+    area: Rect,
+}
+
+#[derive(Default)]
+struct FloatReplay {
+    planned: Vec<TableWrap>,
+    attempts: usize,
+    disabled: bool,
+}
+
+const MAX_FLOAT_PASSES: usize = 3;
 
 /// Walk state while paginating.
 struct Ctx<'a> {
@@ -1566,6 +1583,13 @@ fn push_para(items: &mut Vec<Placed>, story: StoryRef, path: &[u32], pl: &Arc<Pa
     }
 }
 
+/// Seeded decoration stays between prepended paint and body items.
+#[derive(Clone, Copy, Default)]
+struct PagePrefix {
+    behind: usize,
+    decor: usize,
+}
+
 #[derive(Clone)]
 struct PageBuilder<'a> {
     pages: Vec<Page>,
@@ -1599,8 +1623,13 @@ struct PageBuilder<'a> {
     restart_at: Option<u32>,
     /// Wrap areas of floating objects on this page (see [`wrap_area`]).
     excl: Vec<WrapArea>,
+    /// Replay reservations survive paragraph-owned exclusion truncation.
+    replay_excl: Vec<WrapArea>,
     /// Wrap areas of the floating tables on this page, which others may not overlap.
     float_tables: Vec<Rect>,
+    planned_tables: Vec<TableWrap>,
+    placed_tables: Vec<TableWrap>,
+    late_table: bool,
     /// Line numbering counter.
     line_no: u32,
     /// Index of the first body item of the current page (vertical alignment shifts from here).
@@ -1614,9 +1643,8 @@ struct PageBuilder<'a> {
     page_valign: wordcraft_doc::section::PageVAlign,
     /// The document's own footnote separators, laid out for the section's text width.
     seps: NoteSeps,
-    /// Per page: how many items were inserted at the front of its list (behind the text), so a
-    /// [`Snap`] can take them out again.
-    behind: Vec<usize>,
+    /// Per-page prefix counts, moved outside the builder when [`Snap`] clones its state.
+    behind: Vec<PagePrefix>,
     /// The bottom of the tallest column on the current page before the current one.
     max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -1850,6 +1878,16 @@ fn page_border_rules(s: &SectionProps) -> Vec<Placed> {
 }
 
 impl PageBuilder<'_> {
+    fn overlaps_body(&self, rect: &Rect) -> bool {
+        let prefix = self.behind.last().copied().unwrap_or_default();
+        let decor = prefix.behind..prefix.behind.saturating_add(prefix.decor);
+        self.pages.last().is_some_and(|page| page.items.iter().enumerate().any(|(i, item)| !decor.contains(&i) && placed_intersects(item, rect)))
+    }
+
+    fn wrap_areas(&self) -> Vec<WrapArea> {
+        self.replay_excl.iter().chain(&self.excl).cloned().collect()
+    }
+
     /// Space footnotes take at the bottom of the page.
     fn notes_h(&self) -> f32 {
         match self.notes.first() {
@@ -1949,7 +1987,7 @@ impl PageBuilder<'_> {
     /// A top-level block starts here (see `block_marks`).
     fn mark_block(&mut self) {
         if let Some(pg) = self.pages.last() {
-            let behind = self.behind.last().copied().unwrap_or(0);
+            let behind = self.behind.last().map_or(0, |p| p.behind);
             self.block_marks.push(pg.items.len().saturating_sub(behind));
         }
     }
@@ -1960,7 +1998,7 @@ impl PageBuilder<'_> {
         if self.web || self.cols.len() > 1 {
             return;
         }
-        let behind = self.behind.last().copied().unwrap_or(0);
+        let behind = self.behind.last().map_or(0, |p| p.behind);
         let first = self.page_items_start;
         // The room is measured below the last paragraph's space after: Word for Mac 16.113.4 keeps
         // it inside the justified height (72 pt after leaves the last line 72 pt above the margin).
@@ -2027,7 +2065,11 @@ impl PageBuilder<'_> {
         self.flush_notes();
         self.beneath = self.sect_beneath;
         self.excl.clear();
+        self.replay_excl.clear();
         self.float_tables.clear();
+        for table in self.planned_tables.iter().filter(|t| t.page == self.pages.len()) {
+            self.replay_excl.push((table.area, false, None, WrapText::BothSides));
+        }
         if self.sect.line_numbers.as_ref().is_some_and(|l| l.restart == wordcraft_doc::section::LineNumberRestart::Page) {
             self.line_no = 0;
         }
@@ -2054,11 +2096,12 @@ impl PageBuilder<'_> {
                 }
             }
         }
-        self.page_items_start = decor.len();
+        let decor_len = decor.len();
+        self.page_items_start = decor_len;
         self.block_marks.clear();
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
-        self.behind.push(0);
+        self.behind.push(PagePrefix { behind: 0, decor: decor_len });
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
@@ -2132,12 +2175,14 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut note_passes = 1;
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
+    let mut floats = FloatReplay::default();
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES) {
+        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, &mut floats) {
             Pass::Again(t) => {
                 totals = t;
                 passes += 1;
             }
+            Pass::FloatReplay => continue,
             Pass::Done(l) => {
                 if per_page && note_passes < MAX_NOTE_PASSES {
                     // Number each page's footnotes from where the pass before placed them, until they stay.
@@ -2166,6 +2211,7 @@ fn layout_pass(
     note_pages: &HashMap<u32, usize>,
     totals: &Totals,
     may_repeat: bool,
+    floats: &mut FloatReplay,
 ) -> Pass {
     let env = env_hash(doc, opts);
     if env != cache.env {
@@ -2280,7 +2326,11 @@ fn layout_pass(
         next_starts_page: false,
         restart_at: None,
         excl: Vec::new(),
+        replay_excl: Vec::new(),
         float_tables: Vec::new(),
+        planned_tables: floats.planned.clone(),
+        placed_tables: Vec::new(),
+        late_table: false,
         line_no: 0,
         page_items_start: 0,
         block_marks: Vec::new(),
@@ -2466,6 +2516,20 @@ fn layout_pass(
         pb.flush_notes();
     }
     pb.carry.clear();
+    // Reflow stable page-relative placements. Clear reservations if an anchor changes
+    // pages, so a later pass cannot wrap text around an obsolete placement.
+    if !floats.disabled && (pb.late_table || !floats.planned.is_empty()) && floats.planned != pb.placed_tables {
+        let placed: HashMap<_, _> = pb.placed_tables.iter().map(|t| (t.block, t.page)).collect();
+        let moved = floats.planned.iter().any(|t| placed.get(&t.block) != Some(&t.page));
+        if moved || floats.attempts >= MAX_FLOAT_PASSES {
+            floats.planned.clear();
+            floats.disabled = true;
+        } else {
+            floats.planned = pb.placed_tables;
+            floats.attempts += 1;
+        }
+        return Pass::FloatReplay;
+    }
     let mut pages = pb.pages;
     for p in &mut pages {
         if let Some((_, s)) = sections.get(p.section)
@@ -2530,7 +2594,7 @@ struct Snap<'a> {
     pb: PageBuilder<'a>,
     pages: usize,
     items: usize,
-    behind: usize,
+    prefix: PagePrefix,
     counters: Counters,
     eq_count: u32,
     page_field: u32,
@@ -2547,7 +2611,7 @@ impl<'a> Snap<'a> {
             pb: copy,
             pages: pb.pages.len(),
             items: pb.pages.last().map_or(0, |p| p.items.len()),
-            behind: pb.behind.last().copied().unwrap_or(0),
+            prefix: pb.behind.last().copied().unwrap_or_default(),
             counters: ctx.counters.clone(),
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
@@ -2562,12 +2626,12 @@ impl<'a> Snap<'a> {
         pages.truncate(self.pages);
         behind.truncate(self.pages);
         if let Some(pg) = pages.last_mut() {
-            let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
+            let k = behind.last().map_or(0, |p| p.behind).saturating_sub(self.prefix.behind).min(pg.items.len());
             pg.items.drain(..k);
             pg.items.truncate(self.items);
         }
         if let Some(b) = behind.last_mut() {
-            *b = self.behind;
+            *b = self.prefix;
         }
         *pb = self.pb.clone();
         (pb.pages, pb.behind) = (pages, behind);
@@ -3180,7 +3244,7 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
 
 fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     let mut areas = footer_table_wraps(ctx, pb);
-    areas.extend_from_slice(&pb.excl);
+    areas.extend(pb.wrap_areas());
     areas
 }
 
@@ -3510,7 +3574,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         }
     }
     // A different top only matters when there is something to wrap around.
-    if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !pb.excl.is_empty()) {
+    if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !(pb.excl.is_empty() && pb.replay_excl.is_empty())) {
         let y0 = pb.y;
         (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, applied_before, excl_mark, &label));
         (laid_page, laid_width) = (pb.number, pb.col_w());
@@ -3767,7 +3831,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             pg.items.extend(items);
         }
         if let Some(b) = pb.behind.last_mut() {
-            *b += n_behind;
+            b.behind += n_behind;
         }
         if let (Some(f), Some(l)) = (pl.lines.get(l0), pl.lines.get(l1 - 1)) {
             pb.y = y + (l.top + l.height - f.top);
@@ -3878,11 +3942,15 @@ fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // Collapsed, or with something under it hidden by Show Level: the wavy line says so.
     let collapsed = children && o.hidden.get(block + 1).copied().unwrap_or(false);
     items.extend(outline::symbol_items(&pl, x, y, level, children, collapsed));
+    let n_behind = behind.len();
     if let Some(pg) = pb.page() {
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
         pg.items.extend(items);
+    }
+    if let Some(prefix) = pb.behind.last_mut() {
+        prefix.behind += n_behind;
     }
     if let (Some(f), Some(l)) = (pl.lines.first(), l1.checked_sub(1).and_then(|k| pl.lines.get(k))) {
         pb.y = y + (l.top + l.height - f.top);
@@ -4186,6 +4254,29 @@ fn table_notes(ctx: &mut Ctx, pb: &mut PageBuilder, items: &[Placed]) {
     pb.bottom -= pb.notes_h() - before;
 }
 
+/// Moving a fixed row around this float must leave the row on its current page.
+fn row_blocks_float(ctx: &Ctx, pb: &PageBuilder, area: &Rect) -> bool {
+    let Some(page) = pb.pages.last() else { return false };
+    page.items.iter().any(|item| {
+        let Placed::Cell { rect, table, row, cell, story: StoryRef::Body, .. } = item else { return false };
+        // Nested cells may extend outside an exact-height outer row's visible area.
+        if table.0.len() != 1 || !rect.intersects(area) {
+            return false;
+        }
+        let Some(table) = ctx.doc.table(StoryRef::Body, table).filter(|t| t.props.float.is_none()) else { return false };
+        let Some(row) = table.rows.get(*row) else { return false };
+        // A merged cell's rectangle spans rows, so it is not this row's fixed height.
+        if !row.cells.get(*cell).is_some_and(|c| c.props.vmerge == wordcraft_doc::props::VMerge::None) {
+            return false;
+        }
+        let fixed =
+            row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0));
+        let before = (area.y - rect.y).max(0.0);
+        let after = (pb.bottom - area.bottom()).max(0.0);
+        fixed && rect.h > before.max(after) + 0.01
+    })
+}
+
 /// Header tables can displace a non-overlapping body table. Page-positioned drawings keep
 /// their own wrapping rules, so only table areas are retained from the header layout.
 fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
@@ -4248,7 +4339,8 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
     let h: f32 = tl.rows.iter().map(|r| r.height).sum::<f32>().clamp(0.0, 100_000.0);
     let w = tl.width.clamp(1.0, 100_000.0);
     let [dl, dt, dr, db] = f.dist_from_text();
-    for attempt in 0..2 {
+    let advances = pb.cols.len().max(1);
+    for attempt in 0..=advances {
         let s = pb.sect;
         let h_area = float_table_h_area(pb, f, ctx.mirror);
         // The text a table anchored to it stands in: where the next paragraph starts.
@@ -4270,9 +4362,15 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             let covers_text = pb.page().is_some_and(|page| page.items.iter().any(|item| placed_intersects(item, &r)));
             covers_text && pb.y + h > pb.bottom + 0.01
         };
-        if attempt == 0 && moves && !pb.at_top() {
+        let blocked_row = matches!(f.v_rel, Anchor::Page | Anchor::Margin) && row_blocks_float(ctx, pb, &r.inset(-dl, -dt, -dr, -db));
+        if attempt < advances && (moves || blocked_row) && (!pb.at_top() || blocked_row) {
             pb.advance(block, body_top);
             continue;
+        }
+        if matches!(f.v_rel, Anchor::Page | Anchor::Margin) {
+            let area = r.inset(-dl, -dt, -dr, -db);
+            pb.late_table |= pb.overlaps_body(&area);
+            pb.placed_tables.push(TableWrap { block, page: pb.pages.len().saturating_sub(1), area });
         }
         if let Some(pg) = pb.page() {
             let mut y = r.y;

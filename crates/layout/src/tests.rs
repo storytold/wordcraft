@@ -6471,7 +6471,7 @@ fn footer_page_total_needs_one_body_pass() {
     d.last_section.footers.default = Some(id);
     let first = |d: &Document| {
         let totals = Totals::first_guess(d.sections().len());
-        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true)
+        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, &mut FloatReplay::default())
     };
     assert!(matches!(first(&d), Pass::Done(l) if l.pages.len() == 3), "the footer's total asked for another pass");
     // The same field in the body is only known once every page is laid out.
@@ -9422,4 +9422,323 @@ fn caret_height_ignores_line_spacing() {
         let wide = caret_height(Some(spacing));
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
+}
+
+#[test]
+fn late_table_wraps_prior_text() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+
+    let positions = |table_index| {
+        let text = (1..=12).map(|n| format!("Original body line {n}")).collect::<Vec<_>>().join("\n");
+        let mut doc = Document::from_text(&text);
+        for index in 0..12 {
+            let p = doc.para_mut(StoryRef::Body, &Path::top(index)).unwrap();
+            p.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+        let mut table = Table::new(1, 1, 300.0);
+        table.props.fixed = true;
+        table.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 120.0, ..Default::default() });
+        table.rows[0].props.height = Some(48.0);
+        table.rows[0].props.height_rule = HeightRule::Exact;
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Original float", Default::default()))];
+        doc.insert_block(StoryRef::Body, &Path::top(table_index), Block::Table(table)).unwrap();
+        let laid = lay(&doc);
+        assert_eq!(laid.pages.len(), 1);
+        (0..12)
+            .map(|index| {
+                let block = index + usize::from(index >= table_index);
+                let caret = laid.caret(&Pos::body(block, 0)).unwrap();
+                (caret.x, caret.top)
+            })
+            .collect::<Vec<_>>()
+    };
+    let early = positions(0);
+    let late = positions(12);
+    assert!(early.iter().any(|(x, _)| *x >= 372.0), "early anchor must wrap: {early:?}");
+    for (index, (a, b)) in early.iter().zip(&late).enumerate() {
+        assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01, "line {index}: early={a:?}, late={b:?}");
+    }
+}
+
+#[test]
+fn late_float_moves_with_anchor() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+
+    for columns in [1, 2] {
+        for (rule, cant_split) in [(HeightRule::Exact, true), (HeightRule::Exact, false), (HeightRule::AtLeast, true)] {
+            let paragraph = |text| {
+                let mut p = Paragraph::with_text(text, CharProps { size: Some(10.0), ..Default::default() });
+                p.props = ParaProps {
+                    line_spacing: Some(LineSpacing::Exactly(12.0)),
+                    space_before: Some(0.0),
+                    space_after: Some(0.0),
+                    ..Default::default()
+                };
+                wordcraft_doc::para_block(p)
+            };
+            let table = |height, floating: Option<TableFloat>| {
+                let mut t = Table::new(1, 1, 468.0);
+                t.props.style = None;
+                t.props.fixed = true;
+                t.props.cell_margins = Some([0.0; 4]);
+                t.props.borders = Some(Borders::all(Border::single(1.0)));
+                t.rows[0].props.height = Some(height);
+                t.rows[0].props.height_rule = if floating.is_some() { HeightRule::Exact } else { rule };
+                t.rows[0].props.cant_split = cant_split;
+                t.rows[0].cells[0].blocks = vec![paragraph("Original table")];
+                t.props.float = floating;
+                Arc::new(Block::Table(t))
+            };
+            let mut d = Document::new();
+            d.settings.compat_mode = 15;
+            d.last_section.columns.count = columns;
+            d.last_section.columns.space = 36.0;
+            let float = TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 160.0, overlap: false, ..Default::default() };
+            let (flow, float) = (table(440.0, None), table(180.0, Some(float)));
+            d.body = vec![paragraph("Original late probe"), flow, float, paragraph("Original anchor")];
+            let l = lay(&d);
+            assert_eq!(l.pages.len(), 2, "columns={columns} rule={rule:?} cant_split={cant_split}");
+            let (float_block, flow_block) = (2, 1);
+            let page_of = |block| {
+                l.pages
+                    .iter()
+                    .position(|p| {
+                        p.items.iter().any(|item| {
+                            matches!(item,
+                                Placed::Cell { table, .. } if table.0 == vec![block]
+                            )
+                        })
+                    })
+                    .unwrap()
+            };
+            assert_eq!(page_of(float_block), 1, "columns={columns}: float anchor page");
+            assert_eq!(page_of(flow_block), 0, "columns={columns} rule={rule:?} cant_split={cant_split}: prior row page");
+            // Each physical placement must leave the fixed row clear of the float.
+            for page in &l.pages {
+                let cells = |block| {
+                    page.items
+                        .iter()
+                        .filter_map(|item| match item {
+                            Placed::Cell { table, rect, .. } if table.0 == vec![block] => Some(*rect),
+                            _ => None,
+                        })
+                        .collect::<Vec<_>>()
+                };
+                for float in cells(float_block) {
+                    assert!(cells(flow_block).iter().all(|row| !row.intersects(&float)), "columns={columns}: overlapping rows");
+                }
+            }
+            assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, 1, "anchor paragraph must follow the float");
+        }
+    }
+}
+
+#[test]
+fn late_wrap_survives_page_break() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+
+    let positions = |table_index| {
+        let text = std::iter::once("Prelude".to_owned()).chain((1..=12).map(|n| format!("Original body line {n}"))).collect::<Vec<_>>().join("\n");
+        let mut d = Document::from_text(&text);
+        for index in 0..13 {
+            let p = d.para_mut(StoryRef::Body, &Path::top(index)).unwrap();
+            p.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.page_break_before = Some(true);
+        let mut t = Table::new(1, 1, 300.0);
+        t.props.fixed = true;
+        t.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 120.0, ..Default::default() });
+        t.rows[0].props.height = Some(48.0);
+        t.rows[0].props.height_rule = HeightRule::Exact;
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Original float", Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(table_index), Block::Table(t)).unwrap();
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 2);
+        (1..13)
+            .map(|index| {
+                let block = index + usize::from(index >= table_index);
+                let caret = l.caret(&Pos::body(block, 0)).unwrap();
+                assert_eq!(caret.page, 1);
+                (caret.x, caret.top)
+            })
+            .collect::<Vec<_>>()
+    };
+    let early = positions(2);
+    let late = positions(13);
+    assert!(early.iter().any(|(x, _)| *x >= 372.0));
+    for (index, (a, b)) in early.iter().zip(&late).enumerate() {
+        assert!((a.0 - b.0).abs() < 0.01 && (a.1 - b.1).abs() < 0.01, "line {index}: early={a:?}, late={b:?}");
+    }
+}
+
+#[test]
+fn late_float_ignores_clipped_row() {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, LineSpacing, TableFloat};
+
+    let fixed_table = |height| {
+        let mut t = Table::new(1, 1, 468.0);
+        t.props.style = None;
+        t.props.fixed = true;
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].props.height = Some(height);
+        t.rows[0].props.height_rule = HeightRule::Exact;
+        t.rows[0].props.cant_split = true;
+        t
+    };
+    let mut inner = fixed_table(600.0);
+    inner.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Original clipped inner row", Default::default()))];
+    let mut outer = fixed_table(20.0);
+    outer.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(inner))];
+    let mut float = fixed_table(180.0);
+    float.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 160.0, overlap: false, ..Default::default() });
+    float.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(Paragraph::with_text("Original float", Default::default()))];
+    let mut title = Paragraph::with_text("Original clipped-row probe", Default::default());
+    title.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+    title.props.space_after = Some(0.0);
+    let mut d = Document::new();
+    d.settings.compat_mode = 15;
+    d.body = vec![
+        wordcraft_doc::para_block(title),
+        Arc::new(Block::Table(outer)),
+        Arc::new(Block::Table(float)),
+        wordcraft_doc::para_block(Paragraph::with_text("Original anchor", Default::default())),
+    ];
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1, "a clipped inner row must not move the outer float");
+    let page = &l.pages[0];
+    assert!(
+        page.items.iter().any(|it| matches!(it, Placed::Cell { table, rect, clip: true, .. } if table.0 == vec![1] && (rect.h - 20.0).abs() < 0.01))
+    );
+    assert!(page.items.iter().any(|it| matches!(it, Placed::Cell { table, rect, .. } if table.0.len() > 1 && rect.h > 590.0)));
+    assert!(page.items.iter().any(|it| matches!(it, Placed::Cell { table, rect, .. } if table.0 == vec![2] && (rect.y - 160.0).abs() < 0.01)));
+    assert_eq!(l.caret(&Pos::body(3, 0)).unwrap().page, 0);
+}
+
+#[derive(Clone, Copy, Debug)]
+enum PageDecoration {
+    Border,
+    Separator,
+}
+
+fn replay_probe() -> Document {
+    let mut doc = Document::new();
+    doc.body.clear();
+    let section = &mut doc.last_section;
+    section.page_w = 400.0;
+    section.page_h = 500.0;
+    section.margin_left = 40.0;
+    section.margin_right = 40.0;
+    section.margin_top = 40.0;
+    section.margin_bottom = 40.0;
+    doc
+}
+
+fn replay_table(rect: Rect) -> Block {
+    use wordcraft_doc::para::Anchor;
+    use wordcraft_doc::props::{HeightRule, TableFloat};
+
+    let mut table = Table::new(1, 1, rect.w);
+    table.props.style = None;
+    table.props.fixed = true;
+    table.rows[0].props.height = Some(rect.h);
+    table.rows[0].props.height_rule = HeightRule::Exact;
+    table.props.float = Some(TableFloat { h_rel: Anchor::Page, v_rel: Anchor::Page, x: rect.x, y: rect.y, ..Default::default() });
+    Block::Table(table)
+}
+
+fn decorated_float_doc(kind: PageDecoration) -> Document {
+    let mut doc = replay_probe();
+    let x = match kind {
+        PageDecoration::Border => {
+            doc.last_section.page_borders = Some(Borders::all(Border { space: 24.0, ..Border::single(0.5) }));
+            20.0
+        }
+        PageDecoration::Separator => {
+            doc.last_section.columns.count = 2;
+            doc.last_section.columns.space = 20.0;
+            doc.last_section.columns.separator = true;
+            150.0
+        }
+    };
+    doc.body = vec![
+        Arc::new(replay_table(Rect::new(x, 100.0, 100.0, 20.0))),
+        wordcraft_doc::para_block(Paragraph::with_text("Following", Default::default())),
+    ];
+    doc
+}
+
+fn first_float_pass(doc: &Document) -> Pass {
+    let totals = Totals::first_guess(doc.sections().len());
+    layout_pass(doc, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, &mut FloatReplay::default())
+}
+
+#[test]
+fn decoration_needs_no_replay() {
+    let observed: Vec<_> = [PageDecoration::Border, PageDecoration::Separator]
+        .into_iter()
+        .map(|kind| {
+            let pass = first_float_pass(&decorated_float_doc(kind));
+            (kind, matches!(&pass, Pass::Done(_)), matches!(&pass, Pass::FloatReplay))
+        })
+        .collect();
+    assert!(observed.iter().all(|(_, done, _)| *done), "observed (kind, done, replay): {observed:?}");
+}
+
+#[test]
+fn behind_keeps_decor_identity() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+
+    let mut observed = Vec::new();
+    for kind in [PageDecoration::Border, PageDecoration::Separator] {
+        let mut doc = decorated_float_doc(kind);
+        doc.body.insert(0, wordcraft_doc::para_block(Paragraph::with_text("Earlier", Default::default())));
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 10.0,
+            h: 10.0,
+            fill: Some(wordcraft_doc::props::Rgb(40, 80, 120)),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 300.0, y: 300.0, ..Default::default() },
+            story: None,
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        };
+        doc.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let pass = first_float_pass(&doc);
+        observed.push((kind, matches!(&pass, Pass::Done(_)), matches!(&pass, Pass::FloatReplay)));
+    }
+    assert!(observed.iter().all(|(_, done, _)| *done), "prepended paint (kind, done, replay): {observed:?}");
+}
+
+#[test]
+fn paragraph_rule_keeps_replay() {
+    use wordcraft_doc::props::LineSpacing;
+
+    let mut doc = replay_probe();
+    let mut text = Paragraph::with_text("Earlier", Default::default());
+    text.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+    text.props.space_after = Some(0.0);
+    text.props.borders = Some(Borders { bottom: Some(Border::single(0.5)), ..Default::default() });
+    doc.body.push(wordcraft_doc::para_block(text));
+    let baseline = lay(&doc);
+    let rule_y = baseline.pages[0]
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Placed::Rule { y0, y1, .. } if y0 == y1 => Some(*y0),
+            _ => None,
+        })
+        .expect("paragraph bottom border");
+    doc.body.push(Arc::new(replay_table(Rect::new(250.0, rule_y - 1.0, 100.0, 2.0))));
+    assert!(matches!(first_float_pass(&doc), Pass::FloatReplay), "body border overlap still needs replay");
 }
