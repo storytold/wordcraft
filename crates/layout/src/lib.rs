@@ -4009,7 +4009,7 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     if row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)) {
         return false;
     }
-    if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
+    if row.props.height_rule == HeightRule::AtLeast && laid.min_height > room + 0.01 && laid.min_height <= page_height + 0.01 {
         return false;
     }
     table::split_row(laid, room).is_some()
@@ -4070,9 +4070,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     // Measured in Word: an at-least row's minimum height is reserved, not split. Where less room
     // than that is left on a page that already holds something, the row starts the next page
     // whole; a row taller than a page then splits from the top of that page.
-    let short_of_min = |ri: usize, room: f32| {
-        t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::AtLeast && r.props.height.is_some_and(|h| h > room + 0.01))
-    };
+    let short_of_min = |ri: usize, room: f32| tl.rows.get(ri).is_some_and(|row| row.min_height > room + 0.01);
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
     // after them can't start under them there, the table starts on the next page.
     let first = header_rows.len();

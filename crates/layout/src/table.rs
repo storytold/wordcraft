@@ -16,6 +16,8 @@ const MAX_WIDTH_SHARE: f32 = 10.0;
 
 pub struct RowLayout {
     pub height: f32,
+    /// Minimum retained on continuation fragments that can hold it.
+    pub(crate) min_height: f32,
     /// Items relative to the table's top-left (x) and the row's top (y).
     pub items: Vec<Placed>,
     /// The room the row keeps below its text: the bottom cell margin and border band. Part of a
@@ -26,7 +28,14 @@ pub struct RowLayout {
 }
 
 /// A cell of a [`RowLayout`].
+pub(crate) struct CellCenter {
+    offset: f32,
+    height: f32,
+    content: std::ops::Range<usize>,
+}
+
 pub struct CellPart {
+    pub(crate) center: Option<CellCenter>,
     /// Top cell margin and visible border band retained on a continuation.
     pub(crate) top: f32,
     /// Its items in the row's `items` (its fill, text, borders and cell area).
@@ -472,6 +481,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut rows: Vec<Vec<CellBox>> = Vec::with_capacity(nrows);
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
+    let mut minimums = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = 0usize;
         let mut cells = Vec::with_capacity(row.cells.len());
@@ -645,6 +655,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
+        minimums.push(match (row.props.height, row.props.height_rule) {
+            (Some(h), HeightRule::AtLeast) if h > 0.0 => h + row_insets,
+            _ => 0.0,
+        });
         bottoms.push(row_below);
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
@@ -757,10 +771,16 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                     it.turn(tn.turn, ox, oy);
                 }
             }
+            let content_start = items.len();
             for mut it in cell_items {
                 it.translate(0.0, dy);
                 items.push(it);
             }
+            let center = (c.vmerge == VMerge::Restart && c.valign == VAlign::Center && !exact && dy > 0.0).then_some(CellCenter {
+                offset: dy,
+                height: align_h,
+                content: content_start..items.len(),
+            });
             let b = c.borders;
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
             // Horizontal edges run on over half of each visible vertical edge, so the corners
@@ -791,9 +811,15 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 clip: exact && c.h > span_h + 0.01,
             });
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
-            parts.push(CellPart { top, items: first..items.len(), end });
+            parts.push(CellPart { top, center, items: first..items.len(), end });
         }
-        out.push(RowLayout { height: rh, items, bottom: bottoms.get(ri).copied().unwrap_or(0.0), cells: parts });
+        out.push(RowLayout {
+            height: rh,
+            min_height: minimums.get(ri).copied().unwrap_or(0.0),
+            items,
+            bottom: bottoms.get(ri).copied().unwrap_or(0.0),
+            cells: parts,
+        });
     }
     TableLayout { x, width: total, rows: out }
 }
@@ -901,6 +927,50 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     if !kept_any || first_moved == f32::MAX {
         return None;
     }
+    // Word closes the first fragment below its last fitted content.
+    // Nested boxes crossing the cut retain their geometry.
+    let mut kept_bottoms = Vec::with_capacity(cells.len());
+    for (((items, splits), c), &moved_top) in cells.iter().zip(&splits).zip(&row.cells).zip(&moved) {
+        let mut kept_bottom = 0.0f32;
+        for (it, &split) in items.iter().zip(splits) {
+            let bottom = if let Some(r) = it.turned_bounds() {
+                fits(r.bottom()).then_some(r.bottom())
+            } else {
+                match it {
+                    Placed::Lines { para, l0, y, .. } if split > *l0 => crate::item_bottom(*y, para, *l0, split),
+                    Placed::Image { rect, .. } | Placed::Shape { rect, .. } | Placed::Graphic { rect, .. } | Placed::Clip { rect, .. }
+                        if fits(rect.bottom()) =>
+                    {
+                        Some(rect.bottom())
+                    }
+                    Placed::Object { rect, wrap, .. } if *wrap != wordcraft_doc::para::Wrap::BehindText && fits(rect.bottom()) => Some(rect.bottom()),
+                    Placed::Cell { rect, table, .. } if Some(table.0.len()) > own_depth && rect.y < cut => Some(rect.bottom().min(cut)),
+                    _ => None,
+                }
+            };
+            if let Some(bottom) = bottom {
+                kept_bottom = kept_bottom.max(bottom);
+            }
+        }
+        if moved_top == f32::MAX
+            && let Some(end) = c.end.filter(|e| fits(*e))
+        {
+            kept_bottom = kept_bottom.max(end);
+        }
+        kept_bottoms.push(kept_bottom);
+    }
+    let floor = if row.min_height <= cut + 0.01 { row.min_height } else { cut };
+    let plain_bottom = kept_bottoms.iter().zip(&row.cells).filter(|(_, c)| c.center.is_none()).map(|(b, _)| *b).fold(0.0f32, f32::max);
+    let plain_height = (plain_bottom + row.bottom).max(floor).min(cut);
+    // A fitting merged label uses the first physical fragment's vertical center.
+    let kept_bottom = kept_bottoms
+        .iter()
+        .zip(&row.cells)
+        .filter(|(_, c)| c.center.as_ref().is_none_or(|v| v.height > plain_height + 0.01))
+        .map(|(b, _)| *b)
+        .fold(0.0f32, f32::max);
+    let first_height = (kept_bottom + row.bottom).max(floor).min(cut);
+    let trim_first = |r: Rect| (r.y < first_height).then(|| Rect::new(r.x, r.y, r.w, r.h.min(first_height - r.y)));
     // Each cell resumes below its own top margin and border band.
     let shifts: Vec<f32> = moved.iter().zip(&row.cells).map(|(&m, c)| ((if m < f32::MAX { m } else { first_moved }) - c.top).max(0.0)).collect();
     // The continuation is as tall as the cell needing the most room (what it moves on and the
@@ -912,7 +982,10 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
             need = need.max(c.end.map_or(row.height, |e| e + row.bottom) - s);
         }
     }
-    let height = need.clamp(4.0, full);
+    // Word reapplies an at-least height on the continuation. Oversized minimums
+    // that cannot fit the first fragment keep their existing distributed height.
+    let min_height = if row.min_height <= cut + 0.01 { row.min_height } else { 0.0 };
+    let height = need.clamp(4.0, full).max(min_height);
     // What runs to the row's bottom (cell areas, shading, side borders) ends at the
     // continuation's.
     let rest = (row.height - height).max(0.0);
@@ -921,7 +994,16 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     let mut parts = Vec::with_capacity(cells.len());
     for (((c, items), splits), &shift) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts) {
         let start = b.len();
-        for (it, &split) in items.iter().zip(splits) {
+        let center = c.center.as_ref().filter(|v| v.height <= plain_height + 0.01);
+        for (index, (it, &split)) in items.iter().zip(splits).enumerate() {
+            if let Some(center) = center
+                && center.content.contains(&(c.items.start + index))
+            {
+                let mut it = it.clone();
+                it.translate(0.0, ((first_height - center.height) / 2.0).max(0.0) - center.offset);
+                a.push(it);
+                continue;
+            }
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
                 if fits(r.bottom()) {
@@ -978,14 +1060,14 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 // continuation (a nested table's cell below the cut moves whole).
                 Placed::Fill { rect, color } => {
                     let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
-                    a.extend(above.map(|rect| Placed::Fill { rect, color: *color }));
+                    a.extend(above.and_then(trim_first).map(|rect| Placed::Fill { rect, color: *color }));
                     b.extend(below.map(|rect| Placed::Fill { rect, color: *color }));
                 }
                 Placed::Cell { rect, covered, table, row: r, cell, story, clip } => {
                     let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
                     let cell_at =
                         |rect| Placed::Cell { rect, covered: *covered, table: table.clone(), row: *r, cell: *cell, story: *story, clip: *clip };
-                    a.extend(above.map(cell_at));
+                    a.extend(above.and_then(trim_first).map(cell_at));
                     b.extend(below.map(cell_at));
                 }
                 Placed::Rule { x0, y0, x1, y1, border } => {
@@ -995,7 +1077,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                             a.push(it.clone());
                             b.push(Placed::Rule { x0: *x0, y0: 0.0, x1: *x1, y1: 0.0, border: *border });
                         } else if *y0 >= row.height - 0.01 {
-                            a.push(Placed::Rule { x0: *x0, y0: cut, x1: *x1, y1: cut, border: *border });
+                            a.push(Placed::Rule { x0: *x0, y0: first_height, x1: *x1, y1: first_height, border: *border });
                             b.push(Placed::Rule { x0: *x0, y0: y0 - rest, x1: *x1, y1: y1 - rest, border: *border });
                         } else if *y0 <= cut {
                             a.push(it.clone());
@@ -1004,8 +1086,8 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                         }
                     } else {
                         let (t, bt) = (y0.min(*y1), y0.max(*y1));
-                        if t < cut {
-                            a.push(Placed::Rule { x0: *x0, y0: t, x1: *x1, y1: bt.min(cut), border: *border });
+                        if t < first_height {
+                            a.push(Placed::Rule { x0: *x0, y0: t, x1: *x1, y1: bt.min(first_height), border: *border });
                         }
                         if bt > cut {
                             let shift = geo_shift(bt, shift);
@@ -1015,12 +1097,12 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 }
             }
         }
-        parts.push(CellPart { top: c.top, items: start..b.len(), end: c.end.map(|e| e - shift) });
+        parts.push(CellPart { top: c.top, items: start..b.len(), end: c.end.filter(|_| center.is_none()).map(|e| e - shift), center: None });
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, cells: parts },
+        RowLayout { height: first_height, min_height: 0.0, items: a, bottom: row.bottom, cells: Vec::new() },
+        RowLayout { height, min_height, items: b, bottom: row.bottom, cells: parts },
     ))
 }
 
