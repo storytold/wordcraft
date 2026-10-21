@@ -1580,8 +1580,9 @@ mod tests {
         // Dark and grey pixel counts, and the grey pixels' mean offset from the dark ones.
         let shot = |c: CharProps| {
             let mut d = Document::from_text("x");
-            let cp = CharProps { size: Some(40.0), bold: Some(true), ..c };
-            d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("HHHH", cp))];
+            // Bundled squares give the exposed copy a symmetric silhouette, without font substitution.
+            let cp = CharProps { font: Some("Source Sans 3".into()), size: Some(40.0), bold: Some(true), ..c };
+            d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("■■■■", cp))];
             let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
             let img = render_page(&d, &l.pages[0], 2.0, &RenderOptions::default());
             let (mut dark, mut grey) = ((0.0, 0.0, 0.0f64), (0.0, 0.0, 0.0f64));

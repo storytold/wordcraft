@@ -365,26 +365,40 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
     (f64::from(ascender) + f64::from(line_gap.max(0)), f64::from(descender).abs())
 }
 
-/// Line metrics for a face in font units: (ascent, descent), both positive, the way word
-/// processors measure single line spacing: the hhea values with the line gap above the ascent
-/// (Word puts the first baseline that far below the line top), falling back to OS/2
-/// usWinAscent/usWinDescent.
+const EAST_ASIAN_LEADING: f64 = 0.3;
+
+fn east_asian_line(ascender: i16, descender: i16) -> (f64, f64) {
+    let ascent = f64::from(ascender);
+    let descent = f64::from(descender).abs();
+    let half_leading = (ascent + descent) * EAST_ASIAN_LEADING / 2.0;
+    (ascent + half_leading, descent + half_leading)
+}
+
+/// Metrics for fixed line spacing: preserve the font's hhea baseline without automatic leading.
+pub fn fixed_line_metrics(face: &crate::FontFace) -> (f64, f64) {
+    let fallback = (face.ascent.max(1.0), face.descent.abs());
+    let Some(f) = face.skrifa() else { return fallback };
+    let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
+    let win = f.os2().ok().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64));
+    let valid = |m: &(f64, f64)| m.0 > 0.0 && m.0 + m.1 <= face.upem * 2.0;
+    hhea.filter(valid).or_else(|| win.filter(valid)).unwrap_or(fallback)
+}
+
+/// Automatic line metrics in font units. East Asian code pages replace the hhea gap with
+/// 30% of raw ascent plus descent, split equally above and below. Other faces keep their gap.
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
     if let Some(v) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&face.id()) {
         return *v;
     }
-    let mut v = (face.ascent.max(1.0), face.descent.abs());
-    if let Some(f) = face.skrifa() {
-        // hhea ascender + descender + line gap (Word on macOS), the gap above the ascent; OS/2
-        // win metrics only when the hhea values are missing, and never more than twice the em.
-        let hhea = f.hhea().ok().map(|h| hhea_line(h.ascender().to_i16(), h.descender().to_i16(), h.line_gap().to_i16()));
-        let win = f.os2().ok().map(|o| (o.us_win_ascent() as f64, o.us_win_descent() as f64));
-        let ok = |m: &(f64, f64)| m.0 > 0.0 && m.0 + m.1 <= face.upem * 2.0;
-        if let Some(m) = hhea.filter(ok) {
-            v = m;
-        } else if let Some(m) = win.filter(ok) {
+    let mut v = fixed_line_metrics(face);
+    if face.is_east_asian()
+        && let Some(h) = face.skrifa().and_then(|f| f.hhea().ok())
+    {
+        let m = east_asian_line(h.ascender().to_i16(), h.descender().to_i16());
+        // Retain the same bound and fallback for hostile or invalid metrics.
+        if h.ascender().to_i16() > 0 && m.0 > 0.0 && m.0 + m.1 <= face.upem * 2.0 {
             v = m;
         }
     }
