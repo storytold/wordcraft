@@ -3540,3 +3540,34 @@ fn equation_in_alternate_content_is_read() {
     assert_eq!(equations(p), vec![("x+1".to_string(), false)]);
     assert!(!p.plain_text().contains("[picture]"));
 }
+
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill, extra, .. } => (*fill, extra.fill_transparency),
+        o => panic!("{o:?}"),
+    };
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), 69.02));
+    let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), 69.02));
+}
+
+/// Pattern foreground/background opacity must survive editing, not become a solid fill.
+#[test]
+fn ltvert_fill_roundtrips() {
+    let paint = r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:pattFill prst="ltVert"><a:fgClr><a:srgbClr val="9BBB59"><a:alpha val="80000"/></a:srgbClr></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"><a:alpha val="40000"/></a:srgbClr></a:bgClr></a:pattFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Pattern", 254000, 254000, paint, "", "<wps:cNvSpPr/>")));
+    let saved = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&saved), "word/document.xml");
+    assert!(xml.contains("<a:pattFill prst=\"ltVert\">"), "pattern was flattened: {xml}");
+    assert!(xml.contains("<a:bgClr>"));
+    assert!(xml.contains("val=\"80000\""));
+    assert!(xml.contains("val=\"40000\""));
+    let again = wordcraft_docx::read(&saved).unwrap();
+    assert_eq!(d.body, again.body);
+}

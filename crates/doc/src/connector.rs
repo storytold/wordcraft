@@ -38,6 +38,12 @@ pub struct ShapeExtra {
     /// 100000ths of the shorter side, at most [`MAX_CORNER`]; `None` draws [`DEFAULT_CORNER`].
     #[serde(skip_serializing_if = "Option::is_none")]
     pub corner: Option<u32>,
+    /// DrawingML preset pattern colors, including their independent opacity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pattern: Option<crate::pattern::PatternFill>,
+    /// The fill's transparency, percent (DrawingML's `a:alpha` is its opacity); 0 = opaque.
+    #[serde(skip_serializing_if = "is_zero_f32")]
+    pub fill_transparency: f32,
     /// The outline dash pattern; absent in older saved documents means solid.
     #[serde(skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
     pub dash: crate::line_dash::LineDash,
@@ -49,10 +55,17 @@ fn is_zero(v: &u32) -> bool {
 fn is_false(v: &bool) -> bool {
     !*v
 }
+fn is_zero_f32(v: &f32) -> bool {
+    *v == 0.0
+}
 
 impl ShapeExtra {
     pub fn is_empty(&self) -> bool {
         *self == ShapeExtra::default()
+    }
+    /// The fill's opacity, 0–1.
+    pub fn fill_opacity(&self) -> f32 {
+        if self.fill_transparency.is_finite() { (1.0 - self.fill_transparency / 100.0).clamp(0.0, 1.0) } else { 1.0 }
     }
 }
 

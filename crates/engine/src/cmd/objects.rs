@@ -360,8 +360,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("shape.fill", "Shape Fill", "Shape Format › Shape Styles", |s, v| {
             let c = p::str(v, "color").and_then(Rgb::parse);
             with_obj(s, |o| {
-                if let InlineObject::Shape { fill, .. } = o {
+                if let InlineObject::Shape { fill, extra, .. } = o {
                     *fill = c;
+                    extra.pattern = None;
                 } else if let Some(style) = super::canvas::style_mut(o) {
                     style.fill = c;
                 }
@@ -1722,6 +1723,30 @@ mod tests {
         assert!(s.run("arrange.copyTo", &json!({"page": 0})).is_err());
         s.run("edit.undo", &json!({})).unwrap();
         assert_eq!(count(&s), 1);
+    }
+
+    #[test]
+    fn solid_fill_replaces_pattern() {
+        use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+        let pattern = PatternFill {
+            kind: PatternKind::LightVertical,
+            foreground: PatternColor { color: Rgb::BLACK, alpha: 80_000 },
+            background: PatternColor { color: Rgb::WHITE, alpha: 40_000 },
+        };
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind":"rectangle"})).unwrap();
+        with_obj(&mut s, |o| {
+            if let InlineObject::Shape { extra, .. } = o {
+                extra.pattern = Some(pattern);
+            }
+        })
+        .unwrap();
+        s.run("shape.fill", &json!({"color":"FF0000"})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert!(matches!(o,InlineObject::Shape{fill:Some(Rgb(255,0,0)),extra,..} if extra.pattern.is_none()));
+        s.run("edit.undo", &json!({})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert!(matches!(o,InlineObject::Shape{extra,..} if extra.pattern==Some(pattern)));
     }
 
     #[test]

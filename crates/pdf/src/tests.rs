@@ -1860,3 +1860,154 @@ fn pages_print_scaled_to_other_paper() {
         assert_eq!(size(&bytes), size(&plain));
     }
 }
+
+#[test]
+fn ltvert_pdf_has_disjoint_bands() {
+    use kurbo::Shape;
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+    let pattern = PatternFill {
+        kind: PatternKind::LightVertical,
+        foreground: PatternColor { color: wordcraft_doc::Rgb(155, 187, 89), alpha: 80_000 },
+        background: PatternColor { color: wordcraft_doc::Rgb::WHITE, alpha: 40_000 },
+    };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Ellipse,
+        w: 20.0,
+        h: 20.0,
+        fill: Some(pattern.foreground.color),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: wordcraft_doc::connector::ShapeExtra { pattern: Some(pattern), ..Default::default() },
+    };
+    let mut d = Document::new();
+    let mut p = Paragraph::new();
+    p.insert_object(0, shape, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let pdf = export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap();
+    let paths = filled_paths(&pdf);
+    let widths: Vec<_> = paths.iter().map(|p| p.bounding_box().width()).filter(|w| *w < 20.0).collect();
+    assert_eq!(widths.len(), 10, "five foreground and five background bands: {widths:?}");
+    assert_eq!(widths.iter().filter(|w| (**w - 1.0).abs() < 0.01).count(), 5);
+    assert_eq!(widths.iter().filter(|w| (**w - 3.0).abs() < 0.01).count(), 5);
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    struct Paints {
+        colors: Vec<[u8; 4]>,
+        clips: Vec<kurbo::BezPath>,
+    }
+    impl Device<'_> for Paints {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, paint: &Paint<'_>, _: &PathDrawMode) {
+            if let Paint::Color(c) = paint {
+                self.colors.push(c.to_rgba().to_rgba8());
+            }
+        }
+        fn push_clip_path(&mut self, c: &ClipPath) {
+            self.clips.push(c.path.clone());
+        }
+        fn pop_clip_path(&mut self) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn pop_transparency_group(&mut self) {}
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+    }
+    let parsed = hayro_syntax::Pdf::new(pdf).unwrap();
+    let cache = InterpreterCache::new();
+    let mut paints = Paints { colors: Vec::new(), clips: Vec::new() };
+    for page in parsed.pages().iter() {
+        let mut ctx =
+            Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, parsed.xref(), InterpreterSettings::default());
+        interpret_page(page, &mut ctx, &mut paints);
+    }
+    assert!(paints.colors.iter().any(|c| c[3] == 204), "foreground opacity: {:?}", paints.colors);
+    assert!(paints.colors.iter().any(|c| c[3] == 102), "background opacity: {:?}", paints.colors);
+    assert!(
+        paints.clips.iter().any(|p| {
+            let b = p.bounding_box();
+            (b.width() - 20.0).abs() < 0.01 && p.contains(b.center()) && !p.contains((b.x0 + 0.1, b.y0 + 0.1).into())
+        }),
+        "ellipse geometry must clip all bands"
+    );
+}
+
+#[test]
+fn pattern_and_solid_pdf_alpha() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+    struct Alphas {
+        values: Vec<u8>,
+        groups: Vec<f32>,
+    }
+    impl Device<'_> for Alphas {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, paint: &Paint<'_>, _: &PathDrawMode) {
+            if let Paint::Color(c) = paint {
+                let alpha = f32::from(c.to_rgba().to_rgba8()[3]) * self.groups.last().copied().unwrap_or(1.0);
+                self.values.push(alpha.round().clamp(0.0, 255.0) as u8);
+            }
+        }
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn pop_clip_path(&mut self) {}
+        fn push_transparency_group(&mut self, alpha: f32, _: Option<SoftMask<'_>>, _: BlendMode) {
+            self.groups.push(self.groups.last().copied().unwrap_or(1.0) * alpha);
+        }
+        fn pop_transparency_group(&mut self) {
+            if self.groups.len() > 1 {
+                let _ = self.groups.pop();
+            }
+        }
+        fn draw_glyph(&mut self, _: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, _: &GlyphDrawMode) {}
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+    }
+    let pattern = PatternFill {
+        kind: PatternKind::LightVertical,
+        foreground: PatternColor { color: wordcraft_doc::Rgb(155, 187, 89), alpha: 80_000 },
+        background: PatternColor { color: wordcraft_doc::Rgb::WHITE, alpha: 40_000 },
+    };
+    for (pattern, transparency, want) in [(Some(pattern), 100.0, vec![204_u8, 102]), (None, 50.0, vec![128_u8])] {
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Ellipse,
+            w: 20.0,
+            h: 20.0,
+            fill: Some(wordcraft_doc::Rgb(155, 187, 89)),
+            stroke: None,
+            stroke_width: 0.0,
+            float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 72.0, y: 200.0, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: wordcraft_doc::connector::ShapeExtra { pattern, fill_transparency: transparency, ..Default::default() },
+        };
+        let mut d = Document::new();
+        let mut p = Paragraph::new();
+        p.insert_object(0, shape, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+        let bytes = export(&d, &PdfOptions { tagged: false, ..Default::default() }).unwrap();
+        let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+        let cache = InterpreterCache::new();
+        let mut alphas = Alphas { values: Vec::new(), groups: vec![1.0] };
+        for page in pdf.pages().iter() {
+            let mut ctx =
+                Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+            interpret_page(page, &mut ctx, &mut alphas);
+        }
+        for expected in want {
+            assert!(alphas.values.iter().any(|actual| actual.abs_diff(expected) <= 1), "opacity {expected}: {:?}", alphas.values);
+        }
+    }
+}

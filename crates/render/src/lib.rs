@@ -564,15 +564,20 @@ fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOpti
     for it in items {
         let (color, alpha) = match it {
             Draw::Fill { rect, color, alpha, .. } if rect.contains(p) => (*color, *alpha),
-            // The shape's own outline (an ellipse's corners are not inside it). Shape fills are
-            // drawn opaque (the model has no fill transparency), so they cover what's beneath.
-            Draw::Shape { rect, kind, fill: Some(fill), corner, .. }
+            // Sample the shape outline and its active fill opacity at the caret.
+            Draw::Shape { rect, kind, fill: Some(fill), fill_alpha, corner, pattern, .. }
                 if *kind != ShapeKind::Line && rect.contains(p) && {
                     let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
                     kurbo::Shape::contains(&shape_path(*kind, r, *corner), kurbo::Point::new(p.x as f64, p.y as f64))
                 } =>
             {
-                (*fill, 1.0)
+                match pattern {
+                    Some(pattern) => {
+                        let paint = pattern.color_at(p.x);
+                        (paint.color, paint.opacity())
+                    }
+                    None => (*fill, *fill_alpha),
+                }
             }
             Draw::Clip { rect, items } if rect.contains(p) => {
                 blend_backgrounds(items, p, opts, bg, depth + 1);
@@ -897,14 +902,14 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.pop_layer();
             }
         }
-        Draw::Path { segs, fill, stroke, stroke_width, dash } => {
+        Draw::Path { segs, fill, fill_alpha, stroke, stroke_width, dash } => {
             let path = wordcraft_layout::display::seg_path(segs);
             if path.elements().is_empty() {
                 return;
             }
             ctx.set_transform(view);
             if let Some(f) = fill {
-                ctx.set_paint(color(opts.ink(*f), 1.0));
+                ctx.set_paint(color(opts.ink(*f), *fill_alpha));
                 ctx.fill_path(&path);
             }
             if let Some(s) = stroke {
@@ -954,7 +959,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
             ctx.stroke_path(&path);
         }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash } => {
+        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, pattern, fill_alpha, dash } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r, *corner);
             ctx.set_transform(view);
@@ -993,7 +998,8 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             // Soft edges: the fill fades out toward the outline (which fades with it).
             if let (Some(rad), Some(f), true) = (fx.soft_edge, fill, can_fill) {
                 let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
-                for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                let opacity = if fill_alpha.is_finite() { fill_alpha.clamp(0.0, 1.0) } else { 1.0 };
+                for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, opacity) {
                     let rr = r.inflate(g as f64, g as f64);
                     if rr.width() > 0.0 && rr.height() > 0.0 {
                         ctx.set_paint(color(opts.ink(*f), a));
@@ -1002,8 +1008,16 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 }
                 return;
             }
-            if let Some(f) = fill {
-                ctx.set_paint(color(opts.ink(*f), 1.0));
+            if let Some(pattern) = pattern.filter(|_| !kind.is_open()) {
+                ctx.push_clip_layer(&path);
+                for (band, paint) in pattern.bands(*rect) {
+                    let band = kurbo::Rect::new(band.x as f64, band.y as f64, band.right() as f64, band.bottom() as f64);
+                    ctx.set_paint(color(opts.ink(paint.color), paint.opacity()));
+                    ctx.fill_path(&band.to_path(0.1));
+                }
+                ctx.pop_layer();
+            } else if let Some(f) = fill {
+                ctx.set_paint(color(opts.ink(*f), *fill_alpha));
                 ctx.fill_path(&path);
             }
             if let Some(s) = stroke {
@@ -1284,6 +1298,8 @@ mod tests {
             stroke_width: 0.0,
             effects: Default::default(),
             corner: None,
+            pattern: None,
+            fill_alpha: 1.0,
             dash: Vec::new(),
         };
         let at = |x: f32, y: f32| {
@@ -2029,3 +2045,100 @@ mod tests {
 mod cache_tests;
 #[cfg(test)]
 mod tests_color_glyphs;
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+    use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+    #[test]
+    fn ltvert_alpha_and_clip() {
+        let pattern = PatternFill {
+            kind: PatternKind::LightVertical,
+            foreground: PatternColor { color: Rgb(155, 187, 89), alpha: 80_000 },
+            background: PatternColor { color: Rgb::WHITE, alpha: 40_000 },
+        };
+        let items = vec![
+            Draw::Fill { rect: wordcraft_geom::Rect::new(0.0, 0.0, 24.0, 24.0), color: Rgb(0, 0, 255), alpha: 1.0, text_bg: false },
+            Draw::Shape {
+                rect: wordcraft_geom::Rect::new(2.0, 2.0, 20.0, 20.0),
+                kind: ShapeKind::Ellipse,
+                fill: Some(pattern.foreground.color),
+                stroke: None,
+                stroke_width: 0.0,
+                effects: Default::default(),
+                corner: None,
+                pattern: Some(pattern),
+                fill_alpha: 1.0,
+                dash: Vec::new(),
+            },
+        ];
+        let image = render_items(&Document::new(), &items, 0.0, 0.0, 24.0, 24.0, 4.0, &RenderOptions::default());
+        let close = |pixel: [u8; 4], want: [u8; 4]| {
+            for (a, b) in pixel.into_iter().zip(want) {
+                assert!(a.abs_diff(b) <= 2, "{pixel:?} != {want:?}");
+            }
+        };
+        close(image.pixel(50, 50), [124, 150, 122, 255]);
+        close(image.pixel(54, 50), [102, 102, 255, 255]);
+        close(image.pixel(10, 10), [0, 0, 255, 255]);
+        let mut bg = [0.0, 0.0, 255.0];
+        blend_backgrounds(&items[1..], wordcraft_geom::Point::new(12.5, 12.5), &RenderOptions::default(), &mut bg, 0);
+        for (a, b) in bg.into_iter().zip([124.0, 149.6, 122.2]) {
+            assert!((a - b).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn pattern_alpha_is_independent() {
+        const COLOR_TOLERANCE: u8 = 2;
+        let pattern = PatternFill {
+            kind: PatternKind::LightVertical,
+            foreground: PatternColor { color: Rgb(155, 187, 89), alpha: 80_000 },
+            background: PatternColor { color: Rgb::WHITE, alpha: 40_000 },
+        };
+        let items = |pattern: Option<PatternFill>, fill_alpha: f32| {
+            vec![
+                Draw::Fill { rect: wordcraft_geom::Rect::new(0.0, 0.0, 24.0, 24.0), color: Rgb(0, 0, 255), alpha: 1.0, text_bg: false },
+                Draw::Shape {
+                    rect: wordcraft_geom::Rect::new(2.0, 2.0, 20.0, 20.0),
+                    kind: ShapeKind::Ellipse,
+                    fill: Some(Rgb(155, 187, 89)),
+                    stroke: None,
+                    stroke_width: 0.0,
+                    effects: Default::default(),
+                    corner: None,
+                    pattern,
+                    fill_alpha,
+                    dash: Vec::new(),
+                },
+            ]
+        };
+        let close = |pixel: [u8; 4], want: [u8; 4]| {
+            assert!(pixel.into_iter().zip(want).all(|(a, b)| a.abs_diff(b) <= COLOR_TOLERANCE), "{pixel:?} != {want:?}");
+        };
+        for fill_alpha in [0.0, 0.25, 1.0] {
+            let items = items(Some(pattern), fill_alpha);
+            let image = render_items(&Document::new(), &items, 0.0, 0.0, 24.0, 24.0, 4.0, &RenderOptions::default());
+            close(image.pixel(50, 50), [124, 150, 122, 255]);
+            close(image.pixel(54, 50), [102, 102, 255, 255]);
+            let mut bg = [0.0, 0.0, 255.0];
+            blend_backgrounds(&items[1..], wordcraft_geom::Point::new(12.5, 12.5), &RenderOptions::default(), &mut bg, 0);
+            for (a, b) in bg.into_iter().zip([124.0, 149.6, 122.2]) {
+                assert!((a - b).abs() < 0.1);
+            }
+        }
+        for (fill_alpha, want) in [(0.0, [0, 0, 255, 255]), (0.5, [78, 94, 172, 255]), (1.0, [155, 187, 89, 255])] {
+            let items = items(None, fill_alpha);
+            let image = render_items(&Document::new(), &items, 0.0, 0.0, 24.0, 24.0, 4.0, &RenderOptions::default());
+            close(image.pixel(50, 50), want);
+            let mut bg = [0.0, 0.0, 255.0];
+            blend_backgrounds(&items[1..], wordcraft_geom::Point::new(12.5, 12.5), &RenderOptions::default(), &mut bg, 0);
+            for (a, b) in bg.into_iter().zip([155.0 * fill_alpha, 187.0 * fill_alpha, 89.0 * fill_alpha + 255.0 * (1.0 - fill_alpha)]) {
+                assert!((a - b).abs() < 0.1);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod fill_alpha_tests;

@@ -30,6 +30,27 @@ pub(crate) fn fill_colour(e: &El, theme: &[Rgb]) -> Option<Rgb> {
     paint(f, theme)
 }
 
+/// Preserve light vertical fills; other presets keep the foreground fallback.
+pub(crate) fn pattern_fill(sppr: &El, theme: &[Rgb]) -> Option<wordcraft_doc::pattern::PatternFill> {
+    use wordcraft_doc::pattern::{ALPHA_SCALE, PatternColor, PatternFill, PatternKind};
+    if sppr.child("a:noFill").is_some() || sppr.child("a:blipFill").is_some() {
+        return None;
+    }
+    let p = sppr.child("a:pattFill")?;
+    let kind = PatternKind::LightVertical;
+    if p.attr("prst")? != kind.ooxml() {
+        return None;
+    }
+    let resolve = |name| {
+        let e = p.child(name)?;
+        let c = e.els().find(|c| is_color(c))?;
+        let alpha =
+            c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).unwrap_or(i64::from(ALPHA_SCALE)).clamp(0, i64::from(ALPHA_SCALE)) as u32;
+        Some(PatternColor { color: color(e, theme)?, alpha })
+    };
+    Some(PatternFill { kind, foreground: resolve("a:fgClr")?, background: resolve("a:bgClr")? })
+}
+
 fn is_color(e: &El) -> bool {
     matches!(e.name.as_str(), "a:srgbClr" | "a:schemeClr" | "a:sysClr" | "a:prstClr" | "a:scrgbClr" | "a:hslClr")
 }
@@ -265,5 +286,23 @@ mod tests {
         assert_eq!(preset_color("ltGray"), Some(Rgb(0xD3, 0xD3, 0xD3)));
         assert_eq!(preset_color("gold"), Some(Rgb(0xFF, 0xD7, 0)));
         assert_eq!(preset_color("unknownColor"), None);
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+    #[test]
+    fn ltvert_theme_alpha_and_limits() {
+        let xml = br#"<a:spPr xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><a:pattFill prst="ltVert"><a:fgClr><a:schemeClr val="accent3"><a:alpha val="-1"/></a:schemeClr></a:fgClr><a:bgClr><a:srgbClr val="FFFFFF"><a:alpha val="200000"/></a:srgbClr></a:bgClr></a:pattFill></a:spPr>"#;
+        let props = crate::xml::parse(xml).unwrap();
+        let pattern = pattern_fill(&props, &THEME_COLORS).unwrap();
+        assert_eq!(pattern.foreground.color, THEME_COLORS[6]);
+        assert_eq!(pattern.foreground.alpha, 0);
+        assert_eq!(pattern.background.alpha, 100_000);
+        let unsupported = String::from_utf8(xml.to_vec()).unwrap().replace("ltVert", "dkDnDiag");
+        let props = crate::xml::parse(unsupported.as_bytes()).unwrap();
+        assert!(pattern_fill(&props, &THEME_COLORS).is_none());
+        assert_eq!(fill_colour(&props, &THEME_COLORS), Some(THEME_COLORS[6]));
     }
 }
