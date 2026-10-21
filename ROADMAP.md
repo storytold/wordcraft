@@ -141,6 +141,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-18 | Split Cells and Convert Text to Table dialogs (#2592), matched to Word: Split Cells starts from the selection (twice its columns, its rows; Merge cells before split offered for several cells or one cell merged across columns); `table.split` gains `rows` and `mergeFirst`, a merged cell splits into 1 to its height rows (its height or 1 × 1 unmerges it, more is refused with Word's message) and column splits make equal parts without moving other rows' grid lines. Convert Text to Table guesses columns live, shows the row count, and offers Initial column width (Auto or up to 22 in, kept as each column's preferred width), AutoFit to contents/window and Paragraphs/Commas/Tabs/Other separators; `table.fromText` gains `paragraph`/`other` + `char`, `columns`, `autofit` and `width`. |
 | 2026-10-19 | Save As, Export and Open no longer do nothing on Linux desktops whose file chooser portal fails to show its dialog (#2999): a "cancel" quicker than anyone could make one asks again without the parent window, then opens the built-in file browser. |
 | 2026-10-18 | Long navigation headings wrap onto further lines inside the resizable pane instead of ending in an ellipsis: the row grows with the text and the pane keeps its width (#759, #3015). |
 | 2026-10-18 | Clearing a font query with no matches keeps Recently Used Fonts visible at the top of a scrollable list. The initial scroll position no longer skips its heading; measured keyboard scrolling is unchanged (#2068). |
@@ -561,6 +562,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-16 | trivial | Progress log: Hebrew field results and smart quotes (#1670) |
 | 2026-10-16 | trivial | Progress log: Ctrl+wheel zoom no longer scrolls the document (#1743) |
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
+| 2026-10-16 | trivial | Turned text wraps at an at-least row height when its lines fit across the column; narrow cells still grow. |
 | 2026-10-14 | trivial | Progress log: RTF export writes sections (gap 19) |
 | 2026-10-15 | trivial | Progress log: multi-letter equation scripts (#1609) |
 | 2026-10-15 | trivial | Progress log: plain-text paste keeps the paragraph formatting where it lands |
