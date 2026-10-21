@@ -9423,3 +9423,61 @@ fn caret_height_ignores_line_spacing() {
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
 }
+
+/// NUMPAGES has a Word-specific title-page exception; SECTIONPAGES and physical pages do not.
+#[test]
+fn zero_title_page_total() {
+    let field =
+        |instr: &str| InlineObject::Field { instr: instr.into(), result: "99".into(), locked: false, dirty: false, code: false, form: String::new() };
+    for (title, start, total) in [(true, Some(0), "2"), (false, Some(0), "3"), (true, Some(1), "3"), (true, None, "3")] {
+        let mut d = Document::from_text("A\nB\nC");
+        d.last_section.title_page = title;
+        d.last_section.page_num_start = start;
+        for i in 0..3 {
+            let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+            p.props.page_break_before = Some(i > 0);
+            p.insert_object(p.len(), field("NUMPAGES"), &Default::default()).unwrap();
+            p.insert_object(p.len(), field("SECTIONPAGES"), &Default::default()).unwrap();
+        }
+        let mut fp = wordcraft_doc::Paragraph::new();
+        fp.insert_object(0, field("NUMPAGES"), &Default::default()).unwrap();
+        fp.insert_object(fp.len(), field("SECTIONPAGES"), &Default::default()).unwrap();
+        let id = d.add_part(wordcraft_doc::PartKind::Footer, vec![wordcraft_doc::para_block(fp)]);
+        d.last_section.footers.default = Some(id);
+        d.last_section.footers.first = Some(id);
+        let l = lay(&d);
+        assert_eq!(l.pages.len(), 3);
+        for page in &l.pages {
+            for items in [&page.items, &page.footer] {
+                let shown: Vec<_> = items
+                    .iter()
+                    .filter_map(|it| match it {
+                        Placed::Lines { para, .. } => Some(para.shown.iter().map(|s| s.1.as_str())),
+                        _ => None,
+                    })
+                    .flatten()
+                    .collect();
+                assert_eq!(shown, [total, "3"], "title={title}, start={start:?}");
+            }
+        }
+    }
+
+    let mut d = Document::from_text("First section\nLater title");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().section = Some(Box::new(d.last_section.clone()));
+    d.last_section.title_page = true;
+    d.last_section.page_num_start = Some(0);
+    let p = d.para_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    p.insert_object(p.len(), field("NUMPAGES"), &Default::default()).unwrap();
+    let l = lay(&d);
+    let shown: Vec<_> = l
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            Placed::Lines { para, .. } => Some(para.shown.iter().map(|s| s.1.clone())),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(shown, [l.pages.len().to_string()], "a later section cannot trigger the exception");
+}

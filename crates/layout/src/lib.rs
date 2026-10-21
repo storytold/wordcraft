@@ -673,6 +673,12 @@ impl Totals {
     }
 }
 
+/// Word excludes a zero-numbered title page from NUMPAGES (MS-OI29500 §2.1.489).
+fn num_pages(doc: &Document, physical: u32) -> u32 {
+    let omit_title = doc.sections().first().is_some_and(|(_, s)| s.title_page && s.page_num_start == Some(0));
+    physical.saturating_sub(u32::from(omit_title))
+}
+
 /// The most extra layout passes for page totals in the body: a total that changes the page
 /// count (its digits pushing text to another page) is tried again, this many times at most.
 const MAX_TOTAL_PASSES: usize = 3;
@@ -2189,7 +2195,7 @@ fn layout_pass(
         counters: Counters::default(),
         fields: FieldCtx {
             page: 1,
-            pages: totals.pages,
+            pages: num_pages(doc, totals.pages),
             section_pages: totals.section(0),
             section: 1,
             notes: Arc::new(notes),
@@ -4461,7 +4467,7 @@ fn marks_key(marks: &fields::BookmarkPages) -> u64 {
 }
 
 fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {
-    let total = pages.len() as u32;
+    let total = num_pages(ctx.doc, pages.len() as u32);
     let even_odd = ctx.doc.settings.even_odd_headers;
     let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
     let mut first_of_section: HashSet<usize> = HashSet::new();
