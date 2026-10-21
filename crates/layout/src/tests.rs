@@ -3252,6 +3252,73 @@ fn clicks_inside_a_text_box_hit_its_story() {
     assert!(r.contains(wordcraft_geom::Point::new(bc.x, bc.top)), "{bc:?} outside {r:?}");
 }
 
+/// #1932: grouped text keeps its own editable area, including blank space below a line.
+#[test]
+fn group_text_boxes_have_editable_frames_without_replacing_the_group() {
+    use wordcraft_doc::para::{Anchor, Float, GroupChild, ShapeKind};
+    for header in [false, true] {
+        for wrap in [Wrap::InFrontOfText, Wrap::BehindText] {
+            for rot in [0.0, 25.0] {
+                let mut d = Document::new();
+                let host = if header {
+                    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(Default::default())]);
+                    d.last_section.headers.default = Some(id);
+                    StoryRef::Part(id)
+                } else {
+                    StoryRef::Body
+                };
+                let id = d.add_part(
+                    wordcraft_doc::PartKind::TextBox,
+                    vec![wordcraft_doc::para_block(Paragraph::with_text("Editable", Default::default()))],
+                );
+                let shape = InlineObject::Shape {
+                    kind: ShapeKind::TextBox,
+                    w: 80.0,
+                    h: 50.0,
+                    fill: None,
+                    stroke: None,
+                    stroke_width: 0.75,
+                    story: Some(id),
+                    float: Default::default(),
+                    freeform: None,
+                    effects: Default::default(),
+                    extra: Default::default(),
+                };
+                let group = InlineObject::Group {
+                    w: 240.0,
+                    h: 160.0,
+                    ch_w: 120.0,
+                    ch_h: 80.0,
+                    float: Float { wrap, rot, x: 100.0, y: 220.0, h_rel: Anchor::Page, v_rel: Anchor::Page, ..Default::default() },
+                    children: vec![GroupChild { x: 10.0, y: 10.0, obj: shape }],
+                    canvas: None,
+                };
+                let pos = d.start_of(host);
+                d.insert_object(&pos, group, &Default::default()).unwrap();
+                let l = lay(&d);
+                let outer = l.object(&pos, 0).unwrap();
+                assert!(!outer.group_text_box);
+                assert!((outer.rect.w - 240.0).abs() < 0.1);
+                let member = l.text_box(id, 0).expect("group member has an editable frame");
+                assert!(member.group_text_box);
+                assert_eq!(member.story, host);
+                let (x, y) = (member.rect.x + 30.0, member.rect.bottom() - 15.0);
+                assert!(l.object_at_in(0, x, y, 4.0, host).is_none(), "group must not grab its text");
+                if header {
+                    assert_eq!(l.header_footer_text_box_at(0, x, y), Some(id));
+                } else {
+                    assert_eq!(l.story_at(0, x, y), Some(StoryRef::Part(id)));
+                }
+                assert_eq!(l.hit(0, x, y, StoryRef::Part(id)).map(|p| p.story), Some(StoryRef::Part(id)));
+                if wrap == Wrap::InFrontOfText {
+                    let border = l.object_at_in(0, member.rect.x + 1.0, y, 4.0, host).unwrap();
+                    assert_eq!(border, outer, "a member border still selects the whole group");
+                }
+            }
+        }
+    }
+}
+
 #[test]
 fn body_text_wins_over_a_text_box_behind_it() {
     let mut d = Document::from_text("Hi");
@@ -8407,6 +8474,7 @@ fn split_cell_moves_image_frame() {
             text_box: None,
             wrap: Wrap::Square,
             origin: wordcraft_geom::Point::new(3.0, 145.0),
+            group_text_box: false,
         };
         let mut kept = image.clone();
         kept.translate(0.0, top - 150.0);

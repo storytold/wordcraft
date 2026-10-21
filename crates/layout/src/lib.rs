@@ -323,6 +323,8 @@ pub enum Placed {
         off: usize,
         /// The text box story it shows (`Document::parts` id).
         text_box: Option<u32>,
+        /// An editable text area inside a group; the object position still identifies the group.
+        group_text_box: bool,
         wrap: Wrap,
         /// Its paragraph's column left and top: where offsets relative to the column and the
         /// paragraph (`Anchor::Column` / `Anchor::Paragraph`) start.
@@ -3274,6 +3276,7 @@ fn place_objects(
                 path: Path(path.to_vec()),
                 off: c.start,
                 text_box: shown,
+                group_text_box: false,
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
@@ -3294,6 +3297,19 @@ fn place_objects(
             };
             for (id, rect) in boxes {
                 let items = textbox::box_items(ctx, id, rect, depth);
+                if matches!(obj, InlineObject::Group { canvas: None, .. }) && !items.is_empty() {
+                    front.push(Placed::Object {
+                        rect,
+                        spin: Spin::default(),
+                        story,
+                        path: Path(path.to_vec()),
+                        off: c.start,
+                        text_box: Some(textbox::shown_story(ctx, id)),
+                        group_text_box: true,
+                        wrap: float.wrap,
+                        origin: Point::new(at.col.0, at.para_y),
+                    });
+                }
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }

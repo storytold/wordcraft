@@ -138,7 +138,9 @@ pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
         return layout.object(&pos, hint).map(|o| (o, false));
     }
     match app.session.sel.focus.story {
-        StoryRef::Part(id) if crate::canvas::in_text_box(app) => layout.text_box(id, hint).map(|o| (o, true)),
+        StoryRef::Part(id) if crate::canvas::in_text_box(app) => {
+            layout.text_box(id, hint).and_then(|o| if o.group_text_box { layout.object(&o.pos(), hint) } else { Some(o) }).map(|o| (o, true))
+        }
         _ => None,
     }
 }
@@ -338,8 +340,11 @@ fn snap_targets(pg: &wordcraft_layout::Page, me: &ObjectHit) -> Vec<wordcraft_ge
         .chain(&pg.header)
         .chain(&pg.footer)
         .filter_map(|it| match it {
-            wordcraft_layout::Placed::Object { rect, spin, story, path, off, wrap, .. }
-                if *wrap != Wrap::Inline && !(*story == pos.story && *path == pos.path && *off == pos.off) && Some(*story) != own =>
+            wordcraft_layout::Placed::Object { rect, spin, story, path, off, wrap, group_text_box, .. }
+                if !group_text_box
+                    && *wrap != Wrap::Inline
+                    && !(*story == pos.story && *path == pos.path && *off == pos.off)
+                    && Some(*story) != own =>
             {
                 Some(spin.bounds(*rect))
             }
@@ -370,7 +375,7 @@ fn link_click(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
         return;
     }
     let target = crate::canvas::page_at(pages, layout, scale, at).and_then(|(page, x, y)| {
-        layout.find_object(page, |o| o.page == page && o.text_box.is_some() && o.rect.contains(wordcraft_geom::Point::new(x, y)))
+        layout.find_object(page, |o| o.page == page && !o.group_text_box && o.text_box.is_some() && o.rect.contains(wordcraft_geom::Point::new(x, y)))
     });
     let Some(target) = target else {
         app.status(tl!("Not linked: click a text box"));
@@ -412,6 +417,9 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
     });
     handle.or_else(|| {
         let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
+        if group_text_at(layout, page, x, y, EDGE / scale.max(0.01), story) {
+            return None;
+        }
         // A Behind Text picture is normally hit only where no body text is present, so text above
         // it remains easy to edit. Once the picture is selected (for example with the arrow keys
         // or the Selection Pane), let its own frame win inside the frame so the user can drag it
@@ -456,9 +464,13 @@ fn behind_drag_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
     let story = active_story(app, layout);
     let (page, x, y) = crate::canvas::page_at(pages, layout, scale, at)?;
     let edge = EDGE / scale.max(0.01);
+    if group_text_at(layout, page, x, y, edge, story) {
+        return None;
+    }
     layout
         .find_object(page, |o| {
             o.page == page
+                && !o.group_text_box
                 && o.story == story
                 && o.behind()
                 && movable(app, o)
@@ -466,6 +478,18 @@ fn behind_drag_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32,
                 && o.rect.expand(edge).contains(o.unspin(x, y))
         })
         .map(|o| (o, Grab::Move))
+}
+
+/// An editable group member's interior, matching the layout's hit testing.
+fn group_text_at(layout: &DocLayout, page: usize, x: f32, y: f32, edge: f32, story: StoryRef) -> bool {
+    if layout.object_at_in(page, x, y, edge, story).is_some() {
+        return false;
+    }
+    let hit = layout.find_object(page, |o| o.page == page && o.story == story && o.group_text_box && o.rect.expand(-edge).contains(o.unspin(x, y)));
+    hit.is_some_and(|o| match story {
+        StoryRef::Body => layout.story_at(page, x, y) == o.text_box.map(StoryRef::Part),
+        StoryRef::Part(_) => layout.header_footer_text_box_at(page, x, y) == o.text_box,
+    })
 }
 
 /// Whether a drag shows the object's pixels (moved, or scaled for an unturned picture) rather
@@ -681,6 +705,102 @@ mod tests {
         app.session.doc.insert_object(&Pos::body(0, 0), obj, &Default::default()).unwrap();
         let hit = app.session.layout().object(&Pos::body(0, 0), 0).expect("laid out");
         (app, hit)
+    }
+
+    #[test]
+    fn group_text_can_be_clicked_typed_and_undone_without_ungrouping() {
+        use egui::{Event, PointerButton};
+        use wordcraft_doc::para::{Anchor, Float, GroupChild};
+        let mut doc = Document::new();
+        let ids: Vec<u32> = ["Alpha", "Beta"]
+            .into_iter()
+            .map(|text| {
+                doc.add_part(PartKind::TextBox, vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))])
+            })
+            .collect();
+        let children = ids
+            .iter()
+            .enumerate()
+            .map(|(i, id)| {
+                let mut obj = floating_rect(120.0, 60.0);
+                if let InlineObject::Shape { story, float, .. } = &mut obj {
+                    *story = Some(*id);
+                    *float = Default::default();
+                }
+                GroupChild { x: 10.0 + i as f32 * 150.0, y: 10.0, obj }
+            })
+            .collect();
+        let group = InlineObject::Group {
+            w: 300.0,
+            h: 150.0,
+            ch_w: 300.0,
+            ch_h: 150.0,
+            children,
+            canvas: None,
+            float: Float { wrap: Wrap::InFrontOfText, x: 100.0, y: 220.0, h_rel: Anchor::Page, v_rel: Anchor::Page, ..Default::default() },
+        };
+        let pos = Pos::body(0, 0);
+        doc.insert_object(&pos, group, &Default::default()).unwrap();
+        let before = doc.clone();
+        let mut app = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+        app.run("view.commentsPane", json!({"value":false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(6);
+        for id in &ids {
+            let member = h.state_mut().session.layout().text_box(*id, 0).unwrap();
+            let at = crate::canvas::page_to_screen(h.state_mut(), 0, member.rect.x + 30.0, member.rect.bottom() - 15.0).unwrap();
+            h.event(Event::PointerMoved(at));
+            for pressed in [true, false] {
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() });
+                h.run_steps(2);
+            }
+            assert_eq!(h.state().session.sel.focus.story, StoryRef::Part(*id));
+            assert!(h.state().session.sel.is_collapsed());
+            let layout = h.state_mut().session.layout();
+            assert_eq!(crate::canvas::text_box_host(h.state(), &layout), Some(StoryRef::Body));
+            assert_eq!(active(h.state(), &layout).unwrap().0, layout.object(&pos, 0).unwrap());
+            h.event(Event::Text("X".into()));
+            h.run_steps(3);
+            assert!(h.state().session.doc.plain_text(StoryRef::Part(*id)).contains('X'));
+            for other in ids.iter().filter(|other| *other != id) {
+                assert_eq!(h.state().session.doc.plain_text(StoryRef::Part(*other)), before.plain_text(StoryRef::Part(*other)));
+            }
+            assert!(matches!(h.state().session.doc.para_at(&pos).unwrap().object_at(0),Some(InlineObject::Group{children,..}) if children.len()==2));
+            let bytes = wordcraft_engine::io::save_bytes("group.docx", &h.state().session.doc).unwrap();
+            let back = wordcraft_engine::io::open_bytes("group.docx", &bytes).unwrap();
+            let saved_group = back.para_at(&pos).unwrap().object_at(0).unwrap();
+            assert!(matches!(saved_group, InlineObject::Group { children, .. } if children.len() == 2));
+            assert!(saved_group.text_boxes().iter().any(|part| back.plain_text(StoryRef::Part(*part)).contains('X')));
+            h.state_mut().run("edit.undo", json!({})).unwrap();
+            h.run_steps(2);
+            assert_eq!(h.state().session.doc, before, "Undo restores the text without changing the group");
+        }
+
+        // Create Link must not offer a group member as a standalone target.
+        let end = h.state().session.doc.end_of(StoryRef::Body);
+        h.state_mut().run("select.range", json!({"anchor": end, "focus": end})).unwrap();
+        let source = h.state_mut().run("insert.textBox", json!({"text": "Source"})).unwrap()["story"].as_u64().unwrap() as u32;
+        h.run_steps(3);
+        let layout = h.state_mut().session.layout();
+        let from = layout.text_box(source, 0).unwrap().pos();
+        let member = layout.text_box(ids[0], 0).unwrap();
+        let at = crate::canvas::page_to_screen(h.state_mut(), 0, member.rect.x + 30.0, member.rect.bottom() - 15.0).unwrap();
+        let pages = h.state().canvas.page_rects.clone();
+        let scale = h.state().canvas.scale;
+        let doc = h.state().session.doc.clone();
+        let selection = h.state().session.sel.clone();
+        h.state_mut().canvas.link_from = Some(from);
+        link_click(h.state_mut(), &layout, &pages, scale, at, true);
+        assert!(h.state().status_msg.as_ref().unwrap().0.contains("Not linked: click a text box"));
+        assert_eq!(h.state().session.doc, doc);
+        assert_eq!(h.state().session.sel, selection);
+        assert!(h.state().canvas.link_from.is_none());
     }
 
     #[test]
