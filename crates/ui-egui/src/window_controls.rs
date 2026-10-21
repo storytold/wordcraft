@@ -193,6 +193,38 @@ fn paint(painter: &egui::Painter, rect: Rect, button: Button, maximized: bool, t
     }
 }
 
+/// Where [`desktop_grab`] notes that the desktop holds the pointer of `viewport`'s window: each
+/// document window is a viewport of its own, and gets its own release back.
+fn grab_id(viewport: egui::ViewportId) -> egui::Id {
+    egui::Id::unique(("window_controls_desktop_grab", viewport))
+}
+
+/// Hand the pointer to the desktop to move (`StartDrag`) or resize (`BeginResize`) the window.
+/// The desktop keeps the button's release (on Wayland the compositor grabs the pointer), so egui
+/// would still think the button held and miss the next press: an edge or the title bar then
+/// wouldn't start another resize or move until a click inside the window. The release is given
+/// back on the next input ([`release_after_desktop_grab`]).
+pub fn desktop_grab(ctx: &egui::Context, command: egui::ViewportCommand) {
+    ctx.send_viewport_cmd(command);
+    let id = grab_id(ctx.viewport_id());
+    ctx.data_mut(|d| d.insert_temp(id, ()));
+    ctx.request_repaint();
+}
+
+/// After [`desktop_grab`], add the primary button's release to the window's next input, unless it
+/// brings one. Called for every viewport's raw input, before egui reads it (the desktop app's
+/// `eframe::ViewportHooks`: eframe runs `App::raw_input_hook` for the root viewport only).
+pub fn release_after_desktop_grab(ctx: &egui::Context, raw: &mut egui::RawInput) {
+    if ctx.data_mut(|d| d.remove_temp::<()>(grab_id(raw.viewport_id))).is_none() {
+        return;
+    }
+    let released = raw.events.iter().any(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. }));
+    if !released {
+        let (pos, modifiers) = ctx.input_for(raw.viewport_id, |i| (i.pointer.interact_pos().unwrap_or_default(), i.modifiers));
+        raw.events.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers });
+    }
+}
+
 /// The height of [`backstage_header`], as the title bar's.
 pub const HEADER: f32 = 38.0;
 
@@ -207,7 +239,7 @@ pub fn backstage_header(ui: &mut egui::Ui, layout: &Layout) {
             let full = ui.max_rect();
             let drag = ui.interact(full, ui.scope_id().with("header_drag"), Sense::click_and_drag());
             if drag.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
             }
             if drag.double_clicked() {
                 let max = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
@@ -289,7 +321,7 @@ pub fn resize_edges(ctx: &egui::Context) {
                 let response = ui.interact(rect, ui.scope_id().with(("edge", n)), Sense::drag()).on_hover_cursor(cursor(direction));
                 // Sensing only drags, a drag starts on the press itself.
                 if response.drag_started() {
-                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::BeginResize(direction));
+                    desktop_grab(ui.ctx(), egui::ViewportCommand::BeginResize(direction));
                 }
             }
             // Without the desktop's frame or shadow, a hairline keeps the window apart from
@@ -307,6 +339,50 @@ pub fn resize_edges(ctx: &egui::Context) {
 mod tests {
     use super::{Button, Layout, ResizeDirection, zones};
     use egui::{Pos2, Rect};
+
+    /// After the desktop takes the pointer for a move or resize, the next input releases the
+    /// button egui still thinks held, once, unless that input brings the release itself.
+    #[test]
+    fn a_desktop_grab_gives_the_button_release_back() {
+        let primary_releases = |raw: &egui::RawInput| {
+            raw.events.iter().filter(|e| matches!(e, egui::Event::PointerButton { button: egui::PointerButton::Primary, pressed: false, .. })).count()
+        };
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(primary_releases(&raw), 0, "nothing without a grab");
+        super::desktop_grab(&ctx, egui::ViewportCommand::BeginResize(ResizeDirection::East));
+        super::release_after_desktop_grab(&ctx, &mut raw);
+        assert_eq!(primary_releases(&raw), 1, "the release the desktop kept");
+        let mut next = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut next);
+        assert_eq!(primary_releases(&next), 0, "only once");
+        super::desktop_grab(&ctx, egui::ViewportCommand::StartDrag);
+        let mut with_release = egui::RawInput::default();
+        with_release.events.push(egui::Event::PointerButton {
+            pos: Pos2::ZERO,
+            button: egui::PointerButton::Primary,
+            pressed: false,
+            modifiers: Default::default(),
+        });
+        super::release_after_desktop_grab(&ctx, &mut with_release);
+        assert_eq!(primary_releases(&with_release), 1, "not doubled when the release arrives");
+    }
+
+    /// Each document window is a viewport of its own: a grab in one gives the release back to
+    /// that window's input, not to the next window whose input is read.
+    #[test]
+    fn a_desktop_grab_belongs_to_its_window() {
+        let ctx = egui::Context::default();
+        let other = egui::ViewportId::from_hash_of("second window");
+        ctx.data_mut(|d| d.insert_temp(super::grab_id(other), ()));
+        let mut root = egui::RawInput::default();
+        super::release_after_desktop_grab(&ctx, &mut root);
+        assert!(root.events.is_empty(), "the root window's input is left alone");
+        let mut second = egui::RawInput { viewport_id: other, ..Default::default() };
+        super::release_after_desktop_grab(&ctx, &mut second);
+        assert_eq!(second.events.len(), 1, "the grabbing window gets its release");
+    }
 
     #[test]
     fn gnome_button_layouts_parse() {

@@ -321,7 +321,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             // Drag the window by the title bar (integrated title bar on macOS).
             let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
-                ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
+                window_controls::desktop_grab(ui.ctx(), egui::ViewportCommand::StartDrag);
             }
             // Elsewhere the system's own title bar above this one moves the window.
             if mac {
