@@ -141,6 +141,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-19 | Mid-page footer drawings preserve body text below them; genuine footer-band drawings retain their clearance (#2000). |
 | 2026-10-19 | Save As, Export and Open no longer do nothing on Linux desktops whose file chooser portal fails to show its dialog (#2999): a "cancel" quicker than anyone could make one asks again without the parent window, then opens the built-in file browser. |
 | 2026-10-18 | Long navigation headings wrap onto further lines inside the resizable pane instead of ending in an ellipsis: the row grows with the text and the pane keeps its width (#759, #3015). |
 | 2026-10-18 | Clearing a font query with no matches keeps Recently Used Fonts visible at the top of a scrollable list. The initial scroll position no longer skips its heading; measured keyboard scrolling is unchanged (#2068). |
@@ -506,6 +507,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Footer drawings overlapping the reserved band cap body clearance; mid-page top-and-bottom drawings retain body flow above and below, including pinned footer-cell drawings and body table rows. Synthetic controls; no new native Word comparison. |
 | 2026-10-19 | trivial | Progress log: forms protection keeps its content controls: no inserting, Properties or Remove Content Control |
 | 2026-10-19 | trivial | Progress log: text typed into a content control takes the control's formatting; localized placeholder styles recognised |
 | 2026-10-18 | trivial | Progress log: long navigation headings wrap within the pane instead of ending in an ellipsis (#3015) |
@@ -582,6 +584,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | trivial | Footer page tables no longer inflate footer text height; body lines wrap at their physical bounds |
 | 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
+| 2026-10-15 | trivial | Top-and-bottom wrapped footer drawings keep body rows above their positioned wrap area; nonwrapping drawings retain their placement |
+| 2026-10-19 | trivial | Page-anchored top-and-bottom drawings outside footer table cells reserve their wrap bounds and distance from text; nonwrapping controls keep body clearance. |
 | 2026-10-15 | trivial | Progress log: caret inside ligatures (#1974) |
 | 2026-10-14 | trivial | Progress log: row table border exceptions |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |

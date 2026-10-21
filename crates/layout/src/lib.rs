@@ -741,6 +741,8 @@ struct Pin {
     mirror: bool,
     behind: Vec<Placed>,
     front: Vec<Placed>,
+    /// Pinned top-and-bottom wrap areas, in page coordinates.
+    top_bottom: Vec<WrapArea>,
     seen: HashSet<(Vec<u32>, usize)>,
 }
 
@@ -755,11 +757,17 @@ fn page_anchored(f: &Float) -> bool {
 
 /// Run `f`, a layout of header or footer `id` for page `number` of `sect`, with the floats in its
 /// table cells that are placed on the page put there (see [`Pin`]). Returns `f`'s result and those
-/// floats' items, in page coordinates: behind the header's text, and in front.
-fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl FnOnce(&mut Ctx) -> T) -> (T, Vec<Placed>, Vec<Placed>) {
+/// floats' items, in page coordinates: behind the header's text, in front, and top-and-bottom wrap bounds.
+fn with_pin<T>(
+    ctx: &mut Ctx,
+    id: u32,
+    sect: &SectionProps,
+    number: u32,
+    f: impl FnOnce(&mut Ctx) -> T,
+) -> (T, Vec<Placed>, Vec<Placed>, Vec<WrapArea>) {
     let tables = ctx.doc.parts.get(&id).is_some_and(|p| p.blocks.iter().any(|b| matches!(**b, Block::Table(_))));
     if !tables {
-        return (f(ctx), Vec::new(), Vec::new());
+        return (f(ctx), Vec::new(), Vec::new(), Vec::new());
     }
     let pin = Pin {
         story: StoryRef::Part(id),
@@ -768,13 +776,14 @@ fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl
         mirror: ctx.mirror,
         behind: Vec::new(),
         front: Vec::new(),
+        top_bottom: Vec::new(),
         seen: HashSet::new(),
     };
     let outer = ctx.pin.replace(pin);
     let out = f(ctx);
     let pin = std::mem::replace(&mut ctx.pin, outer);
-    let (behind, front) = pin.map(|p| (p.behind, p.front)).unwrap_or_default();
-    (out, behind, front)
+    let (behind, front, top_bottom) = pin.map(|p| (p.behind, p.front, p.top_bottom)).unwrap_or_default();
+    (out, behind, front, top_bottom)
 }
 
 impl Ctx<'_> {
@@ -1344,7 +1353,7 @@ fn layout_box(
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps, exclusions: excl }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -1401,6 +1410,7 @@ struct BoxLayout {
     items: Vec<Placed>,
     table_areas: Vec<Rect>,
     page_table_wraps: Vec<WrapArea>,
+    exclusions: Vec<WrapArea>,
     height: f32,
     floats_bottom: f32,
     last_top: f32,
@@ -1634,6 +1644,8 @@ struct PageBuilder<'a> {
     /// Top of the footer of the pages being started: a footer reaching above the bottom margin
     /// pushes the body up (`f32::MAX`: no footer).
     foot_top: f32,
+    /// The selected even-page footer's limit; the first page uses its own limit when requested.
+    even_foot_top: f32,
 }
 
 /// Gap above the footnote separator and its length.
@@ -2036,7 +2048,8 @@ impl PageBuilder<'_> {
         let (w, h) = if self.web { (s.page_w, f32::MAX / 4.0) } else { (s.page_w, s.page_h) };
         // A footer taller than the bottom margin pushes the body up (Word: no gap), leaving it at
         // least a little room.
-        let bottom = (s.page_h - s.margin_bottom).min(self.foot_top.max(body_top + 36.0));
+        let foot_top = if self.number.is_multiple_of(2) { self.even_foot_top } else { self.foot_top };
+        let bottom = (s.page_h - s.margin_bottom).min(foot_top.max(body_top + 36.0));
         let body = Rect::new(s.margin_left + s.gutter, body_top, s.text_width(), (bottom - body_top).max(36.0));
         let mut decor = Vec::new();
         if !self.web {
@@ -2294,6 +2307,7 @@ fn layout_pass(
         sect_beneath: false,
         beneath: false,
         foot_top: f32::MAX,
+        even_foot_top: f32::MAX,
     };
     // Endnotes in document order, with the section of their reference; placed at the end of a
     // section that keeps them there, else at the end of the document.
@@ -2355,6 +2369,12 @@ fn layout_pass(
         };
         let foot_top =
             if reflow || turn.is_turned() { f32::MAX } else { with_pct_base(&mut ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
+        let even_foot = if reflow || turn.is_turned() || !doc.settings.even_odd_headers {
+            foot_top
+        } else {
+            let id = feet.even.or(feet.default);
+            with_pct_base(&mut ctx, fb(id), |c| foot_top_for(c, sect, id))
+        };
         let first_foot = if reflow || turn.is_turned() || !sect.title_page {
             foot_top
         } else {
@@ -2385,6 +2405,9 @@ fn layout_pass(
                 let (ph, pf) = (linked(&sections, si - 1, |s| s.headers), linked(&sections, si - 1, |s| s.footers));
                 let top = body_top_for(&mut ctx, prev, ph.default);
                 pb.foot_top = foot_top_for(&mut ctx, prev, pf.default);
+                let even_id = if s.even_odd_headers { pf.even.or(pf.default) } else { pf.default };
+                let base = defining_width(&sections, si - 1, |s| s.footers, even_id);
+                pb.even_foot_top = with_pct_base(&mut ctx, base, |c| foot_top_for(c, prev, even_id));
                 pb.new_page(block, top);
                 pb.sect = sect;
                 pb.sect_idx = si;
@@ -2393,6 +2416,7 @@ fn layout_pass(
                 pb.restart_at = restart;
             }
             pb.foot_top = first_foot;
+            pb.even_foot_top = if sect.title_page { first_foot } else { even_foot };
             pb.new_page(block, first_top);
             pb.foot_top = foot_top;
         } else {
@@ -2405,6 +2429,7 @@ fn layout_pass(
         }
         prev_turn = turn;
         pb.foot_top = foot_top;
+        pb.even_foot_top = even_foot;
         let last = (*end).min(doc.body.len().saturating_sub(1));
         // Newspaper columns are balanced on the section's last page when the next section starts
         // on the same page (a continuous break), as in Word. That page is laid out again from the
@@ -2821,6 +2846,11 @@ fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 
     sect.margin_top.max(sect.header + h)
 }
 
+/// Whether a wrap area reaches into the reserved bottom-margin band.
+fn footer_band_overlap(rect: Rect, sect: &SectionProps) -> bool {
+    rect.bottom() > sect.page_h - sect.margin_bottom && rect.y < sect.page_h
+}
+
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
 fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 {
     let Some(part) = footer.and_then(|id| ctx.doc.parts.get(&id).map(|p| (id, p))) else { return f32::MAX };
@@ -2830,8 +2860,28 @@ fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 
     let track = std::mem::replace(&mut ctx.track_totals, false);
     let (laid, ..) =
         with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, None));
-    ctx.track_totals = track;
     let top = sect.page_h - sect.footer - laid.height;
+    let x = sect.margin_left + sect.gutter;
+    let frame = PageFrame { sect, origin: (x, top), number: ctx.fields.page, mirror: ctx.mirror };
+    let counters = std::mem::take(&mut ctx.counters);
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let fields = ctx.fields.clone();
+    let (positioned, _, _, pinned_wraps) = with_pin(ctx, id, sect, frame.number, |ctx| {
+        again(ctx, 0, |ctx| layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)))
+    });
+    ctx.counters = counters;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.fields = fields;
+    ctx.track_totals = track;
+    let wrap_top = positioned
+        .exclusions
+        .iter()
+        .filter(|(r, tb, ..)| *tb && footer_band_overlap(Rect::new(r.x, r.y + top, r.w, r.h), sect))
+        .map(|(r, ..)| top + r.y)
+        .chain(pinned_wraps.iter().filter(|(r, ..)| footer_band_overlap(*r, sect)).map(|(r, ..)| r.y))
+        .fold(top, f32::min);
     // Flow-table strokes extend above their cell boxes. Floating decorations keep their wrap rules.
     let flow_cells: Vec<_> = laid
         .items
@@ -2863,7 +2913,7 @@ fn foot_top_for(ctx: &mut Ctx, sect: &SectionProps, footer: Option<u32>) -> f32 
             }
             _ => None,
         })
-        .fold(top, f32::min)
+        .fold(wrap_top, f32::min)
 }
 
 /// Where a box of laid-out items sits on its page, for floating objects positioned relative to
@@ -3116,8 +3166,8 @@ fn anchor_floats(
     (rects, pl, rel)
 }
 
-/// Footer page tables wrap only the intersecting body lines, which resume below them.
-fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
+/// Footer page tables and mid-page top-and-bottom drawings let body flow resume below them.
+fn footer_body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     if pb.web || ctx.opts.view == ViewMode::Read {
         return Vec::new();
     }
@@ -3157,14 +3207,23 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     let areas = again(ctx, 0, |ctx| {
         with_pct_base(ctx, base, |ctx| {
             let story = StoryRef::Part(id);
-            let h = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, None).height;
+            let (h, ..) = with_pin(ctx, id, sect, page.number, |ctx| {
+                layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, None).height
+            });
             let y = sect.page_h - sect.footer - h;
             let frame = PageFrame { sect, origin: (x, y), number: page.number, mirror: ctx.mirror };
-            let mut areas = layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).page_table_wraps;
+            let (positioned, _, _, pinned) = with_pin(ctx, id, sect, page.number, |ctx| {
+                layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame))
+            });
+            let mut areas = positioned.page_table_wraps;
+            areas.extend(positioned.exclusions.into_iter().filter(|(_, top_bottom, ..)| *top_bottom));
             for (rect, ..) in &mut areas {
                 rect.x += x;
                 rect.y += y;
             }
+            // Pinned bounds are already on the page. Reserved-band drawings cap it instead.
+            areas.extend(pinned);
+            areas.retain(|(rect, top_bottom, ..)| !*top_bottom || !footer_band_overlap(*rect, sect));
             areas
         })
     });
@@ -3179,7 +3238,7 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
 }
 
 fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
-    let mut areas = footer_table_wraps(ctx, pb);
+    let mut areas = footer_body_wraps(ctx, pb);
     areas.extend_from_slice(&pb.excl);
     areas
 }
@@ -3305,6 +3364,9 @@ fn place_objects(
                 {
                     pin.behind.extend(b);
                     pin.front.extend(f);
+                    if let Some(area @ (_, true, ..)) = wrap_area(rect, float, None) {
+                        pin.top_bottom.push(area);
+                    }
                 }
             }
         }
@@ -4103,9 +4165,14 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
             let cur = rest.as_ref().unwrap_or(row);
+            let (x0, x1) = (pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
+            let footer_areas: Vec<_> = footer_body_wraps(ctx, pb).into_iter().filter(|(_, top_bottom, ..)| *top_bottom).collect();
+            pb.y = below(&footer_areas, pb.y, x0, x1);
+            let free_bottom =
+                footer_areas.iter().filter(|(r, ..)| r.y > pb.y + 0.01 && r.x < x1 && r.right() > x0).map(|(r, ..)| r.y).fold(pb.bottom, f32::min);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
-            let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
+            let defer_kept = pb.y + cur.height <= free_bottom + 0.01
                 && !pb.web
                 && !pb.at_top()
                 && !fresh
@@ -4117,14 +4184,14 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                     }
                     let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
                     let page_height = pb.bottom - body_top - repeated_height;
-                    height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
+                    height <= page_height + 0.01 && !row_can_start(next, laid, free_bottom - pb.y - height, page_height)
                 });
-            if pb.y + cur.height <= pb.bottom + 0.01 && !defer_kept {
+            if pb.y + cur.height <= free_bottom + 0.01 && !defer_kept {
                 break;
             }
             // An at-least row with less room than its minimum moves on whole, unless nothing
             // is above it on this page (moving on would gain nothing).
-            let room = pb.bottom - pb.y;
+            let room = free_bottom - pb.y;
             let moves_on = rest.is_none() && !pb.at_top() && !fresh && !under_top_headers && short_of_min(ri, room);
             let split = if splittable && !moves_on && !defer_kept { table::split_row(cur, room) } else { None };
             match split {
@@ -4135,8 +4202,13 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                 }
                 // Like Word, a row that does not fit on an empty page, or under the header rows
                 // repeated there, is placed anyway and runs into the bottom margin.
-                None if pb.at_top() || fresh => break,
+                None if free_bottom >= pb.bottom - 0.01 && (pb.at_top() || fresh) => break,
                 None => {}
+            }
+            if free_bottom < pb.bottom - 0.01 {
+                // A footer drawing interrupts this page, not the remaining table rows.
+                pb.y = below(&footer_areas, free_bottom, x0, x1);
+                continue;
             }
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.
@@ -4514,7 +4586,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             let blocks = part.blocks.clone();
             let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
             let base = defining_width(sections, page.section, |s| s.headers, hid);
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let (mut items, behind, front, _) = with_pin(ctx, id, sect, page.number, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, Some(frame)).items)
             });
             for it in &mut items {
@@ -4533,7 +4605,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, None).height)
             });
             let frame = PageFrame { sect, origin: (x, sect.page_h - sect.footer - h), number: page.number, mirror: ctx.mirror };
-            let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
+            let (mut items, behind, front, _) = with_pin(ctx, id, sect, page.number, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, Some(frame)).items)
             });
             for it in &mut items {

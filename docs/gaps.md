@@ -106,6 +106,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Footer drawings overlapping the reserved band cap body clearance; mid-page top-and-bottom drawings retain body flow above and below, including pinned footer-cell drawings and body table rows. Synthetic controls; no new native Word comparison. |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
@@ -146,6 +147,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | trivial | Footer page tables preserve text height and wrap intersecting body lines |
 | 2026-10-17 | minor | File › Print's Scale to paper size (#2108): pick Letter, Legal, A4 or any Layout › Size paper and every page is scaled to it and centred, the paper turned to each page's orientation, in the preview, the print job (with the spooler's media) and Save these pages as PDF; the document keeps its page size. `paper` param on `ui.print`/`file.printPdf` |
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
+| 2026-10-15 | trivial | Top-and-bottom wrapped footer drawings keep body rows above their positioned wrap area; nonwrapping drawings retain their placement |
+| 2026-10-19 | trivial | Page-anchored top-and-bottom drawings outside footer table cells reserve their wrap bounds and distance from text; nonwrapping controls keep body clearance. |
 | 2026-10-14 | trivial | Row table border exceptions fixed; other row table exceptions remain unsupported |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |

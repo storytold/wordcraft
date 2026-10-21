@@ -475,6 +475,8 @@ fn page_references_in_footer_text_boxes_are_resolved() {
 
 #[test]
 fn widow_control_moves_a_three_line_paragraph_whole() {
+    const GEOMETRY_FONT: &str = "Source Sans 3";
+
     // A three-line paragraph with room for two at the bottom of a page can't leave a widow (two
     // and one) nor an orphan (one and two): Word moves it whole. A four-line one splits two and
     // two. Sweep the paragraph down the page a point at a time and check every split.
@@ -483,6 +485,7 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
         for (fill, shift) in (30usize..60).flat_map(|f| (0..15).step_by(2).map(move |s| (f, s))) {
             let filler = "Filler line.\n".repeat(fill);
             let mut d = Document::from_text(&format!("{filler}{}\nAfter.", "word ".repeat(words)));
+            d.styles.default_chr.font = Some(GEOMETRY_FONT.into());
             d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
             let l = lay(&d);
             let pieces: Vec<(usize, usize)> = l
