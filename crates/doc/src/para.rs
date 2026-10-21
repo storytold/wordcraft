@@ -529,6 +529,10 @@ impl Paragraph {
                 idx = i;
             } else if seen_word {
                 break;
+            } else if crate::cluster::is_thai_lao(c) {
+                // Reached a Thai/Lao run before finding any Latin word (e.g. cursor on a space
+                // between Thai and Latin).  Delegate to Thai segmentation at the run's right edge.
+                return crate::cluster::thai_word_start(&self.text, i + c.len_utf8());
             } else {
                 idx = i;
             }
@@ -574,7 +578,7 @@ impl Paragraph {
         // Never route to thai_word_at when the cursor is on a Latin/other script character (e.g.
         // the first letter of "test" in "ไทยtest" must select the Latin word, not the Thai one).
         let use_thai = at_off.is_some_and(crate::cluster::is_thai_lao)
-            || (at_off.map_or(true, |c| c == ' ') && before_off.is_some_and(crate::cluster::is_thai_lao));
+            || (at_off.map_or(true, |c| matches!(c, ' ' | '\u{00A0}')) && before_off.is_some_and(crate::cluster::is_thai_lao));
         if use_thai {
             return crate::cluster::thai_word_at(&self.text, off);
         }
@@ -844,6 +848,16 @@ mod tests {
         assert_eq!(mixed.word_at(35), (26, 35), "boundary inside Thai run → left word ไม่");
         assert_eq!(mixed.word_at(38), (35, 44), "inside รวม");
         assert_eq!(mixed.word_at(44), (44, 49), "on 'K' → Khmer");
+        // Ctrl+Left across a space into a Thai run: "อนุรักษ์ภาษาไทย abc"
+        // "อนุรักษ์"=24B(0) "ภาษา"=12B(24) "ไทย"=9B(36) " "=1B(45) "abc"=3B(46) → 49B
+        let spaced = Paragraph::with_text("อนุรักษ์ภาษาไทย abc", CharProps::default());
+        assert_eq!(spaced.text.len(), 49);
+        assert_eq!(spaced.word_start(46), 36, "Ctrl+Left from 'a' crosses space → start of ไทย");
+        assert_eq!(spaced.word_start(47), 46, "Ctrl+Left from inside 'abc' → start of abc");
+        // NBSP after Thai routes word_at to thai_word_at.
+        let nbsp = Paragraph::with_text("ไทย\u{00A0}abc", CharProps::default());
+        // "ไทย"=9B, NBSP=2B(9..11), "abc"=3B(11..14)
+        assert_eq!(nbsp.word_at(9), (0, 9), "cursor on NBSP after Thai → selects Thai word");
     }
 
     proptest::proptest! {
