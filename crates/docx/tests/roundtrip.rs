@@ -1463,6 +1463,7 @@ fn settings_core_theme_round_trip() {
     d.settings.grid_h = 5.5;
     d.settings.grid_v = 18.0;
     d.settings.math = Some(wordcraft_doc::math::MathProps {
+        small_frac: true,
         brk_bin: wordcraft_doc::math::BrkBin::Repeat,
         brk_bin_sub: wordcraft_doc::math::BrkBinSub::PlusMinus,
         wrap_indent: 36.0,

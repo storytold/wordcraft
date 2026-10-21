@@ -81,11 +81,12 @@ pub enum BrkBinSub {
     PlusMinus,
 }
 
-/// Document-wide equation options (`m:mathPr` in the settings part) that layout uses: how long
-/// display equations wrap.
+/// Document-wide equation sizing and wrapping options (`m:mathPr` in the settings part).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct MathProps {
+    /// Reduce nested display fraction arguments (`m:smallFrac`).
+    pub small_frac: bool,
     pub brk_bin: BrkBin,
     pub brk_bin_sub: BrkBinSub,
     /// Indent of a wrapped equation's continuation lines, points (`m:wrapIndent`).
@@ -99,7 +100,13 @@ pub const DEFAULT_WRAP_INDENT: f32 = 72.0;
 
 impl Default for MathProps {
     fn default() -> Self {
-        MathProps { brk_bin: BrkBin::Before, brk_bin_sub: BrkBinSub::MinusMinus, wrap_indent: DEFAULT_WRAP_INDENT, wrap_right: false }
+        MathProps {
+            small_frac: false,
+            brk_bin: BrkBin::Before,
+            brk_bin_sub: BrkBinSub::MinusMinus,
+            wrap_indent: DEFAULT_WRAP_INDENT,
+            wrap_right: false,
+        }
     }
 }
 
