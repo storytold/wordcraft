@@ -2288,3 +2288,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	5 cm や 300 px など、任意の単位でサイズを入力します。もう一方の辺も合わせて変わるため、図の縦横比は保たれます。
 
 	Import…	インポート…
+
+	Default document zoom:	文書の既定のズーム:
+	Use document zoom	文書のズームを使用
+	Override zoom saved in documents	文書に保存されたズームを上書き
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	新規および開いた文書に適用されます。上書きを指定しない限り、文書に保存されたズームが優先されます。
+	Text Width	文字幅

@@ -2654,3 +2654,9 @@ preview	Title	Título
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Escribe un tamaño en cualquier unidad, como 5 cm o 300 px. El otro lado se ajusta, así que la imagen conserva sus proporciones.
 
 	Import…	Importar…
+
+	Default document zoom:	Zoom predeterminado del documento:
+	Use document zoom	Usar el zoom del documento
+	Override zoom saved in documents	Reemplazar el zoom guardado en los documentos
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Se aplica a documentos nuevos y abiertos. El zoom guardado en el documento tiene prioridad salvo que lo reemplace.
+	Text Width	Ancho del texto

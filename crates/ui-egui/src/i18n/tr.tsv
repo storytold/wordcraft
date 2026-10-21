@@ -2696,3 +2696,9 @@ preview	Title	Örnek
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Herhangi bir birimde bir boyut yazın, örneğin 5 cm veya 300 px. Diğer kenar da buna uyar, böylece resim oranlarını korur.
 
 	Import…	İçe aktar…
+
+	Default document zoom:	Varsayılan belge yakınlaştırması:
+	Use document zoom	Belgedeki yakınlaştırmayı kullan
+	Override zoom saved in documents	Belgelerde kayıtlı yakınlaştırmayı geçersiz kıl
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Yeni ve açılan belgelere uygulanır. Geçersiz kılmadığınız sürece belgede kayıtlı yakınlaştırma önceliklidir.
+	Text Width	Metin genişliği

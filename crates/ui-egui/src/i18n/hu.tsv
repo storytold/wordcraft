@@ -2695,3 +2695,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Írj be egy méretet bármilyen mértékegységben, például 5 cm vagy 300 px. A másik oldal követi, így a kép megtartja az arányait.
 
 	Import…	Importálás…
+
+	Default document zoom:	Alapértelmezett dokumentumnagyítás:
+	Use document zoom	A dokumentum nagyításának használata
+	Override zoom saved in documents	A dokumentumokba mentett nagyítás felülbírálása
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Új és megnyitott dokumentumokra vonatkozik. A dokumentumba mentett nagyítás elsőbbséget élvez, hacsak nem bírálja felül.
+	Text Width	Szövegszélesség

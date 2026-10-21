@@ -8491,3 +8491,78 @@ fn rtf_list_round_trip_keeps_text() {
         assert_eq!(d.plain_text(StoryRef::Body), "first\nsecond", "{cmd}");
     }
 }
+
+/// #2080: defaults apply on New/Open, saved zoom wins unless explicitly overridden.
+#[test]
+fn default_document_zoom_respects_saved_zoom_and_explicit_override() {
+    use wordcraft_doc::{Document, Zoom, ZoomFit};
+    let mut session = s();
+    run(&mut session, "file.options", json!({"defaultZoom": 125}));
+    assert_eq!(session.view.zoom, 1.0, "changing the preference does not zoom this document");
+    run(&mut session, "file.new", json!({}));
+    assert_eq!(session.view.zoom, 1.25);
+    assert!(!session.dirty && session.doc.settings.zoom.is_none());
+    let mut doc = Document::from_text("Synthetic zoom fixture");
+    doc.settings.zoom = Some(Zoom { percent: 175, fit: Some(ZoomFit::OnePage) });
+    let bytes = wordcraft_docx::write(&doc).unwrap();
+    let data = cmd::insert::base64_encode(&bytes);
+    run(&mut session, "file.open", json!({"path": "synthetic.docx", "data": data}));
+    assert_eq!(session.view.zoom, 1.75);
+    assert_eq!(session.view.fit, "onePage");
+    run(&mut session, "file.options", json!({"overrideDocumentZoom": true}));
+    assert_eq!(session.view.zoom, 1.75, "the preference leaves the current view alone");
+    run(&mut session, "file.open", json!({"path": "synthetic.docx", "data": data}));
+    assert_eq!(session.view.zoom, 1.25);
+    assert!(session.view.fit.is_empty());
+    assert_eq!(session.doc.settings.zoom, doc.settings.zoom, "opening does not rewrite the stored zoom");
+    assert!(!session.dirty);
+    run(&mut session, "file.open", json!({"path": "synthetic.txt", "data": cmd::insert::base64_encode(b"plain text")}));
+    assert_eq!(session.view.zoom, 1.25);
+    run(&mut session, "file.options", json!({"defaultZoom": "pageWidth"}));
+    run(&mut session, "file.new", json!({"template": "letter"}));
+    assert_eq!(session.view.fit, "pageWidth");
+    assert!(session.view.single_column);
+    run(&mut session, "file.options", json!({"defaultZoom": "document"}));
+    run(&mut session, "file.open", json!({"path": "synthetic.docx", "data": data}));
+    assert_eq!(session.view.fit, "onePage");
+    assert_eq!(session.view.zoom, 1.75);
+    let mut legacy = Session::new(Document::new());
+    legacy.view.zoom = 0.8;
+    legacy.view.fit = "pageWidth".into();
+    legacy.set_document(doc);
+    assert_eq!(legacy.view.zoom, 0.8, "without a preference, non-file document switches keep their old view");
+    assert_eq!(legacy.view.fit, "pageWidth");
+}
+
+/// #2080: invalid options are atomic and legacy saved preferences keep their other values.
+#[test]
+fn default_document_zoom_validates_options_and_saved_preferences() {
+    use wordcraft_doc::{Zoom, ZoomFit};
+    let mut session = s();
+    for value in [json!(0), json!(501), json!(-1), json!(125.5), json!(true), json!({}), json!([]), json!("invalid")] {
+        let prefs = session.prefs.clone();
+        assert!(session.run("file.options", &json!({"defaultZoom": value, "units": "centimeters"})).is_err());
+        assert_eq!(session.prefs, prefs);
+    }
+    run(&mut session, "file.options", json!({"defaultZoom": "onePage", "overrideDocumentZoom": true}));
+    assert_eq!(session.prefs.default_zoom, Some(Zoom { percent: 100, fit: Some(ZoomFit::OnePage) }));
+    let before = session.prefs.clone();
+    assert!(session.run("file.options", &json!({"defaultZoom": 200, "overrideDocumentZoom": "yes"})).is_err());
+    assert_eq!(session.prefs, before);
+    run(&mut session, "file.options", json!({"defaultZoom": null}));
+    assert!(session.prefs.default_zoom.is_none());
+    for value in [
+        json!(false),
+        json!("onePage"),
+        json!({"percent": 0}),
+        json!({"percent": 501}),
+        json!({"percent": 125.5}),
+        json!({"percent": 100, "fit": "invalid"}),
+    ] {
+        let prefs: crate::Prefs = serde_json::from_value(json!({"defaultZoom": value, "ignoreNumbers": false})).unwrap();
+        assert!(prefs.default_zoom.is_none());
+        assert!(!prefs.ignore_numbers);
+    }
+    let legacy: crate::Prefs = serde_json::from_value(json!({"ignoreNumbers": false})).unwrap();
+    assert!(legacy.default_zoom.is_none() && !legacy.override_document_zoom);
+}

@@ -2688,3 +2688,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Въведете размер в произволна единица, например 5 cm или 300 px. Другата страна се променя съответно, така че картината запазва пропорциите си.
 
 	Import…	Импортиране…
+
+	Default document zoom:	Мащаб по подразбиране за документи:
+	Use document zoom	Използване на мащаба от документа
+	Override zoom saved in documents	Замяна на мащаба, запазен в документите
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Прилага се за нови и отворени документи. Запазеният в документа мащаб има предимство, освен ако не го замените.
+	Text Width	Ширина на текста

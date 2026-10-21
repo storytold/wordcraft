@@ -2298,3 +2298,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Unesite veličinu u bilo kojoj jedinici, na primer 5 cm ili 300 px. Druga strana se prilagođava, pa slika zadržava svoje proporcije.
 
 	Import…	Uvezi…
+
+	Default document zoom:	Podrazumevano uvećanje dokumenta:
+	Use document zoom	Koristi uvećanje iz dokumenta
+	Override zoom saved in documents	Zameni uvećanje sačuvano u dokumentima
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Primenjuje se na nove i otvorene dokumente. Sačuvano uvećanje dokumenta ima prednost osim ako ga zamenite.
+	Text Width	Širina teksta

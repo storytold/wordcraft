@@ -2289,3 +2289,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	可用任何單位輸入大小，例如 5 cm 或 300 px。另一邊隨之調整，圖片保持原有比例。
 
 	Import…	匯入…
+
+	Default document zoom:	預設文件縮放：
+	Use document zoom	使用文件的縮放比例
+	Override zoom saved in documents	覆寫文件中儲存的縮放比例
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	適用於新建和開啟的文件。除非啟用覆寫，否則優先使用文件中儲存的縮放比例。
+	Text Width	文字寬度

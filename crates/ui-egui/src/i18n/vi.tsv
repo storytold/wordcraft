@@ -2739,3 +2739,9 @@ template	Letter	Thư
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Nhập kích thước theo đơn vị bất kỳ, ví dụ 5 cm hoặc 300 px. Cạnh còn lại thay đổi theo, nên ảnh giữ nguyên tỷ lệ.
 
 	Import…	Nhập…
+
+	Default document zoom:	Thu phóng mặc định của tài liệu:
+	Use document zoom	Dùng mức thu phóng của tài liệu
+	Override zoom saved in documents	Ghi đè mức thu phóng đã lưu trong tài liệu
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Áp dụng cho tài liệu mới và tài liệu được mở. Mức thu phóng đã lưu trong tài liệu được ưu tiên trừ khi bạn ghi đè.
+	Text Width	Chiều rộng văn bản

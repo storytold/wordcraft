@@ -799,6 +799,9 @@ impl WordApp {
             }
         }
         self.session.prefs = std::mem::take(&mut self.ui.editing);
+        if self.session.prefs.default_zoom.is_some() {
+            self.session.apply_document_zoom();
+        }
         // The saved dictionaries folder (#1063) is searched from the start.
         if let Some(f) = self.session.prefs.dictionaries_folder.as_deref() {
             wordcraft_engine::cmd::options::use_dictionaries_folder(Some(f));

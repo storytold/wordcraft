@@ -2300,3 +2300,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	可用任意单位输入大小，例如 5 cm 或 300 px。另一边随之调整，图片保持原有比例。
 
 	Import…	导入…
+
+	Default document zoom:	默认文档缩放：
+	Use document zoom	使用文档的缩放比例
+	Override zoom saved in documents	覆盖文档中保存的缩放比例
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	适用于新建和打开的文档。除非启用覆盖，否则优先使用文档中保存的缩放比例。
+	Text Width	文字宽度

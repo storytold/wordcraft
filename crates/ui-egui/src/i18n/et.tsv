@@ -2322,3 +2322,9 @@
 	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Sisesta suurus mis tahes ühikus, näiteks 5 cm või 300 px. Teine külg muutub kaasa, nii et pilt säilitab oma proportsioonid.
 
 	Import…	Impordi…
+
+	Default document zoom:	Dokumendi vaikesuum:
+	Use document zoom	Kasuta dokumendi suumi
+	Override zoom saved in documents	Asenda dokumentides salvestatud suum
+	Applies to new and opened documents. Saved document zoom takes priority unless you override it.	Kehtib uutele ja avatavatele dokumentidele. Dokumendis salvestatud suum on eelistatud, kui seda ei asendata.
+	Text Width	Teksti laius
