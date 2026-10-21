@@ -720,6 +720,97 @@ fn quick_access_toolbar_is_a_ui_command_and_survives_a_restart() {
     assert_eq!(c.run("ui.quickAccessToolbar", json!({"value": false})).unwrap()["quickAccessToolbar"], false, "works without a document");
 }
 
+/// The window-frame commands the last frame sent: `Decorations(on)`.
+fn decorations_asked(h: &egui_kittest::Harness<'static, WordApp>) -> Option<bool> {
+    h.output().viewport_output.values().flat_map(|v| v.commands.iter()).find_map(|c| match c {
+        egui::ViewportCommand::Decorations(on) => Some(*on),
+        _ => None,
+    })
+}
+
+/// Steps a few frames and reports the first `Decorations` command among them.
+fn step_for_decorations(h: &mut egui_kittest::Harness<'static, WordApp>) -> Option<bool> {
+    let mut asked = None;
+    for _ in 0..4 {
+        h.step();
+        asked = asked.or(decorations_asked(h));
+    }
+    asked
+}
+
+fn window_button_count(h: &egui_kittest::Harness<'static, WordApp>, label: &str) -> usize {
+    h.query_all_by_role_and_label(egui::accesskit::Role::Button, label).count()
+}
+
+/// GNOME on Wayland: the title bar carries the window buttons until File › Options › Use
+/// system title bar gives the window back its frame, at once and without a restart; the
+/// choice is saved, and the command turns it back off.
+#[test]
+fn use_system_title_bar_swaps_the_window_buttons_for_the_frame() {
+    let mut a = app();
+    a.window_controls = Some(window_controls::Layout::default());
+    let mut h = harness(a);
+    // The window opened without winit's frame, so the first frames ask for nothing.
+    assert_eq!(step_for_decorations(&mut h), None);
+    for label in ["Minimize", "Maximize"] {
+        assert_eq!(window_button_count(&h, label), 1, "the title bar has {label}");
+    }
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"})).unwrap();
+    h.run_steps(2);
+    assert_eq!(window_button_count(&h, "Minimize"), 1, "File keeps the window buttons, in a bar of its own");
+    h.get_by_role_and_label(egui::accesskit::Role::CheckBox, "Use system title bar").click();
+    assert_eq!(step_for_decorations(&mut h), Some(true), "the window gets its frame back");
+    assert!(h.state().ui.system_title_bar);
+    assert_eq!(window_button_count(&h, "Minimize"), 0, "and loses the app's buttons");
+    let saved = serde_json::to_string(&h.state().prefs()).unwrap();
+    assert!(saved.contains(r#""systemTitleBar":true"#), "{saved}");
+    let mut b = app();
+    b.apply_prefs(serde_json::from_str(&saved).unwrap());
+    assert!(b.ui.system_title_bar, "kept after a restart");
+    let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
+    assert!(!old.system_title_bar, "older settings draw the app's buttons");
+    assert_eq!(
+        h.state_mut().run("ui.systemTitleBar", json!({})).unwrap(),
+        json!({"systemTitleBar": true, "appDrawsFrame": false}),
+        "no value reads it"
+    );
+    assert!(h.state_mut().run("ui.systemTitleBar", json!({"value": "no"})).is_err());
+    assert_eq!(h.state_mut().run("ui.systemTitleBar", json!({"value": false})).unwrap(), json!({"systemTitleBar": false, "appDrawsFrame": true}));
+    assert_eq!(step_for_decorations(&mut h), Some(false), "the frame goes again");
+    assert_eq!(window_button_count(&h, "Minimize"), 1);
+    h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+    h.run_steps(2);
+    assert_eq!(window_button_count(&h, "Minimize"), 1, "back in the title bar");
+}
+
+/// GNOME's `button-layout` decides which buttons appear: Fedora's default shows only close.
+#[test]
+fn the_desktop_button_layout_decides_the_window_buttons() {
+    let mut h = harness(app());
+    h.run_steps(2);
+    let closes = window_button_count(&h, "Close");
+    let mut a = app();
+    a.window_controls = Some(window_controls::Layout { left: vec![], right: vec![window_controls::Button::Close] });
+    let mut h = harness(a);
+    h.run_steps(2);
+    assert_eq!(window_button_count(&h, "Close"), closes + 1);
+    assert_eq!(window_button_count(&h, "Minimize"), 0);
+    assert_eq!(window_button_count(&h, "Maximize"), 0);
+}
+
+/// Where the desktop draws the frame there are no window buttons and nothing to choose.
+#[test]
+fn desktops_that_draw_the_frame_are_left_alone() {
+    let mut h = harness(app());
+    assert_eq!(step_for_decorations(&mut h), None);
+    assert_eq!(window_button_count(&h, "Minimize"), 0);
+    h.state_mut().run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"})).unwrap();
+    h.run_steps(2);
+    assert!(h.query_by_label("Use system title bar").is_none());
+    assert_eq!(h.state_mut().run("ui.systemTitleBar", json!({"value": true})).unwrap(), json!({"systemTitleBar": true, "appDrawsFrame": false}));
+    assert_eq!(step_for_decorations(&mut h), None);
+}
+
 fn harness(a: WordApp) -> egui_kittest::Harness<'static, WordApp> {
     egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

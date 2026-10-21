@@ -16,6 +16,7 @@ mod appimage_env;
 mod apple_events;
 mod clipboard;
 mod control_server;
+mod decorations;
 mod default_apps;
 mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
@@ -591,15 +592,27 @@ fn main() -> eframe::Result {
         options.viewport = window.apply(options.viewport);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    {
+    let x11 = {
         let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name), x11_libraries);
         log::info!("{why}");
-        if x11 {
-            options.event_loop_builder = Some(Box::new(|b| {
-                use winit::platform::x11::EventLoopBuilderExtX11;
-                b.with_x11();
-            }));
-        }
+        x11
+    };
+    #[cfg(not(all(unix, not(target_os = "macos"))))]
+    let x11 = false;
+    #[cfg(all(unix, not(target_os = "macos")))]
+    if x11 {
+        options.event_loop_builder = Some(Box::new(|b| {
+            use winit::platform::x11::EventLoopBuilderExtX11;
+            b.with_x11();
+        }));
+    }
+    // GNOME on Wayland leaves the window frame to the app (decorations.rs): the title bar carries
+    // the window buttons instead, unless File › Options › Use system title bar is on. Read before
+    // the window opens, so it opens with the right frame.
+    let window_controls = decorations::app_drawn(x11);
+    let app_frame = window_controls.is_some() && !saved.as_ref().is_some_and(|ui| ui.system_title_bar);
+    if app_frame {
+        options.viewport = options.viewport.with_decorations(false);
     }
     // Registered before the event loop starts, so it catches the Finder event that launched us as
     // well as later ones. Lives until the event loop returns; the app creator only borrows it.
@@ -647,6 +660,8 @@ fn main() -> eframe::Result {
             app.ui.window = restored;
             app.set_window_builder(window_builder);
             app.integrated_titlebar = cfg!(target_os = "macos");
+            app.app_frame_shown = window_controls.as_ref().map(|_| app_frame);
+            app.window_controls = window_controls;
             #[cfg(target_os = "macos")]
             if let Some(bar) = traffic_lights::title_bar() {
                 log::info!("title bar: {bar:?}");

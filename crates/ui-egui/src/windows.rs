@@ -651,6 +651,9 @@ impl WordApp {
             Some(mon) => crate::window_geometry::fit_builder_to_monitor(self.windows.builder.clone(), mon, frame),
             None => self.windows.builder.clone(),
         };
+        // GNOME on Wayland: further windows open with the frame Use system title bar asks for, and
+        // follow it when it changes, as the first window does.
+        let base = if self.window_controls.is_some() { base.with_decorations(!self.draws_window_frame()) } else { base };
         self.windows.showing = true;
         let events = viewports.show(
             ui,
