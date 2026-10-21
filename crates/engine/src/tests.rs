@@ -7926,8 +7926,8 @@ fn insert_icon_places_a_picture_of_the_requested_size_that_saves_and_recolours()
     assert!(s.run("picture.iconColor", &json!({})).is_err());
 }
 
-/// `formFields` on the PDF export and save commands gives the copy fillable fields; without it
-/// it has none.
+/// `formFields` and `blankFields` on the PDF export and save commands give the copy fillable
+/// fields; without them it has none.
 #[test]
 fn pdf_copies_get_fillable_fields_on_request() {
     let mut d = wordcraft_doc::Document::from_text("Name: ____________ Agree ");
@@ -7957,6 +7957,10 @@ fn pdf_copies_get_fillable_fields_on_request() {
     let (r, pdf) = export(json!({"formFields": true}));
     assert_eq!(r["formFields"], true);
     assert!(has(&pdf, b"/AcroForm") && has(&pdf, b"(Agree)") && !has(&pdf, b"(Name)"));
+    assert_eq!(r["blankFields"].as_bool(), Some(false));
+    let (r, pdf) = export(json!({"blankFields": true}));
+    assert_eq!(r["blankFields"], true);
+    assert!(has(&pdf, b"(Name)") && !has(&pdf, b"(Agree)"));
     let o = cmd::file::export_options(&s, &json!({"formFields": true}));
     assert!(o.form_fields);
     let _ = std::fs::remove_dir_all(&dir);

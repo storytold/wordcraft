@@ -77,12 +77,16 @@ fn add_form_fields(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[
                 (f.k - 1.0).abs() < 1e-6 && f.dx.abs() < 1e-6 && f.dy.abs() < 1e-6
             })
         });
-    if !opts.form_fields || !as_laid_out {
+    if !(opts.form_fields || opts.blank_fields) || !as_laid_out {
         return Ok(pdf);
+    }
+    let mut collected = if opts.form_fields { forms::collect(doc, lay) } else { Vec::new() };
+    if opts.blank_fields {
+        collected.extend(forms::collect_blanks(doc, lay));
     }
     // Layout pages to output pages: a field on every page it is printed on (a page listed twice
     // has its fields twice, unique names keeping them apart); fields on pages left out go too.
-    let mut fields: Vec<forms::FormField> = forms::collect(doc, lay)
+    let mut fields: Vec<forms::FormField> = collected
         .into_iter()
         .flat_map(|f| {
             pages

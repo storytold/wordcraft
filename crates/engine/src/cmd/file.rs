@@ -94,9 +94,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "formFields"?: bool (a PDF copy gets fillable fields for the form fields and content controls), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format), "formFields"?: bool (a PDF copy gets fillable fields for the form fields and content controls), "blankFields"?: bool (a PDF copy gets fillable text fields over blanks drawn with underscores, ____ and __/__/20__), "strict"?: bool (a .pdf or .png only: refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport)}"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "formFields"?: bool, "strict"?: bool (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save), "formFields"?: bool, "blankFields"?: bool, "strict"?: bool (as file.save)}"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -112,9 +112,9 @@ pub fn specs() -> Vec<CommandSpec> {
             let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
             let opts = export_options(s, v);
             crate::io::save_path_with(std::path::Path::new(&path), &s.doc, None, &opts).map_err(CmdError::Failed)?;
-            Ok(json!({"path": path, "markup": opts.markup, "formFields": opts.form_fields}))
+            Ok(json!({"path": path, "markup": opts.markup, "formFields": opts.form_fields, "blankFields": opts.blank_fields}))
         })
-        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "formFields"?: bool (fillable fields for the document's form fields and content controls, with their values), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport). Fields are left out with Print Markup's comments}"#)
+        .params(r#"{"path": string, "markup"?: bool (Print Markup: tracked changes marked up and each page scaled down beside the comments in balloons; default file.printMarkup), "formFields"?: bool (fillable fields for the document's form fields and content controls, with their values), "blankFields"?: bool (fillable text fields over blanks drawn with underscores: ____, __/__/20__; the page looks the same), "strict"?: bool (refuse, writing nothing, if a character can't be drawn or a picture is missing; see file.strictReport). Fields are left out with Print Markup's comments}"#)
         .pure(),
         CommandSpec::new("file.exportPng", "Export Page as PNG", "File › Export", export_png)
             .params(r#"{"path": string, "page"?: n (1-based), "scale"?: px per pt, "markup"?: bool (the page with its comments in balloons beside it; default file.printMarkup), "strict"?: bool (refuse, writing nothing, if a character on the page can't be drawn or a picture is missing; see file.strictReport)}"#)
@@ -446,7 +446,7 @@ fn save_as(s: &mut Session, v: &Value) -> CmdResult {
 
 /// How a copy is written: Print Markup from the command's `markup`, else the File › Print
 /// setting (`file.printMarkup`); comments as Track Changes Options show them; digits as the
-/// Numeral setting shows them on screen. A PDF copy gets fillable fields with `formFields`.
+/// Numeral setting shows them on screen. A PDF copy gets fillable fields with `formFields` and `blankFields`.
 pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
     let markup = p::bool(v, "markup").unwrap_or(s.prefs.print_markup);
     crate::io::ExportOptions {
@@ -456,6 +456,7 @@ pub fn export_options(s: &Session, v: &Value) -> crate::io::ExportOptions {
         numeral: s.view.numeral.resolve(crate::session::system_locale()),
         strict: p::bool(v, "strict").unwrap_or(false),
         form_fields: p::bool(v, "formFields").unwrap_or(false),
+        blank_fields: p::bool(v, "blankFields").unwrap_or(false),
     }
 }
 
