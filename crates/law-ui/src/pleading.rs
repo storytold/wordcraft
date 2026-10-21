@@ -108,6 +108,7 @@ pub struct PleadingForm {
 }
 
 impl Default for PleadingForm {
+    /// A motion in circuit court, the firm's client as petitioner.
     fn default() -> Self {
         Self {
             kind: "motion",
@@ -142,11 +143,13 @@ pub fn today() -> String {
     wordcraft_engine::cmd::now_iso().chars().take(10).collect()
 }
 
+/// The non-empty lines of a names field, trimmed.
 fn names(text: &str) -> Vec<&str> {
     text.lines().map(str::trim).filter(|l| !l.is_empty()).collect()
 }
 
 impl PleadingForm {
+    /// Whether the form is for a petition rather than a motion.
     fn petition(&self) -> bool {
         self.kind == "petition"
     }
@@ -271,6 +274,7 @@ pub(crate) fn show(app: &mut Ctx<'_>, ctx: &egui::Context) {
     }
 }
 
+/// The New Pleading form's fields.
 fn form_ui(ui: &mut Ui, form: &mut PleadingForm) {
     let field = |ui: &mut Ui, label: &str, value: &mut String| {
         let l = ui.label(label);

@@ -13,6 +13,7 @@ pub fn register_on_document_loaded(f: fn(&mut Session)) {
     hooks.push(f);
 }
 
+/// Run every registered document-loaded hook on `session`.
 pub(crate) fn run_on_document_loaded(session: &mut Session) {
     let hooks = ON_DOCUMENT_LOADED.lock().unwrap_or_else(|e| e.into_inner());
     for f in hooks.iter() {
@@ -27,6 +28,7 @@ pub fn register_on_update_fields(f: fn(&mut Session) -> Result<(), CmdError>) {
     hooks.push(f);
 }
 
+/// Run every registered update-fields hook on `session`; the first error stops the rest.
 pub(crate) fn run_on_update_fields(session: &mut Session) -> Result<(), CmdError> {
     let hooks = ON_UPDATE_FIELDS.lock().unwrap_or_else(|e| e.into_inner());
     for f in hooks.iter() {
@@ -44,6 +46,7 @@ pub fn register_on_text_autoformat(f: fn(&mut Session, &str) -> Result<bool, Cmd
     hooks.push(f);
 }
 
+/// Run the registered AutoFormat hooks on typed `text` until one changes the document; `true` when one did.
 pub(crate) fn run_on_text_autoformat(session: &mut Session, text: &str) -> Result<bool, CmdError> {
     let hooks = ON_TEXT_AUTOFORMAT.lock().unwrap_or_else(|e| e.into_inner());
     for f in hooks.iter() {

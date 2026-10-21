@@ -39,6 +39,7 @@ pub const PALETTE: &[PaletteEntry] = &[
 /// Optional reference mark (U+2E39); hosts may hide it when the interface font has no glyph.
 pub const REFERENCE_MARK: char = '\u{2e39}';
 
+/// The legal symbol commands and the § spacing fix.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("law.symbols.section", "Section Sign", LOC, section).key("Mod+Alt+4"),
@@ -61,48 +62,63 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// Insert a section sign.
 fn section(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "§")
 }
+/// Insert a double section sign.
 fn sections(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "§§")
 }
+/// Insert a paragraph sign.
 fn paragraph(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "¶")
 }
+/// Insert a double paragraph sign.
 fn paragraphs(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "¶¶")
 }
+/// Insert a copyright sign.
 fn copyright(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "©")
 }
+/// Insert a registered sign.
 fn registered(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "®")
 }
+/// Insert a trademark sign.
 fn trademark(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "™")
 }
+/// Insert a service mark.
 fn service_mark(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "℠")
 }
+/// Insert a dagger.
 fn dagger(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "†")
 }
+/// Insert a double dagger.
 fn double_dagger(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "‡")
 }
+/// Insert a reference mark.
 fn reference_mark(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "⸹")
 }
+/// Insert an en dash.
 fn en_dash(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "–")
 }
+/// Insert an em dash.
 fn em_dash(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "—")
 }
+/// Insert a nonbreaking space.
 fn nbsp(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "\u{00a0}")
 }
+/// Insert a nonbreaking hyphen.
 fn nb_hyphen(s: &mut Session, _: &Value) -> CmdResult {
     insert_text(s, "\u{2011}")
 }
@@ -118,6 +134,7 @@ pub fn register_text_hook() {
     ONCE.call_once(|| wordcraft_engine::hooks::register_on_text_autoformat(on_text_autoformat));
 }
 
+/// Replace the selection with `text`; after a § or ¶ a nonbreaking space keeps the sign with its number.
 fn insert_text(s: &mut Session, text: &str) -> CmdResult {
     let _ = delete_selection(s)?;
     type_text(s, text)?;
@@ -127,10 +144,12 @@ fn insert_text(s: &mut Session, text: &str) -> CmdResult {
     sel_result(s)
 }
 
+/// Whether `text` ends with a section or paragraph sign.
 fn needs_nbsp_after_signs(text: &str) -> bool {
     text.chars().last().is_some_and(|c| c == '§' || c == '¶')
 }
 
+/// After a sign at the caret, put a nonbreaking space before the number that follows (or turn the plain space there into one).
 fn maybe_append_sign_nbsp(s: &mut Session) -> Result<(), CmdError> {
     let f = s.sel.focus.clone();
     // What sits at the caret right after the sign: a digit (no space yet), or an ordinary space
@@ -251,6 +270,7 @@ pub fn sign_spacing_space_ranges(text: &str, from: usize, to: usize) -> Vec<(usi
     out
 }
 
+/// Turn the plain spaces between a sign and its number in `from..to` into nonbreaking ones; returns the ranges changed.
 fn fix_sign_spacing_in_para(para: &mut Paragraph, from: usize, to: usize) -> Result<Vec<(usize, usize)>, wordcraft_doc::DocError> {
     let spaces = sign_spacing_space_ranges(&para.text, from, to);
     if spaces.is_empty() {
@@ -281,6 +301,7 @@ fn map_selection_through(sel: &mut Selection, story: StoryRef, path: &Path, repl
     }
 }
 
+/// `law.symbols.fixSpacing`: fix sign spacing in the selection, or the whole document when nothing is selected.
 fn fix_spacing(s: &mut Session, v: &Value) -> CmdResult {
     let scope = p::str(v, "scope");
     let whole = scope == Some("document") || (scope != Some("selection") && s.sel.is_collapsed());
@@ -423,6 +444,7 @@ fn on_text_autoformat(s: &mut Session, text: &str) -> Result<bool, CmdError> {
     Ok(true)
 }
 
+/// The byte length of the run of § and ¶ signs that ends `before_space`.
 fn sign_run_end(before_space: &str) -> usize {
     let mut n = 0usize;
     for c in before_space.chars().rev() {

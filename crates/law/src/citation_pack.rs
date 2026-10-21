@@ -67,6 +67,7 @@ pub struct CompiledPack {
 }
 
 impl CitationPack {
+    /// Read a citation pack from JSON, refusing one too large or with problems.
     pub fn from_json(text: &str) -> Result<Self, Vec<String>> {
         if text.len() > MAX_PACK_BYTES {
             return Err(vec![format!("citation pack is larger than {} bytes", MAX_PACK_BYTES)]);
@@ -76,6 +77,7 @@ impl CitationPack {
         if problems.is_empty() { Ok(v) } else { Err(problems) }
     }
 
+    /// Compile the pack's regular expressions into a pack ready to scan with.
     pub fn compile(self) -> Result<CompiledPack, Vec<String>> {
         let mut rules = Vec::new();
         for r in self.rules {
@@ -99,6 +101,7 @@ impl CitationPack {
     }
 }
 
+/// Compile one rule's `label` regex, refusing one too long or invalid.
 fn compile_regex(pat: &str, label: &str) -> Result<Regex, Vec<String>> {
     if pat.len() > MAX_REGEX_LEN {
         return Err(vec![format!("`{label}` regex is too long (max {MAX_REGEX_LEN} characters)")]);
@@ -106,6 +109,7 @@ fn compile_regex(pat: &str, label: &str) -> Result<Regex, Vec<String>> {
     Regex::new(pat).map_err(|e| vec![format!("`{label}` regex is invalid: {e}")])
 }
 
+/// Everything wrong with a citation pack; empty when it is valid.
 pub fn problems(p: &CitationPack) -> Vec<String> {
     let mut out = Vec::new();
     if p.schema != PACK_SCHEMA {
@@ -141,6 +145,7 @@ pub fn problems(p: &CitationPack) -> Vec<String> {
     out
 }
 
+/// Flag an id that is empty, too long or has characters other than letters, digits, `-`, `_` and `.`.
 fn check_id(out: &mut Vec<String>, field: &str, id: &str) {
     if id.is_empty() {
         out.push(format!("{field} is required"));
@@ -154,6 +159,7 @@ fn check_id(out: &mut Vec<String>, field: &str, id: &str) {
     }
 }
 
+/// Flag a text field that is empty or longer than `max`.
 fn check_len(out: &mut Vec<String>, field: &str, s: &str, max: usize) {
     if s.is_empty() {
         out.push(format!("{field} is required"));

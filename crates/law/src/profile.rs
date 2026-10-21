@@ -168,6 +168,7 @@ pub struct PageNumbersSpec {
 }
 
 impl Default for PageNumbersSpec {
+    /// Page numbers at the bottom center: plain numbers, no prefix, numbering left as the document has it.
     fn default() -> Self {
         PageNumbersSpec {
             position: "bottom".into(),
@@ -272,6 +273,7 @@ pub struct CheckSpec {
     pub effective: String,
 }
 
+/// Serde default for switches that are on unless a profile says otherwise.
 fn on() -> bool {
     true
 }
@@ -400,6 +402,7 @@ pub fn problems(p: &Profile) -> Vec<String> {
     out
 }
 
+/// Check one document type's settings, adding each problem to `out` under `at`.
 fn check_doc(out: &mut Vec<String>, at: &str, d: &DocSpec) {
     if !d.label.is_empty() {
         check_text(out, &format!("{at}.label"), &d.label);
@@ -498,6 +501,7 @@ fn check_doc(out: &mut Vec<String>, at: &str, d: &DocSpec) {
     }
 }
 
+/// Check a page setting: a named size, or a width and height given together and in range.
 fn check_page(out: &mut Vec<String>, at: &str, p: &PageSpec) {
     match (&p.size, (&p.width, &p.height)) {
         (Some(_), (Some(_), _)) | (Some(_), (_, Some(_))) => out.push(format!("{at}: give `size` or `width`/`height`, not both")),
@@ -532,6 +536,7 @@ fn check_page(out: &mut Vec<String>, at: &str, p: &PageSpec) {
     }
 }
 
+/// Check line numbering: its restart value, start, step and distance.
 fn check_line_numbers(out: &mut Vec<String>, at: &str, ln: &LineNumbersSpec) {
     if let Some(v) = &ln.value
         && !matches!(v.as_str(), "continuous" | "restartPage" | "restartSection")
@@ -549,6 +554,7 @@ fn check_line_numbers(out: &mut Vec<String>, at: &str, ln: &LineNumbersSpec) {
     }
 }
 
+/// Check page numbering: position, alignment, number format, start and prefix.
 fn check_page_numbers(out: &mut Vec<String>, at: &str, pn: &PageNumbersSpec) {
     if !matches!(pn.position.as_str(), "top" | "bottom") {
         out.push(format!("{at}.position `{}` is not top or bottom", pn.position));
@@ -573,6 +579,7 @@ fn check_page_numbers(out: &mut Vec<String>, at: &str, pn: &PageNumbersSpec) {
     }
 }
 
+/// Check one rule check: its source and date, and the fields its kind needs.
 fn check_check(out: &mut Vec<String>, at: &str, c: &CheckSpec, section_ids: &[&str]) {
     check_text(out, &format!("{at}.source"), &c.source);
     check_date(out, &format!("{at}.effective"), &c.effective);
@@ -641,6 +648,7 @@ fn check_check(out: &mut Vec<String>, at: &str, c: &CheckSpec, section_ids: &[&s
     }
 }
 
+/// Check character formatting: a size in range and a named font.
 fn check_chr(out: &mut Vec<String>, at: &str, c: Option<&CharProps>) {
     let Some(c) = c else { return };
     if let Some(size) = c.size {
@@ -651,6 +659,7 @@ fn check_chr(out: &mut Vec<String>, at: &str, c: Option<&CharProps>) {
     }
 }
 
+/// Check paragraph formatting: indents, spacing and line spacing in range.
 fn check_para(out: &mut Vec<String>, at: &str, p: Option<&ParaProps>) {
     let Some(p) = p else { return };
     for (what, v) in [
@@ -689,6 +698,7 @@ fn check_id(out: &mut Vec<String>, what: &str, id: &str) {
     }
 }
 
+/// A text field that must not be empty or longer than [`MAX_NAME`] characters.
 fn check_text(out: &mut Vec<String>, what: &str, text: &str) {
     if text.trim().is_empty() {
         out.push(format!("{what} is empty"));
@@ -714,12 +724,14 @@ fn check_date(out: &mut Vec<String>, what: &str, date: &str) {
     }
 }
 
+/// A whole number that must lie within `min`..=`max`.
 fn check_count(out: &mut Vec<String>, what: &str, n: u32, min: u32, max: u32) {
     if n < min || n > max {
         out.push(format!("{what} {n} is outside {min}–{max}"));
     }
 }
 
+/// A measurement in points that must be finite and within `min`..=`max`.
 fn check_points(out: &mut Vec<String>, what: &str, v: f32, min: f32, max: f32) {
     if !v.is_finite() {
         out.push(format!("{what} is not a finite number"));

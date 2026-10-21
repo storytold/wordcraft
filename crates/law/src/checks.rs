@@ -53,10 +53,12 @@ pub fn evaluate(
     Ok(out)
 }
 
+/// A check's finding id: its kind, else `check<index>`.
 fn check_id(c: &CheckSpec, index: usize) -> String {
     if c.kind.is_empty() { format!("check{index}") } else { c.kind.clone() }
 }
 
+/// Run one profile check and add its findings to `out`.
 fn run_one(
     doc: &Document,
     spec: &DocSpec,
@@ -85,6 +87,7 @@ fn run_one(
     }
 }
 
+/// A profile section heading found in the document.
 struct LocatedSection {
     id: String,
     path: Path,
@@ -110,6 +113,7 @@ fn locate_sections(doc: &Document, spec: &DocSpec) -> Vec<LocatedSection> {
     found
 }
 
+/// Whether `para` is the heading of `sec`: by style when the section names one, else by text.
 fn section_heading_matches(doc: &Document, para: &Paragraph, sec: &SectionSpec) -> bool {
     match &sec.match_style {
         Some(style) => para_style_name(doc, para).is_some_and(|n| n.eq_ignore_ascii_case(style)),
@@ -117,11 +121,13 @@ fn section_heading_matches(doc: &Document, para: &Paragraph, sec: &SectionSpec) 
     }
 }
 
+/// The name of the paragraph's style.
 fn para_style_name(doc: &Document, para: &Paragraph) -> Option<String> {
     let id = para.props.style.as_deref()?;
     doc.styles.get(id).map(|s| s.name.clone()).or_else(|| doc.styles.find(id).map(|s| s.name.clone()))
 }
 
+/// Flag each required section that is missing or out of order.
 fn required_sections(found: &[LocatedSection], check: &CheckSpec, id: &str, out: &mut Vec<Finding>) {
     if check.ids.is_empty() {
         return;
@@ -141,6 +147,7 @@ fn required_sections(found: &[LocatedSection], check: &CheckSpec, id: &str, out:
     }
 }
 
+/// Flag a word count over the check's limit.
 fn word_limit(doc: &Document, spec: &DocSpec, sections: &[LocatedSection], check: &CheckSpec, id: &str, out: &mut Vec<Finding>) {
     let Some(limit) = check.limit else { return };
     let words = word_count_with_check(doc, spec, sections, check);
@@ -183,11 +190,13 @@ pub fn word_limit_finding(doc: &Document, profile: &Profile, doc_type: &str) -> 
     }
 }
 
+/// The word count with the check's excluded sections left out.
 fn word_count_with_check(doc: &Document, spec: &DocSpec, sections: &[LocatedSection], check: &CheckSpec) -> u32 {
     let exclude: Vec<&str> = check.exclude_sections.iter().map(String::as_str).collect();
     counted_words(doc, spec, sections, &exclude)
 }
 
+/// Words in the body and its text boxes, leaving out the `exclude` sections.
 fn counted_words(doc: &Document, _spec: &DocSpec, sections: &[LocatedSection], exclude: &[&str]) -> u32 {
     let body_paths = doc.para_paths(StoryRef::Body);
     let section_by_para = section_ids_per_paragraph(&body_paths, sections);
@@ -231,11 +240,13 @@ struct BoxOwnership {
 }
 
 impl BoxOwnership {
+    /// Whether text box `part` belongs to an excluded section.
     fn excluded(&self, part: u32) -> bool {
         self.excluded.get(&part).copied().unwrap_or(false)
     }
 }
 
+/// Which text boxes belong to an excluded section, found in one pass over the body.
 fn box_ownership(doc: &Document, body_paths: &[Path], section_by_para: &[Option<String>], exclude: &[&str]) -> BoxOwnership {
     let mut excluded = HashMap::new();
     for (pi, path) in body_paths.iter().enumerate() {
@@ -275,10 +286,12 @@ fn section_ids_per_paragraph(body_paths: &[Path], sections: &[LocatedSection]) -
     out
 }
 
+/// The words in a paragraph.
 fn para_words(p: &Paragraph) -> usize {
     p.plain_text().split_whitespace().filter(|w| !w.is_empty()).count()
 }
 
+/// Flag text smaller than the check's minimum size or set in another font.
 fn min_font_size(doc: &Document, check: &CheckSpec, id: &str, out: &mut Vec<Finding>) {
     let min_pt = check.pt;
     let want_font = check.font.as_deref().filter(|f| !f.is_empty());
@@ -328,6 +341,7 @@ fn min_font_size(doc: &Document, check: &CheckSpec, id: &str, out: &mut Vec<Find
     }
 }
 
+/// Flag each margin below the minimum, section by section.
 fn min_margins(doc: &Document, spec: &DocSpec, check: &CheckSpec, id: &str, out: &mut Vec<Finding>) {
     let min_pt = check.pt.or_else(|| {
         let p = &spec.page;
@@ -353,6 +367,7 @@ fn min_margins(doc: &Document, spec: &DocSpec, check: &CheckSpec, id: &str, out:
 /// may be. Exceptions may be single-spaced, but not tighter than single spacing.
 const SINGLE_SPACING: f32 = 1.0;
 
+/// Flag paragraphs spaced tighter than the minimum, except the styles the check exempts.
 fn min_line_spacing(doc: &Document, spec: &DocSpec, check: &CheckSpec, id: &str, out: &mut Vec<Finding>) {
     let min_mult = check.spacing.or_else(|| {
         spec.styles
@@ -444,6 +459,7 @@ fn para_natural_line_height(doc: &Document, para: &Paragraph) -> f32 {
     size * 1.15
 }
 
+/// Line spacing as a multiple of single spacing for a line `natural` points high.
 fn effective_line_spacing_multiple(ls: LineSpacing, natural: f32) -> Option<f32> {
     if !natural.is_finite() || natural <= 0.01 {
         return None;
@@ -470,6 +486,7 @@ fn printed_stories(doc: &Document) -> Vec<StoryRef> {
     stories
 }
 
+/// Flag every active hyperlink in the printed stories.
 fn no_hyperlinks(doc: &Document, id: &str, out: &mut Vec<Finding>) {
     for story in printed_stories(doc) {
         for path in doc.para_paths(story) {
@@ -492,6 +509,7 @@ fn no_hyperlinks(doc: &Document, id: &str, out: &mut Vec<Finding>) {
     }
 }
 
+/// Export the document to PDF and flag it when its text can't be searched.
 fn text_searchable_pdf(doc: &Document, id: &str, export_opts: Option<&io::ExportOptions>, out: &mut Vec<Finding>) {
     let opts = export_opts.copied().unwrap_or_default();
     match io::save_bytes_opts("export.pdf", doc, &opts) {
@@ -518,11 +536,13 @@ pub(crate) fn searchability_finding(bytes: &[u8], check_id: &str) -> Option<Find
     finding_for_verdict(verdict, check_id, &detail.unverifiable_pages)
 }
 
+/// The browser build has no PDF text extractor: searchability can't be verified.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn searchability_finding(_bytes: &[u8], check_id: &str) -> Option<Finding> {
     finding_for_verdict(TextSearchability::Unavailable, check_id, &[])
 }
 
+/// The finding for a searchability verdict; `None` when the PDF is searchable.
 fn finding_for_verdict(verdict: TextSearchability, check_id: &str, unverifiable_pages: &[usize]) -> Option<Finding> {
     match verdict {
         TextSearchability::Searchable => None,
@@ -534,6 +554,7 @@ fn finding_for_verdict(verdict: TextSearchability, check_id: &str, unverifiable_
     }
 }
 
+/// The warning for pages with scanned content that couldn't be verified.
 fn unverifiable_scan_message(pages: &[usize]) -> String {
     match pages {
         [] => "A page has scanned content that could not be verified as searchable.".into(),
