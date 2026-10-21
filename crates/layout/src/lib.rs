@@ -1585,6 +1585,8 @@ struct PageBuilder<'a> {
     carry: Vec<NoteBox>,
     /// Page bottom before footnotes took space.
     orig_bottom: f32,
+    /// The physical page body ends above the margin because of its footer.
+    footer_limited: bool,
     /// The paragraph above: its style, contextual spacing, space after, whether that is automatic
     /// and whether it is a list item.
     prev: Option<(String, bool, f32, bool, bool)>,
@@ -2064,6 +2066,7 @@ impl PageBuilder<'_> {
         self.top = body_top;
         self.bottom = if self.web { f32::MAX / 8.0 } else { bottom };
         self.orig_bottom = self.bottom;
+        self.footer_limited = !self.web && bottom < s.page_h - s.margin_bottom;
         self.y = self.top;
         // Notes continued from the page before come first in this page's note area.
         // (`cap_columns` below keeps the columns above them.)
@@ -2275,6 +2278,7 @@ fn layout_pass(
         notes: Vec::new(),
         carry: Vec::new(),
         orig_bottom: 0.0,
+        footer_limited: false,
         prev: None,
         after_break_mark: false,
         next_starts_page: false,
@@ -3582,6 +3586,11 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let Some(first) = pl.lines.get(l0) else { break };
         // A paragraph's first line may start below its top (pushed down by a floating object).
         let lead = if l0 == 0 { first.top.max(0.0) } else { 0.0 };
+        // A continuous section's local top can already be at the physical footer.
+        let footer_rejects_first = pb.footer_limited
+            && pb.at_top()
+            && pb.pages.last().is_some_and(|page| pb.y > page.body.y + 0.01)
+            && item_bottom(pb.y + lead, &pl, l0, l0 + 1).is_some_and(|box_bottom| box_bottom > pb.orig_bottom + 0.01);
         let mut l1 = l0;
         let mut forced_break = None;
         // A page break followed only by the paragraph mark: the mark's (empty) line stays on this
@@ -3613,18 +3622,23 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 - new_notes.iter().map(|n| n.h).sum::<f32>()
                 - if pb.notes.is_empty() && !new_notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 }
                 - extra;
-            let bottom = pb.y + lead + (l.top + l.height - first.top);
+            let has_notes = !pb.notes.is_empty() || !new_notes.is_empty() || !line_notes.is_empty();
+            // Word fits auto-spaced text by its natural bottom; exact spacing keeps its box.
+            let height = if has_notes { l.height } else { l.fit_height };
+            let bottom = pb.y + lead + (l.top + height - first.top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
             // the bottom margin as usual.
-            let has_notes = !pb.notes.is_empty() || !new_notes.is_empty() || !line_notes.is_empty();
             let tail = if has_notes && l1 + 1 == n {
                 *after_on_page.get_or_insert_with(|| space_after_kept(ctx, block, &pl.rp, label.is_some()))
             } else {
                 0.0
             };
-            let over = bottom + tail > limit + 0.01;
+            // Automatic leading may enter the margin, but not the physical footer boundary.
+            let footer_over =
+                pb.footer_limited && item_bottom(pb.y + lead, &pl, l0, l1 + 1).is_some_and(|box_bottom| box_bottom > pb.orig_bottom + 0.01);
+            let over = pl.height > 0.0 && (bottom + tail > limit + 0.01 || footer_over);
             // Notes too long for the rest of the page continue on the next one: the line still
             // fits if the notes before its last one, and that one's first line, fit below it.
             // The notes then take the rest of the page.
@@ -3647,7 +3661,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // An empty paragraph closing a section before a new page: measured in Word, it stays
             // on a full page instead of starting one of its own.
             let closing_mark = pb.next_starts_page && p.section.is_some() && p.text.is_empty();
-            if over && l1 == l0 && !pb.at_top() && !split && !only_break && !closing_mark {
+            if over && l1 == l0 && (!pb.at_top() || footer_rejects_first) && !split && !only_break && !closing_mark {
                 break;
             }
             new_notes.extend(line_notes);
@@ -3681,7 +3695,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             l1 -= 1;
         }
         if l1 == l0 {
-            if pb.at_top() {
+            if pb.at_top() && !footer_rejects_first {
                 l1 = l0 + 1; // can't fit even one line on an empty page: overflow
             } else {
                 pb.advance(block, body_top);

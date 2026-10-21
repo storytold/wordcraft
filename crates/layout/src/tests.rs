@@ -7769,17 +7769,28 @@ fn space_after_stays_clear_of_the_footnote_separator() {
 
 #[test]
 fn space_after_may_overflow_the_bottom_margin_without_notes() {
-    // Without footnotes nothing changes: the last line only has to fit, its space after may run
-    // past the bottom margin (Word).
+    // Without footnotes the last line's natural height fits; extra auto leading and space
+    // after may run past the bottom margin (Word Mac auto-spacing probe).
     let mut tight = 0;
     for before in 0..=300 {
         let (d, t, _) = space_after_doc(before as f32, false);
         let l = lay(&d);
         let bottom_margin = d.last_section.page_h - d.last_section.margin_bottom;
         let (pieces, _) = para_pieces(&l, t);
-        let &(_, _, _, bottom) = pieces.last().unwrap();
-        assert!(bottom <= bottom_margin + 0.01, "before {before}: {bottom}");
-        if bottom > bottom_margin - 6.0 {
+        let &(page, _, l1, bottom) = pieces.last().unwrap();
+        let para = l.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { path, para, .. } if path.0 == [t as u32] => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        let line = &para.lines[l1 - 1];
+        let desc = para.clusters[line.c0..line.c1].iter().map(|c| para.styles[c.style as usize].descent).fold(0.0f32, f32::max);
+        let text_bottom = bottom - (line.top + line.height - line.baseline - desc);
+        assert!(text_bottom <= bottom_margin + 0.01, "before {before}: {text_bottom}");
+        if text_bottom > bottom_margin - 6.0 {
             tight += 1;
         }
     }
@@ -9421,5 +9432,336 @@ fn caret_height_ignores_line_spacing() {
     for spacing in [LineSpacing::Multiple(2.0), LineSpacing::AtLeast(40.0), LineSpacing::Exactly(40.0)] {
         let wide = caret_height(Some(spacing));
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
+    }
+}
+
+#[test]
+fn auto_leading_fits_page_bottom() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(11.0), ..Default::default() };
+    let mut p = wordcraft_doc::Paragraph::with_text("x", chr.clone());
+    p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+    let mut sample = Document::new();
+    sample.body = vec![wordcraft_doc::para_block(p)];
+    let measured = lay(&sample);
+    let Some(Placed::Lines { para, .. }) = measured.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })) else { panic!() };
+    let natural = para.lines[0].height;
+    let height = natural * 1.15;
+    // Word Mac: auto spacing fits by natural height, including a visible line; exact keeps its box.
+    for (text, spacing, room, page) in [
+        ("", LineSpacing::Multiple(1.15), height + 1.0, 0),
+        ("", LineSpacing::Multiple(1.15), (natural + height) / 2.0, 0),
+        ("x", LineSpacing::Multiple(1.15), (natural + height) / 2.0, 0),
+        ("", LineSpacing::Multiple(1.15), natural - 1.0, 1),
+        ("", LineSpacing::Exactly(height), (natural + height) / 2.0, 1),
+    ] {
+        let props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), widow_control: Some(false), ..Default::default() };
+        let mut filler = wordcraft_doc::Paragraph::with_text("Filler", chr.clone());
+        filler.props = props.clone();
+        filler.props.line_spacing = Some(LineSpacing::Exactly(160.0 - room));
+        let mut line = wordcraft_doc::Paragraph::with_text(text, chr.clone());
+        line.props = props.clone();
+        line.props.line_spacing = Some(spacing);
+        line.props.space_after = Some(12.0);
+        let mut next = wordcraft_doc::Paragraph::with_text("", chr.clone());
+        next.props = props;
+        next.insert_object(0, picture(100.0, 70.0, Default::default()), &chr).unwrap();
+        let mut d = Document::new();
+        d.last_section.page_h = 200.0;
+        d.last_section.margin_top = 20.0;
+        d.last_section.margin_bottom = 20.0;
+        d.body = vec![wordcraft_doc::para_block(filler), wordcraft_doc::para_block(line), wordcraft_doc::para_block(next)];
+        let l = lay(&d);
+        let boxes = para_boxes(&l);
+        assert_eq!(boxes[1].0, page, "{text:?} {spacing:?}, room {room}");
+        assert_eq!(boxes[2].0, 1);
+        let photo_top = if page == 0 { 20.0 } else { 20.0 + height + 12.0 };
+        assert!((boxes[2].2 - photo_top).abs() < 0.01, "{} vs {photo_top}", boxes[2].2);
+    }
+}
+
+#[test]
+fn picture_leading_fits_bottom() {
+    use wordcraft_doc::props::LineSpacing;
+    let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+    let mut photo = wordcraft_doc::Paragraph::with_text("", chr.clone());
+    photo.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+    photo.props.space_after = Some(0.0);
+    photo.insert_object(0, picture(100.0, 70.0, Default::default()), &chr).unwrap();
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(photo.clone())];
+    let measured = lay(&d);
+    let Some(Placed::Lines { para, .. }) = measured.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { .. })) else { panic!() };
+    let desc = para.styles[para.clusters[0].style as usize].descent;
+    let room = 70.0 + desc / 2.0;
+    let mut filler = wordcraft_doc::Paragraph::with_text("Filler", chr);
+    filler.props.line_spacing = Some(LineSpacing::Exactly(160.0 - room));
+    filler.props.space_after = Some(0.0);
+    d.last_section.page_h = 200.0;
+    d.last_section.margin_top = 20.0;
+    d.last_section.margin_bottom = 20.0;
+    d.body = vec![wordcraft_doc::para_block(filler), wordcraft_doc::para_block(photo)];
+    assert_eq!(para_boxes(&lay(&d))[1].0, 0, "the picture fits without its extra leading");
+}
+
+#[test]
+fn deleted_para_at_page_bottom() {
+    use wordcraft_doc::props::LineSpacing;
+
+    const FIRST_HEIGHT: f32 = 72.0;
+    const DELETED_HEIGHT: f32 = 24.0;
+    const LAST_HEIGHT: f32 = 6.0;
+
+    for text in ["One\nGone", "One\nGone\nThree"] {
+        let mut d = Document::from_text(text);
+        d.last_section.page_h = 100.0;
+        d.last_section.margin_top = 10.0;
+        d.last_section.margin_bottom = 10.0;
+        for (i, height) in [FIRST_HEIGHT, DELETED_HEIGHT, LAST_HEIGHT].into_iter().enumerate() {
+            let Ok(p) = d.para_mut(StoryRef::Body, &Path::top(i)) else { continue };
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            p.props.line_spacing = Some(LineSpacing::Exactly(height));
+        }
+        let end = d.para(StoryRef::Body, &Path::top(1)).unwrap().len();
+        d.format_range(&Pos::body(1, 0), &Pos::body(1, end), &|c| c.del = Some(0)).unwrap();
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().mark.del = Some(0);
+
+        let visible = lay(&d);
+        assert_eq!(visible.pages.len(), 2, "visible deletion keeps its line: {text}");
+        assert_eq!(visible.caret(&Pos::body(1, 0)).unwrap().page, 1);
+
+        let opts = LayoutOptions { hide_deleted: true, ..Default::default() };
+        let final_text = layout(&d, &mut LayoutCache::new(), &opts);
+        assert_eq!(final_text.pages.len(), 1, "hidden deletion cannot start a blank page: {text}");
+        let hidden = final_text.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { path, para, .. } if path.0 == [1] => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert!(hidden.lines.iter().all(|line| line.height == 0.0 && line.fit_height == 0.0));
+        if d.body.len() == 3 {
+            let after = final_text.caret(&Pos::body(2, 0)).unwrap();
+            assert_eq!(after.page, 0);
+            assert!((after.top - (d.last_section.margin_top + FIRST_HEIGHT)).abs() < 0.01);
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+enum FitObject {
+    CheckBox,
+    TextBox,
+}
+
+fn check_object_bottom_floor(kind: FitObject) {
+    use wordcraft_doc::props::LineSpacing;
+
+    for multiple in [1.15, 2.0] {
+        for with_picture in [false, true] {
+            let mut d = Document::new();
+            let object = match kind {
+                FitObject::CheckBox => InlineObject::Field {
+                    instr: "FORMCHECKBOX".into(),
+                    result: String::new(),
+                    locked: false,
+                    dirty: false,
+                    code: false,
+                    form: r#"<w:ffData><w:checkBox><w:size w:val="72"/></w:checkBox></w:ffData>"#.into(),
+                },
+                FitObject::TextBox => {
+                    let id = d.add_part(
+                        wordcraft_doc::PartKind::TextBox,
+                        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Box text", Default::default()))],
+                    );
+                    let mut object = picture(90.0, 70.0, Default::default());
+                    if let InlineObject::Shape { kind, story, .. } = &mut object {
+                        *kind = wordcraft_doc::para::ShapeKind::TextBox;
+                        *story = Some(id);
+                    }
+                    object
+                }
+            };
+            let chr = wordcraft_doc::CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+            let mut p = Paragraph::new();
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            p.props.line_spacing = Some(LineSpacing::Multiple(multiple));
+            p.insert_object(0, object, &chr).unwrap();
+            if with_picture {
+                p.insert_object(p.len(), picture(90.0, 70.0, Default::default()), &chr).unwrap();
+            }
+            d.body = vec![wordcraft_doc::para_block(p)];
+            let measured = lay(&d);
+            let para = measured.pages[0]
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    Placed::Lines { story: StoryRef::Body, para, .. } => Some(para),
+                    _ => None,
+                })
+                .unwrap();
+            let line = &para.lines[0];
+            let style = &para.styles[para.clusters[0].style as usize];
+            let baseline = line.baseline - line.top;
+            let required = (baseline + style.descent).min(line.height);
+            assert!(required > baseline, "the fixture must need its descent floor");
+            let room = (baseline + required) / 2.0;
+            let mut filler = Paragraph::with_text("Filler", chr);
+            filler.props.space_before = Some(0.0);
+            filler.props.space_after = Some(0.0);
+            filler.props.line_spacing = Some(LineSpacing::Exactly(160.0 - room));
+            d.body.insert(0, wordcraft_doc::para_block(filler));
+            d.last_section.page_h = 200.0;
+            d.last_section.margin_top = 20.0;
+            d.last_section.margin_bottom = 20.0;
+            let placed = lay(&d);
+            assert_eq!(
+                placed.caret(&Pos::body(1, 0)).unwrap().page,
+                1,
+                "{kind:?}, picture={with_picture}, spacing={multiple}: the descent floor does not fit"
+            );
+            assert!((line.fit_height - required).abs() < 0.01, "{kind:?}: {} vs {required}", line.fit_height);
+        }
+    }
+}
+
+#[test]
+fn checkbox_keeps_bottom_floor() {
+    check_object_bottom_floor(FitObject::CheckBox);
+}
+
+#[test]
+fn textbox_keeps_bottom_floor() {
+    check_object_bottom_floor(FitObject::TextBox);
+}
+
+#[test]
+fn collapsed_after_fitted_line() {
+    use wordcraft_doc::props::LineSpacing;
+    let options = LayoutOptions { hide_deleted: true, ..Default::default() };
+    for multiple in [1.15, 2.0] {
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(48.0), ..Default::default() };
+        let mut first = Paragraph::with_text("Before", chr.clone());
+        first.props.space_before = Some(0.0);
+        first.props.space_after = Some(0.0);
+        first.props.line_spacing = Some(LineSpacing::Multiple(multiple));
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(first)];
+        let measured = layout(&d, &mut LayoutCache::new(), &options);
+        let para = measured.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { story: StoryRef::Body, para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        let line = &para.lines[0];
+        assert!(line.fit_height < line.height - 0.1, "fixture needs excess automatic leading");
+        let room = (line.fit_height + line.height) / 2.0;
+        assert!(room > 36.0, "fixture exceeds the minimum body height");
+        d.last_section.margin_top = 20.0;
+        d.last_section.margin_bottom = 20.0;
+        d.last_section.page_h = 40.0 + room;
+        for deleted in [false, true] {
+            let mut next = Paragraph::with_text("Deleted", wordcraft_doc::CharProps { del: deleted.then_some(0), ..chr.clone() });
+            next.mark.del = deleted.then_some(0);
+            next.props.space_before = Some(0.0);
+            next.props.space_after = Some(0.0);
+            d.body.truncate(1);
+            d.body.push(wordcraft_doc::para_block(next));
+            let laid = layout(&d, &mut LayoutCache::new(), &options);
+            if deleted {
+                let hidden = laid
+                    .pages
+                    .iter()
+                    .flat_map(|page| &page.items)
+                    .find_map(|item| match item {
+                        Placed::Lines { story: StoryRef::Body, path, para, .. } if *path == Path::top(1) => Some(para),
+                        _ => None,
+                    })
+                    .unwrap();
+                assert_eq!(hidden.height, 0.0, "deleted paragraph must collapse");
+                assert!(!hidden.lines.is_empty(), "collapsed paragraph retains its caret line");
+                for line in &hidden.lines {
+                    assert_eq!(line.height, 0.0, "collapsed line height");
+                    assert_eq!(line.fit_height, 0.0, "collapsed line fit height");
+                }
+            }
+            let expected = if deleted { 0 } else { 1 };
+            assert_eq!(laid.caret(&Pos::body(1, 0)).unwrap().page, expected, "spacing={multiple}, deleted={deleted}");
+            assert_eq!(laid.pages.len(), expected + 1, "spacing={multiple}, deleted={deleted}");
+        }
+    }
+}
+
+#[test]
+fn label_picture_fit_is_local() {
+    use wordcraft_doc::props::{LineSpacing, NumRef};
+
+    enum PictureLine {
+        First,
+        Second,
+    }
+
+    for picture_line in [PictureLine::First, PictureLine::Second] {
+        let chr = wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+        let mut d = Document::new();
+        let num = d.numbering.add_list(wordcraft_doc::ListKind::Bullet);
+        let prefix = match picture_line {
+            PictureLine::First => "",
+            PictureLine::Second => "Intro\n",
+        };
+        let mut p = Paragraph::with_text(prefix, chr.clone());
+        p.props.numbering = Some(NumRef { num, level: 0 });
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.widow_control = Some(false);
+        p.props.line_spacing = Some(LineSpacing::Multiple(2.0));
+        p.insert_object(p.len(), picture(100.0, 70.0, Default::default()), &chr).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p.clone())];
+        let measured = lay(&d);
+        let para = measured.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert!(para.label.is_some());
+        let ci = para.clusters.iter().position(|c| matches!(c.kind, para::ClKind::Object(_))).unwrap();
+        let li = para.lines.iter().position(|line| line.c0 <= ci && ci < line.c1).unwrap();
+        assert_eq!(li, usize::from(matches!(picture_line, PictureLine::Second)));
+        let line = &para.lines[li];
+        let desc = para.styles[para.clusters[ci].style as usize].descent;
+        let baseline = line.baseline - line.top;
+        assert!(desc > 0.0 && baseline + desc <= line.height);
+        let expected = match picture_line {
+            PictureLine::First => baseline + desc,
+            PictureLine::Second => baseline,
+        };
+        assert!((line.fit_height - expected).abs() < 0.01, "line {li}: {} vs {expected}", line.fit_height);
+
+        let room = line.top + baseline + desc / 2.0;
+        let mut filler = Paragraph::with_text("Filler", chr);
+        filler.props.space_before = Some(0.0);
+        filler.props.space_after = Some(0.0);
+        filler.props.line_spacing = Some(LineSpacing::Exactly(220.0 - room));
+        d.last_section.page_h = 260.0;
+        d.last_section.margin_top = 20.0;
+        d.last_section.margin_bottom = 20.0;
+        d.body = vec![wordcraft_doc::para_block(filler), wordcraft_doc::para_block(p)];
+        let placed = lay(&d);
+        let page = placed.caret(&Pos::body(1, prefix.len())).unwrap().page;
+        let expected_page = match picture_line {
+            PictureLine::First => 1,
+            PictureLine::Second => 0,
+        };
+        assert_eq!(page, expected_page, "only the picture line bearing the label keeps descent");
     }
 }

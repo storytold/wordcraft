@@ -106,6 +106,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Collapsed paragraphs stay after a naturally fitted line even when its full spacing box extends past the page bottom. Visible paragraphs keep their fit checks. |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
