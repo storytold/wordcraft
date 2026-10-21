@@ -221,15 +221,12 @@ pub(crate) fn collect(doc: &Document, lay: &DocLayout) -> Vec<FormField> {
         if out.len() >= MAX_FIELDS {
             break;
         }
-        if !r.control.lock.can_edit() || r.start.path != r.end.path {
+        if !fillable_control(doc, &r) {
             continue;
         }
         let Some(p) = doc.para(story, &r.start.path) else {
             continue;
         };
-        if omitted(doc, p, r.start.off) {
-            continue;
-        }
         let from = Pos::new(story, r.start.path.clone(), r.start.off + OBJ.len_utf8());
         let Some((page, rect)) = span(lay, &from, &r.end) else {
             continue;
@@ -265,6 +262,23 @@ pub(crate) fn collect(doc: &Document, lay: &DocLayout) -> Vec<FormField> {
     out
 }
 
+/// Whether [`collect`] makes control `r` a field: editable, within one paragraph, shown on the page,
+/// and of a kind a PDF field can hold (text, rich text, date, check box, drop-down, combo box).
+fn fillable_control(doc: &Document, r: &wordcraft_doc::ControlRange) -> bool {
+    r.control.lock.can_edit()
+        && r.start.path == r.end.path
+        && matches!(
+            r.control.kind,
+            ControlKind::Text { .. }
+                | ControlKind::RichText
+                | ControlKind::Date { .. }
+                | ControlKind::CheckBox { .. }
+                | ControlKind::DropDown { .. }
+                | ControlKind::ComboBox { .. }
+        )
+        && doc.para(StoryRef::Body, &r.start.path).is_some_and(|p| !omitted(doc, p, r.start.off))
+}
+
 /// Width of the border the layout strokes around a check box's square.
 const CHECK_BOX_STROKE: f32 = 0.72;
 
@@ -280,10 +294,16 @@ const MIN_BLANK: usize = 4;
 /// underscore groups joined by slashes (`__/__/20__`, `__/__/__`, `__/__`) is one field per
 /// group (`…_day`, `…_month`, `…_year`), as long as its underscores and centred: the slashes and a
 /// printed `20` stay as they are. Otherwise a blank is a run of at least [`MIN_BLANK`]
-/// underscores.
-pub(crate) fn collect_blanks(doc: &Document, lay: &DocLayout) -> Vec<FormField> {
+/// underscores. With `beside_controls` (form fields made too), a blank inside a control that
+/// [`collect`] makes a field is left to it: two widgets would sit one on the other.
+pub(crate) fn collect_blanks(doc: &Document, lay: &DocLayout, beside_controls: bool) -> Vec<FormField> {
     let mut out = Vec::new();
     let story = StoryRef::Body;
+    let controls: Vec<(wordcraft_doc::Path, usize, usize)> = if beside_controls {
+        doc.control_ranges(story).into_iter().filter(|r| fillable_control(doc, r)).map(|r| (r.start.path.clone(), r.start.off, r.end.off)).collect()
+    } else {
+        Vec::new()
+    };
     for path in doc.para_paths(story) {
         let Some(p) = doc.para(story, &path) else {
             continue;
@@ -292,7 +312,7 @@ pub(crate) fn collect_blanks(doc: &Document, lay: &DocLayout) -> Vec<FormField> 
             if out.len() >= MAX_FIELDS {
                 return out;
             }
-            if omitted(doc, p, start) {
+            if omitted(doc, p, start) || controls.iter().any(|(cp, a, b)| *cp == path && *a <= start && end <= *b) {
                 continue;
             }
             let name = name_before(p.text.get(..start).unwrap_or(""));
@@ -952,6 +972,20 @@ mod tests {
         let f = FieldFont { size: Some(10.0), color: Some([1.0, 0.0, 0.0]), ..FieldFont::DEFAULT };
         assert_eq!(f.da(), "/Helv 10.0 Tf 1.000 0.000 0.000 rg");
         assert_eq!(FieldFont::DEFAULT.da(), "/Helv 0 Tf 0 g");
+    }
+
+    #[test]
+    fn blanks_inside_fillable_controls_are_the_controls() {
+        use wordcraft_doc::Block;
+        let mut d = Document::from_text("Ref: ________ end");
+        if let Some(Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+            p.insert_object(13, InlineObject::ControlEnd, &Default::default()).unwrap();
+            p.insert_object(5, InlineObject::ControlStart { control: Box::default() }, &Default::default()).unwrap();
+        }
+        let lay = wordcraft_layout::layout(&d, &mut wordcraft_layout::LayoutCache::new(), &Default::default());
+        assert_eq!(collect(&d, &lay).len(), 1, "the control is a field");
+        assert!(collect_blanks(&d, &lay, true).is_empty(), "its underscores are not another one");
+        assert_eq!(collect_blanks(&d, &lay, false).len(), 1, "blanks alone still see them");
     }
 
     #[test]
