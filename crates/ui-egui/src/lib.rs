@@ -70,6 +70,8 @@ pub mod previews;
 pub mod print_page;
 pub mod printing;
 pub mod read_aloud;
+#[cfg(not(target_arch = "wasm32"))]
+mod recent_files;
 pub mod ribbon;
 pub mod ribbon_fit;
 pub mod ruler_tabs;
@@ -582,6 +584,9 @@ pub struct WordApp {
     pub quit_requested: bool,
     pub autosave: bool,
     pub word_count: (u64, usize),
+    /// Availability of displayed recent files, checked off the UI thread (#3314).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recent_files: recent_files::RecentFiles,
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
@@ -697,6 +702,8 @@ impl WordApp {
             quit_requested: false,
             autosave: true,
             word_count: (0, 0),
+            #[cfg(not(target_arch = "wasm32"))]
+            recent_files: recent_files::RecentFiles::default(),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,

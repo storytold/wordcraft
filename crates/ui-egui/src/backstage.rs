@@ -354,6 +354,7 @@ fn new_page(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Show clickable recent documents using cached availability, without filesystem work while painting.
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
@@ -366,15 +367,40 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     if app.ui.recent.is_empty() {
         ui.label(egui::RichText::new(tl!("Documents you open will show up here.")).color(t.text_dim));
     }
-    for p in app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect::<Vec<_>>() {
+    let recent: Vec<_> = app.ui.recent.iter().take(app.ui.recent_shown()).cloned().collect();
+    #[cfg(not(target_arch = "wasm32"))]
+    app.recent_files.refresh(ui.ctx(), &recent, std::time::Instant::now());
+    for p in recent {
         let name = std::path::Path::new(&p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.clone());
+        #[cfg(not(target_arch = "wasm32"))]
+        let missing = app.recent_files.missing(&p);
+        // Browser recent entries are names, not OS paths; there is no filesystem to probe.
+        #[cfg(target_arch = "wasm32")]
+        let missing = false;
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
+        let status = if missing { tl!("File not found") } else { "" };
+        let label = if missing { format!("{name}. {status}") } else { name.clone() };
+        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &label));
         if resp.hovered() {
             ui.painter().rect_filled(r, 4.0, t.hover);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)), "printLayout", t.icon, t.accent);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, &name, medium(13.0), t.text);
-        ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, &p, regular(11.0), t.text_dim);
+        let fade = |color: egui::Color32| if missing { color.gamma_multiply(0.55) } else { color };
+        icons::paint(
+            ui.painter(),
+            Rect::from_center_size(pos2(r.min.x + 18.0, r.center().y), vec2(22.0, 22.0)),
+            "printLayout",
+            fade(t.icon),
+            fade(t.accent),
+        );
+        let status = ui.painter().layout_no_wrap(status.into(), regular(11.0), t.text_dim);
+        let text_right = if missing { r.max.x - status.size().x - 12.0 } else { r.max.x };
+        let text = ui.painter().with_clip_rect(r.intersect(Rect::from_min_max(r.min, pos2(text_right, r.max.y))));
+        text.text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, &name, medium(13.0), fade(t.text));
+        text.text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, &p, regular(11.0), fade(t.text_dim));
+        if missing {
+            ui.painter().galley(pos2(r.max.x - status.size().x, r.center().y - status.size().y / 2.0), status, t.text_dim);
+        }
+        let resp = resp.on_hover_text(if missing { format!("{p}\n{}", tl!("File not found")) } else { p.clone() });
         if resp.clicked() {
             let failed = open_recent(app, &p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
@@ -562,6 +588,35 @@ mod tests {
         let err = super::open_recent(&mut app, &missing.to_string_lossy()).unwrap_err();
         assert!(!err.is_empty());
         assert!(app.ui.backstage, "File stays open");
+    }
+
+    /// #3314: a missing row is named for assistive technology and remains actionable; clicking
+    /// it keeps the existing open error instead of silently disabling or removing the entry.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn missing_recent_row_is_marked_and_still_opens_with_an_error() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        let missing = std::env::temp_dir().join(format!("wordcraft-recent-row-{}-missing.docx", std::process::id()));
+        let path = missing.to_string_lossy().into_owned();
+        app.ui.recent = vec![path.clone()];
+        app.ui.backstage = true;
+        app.ui.backstage_page = "open".into();
+        let mut h = recovery_harness(app);
+        let name = format!("{}. File not found", missing.file_name().unwrap().to_string_lossy());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            h.run_steps(2);
+            if h.query_by_label(&name).is_some() {
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        h.get_by_label(&name).click();
+        h.run_steps(4);
+        assert!(h.state().ui.backstage);
+        assert_eq!(h.state().ui.recent, vec![path]);
+        assert!(!h.state().ctx.as_ref().unwrap().data(|d| d.get_temp::<String>(super::open_error_id())).unwrap_or_default().is_empty());
     }
 
     /// #1873: the macOS back chevron sits beside the traffic lights windowed, at the plain
