@@ -35,6 +35,21 @@ const EDGE_MAX_DT: f32 = 0.1;
 /// are rendered again when they come back.
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
+fn math_screen_clip(page: Rect, scale: f32, cell: Option<wordcraft_geom::Rect>) -> Option<Rect> {
+    cell.map(|r| Rect::from_min_size(pos2(page.min.x + r.x * scale, page.min.y + r.y * scale), vec2(r.w.max(0.0) * scale, r.h.max(0.0) * scale)))
+}
+
+fn math_clip_painter(painter: &egui::Painter, cell: Option<Rect>) -> egui::Painter {
+    cell.map_or_else(|| painter.clone(), |clip| painter.with_clip_rect(clip))
+}
+
+fn math_ime_rect(rect: Rect, cell: Option<Rect>) -> Rect {
+    let Some(cell) = cell else { return rect };
+    // Clamp endpoints so an off-cell cursor retains a valid zero-size edge rectangle.
+    let rect = Rect::from_two_pos(rect.min, rect.max);
+    Rect::from_min_max(rect.min.max(cell.min).min(cell.max), rect.max.max(cell.min).min(cell.max))
+}
+
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
@@ -1479,12 +1494,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             && let Some(pr) = rects.get(pi)
         {
             math_caret = true;
-            let s = geo.scale;
+            let s = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+            let cell_clip = math_screen_clip(*pr, s, layout.equation_clip(&m.at, app.session.page_hint));
+            let math_painter = math_clip_painter(&painter, cell_clip);
             let zone = Rect::from_min_max(
                 pos2(pr.min.x + ex * s - 2.0, pr.min.y + (base - ml.ascent) * s - 2.0),
                 pos2(pr.min.x + (ex + ml.width) * s + 2.0, pr.min.y + (base + ml.descent) * s + 2.0),
             );
-            painter.rect_filled(zone, 2.0, Color32::from_black_alpha(16));
+            math_painter.rect_filled(zone, 2.0, Color32::from_black_alpha(16));
             if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
                 let x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
                 let y0 = pr.min.y + (base - slot.y - slot.a) * s;
@@ -1495,11 +1512,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let look = crate::caret_glide::look(app, ui, content_origin, &geo, [pos2(x, y0), pos2(x, y1)], focused, since, on);
                 if look.opacity > 0.0 && focused {
                     let caret_color = caret_color_at(app, &layout, pi, ex + slot.x, base - slot.y + (slot.d - slot.a) / 2.0, view, dim_body);
-                    painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
+                    math_painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
                 }
                 if focused {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
-                    let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+                    let cr = math_ime_rect(Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1)), cell_clip);
                     ui.ctx().output_mut(|o| {
                         o.ime = Some(egui::output::IMEOutput {
                             rect: cr,
@@ -6086,5 +6103,97 @@ mod tests {
         let hidden = view_key(&app, false, Some(&object));
         assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
         assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    }
+}
+
+#[cfg(test)]
+mod math_clip_tests {
+    use super::*;
+
+    fn cell() -> Rect {
+        Rect::from_min_max(pos2(40.0, 60.0), pos2(140.0, 80.0))
+    }
+
+    #[test]
+    fn math_padding_and_glide_clip() {
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 200.0));
+        let cell = cell();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter =
+                ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("math clip control"))).with_clip_rect(viewport);
+            let math = math_clip_painter(&painter, Some(cell));
+            math.rect_filled(cell.expand(2.0), 2.0, Color32::BLACK);
+            math.line_segment([pos2(50.0, 30.0), pos2(50.0, 110.0)], Stroke::new(1.5, Color32::BLACK));
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        assert_eq!(shapes.len(), 2);
+        for shape in shapes {
+            assert_eq!(shape.clip_rect, cell, "padding and animated caret must share the physical scissor");
+        }
+    }
+
+    #[test]
+    fn math_clip_meets_viewport() {
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_max(pos2(100.0, 50.0), pos2(200.0, 70.0));
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(viewport);
+        assert_eq!(math_clip_painter(&painter, Some(cell())).clip_rect(), viewport.intersect(cell()));
+        assert_eq!(math_clip_painter(&painter, None).clip_rect(), viewport);
+    }
+
+    #[test]
+    fn math_ime_partial_and_hidden() {
+        let cell = cell();
+        for target in [
+            Rect::from_min_max(pos2(50.0, 70.0), pos2(51.0, 100.0)),
+            Rect::from_min_max(pos2(50.0, 100.0), pos2(51.0, 110.0)),
+            Rect::from_min_max(pos2(20.0, 10.0), pos2(30.0, 20.0)),
+            Rect::from_min_max(pos2(160.0, 100.0), pos2(170.0, 120.0)),
+        ] {
+            let result = math_ime_rect(target, Some(cell));
+            assert!(!result.is_negative());
+            assert!(cell.contains_rect(result), "{target:?} => {result:?}");
+        }
+        let right = Rect::from_min_max(pos2(160.0, 65.0), pos2(170.0, 75.0));
+        assert_eq!(math_ime_rect(right, Some(cell)), Rect::from_min_max(pos2(140.0, 65.0), pos2(140.0, 75.0)));
+        let caret = Rect::from_min_max(pos2(50.0, 100.0), pos2(50.0, 110.0));
+        assert_eq!(math_ime_rect(caret, Some(cell)), Rect::from_min_max(pos2(50.0, 80.0), pos2(50.0, 80.0)));
+    }
+
+    #[test]
+    fn math_screen_and_empty_clip() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(600.0, 800.0));
+        let original = wordcraft_geom::Rect::new(40.0, 60.0, 100.0, 20.0);
+        let scale = page_screen_scale(page, &Page { w: 400.0, ..Default::default() }, 1.0);
+        assert_eq!(scale, 1.5);
+        assert_eq!(math_screen_clip(page, scale, Some(original)), Some(Rect::from_min_max(pos2(70.0, 110.0), pos2(220.0, 140.0))));
+        let empty = math_screen_clip(page, 1.5, Some(wordcraft_geom::Rect::new(40.0, 60.0, -10.0, -20.0))).unwrap();
+        assert_eq!(empty.size(), egui::Vec2::ZERO);
+        assert_eq!(math_ime_rect(cell(), Some(empty)), empty);
+    }
+
+    #[test]
+    fn math_offscreen_ime_is_valid() {
+        let offscreen = Rect::from_min_max(pos2(1000.0, 1000.0), pos2(1100.0, 1020.0));
+        let caret = Rect::from_min_max(pos2(1020.0, 1100.0), pos2(1021.0, 1120.0));
+        let clamped = math_ime_rect(caret, Some(offscreen));
+        assert_eq!(clamped, Rect::from_min_max(pos2(1020.0, 1020.0), pos2(1021.0, 1020.0)));
+        assert!(!clamped.is_negative());
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(viewport);
+        assert!(!math_clip_painter(&painter, Some(offscreen)).clip_rect().is_positive());
+    }
+
+    #[test]
+    fn whole_math_ime_unchanged() {
+        let target = Rect::from_min_max(pos2(50.0, 65.0), pos2(51.0, 75.0));
+        assert_eq!(math_ime_rect(target, Some(cell())), target);
+        assert_eq!(math_ime_rect(target, None), target);
+        for edge in [Rect::from_min_max(pos2(50.0, 65.0), pos2(50.0, 75.0)), Rect::from_min_max(pos2(50.0, 65.0), pos2(51.0, 65.0))] {
+            assert_eq!(math_ime_rect(edge, Some(cell())), edge);
+        }
     }
 }

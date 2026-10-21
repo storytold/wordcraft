@@ -8,9 +8,11 @@ use wordcraft_doc::{Block, Document, Path, StoryRef};
 use wordcraft_fonts::{BezPath, FaceRef};
 use wordcraft_geom::{Rect, Spin};
 
+#[cfg(test)]
+use crate::CellClip;
 use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
-use crate::{Page, Placed};
+use crate::{Page, Placed, cell_clip, clipped_cells};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stroke {
@@ -416,13 +418,13 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
         let warps = warped_boxes(doc, items);
         let clips = clipped_cells(items);
         let mut done: Vec<u32> = Vec::new();
-        for it in items.iter() {
+        for (index, it) in items.iter().enumerate() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
             }
             if let Placed::Lines { story, path, .. } = it
-                && let Some(rect) = cell_clip(&clips, *story, &path.0)
+                && let Some(rect) = cell_clip(&clips, *story, &path.0, index)
             {
                 let mut inner = Vec::new();
                 item(doc, it, opts, a, &mut inner);
@@ -467,27 +469,6 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
         }
     }
     out
-}
-
-/// The cells among `items` whose content is cut off at their edge (see [`Placed::Cell`]'s
-/// `clip`): their story, the path of their content (table, row, cell) and their area.
-fn clipped_cells(items: &[Placed]) -> Vec<(StoryRef, Vec<u32>, Rect)> {
-    items
-        .iter()
-        .filter_map(|it| match it {
-            Placed::Cell { rect, table, row, cell, story, clip: true, .. } => {
-                let mut prefix = table.0.clone();
-                prefix.extend([u32::try_from(*row).ok()?, u32::try_from(*cell).ok()?]);
-                Some((*story, prefix, *rect))
-            }
-            _ => None,
-        })
-        .collect()
-}
-
-/// The area to clip a line at `path` of `story` to: its cell's, when that cell is clipped.
-fn cell_clip(clips: &[(StoryRef, Vec<u32>, Rect)], story: StoryRef, path: &[u32]) -> Option<Rect> {
-    clips.iter().find(|(s, prefix, _)| *s == story && path.starts_with(prefix)).map(|(_, _, r)| *r)
 }
 
 /// The text boxes among `items` whose text is warped (Text Effects › Transform, drawn bent): their
@@ -1888,4 +1869,69 @@ fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod cell_clip_tests {
+    use super::*;
+
+    fn clipping(story: StoryRef, prefix: &[u32], rect: Rect) -> CellClip {
+        CellClip { story, prefix: prefix.to_vec(), items: 0..10, rect }
+    }
+
+    #[test]
+    fn nested_clips_intersect() {
+        let outer = clipping(StoryRef::Body, &[0, 0, 0], Rect::new(10.0, 20.0, 100.0, 40.0));
+        let inner = clipping(StoryRef::Body, &[0, 0, 0, 0, 0, 0], Rect::new(15.0, 25.0, 80.0, 100.0));
+        let path = [0, 0, 0, 0, 0, 0, 0];
+        let expected = Some(Rect::new(15.0, 25.0, 80.0, 35.0));
+        assert_eq!(cell_clip(&[outer.clone(), inner.clone()], StoryRef::Body, &path, 0), expected);
+        assert_eq!(cell_clip(&[inner, outer], StoryRef::Body, &path, 0), expected);
+    }
+
+    #[test]
+    fn disjoint_clips_stay_empty() {
+        let clips = [
+            clipping(StoryRef::Body, &[0, 0, 0], Rect::new(10.0, 20.0, 100.0, 40.0)),
+            clipping(StoryRef::Body, &[0, 0, 0, 0, 0, 0], Rect::new(15.0, 80.0, 80.0, 100.0)),
+        ];
+        let clip = cell_clip(&clips, StoryRef::Body, &[0, 0, 0, 0, 0, 0, 0], 0).unwrap();
+        assert_eq!(clip.h, 0.0, "empty must stay clipped rather than become None");
+    }
+
+    #[test]
+    fn unrelated_clips_are_ignored() {
+        let clips = [
+            clipping(StoryRef::Part(1), &[0, 0, 0], Rect::new(0.0, 0.0, 1.0, 1.0)),
+            clipping(StoryRef::Body, &[0, 0, 1], Rect::new(0.0, 0.0, 1.0, 1.0)),
+            clipping(StoryRef::Body, &[0, 0, 0], Rect::new(10.0, 20.0, 100.0, 40.0)),
+        ];
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &[0, 0, 0, 0], 0), Some(clips[2].rect));
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &[1, 0, 0, 0], 0), None);
+    }
+
+    #[test]
+    fn placement_copies_are_separate() {
+        let cell = |x| Placed::Cell {
+            rect: Rect::new(x, 20.0, 80.0, 40.0),
+            covered: false,
+            table: Path(vec![0]),
+            row: 0,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: true,
+        };
+        let rule = Placed::Rule { x0: 0.0, y0: 0.0, x1: 1.0, y1: 0.0, border: Border::single(0.5) };
+        let mut items = [rule.clone(), cell(10.0), rule, cell(100.0)];
+        let clips = clipped_cells(&items);
+        let path = [0, 0, 0, 0];
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &path, 0), Some(Rect::new(10.0, 20.0, 80.0, 40.0)));
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &path, 2), Some(Rect::new(100.0, 20.0, 80.0, 40.0)));
+        if let Placed::Cell { clip, .. } = &mut items[1] {
+            *clip = false;
+        }
+        let clips = clipped_cells(&items);
+        assert_eq!(cell_clip(&clips, StoryRef::Body, &path, 0), None, "an unclipped placement must not borrow a later clip");
+        assert!(cell_clip(&clips, StoryRef::Body, &path, 2).is_some());
+    }
 }

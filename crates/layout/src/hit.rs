@@ -6,7 +6,15 @@ use wordcraft_doc::{Document, Path, Pos, StoryRef};
 use wordcraft_geom::{Point, Rect};
 
 use crate::para::{PARA_MARK_WIDTH, ParaLayout};
-use crate::{DocLayout, Page, Placed};
+use crate::{DocLayout, Page, Placed, cell_clip, clipped_cells};
+
+struct EquationPlacement {
+    page: usize,
+    x: f32,
+    baseline: f32,
+    math: std::sync::Arc<crate::math::MathLayout>,
+    clip: Option<Rect>,
+}
 
 /// Caret geometry on a page: a bar from (`x`, `top`) to (`x + width`, `top + height`). It is
 /// upright (`width` 0) except in turned text (a table cell's text direction), where it lies
@@ -113,8 +121,8 @@ fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit>
 /// The story of the text (not a text box's) near (x, y): body, footnotes, endnotes.
 fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
     let boxes: Vec<StoryRef> = objects(p, index).filter_map(|o| o.text_box.map(StoryRef::Part)).collect();
-    p.items.iter().find_map(|it| match it {
-        Placed::Lines { story, .. } if boxes.contains(story) || *story == crate::DECOR_STORY => None,
+    slice_lines(&p.items).into_iter().find_map(|(it, clip)| match it {
+        Placed::Lines { story, .. } if boxes.contains(story) || *story == crate::DECOR_STORY || !point_in_clip(clip, x, y) => None,
         Placed::Lines { story, .. } if it.turned_bounds().is_some() => {
             it.turned_bounds().filter(|r| r.expand(2.0).contains(Point::new(x, y))).map(|_| *story)
         }
@@ -128,24 +136,16 @@ fn text_at(p: &Page, index: usize, x: f32, y: f32) -> Option<StoryRef> {
     })
 }
 
-fn items_of(page: &Page, story: StoryRef) -> Box<dyn Iterator<Item = &Placed> + '_> {
-    match story {
-        StoryRef::Body => Box::new(page.items.iter()),
-        // Headers and footers, and the text boxes in them, are drawn with the page's header and
-        // footer; everything else is in its items.
-        StoryRef::Part(_) => Box::new(page.header.iter().chain(page.footer.iter()).chain(page.items.iter())),
-    }
-}
-
 /// Whether header/footer part `id` has text near (x, y) on the page (its header or footer
 /// lines). Used so an object behind the header text is only grabbed where there's no text,
 /// mirroring `text_at` for the body.
 fn hf_text_at(p: &Page, id: u32, x: f32, y: f32) -> bool {
     let story = StoryRef::Part(id);
-    p.header
-        .iter()
-        .chain(p.footer.iter())
-        .filter_map(|it| match it {
+    [&p.header[..], &p.footer[..]]
+        .into_iter()
+        .flat_map(slice_lines)
+        .filter(|(_, clip)| point_in_clip(*clip, x, y))
+        .filter_map(|(it, _)| match it {
             Placed::Lines { story: s, para, l0, l1, x: lx, y: ly, .. } if *s == story => Some((para, l0, l1, lx, ly)),
             _ => None,
         })
@@ -156,20 +156,103 @@ fn hf_text_at(p: &Page, id: u32, x: f32, y: f32) -> bool {
         })
 }
 
+/// Pair each physical line item with its own slice's intersected cell clip.
+fn slice_lines(items: &[Placed]) -> Vec<(&Placed, Option<Rect>)> {
+    let clips = clipped_cells(items);
+    items
+        .iter()
+        .enumerate()
+        .filter_map(|(index, item)| {
+            let Placed::Lines { story, path, .. } = item else { return None };
+            Some((item, cell_clip(&clips, *story, &path.0, index)))
+        })
+        .collect()
+}
+
+fn line_items(page: &Page, story: StoryRef) -> Vec<(&Placed, Option<Rect>)> {
+    let slices: &[&[Placed]] = match story {
+        StoryRef::Body => &[&page.items],
+        StoryRef::Part(_) => &[&page.header, &page.footer, &page.items],
+    };
+    slices.iter().flat_map(|items| slice_lines(items)).filter(|(item, _)| matches!(item, Placed::Lines { story: s, .. } if *s == story)).collect()
+}
+
+fn point_in_clip(clip: Option<Rect>, x: f32, y: f32) -> bool {
+    clip.is_none_or(|r| r.w > 0.0 && r.h > 0.0 && r.contains(Point::new(x, y)))
+}
+
+/// Intersect screen geometry without discarding a vertical or horizontal caret.
+fn clip_geometry(rect: Rect, clip: Option<Rect>) -> Option<Rect> {
+    let Some(clip) = clip else { return Some(rect) };
+    if clip.w <= 0.0 || clip.h <= 0.0 {
+        return None;
+    }
+    let (x, y) = (rect.x.max(clip.x), rect.y.max(clip.y));
+    let (right, bottom) = (rect.right().min(clip.right()), rect.bottom().min(clip.bottom()));
+    if right < x || bottom < y || (rect.w > 0.0 && right <= x) || (rect.h > 0.0 && bottom <= y) {
+        return None;
+    }
+    Some(Rect::new(x, y, right - x, bottom - y))
+}
+
+/// Text ink excludes leading-only intersections. Blank and object lines keep their caret band.
+fn cell_text_band(para: &ParaLayout, li: usize) -> Option<Rect> {
+    let line = para.lines.get(li)?;
+    let logical = Rect::new(line.left, line.top, (line.right - line.left).max(0.0), line.height);
+    let mut top = f32::INFINITY;
+    let mut bottom = f32::NEG_INFINITY;
+    for ci in line.c0..line.c1 {
+        let Some(cluster) = para.clusters.get(ci) else { continue };
+        if matches!(cluster.kind, crate::para::ClKind::Object(_)) || !para.rubies.is_empty() || line.hyphen.is_some() {
+            return Some(logical);
+        }
+        let Some(style) = para.styles.get(cluster.style as usize) else { continue };
+        let scale = style.size / style.face.get().units_per_em() as f32;
+        for gi in cluster.g0..cluster.g1 {
+            let Some(glyph) = para.glyphs.get(gi as usize) else { continue };
+            let Some((_, low, _, high)) = wordcraft_fonts::math::glyph_bounds(style.face.get(), glyph.gid) else {
+                // Bitmap/color glyphs need not have an outline.
+                if cluster.kind == crate::para::ClKind::Text {
+                    return Some(logical);
+                }
+                continue;
+            };
+            let base = line.baseline - style.shift - glyph.dy;
+            top = top.min(base - high * scale);
+            bottom = bottom.max(base - low * scale);
+        }
+    }
+    if bottom > top { Some(Rect::new(logical.x, top, logical.w, bottom - top)) } else { Some(logical) }
+}
+
 /// Every upright line on a page that belongs to `story` (body, or a header/footer part).
 /// Turned lines (see [`turned_hit`]) are left out.
 pub fn page_lines(page: &Page, story: StoryRef) -> Vec<LineHit<'_>> {
+    hit_lines(page, story).into_iter().map(|(line, _)| line).collect()
+}
+
+fn hit_lines(page: &Page, story: StoryRef) -> Vec<(LineHit<'_>, Option<Rect>)> {
     let mut v = Vec::new();
-    for it in items_of(page, story) {
+    for (it, clip) in line_items(page, story) {
         if let Placed::Lines { story: s, path, para, l0, l1, x, y, turn } = it {
-            if *s != story || turn.is_turned() {
+            if turn.is_turned() {
                 continue;
             }
             let Some(first) = para.lines.get(*l0) else { continue };
             for li in *l0..*l1 {
                 let Some(l) = para.lines.get(li) else { continue };
                 let top = y + (l.top - first.top);
-                v.push(LineHit { story: *s, path, para, li, x: *x, top, bottom: top + l.height, left: x + l.left, right: x + l.right });
+                let band = Rect::new(x + l.left, top, (l.right - l.left).max(0.0), l.height);
+                if clip_geometry(band, clip).is_none() {
+                    continue;
+                }
+                if clip.is_some()
+                    && cell_text_band(para, li).is_some_and(|r| clip_geometry(Rect::new(x + r.x, y + r.y - first.top, r.w, r.h), clip).is_none())
+                {
+                    continue;
+                }
+                // Keep intrinsic coordinates for baseline users; only interaction results clip.
+                v.push((LineHit { story: *s, path, para, li, x: *x, top, bottom: top + l.height, left: x + l.left, right: x + l.right }, clip));
             }
         }
     }
@@ -210,7 +293,10 @@ fn between(a: &Path, b: &Path, l: &Path) -> bool {
 /// The position in turned text (a table cell's text direction) of `story` under page point
 /// (x, y), if there is turned text there.
 fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
-    items_of(page, story).find_map(|it| {
+    line_items(page, story).into_iter().find_map(|(it, clip)| {
+        if !point_in_clip(clip, x, y) {
+            return None;
+        }
         let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
         if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
             return None;
@@ -229,8 +315,10 @@ fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
 /// The position in the turned text of `story` nearest to page point (x, y), wherever it is.
 fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
     let dist = |r: Rect| band_dist(x, r.x, r.w).hypot(band_dist(y, r.y, r.h));
-    let it = items_of(page, story)
-        .filter(|it| matches!(it, Placed::Lines { story: s, .. } if *s == story))
+    let it = line_items(page, story)
+        .into_iter()
+        .filter(|(_, clip)| point_in_clip(*clip, x, y))
+        .map(|(it, _)| it)
         .filter_map(|it| it.turned_bounds().map(|r| (it, dist(r))))
         .min_by(|a, b| a.1.total_cmp(&b.1))?
         .0;
@@ -247,8 +335,10 @@ fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
 /// The body line on `page` whose band is nearest height `y` (the leftmost on a tie, so in
 /// columns the first column wins); only top-level paragraphs' lines when `top_only`.
 fn nearest_line_at<'a>(page: &'a Page, y: f32, top_only: bool) -> Option<LineHit<'a>> {
-    page_lines(page, StoryRef::Body)
+    hit_lines(page, StoryRef::Body)
         .into_iter()
+        .filter(|(_, clip)| clip.is_none_or(|r| y >= r.y && y <= r.bottom()))
+        .map(|(line, _)| line)
         .filter(|l| !top_only || l.path.0.len() <= 1)
         .min_by(|a, b| band_dist(y, a.top, a.bottom - a.top).total_cmp(&band_dist(y, b.top, b.bottom - b.top)).then(a.left.total_cmp(&b.left)))
 }
@@ -271,12 +361,13 @@ impl DocLayout {
         if let Some(pos) = turned_hit(p, story, x, y) {
             return Some(pos);
         }
-        let lines = page_lines(p, story);
+        let lines = hit_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
             return nearest_turned(p, story, x, y);
         }
-        let best = lines.iter().min_by(|a, b| score(a, x, y).total_cmp(&score(b, x, y)))?;
+        let best =
+            lines.iter().filter(|(_, clip)| point_in_clip(*clip, x, y)).min_by(|(a, _), (b, _)| score(a, x, y).total_cmp(&score(b, x, y)))?.0.clone();
         let off = best.para.off_at_x(best.li, x - best.x);
         Some(Pos { story: best.story, path: best.path.clone(), off })
     }
@@ -374,12 +465,22 @@ impl DocLayout {
     }
 
     /// Pieces of a paragraph: (page, item index).
-    fn pieces(&self, story: StoryRef, path: &Path, page_hint: usize) -> Vec<(usize, &Placed)> {
+    fn pieces(&self, story: StoryRef, path: &Path, page_hint: usize) -> Vec<(usize, &Placed, Option<Rect>)> {
         if story == StoryRef::Body {
+            let mut clips = std::collections::HashMap::new();
             return self
                 .index
                 .get(&(story, path.clone()))
-                .map(|v| v.iter().filter_map(|(pi, ii)| self.pages.get(*pi).and_then(|p| p.items.get(*ii)).map(|it| (*pi, it))).collect())
+                .map(|v| {
+                    v.iter()
+                        .filter_map(|(pi, ii)| {
+                            let page = self.pages.get(*pi)?;
+                            let item = page.items.get(*ii)?;
+                            let own = clips.entry(*pi).or_insert_with(|| clipped_cells(&page.items));
+                            Some((*pi, item, cell_clip(own, story, &path.0, *ii)))
+                        })
+                        .collect()
+                })
                 .unwrap_or_default();
         }
         // Headers/footers repeat: prefer the hinted page, else the first that shows the part.
@@ -395,9 +496,9 @@ impl DocLayout {
             }
             // A note continued over pages has the rest of the paragraph on the pages before or
             // after (a repeated header shows all of it on every page: one page is enough).
-            let lines = |v: &[(usize, &Placed)]| {
+            let lines = |v: &[(usize, &Placed, Option<Rect>)]| {
                 v.iter()
-                    .filter_map(|(_, it)| if let Placed::Lines { para, l0, l1, .. } = it { Some((*l0, *l1, para.lines.len())) } else { None })
+                    .filter_map(|(_, it, _)| if let Placed::Lines { para, l0, l1, .. } = it { Some((*l0, *l1, para.lines.len())) } else { None })
                     .fold((usize::MAX, 0, 0), |(a, b, _), (l0, l1, n)| (a.min(l0), b.max(l1), n))
             };
             let (mut lo, mut hi, n) = lines(&found);
@@ -427,9 +528,13 @@ impl DocLayout {
     }
 
     /// Pieces of a paragraph of story part `story` on page `pi`.
-    fn pieces_on(&self, pi: usize, story: StoryRef, path: &Path) -> Vec<(usize, &Placed)> {
+    fn pieces_on(&self, pi: usize, story: StoryRef, path: &Path) -> Vec<(usize, &Placed, Option<Rect>)> {
         let Some(p) = self.pages.get(pi) else { return Vec::new() };
-        items_of(p, story).filter(|it| matches!(it, Placed::Lines { story: s, path: q, .. } if *s == story && q == path)).map(|it| (pi, it)).collect()
+        line_items(p, story)
+            .into_iter()
+            .filter(|(it, _)| matches!(it, Placed::Lines { path: q, .. } if q == path))
+            .map(|(it, clip)| (pi, it, clip))
+            .collect()
     }
 
     /// Caret geometry for a position.
@@ -438,7 +543,7 @@ impl DocLayout {
     }
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
-        for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
+        for (pi, it, clip) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
@@ -446,6 +551,12 @@ impl DocLayout {
             }
             let first = para.lines.get(*l0)?;
             let l = para.lines.get(li)?;
+            if clip.is_some()
+                && cell_text_band(para, li)
+                    .is_some_and(|r| clip_geometry(crate::turn_rect(*turn, *x, *y, Rect::new(r.x, r.y - first.top, r.w, r.h)), clip).is_none())
+            {
+                continue;
+            }
             let cx = para.x_of(li, pos.off)?;
             let cx = para.caret_limit(li).map_or(cx, |m| cx.min(m));
             // In the lines' own frame (turned text turns it onto the page).
@@ -455,6 +566,7 @@ impl DocLayout {
             let base = top + (l.baseline - l.top);
             let ctop = (base - asc).max(top);
             let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
+            let Some(r) = clip_geometry(r, clip) else { continue };
             return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
         }
         None
@@ -509,7 +621,7 @@ impl DocLayout {
 
     /// Start and end of the visual line holding `pos` (Home / End).
     pub fn line_bounds(&self, pos: &Pos, page_hint: usize) -> Option<(Pos, Pos)> {
-        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+        for (_, it, _) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
@@ -561,7 +673,7 @@ impl DocLayout {
     /// The whole visual line holding `pos`, trailing spaces and break included: (start, end,
     /// whether it is the paragraph's last line). What a click in the selection bar selects.
     pub fn line_span(&self, pos: &Pos, page_hint: usize) -> Option<(Pos, Pos, bool)> {
-        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+        for (_, it, _) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
@@ -588,7 +700,7 @@ impl DocLayout {
             return out;
         }
         for path in doc.paths_between(a, b) {
-            for (_, it) in self.pieces(a.story, &path, page_hint) {
+            for (_, it, _) in self.pieces(a.story, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
                 let first = if path == a.path { para.line_of(a.off) } else { 0 };
                 let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
@@ -615,12 +727,16 @@ impl DocLayout {
         let (a, b) = if a <= b { (a, b) } else { (b, a) };
         let mut out = Vec::new();
         for path in doc.paths_between(a, b) {
-            for (pi, it) in self.pieces(a.story, &path, page_hint) {
+            for (pi, it, clip) in self.pieces(a.story, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
                 let Some(first) = para.lines.get(*l0) else { continue };
                 // Rectangles in the lines' own frame, turned onto the page.
                 let (ox, oy, turn) = (*x, *y, *turn);
-                let mut put = |r: Rect| out.push((pi, crate::turn_rect(turn, ox, oy, r)));
+                let mut put = |r: Rect| {
+                    if let Some(r) = clip_geometry(crate::turn_rect(turn, ox, oy, r), clip) {
+                        out.push((pi, r));
+                    }
+                };
                 for li in *l0..*l1 {
                     let Some(l) = para.lines.get(li) else { continue };
                     let from = if path == a.path { a.off.max(l.start) } else { l.start };
@@ -671,7 +787,7 @@ impl DocLayout {
     /// One step left or right from `pos` in visual order on its line (arrow keys in
     /// bidirectional text). `Edge` when `pos` is already at that end of the line.
     pub fn visual_step(&self, pos: &Pos, left: bool, page_hint: usize) -> Option<VisualStep> {
-        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+        for (_, it, _) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
             let li = para.line_of(pos.off);
             if li < *l0 || li >= *l1 {
@@ -697,9 +813,22 @@ impl DocLayout {
     }
 
     /// Where the equation at `pos` (its U+FFFC) is drawn: page, x of its left edge and its
-    /// baseline (page coordinates), and its layout.
+    /// baseline (page coordinates), and its intrinsic layout. Clip overlays with `equation_clip`.
     pub fn equation_geom(&self, pos: &Pos, page_hint: usize) -> Option<(usize, f32, f32, std::sync::Arc<crate::math::MathLayout>)> {
-        for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
+        let placed = self.equation_placement(pos, page_hint)?;
+        let bounds = Rect::new(placed.x, placed.baseline - placed.math.ascent, placed.math.width, placed.math.ascent + placed.math.descent);
+        clip_geometry(bounds, placed.clip)?;
+        Some((placed.page, placed.x, placed.baseline, placed.math))
+    }
+
+    /// Physical cell clip for the same occurrence selected by `equation_geom`, including empty clips.
+    /// `None` means no owning cell clip or no placed equation. Visibility is decided by `equation_geom`.
+    pub fn equation_clip(&self, pos: &Pos, page_hint: usize) -> Option<Rect> {
+        self.equation_placement(pos, page_hint).and_then(|placed| placed.clip)
+    }
+
+    fn equation_placement(&self, pos: &Pos, page_hint: usize) -> Option<EquationPlacement> {
+        for (pi, it, clip) in self.pieces(pos.story, &pos.path, page_hint) {
             // Equations in turned text aren't edited in place.
             let Placed::Lines { para, l0, l1, x, y, turn: TextDirection::Horizontal, .. } = it else { continue };
             let li = para.line_of(pos.off);
@@ -717,7 +846,7 @@ impl DocLayout {
                 let ml = para.maths.iter().find(|(o, _)| *o == oi)?.1.clone();
                 let cx = l.cl_left(k)?;
                 let base = y + (l.baseline - first.top);
-                return Some((pi, x + cx, base, ml));
+                return Some(EquationPlacement { page: pi, x: x + cx, baseline: base, math: ml, clip });
             }
         }
         None
@@ -726,7 +855,10 @@ impl DocLayout {
     /// The equation under (x, y) on `page` and the caret position inside it nearest the point.
     pub fn equation_hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, wordcraft_doc::math_edit::MathPos)> {
         let p = self.pages.get(page)?;
-        for l in page_lines(p, story) {
+        for (l, clip) in hit_lines(p, story) {
+            if !point_in_clip(clip, x, y) {
+                continue;
+            }
             let Some(line) = l.para.lines.get(l.li) else { continue };
             let base = l.top + (line.baseline - line.top);
             for k in line.c0..line.c1 {
@@ -734,6 +866,9 @@ impl DocLayout {
                 let crate::para::ClKind::Object(oi) = c.kind else { continue };
                 let Some((_, ml)) = l.para.maths.iter().find(|(o, _)| *o == oi) else { continue };
                 let x0 = l.x + line.cl_left(k).unwrap_or(0.0);
+                if clip_geometry(Rect::new(x0, base - ml.ascent, ml.width, ml.ascent + ml.descent), clip).is_none() {
+                    continue;
+                }
                 let pad = 2.0;
                 if x < x0 - pad || x > x0 + ml.width + pad || y < base - ml.ascent - pad || y > base + ml.descent + pad {
                     continue;
