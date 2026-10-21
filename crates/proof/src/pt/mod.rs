@@ -139,7 +139,7 @@ mod tests {
         for w in ["coraçao", "saude", "xqzv", ""] {
             assert!(is_correct_with(&none, w), "{w}");
         }
-        assert!(install_dictionary("FLAG long\n", "1\nkot\n").is_err(), "unsupported files are refused");
+        assert!(install_dictionary("FLAG num\n", "1\nkot\n").is_err(), "unsupported files are refused");
     }
 
     #[test]

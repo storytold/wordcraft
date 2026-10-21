@@ -196,10 +196,16 @@ pub fn suggest_in(d: &AffixDict, word: &str, max: usize) -> Vec<String> {
     }
     // 3. Common confusions.
     for (from, to) in d.rep() {
+        // `^` and `$` anchor an entry to the word's start or end (`REP ^nml$ namelĳk`).
+        let (start, from) = from.strip_prefix('^').map_or((false, from.as_str()), |f| (true, f));
+        let (end, from) = from.strip_suffix('$').map_or((false, from), |f| (true, f));
         if from.is_empty() {
             continue;
         }
-        for (i, _) in input.match_indices(from.as_str()) {
+        for (i, _) in input.match_indices(from) {
+            if (start && i != 0) || (end && i + from.len() != input.len()) {
+                continue;
+            }
             if let (Some(a), Some(b)) = (input.get(..i), input.get(i + from.len()..)) {
                 col.offer(&format!("{a}{to}{b}"), COST_REP);
             }

@@ -401,7 +401,7 @@ fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> bool {
 // Language
 
 /// Proofing languages offered, by BCP 47 tag, with their English names (translated for display).
-pub const LANGUAGES: [(&str, &str); 30] = [
+pub const LANGUAGES: [(&str, &str); 31] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("de-DE", "German (Germany)"),
@@ -412,6 +412,7 @@ pub const LANGUAGES: [(&str, &str); 30] = [
     ("pt-BR", "Portuguese (Brazil)"),
     ("pt-PT", "Portuguese (Portugal)"),
     ("nl-NL", "Dutch"),
+    ("ca-ES", "Catalan"),
     ("sv-SE", "Swedish"),
     ("da-DK", "Danish"),
     ("nb-NO", "Norwegian (Bokmål)"),
@@ -1383,6 +1384,28 @@ mod tests {
         assert!((h.zone - 36.0 / wordcraft_geom::PT_PER_CM).abs() < 0.01, "zone was {} cm", h.zone);
         let sent = h.params()["zone"].as_f64().unwrap_or_default();
         assert!((sent - 36.0).abs() < 0.05, "params sent {sent} pt");
+    }
+
+    #[test]
+    fn catalan_can_be_chosen_in_the_language_dialog() {
+        use egui_kittest::kittest::{By, Queryable};
+        let mut a = app();
+        a.run("select.all", json!({})).unwrap();
+        let fields = LanguageForm::read(&a);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(500.0, 650.0)).build_ui_state(
+            |ui, (app, fields): &mut (WordApp, LanguageForm)| {
+                language_ui(app, ui, fields);
+            },
+            (a, fields),
+        );
+        h.run();
+        h.get(By::new().label_contains("Catalan")).click();
+        h.run();
+        assert_eq!(h.state().1.lang, "ca-ES");
+        h.get(By::new().label_contains("OK")).click();
+        h.run();
+        assert_eq!(h.state().0.session.typing_props().lang.as_deref(), Some("ca-ES"));
+        assert_eq!(language_name("ca-ES"), "Catalan");
     }
 
     /// #407: the Language button opens the dialog (scripts with a language never see it); OK

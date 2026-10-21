@@ -113,10 +113,10 @@ Weights and evidence per area: [docs/target-app-parity.md](docs/target-app-parit
 | Vietnamese | vi | partial (#1434) | ~95% |
 
 Also shipped: Traditional Chinese (`zh-hant`), Ukrainian (`uk`), Serbian (`sr`, `sr-latn`, #250), Russian (`ru`) and Polish (`pl`), all partial (~95%). Bulgarian (`bg`) covers everything the interface audit finds (2,419 entries); Swedish (`sv`) covers that too, plus 44 newer strings no other catalog has yet (2,504 entries). Estonian (`et`), Italian (`it`, #594) and Czech (`cs`) now have complete interface catalogs, and Turkish (`tr`) a complete 2,325-entry one (every key of the Russian catalog), all with
-system-locale selection and a saved language choice (Italian also has 51 strings none of the others had yet); Estonian, Turkish and Italian proofing are not included. Hungarian (`hu`) has a
+system-locale selection and a saved language choice (Italian also has 51 strings none of the others had yet); Estonian proofing is not included. Hungarian (`hu`) has a
 complete 2,419-entry catalog, also without proofing. Vietnamese (`vi`, #1434) has a complete
 2,448-entry catalog, also without proofing.
-Proofing: English, Polish, Portuguese and Russian (spelling, grammar, hyphenation), plus Czech and Indonesian (system Hunspell spelling, generic checks), chosen per run from its language. Word ships
+Proofing: English, Polish, Portuguese, Italian, Croatian, Turkish and Russian (spelling, grammar, hyphenation), plus Czech, Indonesian and Dutch (system Hunspell spelling, generic checks; Dutch with its dictionary's compounding), and Catalan (installed Hunspell spelling and suggestions), chosen per run from its language. Word ships
 30 interface languages and proofing for ~50. Detail: [docs/localization-parity.md](docs/localization-parity.md).
 
 ## Upcoming
@@ -133,6 +133,8 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
    (20–30 h).
 
 ## Progress log
+
+- 2026-10-19: Catalan installed-dictionary spelling and suggestions (#2895); grammar and native hyphenation remain open.
 
 Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target on interactive Save (#2445). Save before Close waits for that write; cancel or failure keeps the draft and original file. This does not add binary Word output. Late Save As answers are rejected before writing if automation has replaced the document.
 
@@ -220,6 +222,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-16 | Comment and revision balloons are readable in the dark theme (#2045): they were drawn on a fixed white card under light text; the card, markup area and author colours are now theme tokens with a contrast test. |
 | 2026-10-17 | DOCX glossary documents (building blocks) open into the model: Insert › Quick Parts and AutoText list and insert the document's own entries, and saving an entry with `"in": "document"` keeps it in the file (undoable). An untouched glossary is saved back byte for byte; an edited one is written from the model |
 | 2026-10-16 | Indonesian proofing (#498): id-ID spelling reads the installed Hunspell `id_ID` dictionary (`hunspell-id` on Debian/Ubuntu, LibreOffice's `dict-id`, or the Dictionaries folder), suggestions use its MAP/REP/TRY/KEY tables, generic repeated-word (offering `anak-anak`) and spacing checks explain in Indonesian; Review › Language, Set Proofing Language and File › Options › Proofing offer Indonesian. No dictionary data bundled; hyphenation keeps the English fallback; parity estimates unchanged |
+| 2026-10-18 | Dutch proofing (#2505): nl-NL and nl-BE spelling reads the installed Hunspell `nl_NL` dictionary (OpenTaal's: `hunspell-nl` on Debian/Ubuntu, LibreOffice's `dict-nl`, or the Dictionaries folder). The affix engine learned what that dictionary needs: two-character flags (`FLAG long`), `ICONV`/`OCONV` (it stores `ij` as `ĳ`), `KEEPCASE`, and compounding (`COMPOUNDRULE`, `COMPOUNDBEGIN`/`MIDDLE`/`END` with `COMPOUNDPERMITFLAG`, `ONLYINCOMPOUND`, `CHECKCOMPOUNDDUP`/`CASE`/`PATTERN`), so new compounds such as `zwembadbouwer` are correct. Suggestions use the dictionary's tables (anchored `REP` entries now apply), generic repeated-word and spacing checks explain in Dutch; Review › Language, Set Proofing Language and File › Options › Proofing offer Dutch. No dictionary data bundled; hyphenation keeps the English fallback; parity estimates unchanged |
 | 2026-10-17 | A table inserted in a right-to-left paragraph is a right-to-left table, like Word, so Tab moves right to left through its cells (#2634) |
 | 2026-10-16 | French interface catalog completed: 402 entries added (equation gallery, built-in style and table-style names, citation styles, paper sizes, watermarks, Bookmark / Go To / Print dialogs), 2,615 in all, with a native-speaker review of the terminology; no French proofing yet |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
@@ -509,6 +512,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-19 | trivial | Progress log: forms protection keeps its content controls: no inserting, Properties or Remove Content Control |
 | 2026-10-19 | trivial | Progress log: text typed into a content control takes the control's formatting; localized placeholder styles recognised |
 | 2026-10-18 | trivial | Progress log: long navigation headings wrap within the pane instead of ending in an ellipsis (#3015) |
+| 2026-10-19 | minor | Catalan installed-dictionary spelling and suggestions (#2895); grammar, hyphenation and full UI translation remain open; review fixes preserve non-Latin words and align proofing summaries |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
 | 2026-10-18 | trivial | A word after a slash wraps whole, like Word (#2963) |
 | 2026-10-17 | trivial | Progress log: recipient list search and merged-only view (#1576) |
@@ -547,6 +551,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-16 | trivial | Progress log: tall-ascent font list entries no longer cut off (#2570) |
 | 2026-10-16 | trivial | Progress log: Read Mode keeps the keyboard, whole columns, page-turn bar clear (#1772) |
 | 2026-10-16 | trivial | Progress log: comments readable in the dark theme (#2045) |
+| 2026-10-18 | trivial | Progress log: Dutch proofing (#2505) |
 | 2026-10-16 | trivial | Progress log: Indonesian proofing (#498) |
 | 2026-10-16 | trivial | Progress log: legacy outline, shadow, emboss and imprint text effects drawn (#2534) |
 | 2026-10-15 | trivial | Progress log: Columns on selected text (#2024) |
