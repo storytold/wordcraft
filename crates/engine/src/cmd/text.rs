@@ -98,6 +98,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let raw = p::bool(v, "raw").unwrap_or(false);
     typing_options(s, text);
     let t = if raw { None } else { autoformat(s, text) };
+    let was_collapsed = s.sel.is_collapsed();
     type_text(s, t.as_deref().unwrap_or(text))?;
     let trigger = text.chars().count() == 1 && text.chars().all(|c| c == ' ' || ",.;:!?".contains(c));
     if raw || !trigger {
@@ -113,6 +114,9 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     }
     if text == " " && !listed && s.prefs.autocorrect.enabled && s.prefs.autocorrect.dashes {
         dash_autoformat(s).inspect_err(|_| s.autocap = None)?;
+    }
+    if text == " " && !listed && was_collapsed && s.prefs.autocorrect.enabled && s.prefs.autocorrect.double_space_period {
+        double_space_period(s)?;
     }
     if let Some((para, sel)) = typed
         && s.doc.para_at(&f) != Some(&para)
@@ -177,6 +181,27 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     }
     s.sel = Selection::caret(Pos { off: 0, ..f });
     Ok(true)
+}
+
+/// "word" + two spaces → "word. ": the second Space turns the first into a period, after a
+/// letter, a digit or a closing bracket or quote; not after other punctuation, at the start of a
+/// paragraph, after a tab, or for a third space (the text before them ends in a period by then).
+fn double_space_period(s: &mut Session) -> Result<(), CmdError> {
+    let f = s.sel.focus.clone();
+    let Some(para) = s.doc.para_at(&f) else { return Ok(()) };
+    let Some(before) = para.text.get(..f.off) else { return Ok(()) };
+    let Some(word) = before.strip_suffix("  ") else { return Ok(()) };
+    if !word.chars().next_back().is_some_and(|c| c.is_alphanumeric() || ")]}\"'\u{201D}\u{2019}\u{00BB}\u{203A}".contains(c)) {
+        return Ok(());
+    }
+    // The period takes the formatting of the space it replaces.
+    let at = word.len();
+    let p = s.doc.para_mut(f.story, &f.path)?;
+    let props = p.props_at(at + 1).clone().without_symbol();
+    p.delete(at, at + 1)?;
+    p.insert_text(at, ".", &props)?;
+    s.sel = Selection::caret(f);
+    Ok(())
 }
 
 /// "word -- word" → en dash, "word--word" → em dash (on the space after).

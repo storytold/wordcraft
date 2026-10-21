@@ -2160,3 +2160,48 @@ fn right_arrow_moves_through_a_ligature_one_letter_at_a_time() {
     assert_eq!(offs, [0, 1, 2, 3]);
     assert!(xs.windows(2).all(|w| w[0].1 < w[1].1), "caret x after each Right press: {xs:?}");
 }
+
+/// #2848: "Add a period with double-space" (an AutoFormat As You Type switch, off by default):
+/// a second Space after a word, a number or a closing bracket or quote turns the first into a
+/// period. Undo puts the two spaces back; other punctuation, a lone space and a run of three
+/// spaces are left as typed.
+#[test]
+fn double_space_adds_a_period_when_asked() {
+    let with_option = |keys: &str| {
+        let mut s = s();
+        run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+        typ(&mut s, keys);
+        s
+    };
+    let text = |s: &Session| s.doc.plain_text(StoryRef::Body);
+    // Off unless asked for.
+    assert_eq!(text(&typed("Hello  world")), "Hello  world");
+    assert!(!s().prefs.autocorrect.double_space_period);
+    // On: the second space makes the period, and the next sentence starts with a capital.
+    assert_eq!(text(&with_option("Hello  world")), "Hello. world");
+    assert_eq!(text(&with_option("Hello  world ")), "Hello. World ");
+    assert_eq!(text(&with_option("See page 5  Then")), "See page 5. Then");
+    assert_eq!(text(&with_option("(it is done)  Next")), "(it is done). Next");
+    assert_eq!(text(&with_option("He said \"stop\"  Next")), "He said “stop”. Next");
+    // Undo brings the two spaces back, in one step.
+    let mut t = with_option("Hello  ");
+    assert_eq!(text(&t), "Hello. ");
+    run(&mut t, "edit.undo", json!({}));
+    assert_eq!(text(&t), "Hello  ");
+    // Left alone: other punctuation before the spaces, a lone space, spaces at the start of a
+    // paragraph or after a tab, and a third space.
+    for keys in ["Hello.  x", "Hello,  x", "Hello?  x", "Hello;  x", "Hello:  x", "Hello x", "  x", "\n  x", "a\t  x"] {
+        let want = typed(keys);
+        assert_eq!(text(&with_option(keys)), text(&want), "{keys:?}");
+    }
+    assert_eq!(text(&with_option("Hello   x")), "Hello.  x");
+    // A selection typed over, and the master switch.
+    let mut t = with_option("Hello world");
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "text.insert", json!({"text": " "}));
+    assert_eq!(text(&t), " ");
+    let mut t = s();
+    run(&mut t, "tools.autocorrect", json!({"doubleSpacePeriod": true, "enabled": false}));
+    typ(&mut t, "Hello  world");
+    assert_eq!(text(&t), "Hello  world");
+}

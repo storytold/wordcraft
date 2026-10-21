@@ -353,6 +353,7 @@ impl AutoCorrectForm {
             "bullets": o.bullets,
             "numbering": o.numbering,
             "borderLines": o.border_lines,
+            "doubleSpacePeriod": o.double_space_period,
             "autoAddFirstLetter": o.auto_add_first_letter,
             "autoAddInitialCaps": o.auto_add_initial_caps,
         })
@@ -397,6 +398,7 @@ fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bo
             ui.checkbox(&mut o.ordinals, tl!("Ordinals (1st) as superscript"));
             ui.checkbox(&mut o.dashes, tl!("Hyphens (--) as dashes (—)"));
             ui.checkbox(&mut o.links, tl!("Internet addresses as links"));
+            ui.checkbox(&mut o.double_space_period, tl!("Add a period with double-space"));
             heading(ui, "Apply as you type");
             ui.checkbox(&mut o.bullets, tl!("Automatic bulleted lists"));
             ui.checkbox(&mut o.numbering, tl!("Automatic numbered lists"));
@@ -889,5 +891,45 @@ mod tests {
             h.step();
         }
         assert!(texts(&h).iter().any(|t| t.contains("(none)")), "no matches: the hint shows");
+    }
+
+    /// #2848 through the real dialog: tick "Add a period with double-space" on the AutoFormat As
+    /// You Type tab, press OK, and a double Space typed in the page makes a period.
+    #[test]
+    fn the_double_space_option_is_set_in_the_dialog_and_works_when_typing() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app("");
+        app.run("tools.autocorrect", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("AutoFormat As You Type").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("Add a period with double-space").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("OK").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().session.prefs.autocorrect.double_space_period, "the option is on");
+        h.state_mut().canvas.focused = true;
+        for t in ["Hello", " ", " ", "world"] {
+            h.event(egui::Event::Text(t.to_string()));
+            h.step();
+        }
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello. world");
     }
 }
