@@ -9423,3 +9423,72 @@ fn caret_height_ignores_line_spacing() {
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
 }
+
+#[test]
+fn space_break_cost() {
+    fn first_para(l: &DocLayout) -> &para::ParaLayout {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(&**para),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    let prefix = "Amber copper indigo silver violet green orange yellow white black blue cyan magenta brown";
+    let paragraph = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(
+            text,
+            wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), kern: Some(0.0), ..Default::default() },
+        );
+        p.props.align = Some(Align::Justify);
+        p
+    };
+    let mut doc = Document::new();
+    doc.last_section.page_w = 1000.0;
+    doc.body = vec![wordcraft_doc::para_block(paragraph(prefix))];
+    let broad = lay(&doc);
+    let p = first_para(&broad);
+    let previous: f32 = p.clusters.iter().map(|c| c.adv).sum();
+    let previous_spaces: f32 = p.clusters.iter().filter(|c| c.kind == para::ClKind::Space).map(|c| c.adv).sum();
+    let margins = doc.last_section.margin_left + doc.last_section.margin_right;
+    for word in ["a", "of", "by"] {
+        let next = format!("{prefix} {word}");
+        doc.body = vec![wordcraft_doc::para_block(paragraph(&next))];
+        doc.last_section.page_w = 1000.0;
+        let broad = lay(&doc);
+        let p = first_para(&broad);
+        let natural: f32 = p.clusters.iter().map(|c| c.adv).sum();
+        let spaces: f32 = p.clusters.iter().filter(|c| c.kind == para::ClKind::Space).map(|c| c.adv).sum();
+        // Native Word weighs compression twice as much as expansion per inner space.
+        let boundary = (2.0 * natural * previous_spaces + previous * spaces) / (spaces + 2.0 * previous_spaces);
+        let text = format!("{next} tail tail.");
+        for cell in [false, true] {
+            for offset in [-0.1, 0.1] {
+                let width = boundary + offset;
+                doc.last_section.page_w = width + margins;
+                let block = wordcraft_doc::para_block(paragraph(&text));
+                doc.body = if cell {
+                    let mut table = Table::new(1, 1, width);
+                    table.props.style = None;
+                    table.props.cell_margins = Some([0.0; 4]);
+                    table.rows[0].cells[0].blocks = vec![block];
+                    vec![std::sync::Arc::new(wordcraft_doc::Block::Table(table))]
+                } else {
+                    vec![block]
+                };
+                for mode in [14, 15] {
+                    doc.settings.compat_mode = mode;
+                    let laid = lay(&doc);
+                    let p = first_para(&laid);
+                    let line = &p.lines[0];
+                    let shown = text[line.start..line.stop].trim_end();
+                    let expected = if mode == 15 && offset > 0.0 { next.as_str() } else { prefix };
+                    assert_eq!(shown, expected, "word={word}, cell={cell}, mode={mode}, offset={offset}");
+                }
+            }
+        }
+    }
+}

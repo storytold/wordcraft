@@ -2312,6 +2312,19 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         if j >= n && end != LineEnd::Wrap && !matches!(end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak) {
             end = LineEnd::Para;
         }
+        if shrink_spaces
+            && !has_tab
+            && matches!(end, LineEnd::Para | LineEnd::Wrap)
+            && pl.hyph_after.binary_search(&(j.saturating_sub(1) as u32)).is_err()
+            && !pl.displays.iter().any(|(ci, _)| *ci >= c0 && *ci < j)
+        {
+            let cut = space_break_end(pl, &xs, c0, j, right_edge);
+            if cut < j {
+                j = cut;
+                xs.truncate(j - c0);
+                end = LineEnd::Wrap;
+            }
+        }
         let c1 = j.max(c0);
         // Ensure progress.
         let (c1, j) = if c1 == c0 && c0 < n { (c0 + 1, c0 + 1) } else { (c1, j) };
@@ -2747,6 +2760,50 @@ const HYPHENATION_ZONE: f32 = wordcraft_doc::DEFAULT_HYPHENATION_ZONE;
 /// How much of their width the spaces of a justified line may give up to fit more text (Word
 /// 2013+, compatibility mode 15).
 const MAX_SPACE_SHRINK: f32 = 0.2;
+
+/// Prefer smaller spacing changes; Word weighs compression twice as much as expansion.
+fn space_break_end(pl: &ParaLayout, xs: &[f32], c0: usize, c1: usize, right: f32) -> usize {
+    const COMPRESSION_COST: f32 = 2.0;
+    let mut best = (c1, f32::INFINITY);
+    let mut consider = |cut: usize, content: f32, spaces: f32| {
+        if spaces <= 0.0 {
+            return;
+        }
+        let ratio = (content - right) / spaces;
+        if ratio > MAX_SPACE_SHRINK + 0.01 / spaces {
+            return;
+        }
+        let cost = if ratio > 0.0 { COMPRESSION_COST * ratio } else { -ratio };
+        if cost <= best.1 {
+            best = (cut, cost);
+        }
+    };
+    let mut spaces = 0.0;
+    let mut inner_spaces = 0.0;
+    let mut content = right;
+    for k in c0..c1 {
+        let (Some(c), Some(x)) = (pl.clusters.get(k), xs.get(k - c0)) else { continue };
+        match c.kind {
+            ClKind::Space => {
+                if c.break_after {
+                    consider(k + 1, content, inner_spaces);
+                }
+                spaces += c.adv;
+            }
+            ClKind::Marker => {}
+            _ => {
+                content = x + c.adv - pl.auto_space_after(k);
+                inner_spaces = spaces;
+            }
+        }
+    }
+    // A naturally fitting line already uses the latest fitting break.
+    if content <= right {
+        return c1;
+    }
+    consider(c1, content, inner_spaces);
+    best.0
+}
 
 /// Take `-slack` (an overflow) out of the line's inner spaces, in proportion to their widths and
 /// never more than [`MAX_SPACE_SHRINK`] of them. Trailing spaces hang and are left alone.
@@ -3232,6 +3289,33 @@ mod label_spacing_tests {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn break_cost_omits_end_spacing() {
+        let mut doc = Document::new();
+        let p = Paragraph::with_text("a a a", wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), ..Default::default() });
+        doc.body = vec![wordcraft_doc::para_block(p)];
+        let laid = crate::layout(&doc, &mut crate::LayoutCache::new(), &crate::LayoutOptions::default());
+        let mut para = laid.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                crate::Placed::Lines { para, .. } => Some((**para).clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(para.clusters.len(), 5);
+        for (cluster, advance) in para.clusters.iter_mut().zip([20.0, 10.0, 20.0, 10.0, 30.0]) {
+            cluster.adv = advance;
+        }
+        let xs = [0.0, 20.0, 30.0, 50.0, 60.0];
+        para.auto_space = vec![(4, 10.0)];
+        assert_eq!(space_break_end(&para, &xs, 0, 5, 80.0), 5, "automatic spacing after the final cluster does not consume line width");
+        para.auto_space.clear();
+        assert_eq!(space_break_end(&para, &xs, 0, 5, 80.0), 4, "ordinary advance still counts toward the compression cap");
+        para.auto_space = vec![(2, 10.0)];
+        assert_eq!(space_break_end(&para, &xs, 0, 5, 80.0), 4, "interior automatic spacing remains in the line width");
+    }
 
     #[test]
     fn symbols_ignore_roman_hint() {

@@ -97,6 +97,17 @@ An original embedded-font control matches native Word inline fallback to Times w
 a covered primary glyph. A tall present-glyph label retains a 19.628 pt pitch (Word mean 19.632 pt).
 The combined numbering-definition blocks are not used to infer their individual font choices.
 
+## Justified break choice
+
+In compatibility mode 15, choose a space break by its relative spacing adjustment.
+Compression costs twice as much as expansion per inner-space width, subject to the existing
+compression cap. A fitting extra word can therefore stay on the next line. Final lines remain
+eligible for compression. Tabs, explicit breaks, display equations and selected discretionary
+hyphens retain their existing break path. Original native Word controls cover short words,
+longer words and multi-line paragraphs; bundled-font regressions cover body and table cells.
+The cost uses the same line-end width as fitting: automatic Asian-Latin spacing after the final
+cluster is excluded, while interior spacing remains. Exact first-line assertions reject suffix-only matches.
+
 ## Floating tables across header and body
 
 A body floating table with `tblOverlap=never` clears floating header tables.
@@ -214,6 +225,8 @@ Page-relative footer tables keep their physical wrap bounds without adding to fo
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Justified-break cost excludes final automatic Asian-Latin spacing; exact first-line controls retain interior spacing and compression limits. |
+| 2026-10-16 | trivial | Justified breaks compare normalized expansion and compression cost before pulling another word onto the line |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
 | 2026-10-16 | trivial | Table row keep-next uses the first paragraph of the first cell, including inherited flags. Kept row chains start on a fresh page when the following row cannot start below them. Synthetic Word export covers mixed-cell flags, multiple paragraphs and kept prefixes before oversized followers. |
