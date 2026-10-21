@@ -212,17 +212,51 @@ fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
     })
 }
 
+/// The byte range of the contiguous Thai/Lao script run that contains `off`, plus the
+/// char-boundary-snapped position of `off` within the text.
+///
+/// ICU4X dictionary segmentation only understands Thai and Lao; feeding it mixed Thai/Latin text
+/// produces wrong word boundaries.  Every script transition is itself a word boundary, so
+/// segmenting the isolated run is both correct and sufficient.
+///
+/// Returns `(run_start, run_end, snapped_off)`.  When `off` sits on a non-Thai/Lao character
+/// (e.g. a trailing space), the run is the adjacent Thai/Lao span to the left, so
+/// `run_end == snapped_off`.
+fn thai_run_at(text: &str, off: usize) -> (usize, usize, usize) {
+    // Snap to the nearest char boundary ≤ off (handles mid-multibyte-char positions).
+    let off = text.floor_char_boundary(off.min(text.len()));
+    // Scan backward through text[..off]: start is the byte after the last non-Thai/Lao char.
+    let mut start = 0;
+    for (i, c) in text[..off].char_indices() {
+        if !is_thai_lao(c) {
+            start = i + c.len_utf8();
+        }
+    }
+    // Scan forward through text[off..]: end is just past the last Thai/Lao char.
+    let mut end = off;
+    for (i, c) in text[off..].char_indices() {
+        if !is_thai_lao(c) {
+            break;
+        }
+        end = off + i + c.len_utf8();
+    }
+    (start, end, off)
+}
+
 /// Start of the Thai/Lao word at or before `off` using ICU4X dictionary word segmentation
 /// (Ctrl+Left / Option+Left inside a Thai/Lao run). `off` must be ≤ `text.len()`.
 pub fn thai_word_start(text: &str, off: usize) -> usize {
+    let (rs, re, off) = thai_run_at(text, off);
+    let run = &text[rs..re];
+    let rel = off.saturating_sub(rs);
     let mut prev = 0usize;
-    for b in word_segmenter().segment_str(text) {
-        if b >= off {
+    for b in word_segmenter().segment_str(run) {
+        if b >= rel {
             break;
         }
         prev = b;
     }
-    prev
+    rs + prev
 }
 
 /// End of the Thai/Lao word after `off` using ICU4X dictionary word segmentation
@@ -230,7 +264,11 @@ pub fn thai_word_start(text: &str, off: usize) -> usize {
 /// non-breaking spaces — matching the behaviour of the generic `word_end`. `off` must be
 /// ≤ `text.len()`.
 pub fn thai_word_end(text: &str, off: usize) -> usize {
-    let mut end = word_segmenter().segment_str(text).find(|&b| b > off).unwrap_or(text.len());
+    let (rs, re, off) = thai_run_at(text, off);
+    let run = &text[rs..re];
+    let rel = off.saturating_sub(rs);
+    let rel_end = word_segmenter().segment_str(run).find(|&b| b > rel).unwrap_or(run.len());
+    let mut end = rs + rel_end;
     while let Some(c) = text.get(end..).and_then(|s| s.chars().next()) {
         if !matches!(c, ' ' | '\u{00A0}') {
             break;
@@ -242,21 +280,21 @@ pub fn thai_word_end(text: &str, off: usize) -> usize {
 
 /// The Thai/Lao word around `off` for double-click selection: (start, end).
 ///
-/// When `off` is exactly on a word boundary (and not at position 0), returns the word to the
-/// *left* of the boundary — consistent with how a click on the right half of the last glyph of
-/// a word lands the caret at the word's end offset.  When `off` is inside a word, returns that
-/// word.  When `off` is 0, returns the first word.
+/// When `off` is exactly on a word boundary (and not at the run's start), returns the word to
+/// the *left* of the boundary.  When `off` is inside a word, returns that word.
 pub fn thai_word_at(text: &str, off: usize) -> (usize, usize) {
-    let bounds: Vec<usize> = word_segmenter().segment_str(text).collect();
-    // An exact boundary hit (other than the very start) selects the word whose right edge is
-    // here; its left edge is the preceding boundary.
-    if off > 0 && let Ok(i) = bounds.binary_search(&off) {
+    let (rs, re, off) = thai_run_at(text, off);
+    let run = &text[rs..re];
+    let rel = off.saturating_sub(rs);
+    let bounds: Vec<usize> = word_segmenter().segment_str(run).collect();
+    // An exact boundary hit (other than the very start of the run) selects the word to the left.
+    if rel > 0 && let Ok(i) = bounds.binary_search(&rel) {
         let a = if i > 0 { bounds[i - 1] } else { 0 };
-        return (a, off);
+        return (rs + a, rs + rel);
     }
-    let a = bounds.iter().copied().rev().find(|&b| b <= off).unwrap_or(0);
-    let b = bounds.iter().copied().find(|&b| b > off).unwrap_or(text.len());
-    (a, b)
+    let a = bounds.iter().copied().rev().find(|&b| b <= rel).unwrap_or(0);
+    let b = bounds.iter().copied().find(|&b| b > rel).unwrap_or(run.len());
+    (rs + a, rs + b)
 }
 
 /// Line-break opportunities within Thai and Lao text, which have no spaces between words.
