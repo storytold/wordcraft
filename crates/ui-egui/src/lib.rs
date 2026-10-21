@@ -1005,6 +1005,7 @@ impl WordApp {
         self.execute_inner(id, params)
     }
 
+    /// [`WordApp::execute`] apart from turning add-ins on or off.
     fn execute_inner(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {

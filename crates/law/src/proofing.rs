@@ -91,6 +91,7 @@ pub fn run_confusion_checks(session: &mut Session, store: bool) -> Value {
     json!({"findings": items})
 }
 
+/// A word legal writers confuse with another, and the context it has to appear in to be flagged.
 struct ConfusionRule {
     wrong: &'static str,
     right: &'static str,
@@ -335,6 +336,7 @@ const CONFUSION_RULES: &[ConfusionRule] = &[
     },
 ];
 
+/// Whether `c` ends a sentence.
 fn is_sentence_end(c: char) -> bool {
     matches!(c, '.' | '!' | '?')
 }
@@ -379,6 +381,7 @@ fn phrase_follows(tokens: &[(usize, usize, String)], idx: usize, text: &str, phr
     true
 }
 
+/// Whether the words just before token `idx` are `phrase`, in order, with bare gaps between them.
 fn phrase_precedes(tokens: &[(usize, usize, String)], idx: usize, text: &str, phrase: &[&str]) -> bool {
     if phrase.is_empty() {
         return true;
@@ -437,6 +440,7 @@ fn medical_subject_before(tokens: &[(usize, usize, String)], idx: usize, text: &
     }
 }
 
+/// `replacement` with its first letter capitalized when `original`'s is.
 fn capitalize_like(original: &str, replacement: &str) -> String {
     if original.chars().next().is_some_and(|c| c.is_uppercase()) {
         let mut s = replacement.to_string();

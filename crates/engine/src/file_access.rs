@@ -195,8 +195,10 @@ pub fn automation_invoked() -> bool {
 
 /// Run `f` as an automation invocation (nested calls stay automation until the outermost ends).
 pub fn invoke_automation<T>(f: impl FnOnce() -> T) -> T {
+    /// Lowers the automation depth again when the call ends, even when it panics.
     struct Restore;
     impl Drop for Restore {
+        /// Leave the automation call this guard opened.
         fn drop(&mut self) {
             AUTOMATION.with(|a| {
                 let mut n = a.borrow_mut();

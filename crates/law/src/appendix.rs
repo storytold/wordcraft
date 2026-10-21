@@ -68,6 +68,7 @@ pub fn create_appendix(s: &mut Session, v: &Value) -> Result<Value, LawError> {
     }))
 }
 
+/// The profile id from `id`, else the profile applied to the document.
 fn profile_id(s: &Session, v: &Value) -> Result<String, LawError> {
     if let Some(id) = p::str(v, "id") {
         return Ok(id.to_string());
@@ -78,6 +79,7 @@ fn profile_id(s: &Session, v: &Value) -> Result<String, LawError> {
         .ok_or_else(|| LawError::Failed("`id` (profile id) is required when no court profile is applied".into()))
 }
 
+/// Write the document type's section headings, each with an empty body paragraph (a table of contents under Contents).
 fn write_skeleton(s: &mut Session, profile: &Profile, doc_type: &str) -> Result<(), LawError> {
     let spec = profile.docs.get(doc_type).ok_or_else(|| LawError::Failed(format!("profile has no `{doc_type}`")))?;
     let body_style = if spec.styles.iter().any(|st| st.name.eq_ignore_ascii_case("Body")) {
@@ -120,6 +122,7 @@ fn write_skeleton(s: &mut Session, profile: &Profile, doc_type: &str) -> Result<
     Ok(())
 }
 
+/// Run a WordCraft command, naming it in the error when it fails.
 fn run(s: &mut Session, id: &str, params: Value) -> Result<Value, LawError> {
     s.run(id, &params).map_err(|e| match e {
         CmdError::Unknown(_) => LawError::Failed(format!("{id}: WordCraft no longer has this command")),
@@ -127,6 +130,7 @@ fn run(s: &mut Session, id: &str, params: Value) -> Result<Value, LawError> {
     })
 }
 
+/// The appendix commands: create an appendix document and apply appendix formatting.
 pub fn specs() -> Vec<wordcraft_engine::CommandSpec> {
     vec![
         wordcraft_engine::CommandSpec::new("law.appendix.create", "Create Appendix", LOC, |s, v| {

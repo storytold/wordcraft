@@ -22,14 +22,17 @@ pub struct Finding {
 }
 
 impl Finding {
+    /// An error finding with no position in the document.
     pub fn error(check_id: impl Into<String>, message: impl Into<String>) -> Self {
         Finding { check_id: check_id.into(), severity: "error".into(), message: message.into(), start: None, end: None }
     }
 
+    /// A warning finding with no position in the document.
     pub fn warning(check_id: impl Into<String>, message: impl Into<String>) -> Self {
         Finding { check_id: check_id.into(), severity: "warning".into(), message: message.into(), start: None, end: None }
     }
 
+    /// A finding of `severity` that spans `start` to `end`.
     pub fn at(check_id: impl Into<String>, severity: impl Into<String>, message: impl Into<String>, start: Pos, end: Pos) -> Self {
         Finding { check_id: check_id.into(), severity: severity.into(), message: message.into(), start: Some(start), end: Some(end) }
     }

@@ -116,6 +116,7 @@ fn is_blank(doc: &Document) -> bool {
     body && doc.comments.is_empty() && doc.parts.keys().all(|k| doc.plain_text(StoryRef::Part(*k)).trim().is_empty())
 }
 
+/// One side of the case: its parties' names and their role (Plaintiff, Respondent).
 struct Side {
     names: Vec<String>,
     role: String,
@@ -139,6 +140,7 @@ struct Form {
 }
 
 impl Form {
+    /// Read and check the command's params; the first problem is the error.
     fn read(v: &Value) -> Result<Form, CmdError> {
         let kind_name = req(v, "type")?;
         let Some(kind) = TYPES.iter().copied().find(|t| *t == kind_name) else {
@@ -196,10 +198,12 @@ impl Form {
         })
     }
 
+    /// The side the firm represents.
     fn client(&self) -> &Side {
         if self.we_first { &self.first } else { &self.second }
     }
 
+    /// A firm detail by field name, empty when it isn't set.
     fn firm(&self, key: &str) -> &str {
         self.firm.get(key).map(String::as_str).unwrap_or("")
     }
@@ -215,10 +219,12 @@ fn text(v: &Value, key: &str) -> Result<Option<String>, CmdError> {
     }
 }
 
+/// A required text param.
 fn req(v: &Value, key: &str) -> Result<String, CmdError> {
     text(v, key)?.ok_or_else(|| CmdError::Params(format!("`{key}` is required")))
 }
 
+/// A party side param (`{"names": [string], "role": string}`), checked.
 fn side(v: &Value, key: &str) -> Result<Side, CmdError> {
     let Some(obj) = v.get(key).filter(|o| o.is_object()) else {
         return Err(CmdError::Params(format!("`{key}` is required: {{\"names\": [string], \"role\": string}}")));
@@ -272,6 +278,7 @@ pub fn long_date((y, m, d): (i64, u32, u32)) -> String {
     format!("{d}{} day of {month}, {y}", ordinal_suffix(d))
 }
 
+/// The English ordinal suffix for a day of the month: st, nd, rd or th.
 fn ordinal_suffix(d: u32) -> &'static str {
     match (d % 10, d % 100) {
         (_, 11..=13) => "th",
@@ -319,6 +326,7 @@ struct Line {
     bold: bool,
 }
 
+/// A plain line of `text` in `style`, with no extra spacing and not bold.
 fn line(style: &'static str, text: impl Into<String>) -> Line {
     Line { style, text: text.into(), before: None, after: None, bold: false }
 }
@@ -333,6 +341,7 @@ struct Writer<'a> {
 }
 
 impl Writer<'_> {
+    /// Run a command as part of the outer undo step.
     fn run(&mut self, id: &str, params: Value) -> CmdResult {
         self.s.join_next_undo();
         self.s.run(id, &params)
@@ -395,6 +404,7 @@ impl Writer<'_> {
         Ok(())
     }
 
+    /// Write the whole pleading in order; returns the names of the sections written.
     fn write(mut self, f: &Form) -> Result<Vec<&'static str>, CmdError> {
         let mut sections = Vec::new();
         self.caption(f)?;
@@ -426,6 +436,7 @@ impl Writer<'_> {
         Ok(sections)
     }
 
+    /// The court heading and the two-column caption table (parties on the left, case number on the right).
     fn caption(&mut self, f: &Form) -> Result<(), CmdError> {
         self.para("Court", &format!("IN THE {} COURT OF {} COUNTY", f.court_type, f.county))?;
         self.para("Court State", "STATE OF MISSOURI")?;
@@ -479,6 +490,7 @@ impl Writer<'_> {
         Ok(())
     }
 
+    /// The opening paragraphs for the pleading's type, with placeholders for what the attorney fills in.
     fn body(&mut self, f: &Form) -> Result<(), CmdError> {
         let client = f.client();
         let (names, role) = (join_names(&client.names), &client.role);
@@ -520,6 +532,7 @@ impl Writer<'_> {
         }
     }
 
+    /// The signature block from the saved firm details.
     fn signature(&mut self, f: &Form) -> Result<(), CmdError> {
         let sig = |text: String| line("Signature", text);
         let mut lines = vec![sig("Respectfully Submitted,".into()), Line { before: Some(6.0), ..sig(f.firm("firmName").into()) }];
@@ -539,6 +552,7 @@ impl Writer<'_> {
         self.block(&lines)
     }
 
+    /// The certificate of service: e-filing to counsel of record, plus USPS service when it was asked for.
     fn certificate(&mut self, f: &Form) -> Result<(), CmdError> {
         let mut said = format!(
             "I hereby certify that on this {}, an electronic copy of the foregoing was sent through the Missouri e-Filing system to counsel of record.",
@@ -559,6 +573,7 @@ impl Writer<'_> {
         ])
     }
 
+    /// The client's verification of a petition, with its notary block.
     fn verification(&mut self, f: &Form) -> Result<(), CmdError> {
         let client = f.client();
         let names = join_names(&client.names);

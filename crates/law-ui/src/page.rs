@@ -58,14 +58,17 @@ fn reconcile_doc_type(law: &mut LawUi, profile: &Value) {
     }
 }
 
+/// The draft key for a section's name being edited.
 fn section_draft_key(profile_id: &str, doc_key: &str, section_id: &str) -> String {
     format!("{profile_id}\0{doc_key}\0section\0{section_id}")
 }
 
+/// The draft key for a check's text fields being edited.
 fn check_draft_key(profile_id: &str, doc_key: &str, index: usize) -> String {
     format!("{profile_id}\0{doc_key}\0{index}")
 }
 
+/// The draft key for a style's font being edited.
 fn style_font_draft_key(profile_id: &str, doc_key: &str, index: usize) -> String {
     format!("{profile_id}\0{doc_key}\0style\0{index}")
 }
@@ -174,6 +177,7 @@ pub fn commit_pending_drafts(app: &mut Ctx<'_>) -> bool {
     true
 }
 
+/// Replace `profile` with the stored copy of `profile_id`, when it can be read.
 fn reload_profile(app: &mut Ctx<'_>, profile_id: &str, profile: &mut Value) {
     if let Ok(p) = app.run("law.profiles.get", json!({"id": profile_id})) {
         *profile = p;
@@ -299,6 +303,7 @@ pub fn page(app: &mut Ctx<'_>, ui: &mut Ui) {
     crate::pleading::firm_section(app, ui);
 }
 
+/// The editor for one court profile: its name, approval, document types, sections, styles and checks.
 fn profile_editor(app: &mut Ctx<'_>, ui: &mut Ui, id: &str, list: &[Value]) {
     let summary = list.iter().find(|r| r["id"].as_str() == Some(id));
     let verified = summary.and_then(|r| r["verified"].as_bool()).unwrap_or(false);
@@ -357,6 +362,7 @@ fn profile_editor(app: &mut Ctx<'_>, ui: &mut Ui, id: &str, list: &[Value]) {
     }
 }
 
+/// The Approve button and its confirmation, which saves pending drafts before approving.
 fn approve_ui(app: &mut Ctx<'_>, ui: &mut Ui, id: &str) {
     if app.law.confirm_approve {
         ui.label("Approve this court profile? You are confirming that its rules match the court's requirements.");
@@ -385,6 +391,7 @@ fn approve_ui(app: &mut Ctx<'_>, ui: &mut Ui, id: &str) {
     }
 }
 
+/// The section list for one document type: rename, mark required, and move up or down.
 fn sections_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str, doc: &Value, profile: &mut Value) {
     let sections = doc.get("sections").and_then(Value::as_array).cloned().unwrap_or_default();
     if sections.is_empty() {
@@ -446,6 +453,7 @@ fn patch_section_name(profile: &Value, doc_key: &str, section_id: &str, name: &s
     secs
 }
 
+/// The section ids the document type's `requiredSections` checks name.
 fn required_section_ids(doc: &Value) -> Vec<String> {
     doc.get("checks")
         .and_then(Value::as_array)
@@ -459,6 +467,7 @@ fn required_section_ids(doc: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// Add `section_id` to, or take it from, the document type's `requiredSections` check, adding the check when needed.
 fn set_section_required_in_profile(profile: &mut Value, doc_key: &str, section_id: &str, required: bool) {
     let doc = profile["docs"].get(doc_key).cloned().unwrap_or(Value::Null);
     let checks = doc.get("checks").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -494,6 +503,7 @@ fn set_section_required_in_profile(profile: &mut Value, doc_key: &str, section_i
     }
 }
 
+/// Move the section at `from` to `to` and save the document type.
 fn reorder_sections(app: &mut Ctx<'_>, profile_id: &str, doc_key: &str, profile: &mut Value, from: usize, to: usize) {
     let doc = profile["docs"].get(doc_key).cloned().unwrap_or(Value::Null);
     let mut sections = doc.get("sections").and_then(Value::as_array).cloned().unwrap_or_default();
@@ -529,6 +539,7 @@ fn patch_style(
     save_doc(app, profile_id, doc_key, profile, json!({"styles": styles}))
 }
 
+/// The style list for one document type, with each style's font, size and spacing.
 fn styles_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str, doc: &Value, profile: &mut Value) {
     let styles = doc.get("styles").and_then(Value::as_array).cloned().unwrap_or_default();
     if styles.is_empty() {
@@ -591,6 +602,7 @@ fn styles_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
     ui.label(RichText::new("These are the profile's named styles. Applying the profile writes them into the document, where WordCraft's usual style tools can refine them.").small().weak());
 }
 
+/// The check list for one document type: each check's kind and settings, plus add and remove.
 fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str, doc: &Value, profile: &mut Value) {
     let checks = doc.get("checks").and_then(Value::as_array).cloned().unwrap_or_default();
     let section_ids: Vec<String> = doc
@@ -754,6 +766,7 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
     }
 }
 
+/// A new check of `kind` with starting values, keeping the source and effective date of the check it replaces.
 fn default_check(kind: &str, previous: &Value) -> Value {
     let source = previous.get("source").and_then(Value::as_str).filter(|s| !s.is_empty()).unwrap_or("Edited in LawCraft settings");
     let effective = previous.get("effective").and_then(Value::as_str).unwrap_or("");
@@ -789,6 +802,7 @@ fn patch_check(app: &mut Ctx<'_>, profile_id: &str, doc_key: &str, profile: &mut
     save_doc(app, profile_id, doc_key, profile, json!({"checks": checks}))
 }
 
+/// A list of checkboxes that picks which section ids or style names a check's `field` lists.
 fn check_id_list_editor(
     app: &mut Ctx<'_>,
     ui: &mut Ui,
@@ -834,6 +848,7 @@ fn check_id_list_editor(
     }
 }
 
+/// Merge `patch` into one document type of `profile` and save the profile; `false` when the save fails.
 fn save_doc(app: &mut Ctx<'_>, profile_id: &str, doc_key: &str, profile: &mut Value, patch: Value) -> bool {
     let doc = profile["docs"].get(doc_key).cloned().unwrap_or(Value::Null);
     let mut merged = doc.as_object().cloned().unwrap_or_default();
@@ -884,6 +899,7 @@ fn save_profile(app: &mut Ctx<'_>, profile_id: &str, profile: Value) -> Result<V
     }
 }
 
+/// Validate the stored profile and keep the error, if any, for the page to show.
 fn validate_profile(app: &mut Ctx<'_>, profile_id: &str) {
     match app.run("law.profiles.get", json!({"id": profile_id})) {
         Ok(p) => match app.run("law.profiles.validate", p) {

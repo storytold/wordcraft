@@ -22,6 +22,7 @@ const MO_TEMPLATE: &str = "I certify that this brief contains {wordCount} words,
 /// Federal appellate brief certificate (FRAP 32(g)).
 const FEDERAL_TEMPLATE: &str = "I certify that this brief complies with the type-volume limitation of the Federal Rules of Appellate Procedure and contains {wordCount} words, excluding the portions of the document required by Rule 32(f) to be excluded. The word limit for this document is {wordLimit} words. The brief is set in {font} {fontSize}-point type and was prepared with {software}.";
 
+/// The values a certificate template's placeholders are filled with.
 struct TemplateValues {
     word_count: u32,
     word_limit: u32,
@@ -66,6 +67,7 @@ pub fn refresh_wordcount_fields(session: &mut Session) -> Result<(), CmdError> {
     refresh_wordcount_fields_for(session, None, None)
 }
 
+/// Refresh every LAWWORDCOUNT field with the word count for `profile_id`/`doc_type`, or the profile the document has applied.
 fn refresh_wordcount_fields_for(session: &mut Session, profile_id: Option<&str>, doc_type: Option<&str>) -> Result<(), CmdError> {
     if !has_lawwordcount_fields(&session.doc) {
         return Ok(());
@@ -119,10 +121,12 @@ pub fn on_update_fields(session: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// The error for a profile that has no document type `doc_type`.
 fn missing_doc(profile: &Profile, doc_type: &str) -> LawError {
     LawError::Failed(format!("profile `{}` has no document type `{doc_type}` (it has {})", profile.id, profile.doc_types().join(", ")))
 }
 
+/// Refuse a profile or document type that differs from the one the document has applied.
 fn ensure_matching_applied_metadata(session: &Session, profile_id: &str, doc_type: &str) -> Result<(), LawError> {
     if let Some(applied) = session.doc.custom_prop(PROP_PROFILE)
         && applied != profile_id
@@ -137,6 +141,7 @@ fn ensure_matching_applied_metadata(session: &Session, profile_id: &str, doc_typ
     Ok(())
 }
 
+/// Whether the document holds a LAWWORDCOUNT field.
 fn has_lawwordcount_fields(doc: &Document) -> bool {
     let want = field_name_instr(FIELD_WORDCOUNT);
     for story in doc.counted_stories() {
@@ -154,14 +159,17 @@ fn has_lawwordcount_fields(doc: &Document) -> bool {
     false
 }
 
+/// The body block a path starts in.
 fn top_level_block_index(path: &Path) -> usize {
     path.0.first().copied().unwrap_or(0) as usize
 }
 
+/// How many top-level blocks the body has.
 fn top_level_block_count(doc: &Document) -> usize {
     doc.story(StoryRef::Body).map(|b| b.len()).unwrap_or(0)
 }
 
+/// The certificate template from the document type, else the bundled Missouri or federal one.
 fn resolve_template(profile: &Profile, spec: &DocSpec) -> Result<String, LawError> {
     if let Some(c) = &spec.certificate_of_compliance {
         return Ok(c.template.clone());
@@ -176,6 +184,7 @@ fn resolve_template(profile: &Profile, spec: &DocSpec) -> Result<String, LawErro
     }
 }
 
+/// The word count, word limit, rule and typeface the certificate states.
 fn template_values(doc: &Document, profile: &Profile, doc_type: &str, spec: &DocSpec, template: &str) -> Result<TemplateValues, LawError> {
     let word_count = word_count(doc, profile, doc_type)?;
     let wl = spec
@@ -190,6 +199,7 @@ fn template_values(doc: &Document, profile: &Profile, doc_type: &str, spec: &Doc
     Ok(TemplateValues { word_count, word_limit, rule, font, font_size })
 }
 
+/// The rule the certificate cites: its own source, else the word limit's, else the document type's.
 fn cert_rule(spec: &DocSpec, wl: &crate::profile::CheckSpec) -> String {
     spec.certificate_of_compliance
         .as_ref()
@@ -198,6 +208,7 @@ fn cert_rule(spec: &DocSpec, wl: &crate::profile::CheckSpec) -> String {
         .unwrap_or_else(|| spec.source.clone())
 }
 
+/// The font and point size the certificate states, from the minimum font size check or the Normal style.
 fn typeface(spec: &DocSpec) -> (String, String) {
     if let Some(c) = spec.checks.iter().find(|x| x.kind == "minFontSize") {
         let font = c.font.clone().or_else(|| {
@@ -219,6 +230,7 @@ fn typeface(spec: &DocSpec) -> (String, String) {
     ("Times New Roman".into(), "12".into())
 }
 
+/// Write the certificate under its section heading, replacing the old one, or add the section at the end.
 fn write_certificate(
     session: &mut Session,
     spec: &DocSpec,
@@ -267,6 +279,7 @@ fn ensure_top_level_heading(paths: &[Path], index: usize, heading: &str) -> Resu
     )))
 }
 
+/// Add the certificate's heading and text at the end of the body.
 fn append_certificate(session: &mut Session, heading: &str, style_id: Option<&str>, template: &str, values: &TemplateValues) -> Result<(), LawError> {
     let at = top_level_block_count(&session.doc);
     let mut head = Paragraph::with_text(heading, CharProps::default());
@@ -280,10 +293,12 @@ fn append_certificate(session: &mut Session, heading: &str, style_id: Option<&st
     Ok(())
 }
 
+/// Where the paragraph whose text is `heading` sits among `paths`.
 fn find_heading_index(doc: &Document, paths: &[Path], heading: &str) -> Option<usize> {
     paths.iter().position(|path| doc.para(StoryRef::Body, path).is_some_and(|p| p.plain_text().trim().eq_ignore_ascii_case(heading)))
 }
 
+/// Where the certificate's text ends: the next profile section heading after it, else the end of the body.
 fn next_section_index(doc: &Document, spec: &DocSpec, paths: &[Path], heading_i: Option<usize>) -> usize {
     let Some(hi) = heading_i else { return paths.len() };
     // Bound the replacement at the next recognized profile section, whatever its position in the
@@ -301,14 +316,17 @@ fn next_section_index(doc: &Document, spec: &DocSpec, paths: &[Path], heading_i:
     paths.len()
 }
 
+/// One paragraph per template line, placeholders filled in.
 fn paragraphs_from_template(template: &str, values: &TemplateValues, style_id: Option<&str>) -> Vec<Paragraph> {
     template.split('\n').map(|line| build_paragraph(substitute_line(line, values), values.word_count, style_id)).collect()
 }
 
+/// A field instruction's name in upper case (`LAWWORDCOUNT`).
 fn field_name_instr(instr: &str) -> String {
     instr.split_whitespace().next().unwrap_or("").trim_start_matches('=').to_ascii_uppercase()
 }
 
+/// Fill a template line's placeholders, except the word count, which becomes a field.
 fn substitute_line(line: &str, values: &TemplateValues) -> String {
     let mut s = line.to_string();
     for (from, to) in [
@@ -323,6 +341,7 @@ fn substitute_line(line: &str, values: &TemplateValues) -> String {
     s
 }
 
+/// A certificate paragraph whose `{wordCount}` placeholders become LAWWORDCOUNT fields.
 fn build_paragraph(text: String, word_count: u32, style_id: Option<&str>) -> Paragraph {
     let mut para = Paragraph::new();
     if let Some(id) = style_id {
