@@ -547,6 +547,9 @@ impl Reader<'_> {
                 if let Some(c) = super::math::lift_color(&mut math) {
                     props.color = Some(TextColor::Rgb(c));
                 }
+                if let Some(size) = super::math::shared_size(k) {
+                    props.size = Some(size);
+                }
                 let linear = wordcraft_doc::math::to_linear(&math.nodes);
                 self.emit_obj(sc, pb, InlineObject::Equation { linear, display: false, math }, &props);
             }
@@ -558,6 +561,9 @@ impl Reader<'_> {
                     let mut props = props.clone();
                     if let Some(c) = super::math::lift_color(&mut math) {
                         props.color = Some(TextColor::Rgb(c));
+                    }
+                    if let Some(size) = super::math::shared_size(m) {
+                        props.size = Some(size);
                     }
                     let linear = wordcraft_doc::math::to_linear(&math.nodes);
                     self.emit_obj(sc, pb, InlineObject::Equation { linear, display: true, math }, &props);

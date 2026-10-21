@@ -2009,6 +2009,36 @@ fn shape_effects_round_trip() {
 }
 
 #[test]
+fn equation_size_keeps_controls() {
+    use wordcraft_doc::math::Math;
+    for display in [false, true] {
+        for (control_size, expected) in [(28, 14.0), (20, 10.0)] {
+            let run = |t: &str| format!("<m:r><w:rPr><w:sz w:val=\"28\"/></w:rPr><m:t>{t}</m:t></m:r>");
+            let omml = format!(
+                "<m:oMath><m:sSup><m:sSupPr><m:ctrlPr><w:rPr><w:sz w:val=\"{control_size}\"/></w:rPr></m:ctrlPr></m:sSupPr><m:e>{}</m:e><m:sup>{}</m:sup></m:sSup></m:oMath>",
+                run("D"),
+                run("3")
+            );
+            let mut p = Paragraph::new();
+            let math = Math { omml, ..Default::default() };
+            p.insert_object(0, InlineObject::Equation { linear: "D^3".into(), display, math }, &CharProps::default()).unwrap();
+            let mut d = doc_with(vec![p]);
+            d.styles.default_chr.size = Some(10.0);
+            let r = rt(&d);
+            let q = paras(&r).into_iter().find(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Equation { .. }))).unwrap();
+            let props = &q.runs.first().unwrap().props;
+            let actual = r.styles.resolve_char(q.props.style.as_deref(), props).draw_size();
+            assert_eq!(actual, expected, "display={display}, control={control_size}");
+            let InlineObject::Equation { math, .. } = &q.objects[0] else { panic!("equation missing") };
+            let mut nodes = math.nodes.clone();
+            let mut sizes = Vec::new();
+            wordcraft_doc::math_edit::each_run_mut(&mut nodes, &mut |r| sizes.push(r.size));
+            assert_eq!(sizes, vec![Some(14.0), Some(14.0)], "operand formatting stays explicit");
+        }
+    }
+}
+
+#[test]
 fn equation_manual_breaks_round_trip() {
     use wordcraft_doc::math::{MNode, MRun, Math};
     let nodes = vec![
