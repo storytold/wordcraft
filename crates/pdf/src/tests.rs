@@ -1860,3 +1860,149 @@ fn pages_print_scaled_to_other_paper() {
         assert_eq!(size(&bytes), size(&plain));
     }
 }
+
+#[test]
+fn exact_rows_clip_partial_ink() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use kurbo::{Affine, BezPath, Line, ParamCurve, PathSeg, Rect, Shape};
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+
+    const ROW_HEIGHT: f32 = 16.0;
+    const EPSILON: f64 = 0.001;
+    const RAW_TEXT: &str = "AHZY";
+
+    // Intersect a scanline with the actual outline, then witness filled ink between crossings.
+    fn ink_in_rect(outline: &BezPath, rect: Rect) -> bool {
+        let rect = outline.bounding_box().intersect(rect);
+        if rect.area() <= 0.0 {
+            return false;
+        }
+
+        let scan = Line::new((rect.x0, rect.center().y), (rect.x1, rect.center().y));
+        let mut cuts = vec![0.0, 1.0];
+        for segment in outline.segments() {
+            cuts.extend(segment.intersect_line(scan).iter().map(|hit| hit.line_t));
+        }
+        cuts.sort_by(f64::total_cmp);
+        cuts.windows(2).any(|pair| pair[0] < pair[1] && outline.contains(scan.eval((pair[0] + pair[1]) / 2.0)))
+    }
+
+    #[derive(Debug)]
+    struct GlyphInk {
+        text: String,
+        bounds: Rect,
+        visible: Rect,
+        painted: bool,
+        cut: bool,
+        clips: Vec<Rect>,
+    }
+
+    #[derive(Default)]
+    struct Ink {
+        clips: Vec<Rect>,
+        glyphs: Vec<GlyphInk>,
+    }
+
+    impl Device<'_> for Ink {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &BezPath, _: Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, clip: &ClipPath) {
+            let bounds = clip.path.bounding_box();
+            assert!(
+                clip.path.segments().all(|segment| { matches!(segment, PathSeg::Line(line) if line.p0.x == line.p1.x || line.p0.y == line.p1.y) }),
+                "this fixture uses rectangular clips"
+            );
+            assert!((clip.path.area().abs() - bounds.area()).abs() < EPSILON);
+            self.clips.push(bounds);
+        }
+        fn pop_clip_path(&mut self) {
+            self.clips.pop().expect("balanced PDF clip stack");
+        }
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn pop_transparency_group(&mut self) {}
+        fn draw_glyph(&mut self, glyph: &Glyph<'_>, transform: Affine, glyph_transform: Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            assert!(matches!(mode, GlyphDrawMode::Fill), "fixture text must paint filled glyphs");
+            let text = match glyph.as_unicode().expect("fixture glyph has ToUnicode text") {
+                hayro_cmap::BfString::Char(c) => c.to_string(),
+                hayro_cmap::BfString::String(s) => s,
+            };
+            let Glyph::Outline(glyph) = glyph else { panic!("fixture must embed outline glyphs") };
+            let outline = transform * glyph_transform * glyph.outline();
+            let bounds = outline.bounding_box();
+            assert!(bounds.area() > 0.0, "fixture letters must have ink");
+            let visible = self.clips.iter().fold(bounds, |rect, clip| rect.intersect(*clip));
+            let painted = ink_in_rect(&outline, visible);
+            let cut = if visible.area() == 0.0 {
+                ink_in_rect(&outline, bounds)
+            } else {
+                [
+                    Rect::new(bounds.x0, bounds.y0, visible.x0, bounds.y1),
+                    Rect::new(visible.x1, bounds.y0, bounds.x1, bounds.y1),
+                    Rect::new(bounds.x0, bounds.y0, bounds.x1, visible.y0),
+                    Rect::new(bounds.x0, visible.y1, bounds.x1, bounds.y1),
+                ]
+                .into_iter()
+                .any(|rect| ink_in_rect(&outline, rect))
+            };
+            self.glyphs.push(GlyphInk { text, bounds, visible, painted, cut, clips: self.clips.clone() });
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: Affine) {}
+    }
+
+    for rule in [HeightRule::Exact, HeightRule::AtLeast] {
+        let mut t = Table::new(1, 1, 200.0);
+        t.props.cell_margins = Some([0.0; 4]);
+        t.rows[0].props.height = Some(ROW_HEIGHT);
+        t.rows[0].props.height_rule = rule;
+        let font = CharProps { font: Some("Source Sans 3".into()), size: Some(10.0), ..Default::default() };
+        let mut p = Paragraph::with_text("A\nH\nZ", font.clone());
+        p.props.line_spacing = Some(LineSpacing::Exactly(12.0));
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        let mut d = Document::new();
+        d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::with_text("Y", font))];
+
+        for tagged in [false, true] {
+            let bytes = export(&d, &PdfOptions { tagged, ..Default::default() }).unwrap();
+            assert_eq!(squash(&extract_text(&bytes).concat()), RAW_TEXT, "raw text survives clipping: {rule:?}, tagged={tagged}");
+            let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+            assert_eq!(pdf.pages().len(), 1);
+            let cache = InterpreterCache::new();
+            let mut ink = Ink::default();
+            let mut ctx = Context::new(Affine::IDENTITY, Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+            interpret_page(&pdf.pages()[0], &mut ctx, &mut ink);
+            assert!(ink.clips.is_empty(), "all PDF clips must be popped");
+            assert_eq!(ink.glyphs.iter().map(|glyph| glyph.text.as_str()).collect::<String>(), RAW_TEXT);
+            let uncut = |glyph: &GlyphInk| {
+                assert_eq!(glyph.visible, glyph.bounds, "{rule:?}, tagged={tagged}: {glyph:?}");
+                assert!(glyph.painted && !glyph.cut, "{rule:?}, tagged={tagged}: {glyph:?}");
+            };
+            uncut(&ink.glyphs[0]);
+            uncut(&ink.glyphs[3]);
+            assert!(
+                ink.glyphs[3].clips.iter().all(|clip| (clip.height() - f64::from(ROW_HEIGHT)).abs() > EPSILON),
+                "following text escapes the cell clip"
+            );
+
+            if rule == HeightRule::AtLeast {
+                for glyph in &ink.glyphs {
+                    uncut(glyph);
+                }
+                continue;
+            }
+            for glyph in &ink.glyphs[..3] {
+                assert!(glyph.clips.iter().any(|clip| (clip.height() - f64::from(ROW_HEIGHT)).abs() < EPSILON), "cell clip missing: {glyph:?}");
+            }
+            let partial = &ink.glyphs[1];
+            assert!(partial.visible.area() > 0.0 && partial.visible.area() < partial.bounds.area(), "{partial:?}");
+            assert!(partial.painted && partial.cut, "second-line outline has ink on both sides of the active clip: {partial:?}");
+            let hidden = &ink.glyphs[2];
+            assert_eq!(hidden.visible.area(), 0.0, "third-line ink lies wholly outside the active clip: {hidden:?}");
+            assert!(!hidden.painted && hidden.cut, "{hidden:?}");
+        }
+    }
+}
