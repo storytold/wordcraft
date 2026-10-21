@@ -32,7 +32,9 @@ impl WordApp {
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
-        let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        // A module's command that opens a new document in place of this one counts it too.
+        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
+        let refused = if replaces || flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -47,8 +49,6 @@ impl WordApp {
         if let Some(what) = self.addin_input_dialog(id, &params) {
             return Ok(json!({"pending": what}));
         }
-        // A module's command that opens a new document in place of this one asks too.
-        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
         if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
             && (replaces || discards_document(id, &params))
             && !self.closes_only_its_window(id, &params)
