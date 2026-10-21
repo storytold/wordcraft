@@ -163,3 +163,20 @@ fn do_not_track_moves_round_trips() {
     assert!(s.contains("<w:doNotTrackMoves/>"), "{s}");
     assert!(!wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap().settings.track_moves);
 }
+
+#[test]
+fn break_spacing_setting_saves() {
+    let original = SETTINGS.replace("<w:compat>", "<w:compat><w:suppressSpBfAfterPgBrk/>");
+    let mut d = wordcraft_docx::read(&with_settings(&original)).unwrap();
+    assert!(d.settings.suppress_break_spacing);
+    for enabled in [false, true, false] {
+        d.settings.suppress_break_spacing = enabled;
+        let bytes = wordcraft_docx::write(&d).unwrap();
+        let files = unzip(&bytes);
+        let settings = text(&files, "word/settings.xml");
+        assert!(settings.contains("enableOpenTypeFeatures"), "unowned compatibility setting survives");
+        assert_eq!(settings.matches("<w:suppressSpBfAfterPgBrk").count(), usize::from(enabled));
+        d = wordcraft_docx::read(&bytes).unwrap();
+        assert_eq!(d.settings.suppress_break_spacing, enabled);
+    }
+}

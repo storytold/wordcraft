@@ -106,6 +106,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Break-spacing toggles survive saves with unowned compatibility settings. A first paragraph does not carry suppressed before-spacing past its page break. |
+| 2026-10-19 | trivial | Retain page-break parity evidence and upstream history. Conflict repair preserves runtime behavior and assertions. |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
@@ -113,6 +115,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | trivial | #21: Find in list and "Show only records that will be merged" in Edit Recipient List (#1576) |
 | 2026-10-18 | trivial | #15 narrowed: Word's `Sources.xml` bibliography file imports into Manage Sources (#2640) |
 | 2026-10-18 | trivial | #2445: pending Save As answers keep their originating document identity, so a replacement document is never written to an old picker destination; real Save-button and focused-editor shortcut controls verified |
+| 2026-10-16 | trivial | Leading page breaks honor suppressSpBfAfterPgBrk; unflagged documents retain before-spacing. |
 | 2026-10-16 | trivial | #2445: interactive Save on import-only .doc/.dot paths uses the existing DOCX Save As flow; cancel and failed writes keep the draft, and Close waits for a successful save. Explicit/script saves still report unsupported legacy output |
 | 2026-10-17 | trivial | #1327: Restrict Editing exceptions no longer let table, row or cell formatting change protected tables; formatting-only protection refuses Paste Formatting, table shading/borders/alignment/margins/text direction, table-style edits and locked table styles; recipient-list commands no longer rewrite merge-field results in a protected document. No gap row (enforcement fix); estimates unchanged |
 | 2026-10-17 | trivial | #21: Find in list and "Show only records that will be merged" in Edit Recipient List (#1576) |

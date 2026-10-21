@@ -199,7 +199,8 @@ hold was dropped without a warning (on 18 real-world Word documents: compatibili
 of 18; the privacy options are modelled since #1062). Now the writer merges into the
 file's original (`crates/docx/src/write/settings_merge.rs`): the original root and every child
 the model doesn't own stay byte for byte; owned children follow the model, in CT_Settings order;
-in `w:compat` only `compatibilityMode` is replaced. Kept children that point at a relationship
+in `w:compat`, `compatibilityMode` and `suppressSpBfAfterPgBrk` follow the model; other
+unowned children remain preserved. Kept children that point at a relationship
 (a mail-merge data source) are dropped. Files WordCraft wrote itself keep nothing extra. Tests:
 `crates/docx/tests/settings_merge.rs`.
 
@@ -233,6 +234,9 @@ Imported text fields use the first nonempty cached result run's formatting on th
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Clarify that compatibilityMode and suppressSpBfAfterPgBrk are model-owned; other compatibility children remain preserved. |
+| 2026-10-19 | minor | Break-spacing toggles survive saves with unowned compatibility settings. A first paragraph does not carry suppressed before-spacing past its page break. |
+| 2026-10-19 | trivial | Retain page-break parity evidence and upstream history. Conflict repair preserves runtime behavior and assertions. |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | A Word 2003 XML or Flat OPC document, or a web page, saved under a `.doc`, `.docx` or `.rtf` name opens by what it holds, as in Word, instead of going to the Word 97-2003 reader and showing a blank page (#2853) |
@@ -240,6 +244,7 @@ Imported text fields use the first nonempty cached result run's formatting on th
 | 2026-10-18 | trivial | Manage Sources imports Word's `Sources.xml` (`b:Sources`) into the document's bibliography sources, sharing the reader of a document's own bibliography part (#2640) |
 | 2026-10-14 | trivial | RTF export writes sections: `\sectd` formatting and `\sect` per section, round-tripping through the reader (gap 19) |
 | 2026-10-14 | trivial | `ASK` and `SET` fields keep their result but show nothing (#1765) |
+| 2026-10-16 | trivial | Leading page breaks honor suppressSpBfAfterPgBrk; unflagged documents retain before-spacing. |
 | 2026-10-16 | trivial | Strict OOXML line heights: `w:line="13.90pt"` under `lineRule="auto"` is read as Word renders it — through twips (13.90 × 20 = 278; the 1.1583 multiple), not as 240ths of a line — so a Word 2024 strict file opens at Word's line spacing and page count (#2329) |
 | 2026-10-15 | trivial | RTF import reads each stylesheet entry's bold, italic, size and font (through `\sbasedon`; unset means RTF's default once the chain sets any) and keeps a heading's, Title's, Quote's or Code run's formatting set by hand, in the text and in the old formatting of a tracked change (gap 19) |
 | 2026-10-15 | trivial | RTF import's heading, Title and Code normalisation is main's again (direct size, bold and code font cleared); only the writer resolves old formatting to the style's values (gap 19) |

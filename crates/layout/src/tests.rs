@@ -9423,3 +9423,48 @@ fn caret_height_ignores_line_spacing() {
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
 }
+
+#[test]
+fn leading_break_spacing_flag() {
+    enum Spacing {
+        Keep,
+        Suppress,
+        SuppressSummed,
+    }
+    let top = |spacing, after| {
+        let mut d = Document::from_text(&format!("Filler\n{}Probe", wordcraft_doc::para::PAGE_BREAK));
+        d.settings.suppress_break_spacing = !matches!(spacing, Spacing::Keep);
+        d.settings.sum_paragraph_spacing = matches!(spacing, Spacing::SuppressSummed);
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(after);
+        d.para_mut(StoryRef::Body, &Path::top(1)).unwrap().props.space_before = Some(6.0);
+        let l = lay(&d);
+        let c = l.caret(&Pos::body(1, 1)).unwrap();
+        assert_eq!(c.page, 1);
+        c.top
+    };
+    let plain = top(Spacing::Suppress, 6.0);
+    for after in [0.0f32, 2.0, 6.0, 10.0] {
+        let expected = (6.0 - after).max(0.0);
+        assert!((top(Spacing::Suppress, after) - plain - expected).abs() < 0.05, "flagged, after={after}");
+        assert!((top(Spacing::Keep, after) - plain - 6.0).abs() < 0.05, "unflagged, after={after}");
+        assert!((top(Spacing::SuppressSummed, after) - plain - 6.0).abs() < 0.05, "summed, after={after}");
+    }
+}
+
+#[test]
+fn first_break_spacing() {
+    let top = |suppress, before| {
+        let mut d = Document::from_text(&format!("{}Probe", wordcraft_doc::para::PAGE_BREAK));
+        d.settings.suppress_break_spacing = suppress;
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_before = Some(before);
+        let l = lay(&d);
+        let caret = l.caret(&Pos::body(0, 1)).unwrap();
+        assert_eq!(caret.page, 1);
+        caret.top
+    };
+    let plain = top(true, 0.0);
+    for before in [2.0, 6.0, 12.0] {
+        assert!((top(true, before) - plain).abs() < 0.05, "suppressed before={before}");
+        assert!((top(false, before) - plain - before).abs() < 0.05, "retained before={before}");
+    }
+}

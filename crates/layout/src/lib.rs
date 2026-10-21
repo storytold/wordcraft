@@ -3787,7 +3787,10 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             }
             Some(LineEnd::PageBreak) if starts_with_break && !pb.web => {
                 pb.new_page(block, body_top);
-                pb.y += pl.rp.space_before.max(0.0);
+                // The compatibility switch keeps the gap already merged with the previous paragraph.
+                let gap =
+                    if ctx.doc.settings.suppress_break_spacing { if prev_para.is_some() { applied_before } else { 0.0 } } else { pl.rp.space_before };
+                pb.y += gap.max(0.0);
             }
             Some(LineEnd::PageBreak) => pb.new_page(block, body_top),
             Some(LineEnd::ColumnBreak) => {

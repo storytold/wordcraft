@@ -149,6 +149,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
 | 2026-10-12 | Fields keep `w:dirty` through DOCX saves (#877): a begin marker flagged by a generator that couldn't compute a result (pandoc-style TOC placeholders) keeps the flag on open/save — as a buffered field or a range field — so Word still refreshes it on open; computing a result (Update Field, Update Table) clears it, like Word's F9 |
 | 2026-10-18 | Symbols keep their font (#2036): a `w:sym` or Insert › Symbol character in Wingdings, Symbol or Webdings remembers its symbol font apart from the text's font, so selecting all and changing the font (or Clear Formatting) no longer turns the symbols into boxes; saved back to DOCX as `w:sym`, so Word shows them too. Typed text and the Format Painter don't pick up the symbol font. |
+| 2026-10-16 | trivial | Leading page breaks honor suppressSpBfAfterPgBrk; unflagged documents retain before-spacing. |
 | 2026-10-16 | `wordcraft-cli run --script FILE.json` (`-` for stdin) runs a JSON list of commands, then saves to one or more outputs (docx and pdf in one run); errors name the command number and id and nothing is saved, #1963 |
 | 2026-10-17 | Restrict Editing holds for structure too (#1327): an exception inside a table cell no longer lets table, row or cell formatting change the protected rest of the table; formatting limited to styles refuses Paste Formatting, table shading, borders, cell alignment, cell margins, text direction, table-style edits and locked table styles; loading, filtering or sorting recipients no longer rewrites merge-field results in a protected document. |
 | 2026-10-18 | Manage Sources › Import… (#2640) reads a Word bibliography file (`b:Sources`: Word's own `Sources.xml` master list) into the document: the tags, names, kinds and fields Word saves are read by the same code that reads the bibliography custom XML part of a `.docx`, a tag already in the document is left alone (an import never overwrites an edited source), an untagged source gets a tag the way a new one does, the whole import is one undo step, and a file that isn't `b:Sources` is refused. |
@@ -506,6 +507,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Break-spacing toggles survive saves with unowned compatibility settings. A first paragraph does not carry suppressed before-spacing past its page break. |
+| 2026-10-19 | trivial | Retain page-break parity evidence and upstream history. Conflict repair preserves runtime behavior and assertions. |
 | 2026-10-19 | trivial | Progress log: forms protection keeps its content controls: no inserting, Properties or Remove Content Control |
 | 2026-10-19 | trivial | Progress log: text typed into a content control takes the control's formatting; localized placeholder styles recognised |
 | 2026-10-18 | trivial | Progress log: long navigation headings wrap within the pane instead of ending in an ellipsis (#3015) |

@@ -1067,6 +1067,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     }
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
+    if s.suppress_break_spacing {
+        w.empty("w:suppressSpBfAfterPgBrk", &[]);
+    }
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
     }
