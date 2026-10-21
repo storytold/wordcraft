@@ -443,6 +443,17 @@ mod tests {
 
         // word_at: click at end of text → last word.
         assert_eq!(thai_word_at(s, len), (36, 45), "click at end → ไทย");
+
+        // Mixed Thai/Latin: "ไทยtest" — cursor at the 't' (byte 9, first byte of "test") must
+        // NOT be routed to thai_word_at; it is handled by the Latin path in Paragraph::word_at.
+        // thai_word_at itself still returns the Thai word when given that offset (it sees only
+        // the Thai side), so the guard lives in word_at.  Here we just verify thai_word_at's own
+        // contract: byte 0 → Thai word (0, 9).
+        let mixed = "ไทยtest";
+        assert_eq!(thai_word_at(mixed, 0), (0, 9), "thai_word_at: click inside Thai part");
+        // byte 9 is inside "test" (Latin); thai_word_at's boundary logic returns the Thai word
+        // to its left — confirming the guard in word_at must check at_off first.
+        assert_eq!(thai_word_at(mixed, 9), (0, 9), "thai_word_at at script boundary returns Thai word");
     }
 
     #[test]
