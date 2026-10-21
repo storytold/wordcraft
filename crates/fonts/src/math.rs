@@ -1,4 +1,4 @@
-//! The OpenType `MATH` table (constants, italic corrections, accent attachment, glyph size
+//! The OpenType `MATH` table (constants, italic corrections, corner kerning, accent attachment, glyph size
 //! variants and assemblies) read into owned, bounds-checked data, and math font resolution.
 //!
 //! Spec: OpenType 1.9 `MATH` table. Every read is checked; a malformed table yields `None` or
@@ -88,6 +88,25 @@ pub struct Construction {
     pub parts: Vec<GlyphPart>,
 }
 
+/// Corner of a glyph used for height-dependent script kerning.
+#[derive(Clone, Copy, Debug)]
+#[repr(usize)]
+pub enum MathCorner {
+    TopRight,
+    TopLeft,
+    BottomRight,
+    BottomLeft,
+}
+
+#[derive(Clone, Debug)]
+struct KernSteps {
+    heights: Vec<f32>,
+    values: Vec<f32>,
+}
+
+const MAX_KERN_HEIGHTS: usize = 256;
+const MAX_KERN_GLYPHS: usize = 4096;
+
 /// A parsed `MATH` table. Values are font units.
 #[derive(Clone, Debug, Default)]
 pub struct MathTable {
@@ -98,6 +117,7 @@ pub struct MathTable {
     values: Vec<f32>,
     pub radical_degree_bottom_raise_percent: f32,
     pub italics: HashMap<u32, f32>,
+    kerns: HashMap<u32, [Option<KernSteps>; 4]>,
     pub top_accent: HashMap<u32, f32>,
     pub min_connector_overlap: f32,
     pub vert: HashMap<u32, Construction>,
@@ -107,6 +127,16 @@ pub struct MathTable {
 impl MathTable {
     pub fn get(&self, c: C) -> f32 {
         self.values.get(c as usize).copied().unwrap_or(0.0)
+    }
+
+    /// Corner kerning at `height` above the glyph baseline, in font units.
+    pub fn kern(&self, gid: u32, corner: MathCorner, height: f32) -> f32 {
+        if !height.is_finite() {
+            return 0.0;
+        }
+        let Some(steps) = self.kerns.get(&gid).and_then(|corners| corners.get(corner as usize)).and_then(Option::as_ref) else { return 0.0 };
+        let index = steps.heights.partition_point(|h| height >= *h);
+        steps.values.get(index).copied().unwrap_or(0.0)
     }
 }
 
@@ -223,6 +253,84 @@ fn constructions(b: &[u8], variants: usize, cov_at: usize, count: usize, offsets
     m
 }
 
+fn kern_steps(b: &[u8], at: usize) -> Option<KernSteps> {
+    let count = u16_at(b, at)? as usize;
+    if count > MAX_KERN_HEIGHTS {
+        return None;
+    }
+    b.get(at..at.checked_add(2 + (2 * count + 1) * 4)?)?;
+    let heights: Vec<f32> = (0..count).map(|i| i16_at(b, at + 2 + i * 4).map(f32::from)).collect::<Option<_>>()?;
+    if heights.windows(2).any(|pair| matches!(pair, [low, high] if low > high)) {
+        return None;
+    }
+    let values = (0..=count).map(|i| i16_at(b, at + 2 + (count + i) * 4).map(f32::from)).collect::<Option<_>>()?;
+    Some(KernSteps { heights, values })
+}
+
+// Validate counts and ranges before expanding untrusted coverage.
+fn kern_coverage(b: &[u8], at: usize, limit: usize) -> Option<Vec<u32>> {
+    if limit > MAX_KERN_GLYPHS {
+        return None;
+    }
+    let mut out = Vec::new();
+    if limit == 0 {
+        return Some(out);
+    }
+    let count = u16_at(b, at + 2)? as usize;
+    match u16_at(b, at)? {
+        1 => {
+            if count != limit {
+                return None;
+            }
+            for i in 0..count {
+                let glyph = u16_at(b, at + 4 + i * 2)? as u32;
+                if out.last().is_some_and(|last| glyph <= *last) {
+                    return None;
+                }
+                out.push(glyph);
+            }
+        }
+        2 => {
+            if count > limit {
+                return None;
+            }
+            let mut previous = None;
+            for i in 0..count {
+                let r = at + 4 + i * 6;
+                let start = u16_at(b, r)?;
+                let end = u16_at(b, r + 2)?;
+                let index = u16_at(b, r + 4)? as usize;
+                if end < start || index != out.len() || previous.is_some_and(|last| start <= last) {
+                    return None;
+                }
+                let len = usize::from(end - start) + 1;
+                if len > limit - out.len() {
+                    return None;
+                }
+                // Disjoint ranges expand to at most the declared, capped glyph count.
+                out.extend((start..=end).map(u32::from));
+                previous = Some(end);
+            }
+        }
+        _ => return None,
+    }
+    (out.len() == limit).then_some(out)
+}
+
+fn kern_map(b: &[u8], at: usize) -> HashMap<u32, [Option<KernSteps>; 4]> {
+    let mut out = HashMap::new();
+    let count = u16_at(b, at + 2).unwrap_or(0) as usize;
+    if count == 0 || count > MAX_KERN_GLYPHS {
+        return out;
+    }
+    let Some(cov) = sub(b, at, at) else { return out };
+    for (i, gid) in kern_coverage(b, cov, count).unwrap_or_default().into_iter().enumerate() {
+        let corners = std::array::from_fn(|corner| sub(b, at, at + 4 + i * 8 + corner * 2).and_then(|offset| kern_steps(b, offset)));
+        out.insert(gid, corners);
+    }
+    out
+}
+
 /// Parse a `MATH` table.
 pub fn parse(b: &[u8]) -> Option<MathTable> {
     if u16_at(b, 0)? != 1 {
@@ -244,6 +352,9 @@ pub fn parse(b: &[u8]) -> Option<MathTable> {
         }
         if let Some(ta) = sub(b, gi, gi + 2) {
             t.top_accent = value_map(b, ta);
+        }
+        if let Some(ki) = sub(b, gi, gi + 6) {
+            t.kerns = kern_map(b, ki);
         }
     }
     if let Some(v) = sub(b, 0, 8) {
@@ -423,6 +534,120 @@ mod tests {
         let long = "L".repeat(10_000);
         let _ = resolve_math(&long);
         assert!(!cached(&long), "absurdly long names must not be cached");
+    }
+
+    #[test]
+    fn height_kerns_are_bounded() {
+        let mut bytes = vec![0u8; 22];
+        bytes[..2].copy_from_slice(&2u16.to_be_bytes());
+        for (i, value) in [0i16, 300, -100, -300, 50].into_iter().enumerate() {
+            let at = 2 + i * 4;
+            bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        }
+        let mut corners = std::array::from_fn(|_| None);
+        corners[MathCorner::BottomRight as usize] = kern_steps(&bytes, 0);
+        let mut table = MathTable::default();
+        table.kerns.insert(7, corners);
+        for (height, expected) in [(-1.0, -100.0), (0.0, -300.0), (299.0, -300.0), (300.0, 50.0), (10000.0, 50.0)] {
+            assert_eq!(table.kern(7, MathCorner::BottomRight, height), expected);
+        }
+        assert_eq!(table.kern(7, MathCorner::TopLeft, 0.0), 0.0);
+        assert_eq!(table.kern(8, MathCorner::BottomRight, 0.0), 0.0);
+        for height in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert_eq!(table.kern(7, MathCorner::BottomRight, height), 0.0);
+        }
+        for len in 0..bytes.len() {
+            assert!(kern_steps(&bytes[..len], 0).is_none());
+        }
+        bytes[2..4].copy_from_slice(&301i16.to_be_bytes());
+        assert!(kern_steps(&bytes, 0).is_none(), "descending heights are ignored");
+        bytes[..2].copy_from_slice(&((MAX_KERN_HEIGHTS + 1) as u16).to_be_bytes());
+        assert!(kern_steps(&bytes, 0).is_none(), "hostile counts are bounded");
+    }
+
+    fn coverage_bytes(format: u16, records: &[u16]) -> Vec<u8> {
+        std::iter::once(format).chain(records.iter().copied()).flat_map(u16::to_be_bytes).collect()
+    }
+
+    #[test]
+    fn kern_coverage_bounds_ranges() {
+        let bytes = coverage_bytes(2, &[1, 0, (MAX_KERN_GLYPHS - 1) as u16, 0]);
+        let glyphs = kern_coverage(&bytes, 0, MAX_KERN_GLYPHS).unwrap();
+        assert_eq!(glyphs.len(), MAX_KERN_GLYPHS);
+        assert_eq!(glyphs.first(), Some(&0));
+        assert_eq!(glyphs.last(), Some(&((MAX_KERN_GLYPHS - 1) as u32)));
+        assert!(kern_coverage(&bytes, 0, usize::MAX).is_none());
+        assert_eq!(kern_coverage(&bytes, 0, 0), Some(vec![]));
+        let bytes = coverage_bytes(2, &[u16::MAX, 0, u16::MAX, 0]);
+        assert!(kern_coverage(&bytes, 0, MAX_KERN_GLYPHS).is_none());
+
+        let bytes = coverage_bytes(1, &[3, 11, 12, 13]);
+        assert_eq!(kern_coverage(&bytes, 0, 3), Some(vec![11, 12, 13]));
+        let bytes = coverage_bytes(2, &[2, 7, 8, 0, 12, 14, 2]);
+        assert_eq!(kern_coverage(&bytes, 0, 5), Some(vec![7, 8, 12, 13, 14]));
+        assert!(kern_coverage(&bytes, 0, 3).is_none());
+    }
+
+    #[test]
+    fn kern_coverage_rejects_ranges() {
+        for records in [
+            vec![1, 7, 8, u16::MAX],     // Sparse coverage index.
+            vec![2, 7, 8, 0, 8, 9, 2],   // Overlapping glyph ranges.
+            vec![2, 7, 8, 0, 12, 13, 0], // Repeated coverage index.
+            vec![1, 8, 7, 0],            // Reversed range.
+            vec![1, 7, 8],               // Truncated range.
+        ] {
+            let bytes = coverage_bytes(2, &records);
+            assert!(kern_coverage(&bytes, 0, 8).is_none(), "{records:?}");
+        }
+    }
+
+    fn kern_math_bytes(count: u16, coverage: &[u8]) -> Vec<u8> {
+        const GLYPH_INFO: usize = 256;
+        const KERN_INFO: usize = GLYPH_INFO + 8;
+        let cov = KERN_INFO + 4 + count as usize * 8;
+        let mut bytes = vec![0; cov + coverage.len()];
+        let mut put = |at, value: u16| bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        put(0, 1);
+        put(4, 10);
+        put(6, GLYPH_INFO as u16);
+        put(GLYPH_INFO + 6, 8);
+        put(KERN_INFO, (cov - KERN_INFO) as u16);
+        put(KERN_INFO + 2, count);
+        bytes[cov..].copy_from_slice(coverage);
+        bytes
+    }
+
+    #[test]
+    fn kern_parse_rejects_ranges() {
+        for (count, format, records) in [
+            (1, 2, vec![2, 7, 7, 0, 8, 8, 1]),   // Too many ranges.
+            (3, 2, vec![1, 7, 8, 0]),            // Too few glyphs.
+            (1, 2, vec![1, 7, 8, 0]),            // Too many glyphs.
+            (3, 1, vec![2, 7, 8]),               // Glyph count mismatch.
+            (4, 2, vec![2, 7, 8, 0, 8, 9, 2]),   // Overlap.
+            (4, 2, vec![2, 7, 8, 0, 12, 13, 0]), // Index mismatch.
+        ] {
+            let coverage = coverage_bytes(format, &records);
+            let table = parse(&kern_math_bytes(count, &coverage)).unwrap();
+            assert!(table.kerns.is_empty(), "{count}: {records:?}");
+        }
+    }
+
+    #[test]
+    fn parse_hostile_kern_ranges() {
+        let records: Vec<u16> = std::iter::once(u16::MAX).chain((0..u16::MAX).flat_map(|_| [0, u16::MAX, 0])).collect();
+        let coverage = coverage_bytes(2, &records);
+        for count in [0, 1, (MAX_KERN_GLYPHS + 1) as u16] {
+            let bytes = kern_math_bytes(count, &coverage);
+            let table = parse(&bytes).unwrap();
+            assert!(table.kerns.is_empty());
+        }
+        let coverage = coverage_bytes(2, &[2, 7, 8, 0, 12, 12, 2]);
+        let table = parse(&kern_math_bytes(3, &coverage)).unwrap();
+        let mut glyphs: Vec<_> = table.kerns.keys().copied().collect();
+        glyphs.sort_unstable();
+        assert_eq!(glyphs, [7, 8, 12]);
     }
 
     #[test]

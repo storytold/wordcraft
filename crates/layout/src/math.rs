@@ -16,7 +16,7 @@ use wordcraft_doc::math::{
 };
 use wordcraft_doc::props::{Rgb, TextColor};
 use wordcraft_doc::resolve::ResolvedChar;
-use wordcraft_fonts::math::{C, Construction, MathTable, glyph_bounds};
+use wordcraft_fonts::math::{C, Construction, MathCorner, MathTable, glyph_bounds};
 use wordcraft_fonts::{FaceRef, FontDb};
 
 /// Something to draw.
@@ -211,7 +211,7 @@ pub fn layout_equation(
         path: Vec::new(),
         node_stack: Vec::new(),
     };
-    let st = St { level: 0, display, cramped: false, upright: false };
+    let st = St { level: 0, display, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
     let avail = if avail.is_finite() { avail.clamp(0.0, 1e5) } else { 0.0 };
     let b = match nodes.as_slice() {
         [] => cx.hint(st),
@@ -230,12 +230,21 @@ pub fn layout_equation(
     MathLayout { width: b.w.max(0.0), ascent: b.a.max(0.0), descent: b.d.max(0.0), items: b.items, slots }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FracEdges {
+    Spaced,
+    Tight,
+    LeftTight,
+    RightTight,
+}
+
 /// Layout style: script level (0 = text size, 1 = script, 2 = script-script), display or inline,
 /// cramped (superscripts lowered: inside radicals, denominators, subscripts).
 #[derive(Clone, Copy, Debug)]
 struct St {
     level: u8,
     display: bool,
+    frac_edges: FracEdges,
     cramped: bool,
     /// Letters default to upright (function names).
     upright: bool,
@@ -243,14 +252,14 @@ struct St {
 
 impl St {
     fn script(self) -> St {
-        St { level: (self.level + 1).min(2), display: false, ..self }
+        St { level: (self.level + 1).min(2), display: false, frac_edges: FracEdges::Spaced, ..self }
     }
     fn cramp(self) -> St {
         St { cramped: true, ..self }
     }
     /// Numerator / denominator style.
     fn frac(self) -> St {
-        if self.display { St { display: false, ..self } } else { self.script() }
+        if self.display { St { display: false, frac_edges: FracEdges::Spaced, ..self } } else { self.script() }
     }
 }
 
@@ -543,9 +552,26 @@ impl Ctx {
         if depth > MAX_DEPTH {
             return out;
         }
+        // Fence runs enclose the argument just as a structured delimiter does.
+        let fence = |n: &MNode, cls| matches!(n, MNode::Run(r) if !r.lit && !r.text.is_empty() && r.text.chars().all(|c| class_of(c) == cls));
+        let (first, last) = if st.frac_edges == FracEdges::Spaced {
+            (None, None)
+        } else {
+            (a.iter().position(|n| !fence(n, Cls::Open)), a.iter().rposition(|n| !fence(n, Cls::Close)))
+        };
         let mut seg = 0usize;
         let mut u = u0;
         for (i, n) in a.iter().enumerate() {
+            // Only outward-facing edges inherit radical packing; inner neighbours stay spaced.
+            let left = first == Some(i) && matches!(st.frac_edges, FracEdges::Tight | FracEdges::LeftTight);
+            let right = last == Some(i) && matches!(st.frac_edges, FracEdges::Tight | FracEdges::RightTight);
+            let frac_edges = match (left, right) {
+                (true, true) => FracEdges::Tight,
+                (true, false) => FracEdges::LeftTight,
+                (false, true) => FracEdges::RightTight,
+                (false, false) => FracEdges::Spaced,
+            };
+            let st = St { frac_edges, ..st };
             self.nodes += 1;
             if self.nodes > MAX_NODES {
                 break;
@@ -911,12 +937,45 @@ impl Ctx {
         out
     }
 
+    fn kern_at(&self, b: &Bx, corner: MathCorner, height: f32) -> f32 {
+        let Some((face, gid, _)) = b.glyph else { return 0.0 };
+        if face.id() != self.face.id() {
+            return 0.0;
+        }
+        let Some(size) = b.items.iter().find_map(|item| match item {
+            MItem::Glyphs { size, .. } => Some(*size),
+            _ => None,
+        }) else {
+            return 0.0;
+        };
+        let scale = size / face.upem.max(1.0) as f32;
+        if !scale.is_finite() || scale <= 0.0 {
+            return 0.0;
+        }
+        self.t.as_ref().map_or(0.0, |table| table.kern(gid, corner, height / scale) * scale)
+    }
+
+    fn sub_kern(&self, base: &Bx, sub: &Bx, drop: f32) -> f32 {
+        if base.glyph.is_none() {
+            return 0.0;
+        }
+        // OpenType evaluates both touching heights. A compound script contributes no corner kern.
+        let at_sub_top = self.kern_at(base, MathCorner::BottomRight, sub.a - drop) + self.kern_at(sub, MathCorner::TopLeft, sub.a);
+        let at_base_bottom = self.kern_at(base, MathCorner::BottomRight, -base.d) + self.kern_at(sub, MathCorner::TopLeft, drop - base.d);
+        at_sub_top.min(at_base_bottom)
+    }
+
     /// Sub/superscripts after `base`. `char_base`: the base is a single character (no baseline drop).
     fn attach(&self, base: Bx, sub: Option<Bx>, sup: Option<Bx>, st: St, char_base: bool) -> Bx {
+        // Only same-size character bases use corner kerning.
+        let matched_char_base = char_base
+            && base.items.iter().find_map(|item| match item {
+                MItem::Glyphs { size, .. } => Some(*size),
+                _ => None,
+            }) == Some(self.size(st));
         let (bw, ba, bd, ic) = (base.w, base.a, base.d, base.ic);
         let (first, last) = (base.first, base.last);
         let mut out = Bx { w: bw, ..Default::default() };
-        out.put(base, 0.0, 0.0);
         let mut u = 0.0f32;
         let mut v = 0.0f32;
         if let Some(p) = &sup {
@@ -944,6 +1003,8 @@ impl Ctx {
                 }
             }
         }
+        let sub_x = if matched_char_base { (bw + sub.as_ref().map_or(0.0, |b| self.sub_kern(&base, b, v))).max(0.0) } else { bw };
+        out.put(base, 0.0, 0.0);
         let space = self.k(C::SpaceAfterScript, st);
         let mut w = bw;
         if let Some(p) = sup {
@@ -952,9 +1013,8 @@ impl Ctx {
             out.put(p, x, u);
         }
         if let Some(b) = sub {
-            let x = bw;
-            w = w.max(x + b.w);
-            out.put(b, x, -v);
+            w = w.max(sub_x + b.w);
+            out.put(b, sub_x, -v);
         }
         out.w = w + if w > bw { space } else { 0.0 };
         out.first = first;
@@ -1323,15 +1383,23 @@ impl Ctx {
                     }
                     (su, sd)
                 };
+                // Pack only the boundary touching the radical; nested arguments stay spaced.
                 let pad = em * 0.08;
-                let w = n.w.max(dn.w) + 2.0 * pad;
+                let (left, right) = match (kind, st.frac_edges) {
+                    (FracKind::Bar, FracEdges::Tight) => (0.0, 0.0),
+                    (FracKind::Bar, FracEdges::LeftTight) => (0.0, pad),
+                    (FracKind::Bar, FracEdges::RightTight) => (pad, 0.0),
+                    _ => (pad, pad),
+                };
+                let inner = n.w.max(dn.w);
+                let w = inner + left + right;
                 let (nw, dw) = (n.w, dn.w);
                 let mut out = Bx { w, ..Default::default() };
-                out.put(n, (w - nw) / 2.0, u);
-                out.put(dn, (w - dw) / 2.0, -v);
+                out.put(n, left + (inner - nw) / 2.0, u);
+                out.put(dn, left + (inner - dw) / 2.0, -v);
                 if kind == FracKind::Bar {
                     let t = self.k(C::FractionRuleThickness, st).max(0.4);
-                    out.rect(pad * 0.5, axis - t / 2.0, w - pad, t, self.color);
+                    out.rect(left * 0.5, axis - t / 2.0, w - (left + right) * 0.5, t, self.color);
                 }
                 out
             }
@@ -1339,7 +1407,7 @@ impl Ctx {
     }
 
     fn radical(&mut self, deg: &[MNode], deg_hide: bool, e: &[MNode], st: St, d: usize) -> Bx {
-        let b = self.sub(1, e, st.cramp(), d);
+        let b = self.sub(1, e, St { frac_edges: FracEdges::Tight, ..st.cramp() }, d);
         let size = self.size(st);
         let t = self.k(C::RadicalRuleThickness, st).max(0.4);
         let mut gap = if st.display { self.k(C::RadicalDisplayStyleVerticalGap, st) } else { self.k(C::RadicalVerticalGap, st) };
@@ -1364,7 +1432,12 @@ impl Ctx {
         let mut x0 = 0.0f32;
         let mut out = Bx::default();
         if !deg_hide {
-            let db = self.sub(0, deg, St { level: (st.level + 2).min(2), display: false, cramped: true, upright: st.upright }, d);
+            let db = self.sub(
+                0,
+                deg,
+                St { level: (st.level + 2).min(2), display: false, frac_edges: FracEdges::Spaced, cramped: true, upright: st.upright },
+                d,
+            );
             let kb = self.k(C::RadicalKernBeforeDegree, st);
             let ka = self.k(C::RadicalKernAfterDegree, st);
             let raise = self.t.as_ref().map_or(60.0, |t| t.radical_degree_bottom_raise_percent) / 100.0 * (ga + gd);
@@ -2069,6 +2142,300 @@ mod tests {
         assert_eq!(lines(&one).len(), 1);
         let plain = lay_in(&Math::default(), "a+b=c", false, 400.0, &mp);
         assert!(one.width < 400.0 && (one.width - plain.width).abs() < 0.01, "{} vs {}", one.width, plain.width);
+    }
+
+    fn script_kern_bytes(base: u16, script: u16) -> Vec<u8> {
+        let gi = 10 + 8 + (C::RadicalKernAfterDegree as usize + 1) * 4 + 2;
+        let ki = gi + 8;
+        let mut bytes = vec![0u8; ki + 40];
+        let mut put = |at, value: u16| bytes[at..at + 2].copy_from_slice(&value.to_be_bytes());
+        put(0, 1);
+        put(4, 10);
+        put(6, gi as u16);
+        put(10, 73);
+        put(12, 60);
+        put(gi + 6, 8);
+        put(ki, 20);
+        put(ki + 2, 2);
+        let mut glyphs = [base, script];
+        glyphs.sort_unstable();
+        for (i, glyph) in glyphs.into_iter().enumerate() {
+            let corner = if glyph == base { 2 } else { 1 };
+            put(ki + 4 + i * 8 + corner * 2, if glyph == base { 28 } else { 34 });
+            put(ki + 24 + i * 2, glyph);
+        }
+        put(ki + 20, 1);
+        put(ki + 22, 2);
+        put(ki + 30, (-100i16) as u16);
+        put(ki + 36, (-50i16) as u16);
+        bytes
+    }
+
+    #[test]
+    fn subscript_math_kerning() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+        let face = FaceRef::of(&font);
+        let bytes = script_kern_bytes(face.glyph_for('V') as u16, face.glyph_for('a') as u16);
+        for size in [9.0, 14.0, 20.0] {
+            let mut cx = Ctx {
+                face,
+                t: Some(Arc::new(wordcraft_fonts::math::parse(&bytes).unwrap())),
+                upem: face.upem as f32,
+                base: size,
+                color: Rgb::BLACK,
+                text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+                nodes: 0,
+                path: Vec::new(),
+                node_stack: Vec::new(),
+            };
+            let st = St { level: 0, display: true, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
+            for ratio in [1.0, 1.4] {
+                let base_size = size * ratio;
+                let base = cx.glyphs(face, "V", base_size, 0, Rgb::BLACK, (false, false));
+                let script_size = cx.size(st.script());
+                let sub = cx.glyphs(face, "a", script_size, 1, Rgb::BLACK, (false, false));
+                let sub_x = |b: &Bx| {
+                    b.items
+                        .iter()
+                        .find_map(|i| match i {
+                            MItem::Glyphs { glyphs, text, .. } if text == "a" => glyphs.first().map(|g| g.1),
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                for boxed_script in [false, true] {
+                    let mut sub = sub.clone();
+                    if boxed_script {
+                        sub.glyph = None;
+                    }
+                    let result = cx.attach(base.clone(), Some(sub), None, st, true);
+                    let kern = if ratio == 1.0 { (-100.0 * base_size - if boxed_script { 0.0 } else { 50.0 * script_size }) / cx.upem } else { 0.0 };
+                    assert!((sub_x(&result) - (base.w + kern).max(0.0)).abs() < 0.001, "font corner kerning positions the subscript");
+                }
+                let mut boxed_base = base.clone();
+                boxed_base.glyph = None;
+                let result = cx.attach(boxed_base, Some(sub), None, st, false);
+                assert_eq!(sub_x(&result), base.w, "a compound base keeps its existing script attachment");
+            }
+            let mut stepped = bytes.clone();
+            let gi = u16::from_be_bytes([stepped[6], stepped[7]]) as usize;
+            let ki = gi + 8;
+            stepped.resize(ki + 56, 0);
+            let mut put = |at, value: i16| stepped[at..at + 2].copy_from_slice(&value.to_be_bytes());
+            let mut glyphs = [face.glyph_for('V') as u16, face.glyph_for('a') as u16];
+            glyphs.sort_unstable();
+            let script_index = glyphs.iter().position(|g| *g == face.glyph_for('a') as u16).unwrap();
+            put(ki + 4 + script_index * 8 + 2, 50);
+            put(ki + 28, 2);
+            for (i, value) in [0i16, 300, -100, -300, 50].into_iter().enumerate() {
+                put(ki + 30 + i * 4, value);
+            }
+            put(ki + 50, 0);
+            put(ki + 52, -50);
+            cx.t = Some(Arc::new(wordcraft_fonts::math::parse(&stepped).unwrap()));
+            let scale = size / cx.upem;
+            let mut base = cx.glyphs(face, "V", size, 0, Rgb::BLACK, (false, false));
+            base.d = 200.0 * scale;
+            let mut sub = cx.glyphs(face, "a", cx.size(st.script()), 1, Rgb::BLACK, (false, false));
+            sub.a = 600.0 * scale;
+            for (drop, expected) in [(200.0, -100.0), (500.0, -300.0)] {
+                let kern = cx.sub_kern(&base, &sub, drop * scale);
+                let expected = expected * scale - 50.0 * cx.size(st.script()) / cx.upem;
+                assert!((kern - expected).abs() < 0.001, "choose the smaller sum at the two touching heights");
+            }
+        }
+    }
+
+    #[test]
+    fn adjacent_radical_fraction_gap() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+        let face = FaceRef::of(&font);
+        let mut failures = Vec::new();
+        for display in [false, true] {
+            for size in [9.0, 14.0, 20.0] {
+                let mut cx = Ctx {
+                    face,
+                    t: None,
+                    upem: face.upem as f32,
+                    base: size,
+                    color: Rgb::BLACK,
+                    text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+                    nodes: 0,
+                    path: Vec::new(),
+                    node_stack: Vec::new(),
+                };
+                let st = St { level: 0, display, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
+                for count in [2, 3] {
+                    let frac = MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b"))] };
+                    for body in [vec![frac.clone(); count], vec![MNode::Boxed { e: vec![frac] }; count]] {
+                        let plain = cx.arg(&body, st.cramp(), 0);
+                        let radical = cx.node(&MNode::Rad { deg: Vec::new(), deg_hide: true, e: body }, st, 0);
+                        let bars = |b: &Bx| {
+                            b.items
+                                .iter()
+                                .filter_map(|i| match i {
+                                    MItem::Rect { x, y, w, .. } => Some((*x, *y, *w)),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                        };
+                        let plain = bars(&plain);
+                        let radical = bars(&radical);
+                        assert_eq!(plain.len(), count);
+                        assert_eq!(radical.len(), count + 1);
+                        for i in 0..count - 1 {
+                            let expected = plain[i + 1].0 - plain[i].0 - plain[i].2;
+                            let actual = radical[i + 2].0 - radical[i + 1].0 - radical[i + 1].2;
+                            assert!(expected > 0.0, "the ordinary fraction bars are separated");
+                            assert!((radical[i + 1].1 - radical[i + 2].1).abs() < 0.001, "the bars share a baseline");
+                            eprintln!("display={display} size={size} count={count} boundary={i} expected={expected} actual={actual}");
+                            if (actual - expected).abs() >= 0.001 {
+                                failures.push((display, size, count, i, expected, actual));
+                            }
+                        }
+                        assert!((radical[0].0 - radical[1].0).abs() < 0.001, "the first edge stays radical-facing");
+                        let last = radical.last().unwrap();
+                        assert!((radical[0].0 + radical[0].2 - last.0 - last.2).abs() < 0.001, "the last edge stays radical-facing");
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "inner fraction edges lose their ordinary spacing: {failures:?}");
+    }
+
+    #[test]
+    fn radical_row_side_context() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+        let face = FaceRef::of(&font);
+        let mut cx = Ctx {
+            face,
+            t: None,
+            upem: face.upem as f32,
+            base: 14.0,
+            color: Rgb::BLACK,
+            text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+            nodes: 0,
+            path: Vec::new(),
+            node_stack: Vec::new(),
+        };
+        let st = St { level: 0, display: false, frac_edges: FracEdges::Spaced, cramped: true, upright: false };
+        let tight = St { frac_edges: FracEdges::Tight, ..st };
+        let frac = MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b"))] };
+        let text = MNode::Run(MRun::new("x"));
+        let plain = cx.node(&frac, st, 0).w;
+        let pad = cx.em(st) * 0.08;
+        let middle = cx.row(&[text.clone(), frac.clone(), text.clone()], tight, 0, 0);
+        assert!((middle[1].0.w - plain).abs() < 0.001, "a fraction between ordinary atoms retains both margins");
+        let first = cx.row(&[frac.clone(), text.clone()], tight, 0, 0);
+        let last = cx.row(&[text, frac], tight, 0, 0);
+        let bar_x = |b: &Bx| {
+            b.items
+                .iter()
+                .find_map(|i| match i {
+                    MItem::Rect { x, .. } => Some(*x),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert!((first[0].0.w - (plain - pad)).abs() < 0.001, "only the leading margin is removed");
+        assert!((last[1].0.w - (plain - pad)).abs() < 0.001, "only the trailing margin is removed");
+        assert!(bar_x(&first[0].0).abs() < 0.001, "leading bar aligns with the radical");
+        assert!((bar_x(&last[1].0) - pad * 0.5).abs() < 0.001, "inner-facing bar edge retains its ordinary inset");
+    }
+
+    #[test]
+    fn enclosed_fraction_edges() {
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        let font = db.face(wordcraft_fonts::DEFAULT_FAMILY, "Regular");
+        let face = FaceRef::of(&font);
+        for display in [false, true] {
+            for size in [9.0, 14.0, 20.0] {
+                let mut cx = Ctx {
+                    face,
+                    t: None,
+                    upem: face.upem as f32,
+                    base: size,
+                    color: Rgb::BLACK,
+                    text_font: wordcraft_fonts::DEFAULT_FAMILY.into(),
+                    nodes: 0,
+                    path: Vec::new(),
+                    node_stack: Vec::new(),
+                };
+                let st = St { level: 0, display, frac_edges: FracEdges::Spaced, cramped: false, upright: false };
+                let tight = St { frac_edges: FracEdges::Tight, ..st };
+                assert_eq!(tight.frac().frac_edges, FracEdges::Spaced, "nested arguments keep their spacing");
+                assert_eq!(tight.script().frac_edges, FracEdges::Spaced, "scripts keep their spacing");
+                assert_eq!(tight.cramp().frac_edges, FracEdges::Tight, "cramping preserves the surrounding edge context");
+                let no_bar = MNode::Frac { kind: FracKind::NoBar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b"))] };
+                assert_eq!(cx.node(&no_bar, tight, 0).w, cx.node(&no_bar, st, 0).w, "barless fractions keep their spacing");
+                let frac = MNode::Frac { kind: FracKind::Bar, num: vec![MNode::Run(MRun::new("a"))], den: vec![MNode::Run(MRun::new("b+1"))] };
+                let rad = MNode::Rad { deg: Vec::new(), deg_hide: true, e: vec![frac.clone()] };
+                let result = cx.node(&rad, st, 0);
+                let bars: Vec<_> = result
+                    .items
+                    .iter()
+                    .filter_map(|i| match i {
+                        MItem::Rect { x, w, .. } => Some((*x, *w)),
+                        _ => None,
+                    })
+                    .collect();
+                assert_eq!(bars.len(), 2);
+                assert!((bars[0].0 - bars[1].0).abs() < 0.001, "radical and fraction start together: {bars:?}");
+                assert!((bars[0].1 - bars[1].1).abs() < 0.001, "radical and fraction end together: {bars:?}");
+
+                let nested = MNode::Frac { kind: FracKind::Bar, num: vec![frac.clone()], den: vec![MNode::Run(MRun::new("c"))] };
+                let plain = cx.node(&nested, st, 0);
+                let inside = cx.node(&MNode::Rad { deg: Vec::new(), deg_hide: true, e: vec![nested] }, st, 0);
+                let rule_width = |b: &Bx, index| {
+                    b.items
+                        .iter()
+                        .filter_map(|i| match i {
+                            MItem::Rect { w, .. } => Some(*w),
+                            _ => None,
+                        })
+                        .nth(index)
+                        .unwrap()
+                };
+                assert_eq!(rule_width(&inside, 1), rule_width(&plain, 0), "nested fraction spacing stays unchanged");
+
+                for body in [
+                    vec![MNode::Run(MRun::new("(")), frac.clone(), MNode::Run(MRun::new(")"))],
+                    vec![MNode::Delim { beg: Some('('), end: Some(')'), sep: None, grow: false, shp_match: false, elems: vec![vec![frac.clone()]] }],
+                ] {
+                    let result = cx.node(&MNode::Rad { deg: Vec::new(), deg_hide: true, e: body }, st, 0);
+                    let (bar_x, bar_w) = result
+                        .items
+                        .iter()
+                        .filter_map(|i| match i {
+                            MItem::Rect { x, w, .. } => Some((*x, *w)),
+                            _ => None,
+                        })
+                        .nth(1)
+                        .unwrap();
+                    let (left, right) = ('(', ')');
+                    let glyph_x = |c: char| {
+                        result
+                            .items
+                            .iter()
+                            .find_map(|i| match i {
+                                MItem::Glyphs { glyphs, text, .. } if text == &c.to_string() => glyphs.first().map(|g| g.1),
+                                _ => None,
+                            })
+                            .unwrap()
+                    };
+                    let left_end = glyph_x(left) + face.advance(face.glyph_for(left)) as f32 * size / face.upem as f32;
+                    assert!((bar_x - left_end).abs() < 0.001, "no fraction margin after opening bracket");
+                    assert!((bar_x + bar_w - glyph_x(right)).abs() < 0.001, "no fraction margin before closing bracket");
+                }
+            }
+        }
     }
 
     #[test]
