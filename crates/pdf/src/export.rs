@@ -83,7 +83,7 @@ fn add_form_fields(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[
     }
     let mut collected = if opts.form_fields { forms::collect(doc, lay) } else { Vec::new() };
     if opts.blank_fields {
-        collected.extend(forms::collect_blanks(doc, lay));
+        collected.extend(forms::collect_blanks(doc, lay, opts.form_fields));
     }
     // Layout pages to output pages: a field on every page it is printed on (a page listed twice
     // has its fields twice, unique names keeping them apart); fields on pages left out go too.
