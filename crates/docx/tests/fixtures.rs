@@ -2542,6 +2542,25 @@ fn cover_page_relative_position_and_freeform_drawn_back_to_its_start() {
 }
 
 #[test]
+fn upright_text_box_roundtrips() {
+    let shape = anchored_wsp(
+        "Upright",
+        889000,
+        190500,
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#,
+        "",
+        r#"<wps:cNvSpPr txBox="1"/><wps:txbx><w:txbxContent><w:p><w:r><w:t>Heading</w:t></w:r></w:p></w:txbxContent></wps:txbx>"#,
+    )
+    .replace("<wps:bodyPr/>", r#"<wps:bodyPr upright="1"/>"#);
+    let d = read_body(&format!("<w:p>{shape}</w:p>"));
+    let check = |doc: &Document| {
+        assert!(doc.parts.values().any(|part| part.kind == wordcraft_doc::PartKind::TextBox && part.body.upright));
+    };
+    check(&d);
+    check(&wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap());
+}
+
+#[test]
 fn embedded_fonts_survive_a_round_trip() {
     let table = r#"<w:fonts xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:font w:name="Roboto"><w:embedRegular r:id="rId1"/><w:embedBold r:id="rId2"/></w:font></w:fonts>"#;
     let table_rels = rels(&[("rId1", "font", "fonts/Roboto-regular.ttf"), ("rId2", "font", "fonts/Roboto-bold.ttf")]);

@@ -80,6 +80,41 @@ fn align_text_and_text_direction_place_the_text_in_the_box() {
 }
 
 #[test]
+fn rotated_group_text_turns() {
+    for grouped in [false, true] {
+        let mut d = Document::from_text("x");
+        let id = text_box(&mut d, 0, "Heading", 70.0, 15.0, TextBody::default());
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        let mut shape = p.objects[0].clone();
+        shape.float_mut().unwrap().set_spin(Spin::new(-90.0, false, false));
+        p.objects[0] = if grouped {
+            InlineObject::Group {
+                w: 100.0,
+                h: 100.0,
+                float: Default::default(),
+                ch_w: 100.0,
+                ch_h: 100.0,
+                children: vec![wordcraft_doc::para::GroupChild { x: 15.0, y: 40.0, obj: shape }],
+                canvas: None,
+            }
+        } else {
+            shape
+        };
+        let l = lay(&d);
+        assert_eq!(lines(&l, id)[0].2, TextDirection::Up, "grouped={grouped}");
+    }
+}
+
+#[test]
+fn upright_box_text_stays() {
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "Heading", 70.0, 15.0, TextBody { upright: true, ..Default::default() });
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.objects[0].float_mut().unwrap().set_spin(Spin::new(90.0, false, false));
+    assert_eq!(lines(&lay(&d), id)[0].2, TextDirection::Horizontal);
+}
+
+#[test]
 fn linked_boxes_continue_the_text() {
     let mut d = Document::from_text("one\ntwo");
     let text = "Words that run on well past the first little box. ".repeat(6);
@@ -210,3 +245,86 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 /// Filler paragraphs before the box in [`inline_box_that_resizes_to_fit_takes_its_texts_height`]:
 /// enough that a 10 cm box no longer leaves room for the page break on the first page.
 const FILLER: usize = 22;
+
+const SPIN_GROUP_SIZE: f32 = 100.0;
+
+fn group_story(group: Spin, member: Spin, body: TextBody) -> (DocLayout, u32, Spin) {
+    let mut d = Document::from_text("x");
+    let id = text_box(&mut d, 0, "Heading", 70.0, 15.0, body);
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let mut shape = p.objects[0].clone();
+    shape.float_mut().unwrap().set_spin(member);
+    let mut grouped = InlineObject::Group {
+        w: SPIN_GROUP_SIZE,
+        h: SPIN_GROUP_SIZE,
+        float: Default::default(),
+        ch_w: SPIN_GROUP_SIZE,
+        ch_h: SPIN_GROUP_SIZE,
+        children: vec![wordcraft_doc::para::GroupChild { x: 15.0, y: 40.0, obj: shape }],
+        canvas: None,
+    };
+    let float = grouped.float_mut().unwrap();
+    float.set_spin(group);
+    float.wrap = Wrap::InFrontOfText;
+    p.objects[0] = grouped;
+    let l = lay(&d);
+    let painted = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Shape { spin, .. } => Some(*spin),
+            _ => None,
+        })
+        .unwrap();
+    (l, id, painted)
+}
+
+#[test]
+fn group_only_turns_text() {
+    for (angle, expected) in [(90.0, TextDirection::Down), (270.0, TextDirection::Up)] {
+        let (l, id, painted) = group_story(Spin::new(angle, false, false), Spin::default(), TextBody::default());
+        assert_eq!(painted.deg, angle);
+        assert_eq!(lines(&l, id)[0].2, expected, "group angle {angle}");
+    }
+}
+
+#[test]
+fn group_member_turns_text() {
+    for (group, member, angle, expected) in [
+        (90.0, 180.0, 270.0, TextDirection::Up),
+        (270.0, 180.0, 90.0, TextDirection::Down),
+        (90.0, 270.0, 0.0, TextDirection::Horizontal),
+        (270.0, 90.0, 0.0, TextDirection::Horizontal),
+    ] {
+        let (l, id, painted) = group_story(Spin::new(group, false, false), Spin::new(member, false, false), TextBody::default());
+        assert_eq!(painted.deg, angle);
+        assert_eq!(lines(&l, id)[0].2, expected, "group {group}, member {member}");
+    }
+}
+
+#[test]
+fn group_flip_keeps_text() {
+    for (group, member, angle, expected) in [
+        (Spin::new(0.0, true, false), Spin::default(), 0.0, TextDirection::Horizontal),
+        (Spin::new(0.0, true, false), Spin::new(90.0, false, false), 270.0, TextDirection::Up),
+        (Spin::new(0.0, false, true), Spin::new(90.0, false, false), 270.0, TextDirection::Up),
+        (Spin::new(0.0, true, true), Spin::new(90.0, false, false), 90.0, TextDirection::Down),
+        (Spin::default(), Spin::new(90.0, true, false), 90.0, TextDirection::Down),
+    ] {
+        let (l, id, painted) = group_story(group, member, TextBody::default());
+        assert_eq!(painted.deg, angle);
+        assert_eq!(lines(&l, id)[0].2, expected, "group {group:?}, member {member:?}");
+    }
+}
+
+#[test]
+fn group_upright_text_stays() {
+    for (group, member) in [
+        (Spin::new(90.0, false, false), Spin::default()),
+        (Spin::new(270.0, false, false), Spin::new(180.0, false, false)),
+        (Spin::new(0.0, true, false), Spin::new(90.0, false, false)),
+    ] {
+        let (l, id, _) = group_story(group, member, TextBody { upright: true, ..Default::default() });
+        assert_eq!(lines(&l, id)[0].2, TextDirection::Horizontal, "group {group:?}, member {member:?}");
+    }
+}

@@ -1423,6 +1423,7 @@ impl Reader<'_> {
             if let Some(a) = bp.attr("anchor") {
                 part.body.anchor = wordcraft_doc::props::valign_from_anchor(a);
             }
+            part.body.upright = on_off_attr(bp, "upright");
             // Internal margins, each defaulting to Word's (#743).
             let mut inset = wordcraft_doc::TEXT_BOX_INSET;
             for (slot, n) in inset.iter_mut().zip(["lIns", "tIns", "rIns", "bIns"]) {
