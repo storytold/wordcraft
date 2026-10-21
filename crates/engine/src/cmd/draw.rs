@@ -495,7 +495,7 @@ fn place(s: &mut Session, layout: &DocLayout, obj: InlineObject, page: usize, (x
             true,
         ),
     };
-    s.doc.insert_object(&at, obj, &CharProps::default())?;
+    super::z_order::insert(s, &at, obj, &CharProps::default(), super::z_order::Intent::Fresh)?;
     let len = OBJ.len_utf8();
     for p in [&mut s.sel.anchor, &mut s.sel.focus] {
         if p.story == at.story && p.path == at.path && p.off > at.off {

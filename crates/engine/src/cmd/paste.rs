@@ -342,10 +342,14 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
     let at = delete_selection(s)?;
     let track = s.doc.settings.track_changes;
     let mut rid = None;
+    let mut order = super::z_order::Intent::Fresh;
     if track {
         // What the last command cut, pasted again: the two ends of a move.
         let r = match super::moves::take_paste(s, &frag) {
-            Some(r) => r,
+            Some(r) => {
+                order = super::z_order::Intent::Preserve;
+                r
+            }
             None => super::new_revision(s, wordcraft_doc::RevisionKind::Insert),
         };
         rid = Some(r);
@@ -361,6 +365,7 @@ pub fn insert(s: &mut Session, mut frag: Fragment) -> Result<(), CmdError> {
             });
         }
     }
+    super::z_order::fragment(&mut s.doc, &mut frag, order)?;
     let end = s.doc.insert_fragment(&at, &frag)?;
     // The paragraph marks the paste added are inserted too, so rejecting it joins the
     // paragraphs again. The last paragraph ends with the original mark and keeps it.

@@ -120,6 +120,7 @@ pub fn specs() -> Vec<CommandSpec> {
             let mut frag = doc.body_fragment();
             super::paste::unlink_sections(&mut frag.blocks);
             let at = delete_selection(s)?;
+            super::z_order::fragment(&mut s.doc, &mut frag, super::z_order::Intent::Fresh)?;
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
             sel_result(s)
@@ -276,7 +277,7 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     }
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let end = s.doc.insert_object(&at, obj, &props)?;
+    let end = super::z_order::insert(s, &at, obj, &props, super::z_order::Intent::Fresh)?;
     s.sel = Selection::caret(end);
     Ok(json!({"media": key, "width": w, "height": h}))
 }
@@ -351,7 +352,7 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
     // selection and becomes the selection. (A picture does replace the selection, as in Word.)
     let props = s.typing_props();
     let (_, at) = s.sel.ordered();
-    let end = s.doc.insert_object(&at, obj, &props)?;
+    let end = super::z_order::insert(s, &at, obj, &props, super::z_order::Intent::Fresh)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
 }
@@ -378,7 +379,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
     if super::canvas::add_member(s, obj.clone())?.is_none() {
         let props = s.typing_props();
         let at = delete_selection(s)?;
-        s.doc.insert_object(&at, obj, &props)?;
+        super::z_order::insert(s, &at, obj, &props, super::z_order::Intent::Fresh)?;
     }
     // Like Word, type straight into the new box.
     s.sel = Selection::caret(s.doc.end_of(StoryRef::Part(id)));

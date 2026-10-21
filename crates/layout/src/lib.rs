@@ -741,6 +741,7 @@ struct Pin {
     mirror: bool,
     behind: Vec<Placed>,
     front: Vec<Placed>,
+    foreground: Vec<Foreground>,
     seen: HashSet<(Vec<u32>, usize)>,
 }
 
@@ -768,12 +769,18 @@ fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl
         mirror: ctx.mirror,
         behind: Vec::new(),
         front: Vec::new(),
+        foreground: Vec::new(),
         seen: HashSet::new(),
     };
     let outer = ctx.pin.replace(pin);
     let out = f(ctx);
     let pin = std::mem::replace(&mut ctx.pin, outer);
-    let (behind, front) = pin.map(|p| (p.behind, p.front)).unwrap_or_default();
+    let (behind, front) = pin
+        .map(|mut p| {
+            order_foreground(&mut p.front, &p.foreground, 0);
+            (p.behind, p.front)
+        })
+        .unwrap_or_default();
     (out, behind, front)
 }
 
@@ -1174,6 +1181,7 @@ fn layout_box(
     let mut items = Vec::new();
     // Pictures behind the text go first; `behind` counts them.
     let mut behind = 0;
+    let mut foreground = Vec::new();
     // Wrap areas of the box's floating objects.
     let mut excl: Vec<WrapArea> = Vec::new();
     // Areas of the box's floating tables, which other floating tables may have to avoid.
@@ -1281,11 +1289,13 @@ fn layout_box(
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
                     let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
-                    let (back, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
+                    let ObjectPlacement { behind: back, inline, front } =
+                        place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
                     let at = behind.min(items.len());
                     behind += back.len();
                     items.splice(at..at, back);
-                    items.extend(front);
+                    items.extend(inline);
+                    append_foreground(&mut items, &mut foreground, behind, front);
                 }
                 // Automatic space after: none after the last paragraph of a cell or box.
                 let after = if pl.rp.after_auto && i + 1 == blocks.len() { 0.0 } else { pl.rp.space_after };
@@ -1327,6 +1337,7 @@ fn layout_box(
                 };
                 let mut row_y = ty;
                 for row in &tl.rows {
+                    extend_foreground(&mut foreground, &row.foreground, items.len().saturating_sub(behind));
                     for it in &row.items {
                         let mut it = it.clone();
                         it.translate(tx, row_y);
@@ -1344,7 +1355,15 @@ fn layout_box(
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    if in_cell {
+        for group in &mut foreground {
+            group.range = group.range.start.saturating_add(behind)..group.range.end.saturating_add(behind);
+        }
+    } else {
+        order_foreground(&mut items, &foreground, behind);
+        foreground.clear();
+    }
+    BoxLayout { items, foreground, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -1399,6 +1418,7 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// height without it).
 struct BoxLayout {
     items: Vec<Placed>,
+    foreground: Vec<Foreground>,
     table_areas: Vec<Rect>,
     page_table_wraps: Vec<WrapArea>,
     height: f32,
@@ -1617,6 +1637,8 @@ struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     behind: Vec<usize>,
+    /// Foreground object ranges, indexed without the prepended behind-text items.
+    foreground: Vec<Vec<Foreground>>,
     /// The bottom of the tallest column on the current page before the current one.
     max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -2016,6 +2038,7 @@ impl PageBuilder<'_> {
         }
         self.pages.pop();
         self.behind.pop();
+        self.foreground.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
@@ -2059,6 +2082,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.foreground.push(Vec::new());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
@@ -2287,6 +2311,7 @@ fn layout_pass(
         page_valign: wordcraft_doc::section::PageVAlign::Top,
         seps: NoteSeps::default(),
         behind: Vec::new(),
+        foreground: Vec::new(),
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
@@ -2466,6 +2491,9 @@ fn layout_pass(
         pb.flush_notes();
     }
     pb.carry.clear();
+    for ((page, ranges), behind) in pb.pages.iter_mut().zip(&pb.foreground).zip(&pb.behind) {
+        order_foreground(&mut page.items, ranges, *behind);
+    }
     let mut pages = pb.pages;
     for p in &mut pages {
         if let Some((_, s)) = sections.get(p.section)
@@ -2531,6 +2559,7 @@ struct Snap<'a> {
     pages: usize,
     items: usize,
     behind: usize,
+    foreground: usize,
     counters: Counters,
     eq_count: u32,
     page_field: u32,
@@ -2540,14 +2569,15 @@ struct Snap<'a> {
 impl<'a> Snap<'a> {
     fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
-        let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (pages, behind, foreground) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.foreground));
         let copy = pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.foreground) = (pages, behind, foreground);
         Snap {
             pb: copy,
             pages: pb.pages.len(),
             items: pb.pages.last().map_or(0, |p| p.items.len()),
             behind: pb.behind.last().copied().unwrap_or(0),
+            foreground: pb.foreground.last().map_or(0, Vec::len),
             counters: ctx.counters.clone(),
             eq_count: ctx.eq_count,
             page_field: ctx.fields.page,
@@ -2558,9 +2588,14 @@ impl<'a> Snap<'a> {
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
     fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
-        let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (mut pages, mut behind, mut foreground) =
+            (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.foreground));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
+        foreground.truncate(self.pages);
+        if let Some(ranges) = foreground.last_mut() {
+            ranges.truncate(self.foreground);
+        }
         if let Some(pg) = pages.last_mut() {
             let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
             pg.items.drain(..k);
@@ -2570,7 +2605,7 @@ impl<'a> Snap<'a> {
             *b = self.behind;
         }
         *pb = self.pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.foreground) = (pages, behind, foreground);
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
@@ -3199,6 +3234,12 @@ struct ObjFrame<'a> {
     pinned: Option<&'a HashMap<usize, Rect>>,
 }
 
+struct ObjectPlacement {
+    behind: Vec<Placed>,
+    inline: Vec<Placed>,
+    front: Vec<(u32, Vec<Placed>)>,
+}
+
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
@@ -3215,9 +3256,9 @@ fn place_objects(
     at: &ObjFrame,
     floats: &HashMap<usize, Rect>,
     depth: usize,
-) -> (Vec<Placed>, Vec<Placed>) {
-    let (mut behind, mut front) = (Vec::new(), Vec::new());
-    let Some(fl) = pl.lines.get(l0) else { return (behind, front) };
+) -> ObjectPlacement {
+    let (mut behind, mut inline, mut front) = (Vec::new(), Vec::new(), Vec::new());
+    let Some(fl) = pl.lines.get(l0) else { return ObjectPlacement { behind, inline, front } };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
     let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
     // A floating object belongs to its paragraph, not to its line: Word puts it on the page the
@@ -3254,7 +3295,14 @@ fn place_objects(
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
-            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            let mut foreground = Vec::new();
+            let layer = if !floating {
+                &mut inline
+            } else if float.wrap == Wrap::BehindText {
+                &mut behind
+            } else {
+                &mut foreground
+            };
             // Floating ones are drawn here; inline ones with their line.
             if floating {
                 layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
@@ -3267,7 +3315,7 @@ fn place_objects(
             };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
-            front.push(Placed::Object {
+            layer.push(Placed::Object {
                 rect,
                 spin: float.spin(),
                 story,
@@ -3294,8 +3342,17 @@ fn place_objects(
             };
             for (id, rect) in boxes {
                 let items = textbox::box_items(ctx, id, rect, depth);
-                let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                let layer = if !floating {
+                    &mut inline
+                } else if float.wrap == Wrap::BehindText {
+                    &mut behind
+                } else {
+                    &mut foreground
+                };
                 layer.extend(items);
+            }
+            if !foreground.is_empty() {
+                front.push((float.z_order, foreground));
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
             if pinned.is_some() {
@@ -3304,12 +3361,72 @@ fn place_objects(
                     && pin.seen.insert((path.to_vec(), c.start))
                 {
                     pin.behind.extend(b);
-                    pin.front.extend(f);
+                    append_foreground(&mut pin.front, &mut pin.foreground, 0, f);
                 }
             }
         }
     }
-    (behind, front)
+    ObjectPlacement { behind, inline, front }
+}
+
+/// A foreground group's indices exclude the prepended behind-text items.
+#[derive(Clone)]
+struct Foreground {
+    range: std::ops::Range<usize>,
+    z: u32,
+}
+
+/// Keep each object's frame and text together until its story is complete.
+fn append_foreground(items: &mut Vec<Placed>, ranges: &mut Vec<Foreground>, behind: usize, front: Vec<(u32, Vec<Placed>)>) {
+    for (z, group) in front {
+        let start = items.len().saturating_sub(behind);
+        ranges.push(Foreground { range: start..start.saturating_add(group.len()), z });
+        items.extend(group);
+    }
+}
+
+/// Carry table-cell groups into their owning story without changing item order.
+fn extend_foreground(out: &mut Vec<Foreground>, groups: &[Foreground], offset: usize) {
+    out.extend(groups.iter().map(|g| Foreground { range: g.range.start.saturating_add(offset)..g.range.end.saturating_add(offset), z: g.z }));
+}
+
+fn remap_foreground(groups: &[Foreground], map: &[std::ops::Range<usize>]) -> Vec<Foreground> {
+    groups
+        .iter()
+        .filter_map(|g| {
+            let mut kept = map.get(g.range.clone())?.iter().filter(|r| !r.is_empty());
+            let first = kept.next()?;
+            Some(Foreground { range: first.start..kept.next_back().unwrap_or(first).end, z: g.z })
+        })
+        .collect()
+}
+
+/// Foreground floats cover later inline content. Defer sorting until placement and vertical
+/// alignment finish, keeping their indices valid for pagination and column balancing.
+fn order_foreground(items: &mut Vec<Placed>, ranges: &[Foreground], behind: usize) {
+    if ranges.is_empty() {
+        return;
+    }
+    let mut marked = vec![None; items.len()];
+    for (i, group) in ranges.iter().enumerate() {
+        let start = group.range.start.saturating_add(behind).min(marked.len());
+        let end = group.range.end.saturating_add(behind).min(marked.len());
+        if let Some(slice) = marked.get_mut(start..end) {
+            slice.fill(Some(i));
+        }
+    }
+    let mut front: Vec<_> = ranges.iter().map(|g| (g.z, Vec::new())).collect();
+    for (item, group) in std::mem::take(items).into_iter().zip(marked) {
+        if let Some((_, group)) = group.and_then(|i| front.get_mut(i)) {
+            group.push(item);
+        } else {
+            items.push(item);
+        }
+    }
+    front.sort_by_key(|(z, _)| *z);
+    for (_, group) in front {
+        items.extend(group);
+    }
 }
 
 /// Footnotes referenced in a paragraph laid out as `pl`: in its text, and inside its text boxes
@@ -3730,8 +3847,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             table_chr: None,
             pinned: None,
         };
-        let (behind, front) = place_objects(ctx, StoryRef::Body, &[block as u32], p, &pl, (l0, l1), (x, y), &at, &float_rects, 0);
-        items.extend(front);
+        let ObjectPlacement { behind, inline, front } =
+            place_objects(ctx, StoryRef::Body, &[block as u32], p, &pl, (l0, l1), (x, y), &at, &float_rects, 0);
+        items.extend(inline);
         // Line numbers in the left margin.
         if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && !pl.rp.suppress_line_numbers)
             && let Some(first) = pl.lines.get(l0)
@@ -3760,11 +3878,13 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             }
         }
         let n_behind = behind.len();
-        if let Some(pg) = pb.pages.last_mut() {
+        let prefix = pb.behind.last().copied().unwrap_or(0) + n_behind;
+        if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
             for (i, it) in behind.into_iter().enumerate() {
                 pg.items.insert(i.min(pg.items.len()), it);
             }
             pg.items.extend(items);
+            append_foreground(&mut pg.items, ranges, prefix, front);
         }
         if let Some(b) = pb.behind.last_mut() {
             *b += n_behind;
@@ -3872,17 +3992,24 @@ fn place_outline_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         table_chr: None,
         pinned: None,
     };
-    let (behind, front) = place_objects(ctx, StoryRef::Body, &[block as u32], &q, &pl, (0, l1), (x, y), &at, &HashMap::new(), 0);
-    items.extend(front);
+    let ObjectPlacement { behind, inline, front } =
+        place_objects(ctx, StoryRef::Body, &[block as u32], &q, &pl, (0, l1), (x, y), &at, &HashMap::new(), 0);
+    items.extend(inline);
     let children = level < outline::BODY && outline::has_children(&o.levels, block);
     // Collapsed, or with something under it hidden by Show Level: the wavy line says so.
     let collapsed = children && o.hidden.get(block + 1).copied().unwrap_or(false);
     items.extend(outline::symbol_items(&pl, x, y, level, children, collapsed));
-    if let Some(pg) = pb.page() {
+    let n_behind = behind.len();
+    let prefix = pb.behind.last().copied().unwrap_or(0) + n_behind;
+    if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
         for (i, it) in behind.into_iter().enumerate() {
             pg.items.insert(i.min(pg.items.len()), it);
         }
         pg.items.extend(items);
+        append_foreground(&mut pg.items, ranges, prefix, front);
+    }
+    if let Some(b) = pb.behind.last_mut() {
+        *b += n_behind;
     }
     if let (Some(f), Some(l)) = (pl.lines.first(), l1.checked_sub(1).and_then(|k| pl.lines.get(k))) {
         pb.y = y + (l.top + l.height - f.top);
@@ -4057,7 +4184,9 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
     let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
-        if let Some(pg) = pb.page() {
+        let behind = pb.behind.last().copied().unwrap_or(0);
+        if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
+            extend_foreground(ranges, &row.foreground, pg.items.len().saturating_sub(behind));
             for it in &row.items {
                 let mut it = it.clone();
                 it.translate(x, y);
@@ -4274,9 +4403,11 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pb.advance(block, body_top);
             continue;
         }
-        if let Some(pg) = pb.page() {
+        let behind = pb.behind.last().copied().unwrap_or(0);
+        if let (Some(pg), Some(ranges)) = (pb.pages.last_mut(), pb.foreground.last_mut()) {
             let mut y = r.y;
             for row in &tl.rows {
+                extend_foreground(ranges, &row.foreground, pg.items.len().saturating_sub(behind));
                 for it in &row.items {
                     let mut it = it.clone();
                     it.translate(r.x, y);

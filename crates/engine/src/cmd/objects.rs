@@ -772,7 +772,7 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
             at.off = at.off.saturating_sub(len);
         }
         let at = s.doc.clamp(&at);
-        s.doc.insert_object(&at, obj, &wordcraft_doc::CharProps::default())?;
+        super::z_order::insert(s, &at, obj, &wordcraft_doc::CharProps::default(), super::z_order::Intent::Preserve)?;
         at
     };
     let (h_rel, v_rel) = if on_page { (Anchor::Page, Anchor::Page) } else { (Anchor::Column, Anchor::Paragraph) };
@@ -946,12 +946,15 @@ fn with_obj(s: &mut Session, f: impl Fn(&mut InlineObject)) -> CmdResult {
 
 /// Change the object at `pos`; returns it afterwards.
 fn edit_obj(s: &mut Session, pos: &Pos, f: impl Fn(&mut InlineObject)) -> Result<InlineObject, CmdError> {
+    let mut obj = s.doc.para_at(pos).and_then(|p| p.object_at(pos.off)).cloned().ok_or_else(|| CmdError::Failed("object vanished".into()))?;
+    let was_inline = obj.frame().is_some_and(|(_, _, f)| f.wrap == Wrap::Inline);
+    f(&mut obj);
+    let intent = if was_inline { super::z_order::Intent::Fresh } else { super::z_order::Intent::Preserve };
+    super::z_order::object(&mut s.doc, &mut obj, intent)?;
     let para = s.doc.para_mut(pos.story, &pos.path)?;
-    let o = para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))?;
-    f(o);
-    let o = o.clone();
+    *para.object_at_mut(pos.off).ok_or_else(|| CmdError::Failed("object vanished".into()))? = obj.clone();
     para.touch();
-    Ok(o)
+    Ok(obj)
 }
 
 fn edit_float(s: &mut Session, pos: &Pos, f: impl Fn(&mut Float)) -> Result<InlineObject, CmdError> {
@@ -1525,7 +1528,7 @@ fn group(s: &mut Session, _: &Value) -> CmdResult {
     }
     let first = picks.first().cloned().ok_or_else(|| CmdError::Failed("nothing to group".into()))?;
     let at = s.doc.clamp(&first);
-    s.doc.insert_object(&at, grouped, &wordcraft_doc::CharProps::default())?;
+    super::z_order::insert(s, &at, grouped, &wordcraft_doc::CharProps::default(), super::z_order::Intent::Preserve)?;
     s.touch();
     let pos = move_object(s, at, Some(page as u64), x0, y0, (w, h))?;
     s.also_selected.clear();
@@ -1585,7 +1588,7 @@ fn ungroup(s: &mut Session, _: &Value) -> CmdResult {
     let mut placed = Vec::new();
     for m in members {
         placed.push(at.clone());
-        at = s.doc.insert_object(&at, m, &wordcraft_doc::CharProps::default())?;
+        at = super::z_order::insert(s, &at, m, &wordcraft_doc::CharProps::default(), super::z_order::Intent::Preserve)?;
     }
     let first = placed.first().cloned().unwrap_or(pos);
     s.sel = Selection { anchor: first.clone(), focus: Pos { off: first.off + len, ..first } };
