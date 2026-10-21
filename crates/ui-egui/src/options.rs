@@ -251,6 +251,17 @@ fn general(app: &mut WordApp, ui: &mut Ui) {
     }
     ui.checkbox(&mut app.ui.show_discord, tl!("Show the community button in the title bar"));
     ui.checkbox(&mut app.ui.font_download_notice, tl!("Tell me when a document's missing fonts can be downloaded"));
+    // Only where the app draws the window buttons (GNOME on Wayland); elsewhere the desktop
+    // draws the frame.
+    if app.window_controls.is_some() {
+        let mut system = app.ui.system_title_bar;
+        let hint = tl!(
+            "Show a basic title bar for the window buttons above WordCraft's own. GNOME doesn't draw title bars for apps, so this one doesn't follow its theme."
+        );
+        if ui.checkbox(&mut system, tl!("Use system title bar")).on_hover_text(hint).changed() {
+            let _ = app.run("ui.systemTitleBar", json!({"value": system}));
+        }
+    }
     default_app_button(app, ui);
     ui.add_space(8.0);
     section(ui, "Start-up");

@@ -85,6 +85,36 @@ impl WordApp {
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
     }
 
+    /// Whether the app draws the window buttons and resize edges: the desktop leaves the frame to
+    /// the app and Use system title bar is off.
+    pub fn draws_window_frame(&self) -> bool {
+        self.window_controls.is_some() && !self.ui.system_title_bar
+    }
+
+    /// The window buttons to draw this frame: none where the desktop draws the frame, and none in
+    /// full screen.
+    pub(crate) fn shown_window_controls(&self, ctx: &egui::Context) -> Option<crate::window_controls::Layout> {
+        let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+        self.window_controls.clone().filter(|_| self.draws_window_frame() && !fullscreen)
+    }
+
+    /// Follow Use system title bar at once, in the window being drawn: windows open without
+    /// winit's frame wherever the app may draw its own (the desktop app's `main`, and
+    /// [`WordApp::window_builder`]'s viewports), and get it back, or lose it again, when the
+    /// setting changes.
+    pub(crate) fn sync_window_frame(&mut self, ctx: &egui::Context) {
+        if self.window_controls.is_none() {
+            return;
+        }
+        let app_frame = self.draws_window_frame();
+        if self.app_frame_shown != Some(app_frame) {
+            if self.app_frame_shown.is_some() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!app_frame));
+            }
+            self.app_frame_shown = Some(app_frame);
+        }
+    }
+
     /// Follow the desktop's light/dark choice while the app runs (Linux, where winit reports no
     /// system theme; see [`desktop_theme`]). The desktop app calls this once at start-up; unit
     /// tests and `ui_shot` don't, so what they draw doesn't depend on the host's desktop theme.
