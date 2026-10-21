@@ -3978,6 +3978,38 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize) -> f32
     }
 }
 
+struct MergeBand {
+    edge: table::MergeEdge,
+    bottom: f32,
+}
+
+/// Close merged cells at the end of each physical table fragment.
+fn close_merge_bands(pb: &mut PageBuilder, bands: &mut HashMap<(usize, usize), MergeBand>) {
+    if bands.is_empty() {
+        return;
+    }
+    let Some(pg) = pb.page() else {
+        bands.clear();
+        return;
+    };
+    let mut edges: HashSet<_> = pg
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Rule { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 => Some((x0.to_bits(), x1.to_bits(), y0.to_bits())),
+            _ => None,
+        })
+        .collect();
+    for (_, band) in bands.drain() {
+        let edge = band.edge;
+        if let Some(border) = edge.bottom
+            && edges.insert((edge.x0.to_bits(), edge.x1.to_bits(), band.bottom.to_bits()))
+        {
+            pg.items.push(Placed::Rule { x0: edge.x0, x1: edge.x1, y0: band.bottom, y1: band.bottom, border });
+        }
+    }
+}
+
 fn row_keeps_next(row: &table::RowLayout) -> bool {
     let Some(items) = row.cells.first().and_then(|cell| row.items.get(cell.items.clone())) else { return false };
     let Some((depth, story)) = items
@@ -4009,7 +4041,7 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     if row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)) {
         return false;
     }
-    if row.props.height_rule == HeightRule::AtLeast && row.props.height.is_some_and(|h| h > room + 0.01 && h <= page_height + 0.01) {
+    if row.props.height_rule == HeightRule::AtLeast && laid.min_height > room + 0.01 && laid.min_height <= page_height + 0.01 {
         return false;
     }
     table::split_row(laid, room).is_some()
@@ -4055,13 +4087,51 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         }
     }
     let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
-    let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
+    let mut bands = HashMap::new();
+    let mut seen = HashSet::new();
+    let place = |pb: &mut PageBuilder,
+                 row: &table::RowLayout,
+                 index: usize,
+                 bands: &mut HashMap<(usize, usize), MergeBand>,
+                 seen: &mut HashSet<(usize, usize)>| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
         if let Some(pg) = pb.page() {
             for it in &row.items {
                 let mut it = it.clone();
                 it.translate(x, y);
                 pg.items.push(it);
+            }
+            if let Some(original) = tl.rows.get(index)
+                && original.cells.iter().any(|c| c.merge.is_some())
+            {
+                let mut edges: HashSet<_> = row
+                    .items
+                    .iter()
+                    .filter_map(|it| match it {
+                        Placed::Rule { x0, x1, y0, y1, .. } if (y0 - y1).abs() < 0.01 => {
+                            Some(((x0 + x).to_bits(), (x1 + x).to_bits(), (y0 + y).to_bits()))
+                        }
+                        _ => None,
+                    })
+                    .collect();
+                for edge in original.cells.iter().filter_map(|c| c.merge.as_ref()) {
+                    let mut edge = edge.clone();
+                    edge.x0 += x;
+                    edge.x1 += x;
+                    if let Some(band) = bands.get_mut(&edge.key) {
+                        band.bottom = y + row.height;
+                        band.edge.bottom = edge.bottom;
+                        continue;
+                    }
+                    if seen.contains(&edge.key)
+                        && let Some(border) = edge.top
+                        && edges.insert((edge.x0.to_bits(), edge.x1.to_bits(), y.to_bits()))
+                    {
+                        pg.items.push(Placed::Rule { x0: edge.x0, x1: edge.x1, y0: y, y1: y, border });
+                    }
+                    seen.insert(edge.key);
+                    bands.insert(edge.key, MergeBand { edge, bottom: y + row.height });
+                }
             }
         }
         pb.y += row.height;
@@ -4070,9 +4140,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     // Measured in Word: an at-least row's minimum height is reserved, not split. Where less room
     // than that is left on a page that already holds something, the row starts the next page
     // whole; a row taller than a page then splits from the top of that page.
-    let short_of_min = |ri: usize, room: f32| {
-        t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::AtLeast && r.props.height.is_some_and(|h| h > room + 0.01))
-    };
+    let short_of_min = |ri: usize, room: f32| tl.rows.get(ri).is_some_and(|row| row.min_height > room + 0.01);
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
     // after them can't start under them there, the table starts on the next page.
     let first = header_rows.len();
@@ -4083,6 +4151,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
         if row.height > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row(row, room).is_some())) {
+            close_merge_bands(pb, &mut bands);
             pb.advance(block, body_top);
         }
     }
@@ -4129,7 +4198,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             let split = if splittable && !moves_on && !defer_kept { table::split_row(cur, room) } else { None };
             match split {
                 Some((a, b)) => {
-                    place(pb, &a);
+                    place(pb, &a, ri, &mut bands, &mut seen);
                     table_notes(ctx, pb, &a.items);
                     rest = Some(b);
                 }
@@ -4138,6 +4207,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                 None if pb.at_top() || fresh => break,
                 None => {}
             }
+            close_merge_bands(pb, &mut bands);
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.
             if !header_rows.contains(&ri) && header_repeats < MAX_HEADER_REPEATS {
@@ -4146,7 +4216,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                         break;
                     }
                     if let Some(h) = tl.rows.get(*hr) {
-                        place(pb, h);
+                        place(pb, h, *hr, &mut bands, &mut seen);
                         header_repeats += 1;
                     }
                 }
@@ -4154,9 +4224,10 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             fresh = true;
         }
         let last = rest.as_ref().unwrap_or(row);
-        place(pb, last);
+        place(pb, last, ri, &mut bands, &mut seen);
         table_notes(ctx, pb, &last.items);
     }
+    close_merge_bands(pb, &mut bands);
 }
 
 /// Footnotes referenced in the cell lines of a placed table row (or part of one) go to the
