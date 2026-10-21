@@ -16,6 +16,8 @@ const MAX_WIDTH_SHARE: f32 = 10.0;
 
 pub struct RowLayout {
     pub height: f32,
+    /// Minimum retained on continuation fragments that can hold it.
+    pub(crate) min_height: f32,
     /// Items relative to the table's top-left (x) and the row's top (y).
     pub items: Vec<Placed>,
     /// The room the row keeps below its text: the bottom cell margin and border band. Part of a
@@ -472,6 +474,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut rows: Vec<Vec<CellBox>> = Vec::with_capacity(nrows);
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
+    let mut minimums = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
         let mut g = 0usize;
         let mut cells = Vec::with_capacity(row.cells.len());
@@ -645,6 +648,10 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             (Some(h), _) if h > 0.0 => rh.max(h + row_insets),
             _ => rh,
         };
+        minimums.push(match (row.props.height, row.props.height_rule) {
+            (Some(h), HeightRule::AtLeast) if h > 0.0 => h + row_insets,
+            _ => 0.0,
+        });
         bottoms.push(row_below);
         heights.push(if collapsed && !cells.is_empty() { rh.max(0.0) } else { rh.max(4.0) });
         rows.push(cells);
@@ -793,7 +800,13 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             parts.push(CellPart { top, items: first..items.len(), end });
         }
-        out.push(RowLayout { height: rh, items, bottom: bottoms.get(ri).copied().unwrap_or(0.0), cells: parts });
+        out.push(RowLayout {
+            height: rh,
+            min_height: minimums.get(ri).copied().unwrap_or(0.0),
+            items,
+            bottom: bottoms.get(ri).copied().unwrap_or(0.0),
+            cells: parts,
+        });
     }
     TableLayout { x, width: total, rows: out }
 }
@@ -912,7 +925,10 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
             need = need.max(c.end.map_or(row.height, |e| e + row.bottom) - s);
         }
     }
-    let height = need.clamp(4.0, full);
+    // Word reapplies an at-least height on the continuation. Oversized minimums
+    // that cannot fit the first fragment keep their existing distributed height.
+    let min_height = if row.min_height <= cut + 0.01 { row.min_height } else { 0.0 };
+    let height = need.clamp(4.0, full).max(min_height);
     // What runs to the row's bottom (cell areas, shading, side borders) ends at the
     // continuation's.
     let rest = (row.height - height).max(0.0);
@@ -1019,8 +1035,8 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     }
     // The part left on the page is placed and never split again.
     Some((
-        RowLayout { height: cut, items: a, bottom: row.bottom, cells: Vec::new() },
-        RowLayout { height, items: b, bottom: row.bottom, cells: parts },
+        RowLayout { height: cut, min_height: 0.0, items: a, bottom: row.bottom, cells: Vec::new() },
+        RowLayout { height, min_height, items: b, bottom: row.bottom, cells: parts },
     ))
 }
 
