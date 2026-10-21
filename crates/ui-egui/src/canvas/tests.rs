@@ -2093,6 +2093,26 @@ fn an_agent_cannot_close_the_document_over_a_pending_comment_draft() {
     assert!(crate::control::close_refused(h.state(), "text.insert", &json!({"text": "x"})).is_none());
 }
 
+/// #1348: a module's command that replaces the document (New Pleading, say) counts comment
+/// text still being typed as an unsaved change and asks first.
+#[test]
+fn a_command_that_replaces_the_document_asks_about_a_pending_comment_draft() {
+    fn replace(s: &mut wordcraft_engine::Session, _: &serde_json::Value) -> wordcraft_engine::CmdResult {
+        s.set_document(wordcraft_doc::Document::new());
+        Ok(json!({}))
+    }
+    let (mut h, id) = comment_harness();
+    h.state_mut()
+        .session
+        .install_commands(vec![wordcraft_engine::CommandSpec::new("test.replace", "Replace", "Test", replace).replaces_document()]);
+    h.state_mut().session.dirty = false;
+    click_balloon(&mut h, id);
+    type_in(&mut h, "Typed ");
+    let document = h.state().session.document_id();
+    assert_eq!(h.state_mut().run("test.replace", json!({})).unwrap(), json!({"pending": "saveChanges"}));
+    assert_eq!(h.state().session.document_id(), document, "nothing is replaced yet");
+}
+
 /// #1348: a comment edit typed, then refused (the document became read-only).
 fn refused_draft() -> (egui_kittest::Harness<'static, WordApp>, u32) {
     let (mut h, id) = comment_harness();

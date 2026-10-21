@@ -434,6 +434,21 @@ mod tests {
         assert_eq!(a.ui.tab, "Insert");
     }
 
+    /// Closing the window from its options page lets it save first, as closing File does.
+    #[test]
+    fn closing_the_window_waits_for_its_page() {
+        let mut a = app();
+        a.run("file.options", json!({"modules": {"probe": true}})).unwrap();
+        a.run("file.options", json!({"pane": "addin:probe"})).unwrap();
+        a.ui.backstage = true;
+        a.ui.backstage_page = "options".into();
+        a.session.dirty = false;
+        probe(&mut a).refuse_leave = true;
+        assert!(!a.close_requested(), "pending changes it can't save keep the window open");
+        probe(&mut a).refuse_leave = false;
+        assert!(a.close_requested());
+    }
+
     /// Scripts and agents turn it on and off as the Add-ins page does.
     #[test]
     fn a_script_turning_it_on_or_off_applies_it() {
