@@ -181,12 +181,6 @@ pub fn is_thai_lao(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0EFF)
 }
 
-/// Returns the shared ICU4X dictionary `LineSegmenter`, built once on first use.
-fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
-    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
-    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
-}
-
 /// Thai combining marks: above/below vowel signs, tone marks, and diacritics that stack on top
 /// of or below the base consonant. These are Unicode `Extend` (UAX #29) so UAX #29 grapheme
 /// clusters already keep them attached to their base — the caret never stops on one alone.
