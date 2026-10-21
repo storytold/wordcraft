@@ -39,6 +39,17 @@ use wordcraft_ui_egui::{
 /// first frame that knows the monitor has checked it, the control server's key file (removed on
 /// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
 /// the documents opened from Finder.
+/// Every window's raw input, before egui reads it: eframe runs [`eframe::App::raw_input_hook`]
+/// for the root viewport only, and each further document window is a viewport of its own.
+struct ViewportInput;
+
+impl eframe::ViewportHooks for ViewportInput {
+    fn raw_input(&self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // A move or resize handed to the desktop keeps the button's release (window_controls).
+        wordcraft_ui_egui::window_controls::release_after_desktop_grab(ctx, raw);
+    }
+}
+
 struct App(
     WordApp,
     Option<WindowGeometry>,
@@ -560,6 +571,7 @@ fn main() -> eframe::Result {
         }
     }
     let mut options = eframe::NativeOptions {
+        viewport_hooks: Some(std::sync::Arc::new(ViewportInput)),
         viewport: egui::ViewportBuilder::default()
             .with_title("WordCraft")
             .with_app_id("ai.storyteller.wordcraft")
