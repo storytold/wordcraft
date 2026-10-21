@@ -521,7 +521,9 @@ impl Paragraph {
         let mut idx = off;
         let mut seen_word = false;
         for (i, c) in before.char_indices().rev() {
-            let w = crate::bidi::is_word_char(c);
+            // Thai/Lao chars are alphanumeric but belong to their own script; treat the script
+            // transition as a word boundary so the Latin scan doesn't walk into Thai/Lao runs.
+            let w = crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
             if w {
                 seen_word = true;
                 idx = i;
@@ -543,10 +545,13 @@ impl Paragraph {
         let Some(after) = self.text.get(off..) else { return self.text.len() };
         let it = after.char_indices().peekable();
         let mut end = self.text.len();
-        let first_word = after.chars().next().is_some_and(|c| crate::bidi::is_word_char(c) && c != '\'');
+        // Thai/Lao is alphanumeric but forms its own script; it must not be treated as a Latin
+        // word char — the script transition is a word boundary.
+        let is_latin_word = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
+        let first_word = after.chars().next().is_some_and(|c| is_latin_word(c) && c != '\'');
         let mut in_space = false;
         for (i, c) in it {
-            let w = crate::bidi::is_word_char(c);
+            let w = is_latin_word(c);
             if c == ' ' || c == NBSP {
                 in_space = true;
                 continue;
@@ -806,12 +811,39 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
-        // Mixed Thai/Latin: cursor at the first byte of "test" must select the Latin word, not
-        // the preceding Thai word.  "ไทย" is 9 bytes; byte 9 is 't'.
-        let mixed = Paragraph::with_text("ไทยtest", CharProps::default());
-        assert_eq!(mixed.word_at(9), (9, 13), "cursor on 't' selects Latin word, not ไทย");
-        // Cursor inside Thai → Thai word.
-        assert_eq!(mixed.word_at(3), (0, 9), "cursor inside Thai → Thai word");
+        // Mixed Thai/Latin (no spaces): script transitions are word boundaries; ICU4X word
+        // boundaries within a Thai run are also respected.
+        //
+        // Byte layout: "ไทย"=9B(0) "test"=4B(9) "ลาว"=9B(13) "test"=4B(22)
+        //              "ไม่"=9B(26) "รวม"=9B(35) "Khmer"=5B(44) → total 49B.
+        // "ไม่รวม" is one Thai run (26..44); ICU4X splits it into ไม่(26..35)/รวม(35..44).
+        let mixed = Paragraph::with_text("ไทยtestลาวtestไม่รวมKhmer", CharProps::default());
+        assert_eq!(mixed.text.len(), 49);
+        // Ctrl+Right (word_end)
+        assert_eq!(mixed.word_end(0),  9,  "ไทย→");
+        assert_eq!(mixed.word_end(9),  13, "first test→");
+        assert_eq!(mixed.word_end(13), 22, "ลาว→");
+        assert_eq!(mixed.word_end(22), 26, "second test→");
+        assert_eq!(mixed.word_end(26), 35, "ไม่→ (ICU4X intra-run boundary)");
+        assert_eq!(mixed.word_end(35), 44, "รวม→");
+        assert_eq!(mixed.word_end(44), 49, "Khmer→end");
+        // Ctrl+Left (word_start)
+        assert_eq!(mixed.word_start(9),  0,  "←ไทย");
+        assert_eq!(mixed.word_start(13), 9,  "←first test");
+        assert_eq!(mixed.word_start(22), 13, "←ลาว");
+        assert_eq!(mixed.word_start(26), 22, "←second test");
+        assert_eq!(mixed.word_start(35), 26, "←ไม่");
+        assert_eq!(mixed.word_start(44), 35, "←รวม");
+        assert_eq!(mixed.word_start(49), 44, "←Khmer");
+        // Double-click (word_at)
+        assert_eq!(mixed.word_at(3),  (0,  9),  "inside ไทย");
+        assert_eq!(mixed.word_at(9),  (9,  13), "on 't' after ไทย → Latin");
+        assert_eq!(mixed.word_at(13), (13, 22), "on 'ล'");
+        assert_eq!(mixed.word_at(16), (13, 22), "inside ลาว");
+        assert_eq!(mixed.word_at(26), (26, 35), "on 'ไ' of ไม่");
+        assert_eq!(mixed.word_at(35), (26, 35), "boundary inside Thai run → left word ไม่");
+        assert_eq!(mixed.word_at(38), (35, 44), "inside รวม");
+        assert_eq!(mixed.word_at(44), (44, 49), "on 'K' → Khmer");
     }
 
     proptest::proptest! {
