@@ -1,6 +1,7 @@
 //! Text boxes' text direction, alignment and linked boxes (Shape Format › Text).
 
 use super::*;
+use crate::display::Draw;
 use wordcraft_doc::props::{TextVert, VAlign};
 use wordcraft_doc::{PartKind, Pos, TextBody, para_block};
 
@@ -210,3 +211,350 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 /// Filler paragraphs before the box in [`inline_box_that_resizes_to_fit_takes_its_texts_height`]:
 /// enough that a 10 cm box no longer leaves room for the page break on the first page.
 const FILLER: usize = 22;
+
+/// A floating text box turned `deg` (flipped as given) showing "Rotated text box", in a body of a
+/// few paragraphs; its story id.
+fn turned_box(d: &mut Document, deg: f32, flip_h: bool, flip_v: bool) -> u32 {
+    let id = text_box(d, 0, "Rotated text box", 180.0, 60.0, TextBody::default());
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for o in p.objects.iter_mut() {
+        if let InlineObject::Shape { float, .. } = o {
+            float.wrap = Wrap::Square;
+            float.rot = deg;
+            float.flip_h = flip_h;
+            float.flip_v = flip_v;
+        }
+    }
+    id
+}
+
+/// The spins of the turns around the box text's glyphs (empty: drawn upright), and how many glyph
+/// runs are drawn upright, outside any turn.
+fn glyph_turns(draws: &[Draw]) -> (Vec<Spin>, usize) {
+    fn walk(ds: &[Draw], spin: Option<Spin>, turns: &mut Vec<Spin>, plain: &mut usize) {
+        for d in ds {
+            match d {
+                Draw::Glyphs { text, .. } if text.contains("Rotated") || text.contains("box") => match spin {
+                    Some(s) => turns.push(s),
+                    None => *plain += 1,
+                },
+                Draw::Rotated { spin: s, items, .. } => walk(items, Some(*s), turns, plain),
+                Draw::Clip { items, .. } | Draw::Turned { items, .. } => walk(items, spin, turns, plain),
+                _ => {}
+            }
+        }
+    }
+    let (mut turns, mut plain) = (Vec::new(), 0);
+    walk(draws, None, &mut turns, &mut plain);
+    (turns, plain)
+}
+
+#[test]
+fn text_in_a_rotated_text_box_turns_with_the_box() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let l = lay(&d);
+    assert!(!lines(&l, id).is_empty(), "the box shows its text");
+    let draws = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let (turns, plain) = glyph_turns(&draws);
+    assert_eq!(plain, 0, "no glyph of the box's text is drawn upright");
+    assert!(!turns.is_empty() && turns.iter().all(|s| (s.deg - 30.0).abs() < 0.01), "the text turns 30° with the box: {turns:?}");
+}
+
+#[test]
+fn a_rotated_text_box_is_drawn_straight_while_its_text_is_edited() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let other = text_box(&mut d, 0, "Another one", 120.0, 40.0, TextBody::default());
+    if let Some(InlineObject::Shape { float, .. }) = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.last_mut() {
+        float.wrap = Wrap::Square;
+        float.rot = 30.0;
+        float.y = 300.0;
+    }
+    let l = lay(&d);
+    let opts = display::DisplayOptions { straight: Some(id), ..Default::default() };
+    let draws = display::page_display(&d, &l.pages[0], &opts);
+    let (turns, plain) = glyph_turns(&draws);
+    assert!(turns.iter().all(|s| s.is_identity()), "the edited box's text isn't turned: {turns:?}");
+    assert!(plain > 0, "it is drawn upright");
+    // The other turned box stays turned, frame and all.
+    fn turned_text(ds: &[Draw], spin: bool) -> Vec<String> {
+        ds.iter()
+            .flat_map(|d| match d {
+                Draw::Glyphs { text, .. } if spin => vec![text.clone()],
+                Draw::Rotated { items, .. } => turned_text(items, true),
+                Draw::Clip { items, .. } => turned_text(items, spin),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+    let turned = turned_text(&draws, false).concat();
+    assert!(turned.contains("Another"), "the other box stays turned: {turned:?}");
+    let _ = other;
+}
+
+#[test]
+fn a_flipped_text_box_turns_its_text_but_does_not_mirror_it() {
+    let mut d = Document::from_text("Body words around it.");
+    turned_box(&mut d, 30.0, true, false);
+    let l = lay(&d);
+    let (turns, plain) = glyph_turns(&display::page_display(&d, &l.pages[0], &display::DisplayOptions::default()));
+    assert_eq!(plain, 0);
+    assert!(!turns.is_empty() && turns.iter().all(|s| (s.deg - 30.0).abs() < 0.01 && !s.flip_h && !s.flip_v), "{turns:?}");
+}
+
+#[test]
+fn a_click_on_a_rotated_box_lands_on_the_character_drawn_there() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let l = lay(&d);
+    let o = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    let story = StoryRef::Part(id);
+    let pos = |off| Pos { story, path: Path::top(0), off };
+    // A quarter into the "b" of "box" (byte 13), unturned, and where it is drawn: turned about
+    // the frame's centre.
+    let (a, b) = (l.caret_on(&pos(13), 0).unwrap(), l.caret_on(&pos(14), 0).unwrap());
+    let (ux, uy) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+    let (x, y) = Spin::new(30.0, false, false).apply(cx, cy, ux, uy);
+    assert_eq!(l.story_at_shown(0, x, y, None), Some(story), "the click is in the box");
+    assert_eq!(l.hit_shown(0, x, y, story, None).map(|p| p.off), Some(13), "the click starts editing on the character under it");
+    assert_ne!(l.hit(0, x, y, story).map(|p| p.off), Some(13), "(plain coordinates miss it)");
+    // While the box is edited it is drawn straight: the point is plain page coordinates.
+    assert_eq!(l.story_at_shown(0, ux, uy, Some(id)), Some(story));
+    assert_eq!(l.hit_shown(0, ux, uy, story, Some(id)).map(|p| p.off), Some(13));
+    // Hostile points stay safe.
+    let _ = l.hit_shown(0, f32::NAN, f32::INFINITY, story, None);
+    assert!(l.story_at_shown(99, 0.0, 0.0, None).is_none());
+}
+
+#[test]
+fn an_edited_turned_box_is_grabbed_on_the_straight_border_it_is_drawn_with() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let l = lay(&d);
+    let o = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    // A point on the straight frame's top edge, 60 pt right of its middle: well off the turned
+    // border.
+    let (x, y) = (o.rect.x + o.rect.w / 2.0 + 60.0, o.rect.y);
+    let grabbed = |straight: Option<u32>| l.object_at_shown(0, x, y, 3.0, StoryRef::Body, straight).map(|o| o.text_box);
+    assert_eq!(grabbed(None), None, "not edited, the box is turned: no border there");
+    assert_eq!(grabbed(Some(id)), Some(Some(id)), "edited, it is drawn straight: its border is there");
+    let hit = l.object_at_shown(0, x, y, 3.0, StoryRef::Body, Some(id)).unwrap();
+    assert!((hit.spin.deg - 30.0).abs() < 0.01, "the grab keeps the box's real turn for the move");
+    // Inside the straight frame (off the border) is its text, not a grab.
+    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+    assert!(l.object_at_shown(0, cx, cy, 3.0, StoryRef::Body, Some(id)).is_none());
+}
+
+/// The PDF draws an item inside its turned text box from a page of just the box's open marker
+/// and the item: that gives the same draws as the whole page on screen (a shadow keeps its page
+/// direction in both).
+#[test]
+fn a_turned_box_shape_draws_the_same_alone_as_on_the_page() {
+    let mut d = Document::from_text("Body words around it.");
+    turned_box(&mut d, 30.0, false, false);
+    if let Some(InlineObject::Shape { effects, fill, stroke, .. }) = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.first_mut() {
+        effects.shadow = Some(wordcraft_doc::effects::Shadow { distance: 8.0, angle: 0.0, ..Default::default() });
+        *fill = Some(wordcraft_doc::props::Rgb(0, 0, 255));
+        *stroke = Some(wordcraft_doc::props::Rgb::BLACK);
+    }
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+    // The shadow angle of the shape drawn inside a turn.
+    fn shadow(ds: &[Draw], turned: bool) -> Option<f32> {
+        ds.iter().find_map(|d| match d {
+            Draw::Shape { effects, .. } if turned => effects.shadow.map(|s| s.angle),
+            Draw::Rotated { items, .. } => shadow(items, true),
+            _ => None,
+        })
+    }
+    let open = page.items.iter().position(|it| matches!(it, Placed::Spun { open: true, .. })).expect("an open marker");
+    let shape = page.items.iter().skip(open).find(|it| matches!(it, Placed::Shape { .. })).expect("the box's shape").clone();
+    let one = Page { items: vec![page.items[open].clone(), shape], ..page.clone() };
+    let alone = shadow(&display::page_display(&d, &one, &opts), false).expect("drawn alone, turned, with its shadow");
+    let whole = shadow(&display::page_display(&d, page, &opts), false).expect("drawn on the page, turned, with its shadow");
+    assert_eq!(alone, whole, "the PDF's shadow matches the screen's");
+    assert!((alone - 330.0).abs() < 0.01, "cast 30° back inside the turn, so it falls to the right on the page: {alone}");
+}
+
+#[test]
+fn box_text_keeps_free_rotation() {
+    fn angles(draws: &[display::Draw], angle: f32, found: &mut Vec<f32>) {
+        for draw in draws {
+            match draw {
+                display::Draw::Glyphs { text, .. } if text.contains("Original") => found.push(angle.rem_euclid(360.0)),
+                display::Draw::Rotated { spin, items, .. } => angles(items, angle + spin.deg, found),
+                display::Draw::Turned { turn, items, .. } => {
+                    let delta = if *turn == TextDirection::Down { 90.0 } else { 270.0 };
+                    angles(items, angle + delta, found);
+                }
+                display::Draw::Clip { items, .. } => angles(items, angle, found),
+                _ => {}
+            }
+        }
+    }
+    for degrees in [315.0, 45.0, 180.0, 0.0, 90.0, 270.0] {
+        for upright in [false, true] {
+            for header in [false, true] {
+                let mut document = Document::from_text("Body probe");
+                text_box(&mut document, 0, "Original rotation probe", 180.0, 60.0, TextBody { upright, ..Default::default() });
+                let object = &mut document.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects[0];
+                let float = object.float_mut().unwrap();
+                float.set_spin(Spin::new(degrees, false, false));
+                float.wrap = wordcraft_doc::para::Wrap::BehindText;
+                if header {
+                    let blocks = std::mem::replace(&mut document.body, Document::from_text("Body probe").body);
+                    let id = document.add_part(PartKind::Header, blocks);
+                    document.last_section.headers.default = Some(id);
+                }
+                let layout = lay(&document);
+                let draws = display::page_display(&document, &layout.pages[0], &display::DisplayOptions::default());
+                let mut found = Vec::new();
+                angles(&draws, 0.0, &mut found);
+                let expected = if upright { 0.0 } else { degrees };
+                assert!(!found.is_empty(), "original text must remain visible");
+                assert!(found.iter().all(|angle| (*angle - expected).abs() < 0.01), "degrees={degrees} upright={upright} header={header}: {found:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn upright_text_hit_stays_flat() {
+    let mut document = Document::from_text("Body probe");
+    let id = turned_box(&mut document, 315.0, false, false);
+    document.parts.get_mut(&id).unwrap().body.upright = true;
+    let layout = lay(&document);
+    let story = StoryRef::Part(id);
+    let first = Pos { story, path: Path::top(0), off: 0 };
+    let next = Pos { off: 1, ..first.clone() };
+    let a = layout.caret_on(&first, 0).unwrap();
+    let b = layout.caret_on(&next, 0).unwrap();
+    let (x, y) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    assert_eq!(layout.story_at_shown(0, x, y, None), Some(story));
+    assert_eq!(layout.hit_shown(0, x, y, story, None).map(|p| p.off), Some(0));
+}
+
+#[test]
+fn rotated_header_text_is_hit() {
+    let mut document = Document::from_text("Header anchor");
+    let id = turned_box(&mut document, 315.0, false, false);
+    let blocks = std::mem::replace(&mut document.body, Document::from_text("Body probe").body);
+    let header = document.add_part(PartKind::Header, blocks);
+    document.last_section.headers.default = Some(header);
+    let layout = lay(&document);
+    let object = layout.pages[0]
+        .header
+        .iter()
+        .find_map(|item| match item {
+            Placed::Object { rect, text_box: Some(part), .. } if *part == id => Some(*rect),
+            _ => None,
+        })
+        .unwrap();
+    let story = StoryRef::Part(id);
+    let first = Pos { story, path: Path::top(0), off: 0 };
+    let next = Pos { off: 1, ..first.clone() };
+    let a = layout.caret_on(&first, 0).unwrap();
+    let b = layout.caret_on(&next, 0).unwrap();
+    let (x, y) =
+        Spin::new(315.0, false, false).apply(object.x + object.w / 2.0, object.y + object.h / 2.0, a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    assert_eq!(layout.header_footer_text_box_at(0, x, y), Some(id));
+    assert_eq!(layout.hit_shown(0, x, y, story, None).map(|p| p.off), Some(0));
+}
+
+#[test]
+fn move_preview_keeps_text_angle() {
+    for degrees in [0.0, 30.0, 315.0] {
+        for upright in [false, true] {
+            for editing in [false, true] {
+                let mut document = Document::from_text("Body words around it.");
+                let id = turned_box(&mut document, degrees, false, false);
+                document.parts.get_mut(&id).unwrap().body.upright = upright;
+                let layout = lay(&document);
+                let page = &layout.pages[0];
+                let object = layout.find_object(0, |object| object.text_box == Some(id)).unwrap();
+                let source = document.para_at(&object.pos()).unwrap().object_at(object.off).unwrap();
+                let options = display::DisplayOptions { straight: editing.then_some(id), ..Default::default() };
+                let shown = display::page_display(&document, page, &options);
+                let preview = display::object_display(&document, page, source, object.rect, object.text_box, &options);
+                let angles = |draws: &[Draw]| {
+                    let (spins, flat) = glyph_turns(draws);
+                    let mut values: Vec<f32> = spins.into_iter().map(|spin| spin.deg.rem_euclid(360.0)).collect();
+                    values.extend(std::iter::repeat_n(0.0, flat));
+                    values
+                };
+                assert_eq!(angles(&preview), angles(&shown), "degrees={degrees} upright={upright} editing={editing}");
+            }
+        }
+    }
+}
+
+/// Fractional page-relative geometry whose vertical turn loses bits through delta translation.
+fn vertical_spun_doc(direction: TextDirection) -> (Document, u32) {
+    let mut document = Document::from_text("Body");
+    let id = turned_box(&mut document, 30.0, false, false);
+    document.last_section.text_direction = direction;
+    let p = document.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let InlineObject::Shape { float, w, h, .. } = p.objects.last_mut().unwrap() else { panic!() };
+    *w = 151.3;
+    *h = 54.2;
+    float.wrap = Wrap::InFrontOfText;
+    float.h_rel = wordcraft_doc::para::Anchor::Page;
+    float.v_rel = wordcraft_doc::para::Anchor::Page;
+    float.x = 299.6;
+    float.y = 411.9;
+    (document, id)
+}
+
+#[test]
+fn vertical_spun_frames() {
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let (document, id) = vertical_spun_doc(direction);
+        let layout = lay(&document);
+        let object = layout.find_object(0, |o| o.text_box == Some(id)).unwrap();
+        let frames: Vec<_> = layout.pages[0]
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                Placed::Spun { part, rect, .. } if *part == id => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(frames, vec![object.rect; 2], "{direction:?}: both markers use the object's canonical frame");
+    }
+}
+
+#[test]
+fn vertical_spun_hit() {
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let (document, id) = vertical_spun_doc(direction);
+        let layout = lay(&document);
+        let object = layout.find_object(0, |o| o.text_box == Some(id)).unwrap();
+        let story = StoryRef::Part(id);
+        let pos = |off| Pos { story, path: Path::top(0), off };
+        let (a, b) = (layout.caret_on(&pos(13), 0).unwrap(), layout.caret_on(&pos(14), 0).unwrap());
+        let (x, y) = Spin::new(30.0, false, false).apply(
+            object.rect.x + object.rect.w / 2.0,
+            object.rect.y + object.rect.h / 2.0,
+            a.x + (b.x - a.x) * 0.25,
+            a.top + a.height / 2.0,
+        );
+        assert_eq!(layout.hit_shown(0, x, y, story, None).map(|p| p.off), Some(13), "{direction:?}: actual turned character");
+    }
+}
+
+#[test]
+fn vertical_spun_preview() {
+    for direction in [TextDirection::Down, TextDirection::Up] {
+        let (document, id) = vertical_spun_doc(direction);
+        let layout = lay(&document);
+        let page = &layout.pages[0];
+        let object = layout.find_object(0, |o| o.text_box == Some(id)).unwrap();
+        let source = document.para_at(&object.pos()).unwrap().object_at(object.off).unwrap();
+        let options = display::DisplayOptions::default();
+        let preview = display::object_display(&document, page, source, object.rect, object.text_box, &options);
+        assert_eq!(glyph_turns(&preview), glyph_turns(&display::page_display(&document, page, &options)), "{direction:?}");
+    }
+}

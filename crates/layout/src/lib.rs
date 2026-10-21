@@ -298,6 +298,17 @@ pub enum Placed {
         spin: Spin,
         items: Vec<Placed>,
     },
+    /// Opens (`open`) or closes the items of a turned text box: its frame's shape and its
+    /// text, laid out in the unturned frame `rect` and drawn turned by `spin` about the frame's
+    /// centre, as Word does. While story `part` (the text it shows) is being edited, they are
+    /// drawn straight instead (see [`display::DisplayOptions::straight`]). The items between
+    /// stay in the page's list, so carets, selections and searches find the text as ever.
+    Spun {
+        rect: Rect,
+        spin: Spin,
+        part: u32,
+        open: bool,
+    },
     /// A table cell's area (for hit testing and cell selection). A vertically merged cell is
     /// one `Cell` as tall as all its rows; its continuation rows get a `covered` `Cell` (their
     /// own row's height) so the rows keep a box each, but it isn't a cell of its own on screen.
@@ -341,6 +352,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Spun { rect, .. }
             | Placed::Cell { rect, .. } => {
                 rect.x += dx;
                 rect.y += dy;
@@ -398,6 +410,7 @@ impl Placed {
             | Placed::Image { rect, .. }
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
+            | Placed::Spun { rect, .. }
             | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
@@ -1515,6 +1528,7 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
             | Placed::Shape { rect, .. }
             | Placed::Graphic { rect, .. }
             | Placed::Clip { rect, .. }
+            | Placed::Spun { rect, .. }
             | Placed::Cell { rect, .. }
             | Placed::Object { rect, .. }
                 if rect.y < limit =>
@@ -1732,6 +1746,7 @@ fn v_span(it: &Placed) -> (f32, f32) {
         | Placed::Shape { rect, .. }
         | Placed::Graphic { rect, .. }
         | Placed::Clip { rect, .. }
+        | Placed::Spun { rect, .. }
         | Placed::Cell { rect, .. }
         | Placed::Object { rect, .. } => (rect.y, rect.y + rect.h),
         Placed::Rule { y0, y1, .. } => (y0.min(*y1), y0.max(*y1)),
@@ -3254,11 +3269,6 @@ fn place_objects(
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
             };
-            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
-            // Floating ones are drawn here; inline ones with their line.
-            if floating {
-                layer.extend(float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start));
-            }
             let text_box = match obj {
                 InlineObject::Shape { story: Some(id), .. } if ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox) => {
                     Some(*id)
@@ -3267,6 +3277,28 @@ fn place_objects(
             };
             // A box linked from another shows (and edits) that box's story.
             let shown = text_box.map(|id| textbox::shown_story(ctx, id));
+            // A turned text box's text turns with it (Word; its flips leave the text unmirrored):
+            // its frame (a floating one's shape) and text are drawn turned between two markers.
+            let upright = text_box.and_then(|id| ctx.doc.parts.get(&id)).is_some_and(|part| part.body.upright);
+            let turn = Spin::new(float.spin().deg, false, false);
+            let spun = shown.filter(|_| !upright && !turn.is_identity()).map(|part| (Placed::Spun { rect, spin: turn, part, open: true }, part));
+            let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+            if let Some((open, _)) = &spun {
+                layer.push(open.clone());
+            }
+            // Floating ones are drawn here; inline ones with their line.
+            if floating {
+                let mut items = float_items(obj, rect, (Spin::default(), Point::default()), story, path, c.start);
+                if spun.is_some() {
+                    // The turn is the markers'; the shape keeps its flips.
+                    for it in &mut items {
+                        if let Placed::Shape { spin, .. } = it {
+                            *spin = Spin::new(0.0, float.flip_h, float.flip_v);
+                        }
+                    }
+                }
+                layer.extend(items);
+            }
             front.push(Placed::Object {
                 rect,
                 spin: float.spin(),
@@ -3296,6 +3328,10 @@ fn place_objects(
                 let items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
+            }
+            if let Some((_, part)) = spun {
+                let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                layer.push(Placed::Spun { rect, spin: turn, part, open: false });
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
             if pinned.is_some() {
@@ -4321,7 +4357,8 @@ fn placed_intersects(item: &Placed, rect: &Rect) -> bool {
         | Placed::Graphic { rect: bounds, .. }
         | Placed::Cell { rect: bounds, .. }
         | Placed::Object { rect: bounds, .. }
-        | Placed::Clip { rect: bounds, .. } => bounds.intersects(rect),
+        | Placed::Clip { rect: bounds, .. }
+        | Placed::Spun { rect: bounds, .. } => bounds.intersects(rect),
         Placed::Rule { x0, y0, x1, y1, .. } => Rect::new(x0.min(*x1), y0.min(*y1), (x1 - x0).abs(), (y1 - y0).abs()).intersects(rect),
     }
 }
