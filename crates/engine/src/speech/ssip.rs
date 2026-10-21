@@ -522,8 +522,8 @@ pub(super) fn list_voices(stream: &Stream) -> std::io::Result<Vec<(String, Strin
     let mut out = Vec::new();
     let start = Instant::now();
     loop {
-        match c.lines.next()? {
-            Some(line) => match final_code(&line) {
+        if let Some(line) = c.lines.next()? {
+            match final_code(&line) {
                 Some(code) if (700..800).contains(&code) => {}
                 Some(code) => {
                     ok(code)?;
@@ -536,9 +536,11 @@ pub(super) fn list_voices(stream: &Stream) -> std::io::Result<Vec<(String, Strin
                         out.push(v);
                     }
                 }
-            },
-            None if start.elapsed() > REPLY_TIMEOUT => return Err(ErrorKind::TimedOut.into()),
-            None => {}
+            }
+        }
+        // Also while lines keep coming: a server that never ends the list can't hold it up.
+        if start.elapsed() > REPLY_TIMEOUT {
+            return Err(ErrorKind::TimedOut.into());
         }
     }
     let _ = c.w.write_all(b"QUIT\r\n");
@@ -924,6 +926,24 @@ mod tests {
         });
         let v = list_voices(&Stream::Unix(client)).unwrap();
         assert_eq!(v, [("Afrikaans".to_string(), "af".to_string()), ("Hungarian".to_string(), "hu".to_string())]);
+        h.join().unwrap();
+    }
+
+    #[test]
+    fn a_voice_list_without_an_end_times_out() {
+        let (client, mut srv) = UnixStream::pair().unwrap();
+        let h = std::thread::spawn(move || {
+            let mut r = BufReader::new(srv.try_clone().unwrap());
+            let mut line = String::new();
+            r.read_line(&mut line).unwrap();
+            srv.write_all(b"208 OK CLIENT NAME SET\r\n").unwrap();
+            while srv.write_all(b"249-Hungarian\thu\tnone\r\n").is_ok() {}
+        });
+        let start = Instant::now();
+        let client = Stream::Unix(client);
+        assert_eq!(list_voices(&client).unwrap_err().kind(), ErrorKind::TimedOut);
+        assert!(start.elapsed() < REPLY_TIMEOUT * 3, "{:?}", start.elapsed());
+        drop(client);
         h.join().unwrap();
     }
 

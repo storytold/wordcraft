@@ -264,7 +264,7 @@ fn script_language(primary: &str) -> Option<&'static str> {
         "th" => "th",
         "ko" => "ko",
         "ja" => "ja",
-        "zh" => "zh",
+        "zh" | "cmn" | "yue" => "zh",
         _ => return None,
     })
 }
@@ -307,10 +307,17 @@ fn voice_language(lang: Option<&str>, default: &str) -> Option<String> {
 /// (espeak's default voice), and `--stdin`.
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
 fn espeak_args(wpm: &str, lang: Option<&str>) -> Vec<String> {
+    espeak_voice_args(wpm, voice_language(lang, "en").as_deref())
+}
+
+/// The arguments of `espeak-ng`/`espeak` with `voice` (a language or a voice file, `urj/hu`),
+/// left out unless it is a plain name that can't be taken for an option.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn espeak_voice_args(wpm: &str, voice: Option<&str>) -> Vec<String> {
     let mut a = vec!["-s".to_string(), wpm.to_string()];
-    if let Some(p) = voice_language(lang, "en") {
+    if let Some(v) = voice.filter(|v| !v.is_empty() && !v.starts_with('-') && !v.chars().any(|c| c.is_control() || c.is_whitespace())) {
         a.push("-v".into());
-        a.push(p);
+        a.push(v.to_string());
     }
     a.push("--stdin".into());
     a
@@ -409,7 +416,7 @@ fn mac_default_voice_language() -> &'static str {
 mod ssip;
 
 /// Longest voice id kept (ids come from saved settings and commands, hostile input).
-const MAX_VOICE_ID: usize = 200;
+pub(crate) const MAX_VOICE_ID: usize = 200;
 
 /// Which speech program a [`Voice`] belongs to.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -442,36 +449,60 @@ impl Voice {
     }
 }
 
-/// The chosen voice, when it suits the sentence: the sentence has no language, or the voice's
-/// language is the sentence's (the primary subtags match). A sentence in another language keeps
-/// the voice of its language, so a Hungarian voice doesn't read a Russian quotation.
+/// The chosen voice, when it suits the sentence: the sentence has no language, or its language is
+/// written in the voice's script. A sentence in another script keeps the voice of its language, so
+/// a Hungarian voice doesn't spell out a Russian quotation letter by letter; Latin text is the
+/// chosen voice's whatever its tag, since the tag is often only the default: Word and new
+/// documents tag every run `en-US`, Hungarian text included.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>) -> Option<&'a Voice> {
     let voice = voice?;
-    let Some(sentence) = lang.and_then(primary_tag) else { return Some(voice) };
-    let own = voice.lang.split(['-', '_']).next().unwrap_or("").to_ascii_lowercase();
-    (own == sentence).then_some(voice)
+    // The voice's language as the program writes it: `hu`, `en-gb`, `ru_RU`, `cmn-latn-pinyin`.
+    let script = |tag: &str| primary_tag(tag.split(['-', '_']).next().unwrap_or("")).map(|p| script_language(&p));
+    let Some(sentence) = lang.and_then(script) else { return Some(voice) };
+    (script(&voice.lang).flatten() == sentence).then_some(voice)
 }
 
 /// The voices in `espeak-ng --voices`' `listing`: a header, then `Pty Language Age/Gender
-/// VoiceName File Other…` per voice. MBROLA voices (`mb/…`) are left out unless `mbrola` is
-/// installed, since espeak-ng can't speak them without it.
+/// VoiceName File Other…` per voice. espeak-ng lists every MBROLA voice (`mb/mb-hu1`) it has a
+/// voice file for, but speaks one only with the `mbrola` program and the voice's database
+/// installed; `mbrola(database)` says whether both are (`hu1` for `mb/mb-hu1` and `mb/mb-hu1-en`).
 #[cfg(any(all(unix, not(target_os = "macos")), test))]
-fn espeak_voices(listing: &str, mbrola: bool) -> Vec<Voice> {
+fn espeak_voices(listing: &str, mbrola: &dyn Fn(&str) -> bool) -> Vec<Voice> {
     listing
         .lines()
         .skip(1)
         .filter_map(|line| {
             let f: Vec<&str> = line.split_whitespace().collect();
             let (lang, name, file) = (f.get(1)?, f.get(3)?, f.get(4)?);
-            (mbrola || !file.starts_with("mb/")).then(|| Voice {
-                id: file.to_string(),
-                name: name.replace('_', " "),
-                lang: lang.to_string(),
-                kind: VoiceKind::Espeak,
-            })
+            let speakable = match file.strip_prefix("mb/") {
+                Some(mb) => mb
+                    .strip_prefix("mb-")
+                    .and_then(|v| v.split('-').next())
+                    .is_some_and(|db| !db.is_empty() && db.chars().all(|c| c.is_ascii_alphanumeric()) && mbrola(db)),
+                None => true,
+            };
+            speakable.then(|| Voice { id: file.to_string(), name: name.replace('_', " "), lang: lang.to_string(), kind: VoiceKind::Espeak })
         })
         .collect()
+}
+
+/// Is MBROLA voice `database` installed in one of `data_dirs` (`XDG_DATA_DIRS`, else
+/// `/usr/local/share:/usr/share`), where espeak-ng looks for it: `mbrola/<db>`,
+/// `mbrola/<db>/<db>` or `mbrola/voices/<db>`?
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn mbrola_database(database: &str, data_dirs: Option<&std::ffi::OsStr>) -> bool {
+    let dirs = data_dirs.filter(|d| !d.is_empty()).unwrap_or("/usr/local/share:/usr/share".as_ref());
+    std::env::split_paths(dirs).any(|d| {
+        let m = d.join("mbrola");
+        [m.join(database), m.join(database).join(database), m.join("voices").join(database)].iter().any(|p| p.is_file())
+    })
+}
+
+/// Is `program` a file in one of the `PATH` folders?
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn on_path(program: &str) -> bool {
+    std::env::var_os("PATH").is_some_and(|p| std::env::split_paths(&p).any(|d| d.join(program).is_file()))
 }
 
 /// The voices in the Windows listing ([`WINDOWS_VOICES`]): `name<TAB>culture` per line.
@@ -491,9 +522,11 @@ fn windows_voices(listing: &str) -> Vec<Voice> {
         .collect()
 }
 
-/// PowerShell that lists the enabled Windows voices, one `name<TAB>culture` per line.
+/// PowerShell that lists the enabled Windows voices, one `name<TAB>culture` per line, in UTF-8
+/// (PowerShell writes its output in the console's code page otherwise, and accented voice names
+/// would come out garbled).
 #[cfg(any(target_os = "windows", test))]
-const WINDOWS_VOICES: &str = "Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name + [char]9 + $_.VoiceInfo.Culture.Name }";
+const WINDOWS_VOICES: &str = "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; Add-Type -AssemblyName System.Speech; (New-Object System.Speech.Synthesis.SpeechSynthesizer).GetInstalledVoices() | Where-Object { $_.Enabled } | ForEach-Object { $_.VoiceInfo.Name + [char]9 + $_.VoiceInfo.Culture.Name }";
 
 /// Ask the system which voices it has (desktop only; nothing in tests or with speech off).
 #[cfg(not(target_arch = "wasm32"))]
@@ -523,10 +556,12 @@ fn list_voices() -> Vec<Voice> {
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
-        let mbrola = run("mbrola".as_ref(), &["-h"]).is_some();
+        let mbrola = on_path("mbrola");
+        let data_dirs = std::env::var_os("XDG_DATA_DIRS");
+        let database = |db: &str| mbrola && mbrola_database(db, data_dirs.as_deref());
         for prog in ["espeak-ng", "espeak"] {
             if let Some(l) = run(prog.as_ref(), &["--voices"]) {
-                return espeak_voices(&l, mbrola);
+                return espeak_voices(&l, &database);
             }
         }
         let listed = match ssip::connect(&|| false) {
@@ -542,39 +577,71 @@ fn list_voices() -> Vec<Voice> {
     Vec::new()
 }
 
+/// How long an empty voice list stands before the system is asked again: a speech server may
+/// still have been starting, or a speech program may be installed meanwhile.
 #[cfg(not(target_arch = "wasm32"))]
-static VOICES: std::sync::OnceLock<Vec<Voice>> = std::sync::OnceLock::new();
+const VOICES_RETRY: std::time::Duration = std::time::Duration::from_secs(10);
+/// Longest wait of a sentence for the voice list, when a voice is chosen.
+#[cfg(not(target_arch = "wasm32"))]
+const VOICE_WAIT: std::time::Duration = std::time::Duration::from_secs(10);
 
-/// The installed voices, asked once; waits for the answer (the speech worker uses it).
+/// The voice list and when it was last asked for.
 #[cfg(not(target_arch = "wasm32"))]
-fn installed_voices_blocking() -> &'static [Voice] {
-    VOICES.get_or_init(list_voices)
+struct VoiceList {
+    voices: Option<Arc<[Voice]>>,
+    asked: Option<std::time::Instant>,
+    asking: bool,
 }
 
-/// The installed voices, or `None` while the system is still being asked: the first call starts
-/// asking on a thread, so a settings page never waits on a slow speech program.
-pub fn installed_voices() -> Option<&'static [Voice]> {
+#[cfg(not(target_arch = "wasm32"))]
+static VOICES: Mutex<VoiceList> = Mutex::new(VoiceList { voices: None, asked: None, asking: false });
+
+/// The installed voices, or `None` while the system is asked for the first time. Asking happens
+/// on a thread, so neither a settings page nor the speech worker waits on a slow speech program;
+/// an empty list is asked for again after [`VOICES_RETRY`].
+pub fn installed_voices() -> Option<Arc<[Voice]>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Some(v) = VOICES.get() {
-            return Some(v);
+        let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+        let empty = l.voices.as_ref().is_none_or(|v| v.is_empty());
+        if empty && !l.asking && l.asked.is_none_or(|t| t.elapsed() >= VOICES_RETRY) {
+            l.asking = true;
+            l.asked = Some(std::time::Instant::now());
+            let asked = std::thread::Builder::new().name("read-aloud-voices".into()).spawn(|| {
+                let found: Arc<[Voice]> = list_voices().into();
+                let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+                l.voices = Some(found);
+                l.asking = false;
+            });
+            if asked.is_err() {
+                l.asking = false;
+                l.voices.get_or_insert_with(|| Arc::new([]));
+            }
         }
-        static ASKED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-        if !ASKED.swap(true, std::sync::atomic::Ordering::SeqCst)
-            && std::thread::Builder::new()
-                .name("read-aloud-voices".into())
-                .spawn(|| {
-                    let _ = installed_voices_blocking();
-                })
-                .is_err()
-        {
-            return Some(installed_voices_blocking());
-        }
-        None
+        l.voices.clone()
     }
     #[cfg(target_arch = "wasm32")]
     {
-        Some(&[])
+        Some(Arc::new([]))
+    }
+}
+
+/// The installed voice `id`, waiting while the list is asked for the first time, but no longer
+/// than [`VOICE_WAIT`]; `Err` as soon as reading moves on.
+#[cfg(not(target_arch = "wasm32"))]
+fn chosen_voice(id: &str, changed: &dyn Fn() -> bool) -> Result<Option<Voice>, ()> {
+    let until = std::time::Instant::now() + VOICE_WAIT;
+    loop {
+        if let Some(list) = installed_voices() {
+            return Ok(list.iter().find(|v| v.id == id).cloned());
+        }
+        if changed() {
+            return Err(());
+        }
+        if std::time::Instant::now() >= until {
+            return Ok(None);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
     }
 }
 
@@ -963,6 +1030,9 @@ impl ReadAloud {
     /// choice from another machine) is simply not used.
     pub fn set_voice(&mut self, voice: Option<&str>) {
         let v = voice.map(str::trim).filter(|v| !v.is_empty() && v.len() <= MAX_VOICE_ID).map(str::to_string);
+        if self.voice() == v {
+            return;
+        }
         if self.state() == State::Playing {
             self.change(|s| s.voice = v);
         } else {
@@ -1083,10 +1153,10 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
         }
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
-            Backend::System => {
-                let voice = voice.as_deref().and_then(|id| installed_voices_blocking().iter().find(|v| v.id == id));
-                speak(&text, lang.as_deref(), voice_for(voice, lang.as_deref()), rate, &changed)
-            }
+            Backend::System => match voice.as_deref().map(|id| chosen_voice(id, &changed)).transpose() {
+                Ok(chosen) => speak(&text, lang.as_deref(), voice_for(chosen.flatten().as_ref(), lang.as_deref()), rate, &changed),
+                Err(()) => Spoken::Interrupted,
+            },
             Backend::Instant => Spoken::Done,
             Backend::Hold => {
                 let mut s = lock(m);
@@ -1251,7 +1321,7 @@ fn speak_with(text: &str, lang: Option<&str>, voice: Option<&Voice>, rate: f32, 
         let programs: &[&str] = if NO_ESPEAK.get() { &[] } else { &["espeak-ng", "espeak"] };
         for prog in programs {
             let args = match chosen(VoiceKind::Espeak) {
-                Some(id) => vec!["-s".to_string(), wpm.clone(), "-v".into(), id.to_string(), "--stdin".into()],
+                Some(id) => espeak_voice_args(&wpm, Some(id)),
                 None => espeak_args(&wpm, lang),
             };
             let voiced = args.iter().any(|a| a == "-v");

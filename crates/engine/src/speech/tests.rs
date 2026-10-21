@@ -342,22 +342,50 @@ fn espeak_gets_the_language() {
     assert_eq!(espeak_args("180", None), ["-s", "180", "--stdin"]);
     assert_eq!(espeak_args("180", Some("--evil")), ["-s", "180", "--stdin"]);
     assert_eq!(espeak_args("180", Some("hu-HU")), ["-s", "180", "-v", "hu", "--stdin"]);
+    // A chosen voice goes the same way, never as an option of its own.
+    assert_eq!(espeak_voice_args("180", Some("urj/hu")), ["-s", "180", "-v", "urj/hu", "--stdin"]);
+    assert_eq!(espeak_voice_args("180", Some("--version")), ["-s", "180", "--stdin"]);
+    assert_eq!(espeak_voice_args("180", Some("a b")), ["-s", "180", "--stdin"]);
 }
 
 #[test]
 fn installed_voices_are_read_from_each_listing() {
     let espeak = " Pty Language       Age/Gender VoiceName          File                 Other Languages\n 5  hu              --/M      Hungarian          urj/hu               \n 2  en-gb           --/M      English_(Great_Britain) gmw/en               (en 2)\n 7  hu              --/F      hungarian-mbrola-1 mb/mb-hu1            \n\n";
-    let v = espeak_voices(espeak, false);
-    assert_eq!(v.len(), 2, "MBROLA voices need mbrola: {v:?}");
+    let v = espeak_voices(espeak, &|_| false);
+    assert_eq!(v.len(), 2, "MBROLA voices need mbrola and their database: {v:?}");
     assert_eq!(v[0], Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak });
     assert_eq!(v[1].name, "English (Great Britain)");
-    assert_eq!(espeak_voices(espeak, true).len(), 3);
+    assert_eq!(espeak_voices(espeak, &|db| db == "hu1").len(), 3);
+    assert_eq!(espeak_voices(espeak, &|db| db == "de4").len(), 2, "only the voices whose database is there");
     let win = "Microsoft Szabolcs\thu-HU\r\nMicrosoft Zira Desktop\ten-US\r\n\tbroken\r\n";
     let v = windows_voices(win);
     assert_eq!(v.len(), 2);
     assert_eq!((v[0].id.as_str(), v[0].lang.as_str()), ("Microsoft Szabolcs", "hu-HU"));
     assert!(WINDOWS_VOICES.contains("GetInstalledVoices"));
-    assert!(espeak_voices("", false).is_empty() && windows_voices("").is_empty());
+    // Voice names arrive in UTF-8, not in the console's code page.
+    assert!(WINDOWS_VOICES.starts_with("[Console]::OutputEncoding = [System.Text.Encoding]::UTF8;"), "{WINDOWS_VOICES}");
+    assert!(espeak_voices("", &|_| true).is_empty() && windows_voices("").is_empty());
+}
+
+#[test]
+fn an_mbrola_voice_is_listed_only_with_its_database() {
+    // espeak-ng's own places: `mbrola/<db>`, `mbrola/<db>/<db>` and `mbrola/voices/<db>`.
+    let root = std::env::temp_dir().join(format!("wordcraft-mbrola-{}", std::process::id()));
+    let (a, b) = (root.join("a"), root.join("b"));
+    std::fs::create_dir_all(a.join("mbrola").join("hu1")).unwrap();
+    std::fs::create_dir_all(b.join("mbrola").join("voices")).unwrap();
+    std::fs::create_dir_all(b.join("mbrola").join("en1")).unwrap();
+    std::fs::write(a.join("mbrola").join("hu1").join("hu1"), b"").unwrap();
+    std::fs::write(b.join("mbrola").join("voices").join("de4"), b"").unwrap();
+    let dirs = std::env::join_paths([&a, &b]).unwrap();
+    assert!(mbrola_database("hu1", Some(&dirs)));
+    assert!(mbrola_database("de4", Some(&dirs)));
+    assert!(!mbrola_database("en1", Some(&dirs)), "a folder without the database");
+    assert!(!mbrola_database("fr1", Some(&dirs)));
+    let listing = " Pty Language Age/Gender VoiceName File Other\n 7 hu --/F hungarian-mbrola-1 mb/mb-hu1\n 6 en --/M german-mbrola-4-en mb/mb-de4-en\n 5 en --/M english-mb-en1 mb/mb-en1\n 5 xx --/M odd mb/../../x\n";
+    let ids: Vec<String> = espeak_voices(listing, &|db| mbrola_database(db, Some(&dirs))).into_iter().map(|v| v.id).collect();
+    assert_eq!(ids, ["mb/mb-hu1", "mb/mb-de4-en"]);
+    let _ = std::fs::remove_dir_all(&root);
 }
 
 #[test]
@@ -370,6 +398,26 @@ fn a_chosen_voice_reads_its_own_language() {
     let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
     assert_eq!(voice_for(Some(&gb), Some("en-US")), Some(&gb));
     assert_eq!(voice_for(None, Some("hu")), None);
+    // Text in another script than the voice's keeps its language's voice, either way round.
+    let ru = Voice { id: "Milena".into(), name: "Milena".into(), lang: "ru_RU".into(), kind: VoiceKind::Mac };
+    assert_eq!(voice_for(Some(&ru), Some("ru")), Some(&ru));
+    assert_eq!(voice_for(Some(&ru), Some("uk-UA")), Some(&ru), "the same script");
+    assert_eq!(voice_for(Some(&ru), Some("en-US")), None, "English text keeps an English voice");
+    let cmn = Voice { id: "sit/cmn".into(), name: "Chinese (Mandarin)".into(), lang: "cmn".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&cmn), Some("zh")), Some(&cmn));
+    assert_eq!(voice_for(Some(&cmn), Some("en-US")), None);
+}
+
+#[test]
+fn a_chosen_voice_reads_text_tagged_with_the_default_language() {
+    // A new document (and almost every Word file) tags every run `en-US`, Hungarian text too:
+    // the chosen Hungarian voice reads it, and only the Russian sentence gets its own voice.
+    let doc = Document::from_text("Jó reggelt kívánok. Привет, как дела?");
+    let s = sentences(&doc, &Pos::body(0, 0), None, true);
+    assert_eq!(s.iter().map(|u| u.lang.as_deref()).collect::<Vec<_>>(), [Some("en-US"), Some("ru")]);
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    assert_eq!(voice_for(Some(&hu), s[0].lang.as_deref()), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), s[1].lang.as_deref()), None);
 }
 
 #[test]
@@ -385,6 +433,16 @@ fn the_chosen_voice_is_kept_and_reported() {
     assert_eq!(r.voice(), None, "an overlong id is dropped");
     r.set_voice(None);
     assert_eq!(r.voice(), None);
+    // During reading a new voice restarts the sentence; the same voice again doesn't.
+    r.backend = Backend::Hold;
+    r.start(sentences(&Document::from_text("One. Two."), &Pos::body(0, 0), None, true));
+    let generation = |r: &ReadAloud| lock(&r.shared.0).generation;
+    let before = generation(&r);
+    r.set_voice(Some("urj/hu"));
+    assert_eq!(generation(&r), before + 1);
+    r.set_voice(Some(" urj/hu "));
+    assert_eq!(generation(&r), before + 1, "the same voice: the sentence goes on");
+    r.stop();
 }
 
 #[test]

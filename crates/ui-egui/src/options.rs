@@ -578,7 +578,7 @@ fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
             if ui.selectable_label(chosen.is_none(), tl!("Automatic")).clicked() {
                 pick = Some(None);
             }
-            for v in voices {
+            for v in voices.iter() {
                 if ui.selectable_label(chosen.as_deref() == Some(v.id.as_str()), label(v)).clicked() {
                     pick = Some(Some(v.id.clone()));
                 }

@@ -98,15 +98,17 @@ fn speed(s: &mut Session, v: &Value) -> CmdResult {
 /// and the chosen one, so without `value` it only lists them; `pending` is true while the system
 /// is still being asked: ask again shortly.
 fn voice(s: &mut Session, v: &Value) -> CmdResult {
-    match v.get("value").or_else(|| v.get("voice")) {
+    match v.get("value") {
         None => {}
         Some(Value::Null) => s.read_aloud.set_voice(None),
-        Some(Value::String(id)) => s.read_aloud.set_voice(Some(id)),
-        Some(_) => return Err(CmdError::Params("`value` must be a voice id (string) or null".into())),
+        Some(Value::String(id)) if !id.trim().is_empty() && id.trim().len() <= speech::MAX_VOICE_ID => s.read_aloud.set_voice(Some(id)),
+        Some(_) => {
+            return Err(CmdError::Params(format!("`value` must be a voice id from the list (1 to {} bytes) or null", speech::MAX_VOICE_ID)));
+        }
     }
     let list = speech::installed_voices();
     Ok(serde_json::json!({
-        "voices": list.unwrap_or_default().iter().map(speech::Voice::to_json).collect::<Vec<_>>(),
+        "voices": list.as_deref().unwrap_or_default().iter().map(speech::Voice::to_json).collect::<Vec<_>>(),
         "pending": list.is_none(),
         "voice": s.read_aloud.voice(),
     }))
@@ -246,6 +248,11 @@ mod tests {
         assert_eq!(s.run("readAloud.status", &json!({})).unwrap()["voice"], "urj/hu");
         assert_eq!(s.run("readAloud.voice", &json!({"value": null})).unwrap()["voice"], serde_json::Value::Null);
         assert!(s.run("readAloud.voice", &json!({"value": 7})).is_err());
+        // A blank or overlong id is an error, not a silent switch to Automatic.
+        for bad in [json!(" "), json!("x".repeat(201))] {
+            assert!(s.run("readAloud.voice", &json!({"value": bad})).is_err());
+        }
+        assert_eq!(s.run("readAloud.voice", &json!({"voice": "urj/hu"})).unwrap()["voice"], serde_json::Value::Null, "only `value` sets it");
         // Pressing Read Aloud again pauses, then carries on.
         assert_eq!(s.run("review.readAloud", &json!({})).unwrap()["state"], "paused");
         assert_eq!(s.run("readAloud.playPause", &json!({})).unwrap()["state"], "playing");
