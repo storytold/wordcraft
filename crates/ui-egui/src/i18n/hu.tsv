@@ -1462,7 +1462,7 @@
 	Allow Latin text to wrap in the middle of a word	A latin betűs szöveg szó közben is törhet
 	Apply Asian line-breaking rules (kinsoku)	Ázsiai sortörési szabályok alkalmazása (kinsoku)
 	Asian Typography	Ázsiai tipográfia
-	Click a border between two cells to merge them. Esc stops.	Két cella egyesítéséhez kattints a köztük lévő szegélyre. Kilépés: Esc.
+	Click a border, or drag across borders, to erase them. Esc stops.	A szegélyek törléséhez kattints egy szegélyre, vagy húzd át a mutatót a szegélyeken. Kilépés: Esc.
 	Compress punctuation at the start of a line	Írásjelek tömörítése a sor elején
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Táblázat rajzolásához húzz egy téglalapot, a cellák felosztásához húzz vonalat rajtuk keresztül. Kilépés: Esc.
 	Draw Table	Táblázat rajzolása

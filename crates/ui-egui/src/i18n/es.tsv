@@ -256,7 +256,7 @@
 	Clear Character Style	Borrar estilo de carácter
 	Clear Formatting Level	Borrar nivel de formato
 	Clear Paragraph Formatting	Borrar formato de párrafo
-	Click a border between two cells to merge them. Esc stops.	Haz clic en un borde entre dos celdas para combinarlas. Esc termina.
+	Click a border, or drag across borders, to erase them. Esc stops.	Haz clic en un borde o arrastra sobre los bordes para borrarlos. Esc termina.
 	Clipboard	Portapapeles
 	Clipboard Pane	Panel del portapapeles
 	Clipboard Items	Elementos del portapapeles

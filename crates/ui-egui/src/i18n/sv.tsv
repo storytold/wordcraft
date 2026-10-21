@@ -249,7 +249,7 @@
 	Clear Character Style	Rensa teckenstil
 	Clear Formatting Level	Rensa formateringsnivå
 	Clear Paragraph Formatting	Rensa styckeformatering
-	Click a border between two cells to merge them. Esc stops.	Klicka på en kantlinje mellan två celler för att sammanfoga dem. Esc avslutar.
+	Click a border, or drag across borders, to erase them. Esc stops.	Klicka på en kantlinje eller dra över kantlinjer för att radera dem. Esc avslutar.
 	Clipboard	Urklipp
 	Clipboard Pane	Urklippspanel
 	Clipboard Items	Objekt i Urklipp

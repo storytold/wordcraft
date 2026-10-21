@@ -198,7 +198,7 @@
 	Clear Character Style	Xóa kiểu ký tự
 	Clear Formatting Level	Xóa cấp độ định dạng
 	Clear Paragraph Formatting	Xóa định dạng đoạn
-	Click a border between two cells to merge them. Esc stops.	Nhấp vào đường viền giữa hai ô để gộp. Nhấn Esc để hủy.
+	Click a border, or drag across borders, to erase them. Esc stops.	Nhấp vào đường viền hoặc kéo qua các đường viền để xóa. Nhấn Esc để hủy.
 	Clipboard	Bảng tạm
 	Clipboard Pane	Ngăn bảng tạm
 	Clipboard Items	Các mục trong bảng tạm

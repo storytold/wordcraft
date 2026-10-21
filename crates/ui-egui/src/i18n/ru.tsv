@@ -1467,7 +1467,7 @@ preview	Title	Пример
 	Allow Latin text to wrap in the middle of a word	Разрешить перенос латинского текста посреди слова
 	Apply Asian line-breaking rules (kinsoku)	Применять азиатские правила переноса строк (кинсоку)
 	Asian Typography	Азиатская типографика
-	Click a border between two cells to merge them. Esc stops.	Щёлкните границу между двумя ячейками, чтобы объединить их. Esc — завершить.
+	Click a border, or drag across borders, to erase them. Esc stops.	Щёлкните границу или проведите по границам, чтобы стереть их. Esc — завершить.
 	Compress punctuation at the start of a line	Сжимать пунктуацию в начале строки
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Нарисуйте прямоугольник, чтобы создать таблицу, или линию поперёк ячеек, чтобы разделить их. Esc — завершить.
 	Draw Table	Нарисовать таблицу
