@@ -564,10 +564,18 @@ impl Paragraph {
         let off = self.clamp(off);
         let at_off = self.text.get(off..).and_then(|t| t.chars().next());
         let before_off = self.text.get(..off).and_then(|t| t.chars().next_back());
-        if at_off.is_some_and(crate::cluster::is_thai_lao) || before_off.is_some_and(crate::cluster::is_thai_lao) {
+        // Use ICU4X Thai/Lao segmentation when the character AT the cursor is Thai/Lao, or when
+        // the cursor sits on a space or end-of-text and the preceding character is Thai/Lao.
+        // Never route to thai_word_at when the cursor is on a Latin/other script character (e.g.
+        // the first letter of "test" in "ไทยtest" must select the Latin word, not the Thai one).
+        let use_thai = at_off.is_some_and(crate::cluster::is_thai_lao)
+            || (at_off.map_or(true, |c| c == ' ') && before_off.is_some_and(crate::cluster::is_thai_lao));
+        if use_thai {
             return crate::cluster::thai_word_at(&self.text, off);
         }
-        let is_w = |c: char| crate::bidi::is_word_char(c);
+        // Thai/Lao chars satisfy is_alphanumeric, so exclude them from the Latin scan — they act
+        // as a script boundary (the Thai path above handles them).
+        let is_w = |c: char| crate::bidi::is_word_char(c) && !crate::cluster::is_thai_lao(c);
         let mut a = off;
         for (i, c) in self.text.get(..off).unwrap_or("").char_indices().rev() {
             if !is_w(c) {
@@ -798,6 +806,12 @@ mod tests {
         assert_eq!(p.sentence_at(3), (0, 21));
         assert_eq!(p.next_boundary(0), 1);
         assert_eq!(p.prev_boundary(0), 0);
+        // Mixed Thai/Latin: cursor at the first byte of "test" must select the Latin word, not
+        // the preceding Thai word.  "ไทย" is 9 bytes; byte 9 is 't'.
+        let mixed = Paragraph::with_text("ไทยtest", CharProps::default());
+        assert_eq!(mixed.word_at(9), (9, 13), "cursor on 't' selects Latin word, not ไทย");
+        // Cursor inside Thai → Thai word.
+        assert_eq!(mixed.word_at(3), (0, 9), "cursor inside Thai → Thai word");
     }
 
     proptest::proptest! {
