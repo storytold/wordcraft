@@ -190,6 +190,9 @@ No overall parity estimate changes from these probes.
 | Large real-world documents (500+ pages, many pictures) | not measured | | gap |
 | Scrolling a 1,096-page document that is one 5,300-row table (#811) | ~2.4 ms idle, ~4.5 ms median scroll frame (was ~600 ms); opening still lays out for ~4–8 s | not measured | measured 2026-10-12, release, headless (`tests_perf::big_table_scroll_bench`) |
 
+## Final row closing strokes
+
+Unmerged, non-exact final rows paint their closing border inside the reserved band, including whole rows and repeated page continuations. Original fixtures cover automatic and minimum heights, multiple stroke widths and cell margins. Closing rules retain their owning cell and item index through splits. Unrotated nested exact rows keep their closing rule on the page where that row starts, even when it ends outside the page. They do not acquire a continuation rule. Other row types keep their border offsets. Row sizing and fit decisions are unchanged. Native Word for Mac 16.113.2 controls confirm the bounded rule. Separate pagination and stroke-thickness differences remain, including an existing roughly 2pt exact-row stroke-placement difference in the nested control.
 TOC refresh includes heading and outline paragraphs inside tables, including nested cells. Links and page numbers retain their full paragraph paths when entries move body blocks. The existing link picker still accepts top-level heading block indices.
 
 Explicit DrawingML preset and custom outline dashes retain their stroke-width units on import
@@ -214,6 +217,8 @@ Page-relative footer tables keep their physical wrap bounds without adding to fo
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | trivial | Preserve nested exact-row closing-rule anchors through outer row splits, as observed in a native mode15 control. |
+| 2026-10-16 | trivial | Keep unmerged, non-exact final-row closing strokes inside their reserved bands and preserve closing-rule ownership through splits. |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
 | 2026-10-16 | trivial | Table row keep-next uses the first paragraph of the first cell, including inherited flags. Kept row chains start on a fresh page when the following row cannot start below them. Synthetic Word export covers mixed-cell flags, multiple paragraphs and kept prefixes before oversized followers. |
