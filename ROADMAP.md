@@ -140,7 +140,12 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-19: Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey.
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
+- Complete percentage rows rounded down by one OOXML unit now set table widths. Shared cell boundaries retain spans and reject conflicts.
+
 | Date | What landed |
+| --- | --- |
+| 2026-10-19 | Reject complete percentage rows above 100% beyond float roundoff; restore progress-table structure. |
+| 2026-10-17 | Complete rounded percentage rows replace stale table grids |
 | 2026-10-19 | Save As, Export and Open no longer do nothing on Linux desktops whose file chooser portal fails to show its dialog (#2999): a "cancel" quicker than anyone could make one asks again without the parent window, then opens the built-in file browser. |
 | 2026-10-18 | Long navigation headings wrap onto further lines inside the resizable pane instead of ending in an ellipsis: the row grows with the text and the pane keeps its width (#759, #3015). |
 | 2026-10-18 | Clearing a font query with no matches keeps Recently Used Fonts visible at the top of a scrollable list. The initial scroll position no longer skips its heading; measured keyboard scrolling is unchanged (#2068). |

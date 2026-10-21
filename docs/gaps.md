@@ -98,6 +98,8 @@ The same gaps grouped the way the parity documents are, for agents working in on
 - **Localization gaps:** #8, #11, #16, #17; native-speaker review of every catalog (human).
 - **Stability and performance gaps:** #3, #20.
 
+Complete positive percentage rows rounded down by at most one fiftieth-percent unit keep their preferred widths. Shared boundaries retain horizontal spans and reject missing or conflicting preferences. Larger deficits and totals above 100% beyond floating-point roundoff retain the existing grid. Original native Word controls cover the rounding case; automatic widths and conflicting preferences remain separate parity gaps.
+
 The Language dialog reads effective character formatting, including document defaults, paragraph styles and character styles. Accepting it unchanged keeps inherited language and no-proof choices (#2717); explicit direct formatting still takes precedence. Other proofing and Windows-specific reports remain separate.
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
@@ -106,6 +108,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | minor | Reject complete percentage rows above 100% beyond float roundoff before solving cell boundaries. |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | Font list starts at its first row after clearing a no-match query; recent heading remains visible (#2068) |
@@ -132,6 +135,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-15 | trivial | Numbered headings (#1793): heading-linked Multilevel List presets; numbering keeps heading styles. Not a ranked gap; style gallery previews without numbers remain |
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
 | 2026-10-16 | trivial | #17: automatic space between Asian text and Latin text or digits laid out (#2358) |
+| 2026-10-17 | trivial | Complete rounded percentage rows replace stale table grids |
 | 2026-10-14 | trivial | Gap 19: RTF export writes sections (ODT export landed too) |
 | 2026-10-14 | trivial | #19 narrowed: ODT export done (master page and page layout per section, columned `text:section`s) |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
