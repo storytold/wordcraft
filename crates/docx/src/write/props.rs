@@ -497,6 +497,8 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
+    } else if let Some(m) = &t.partial_cell_margins {
+        margin_sides(w, "w:tblCellMar", m);
     }
     let look = look_attrs(&t.look);
     let refs: Vec<(&str, &str)> = look.iter().map(|(k, v)| (*k, v.as_str())).collect();
@@ -552,6 +554,8 @@ fn tblprex(w: &mut W, t: &TableProps) {
     }
     if let Some(m) = &t.cell_margins {
         margins(w, "w:tblCellMar", m);
+    } else if let Some(m) = &t.partial_cell_margins {
+        margin_sides(w, "w:tblCellMar", m);
     }
     w.close("w:tblPrEx");
 }
