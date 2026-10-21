@@ -266,6 +266,7 @@ Imported text fields use the first nonempty cached result run's formatting on th
 | 2026-10-16 | trivial | DOCX: `wp:anchor/@layoutInCell="0"` and VML `o:allowincell="f"` are read and written back (`layoutInCell="0"`), so a header-cell picture watermark is placed on the page (#1775) |
 | 2026-10-16 | trivial | Equations from Word files no longer lose content: body-level `m:oMathPara`, `mc:AlternateContent Requires="m"`, hyperlinks/simple fields/`mc:AlternateContent` inside an equation, `w:sym` and Symbol-font text in math (#1273) |
 | 2026-10-13 | trivial | Recipient lists: cell text capped at 64 MiB a sheet (shared-string amplification), an XML spreadsheet named .xls explained (#1287) |
+| 2026-10-16 | trivial | Solid shape fill opacity is read, drawn and written back. Synthetic transparency round-trip and display regressions; rounded corners remain intact. |
 | 2026-10-13 | trivial | A cell's explicit top vertical alignment (`w:vAlign w:val="top"`) is kept on read and write and beats a table style that centres or bottom-aligns (#1288) |
 | 2026-10-14 | trivial | Row table border exceptions survive DOCX saves |
 | 2026-10-12 | trivial | Fields keep `w:dirty` through DOCX round trips — on buffered fields and range-field begin markers alike — and computing a result (Update Field, Update Table) clears it like Word's F9, so a generator's placeholder TOC still refreshes when Word opens the file until WordCraft replaces the placeholder (#877) |
@@ -375,3 +376,4 @@ Imported text fields use the first nonempty cached result run's formatting on th
 | 2026-10-15 | trivial | Legacy form fields are drawn: check boxes as Word's squares (checked with an X), drop-downs with their selected entry |
 | 2026-10-17 | trivial | A folder that refuses a temporary file leaves an existing document untouched (the error says to use Save As or allow access to the folder); a new file is created directly (#2138) |
 | 2026-10-18 | trivial | Word 2007 WordArt (VML `v:textpath` in the body or a header logo) shown as a text box with its text, font, colour and warp, not dropped (#2875) |
+| 2026-10-19 | trivial | Solid fill opacity is carried through closed freeform paths and targeted soft-edge bands. Synthetic raster/PDF controls cover fill blending and independent strokes/effects; no new native Word comparison. `Draw::Path.fill_alpha` is a required public field: external constructors and full field patterns must update. Stroke/ink/effect policy is unchanged; soft-edge patterns, freeform patterns and caret parity remain unsupported. |

@@ -1467,6 +1467,7 @@ impl Reader<'_> {
             self.glued.extend(extra.start.iter().chain(extra.end.iter()).map(|e| e.id));
         }
         extra.warp = wsp.child("wps:bodyPr").and_then(|b| b.child("a:prstTxWarp")).and_then(text_warp);
+        extra.fill_transparency = fill_transparency(sppr);
         // A freeform: its custom geometry (#743: in a group too).
         let freeform = sppr.and_then(|s| super::freeform::cust_geom(s, w, h)).map(|mut f| {
             f.alpha = super::freeform::line_alpha(ln);
@@ -2301,6 +2302,13 @@ fn effect_color(e: &El) -> (Option<Rgb>, f32) {
     // `a:alpha`: opacity in 1000ths of a percent.
     let opacity = c.child("a:alpha").and_then(|a| a.attr("val")).and_then(int).map(|v| v.clamp(0, 100_000) as f32 / 1000.0).unwrap_or(100.0);
     (rgb, 100.0 - opacity)
+}
+
+/// A solid fill's transparency, percent: its colour's `a:alpha` is the opacity in 1000ths of a
+/// percent. 0 when opaque or not a solid fill.
+fn fill_transparency(sppr: Option<&El>) -> f32 {
+    let alpha = sppr.and_then(|s| s.child("a:solidFill")).and_then(|f| f.els().next()).and_then(|c| c.child("a:alpha"));
+    alpha.and_then(|a| a.attr("val")).and_then(int).map_or(0.0, |v| (100_000 - v.clamp(0, 100_000)) as f32 / 1000.0)
 }
 
 /// A DrawingML `a:xfrm` (ECMA-376 §20.1.7.5/6) in points: offset, extent and, for a group, its
