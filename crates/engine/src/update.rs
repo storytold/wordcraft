@@ -22,6 +22,7 @@ pub const MAX_JSON: usize = 256 * 1024;
 /// Download size cap (largest release asset today is well below this).
 pub const MAX_DOWNLOAD: usize = 512 * 1024 * 1024;
 
+/// A release version as (major, minor, patch).
 pub type Version = (u64, u64, u64);
 
 /// Catalogued English messages for update failures. The interface translates these by key; the
@@ -45,6 +46,7 @@ pub struct UpdateError {
 }
 
 impl UpdateError {
+    /// An error with its catalogued `message` and technical `detail`.
     pub fn new(message: &'static str, detail: impl Into<String>) -> Self {
         Self { message, detail: detail.into() }
     }
@@ -131,6 +133,7 @@ pub fn detect_install_kind(exe: &str, env: &dyn EnvRead) -> InstallKind {
     InstallKind::Unknown
 }
 
+/// Is `lower_exe` (lowercased) in a system location a `.deb` package installs to?
 fn linux_system_install_path(lower_exe: &str) -> bool {
     lower_exe.starts_with("/usr/bin/") || lower_exe.starts_with("/usr/local/bin/") || lower_exe.contains("/opt/wordcraft/")
 }
@@ -144,11 +147,17 @@ fn mac_app_bundle_in_system_applications(lower_exe: &str) -> bool {
 
 /// Environment hooks for install detection (real env or test fake).
 pub trait EnvRead {
+    /// Running inside Flatpak.
     fn flatpak(&self) -> bool;
+    /// The AppImage path when running from one.
     fn appimage(&self) -> Option<String>;
+    /// An install kind a packager forces (`WORDCRAFT_INSTALL`).
     fn install_override(&self) -> Option<InstallKind>;
+    /// Running on Windows.
     fn windows(&self) -> bool;
+    /// Running on macOS.
     fn macos(&self) -> bool;
+    /// Running on Linux or another non-macOS Unix.
     fn linux(&self) -> bool;
     /// True when `dpkg-query -S` reports the installed binary (`.deb` installs only).
     fn linux_deb_package(&self, exe: &str) -> bool;
@@ -180,6 +189,7 @@ fn run_quiet(program: &str, args: &[&str], timeout: std::time::Duration) -> Opti
     wait_with_deadline(child, timeout)
 }
 
+/// Wait for `child` until `timeout`, then collect its output; `None` when it ran too long.
 #[cfg(any(target_os = "linux", target_os = "windows", test))]
 fn wait_with_deadline(mut child: std::process::Child, timeout: std::time::Duration) -> Option<std::process::Output> {
     let deadline = std::time::Instant::now() + timeout;
@@ -224,6 +234,7 @@ fn collect_output(child: std::process::Child, timeout: std::time::Duration) -> O
     }
 }
 
+/// Does `dpkg-query -S` say a package owns `exe`?
 #[cfg(target_os = "linux")]
 fn linux_deb_package_query(exe: &str) -> bool {
     if exe.is_empty() || exe.len() > 512 {
@@ -232,6 +243,7 @@ fn linux_deb_package_query(exe: &str) -> bool {
     run_quiet("dpkg-query", &["-S", exe], QUERY_TIMEOUT).is_some_and(|out| out.status.success())
 }
 
+/// No dpkg outside Linux.
 #[cfg(not(target_os = "linux"))]
 fn linux_deb_package_query(_exe: &str) -> bool {
     false
@@ -263,6 +275,7 @@ fn windows_msi_path_matches(exe: &str) -> bool {
     })
 }
 
+/// No MSI registry outside Windows.
 #[cfg(not(target_os = "windows"))]
 fn windows_msi_path_matches(_exe: &str) -> bool {
     false
@@ -279,18 +292,23 @@ fn same_windows_path(a: &str, b: &str) -> bool {
 pub struct SystemEnv;
 
 impl EnvRead for SystemEnv {
+    /// Ask dpkg whether a package owns `exe`.
     fn linux_deb_package(&self, exe: &str) -> bool {
         linux_deb_package_query(exe)
     }
+    /// Ask the registry whether an MSI installed `exe`.
     fn windows_msi_installed(&self, exe: &str) -> bool {
         windows_msi_path_matches(exe)
     }
+    /// `FLATPAK_ID` is set or `/.flatpak-info` exists.
     fn flatpak(&self) -> bool {
         std::env::var_os("FLATPAK_ID").is_some() || std::path::Path::new("/.flatpak-info").exists()
     }
+    /// The `APPIMAGE` variable, when set.
     fn appimage(&self) -> Option<String> {
         std::env::var("APPIMAGE").ok().filter(|s| !s.is_empty())
     }
+    /// `WORDCRAFT_INSTALL`: only Flatpak, AppImage or unknown can be forced.
     fn install_override(&self) -> Option<InstallKind> {
         // Packagers may force Flatpak/AppImage/unknown; never grant MSI/.deb/.app without registry,
         // dpkg or `/Applications` evidence (tests inject [`EnvRead`] instead).
@@ -301,15 +319,19 @@ impl EnvRead for SystemEnv {
             _ => None,
         }
     }
+    /// Built for Windows.
     fn windows(&self) -> bool {
         cfg!(target_os = "windows")
     }
+    /// Built for macOS.
     fn macos(&self) -> bool {
         cfg!(target_os = "macos")
     }
+    /// Built for Linux or another non-macOS Unix.
     fn linux(&self) -> bool {
         cfg!(all(unix, not(target_os = "macos")))
     }
+    /// `WORDCRAFT_NO_UPDATE_CHECK` set at build time or for this run (not empty, not `0`).
     fn no_update_check(&self) -> bool {
         // Build-time (a packager ships updates another way) or a single run's environment. An
         // empty value or `0` (as in the runtime variable) does not disable the check.
@@ -350,6 +372,7 @@ pub fn parse_version(tag: &str) -> Option<Version> {
     parts.next().is_none().then_some(v)
 }
 
+/// `v` as `major.minor.patch`.
 pub fn version_text(v: Version) -> String {
     let (a, b, c) = v;
     format!("{a}.{b}.{c}")
@@ -383,6 +406,7 @@ pub struct CheckResult {
     pub reboot_required: bool,
 }
 
+/// The outcome of an update check.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum CheckStatus {
@@ -392,6 +416,7 @@ pub enum CheckStatus {
     Error,
 }
 
+/// A newer release as offered to the interface: what it is and how it can be installed.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ReleaseOffer {
@@ -456,6 +481,7 @@ pub fn offer(release: ReleaseInfo, _skipped: &str, kind: InstallKind) -> Release
     }
 }
 
+/// Did the person skip this release's version?
 pub fn skipped(release: &ReleaseInfo, skipped: &str) -> bool {
     parse_version(skipped) == Some(release.version)
 }
@@ -494,6 +520,7 @@ pub fn release_arch_label(arch: &'static str, windows: bool) -> &'static str {
     }
 }
 
+/// The asset name for this install kind on the running build's arch.
 pub fn pick_asset_name(version: Version, kind: InstallKind) -> Option<String> {
     pick_asset_name_with_arch(version, kind, host_release_arch())
 }
@@ -503,10 +530,12 @@ pub fn host_release_arch() -> &'static str {
     if cfg!(target_os = "windows") { windows_arch() } else { target_arch() }
 }
 
+/// The asset name for this install kind on `arch`.
 pub fn pick_asset_name_with_arch(version: Version, kind: InstallKind, arch: &str) -> Option<String> {
     asset_name(version, kind, arch)
 }
 
+/// The release arch for this session: its test override, else the running build's.
 pub fn release_arch_for(session: &crate::Session) -> String {
     session.update_release_arch.as_deref().filter(|a| !a.is_empty()).map(str::to_string).unwrap_or_else(|| host_release_arch().to_string())
 }
@@ -552,6 +581,7 @@ pub fn sha256_hex(data: &[u8]) -> String {
     hex
 }
 
+/// The lowercase hex digit for a nibble.
 fn hex_char(n: u8) -> char {
     match n {
         0..=9 => char::from_u32('0' as u32 + n as u32).unwrap_or('0'),
@@ -607,8 +637,11 @@ pub fn http_get(session: &crate::Session, url: &str, max_bytes: usize) -> Result
     Ok(data)
 }
 
+/// Fetch a URL, reading at most the given number of bytes.
 pub type HttpGet = Arc<dyn Fn(&str, usize) -> Result<Vec<u8>, String> + Send + Sync>;
+/// Hand a verified download to the platform installer.
 pub type InstallFn = Arc<dyn Fn(InstallHandoff) -> Result<InstallOutcome, String> + Send + Sync>;
+/// A shared environment reader.
 pub type EnvReadBox = Arc<dyn EnvRead + Send + Sync>;
 
 /// Unix seconds for throttling (0 when unknown).

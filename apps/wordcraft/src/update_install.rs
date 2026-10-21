@@ -17,10 +17,12 @@ const STAGING_PREFIX: &str = "wordcraft-update-";
 /// verified file is kept; a leftover from a previous update is cleared once it is certainly idle.
 const STAGING_RETENTION: std::time::Duration = std::time::Duration::from_secs(3 * 24 * 60 * 60);
 
+/// The desktop installer handoff the engine calls with a verified download.
 pub fn handoff() -> InstallFn {
     std::sync::Arc::new(run)
 }
 
+/// Stage a verified download and hand it to the platform installer.
 fn run(job: InstallHandoff) -> Result<InstallOutcome, String> {
     run_with(job, &install_into)
 }
@@ -29,6 +31,8 @@ fn run(job: InstallHandoff) -> Result<InstallOutcome, String> {
 /// it off. Split out so tests can drive the staging lifetime with a fake handoff.
 type InstallAction<'a> = dyn Fn(&InstallHandoff, &Path) -> Result<InstallOutcome, String> + 'a;
 
+/// Run `action` in a fresh private staging folder, then clean that folder up as
+/// [`finish_staging`] decides.
 fn run_with(job: InstallHandoff, action: &InstallAction<'_>) -> Result<InstallOutcome, String> {
     // Clear a leftover from an earlier manual install before creating this run's staging.
     sweep_stale_staging();
@@ -54,6 +58,7 @@ pub fn sweep_stale_staging() {
     sweep_stale_staging_in(&std::env::temp_dir(), STAGING_RETENTION, std::time::SystemTime::now());
 }
 
+/// Remove staging folders under `parent` that are older than `retention` at `now`.
 fn sweep_stale_staging_in(parent: &Path, retention: std::time::Duration, now: std::time::SystemTime) {
     let Ok(entries) = std::fs::read_dir(parent) else { return };
     for entry in entries.flatten() {
@@ -79,6 +84,8 @@ fn is_staging_name(name: &str) -> bool {
     hex.len() == 32 && hex.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
+/// Hand the download to the installer for its kind: a `.deb` goes to root over a pipe, the
+/// others are written into `staging` first.
 fn install_into(job: &InstallHandoff, staging: &Path) -> Result<InstallOutcome, String> {
     // A `.deb` never touches a path this user can write: it goes to root over a pipe.
     if matches!(job.kind, InstallKind::LinuxDeb) {
@@ -109,6 +116,7 @@ pub fn private_staging_dir() -> Result<PathBuf, String> {
     Ok(path)
 }
 
+/// `bytes` random bytes as lowercase hex, for staging folder names.
 fn random_hex(bytes: usize) -> Result<String, String> {
     let mut buf = vec![0u8; bytes];
     getrandom::fill(&mut buf).map_err(|e| e.to_string())?;
@@ -120,6 +128,7 @@ fn random_hex(bytes: usize) -> Result<String, String> {
     Ok(hex)
 }
 
+/// The lowercase hex digit for a nibble.
 fn hex_digit(n: u8) -> char {
     match n {
         0..=9 => char::from_u32('0' as u32 + n as u32).unwrap_or('0'),
@@ -139,10 +148,12 @@ pub fn write_exclusive_file(dir: &Path, name: &str, bytes: &[u8]) -> Result<Path
     Ok(path)
 }
 
+/// `name` reduced to ASCII letters, digits, `.`, `-` and `_`, safe as a file name.
 fn safe_name(name: &str) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect()
 }
 
+/// Wait for `child` to exit, killing it and failing after `secs` seconds.
 fn wait_child(mut child: std::process::Child, secs: u64) -> Result<std::process::ExitStatus, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
     loop {
@@ -173,6 +184,7 @@ pub const MSI_SUCCESS_REBOOT_INITIATED: u32 = 1641;
 #[cfg(any(target_os = "windows", test))]
 pub const MSI_CANCELLED: u32 = 1602;
 
+/// What an `msiexec` exit code means for the update.
 #[cfg(any(target_os = "windows", test))]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MsiOutcome {
@@ -182,6 +194,7 @@ pub enum MsiOutcome {
     Failed(u32),
 }
 
+/// Read an `msiexec` exit code as an [`MsiOutcome`].
 #[cfg(any(target_os = "windows", test))]
 pub fn msi_outcome(code: u32) -> MsiOutcome {
     match code {
@@ -192,19 +205,24 @@ pub fn msi_outcome(code: u32) -> MsiOutcome {
     }
 }
 
+/// The `msiexec` arguments for a passive install that never restarts the computer or closes
+/// WordCraft.
 #[cfg(any(target_os = "windows", test))]
 pub fn msi_args(path: &str) -> Vec<String> {
     vec!["/i".into(), path.into(), "/passive".into(), "/norestart".into(), "MSIRESTARTMANAGERCONTROL=DisableShutdown".into()]
 }
 
+/// Runs `msiexec`; tests use a fake.
 #[cfg(any(target_os = "windows", test))]
 pub trait MsiRunner {
+    /// Run `msiexec` with `args` and return its exit code, giving up after `timeout_secs`.
     fn run(&self, args: &[String], timeout_secs: u64) -> Result<u32, String>;
 }
 
 #[cfg(any(target_os = "windows", test))]
 const MSI_WAIT_SECS: u64 = 60 * 60;
 
+/// Install the MSI at `path` through `runner` and report the outcome.
 #[cfg(any(target_os = "windows", test))]
 fn windows_msi_with(runner: &dyn MsiRunner, path: &Path) -> Result<InstallOutcome, String> {
     let p = path.to_str().ok_or("bad path")?;
@@ -220,11 +238,13 @@ fn windows_msi_with(runner: &dyn MsiRunner, path: &Path) -> Result<InstallOutcom
     }
 }
 
+/// The real `msiexec`.
 #[cfg(target_os = "windows")]
 struct RealMsiRunner;
 
 #[cfg(target_os = "windows")]
 impl MsiRunner for RealMsiRunner {
+    /// Start `msiexec` and wait for its exit code.
     fn run(&self, args: &[String], timeout_secs: u64) -> Result<u32, String> {
         let child = Command::new("msiexec").args(args).spawn().map_err(|e| e.to_string())?;
         let status = wait_child(child, timeout_secs)?;
@@ -232,11 +252,13 @@ impl MsiRunner for RealMsiRunner {
     }
 }
 
+/// Install the MSI at `path` with the real `msiexec`.
 #[cfg(target_os = "windows")]
 fn windows_msi(path: &Path) -> Result<InstallOutcome, String> {
     windows_msi_with(&RealMsiRunner, path)
 }
 
+/// MSI installs exist only on Windows.
 #[cfg(not(target_os = "windows"))]
 fn windows_msi(_path: &Path) -> Result<InstallOutcome, String> {
     Err("MSI install is only on Windows".into())
@@ -279,12 +301,14 @@ fn run_deb_install(bytes: &[u8], wait_secs: u64) -> Result<std::process::ExitSta
     status
 }
 
+/// Install a verified `.deb` through `pkexec` and [`DEB_INSTALL_SCRIPT`].
 #[cfg(all(unix, not(target_os = "macos")))]
 fn linux_deb(bytes: &[u8]) -> Result<InstallOutcome, String> {
     let status = run_deb_install(bytes, INSTALLER_WAIT_SECS)?;
     if status.success() { Ok(InstallOutcome::default()) } else { Err("dpkg install was cancelled or failed.".into()) }
 }
 
+/// `.deb` installs exist only on Linux.
 #[cfg(not(all(unix, not(target_os = "macos"))))]
 fn linux_deb(_bytes: &[u8]) -> Result<InstallOutcome, String> {
     Err(".deb install is only on Linux".into())
@@ -293,17 +317,20 @@ fn linux_deb(_bytes: &[u8]) -> Result<InstallOutcome, String> {
 /// Opens a verified `.dmg` in Finder (macOS only).
 #[cfg(any(target_os = "macos", test))]
 pub trait DmgOpener {
+    /// Open the disk image at `dmg` in Finder.
     fn open_in_finder(&self, dmg: &Path) -> Result<(), String>;
 }
 
 #[cfg(target_os = "macos")]
 const OPEN_DMG_WAIT_SECS: u64 = 60;
 
+/// Opens disk images with the system `open` command.
 #[cfg(target_os = "macos")]
 struct RealDmgOpener;
 
 #[cfg(target_os = "macos")]
 impl DmgOpener for RealDmgOpener {
+    /// Run `open` on the disk image and wait for it.
     fn open_in_finder(&self, dmg: &Path) -> Result<(), String> {
         let p = dmg.to_str().ok_or("bad path")?;
         let child = Command::new("open").arg(p).spawn().map_err(|e| e.to_string())?;
@@ -312,17 +339,20 @@ impl DmgOpener for RealDmgOpener {
     }
 }
 
+/// Open the `.dmg` at `path` through `opener` for a manual drag-install.
 #[cfg(any(target_os = "macos", test))]
 fn mac_open_dmg_with(path: &Path, opener: &dyn DmgOpener) -> Result<InstallOutcome, String> {
     opener.open_in_finder(path)?;
     Ok(InstallOutcome::default())
 }
 
+/// Open the `.dmg` at `path` in Finder.
 #[cfg(target_os = "macos")]
 fn mac_open_dmg(path: &Path) -> Result<InstallOutcome, String> {
     mac_open_dmg_with(path, &RealDmgOpener)
 }
 
+/// Disk image installs exist only on macOS.
 #[cfg(not(target_os = "macos"))]
 fn mac_open_dmg(_path: &Path) -> Result<InstallOutcome, String> {
     Err("disk image install is only on macOS".into())

@@ -21,10 +21,12 @@ const BACKSTOP: Duration = Duration::from_secs(4 * 60 * 60);
 /// How much is read at a time.
 const CHUNK: usize = 64 * 1024;
 
+/// The desktop app's HTTP fetch for update checks and installer downloads.
 pub fn http_get() -> HttpGet {
     Arc::new(fetch_url)
 }
 
+/// Fetch `url` over HTTPS with the update check's timeouts, failing past `max_bytes` or a stall.
 fn fetch_url(url: &str, max_bytes: usize) -> Result<Vec<u8>, String> {
     // HTTPS only, redirects included: release assets redirect to GitHub's download host.
     let agent: ureq::Agent = ureq::Agent::config_builder()

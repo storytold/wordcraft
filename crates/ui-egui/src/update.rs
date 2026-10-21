@@ -13,6 +13,7 @@ use crate::theme::{Tokens, TypeRung};
 
 pub use wordcraft_engine::update::{INTERVAL_SECS, MAX_JSON, due};
 
+/// The update check's interface state: the notice, the running worker and the answers shown.
 #[derive(Default)]
 pub struct UpdateCheck {
     started: bool,
@@ -43,6 +44,7 @@ impl UpdateCheck {
     }
 }
 
+/// A check or install running off the UI thread, and who is waiting for its answer.
 struct PendingWorker {
     rx: Receiver<WorkerDone>,
     manual: bool,
@@ -50,12 +52,14 @@ struct PendingWorker {
     control_reply: Option<std::sync::mpsc::Sender<Value>>,
 }
 
+/// What a worker hands back: the command's result, the updated settings and its UI requests.
 struct WorkerDone {
     result: Result<Value, String>,
     prefs: UpdatePrefs,
     ui_requests: Vec<Value>,
 }
 
+/// What a worker needs from the session, copied so it can run on its own thread.
 struct CheckSnapshot {
     http: HttpGet,
     install: Option<InstallFn>,
@@ -67,6 +71,7 @@ struct CheckSnapshot {
     release_arch: Option<String>,
 }
 
+/// The update notice bar's release.
 #[derive(Clone, Debug)]
 pub struct Notice {
     pub version: String,
@@ -85,6 +90,7 @@ pub fn notice_from_payload(value: &Value) -> Option<Notice> {
     notice_from_fields(value)
 }
 
+/// A notice from a release's JSON fields; `None` without a version.
 fn notice_from_fields(v: &Value) -> Option<Notice> {
     let version = v.get("version").and_then(Value::as_str)?;
     Some(Notice {
@@ -97,6 +103,7 @@ fn notice_from_fields(v: &Value) -> Option<Notice> {
     })
 }
 
+/// Once a frame: pick up a finished worker, and start the startup check when it is due.
 pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
     poll_worker(app);
     if app.update.worker.is_some() {
@@ -127,6 +134,8 @@ pub fn queue_check_control(app: &mut WordApp, params: Value, ctx: &egui::Context
     queue_check_inner(app, params, true, ctx, Some(reply))
 }
 
+/// Start `file.checkForUpdates` on a worker thread. Returns whether it started; when it
+/// didn't, a control-channel caller has its reply and a manual check its answer.
 fn queue_check_inner(
     app: &mut WordApp,
     params: Value,
@@ -180,6 +189,7 @@ fn queue_check_inner(
     }
 }
 
+/// Take a finished worker's result, apply it and answer whoever was waiting.
 fn poll_worker(app: &mut WordApp) {
     let Some(worker) = app.update.worker.as_ref() else { return };
     let msg = match worker.rx.try_recv() {
@@ -204,6 +214,7 @@ fn poll_worker(app: &mut WordApp) {
     }
 }
 
+/// Copy what a worker needs from the app; `None` without an update client.
 fn snapshot_from(app: &WordApp) -> Option<CheckSnapshot> {
     let http = app.session.update_http.clone()?;
     Some(CheckSnapshot {
@@ -218,6 +229,7 @@ fn snapshot_from(app: &WordApp) -> Option<CheckSnapshot> {
     })
 }
 
+/// Run the check in a session of its own on the worker thread.
 fn run_check(snapshot: CheckSnapshot, params: &Value) -> WorkerDone {
     let mut s = Session::new(wordcraft_doc::Document::new());
     s.update_http = Some(snapshot.http);
@@ -232,6 +244,8 @@ fn run_check(snapshot: CheckSnapshot, params: &Value) -> WorkerDone {
     WorkerDone { result, prefs: s.update_prefs, ui_requests: s.ui_requests }
 }
 
+/// Apply a worker's result to the app: settings, UI requests, the notice and any answer to
+/// show.
 fn apply_worker_result(app: &mut WordApp, done: WorkerDone, manual: bool, apply: bool) -> Result<Value, String> {
     app.session.update_prefs.last_check_unix = done.prefs.last_check_unix;
     app.ui.update_prefs.last_check_unix = done.prefs.last_check_unix;
@@ -270,6 +284,7 @@ fn apply_worker_result(app: &mut WordApp, done: WorkerDone, manual: bool, apply:
     }
 }
 
+/// Should a successful install quit so the installer can finish? Only one-click handoffs do.
 fn should_quit_after_successful_apply(v: &Value) -> bool {
     if v.get("status").and_then(Value::as_str) != Some("available") {
         return false;
@@ -277,6 +292,7 @@ fn should_quit_after_successful_apply(v: &Value) -> bool {
     v.get("release").and_then(|r| r.get("oneClick")).and_then(Value::as_bool) == Some(true)
 }
 
+/// Show an install's result. Returns whether the app should now quit.
 fn apply_install_result(app: &mut WordApp, v: Result<Value, String>) -> bool {
     match v {
         Ok(v) => {
@@ -309,6 +325,7 @@ pub fn can_run_off_thread(app: &WordApp) -> bool {
     app.session.update_http.is_some()
 }
 
+/// A check or install is running off the UI thread.
 pub fn worker_busy(app: &WordApp) -> bool {
     app.update.worker.is_some()
 }
@@ -383,6 +400,7 @@ fn message_bar(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Draw the update bars: the restart notice, the answer line and the release notice.
 pub fn bar(app: &mut WordApp, ui: &mut Ui) {
     reboot_bar(app, ui);
     message_bar(app, ui);
@@ -462,12 +480,14 @@ pub fn handle_quit(app: &mut WordApp, ctx: &egui::Context) -> bool {
     true
 }
 
+/// Ask once, on a first run, whether to check for updates on startup.
 pub fn maybe_startup_prompt(app: &mut WordApp) {
     if !app.session.update_prefs.asked_startup {
         app.show_update_startup_prompt = true;
     }
 }
 
+/// The first-run "Check for updates?" window.
 pub fn startup_prompt(app: &mut WordApp, ui: &mut Ui, open: &mut bool) {
     egui::Window::new(tl!("Check for updates?")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(
         ui.ctx(),
@@ -488,6 +508,7 @@ pub fn startup_prompt(app: &mut WordApp, ui: &mut Ui, open: &mut bool) {
     );
 }
 
+/// The current time in Unix seconds (0 when unknown).
 fn now_secs() -> u64 {
     let ms = crate::now_ms();
     if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as u64 } else { 0 }

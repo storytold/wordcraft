@@ -10,6 +10,7 @@ use crate::update::{
 };
 use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 
+/// The update commands: `file.checkForUpdates` and `file.updatePrefs`.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.checkForUpdates", "Check for Updates", "Help", check).params(
@@ -23,6 +24,8 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
+/// `file.updatePrefs`: set the startup check, the first-run prompt flag and the skipped
+/// version, and return the settings.
 fn prefs(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(on) = p::bool(v, "checkOnStartup") {
         s.update_prefs.check_on_startup = on;
@@ -41,6 +44,8 @@ fn prefs(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
+/// `file.checkForUpdates`: ask GitHub for the latest release, honouring the throttle and the
+/// skipped version, and with `apply` download, verify and install it.
 fn check(s: &mut Session, v: &Value) -> CmdResult {
     let apply = p::bool(v, "apply").unwrap_or(false);
     // An explicit install request is never throttled.
@@ -163,14 +168,17 @@ fn check(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
+/// A check result as the command's JSON.
 fn json_result(r: CheckResult) -> Value {
     serde_json::to_value(r).unwrap_or(json!({"status": "error"}))
 }
 
+/// A result for a check the throttle or settings held back.
 fn throttled(current: &str) -> CheckResult {
     CheckResult { status: CheckStatus::Throttled, current: current.into(), release: None, error: None, error_detail: None, reboot_required: false }
 }
 
+/// A failed check: the catalogued `message` to show and the technical `detail` to log.
 fn failed(current: &str, message: &'static str, detail: impl Into<String>) -> CheckResult {
     CheckResult {
         status: CheckStatus::Error,
@@ -182,10 +190,13 @@ fn failed(current: &str, message: &'static str, detail: impl Into<String>) -> Ch
     }
 }
 
+/// How the running build at `exe` was installed, in this session's environment.
 fn install_kind(s: &Session, exe: &str) -> crate::update::InstallKind {
     detect_install_kind(exe, env_of(s))
 }
 
+/// Download this kind's asset for `release`, check it against the release's `SHA256SUMS.txt`,
+/// and hand it to the session's installer.
 fn download_and_install(
     s: &mut Session,
     latest_json: &[u8],

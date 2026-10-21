@@ -5,6 +5,8 @@ use std::time::Duration;
 
 use wordcraft_engine::update::{HttpGet, LATEST_API};
 
+/// The CLI's HTTP fetch for update checks: serves a local file instead of GitHub when
+/// `WORDCRAFT_UPDATE_CHECK_FIXTURE` is set (tests), else fetches over the network.
 pub fn http_get() -> HttpGet {
     if let Ok(path) = std::env::var("WORDCRAFT_UPDATE_CHECK_FIXTURE") {
         let body = std::fs::read(&path).map_err(|e| e.to_string());
