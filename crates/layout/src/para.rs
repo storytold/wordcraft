@@ -1212,6 +1212,50 @@ impl<'a> Builder<'a> {
         self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
     }
 
+    /// Wrap cached REF text at ordinary spaces without changing its document range or format.
+    fn shape_ref(&mut self, text: &str, start: usize, end: usize, rc: &Arc<ResolvedChar>, breaks: &mut Vec<(usize, bool)>) {
+        use unicode_bidi::BidiClass::{AL, AN, FSI, LRE, LRI, LRO, PDF, PDI, R, RLE, RLI, RLO};
+        // Direction-sensitive results keep the existing whole-result isolate.
+        if self.levels.get(start).is_some_and(|l| l % 2 == 1)
+            || text.chars().any(|c| matches!(unicode_bidi::bidi_class(c), R | AL | AN | LRE | RLE | LRO | RLO | PDF | LRI | RLI | FSI | PDI))
+        {
+            self.shape_atomic(text, start, end, rc);
+            return;
+        }
+        // A missing Thai font selects its substitute from the complete result, including Latin.
+        // Keep that result atomic until split pieces can share the whole-result font choice.
+        if wordcraft_fonts::word::is_thai_family(&rc.font)
+            && text.chars().any(|c| matches!(u32::from(c), 0x0E00..=0x0E7F))
+            && wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic).substituted
+        {
+            self.shape_atomic(text, start, end, rc);
+            return;
+        }
+        let first = self.clusters.len();
+        for piece in text.split_inclusive(' ') {
+            if let Some(word) = piece.strip_suffix(' ') {
+                if !word.is_empty() {
+                    self.shape_atomic(word, start, end, rc);
+                }
+                self.shape_atomic(" ", start, end, rc);
+                if let Some(c) = self.clusters.last_mut() {
+                    c.kind = ClKind::Space;
+                }
+            } else {
+                self.shape_atomic(piece, start, end, rc);
+            }
+        }
+        if self.clusters.len() == first {
+            self.shape_atomic(text, start, end, rc);
+        }
+        let last = self.clusters.len().saturating_sub(1);
+        for (i, c) in self.clusters.iter().enumerate().skip(first) {
+            if i < last || c.kind == ClKind::Space {
+                breaks.push((i, c.kind == ClKind::Space));
+            }
+        }
+    }
+
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
     /// the cluster (at least `width` wide) and raised `dy`. Returns the cluster's index.
     #[allow(clippy::too_many_arguments)]
@@ -1459,6 +1503,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mark_rc = resolve(&p.mark);
     let mark_style = b.style(&mark_rc, None, false);
     let mut has_page_fields = false;
+    let mut ref_breaks = Vec::new();
     let mut notes = Vec::new();
     let mut obj_index = 0usize;
     // Drop cap: the first character, sized so its capital spans `lines` lines.
@@ -1648,7 +1693,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                         } else {
                                             rc.clone()
                                         };
-                                        b.shape_atomic(&t, start, end, &rc);
+                                        if crate::fields::field_name(instr) == "REF" {
+                                            b.shape_ref(&t, start, end, &rc, &mut ref_breaks);
+                                        } else {
+                                            b.shape_atomic(&t, start, end, &rc);
+                                        }
                                     }
                                 }
                             }
@@ -1789,6 +1838,12 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let opps: std::collections::HashSet<usize> = found.into_iter().filter_map(to_para).collect();
     for c in &mut b.clusters {
         c.break_after = opps.contains(&c.end) || matches!(c.kind, ClKind::Object(_) | ClKind::Tab);
+    }
+    // Expanded REF pieces share one object offset, so use their own space boundaries.
+    for (i, allowed) in ref_breaks {
+        if let Some(c) = b.clusters.get_mut(i) {
+            c.break_after = allowed;
+        }
     }
 
     // Word hides a list label on a paragraph containing only a page break. The list counter
@@ -2932,7 +2987,8 @@ impl ParaLayout {
         for (i, l) in self.lines.iter().enumerate() {
             let next_start = self.lines.get(i + 1).map(|n| n.start);
             match next_start {
-                Some(ns) if off < ns => return i,
+                // Wrapped object pieces share a range: its start stays on the first piece.
+                Some(ns) if off < ns || (off == ns && l.stop > ns) => return i,
                 Some(_) => {}
                 None => return i,
             }

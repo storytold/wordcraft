@@ -891,7 +891,8 @@ impl Session {
         let (start, end) = typed_range(&self.doc.para_at(&at)?.text, at.off)?;
         Some(TypedWord { at, start, end })
     }
-    /// A layout for output (PDF, images, print): no proofing marks, print view.
+    /// Cached field results in print view, without proofing marks. Physical exports evaluate
+    /// local cross-references in a temporary copy before layout.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)
     }

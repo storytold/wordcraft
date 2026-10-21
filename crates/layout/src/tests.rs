@@ -9423,3 +9423,257 @@ fn caret_height_ignores_line_spacing() {
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
 }
+
+#[derive(Clone, Copy)]
+enum RefText {
+    Plain,
+    Field,
+}
+
+fn ref_wrap_doc(text: &str, kind: RefText) -> Document {
+    let cp = wordcraft_doc::CharProps {
+        font: Some("Arial".into()),
+        size: Some(8.0),
+        bold: Some(true),
+        italic: Some(true),
+        color: Some(wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(20, 40, 60))),
+        ..Default::default()
+    };
+    let mut p = wordcraft_doc::Paragraph::new();
+    match kind {
+        RefText::Plain => {
+            p.insert_text(0, text, &cp).unwrap();
+        }
+        RefText::Field => p
+            .insert_object(
+                0,
+                InlineObject::Field { instr: "REF Sample".into(), result: text.into(), locked: true, dirty: true, code: false, form: String::new() },
+                &cp,
+            )
+            .unwrap(),
+    }
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(10.0));
+    let mut d = Document::new();
+    d.last_section.page_w = 90.0;
+    d.last_section.page_h = 80.0;
+    d.last_section.margin_left = 20.0;
+    d.last_section.margin_right = 20.0;
+    d.last_section.margin_top = 20.0;
+    d.last_section.margin_bottom = 20.0;
+    d.body = vec![wordcraft_doc::para_block(p)];
+    d
+}
+
+fn ref_drawn_words(d: &Document, l: &DocLayout) -> Vec<String> {
+    l.pages
+        .iter()
+        .flat_map(|p| display::page_display(d, p, &display::DisplayOptions::default()))
+        .filter_map(|draw| match draw {
+            display::Draw::Glyphs { text, .. } => Some(text),
+            _ => None,
+        })
+        .flat_map(|s| s.split_whitespace().map(str::to_owned).collect::<Vec<_>>())
+        .collect()
+}
+
+#[test]
+fn ref_result_wraps_like_text() {
+    let plain = ref_wrap_doc("Original sample", RefText::Plain);
+    let field = ref_wrap_doc("Original sample", RefText::Field);
+    let a = lay(&plain);
+    let b = lay(&field);
+    let lines = |l: &DocLayout| {
+        l.pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { l0, l1, .. } => Some(l1 - l0),
+                _ => None,
+            })
+            .sum::<usize>()
+    };
+    assert_eq!(lines(&a), 2);
+    assert_eq!(lines(&b), lines(&a));
+    assert_eq!(ref_drawn_words(&field, &b), ref_drawn_words(&plain, &a));
+    for page in &b.pages {
+        for it in &page.items {
+            if let Placed::Lines { para, .. } = it {
+                for c in &para.clusters {
+                    if c.g0 == c.g1 {
+                        continue;
+                    }
+                    let rc = &para.styles[c.style as usize].rc;
+                    assert!(rc.bold && rc.italic);
+                    assert_eq!(rc.size, 8.0);
+                    assert_eq!(rc.color, wordcraft_doc::TextColor::Rgb(wordcraft_doc::Rgb(20, 40, 60)));
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn ref_wrap_crosses_pages_once() {
+    let text = "Alpha Beta ".repeat(40);
+    let plain = ref_wrap_doc(&text, RefText::Plain);
+    let field = ref_wrap_doc(&text, RefText::Field);
+    let a = lay(&plain);
+    let b = lay(&field);
+    assert!(a.pages.len() > 1);
+    assert_eq!(b.pages.len(), a.pages.len());
+    assert_eq!(ref_drawn_words(&field, &b), ref_drawn_words(&plain, &a));
+}
+
+#[test]
+fn ref_caret_spans_wrapped_field() {
+    let mut d = ref_wrap_doc("Original sample", RefText::Field);
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_text(0, "X ", &Default::default()).unwrap();
+    let l = lay(&d);
+    let before = l.caret(&Pos::body(0, 0)).unwrap();
+    let start = l.caret(&Pos::body(0, 2)).unwrap();
+    let end = l.caret(&Pos::body(0, 5)).unwrap();
+    assert_eq!(start.top, before.top);
+    assert!(end.top > start.top);
+
+    let d = ref_wrap_doc(&"Alpha Beta ".repeat(40), RefText::Field);
+    let l = lay(&d);
+    assert_eq!(l.caret(&Pos::body(0, 0)).unwrap().page, 0);
+    assert_eq!(l.caret(&Pos::body(0, 3)).unwrap().page, l.pages.len() - 1);
+}
+
+#[test]
+fn ref_bidi_keeps_atomic_result() {
+    fn first_para(l: &DocLayout) -> &para::ParaLayout {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(&**para),
+                _ => None,
+            })
+            .unwrap()
+    }
+
+    for (rtl, text) in [
+        (false, "אב גד"),
+        (false, "ab אב 12 (cd)"),
+        (true, "ab 12 (cd)"),
+        (false, "\u{202e}ab cd\u{202c}"),
+        (false, "\u{2067}ab cd\u{2069}"),
+        (false, "١٢ ٣٤"),
+    ] {
+        let mut d = ref_wrap_doc(text, RefText::Field);
+        d.last_section.page_w = 1200.0;
+        d.last_section.page_h = 400.0;
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.bidi = Some(rtl);
+        let InlineObject::Field { instr, .. } = &mut p.objects[0] else { panic!("field") };
+        *instr = r"REF Sample \h".into();
+        let wrapped = lay(&d);
+        let actual = first_para(&wrapped);
+        assert_eq!(actual.clusters.len(), 1, "rtl={rtl}, {text:?}: preserve the whole-result isolate");
+        assert_eq!(actual.shown.len(), 1);
+        assert_eq!(actual.shown[0].1, text);
+        assert_eq!(actual.styles[actual.clusters[0].style as usize].rc.link.as_deref(), Some("#Sample"));
+
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        let InlineObject::Field { instr, .. } = &mut p.objects[0] else { panic!("field") };
+        *instr = "CACHED".into();
+        let atomic = lay(&d);
+        let expected = first_para(&atomic);
+        assert_eq!(actual.shown, expected.shown, "retain complete glyph-to-result ranges");
+        assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+        for (a, b) in actual.glyphs.iter().zip(&expected.glyphs) {
+            assert_eq!(a.gid, b.gid, "rtl={rtl}, {text:?}");
+            assert!((a.dx - b.dx).abs() < 0.001 && (a.dy - b.dy).abs() < 0.001, "retain whole-result glyph placement");
+        }
+        assert!((actual.clusters[0].adv - expected.clusters[0].adv).abs() < 0.001);
+    }
+}
+
+#[test]
+fn ref_thai_retains_atomic_face() {
+    const TEXT: &str = "ไทย Latin 123";
+    const FONT: &str = "TH Missing REF 2473";
+    let db = wordcraft_fonts::FontDb::global();
+    let run: Vec<char> = TEXT.chars().filter(|c| !c.is_whitespace()).collect();
+    if db.fallback_for_run(&run, 0, false, false).is_none() {
+        eprintln!("UNEXERCISED_REF_THAI_FACE: no face covers the complete Thai/Latin run; this run is not font qualification");
+        return;
+    }
+    assert!(wordcraft_fonts::word::resolve(FONT, false, false).substituted);
+    let mut d = ref_wrap_doc(TEXT, RefText::Field);
+    d.last_section.page_w = 1200.0;
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some(FONT.into());
+    p.runs[0].props.bold = Some(false);
+    p.runs[0].props.italic = Some(false);
+    let wrapped = lay(&d);
+    let first_para = |l: &DocLayout| {
+        l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(para.clone()),
+                _ => None,
+            })
+            .unwrap()
+    };
+    let actual = first_para(&wrapped);
+    assert_eq!(actual.clusters.len(), 1, "a missing Thai font keeps whole-result shaping");
+    assert_eq!(actual.shown[0].1, TEXT);
+    let drawn = display::page_display(&d, &wrapped.pages[0], &display::DisplayOptions::default());
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    let InlineObject::Field { instr, .. } = &mut p.objects[0] else { panic!("field") };
+    *instr = "CACHED".into();
+    let atomic = lay(&d);
+    let expected = first_para(&atomic);
+    assert_eq!(actual.shown, expected.shown);
+    assert_eq!(actual.styles.len(), expected.styles.len());
+    for (a, b) in actual.styles.iter().zip(&expected.styles) {
+        assert_eq!(a.face.id(), b.face.id(), "retain whole-result fallback faces");
+    }
+    assert_eq!(actual.glyphs.len(), expected.glyphs.len());
+    for (a, b) in actual.glyphs.iter().zip(&expected.glyphs) {
+        assert_eq!(a.gid, b.gid);
+        assert!((a.dx - b.dx).abs() < 0.001 && (a.dy - b.dy).abs() < 0.001);
+    }
+    assert!((actual.clusters[0].adv - expected.clusters[0].adv).abs() < 0.001);
+    let chosen = actual.styles[actual.clusters[0].style as usize].face;
+    for c in TEXT.chars().filter(|c| !c.is_whitespace()) {
+        assert!(chosen.covers(c), "{} must cover Thai and Latin: {c}", chosen.family);
+    }
+    assert!(actual.glyphs.iter().all(|g| g.gid != 0), "the complete result has no missing glyphs");
+    assert!(chosen.covers('ไ') && chosen.covers('L'));
+    let mut shown = String::new();
+    for draw in drawn {
+        if let display::Draw::Glyphs { face, text, glyphs, .. } = draw {
+            assert_eq!(face.id(), chosen.id(), "Thai and Latin draw with the complete-result face");
+            assert!(glyphs.iter().all(|g| g.0 != 0));
+            shown.push_str(&text);
+        }
+    }
+    assert_eq!(shown, TEXT, "both scripts were drawn and checked");
+    eprintln!("REF_THAI_COMPLETE_FACE_ASSERTIONS_EXECUTED: {} draws Thai and Latin", chosen.family);
+}
+
+#[test]
+fn ref_latin_keeps_piece_wrapping() {
+    for (font, text) in [("No Such Latin Font REF 2473", "ไทย Latin"), ("TH Missing REF 2473", "Latin only")] {
+        let mut d = ref_wrap_doc(text, RefText::Field);
+        d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().runs[0].props.font = Some(font.into());
+        let l = lay(&d);
+        let para = l.pages[0]
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Placed::Lines { para, .. } => Some(para),
+                _ => None,
+            })
+            .unwrap();
+        assert!(para.clusters.len() > 1, "{font}: {text}");
+        assert_eq!(ref_drawn_words(&d, &l), text.split_whitespace().map(str::to_owned).collect::<Vec<_>>());
+    }
+}

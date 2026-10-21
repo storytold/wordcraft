@@ -156,8 +156,14 @@ impl Session {
     pub fn print_pdf(&self, v: &Value) -> Result<(Vec<u8>, PrintPlan), CmdError> {
         // Print Markup (File › Print) decides whether tracked changes and comments print.
         let markup = crate::cmd::file::export_options(self, v);
-        let lay = self.export_layout_with(markup.markup);
-        let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
+        let lo = wordcraft_layout::LayoutOptions {
+            view: wordcraft_layout::ViewMode::Print,
+            comment_balloons: markup.markup && markup.comments,
+            ..Default::default()
+        };
+        let output = crate::print_fields::prepare(&self.doc, &lo).map_err(CmdError::Failed)?;
+        let lay = &output.layout;
+        let plan = plan(v, lay.pages.len(), self.current_pages(lay))?;
         let paper = paper(v)?.map(|(_, w, h)| (w, h));
         let opts = wordcraft_pdf::PdfOptions {
             pages: Some(plan.pages.clone()),
@@ -168,7 +174,7 @@ impl Session {
             paper,
             ..Default::default()
         };
-        let bytes = wordcraft_pdf::export_layout(&self.doc, &lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
+        let bytes = wordcraft_pdf::export_layout(&output.doc, lay, &opts).map_err(|e| CmdError::Failed(e.to_string()))?;
         Ok((bytes, plan))
     }
 }
