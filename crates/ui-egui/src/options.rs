@@ -562,7 +562,7 @@ fn accessibility(app: &mut WordApp, ui: &mut Ui) {
 /// The Read Aloud voice: Automatic (each sentence in the voice of its language) or an installed
 /// voice. The list is asked for in the background; until it arrives only Automatic shows.
 fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
-    let voices = wordcraft_engine::speech::installed_voices();
+    let voices = app.session.read_aloud.voices();
     if voices.is_none() {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
     }

@@ -20,7 +20,10 @@ fn unknown_settings_keys_load_in_linear_time() {
 }
 
 fn app() -> WordApp {
-    WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    // Silent Read Aloud: the Accessibility pane never asks the system for its voices.
+    a.session.read_aloud.backend = wordcraft_engine::speech::Backend::Hold;
+    a
 }
 
 fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, WordApp> {
@@ -325,6 +328,7 @@ fn animation_effects_is_an_accessibility_option() {
     use egui_kittest::kittest::{By, Queryable};
     let services = Services { animations_enabled: Some(Box::new(|| Some(false))), ..Default::default() };
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
+    a.session.read_aloud.backend = wordcraft_engine::speech::Backend::Hold;
     a.run("file.options", json!({"pane": "accessibility"})).unwrap();
     let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
         |ui, app: &mut WordApp| {

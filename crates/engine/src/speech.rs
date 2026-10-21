@@ -599,7 +599,7 @@ static VOICES: Mutex<VoiceList> = Mutex::new(VoiceList { voices: None, asked: No
 /// The installed voices, or `None` while the system is asked for the first time. Asking happens
 /// on a thread, so neither a settings page nor the speech worker waits on a slow speech program;
 /// an empty list is asked for again after [`VOICES_RETRY`].
-pub fn installed_voices() -> Option<Arc<[Voice]>> {
+fn installed_voices() -> Option<Arc<[Voice]>> {
     #[cfg(not(target_arch = "wasm32"))]
     {
         let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
@@ -1042,6 +1042,11 @@ impl ReadAloud {
     /// The chosen voice's id, if any.
     pub fn voice(&self) -> Option<String> {
         lock(&self.shared.0).voice.clone()
+    }
+    /// The voices to choose from, or `None` while the system is still being asked: the installed
+    /// voices with the system's speech, none with a silent backend (tests never ask the system).
+    pub fn voices(&self) -> Option<Arc<[Voice]>> {
+        if self.backend == Backend::System { installed_voices() } else { Some(Arc::new([])) }
     }
     /// The sentence being read (or paused on).
     pub fn current(&self) -> Option<Utterance> {

@@ -300,7 +300,7 @@ pub(super) fn message_data(text: &str) -> String {
 /// server's list, but a saved choice is hostile input).
 fn plain_voice(name: &str) -> Option<&str> {
     let n = name.trim();
-    (!n.is_empty() && n.len() <= 200 && !n.chars().any(char::is_control)).then_some(n)
+    (!n.is_empty() && n.len() <= super::MAX_VOICE_ID && !n.chars().any(char::is_control)).then_some(n)
 }
 
 /// Reads reply lines. Bytes wait in `pending` until their line is complete, so a character split

@@ -106,7 +106,7 @@ fn voice(s: &mut Session, v: &Value) -> CmdResult {
             return Err(CmdError::Params(format!("`value` must be a voice id from the list (1 to {} bytes) or null", speech::MAX_VOICE_ID)));
         }
     }
-    let list = speech::installed_voices();
+    let list = s.read_aloud.voices();
     Ok(serde_json::json!({
         "voices": list.as_deref().unwrap_or_default().iter().map(speech::Voice::to_json).collect::<Vec<_>>(),
         "pending": list.is_none(),

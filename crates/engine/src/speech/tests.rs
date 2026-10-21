@@ -424,6 +424,9 @@ fn a_chosen_voice_reads_text_tagged_with_the_default_language() {
 fn the_chosen_voice_is_kept_and_reported() {
     let mut r = ReadAloud::default();
     assert_eq!(r.status()["voice"], Value::Null);
+    // A silent backend never asks the system (no `espeak-ng --voices`, no server started).
+    assert_ne!(r.backend, Backend::System);
+    assert_eq!(r.voices().as_deref(), Some(&[][..]));
     r.set_voice(Some(" urj/hu "));
     assert_eq!(r.voice().as_deref(), Some("urj/hu"));
     assert_eq!(r.status()["voice"], "urj/hu");
