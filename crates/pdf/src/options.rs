@@ -54,6 +54,9 @@ pub struct PdfOptions {
     /// content controls that may be edited, with their values. None on pages drawn scaled or moved
     /// (`comments`, `paper`).
     pub form_fields: bool,
+    /// Fillable text fields over blanks drawn with underscores (`Name: ________`, `__/__/20__`);
+    /// the page looks the same. None on pages drawn scaled or moved.
+    pub blank_fields: bool,
 }
 
 impl Default for PdfOptions {
@@ -74,6 +77,7 @@ impl Default for PdfOptions {
             paper: None,
             numeral: NumeralMode::Arabic,
             form_fields: false,
+            blank_fields: false,
         }
     }
 }

@@ -2863,8 +2863,8 @@ fn baseline_is_the_most_shared_y() {
     assert_eq!(baseline(&[(1, 0.0, -0.0), (2, 3.0, 0.0)]), Some(0.0));
 }
 
-/// `form_fields` turns legacy form fields into AcroForm widgets with their names and values,
-/// opaque over what layout drew; none by default or on pages drawn scaled.
+/// `form_fields` turns legacy form fields into AcroForm widgets with their names and values;
+/// `blank_fields` turns underscore blanks into text fields, transparent but for a date's.
 #[test]
 fn form_fields_are_fillable() {
     use lopdf::Object;
@@ -2877,7 +2877,7 @@ fn form_fields_are_fillable() {
         code: false,
         form: form.into(),
     };
-    let text = "Choose: ab";
+    let text = "Ref. No. ________ on the day __/__/20__ ab";
     let mut d = Document::from_text(text);
     let at = text.len() - 1;
     d.insert_object(
@@ -2913,17 +2913,34 @@ fn form_fields_are_fillable() {
             .collect()
     };
     assert!(fields(PdfOptions::default()).is_empty());
-    let got = fields(PdfOptions { form_fields: true, ..Default::default() });
+    let got = fields(PdfOptions { form_fields: true, blank_fields: true, ..Default::default() });
     let names: Vec<(&str, &str, bool)> = got.iter().map(|(t, ft, _, mk)| (t.as_str(), ft.as_str(), *mk)).collect();
-    assert_eq!(names, [("List", "Ch", true), ("Box", "Btn", true)]);
+    // Form fields are opaque, blanks transparent; a date is a field per part.
+    assert_eq!(
+        names,
+        [
+            ("List", "Ch", true),
+            ("Box", "Btn", true),
+            ("Ref_No", "Tx", false),
+            ("day_day", "Tx", false),
+            ("day_month", "Tx", false),
+            ("day_year", "Tx", false)
+        ]
+    );
+    // A date's parts take digits only, the month 1-12.
+    let raw = export(&d, &PdfOptions { blank_fields: true, ..Default::default() }).unwrap();
+    let has = |needle: &[u8]| raw.windows(needle.len()).any(|w| w == needle);
+    assert!(has(b"/MaxLen 2") && has(b"Enter a number from 1 to 12.") && has(b"Enter a number from 1 to 31."));
     // A page printed twice has its fields twice, under names of their own.
     let twice = fields(PdfOptions { form_fields: true, pages: Some(vec![0, 0]), ..Default::default() });
     let names: Vec<&str> = twice.iter().map(|(t, ..)| t.as_str()).collect();
     assert_eq!(names, ["List", "List_2", "Box", "Box_2"]);
     assert_eq!(got[0].2, Some(Object::string_literal("Beta")));
     assert_eq!(got[1].2, Some(Object::Name(b"Yes".to_vec())));
-    // Print Markup with no comments to show leaves the page as laid out: the fields stay. Another
-    // paper size scales the page: none.
+    // Each option alone. Print Markup with no comments to show leaves the page as laid out; another
+    // paper size scales it: no fields.
+    assert_eq!(fields(PdfOptions { form_fields: true, ..Default::default() }).len(), 2);
+    assert_eq!(fields(PdfOptions { blank_fields: true, ..Default::default() }).len(), 4);
     assert_eq!(fields(PdfOptions { form_fields: true, include_markup: true, comments: true, ..Default::default() }).len(), 2);
     // Nor on a print job's sheets: its pages are scaled onto them, or repeated as copies.
     for imposition in [crate::imposition::Imposition::NUp(2), crate::imposition::Imposition::Booklet { reverse: false }] {
@@ -2932,6 +2949,6 @@ fn form_fields_are_fillable() {
     for sheet_collate in [true, false] {
         assert!(fields(PdfOptions { form_fields: true, sheet_copies: 2, sheet_collate, ..Default::default() }).is_empty());
     }
-    assert_eq!(fields(PdfOptions { form_fields: true, sheet_copies: 1, ..Default::default() }), got);
+    assert_eq!(fields(PdfOptions { form_fields: true, blank_fields: true, sheet_copies: 1, ..Default::default() }), got);
     assert!(fields(PdfOptions { form_fields: true, paper: Some((842.0, 1191.0)), ..Default::default() }).is_empty());
 }

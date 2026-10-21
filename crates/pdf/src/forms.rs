@@ -1,4 +1,5 @@
-//! Fillable form fields (AcroForm) for [`crate::PdfOptions::form_fields`].
+//! Fillable form fields (AcroForm) for [`crate::PdfOptions::form_fields`] and
+//! [`crate::PdfOptions::blank_fields`].
 //!
 //! krilla writes no interactive forms, so they are added to the finished PDF: the document's
 //! fields are found where the same layout put them on the page, and each becomes a widget with
@@ -9,6 +10,11 @@
 //!   named after the field (`w:name`, tag or title), with the document's value as the page shows
 //!   it (no hidden text or tracked deletions). Their widgets are opaque: they cover the field drawn
 //!   below, so a printed or flattened copy shows the value filled in, not the one under it.
+//! - **Blanks:** runs of underscores (`Ref. No. ________`) as text fields named after the words
+//!   before them. A date (`__/__/20__`, `__/__`) or a year (`20__`) is one field per underscore
+//!   group (`_day`, `_month`, `_year`), digits only, the day 1-31 and the month 1-12 (checked by
+//!   the viewer's JavaScript); the slashes and printed digits stay as they are. Their widgets are
+//!   transparent, so the page looks as before (underscores, highlight).
 //!
 //! The PDF is read and written again with `lopdf`; the page content, fonts and structure tree are
 //! kept as they are.
@@ -130,12 +136,20 @@ pub(crate) struct FormField {
     pub(crate) font: FieldFont,
     /// An opaque white background covering what is drawn below (a field's static value).
     pub(crate) opaque: bool,
+    /// A blank drawn with underscores: room above and below its line of text.
+    pub(crate) blank: bool,
+    /// Text centred in the box (a date's day, month or year).
+    pub(crate) centred: bool,
+    /// Only digits may be typed in (a date's parts), and the number must lie in `range` if given
+    /// (day 1-31, month 1-12). Checked by the viewer's JavaScript (Acrobat, Chrome, Edge, Firefox).
+    pub(crate) digits: bool,
+    pub(crate) range: Option<(u32, u32)>,
 }
 
 impl FormField {
     /// A field with an opaque background, its text left-aligned and free.
     pub(crate) fn new(name: String, page: usize, rect: [f32; 4], kind: FieldKind, font: FieldFont) -> FormField {
-        FormField { name, page, rect, kind, font, opaque: true }
+        FormField { name, page, rect, kind, font, opaque: true, blank: false, centred: false, digits: false, range: None }
     }
 }
 
@@ -257,6 +271,246 @@ const CHECK_BOX_STROKE: f32 = 0.72;
 /// White margin around a check box widget, covering the drawn square should a viewer round its
 /// position differently.
 const CHECK_BOX_PAD: f32 = 1.0 + CHECK_BOX_STROKE / 2.0;
+
+/// Shortest run of underscores taken for a blank to fill in.
+const MIN_BLANK: usize = 4;
+
+/// Blanks drawn with underscores (`Prot. N° __________`, `__/__/20__`) as fillable text fields,
+/// one per line the blank covers, named after the words before it. A date pattern of
+/// underscore groups joined by slashes (`__/__/20__`, `__/__/__`, `__/__`) is one field per
+/// group (`…_day`, `…_month`, `…_year`), as long as its underscores and centred: the slashes and a
+/// printed `20` stay as they are. Otherwise a blank is a run of at least [`MIN_BLANK`]
+/// underscores.
+pub(crate) fn collect_blanks(doc: &Document, lay: &DocLayout) -> Vec<FormField> {
+    let mut out = Vec::new();
+    let story = StoryRef::Body;
+    for path in doc.para_paths(story) {
+        let Some(p) = doc.para(story, &path) else {
+            continue;
+        };
+        for (start, end) in blank_runs(&p.text) {
+            if out.len() >= MAX_FIELDS {
+                return out;
+            }
+            if omitted(doc, p, start) {
+                continue;
+            }
+            let name = name_before(p.text.get(..start).unwrap_or(""));
+            // Written like the text before the blank (the label), else like the blank itself.
+            let label =
+                p.text.get(..start).and_then(|t| t.char_indices().rev().find(|(_, c)| !c.is_whitespace() && *c != OBJ && *c != '_').map(|(i, _)| i));
+            let font = font_at(doc, p, label.unwrap_or(start));
+            let is_date = p.text.get(start..end).is_some_and(date_like);
+            for (from, to, part, max_len) in blank_parts(&p.text, start, end, is_date) {
+                let name = if part.is_empty() { name.clone() } else { format!("{name}_{part}") };
+                let a = Pos::new(story, path.clone(), from);
+                let b = Pos::new(story, path.clone(), to);
+                for (page, r) in lay.selection_rects(doc, &a, &b, 0) {
+                    if r.w < 4.0 || r.h < 4.0 {
+                        continue;
+                    }
+                    out.push(FormField {
+                        opaque: false,
+                        blank: true,
+                        centred: is_date,
+                        digits: is_date,
+                        range: match part.as_str() {
+                            "day" => Some((1, 31)),
+                            "month" => Some((1, 12)),
+                            _ => None,
+                        },
+                        ..FormField::new(name.clone(), page, [r.x, r.y, r.w, r.h], FieldKind::Text { value: String::new(), max_len }, font.clone())
+                    });
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Additional actions for a numeric field: a keystroke script letting only digits in, and with
+/// `range` a validation script refusing numbers outside it (an empty field is fine). `None` when
+/// the field is free text.
+fn number_actions(digits: bool, range: Option<(u32, u32)>) -> Option<lopdf::Dictionary> {
+    if !digits {
+        return None;
+    }
+    let js = |code: String| dictionary! { "S" => "JavaScript", "JS" => Object::String(code.into_bytes(), StringFormat::Literal) };
+    let mut aa = dictionary! { "K" => js("if (!event.willCommit) event.rc = /^[0-9]*$/.test(event.change);".to_string()) };
+    if let Some((lo, hi)) = range {
+        aa.set(
+            "V",
+            js(format!(
+                "if (event.value !== \"\") {{ var n = Number(event.value); if (isNaN(n) || n < {lo} || n > {hi}) {{ app.alert(\"Enter a number from {lo} to {hi}.\"); event.rc = false; }} }}"
+            )),
+        );
+    }
+    Some(aa)
+}
+
+/// The fields of the blank at `start..end` in `text`: (from, to, name suffix, length limit). A date
+/// (or a year, `20__`) has one per underscore group, named day, month, year (`day`, `month`, `year`)
+/// for one to three, numbered otherwise; any other blank is one field.
+fn blank_parts(text: &str, start: usize, end: usize, is_date: bool) -> Vec<(usize, usize, String, Option<u32>)> {
+    if !is_date {
+        return vec![(start, end, String::new(), None)];
+    }
+    let b = text.as_bytes();
+    let mut groups = Vec::new();
+    let mut i = start;
+    while i < end {
+        let n = b.get(i..end).map_or(0, |r| r.iter().take_while(|c| **c == b'_').count());
+        if n > 0 {
+            groups.push((i, i + n));
+            i += n;
+        } else {
+            i += 1;
+        }
+    }
+    let names: &[&str] = match groups.len() {
+        1 => &["year"],
+        2 => &["day", "month"],
+        3 => &["day", "month", "year"],
+        _ => &[],
+    };
+    groups
+        .iter()
+        .enumerate()
+        .map(|(k, &(a, z))| {
+            let part = names.get(k).map_or_else(|| (k + 1).to_string(), |n| n.to_string());
+            (a, z, part, u32::try_from(z - a).ok())
+        })
+        .collect()
+}
+
+/// Whether a blank's text is a date (`__/__/20__`) or a year (`20__`): digits only, in parts.
+fn date_like(blank: &str) -> bool {
+    blank.contains('/') || (blank.len() == 4 && blank.bytes().take(2).all(|c| c.is_ascii_digit()) && blank.ends_with("__"))
+}
+
+/// Byte ranges of the blanks in `text`: date patterns, years (`20__`) and long underscore runs.
+fn blank_runs(text: &str) -> Vec<(usize, usize)> {
+    let b = text.as_bytes();
+    let underscores = |from: usize| b.get(from..).map_or(0, |r| r.iter().take_while(|c| **c == b'_').count());
+    let spaces = |mut j: usize| {
+        while b.get(j) == Some(&b' ') {
+            j += 1;
+        }
+        j
+    };
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b.get(i) != Some(&b'_') {
+            i += 1;
+            continue;
+        }
+        let first = underscores(i);
+        // Groups of underscores joined by `/` (digits such as `20` may open a group).
+        let mut end = i + first;
+        let mut groups = 1;
+        loop {
+            let j = spaces(end);
+            if b.get(j) != Some(&b'/') {
+                break;
+            }
+            let j = spaces(j + 1);
+            let digits = b.get(j..).map_or(0, |r| r.iter().take_while(|c| c.is_ascii_digit()).count()).min(4);
+            let n = underscores(j + digits);
+            if n < 2 {
+                break;
+            }
+            end = j + digits + n;
+            groups += 1;
+        }
+        // A year with its century printed (`20__`): two digits right before exactly two
+        // underscores, the whole touching no other letter, digit or underscore.
+        let year = groups == 1
+            && first == 2
+            && i >= 2
+            && b.get(i - 2..i).is_some_and(|d| d.iter().all(u8::is_ascii_digit))
+            && !(i >= 3 && b.get(i - 3).is_some_and(u8::is_ascii_alphanumeric))
+            && !b.get(end).is_some_and(|c| c.is_ascii_alphanumeric() || *c == b'_');
+        if year {
+            if !filled_in(b, i - 2, end) {
+                out.push((i - 2, end));
+            }
+        } else if ((groups >= 2 && first >= 2) || first >= MIN_BLANK) && !filled_in(b, i, end) {
+            out.push((i, end));
+        }
+        i = end.max(i + 1);
+    }
+    out
+}
+
+/// Room a blank's field gets above and below its line of text, so no viewer shrinks the text
+/// typed in to fit (the line's height is barely its font's).
+const BLANK_ROOM: f32 = 1.5;
+
+/// How far [`filled_in`] looks for the underscores on the other side of a value.
+const FILLED_REACH: usize = 40;
+
+/// Whether the underscores at `start..end` are the leftover of a blank already filled in by hand,
+/// `__MARIO ROSSI______`: a value touching them that touches more underscores on its other side.
+/// The search stops after [`FILLED_REACH`] bytes and at a `:`, a tab or two spaces, which part
+/// labels and blanks (`Prot. N° ____    CIG ____` is two blanks).
+fn filled_in(b: &[u8], start: usize, end: usize) -> bool {
+    // A value starts with a letter or digit against the underscores (any byte of a non-ASCII
+    // letter too); punctuation there (`____;`) ends the blank instead.
+    let touches = |c: Option<&u8>| c.is_some_and(|c| c.is_ascii_alphanumeric() || *c >= 0x80);
+    let reaches = |bytes: &mut dyn Iterator<Item = &u8>| {
+        let mut prev = 0u8;
+        for &c in bytes.take(FILLED_REACH) {
+            match c {
+                // The value must touch these underscores too (`20__. alle ore __/__` is two blanks).
+                b'_' => return prev != b' ',
+                b':' | b'\t' => return false,
+                b' ' if prev == b' ' => return false,
+                _ => {}
+            }
+            prev = c;
+        }
+        false
+    };
+    let before = start.checked_sub(1).and_then(|j| b.get(j));
+    (touches(before) && reaches(&mut b.get(..start).unwrap_or(&[]).iter().rev()))
+        || (touches(b.get(end)) && reaches(&mut b.get(end..).unwrap_or(&[]).iter()))
+}
+
+/// A field name from the end of `before`: its last word or two (`Prot. N°` → `Prot_N`), or
+/// `Field` when there are none.
+fn name_before(before: &str) -> String {
+    // Only the words since the previous blank on the line.
+    let before = before.rsplit('_').next().unwrap_or(before);
+    // Articles, prepositions and one-letter elisions (`il giorno`, `entro il`, `d'`) add nothing.
+    const SMALL: [&str; 24] = [
+        "il", "lo", "la", "i", "gli", "le", "un", "una", "di", "del", "della", "dei", "al", "alla", "alle", "ai", "in", "nel", "per", "con", "the",
+        "of", "on", "at",
+    ];
+    let words: Vec<&str> = before
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty() && w.chars().any(char::is_alphabetic))
+        .filter(|w| !SMALL.contains(&w.to_lowercase().as_str()))
+        .filter(|w| w.chars().count() > 1 || w.chars().all(char::is_uppercase))
+        .collect();
+    let tail = words.get(words.len().saturating_sub(2)..).unwrap_or(&[]);
+    // Two words make a label when the first is capitalised (`Prot. N°`, `Codice univoco`); in
+    // running text (`non oltre il giorno`) the last word names the blank.
+    let tail = match tail {
+        [a, b] if !a.chars().next().is_some_and(char::is_uppercase) => vec![*b],
+        t => t.to_vec(),
+    };
+    let mut name = tail.join("_");
+    if name.is_empty() {
+        // Only small words since the last blank (`dal __/__ al __/__`): the last of them.
+        name = before
+            .split(|c: char| !c.is_alphanumeric())
+            .rfind(|w| w.chars().count() > 1 && w.chars().all(char::is_alphabetic))
+            .unwrap_or("")
+            .to_string();
+    }
+    if name.is_empty() { "Field".to_string() } else { name.chars().take(40).collect() }
+}
 
 /// The band from `a` to `b` on one line: (page, [x, top, width, height]); `None` when they are
 /// on different pages or lines, or not laid out.
@@ -384,8 +638,12 @@ pub(crate) fn add_acroform(pdf: Vec<u8>, fields: &[FormField]) -> Result<Vec<u8>
             continue;
         };
         let page_h = page_height(&doc, page_id).unwrap_or(842.0);
-        // A check box's rect is its square; the widget adds a white margin around it.
-        let (px, py) = if matches!(f.kind, FieldKind::CheckBox { .. }) { (CHECK_BOX_PAD, CHECK_BOX_PAD) } else { (0.0, 0.0) };
+        // A check box's rect is its square; the widget adds a white margin around it. A blank's
+        // field gets room above and below its line, so viewers keep the text's size.
+        let (px, mut py) = if matches!(f.kind, FieldKind::CheckBox { .. }) { (CHECK_BOX_PAD, CHECK_BOX_PAD) } else { (0.0, 0.0) };
+        if f.blank {
+            py = BLANK_ROOM;
+        }
         let [x, y, w, h] = [f.rect[0] - px, f.rect[1] - py, f.rect[2] + 2.0 * px, f.rect[3] + 2.0 * py];
         let rect = vec![Object::Real(x), Object::Real(page_h - y - h), Object::Real(x + w), Object::Real(page_h - y)];
         let mut d = dictionary! {
@@ -420,6 +678,12 @@ pub(crate) fn add_acroform(pdf: Vec<u8>, fields: &[FormField]) -> Result<Vec<u8>
                 }
                 if !mk.is_empty() {
                     d.set("MK", mk);
+                }
+                if f.centred {
+                    d.set("Q", 1);
+                }
+                if let Some(aa) = number_actions(f.digits, f.range) {
+                    d.set("AA", aa);
                 }
                 if let Some(n) = max_len {
                     d.set("MaxLen", i64::from(*n));
@@ -635,6 +899,46 @@ mod tests {
     }
 
     #[test]
+    fn blanks_and_their_names() {
+        let t = "Prot. N° __________    CIG _______ il giorno __/__/20__. alle ore __/__ e _ x__y";
+        let runs: Vec<&str> = blank_runs(t).into_iter().map(|(a, b)| &t[a..b]).collect();
+        assert_eq!(runs, ["__________", "_______", "__/__/20__", "__/__"]);
+        assert_eq!(blank_runs("__ / __ / ____"), [(0, 14)]);
+        // A date: one field per group, the slashes and a printed `20` left out.
+        let d = "il __/__/20__";
+        let parts: Vec<(&str, String, Option<u32>)> = blank_parts(d, 3, d.len(), true).into_iter().map(|(a, z, n, m)| (&d[a..z], n, m)).collect();
+        assert_eq!(parts, [("__", "day".into(), Some(2)), ("__", "month".into(), Some(2)), ("__", "year".into(), Some(2))]);
+        let parts: Vec<(usize, usize)> = blank_parts("__ / ____", 0, 9, true).into_iter().map(|(a, z, _, _)| (a, z)).collect();
+        assert_eq!(parts, [(0, 2), (5, 9)]);
+        assert_eq!(blank_parts("x ____", 2, 6, false), [(2, 6, String::new(), None)]);
+        // A year with its century printed: the two underscores, as the year.
+        let t = "canone annuale 20__; dal 20__ al 2031";
+        let runs: Vec<&str> = blank_runs(t).into_iter().map(|(a, b)| &t[a..b]).collect();
+        assert_eq!(runs, ["20__", "20__"]);
+        assert!(date_like("20__") && date_like("__/__") && !date_like("____"));
+        assert_eq!(blank_parts("20__", 0, 4, true), [(2, 4, "year".to_string(), Some(2))]);
+        for not_a_year in ["A20__", "120__", "20__x", "20___", "20__5", "x 2__"] {
+            assert!(blank_runs(not_a_year).is_empty(), "{not_a_year}");
+        }
+        // Blanks already filled in by hand are not blanks.
+        assert!(blank_runs("Nome del Dipendente: __MARIO ROSSI______").is_empty());
+        assert!(blank_runs("Data di compilazione __04/05/2025_____").is_empty());
+        assert!(blank_runs("Nome: ______MARIO__").is_empty());
+        assert_eq!(blank_runs("Nome: MARIO ROSSI______").len(), 1);
+        assert_eq!(blank_runs("____ a ____").len(), 2);
+        assert_eq!(blank_runs("Prot. ____; vedi 20__").len(), 2);
+        assert!(blank_runs("Nome: __Élodie ROSSI____").is_empty());
+        assert_eq!(name_before("Prot. N° "), "Prot_N");
+        assert_eq!(name_before("Prot. N° __________    CIG "), "CIG");
+        assert_eq!(name_before("entro e non oltre il giorno "), "giorno");
+        assert_eq!(name_before(""), "Field");
+        assert_eq!(name_before("dal __/__/20__ al "), "al");
+        assert_eq!(name_before("__ , "), "Field");
+        assert_eq!(name_before("da consegnare entro il "), "entro");
+        assert_eq!(name_before("l'importo d'"), "importo");
+    }
+
+    #[test]
     fn standard_fonts_for_document_fonts() {
         let base = |n: &str, b: bool, i: bool| standard_font(n, b, i).1;
         assert_eq!(base("Aptos", false, false), "Helvetica");
@@ -648,6 +952,19 @@ mod tests {
         let f = FieldFont { size: Some(10.0), color: Some([1.0, 0.0, 0.0]), ..FieldFont::DEFAULT };
         assert_eq!(f.da(), "/Helv 10.0 Tf 1.000 0.000 0.000 rg");
         assert_eq!(FieldFont::DEFAULT.da(), "/Helv 0 Tf 0 g");
+    }
+
+    #[test]
+    fn date_parts_take_digits_in_range() {
+        assert!(number_actions(false, None).is_none());
+        let aa = number_actions(true, Some((1, 12))).unwrap();
+        let code = |k: &[u8]| match aa.get(k).unwrap().as_dict().unwrap().get(b"JS").unwrap() {
+            Object::String(b, _) => String::from_utf8(b.clone()).unwrap(),
+            _ => panic!(),
+        };
+        assert!(code(b"K").contains("/^[0-9]*$/"));
+        assert!(code(b"V").contains("n < 1 || n > 12"));
+        assert!(number_actions(true, None).unwrap().get(b"V").is_err());
     }
 
     #[test]
