@@ -723,6 +723,8 @@ struct Ctx<'a> {
     /// on the page (see [`with_pin`]).
     pin: Option<Pin>,
     footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
+    header_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
+    header_sections: Arc<Vec<(usize, &'a SectionProps)>>,
     header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
@@ -1323,7 +1325,7 @@ fn layout_box(
                         (r.x, r.y)
                     }
                     // A table in the text flow starts below the floating objects in its way.
-                    None => (tl.x, below(&excl, y, tl.x, tl.x + tl.width)),
+                    None => (tl.x, below(&excl, y, tl.x, tl.x + tl.width, tl.rows.first().map_or(0.0, |r| r.height))),
                 };
                 let mut row_y = ty;
                 for row in &tl.rows {
@@ -1344,7 +1346,7 @@ fn layout_box(
     }
     let floats_bottom = float_tables.iter().map(|r| r.bottom()).fold(0.0, f32::max);
     ctx.hide_deleted = outer_hide;
-    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps }
+    BoxLayout { items, height: y.max(0.0), floats_bottom, last_top: last_top.max(0.0), table_areas, page_table_wraps, exclusions: excl }
 }
 
 /// The width a text frame without one takes: its widest line, with the paragraph's indents.
@@ -1398,6 +1400,7 @@ fn frame_float(fr: &wordcraft_doc::props::TextFrame) -> Float {
 /// floating tables end (a table cell grows to hold them) and where its last block starts (the
 /// height without it).
 struct BoxLayout {
+    exclusions: Vec<WrapArea>,
     items: Vec<Placed>,
     table_areas: Vec<Rect>,
     page_table_wraps: Vec<WrapArea>,
@@ -2212,9 +2215,11 @@ fn layout_pass(
         fitted: HashMap::new(),
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
+        header_wraps: HashMap::new(),
+        header_sections: Arc::new(doc.sections()),
         pin: None,
     };
-    let sections = doc.sections();
+    let sections = ctx.header_sections.clone();
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
     let read = opts.view == ViewMode::Read;
     let reflow = web || read;
@@ -3178,8 +3183,65 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     areas
 }
 
+/// Header wrapping is independent of body counters and is reused for each paragraph on a page.
+fn header_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
+    if pb.web || ctx.opts.view == ViewMode::Read {
+        return Vec::new();
+    }
+    let Some(page) = pb.pages.last() else { return Vec::new() };
+    let first = pb.pages.iter().rev().nth(1).is_none_or(|prev| prev.section != page.section);
+    let key = (page.section, page.number, first);
+    if let Some(areas) = ctx.header_wraps.get(&key) {
+        return areas.clone();
+    }
+    ctx.header_wraps.insert(key, Vec::new());
+    let sections = ctx.header_sections.clone();
+    let Some((_, sect)) = sections.get(page.section) else { return Vec::new() };
+    if sect.text_direction.is_turned() {
+        return Vec::new();
+    }
+    let set = linked(&sections, page.section, |s| s.headers);
+    let id = if sect.title_page && first {
+        set.first
+    } else if ctx.doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
+        set.even.or(set.default)
+    } else {
+        set.default
+    };
+    let Some(id) = id else { return Vec::new() };
+    let Some(part) = ctx.doc.parts.get(&id) else { return Vec::new() };
+    let blocks = part.blocks.clone();
+    let x = sect.margin_left + sect.gutter;
+    let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
+    let base = defining_width(&sections, page.section, |s| s.headers, Some(id));
+    let counters = std::mem::take(&mut ctx.counters);
+    let boxes = std::mem::take(&mut ctx.boxes);
+    let chains = std::mem::take(&mut ctx.chains);
+    let fields = ctx.fields.clone();
+    let grid = std::mem::take(&mut ctx.grid);
+    let track = std::mem::replace(&mut ctx.track_totals, false);
+    ctx.fields.page = page.number;
+    let mut areas = again(ctx, 0, |ctx| {
+        with_pct_base(ctx, base, |ctx| layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)))
+            .exclusions
+    });
+    ctx.counters = counters;
+    ctx.boxes = boxes;
+    ctx.chains = chains;
+    ctx.fields = fields;
+    ctx.grid = grid;
+    ctx.track_totals = track;
+    for (r, _, _, _) in &mut areas {
+        r.x += x;
+        r.y += sect.header;
+    }
+    ctx.header_wraps.insert(key, areas.clone());
+    areas
+}
+
 fn body_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
-    let mut areas = footer_table_wraps(ctx, pb);
+    let mut areas = header_wraps(ctx, pb);
+    areas.extend(footer_table_wraps(ctx, pb));
     areas.extend_from_slice(&pb.excl);
     areas
 }
@@ -3510,7 +3572,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         }
     }
     // A different top only matters when there is something to wrap around.
-    if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !pb.excl.is_empty()) {
+    if spot(pb) != placed_at || ((pb.y - guess).abs() > 0.01 && !body_wraps(ctx, pb).is_empty()) {
         let y0 = pb.y;
         (float_rects, pl, rel) = again(ctx, eq_start, |ctx| anchor_floats(ctx, pb, p, y0, applied_before, excl_mark, &label));
         (laid_page, laid_width) = (pb.number, pb.col_w());
@@ -4033,7 +4095,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         tl.x = float_table_x(pb, tl.width, &f, legacy, ctx.mirror) - pb.col_x();
     }
     // A table in the text flow starts below the floating objects in its way.
-    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
+    below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, tl.rows.first().map_or(0.0, |r| r.height));
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
     // Header rows are re-placed on every page a table spills onto, so a table with many header
     // rows that each spill onto their own page is O(header rows × pages) placed items — a few KB
@@ -4084,6 +4146,8 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
         if row.height > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row(row, room).is_some())) {
             pb.advance(block, body_top);
+            let height = tl.rows.first().map_or(0.0, |r| r.height);
+            below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, height);
         }
     }
     // For the move-on rule, the table's own header rows at the top of a page leave it empty.
@@ -4139,6 +4203,9 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                 None => {}
             }
             pb.advance(block, body_top);
+            // Header wrap areas apply again when a row moves onto another page.
+            let height = header_rows.first().and_then(|i| tl.rows.get(*i)).map_or_else(|| rest.as_ref().unwrap_or(row).height, |r| r.height);
+            below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width, height);
             // Repeat header rows, up to this table's cap.
             if !header_rows.contains(&ri) && header_repeats < MAX_HEADER_REPEATS {
                 for hr in &header_rows {
@@ -4353,15 +4420,15 @@ fn float_table_x(pb: &PageBuilder, w: f32, f: &TableFloat, legacy: f32, mirror: 
 
 /// Move `pb.y` below the floating objects in the way of something spanning `x0..x1` that
 /// starts there (a table in the text flow doesn't wrap around them).
-fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32) {
-    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1);
+fn below_floats(ctx: &mut Ctx, pb: &mut PageBuilder, x0: f32, x1: f32, height: f32) {
+    pb.y = below(&body_wraps(ctx, pb), pb.y, x0, x1, height);
 }
 
 /// `y`, moved below the wrap areas in `excl` in the way of something spanning `x0..x1` that
 /// starts there.
-fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
+fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32, height: f32) -> f32 {
     for _ in 0..64 {
-        let in_the_way = excl.iter().filter(|(r, ..)| r.y <= y + 0.01 && r.bottom() > y && r.x < x1 && r.right() > x0);
+        let in_the_way = excl.iter().filter(|(r, ..)| r.y < y + height.max(0.01) && r.bottom() > y && r.x < x1 && r.right() > x0);
         let Some(bottom) = in_the_way.map(|(r, ..)| r.bottom()).reduce(f32::max) else { break };
         y = bottom;
     }

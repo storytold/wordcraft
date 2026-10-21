@@ -210,10 +210,14 @@ Footer flow-table strokes reserve their drawn top edge, including the half-width
 
 Page-relative footer tables keep their physical wrap bounds without adding to footer text height. Body text resumes below the table. Original native controls cover empty, text-bearing and minimum-height tables. Body textbox boundaries and nested footer painting remain separate gaps.
 
+Body paragraphs and tables avoid positioned header objects. Table placement checks the first row, including objects beginning just below its top. Pictures inside header table cells remain outside this change.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | Header wrap clearance is recomputed after collapsed paragraph spacing and a table header-row move. Synthetic regressions prepared; no new native observation. |
+| 2026-10-15 | trivial | Body paragraphs and tables avoid positioned header objects; original regressions cover continuation, first/even selection and nonwrapping pictures |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
 | 2026-10-16 | trivial | Table row keep-next uses the first paragraph of the first cell, including inherited flags. Kept row chains start on a fresh page when the following row cannot start below them. Synthetic Word export covers mixed-cell flags, multiple paragraphs and kept prefixes before oversized followers. |
