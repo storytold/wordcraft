@@ -674,6 +674,7 @@ pub struct HfRef {
     pub rid: String,
 }
 
+/// A page-number prefix from a document variable: at most 16 characters, `None` when empty.
 fn page_num_prefix_val(raw: Option<&str>) -> Option<String> {
     let p = raw?.chars().take(16).collect::<String>();
     if p.is_empty() { None } else { Some(p) }

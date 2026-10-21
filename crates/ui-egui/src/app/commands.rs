@@ -130,6 +130,7 @@ impl WordApp {
         self.execute_inner(id, params)
     }
 
+    /// [`WordApp::execute`] apart from turning add-ins on or off.
     fn execute_inner(&mut self, id: &str, params: Value) -> Result<Value, String> {
         self.clear_command_targets(id);
         if let Some(error) = self.document_required_error(id) {

@@ -28,12 +28,14 @@ pub struct CitationEntry {
     pub occurrences: Vec<CitationOccurrence>,
 }
 
+/// Where one citation of an authority appears.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CitationOccurrence {
     pub start: Pos,
     pub end: Pos,
 }
 
+/// One finder match before overlaps are dropped: its rule kind, the matched text and its span.
 struct RawHit {
     kind: String,
     text: String,
@@ -138,18 +140,22 @@ pub(crate) fn find_entries_limited(
     Ok(out)
 }
 
+/// The error for a scan that went past one of its caps.
 fn too_many(what: &str, got: usize, max: usize) -> CmdError {
     CmdError::Failed(format!("too many {what} in the document ({got}, at most {max}); narrow the document or turn off the table of authorities"))
 }
 
+/// Sort key for a hit's start: story, paragraph path, then offset.
 fn pos_order(start: &Pos) -> (i64, Vec<u32>, usize) {
     (story_rank(start.story), start.path.0.clone(), start.off)
 }
 
+/// Key for a paragraph: its story and path.
 fn para_key(story: StoryRef, path: &wordcraft_doc::Path) -> (i64, Vec<u32>) {
     (story_rank(story), path.0.clone())
 }
 
+/// Order of a story: the body first, then other parts by id.
 fn story_rank(story: StoryRef) -> i64 {
     match story {
         StoryRef::Body => 0,
@@ -157,6 +163,7 @@ fn story_rank(story: StoryRef) -> i64 {
     }
 }
 
+/// Drop hits that overlap a longer one in the same paragraph, keeping the longest; the rest come back in document order.
 fn dedupe_overlaps(hits: Vec<RawHit>) -> Vec<RawHit> {
     let mut hits = hits;
     hits.sort_by(|a, b| b.text.len().cmp(&a.text.len()).then_with(|| pos_order(&a.start).cmp(&pos_order(&b.start))));

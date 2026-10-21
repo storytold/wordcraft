@@ -340,12 +340,14 @@ pub struct ModuleEn {
 }
 
 impl std::fmt::Debug for ModuleEn {
+    /// Shows how many module words there are and whether a grammar check is set.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ModuleEn").field("spelling_words", &self.spelling.map(|w| w.len())).field("grammar", &self.grammar.is_some()).finish()
     }
 }
 
 impl PartialEq for ModuleEn {
+    /// Same words and the same grammar check.
     fn eq(&self, other: &Self) -> bool {
         self.spelling == other.spelling
             && match (self.grammar, other.grammar) {
@@ -359,6 +361,7 @@ impl PartialEq for ModuleEn {
 impl Eq for ModuleEn {}
 
 impl std::hash::Hash for ModuleEn {
+    /// Hashes the words and the grammar check, matching `eq`.
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Hash the spelling *contents*, matching the content comparison in `PartialEq`: two
         // separate slices holding the same words must compare equal *and* hash equally.
@@ -379,6 +382,7 @@ impl ModuleEn {
     }
 }
 
+/// Whether `lower` is in the module's word list.
 fn in_module_spelling(lower: &str, module: ModuleEn) -> bool {
     module.spelling.is_some_and(|words| words.binary_search_by(|w| w.cmp(&lower)).is_ok())
 }
@@ -503,6 +507,7 @@ fn base_known(d: &dict::Dictionary, w: &str) -> bool {
     d.get(w).is_some() || extra_words().contains(w)
 }
 
+/// Whether `w` (lower case) is a known word: the dictionary, common words, the user's and the module's words, ignored words, or an inflected or prefixed form of one.
 fn known_core(w: &str, module: ModuleEn) -> bool {
     let d = dict::Dictionary::en_us();
     if base_known(d, w) || COMMON.split(' ').any(|c| c == w) {

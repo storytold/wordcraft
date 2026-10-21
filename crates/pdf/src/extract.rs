@@ -22,6 +22,7 @@ struct PageText {
     page_area: f64,
 }
 
+/// Collects a page's text as the interpreter draws it: all of it, the part outside artifacts, and how much picture it holds.
 struct Extractor {
     all: String,
     content: String,
@@ -32,17 +33,24 @@ struct Extractor {
 }
 
 impl Extractor {
+    /// Whether drawing is inside an `Artifact` marked-content sequence (headers, footers, watermarks).
     fn in_artifact(&self) -> bool {
         self.marks.iter().any(|artifact| *artifact)
     }
 }
 
 impl Device<'_> for Extractor {
+    /// Ignored: masks don't change the text.
     fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+    /// Ignored: blend modes don't change the text.
     fn set_blend_mode(&mut self, _: BlendMode) {}
+    /// Ignored: paths carry no text.
     fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+    /// Ignored: clipping doesn't change the text.
     fn push_clip_path(&mut self, _: &ClipPath) {}
+    /// Ignored: groups don't change the text.
     fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+    /// Record a filled glyph's Unicode text; one with no mapping counts as U+FFFD.
     fn draw_glyph(&mut self, g: &Glyph<'_>, _: kurbo::Affine, _: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
         if matches!(mode, GlyphDrawMode::Stroke(_)) {
             return;
@@ -69,6 +77,7 @@ impl Device<'_> for Extractor {
             }
         }
     }
+    /// Note a picture outside artifacts and add the page area it covers.
     fn draw_image(&mut self, image: Image<'_, '_>, transform: kurbo::Affine) {
         // Page furniture can carry a logo or watermark image; that is not document content.
         if !self.in_artifact() {
@@ -79,12 +88,16 @@ impl Device<'_> for Extractor {
             }
         }
     }
+    /// Ignored: clipping doesn't change the text.
     fn pop_clip_path(&mut self) {}
+    /// Ignored: groups don't change the text.
     fn pop_transparency_group(&mut self) {}
     // Headers, footers and watermarks are written inside an `Artifact` marked-content sequence.
+    /// Enter a marked-content sequence, noting whether it is an artifact.
     fn begin_marked_content(&mut self, tag: &[u8], _: Option<i32>) {
         self.marks.push(tag == b"Artifact");
     }
+    /// Leave the innermost marked-content sequence.
     fn end_marked_content(&mut self) {
         self.marks.pop();
     }
@@ -227,6 +240,7 @@ enum Coverage {
     Uncertain,
 }
 
+/// Whether a page's own text covers it, or a picture dominates it so its text can't be trusted.
 fn page_coverage(page: &PageText) -> Coverage {
     if !page.image {
         // A page with its own text, or a blank or furniture-only page, never leaves a gap; the
