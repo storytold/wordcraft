@@ -85,6 +85,7 @@ fn order(name: &str) -> Option<Subpixel> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 mod desktop {
+    use std::collections::HashMap;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::time::Duration;
@@ -169,9 +170,15 @@ mod desktop {
     fn portal(connection: &Connection) -> Option<Option<Subpixel>> {
         let portal =
             Proxy::new(connection, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop", "org.freedesktop.portal.Settings").ok()?;
+        // Plasma 6.7's portal answers `ReadOne` and `Read` for its own keys with "not found", yet
+        // lists them in `ReadAll`: so the whole namespace is read when a single key can't be.
+        let read_all = |namespace: &str, key: &str| -> Option<String> {
+            let mut all: HashMap<String, HashMap<String, OwnedValue>> = portal.call("ReadAll", &(vec![namespace],)).ok()?;
+            text(all.remove(namespace)?.get(key)?, 0)
+        };
         let read = |namespace: &str, key: &str| -> Option<String> {
-            let value: OwnedValue = portal.call("ReadOne", &(namespace, key)).or_else(|_| portal.call("Read", &(namespace, key))).ok()?;
-            text(&value, 0)
+            let one: Option<OwnedValue> = portal.call("ReadOne", &(namespace, key)).or_else(|_| portal.call("Read", &(namespace, key))).ok();
+            one.and_then(|value| text(&value, 0)).or_else(|| read_all(namespace, key))
         };
         let kde = "org.kde.kdeglobals.General";
         let gnome = "org.gnome.desktop.interface";
