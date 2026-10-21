@@ -9423,3 +9423,459 @@ fn caret_height_ignores_line_spacing() {
         assert!((single - wide).abs() < 0.01, "{spacing:?}: single {single}, wide {wide}");
     }
 }
+
+fn fit_image(float: wordcraft_doc::para::Float) -> InlineObject {
+    InlineObject::Image { media: "original-probe".into(), w: 400.0, h: 280.0, alt: String::new(), float, crop: [0.0; 4], ole: None }
+}
+
+fn image_rects(items: &[Placed]) -> Vec<Rect> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Image { rect, .. } => Some(*rect),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn paragraph_floats_fit_the_page() {
+    use wordcraft_doc::para::{Anchor, Float, GroupChild, Wrap};
+    for grouped in [false, true] {
+        let mut d = Document::from_text("\n\n");
+        for block in 0..3 {
+            let p = d.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
+            p.props.space_after = Some(280.0);
+            let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 9.0, ..Default::default() };
+            let o = if grouped {
+                InlineObject::Group {
+                    w: 400.0,
+                    h: 280.0,
+                    float: f,
+                    ch_w: 400.0,
+                    ch_h: 280.0,
+                    children: vec![GroupChild { x: 0.0, y: 0.0, obj: fit_image(Default::default()) }],
+                    canvas: None,
+                }
+            } else {
+                fit_image(f)
+            };
+            p.insert_object(0, o, &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        assert_eq!(l.pages.iter().map(|p| image_rects(&p.items).len()).sum::<usize>(), 3);
+        for page in &l.pages {
+            for r in image_rects(&page.items) {
+                assert!(r.bottom() <= page.body.bottom() + 0.01, "picture {r:?} overflows body {:?}", page.body);
+            }
+        }
+    }
+}
+
+#[test]
+fn page_float_keeps_its_position() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Before\n");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(520.0);
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 650.0, ..Default::default() };
+    d.insert_object(&Pos::body(1, 0), fit_image(f), &Default::default()).unwrap();
+    let l = lay(&d);
+    assert_eq!(l.pages.len(), 1);
+    assert!((image_rects(&l.pages[0].items)[0].y - 650.0).abs() < 0.01);
+}
+
+#[test]
+fn annotation_keeps_its_anchor() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Before\nAnchor");
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(520.0);
+    let f = Float { wrap: Wrap::Square, v_rel: Anchor::Paragraph, y: 300.0, ..Default::default() };
+    d.insert_object(&Pos::body(1, 0), rect_shape(10.0, 10.0, f), &Default::default()).unwrap();
+    assert_eq!(lay(&d).pages.len(), 1);
+}
+
+mod contextual_picture_fit {
+    use super::*;
+    use wordcraft_doc::para::{Anchor, Float, GroupChild, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+
+    const PICTURE_WIDTH: f32 = 400.0;
+    const PICTURE_HEIGHT: f32 = 280.0;
+    const SUPPRESSED_GAP: f32 = 80.0;
+
+    #[derive(Clone, Copy, Debug)]
+    enum PictureKind {
+        Image,
+        Group,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Gap {
+        Contextual,
+        Zero,
+    }
+
+    fn document(kind: PictureKind, gap: Gap, first_height: f32) -> Document {
+        let mut d = Document::from_text("Before\n");
+        for block in 0..2 {
+            let p = d.para_mut(StoryRef::Body, &Path::top(block)).unwrap();
+            p.props = ParaProps {
+                space_before: Some(0.0),
+                space_after: Some(0.0),
+                contextual_spacing: Some(false),
+                line_spacing: Some(LineSpacing::Exactly(if block == 0 { first_height } else { 24.0 })),
+                ..Default::default()
+            };
+        }
+        if matches!(gap, Gap::Contextual) {
+            let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+            p.props.space_after = Some(SUPPRESSED_GAP);
+            p.props.contextual_spacing = Some(true);
+        }
+        let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 0.0, ..Default::default() };
+        let picture = match kind {
+            PictureKind::Image => fit_image(float),
+            PictureKind::Group => InlineObject::Group {
+                w: PICTURE_WIDTH,
+                h: PICTURE_HEIGHT,
+                float,
+                ch_w: PICTURE_WIDTH,
+                ch_h: PICTURE_HEIGHT,
+                children: vec![GroupChild { x: 0.0, y: 0.0, obj: fit_image(Default::default()) }],
+                canvas: None,
+            },
+        };
+        d.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
+        d
+    }
+
+    fn assert_pair(first_height: f32, expected_page: usize) {
+        for kind in [PictureKind::Image, PictureKind::Group] {
+            let contextual = lay(&document(kind, Gap::Contextual, first_height));
+            let control = lay(&document(kind, Gap::Zero, first_height));
+            for l in [&contextual, &control] {
+                assert_eq!(l.pages.len(), expected_page + 1, "{kind:?}");
+                assert_eq!(l.pages.iter().map(|p| image_rects(&p.items).len()).sum::<usize>(), 1, "{kind:?}");
+                let page = &l.pages[expected_page];
+                let images = image_rects(&page.items);
+                assert_eq!(images.len(), 1, "{kind:?}");
+                let r = images[0];
+                let expected_y = page.body.y + if expected_page == 0 { first_height } else { 0.0 };
+                assert!((r.y - expected_y).abs() < 0.01, "{kind:?}: {r:?}, expected y={expected_y}");
+                assert!((r.x - page.body.x).abs() < 0.01, "{kind:?}: {r:?} vs {:?}", page.body);
+                assert!((r.w - PICTURE_WIDTH).abs() < 0.01 && (r.h - PICTURE_HEIGHT).abs() < 0.01, "{kind:?}: {r:?}");
+                assert!(r.bottom() <= page.body.bottom() + 0.01, "{kind:?}: {r:?} outside {:?}", page.body);
+            }
+            let a = contextual.caret(&Pos::body(1, 0)).unwrap();
+            let b = control.caret(&Pos::body(1, 0)).unwrap();
+            assert_eq!(a.page, b.page, "{kind:?}");
+            assert!((a.x - b.x).abs() < 0.01 && (a.top - b.top).abs() < 0.01, "{kind:?}: {a:?} vs {b:?}");
+        }
+    }
+
+    #[test]
+    fn suppressed_gap_fits_here() {
+        // A 648 pt body fits 300 + 280 pt, but not the discarded 80 pt gap as well.
+        assert_pair(300.0, 0);
+    }
+
+    #[test]
+    fn effective_overflow_still_moves() {
+        // Even after discarding the gap, 400 + 280 pt exceeds the 648 pt body.
+        assert_pair(400.0, 1);
+    }
+}
+
+mod continuous_picture_fit {
+    use super::*;
+    use wordcraft_doc::CharProps;
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    use wordcraft_doc::props::LineSpacing;
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+
+    const BODY_TOP: f32 = 72.0;
+    const BODY_HEIGHT: f32 = 648.0;
+    const PICTURE_WIDTH: f32 = 160.0;
+    const FIT_HEIGHT: f32 = 200.0;
+    const OVERFLOW_HEIGHT: f32 = 280.0;
+    const OVERSIZE_HEIGHT: f32 = 700.0;
+    const BEFORE_LINES: usize = 20;
+    const BEFORE_LINE_HEIGHT: f32 = 20.0;
+    const ANCHOR_LINE_HEIGHT: f32 = 12.0;
+    const AFTER_BLOCK: usize = BEFORE_LINES + 1;
+    const COMPAT_MODE: u32 = 15;
+    const EPSILON: f32 = 0.01;
+    const BOOKMARK_NAME: &str = "native_anchor";
+    const COMMENT_ID: u32 = 1;
+
+    #[derive(Clone, Copy)]
+    enum Case {
+        Fits,
+        Overflow,
+        Oversize,
+    }
+
+    impl Case {
+        fn height(self) -> f32 {
+            match self {
+                Self::Fits => FIT_HEIGHT,
+                Self::Overflow => OVERFLOW_HEIGHT,
+                Self::Oversize => OVERSIZE_HEIGHT,
+            }
+        }
+
+        fn label(self) -> &'static str {
+            match self {
+                Self::Fits => "F1_fits",
+                Self::Overflow => "F1_overflow",
+                Self::Oversize => "F1_oversize",
+            }
+        }
+    }
+
+    #[derive(Clone, Copy)]
+    enum Flow {
+        Continuous,
+        Unbroken,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Marks {
+        Bookmarks,
+        Comments,
+    }
+
+    #[derive(Clone, Copy)]
+    enum Extra {
+        Comments,
+        Shape,
+        Text,
+    }
+
+    fn section(start: SectionStart, columns: u32) -> SectionProps {
+        let mut section = SectionProps {
+            start,
+            page_w: 612.0,
+            page_h: 792.0,
+            margin_top: BODY_TOP,
+            margin_bottom: BODY_TOP,
+            margin_left: BODY_TOP,
+            margin_right: BODY_TOP,
+            ..Default::default()
+        };
+        section.columns.count = columns;
+        section
+    }
+
+    fn paragraph(text: &str, height: f32) -> Paragraph {
+        let chr = CharProps { font: Some("Arial".into()), size: Some(10.0), ..Default::default() };
+        let mut p = Paragraph::with_text(text, chr);
+        p.props = ParaProps {
+            space_before: Some(0.0),
+            space_after: Some(0.0),
+            contextual_spacing: Some(false),
+            line_spacing: Some(LineSpacing::Exactly(height)),
+            widow_control: Some(false),
+            ..Default::default()
+        };
+        p
+    }
+
+    fn document(case: Case, flow: Flow, columns: u32) -> Document {
+        let mut d = Document::new();
+        d.settings.compat_mode = COMPAT_MODE;
+        d.body.clear();
+        for line in 1..=BEFORE_LINES {
+            d.body.push(wordcraft_doc::para_block(paragraph(&format!("{} before {line:02}", case.label()), BEFORE_LINE_HEIGHT)));
+        }
+        if matches!(flow, Flow::Continuous) {
+            d.para_mut(StoryRef::Body, &Path::top(BEFORE_LINES - 1)).unwrap().section = Some(Box::new(section(SectionStart::NextPage, 1)));
+        }
+        d.body.push(wordcraft_doc::para_block(paragraph("", ANCHOR_LINE_HEIGHT)));
+        // A short multicolumn sentinel avoids testing unrelated word wrapping in its narrow strip.
+        let after = if columns == 1 { format!("{} AFTER", case.label()) } else { "AFTER".into() };
+        d.body.push(wordcraft_doc::para_block(paragraph(&after, ANCHOR_LINE_HEIGHT)));
+        let start = if matches!(flow, Flow::Continuous) { SectionStart::Continuous } else { SectionStart::NextPage };
+        d.last_section = section(start, columns);
+        let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, dist: 0.0, ..Default::default() };
+        let image = InlineObject::Image {
+            media: "original-continuous-control".into(),
+            w: PICTURE_WIDTH,
+            h: case.height(),
+            alt: String::new(),
+            float,
+            crop: [0.0; 4],
+            ole: None,
+        };
+        d.insert_object(&Pos::body(BEFORE_LINES, 0), image, &Default::default()).unwrap();
+        d
+    }
+
+    fn positions(d: &Document) -> ((usize, Rect), (usize, f32, f32)) {
+        let layout = lay(d);
+        let images: Vec<_> =
+            layout.pages.iter().enumerate().flat_map(|(page, data)| image_rects(&data.items).into_iter().map(move |r| (page, r))).collect();
+        assert_eq!(images.len(), 1);
+        let boxes = para_boxes(&layout);
+        assert_eq!(boxes.len(), AFTER_BLOCK + 1, "every source paragraph must survive");
+        let before = boxes[BEFORE_LINES - 1];
+        assert_eq!(before.0, 0);
+        assert!((before.3 - (BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT)).abs() < EPSILON, "{before:?}");
+        // Wrapping offsets clusters inside the paragraph's unchanged container origin.
+        let after = layout
+            .pages
+            .iter()
+            .enumerate()
+            .find_map(|(page, data)| {
+                data.items.iter().find_map(|item| match item {
+                    Placed::Lines { path, l0, x, y, para, .. } if path.0 == [AFTER_BLOCK as u32] && *l0 == 0 => {
+                        Some((page, x + para.lines.get(*l0)?.xs.first().copied()?, *y))
+                    }
+                    _ => None,
+                })
+            })
+            .unwrap();
+        (images[0], after)
+    }
+
+    fn bracket_anchor(d: &mut Document, marks: Marks) {
+        let (start, end) = match marks {
+            Marks::Bookmarks => {
+                (InlineObject::BookmarkStart { name: BOOKMARK_NAME.into() }, InlineObject::BookmarkEnd { name: BOOKMARK_NAME.into() })
+            }
+            Marks::Comments => (InlineObject::CommentStart { id: COMMENT_ID }, InlineObject::CommentEnd { id: COMMENT_ID }),
+        };
+        d.insert_object(&Pos::body(BEFORE_LINES, 0), start, &Default::default()).unwrap();
+        let end_offset = d.para(StoryRef::Body, &Path::top(BEFORE_LINES)).unwrap().text.len();
+        d.insert_object(&Pos::body(BEFORE_LINES, end_offset), end, &Default::default()).unwrap();
+    }
+
+    fn assert_native_doc(d: &Document, case: Case, page: usize, top: f32) {
+        let (image, after) = positions(d);
+        assert_eq!(image.0, page, "image={image:?}");
+        let expected = Rect::new(BODY_TOP, top, PICTURE_WIDTH, case.height());
+        for (actual, expected) in [(image.1.x, expected.x), (image.1.y, expected.y), (image.1.w, expected.w), (image.1.h, expected.h)] {
+            assert!((actual - expected).abs() < EPSILON, "{image:?} vs {expected}");
+        }
+        assert!(image.1.bottom() <= BODY_TOP + BODY_HEIGHT + EPSILON);
+        assert_eq!(after.0, page, "AFTER={after:?}");
+        assert!((after.1 - (BODY_TOP + PICTURE_WIDTH)).abs() < EPSILON, "AFTER={after:?}");
+        assert!((after.2 - (top + ANCHOR_LINE_HEIGHT)).abs() < EPSILON, "AFTER={after:?}");
+    }
+
+    fn assert_native(case: Case, page: usize, top: f32) {
+        assert_native_doc(&document(case, Flow::Continuous, 1), case, page, top);
+    }
+
+    #[test]
+    fn native_fitting_picture_stays() {
+        assert_native(Case::Fits, 0, BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT);
+    }
+
+    #[test]
+    fn native_overflow_moves_picture() {
+        assert_native(Case::Overflow, 1, BODY_TOP);
+    }
+
+    #[test]
+    fn first_header_keeps_owned_page() {
+        let sample = |start| {
+            let mut d = document(Case::Overflow, Flow::Unbroken, 1);
+            d.body.drain(..BEFORE_LINES);
+            d.last_section.start = start;
+            d.last_section.title_page = true;
+            d.last_section.header = BODY_TOP;
+            let header = paragraph("FIRST HEADER", BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT);
+            let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(header)]);
+            d.last_section.headers.first = Some(id);
+            let laid = lay(&d);
+            let first = &laid.pages[0];
+            assert_eq!(first.section, 0);
+            assert!((first.body.y - (BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT)).abs() < EPSILON);
+            let images: Vec<_> =
+                laid.pages.iter().enumerate().flat_map(|(page, data)| image_rects(&data.items).into_iter().map(move |r| (page, r))).collect();
+            let after = laid
+                .pages
+                .iter()
+                .enumerate()
+                .find_map(|(page, data)| {
+                    data.items.iter().find_map(|item| match item {
+                        Placed::Lines { path, l0, x, y, para, .. } if *path == Path::top(1) && *l0 == 0 => {
+                            Some((page, x + para.lines[*l0].xs[0], *y))
+                        }
+                        _ => None,
+                    })
+                })
+                .unwrap();
+            (images, after)
+        };
+        let ordinary = sample(SectionStart::NextPage);
+        assert_eq!(ordinary.0, [(0, Rect::new(BODY_TOP, BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT, PICTURE_WIDTH, OVERFLOW_HEIGHT))]);
+        assert_eq!(ordinary.1, (0, BODY_TOP + PICTURE_WIDTH, BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT + ANCHOR_LINE_HEIGHT));
+        assert_eq!(sample(SectionStart::Continuous), ordinary);
+    }
+
+    #[test]
+    fn bookmarks_keep_geometry() {
+        for (case, page, top) in [(Case::Fits, 0, BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT), (Case::Overflow, 1, BODY_TOP)] {
+            let mut d = document(case, Flow::Continuous, 1);
+            bracket_anchor(&mut d, Marks::Bookmarks);
+            assert_native_doc(&d, case, page, top);
+        }
+    }
+
+    #[test]
+    fn ordinary_bookmarks_match() {
+        for (case, page, top) in [(Case::Fits, 0, BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT), (Case::Overflow, 1, BODY_TOP)] {
+            let plain = document(case, Flow::Unbroken, 1);
+            assert_native_doc(&plain, case, page, top);
+            let mut marked = plain.clone();
+            bracket_anchor(&mut marked, Marks::Bookmarks);
+            assert_eq!(positions(&marked), positions(&plain));
+        }
+        let plain = document(Case::Oversize, Flow::Unbroken, 1);
+        let mut marked = plain.clone();
+        bracket_anchor(&mut marked, Marks::Bookmarks);
+        assert_eq!(positions(&marked), positions(&plain));
+    }
+
+    #[test]
+    fn other_content_keeps_old_route() {
+        for extra in [Extra::Comments, Extra::Shape, Extra::Text] {
+            let sample = |flow| {
+                let mut d = document(Case::Overflow, flow, 1);
+                bracket_anchor(&mut d, Marks::Bookmarks);
+                match extra {
+                    Extra::Comments => bracket_anchor(&mut d, Marks::Comments),
+                    Extra::Shape => {
+                        d.insert_object(&Pos::body(BEFORE_LINES, 0), rect_shape(10.0, 10.0, Default::default()), &Default::default()).unwrap();
+                    }
+                    Extra::Text => {
+                        d.insert_text(&Pos::body(BEFORE_LINES, 0), "Text", &Default::default()).unwrap();
+                    }
+                }
+                positions(&d)
+            };
+            assert_eq!(sample(Flow::Continuous), sample(Flow::Unbroken));
+        }
+    }
+
+    #[test]
+    fn oversize_keeps_previous_route() {
+        // Native oversized behavior differs. Preserve the existing excluded route here.
+        let partial = positions(&document(Case::Oversize, Flow::Continuous, 1));
+        let unbroken = positions(&document(Case::Oversize, Flow::Unbroken, 1));
+        assert_eq!(partial, unbroken);
+    }
+
+    #[test]
+    fn multicolumn_keeps_old_route() {
+        let (image, after) = positions(&document(Case::Overflow, Flow::Continuous, 2));
+        let top = BODY_TOP + BEFORE_LINES as f32 * BEFORE_LINE_HEIGHT;
+        assert_eq!(image.0, 0);
+        assert!((image.1.x - BODY_TOP).abs() < EPSILON && (image.1.y - top).abs() < EPSILON, "{image:?}");
+        assert_eq!(after.0, 0);
+        assert!((after.1 - (BODY_TOP + PICTURE_WIDTH)).abs() < EPSILON, "{after:?}");
+        assert!((after.2 - (top + ANCHOR_LINE_HEIGHT)).abs() < EPSILON, "{after:?}");
+    }
+}

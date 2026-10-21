@@ -16,6 +16,8 @@ Additive paragraph spacing retains the full before-space after a section page br
 
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Synthetic control: `layout::tests::exact_math_keeps_run_baseline`.
 
+Single-column continuous-section picture fitting has a bounded source prototype: a picture-only wrapping anchor at the section's partial top uses the fresh page's body capacity when no notes are pending and the current page belongs to a preceding section. The section's own first page retains its ordinary route beneath a tall first-page header. Bookmark boundaries do not count as additional content; comments and other objects retain their exclusions. An original Word Best for printing export on 2026-10-20 retained a 160 by 200 pt picture at y=472 after 400 pt of preceding text, and moved a 160 by 280 pt picture to y=72 on the next page. AFTER followed beside each picture; native anchor caret movement was not observed. Multicolumn transitions and oversized-picture policy remain open; the 700 pt native picture moved to another page and extended below its body, which this prototype does not implement.
+
 ## Checklist
 
 ✅ matches Word as far as our tests show · 🟡 implemented, differs or untested against Word · ❌ missing
@@ -214,6 +216,7 @@ Page-relative footer tables keep their physical wrap bounds without adding to fo
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-20 | trivial | Prepare single-column continuous-section picture fitting from an original native export, ignoring only bookmark boundaries in picture-only eligibility. Image/AFTER controls retain comment, other-object, oversized and multicolumn exclusions. |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
 | 2026-10-16 | trivial | Table row keep-next uses the first paragraph of the first cell, including inherited flags. Kept row chains start on a fresh page when the following row cannot start below them. Synthetic Word export covers mixed-cell flags, multiple paragraphs and kept prefixes before oversized followers. |
@@ -252,6 +255,7 @@ Page-relative footer tables keep their physical wrap bounds without adding to fo
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
 | 2026-10-16 | trivial | Synthetic regression confirms a fitting exact-height row containing overflowing pictures moves to the next page whole. Existing runtime behavior is unchanged. |
 | 2026-10-15 | trivial | The caret, clicks and selection edges fall between the letters of a ligature (#1974) |
+| 2026-10-15 | trivial | A wrapping paragraph-relative picture, alone in its anchor paragraph and fitting a column, moves with that paragraph before overflowing the current column. Page-relative objects and mixed text/annotation paragraphs keep their positions |
 | 2026-10-14 | trivial | Row table border exceptions draw without leaking into other rows |
 | 2026-10-14 | trivial | Consistent cell widths override a stale table grid |
 | 2026-10-14 | trivial | Paragraphs inside complex-field instructions take no flow height; empty result paragraphs keep their line. |

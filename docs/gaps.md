@@ -121,6 +121,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-15 | trivial | #5 narrowed: Track Changes Options › Moves (Moved from / Moved to marks and colours) and Track moves (`w:doNotTrackMoves`) landed; drag-and-drop moves remain |
 | 2026-10-17 | trivial | Language dialog keeps inherited proofing language and no-proof choices (#2717); readiness estimates unchanged |
 | 2026-10-15 | trivial | Gap 19: RTF tracked paragraph marks and character/paragraph formatting revisions read and written; RTF section/table and ODT formatting revisions remain |
+| 2026-10-15 | trivial | A wrapping paragraph-relative picture, alone in its anchor paragraph and fitting a column, moves with that paragraph before overflowing the current column. Page-relative objects and mixed text/annotation paragraphs keep their positions |
 | 2026-10-14 | trivial | #19 narrowed: ODT export done (master page and page layout per section, columned `text:section`s) |
 | 2026-10-17 | trivial | Explicit DrawingML preset/custom outline dashes survive import/save and paint in raster/PDF, scaled to the effective stroke width even for zero-width paths. Synthetic controls; theme-inherited dashes and line caps remain unverified. |
 | 2026-10-15 | trivial | `wordcraft-cli convert --update-fields` explicitly refreshes unlocked fields before conversion; ordinary conversion keeps cached results. Field refresh can change pagination |
