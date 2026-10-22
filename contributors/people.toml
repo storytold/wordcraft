@@ -207,3 +207,6 @@ real_name = "Ashok Ram"
 
 [people.benandez]
 sync_github_name = true
+
+[people.dpkruse]
+real_name = "Darren Kruse"
