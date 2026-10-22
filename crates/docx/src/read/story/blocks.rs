@@ -350,16 +350,23 @@ impl Reader<'_> {
     }
 }
 
+/// The narrowest column Word rebuilds for a table without `w:tblGrid`: 26 twips, for a cell of
+/// 10 twips and for 10 twips left over by a spanning cell alike (measured: Word re-saves both as
+/// `w:gridCol w:w="26"`). Content still widens a column when laid out.
+const MIN_GRID_COL: f32 = 1.3;
+
 /// The column grid of a table without `w:tblGrid` (a file written by a template library), the
 /// way Word rebuilds it on opening: each column as wide as the widest preferred width
 /// (`w:tcW` in twips) among the cells that occupy it alone, a spanning cell's width shared out
-/// among its columns that no cell sets, and an inch for a column no cell sizes at all.
+/// among its columns that no cell sets, and an inch for a column no cell sizes at all; never
+/// narrower than [`MIN_GRID_COL`].
 fn grid_from_cells(table: &Table) -> Vec<f32> {
     let cols = table.cols().clamp(1, MAX_COLS);
     let mut grid: Vec<Option<f32>> = vec![None; cols];
     let mut spanning = Vec::new();
     for row in &table.rows {
-        let mut g = 0usize;
+        // After `w:gridBefore` the row's first cell is not in the first column.
+        let mut g = row.first_grid();
         for cell in &row.cells {
             let span = cell.span();
             if let Some(w) = cell.props.width.filter(|w| w.is_finite() && *w > 0.0) {
@@ -381,10 +388,10 @@ fn grid_from_cells(table: &Table) -> Vec<f32> {
         if unknown == 0 {
             continue;
         }
-        let each = ((w - known) / unknown as f32).max(4.0);
+        let each = ((w - known) / unknown as f32).max(MIN_GRID_COL);
         for c in cs.iter_mut().filter(|c| c.is_none()) {
             *c = Some(each);
         }
     }
-    grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(4.0, crate::units::MAX_LEN_PT)).collect()
+    grid.into_iter().map(|w| w.unwrap_or(72.0).clamp(MIN_GRID_COL, crate::units::MAX_LEN_PT)).collect()
 }
