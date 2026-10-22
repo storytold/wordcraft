@@ -38,6 +38,7 @@ pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
+pub(crate) use paragraph::effective_para;
 pub use paragraph::layout_para;
 #[cfg(test)]
 pub(crate) use paragraph::word_widths;

@@ -338,7 +338,7 @@ impl<'e> Breaker<'e> {
             sc.end = LineEnd::Para;
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
-        let v = self.measure(pl, (sc.c0, c1));
+        let v = self.measure(pl, (sc.c0, c1), sc.end);
         self.align(pl, &mut sc, c1);
         let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
@@ -352,6 +352,7 @@ impl<'e> Breaker<'e> {
             baseline: v.baseline,
             text_asc: v.text_asc,
             text_desc: v.text_desc,
+            hang: v.hang,
             c0: sc.c0,
             c1,
             xs: sc.xs,
@@ -404,7 +405,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, text: false };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -421,14 +422,17 @@ impl<'e> Breaker<'e> {
             // and descent, and grows above the baseline to fit a taller picture.
             let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
                 if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                    // An equation is text: its ascent and descent count like the text's.
                     // Exact spacing keeps the run's baseline; tall math may overflow the
                     // fixed line box without moving adjacent text up by its denominator.
+                    ex.text = true;
                     if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                 } else {
                     ex.obj_asc = ex.obj_asc.max(c.obj_h);
                     (st.ascent, st.descent)
                 }
             } else {
+                ex.text = true;
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
                 let (a, d) = st.line_extent();
                 (a.max(c.obj_h + st.shift), d)
@@ -447,12 +451,28 @@ impl<'e> Breaker<'e> {
     }
 
     /// The line's height, baseline and text extent.
-    fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
+    fn measure(&self, pl: &ParaLayout, range: (usize, usize), end: LineEnd) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let Extents { mut asc, mut desc, obj_asc, text } = self.extents(pl, range);
+        // A list label is text too.
+        let text = text || (self.first && pl.label.is_some());
+        // Line spacing scales the text's height, never a picture's: a line with text is at least
+        // as tall as its tallest picture plus the descent below the baseline. The last line of a
+        // paragraph that holds only pictures keeps no descent: the picture fills it from the top
+        // and multiple spacing adds only its extra leading below (Word reference PDFs: 14.13pt
+        // pictures alone in single-spaced 10pt Calibri table cells make 14.13pt rows; a 68.25pt
+        // logo at 1.15 lines of 11pt Calibri makes a 70.3pt line, not 71.2pt). Picture lines that
+        // wrap keep the descent between them (docxide-pdf's header fixture case121). At-least
+        // spacing below the picture's height keeps no descent either (Word 365 probes on #1172:
+        // at least 12pt under 100–140pt pictures adds nothing); exact spacing has its own baseline (below).
+        let only_pictures_below = match rp.line_spacing {
+            LineSpacing::Multiple(m) if !text && end == LineEnd::Para => Some(((asc + desc) * (m - 1.0)).max(0.0)),
+            LineSpacing::AtLeast(_) if !text && end == LineEnd::Para => Some(0.0),
+            _ => None,
+        };
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
-        let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        let text_pictures = if obj_asc > asc { obj_asc + only_pictures_below.unwrap_or(desc) } else { 0.0 };
         let mut label_extra = 0.0;
         if self.first
             && let Some(lab) = &pl.label
@@ -470,10 +490,9 @@ impl<'e> Breaker<'e> {
             }
         }
         // Keep the picture floor independent of list-label metrics and line-spacing multipliers.
-        // shortcut: Word leaves less than a full descent below a line of only pictures (0.5pt to
-        // 1.9pt in docxide-pdf's header fixtures case121/case123, where the descent is 3.3pt), and
-        // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
+        // On a grid the pictures are centred with the descent (the no-descent rule is off it).
         let natural = asc + desc;
+        let below = only_pictures_below.unwrap_or(desc);
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
         // Document grid: the line takes whole line pitches, its text centred in them.
         let grid = self.grid.as_ref();
@@ -484,13 +503,28 @@ impl<'e> Breaker<'e> {
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
+        // The descent the line keeps under its baseline: none under a picture-only last line
+        // (multiple spacing, off the grid), so all of the room below its pictures may hang. At-least
+        // spacing needs its whole line on the page.
+        let multiple = matches!(rp.line_spacing, LineSpacing::Multiple(_));
+        let kept_desc = if obj_asc > asc && !centred && multiple && only_pictures_below.is_some() { 0.0 } else { desc };
         let baseline = if centred {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
+        } else if obj_asc > asc && matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+            // A picture taller than the text sits on a baseline four fifths down an exact line,
+            // with text beside it or not (Word 365 probes on #1172: 32pt below it at exactly 160pt,
+            // 2.4pt at exactly 12pt).
+            self.top + height * 0.8
+        } else if obj_asc > asc && only_pictures_below.is_some() && matches!(rp.line_spacing, LineSpacing::AtLeast(_)) {
+            // An at-least line taller than its pictures has them on its bottom edge (ibid.).
+            self.top + height
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - below))
         };
-        Measure { height, baseline, text_asc, text_desc }
+        // On a grid the text is centred in its pitches: no evidence that the slack may hang.
+        let hang = if centred || !multiple { 0.0 } else { (self.top + height - baseline - kept_desc).max(0.0) };
+        Measure { height, baseline, text_asc, text_desc, hang }
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
@@ -567,12 +601,14 @@ impl<'e> Breaker<'e> {
         };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
+        let baseline = self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) };
         self.lines.push(Line {
             top: self.top,
             height: h,
-            baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+            baseline,
             text_asc: asc,
             text_desc: desc,
+            hang: (self.top + h - baseline - desc).max(0.0),
             c0: self.n,
             c1: self.n,
             xs: vec![x0],
@@ -634,6 +670,8 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    /// Whether the line holds anything but pictures (text, an equation, a break).
+    text: bool,
 }
 
 /// A line's height and baseline, and the extent of its text.
@@ -642,6 +680,8 @@ struct Measure {
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
+    /// How far the leading below the text may hang past the page bottom ([`Line::hang`]).
+    hang: f32,
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.

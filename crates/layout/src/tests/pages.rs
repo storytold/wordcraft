@@ -182,6 +182,417 @@ fn a_tall_footer_pushes_the_body_up() {
     assert!((l.pages[0].body.bottom() - (792.0 - 72.0)).abs() < 0.01, "{:?}", l.pages[0].body);
 }
 
+/// The extra leading of double spacing may hang into the bottom margin, but not into a footer
+/// that reaches above the margin and pushed the body up: wherever the page breaks, the body's
+/// lines end above the footer.
+#[test]
+fn line_spacing_leading_does_not_hang_into_a_tall_footer() {
+    use wordcraft_doc::props::LineSpacing;
+    for shift in 0..30 {
+        let mut d = Document::from_text(&"Body line\n".repeat(40));
+        let end = Pos::body(d.body.len() - 1, 0);
+        d.format_paragraphs(&Pos::body(0, 0), &end, &|p| {
+            p.line_spacing = Some(LineSpacing::Multiple(2.0));
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        let id = d.add_part(PartKind::Footer, paras("Footer line", 8));
+        d.last_section.footers.default = Some(id);
+        let l = lay(&d);
+        for (i, p) in l.pages.iter().enumerate() {
+            let (_, body_bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            let (top, _) = extent(&p.footer, StoryRef::Part(id)).unwrap();
+            assert!(body_bottom <= top + 0.01, "shift {shift}, page {i}: body ends at {body_bottom}, footer starts at {top}");
+        }
+    }
+}
+
+/// With a different first page, the first page's leading hangs by its own footer: not into a
+/// tall first-page footer when the other pages' is short, and into the bottom margin below a
+/// short one when the other pages' is tall.
+#[test]
+fn line_spacing_leading_hangs_by_the_first_pages_own_footer() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |shift: usize, first: usize, default: Option<usize>| {
+        let mut d = Document::from_text(&"Body line\n".repeat(40));
+        let end = Pos::body(d.body.len() - 1, 0);
+        d.format_paragraphs(&Pos::body(0, 0), &end, &|p| {
+            p.line_spacing = Some(LineSpacing::Multiple(2.0));
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        let id = d.add_part(PartKind::Footer, paras("First footer line", first));
+        d.last_section.title_page = true;
+        d.last_section.footers.first = Some(id);
+        let other = default.map(|n| d.add_part(PartKind::Footer, paras("Footer line", n)));
+        d.last_section.footers.default = other;
+        (d, id)
+    };
+    let on_page_one = |d: &Document| lay(d).pages[0].items.iter().filter(|it| matches!(it, Placed::Lines { story: StoryRef::Body, .. })).count();
+    for shift in 0..30 {
+        let (d, id) = doc(shift, 8, Some(1));
+        let l = lay(&d);
+        let (_, body_bottom) = extent(&l.pages[0].items, StoryRef::Body).unwrap();
+        let (top, _) = extent(&l.pages[0].footer, StoryRef::Part(id)).unwrap();
+        assert!(body_bottom <= top + 0.01, "shift {shift}: body ends at {body_bottom}, the first-page footer starts at {top}");
+        let (short, _) = doc(shift, 1, None);
+        let (tall_default, _) = doc(shift, 1, Some(8));
+        assert_eq!(on_page_one(&tall_default), on_page_one(&short), "shift {shift}");
+    }
+}
+
+/// Without a footer the leading of multiple spacing hangs into the bottom margin, but not past
+/// the page edge: with a margin smaller than the leading, the last line's box stays on the page.
+#[test]
+fn line_spacing_leading_does_not_hang_past_the_page_edge() {
+    use wordcraft_doc::props::LineSpacing;
+    for shift in (0..90).step_by(3) {
+        let mut d = Document::from_text(&"Body line\n".repeat(20));
+        let end = Pos::body(d.body.len() - 1, 0);
+        d.format_paragraphs(&Pos::body(0, 0), &end, &|p| {
+            p.line_spacing = Some(LineSpacing::Multiple(6.0));
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.last_section.margin_bottom = 4.0;
+        let l = lay(&d);
+        for (i, p) in l.pages.iter().enumerate() {
+            let (_, body_bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            assert!(body_bottom <= p.h + 0.01, "shift {shift}, page {i}: body ends at {body_bottom}, past the page edge at {}", p.h);
+        }
+    }
+}
+
+/// Keep with next looks ahead with the room the next paragraph's leading really has: none when
+/// a tall footer pushed the body up, so a heading whose double-spaced next paragraph fits only by
+/// hanging into that footer moves on with it instead of staying alone.
+#[test]
+fn keep_with_next_counts_the_leading_a_tall_footer_leaves_no_room_for() {
+    use wordcraft_doc::props::LineSpacing;
+    let page_of = |l: &DocLayout, block: usize| {
+        l.pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(block))))
+    };
+    for shift in 300..520 {
+        let mut d = Document::from_text("Filler\nHeading\nText");
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.keep_next = Some(true)).unwrap();
+        d.format_paragraphs(&Pos::body(2, 0), &Pos::body(2, 0), &|p| p.line_spacing = Some(LineSpacing::Multiple(2.0))).unwrap();
+        let id = d.add_part(PartKind::Footer, paras("Footer line", 8));
+        d.last_section.footers.default = Some(id);
+        let l = lay(&d);
+        assert_eq!(page_of(&l, 1), page_of(&l, 2), "shift {shift}: the heading is left alone");
+    }
+}
+
+/// Keep with next looks ahead as the line loop places: a next paragraph's line with a footnote
+/// doesn't hang its leading into the bottom margin. Checked where the line fits only by hanging
+/// (without the note): with the note it moves on, so the heading has to go along. (The note's own
+/// room isn't looked ahead for.)
+#[test]
+fn keep_with_next_counts_the_leading_of_a_line_with_a_footnote() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |shift: usize, note: bool| {
+        let mut d = Document::from_text("Filler\nHeading\nText");
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.keep_next = Some(true)).unwrap();
+        d.format_paragraphs(&Pos::body(2, 0), &Pos::body(2, 0), &|p| p.line_spacing = Some(LineSpacing::Multiple(2.0))).unwrap();
+        if note {
+            let id = d.add_part(PartKind::Footnote, paras("Note", 1));
+            d.insert_object(&Pos::body(2, 4), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+                .unwrap();
+        }
+        lay(&d)
+    };
+    let text = |l: &DocLayout, block: usize| {
+        l.pages.iter().enumerate().find_map(|(pi, p)| {
+            p.items.iter().find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } if *path == Path::top(block) => {
+                    Some((pi, item_bottom(*y, para, *l0, *l1)?))
+                }
+                _ => None,
+            })
+        })
+    };
+    let mut checked = 0;
+    for shift in 520..640 {
+        if !text(&doc(shift, false), 2).is_some_and(|(pg, bottom)| pg == 0 && bottom > 720.01) {
+            continue;
+        }
+        checked += 1;
+        let l = doc(shift, true);
+        assert_eq!(text(&l, 1).map(|t| t.0), text(&l, 2).map(|t| t.0), "shift {shift}: the heading is left alone");
+    }
+    assert!(checked > 0);
+}
+
+/// Keep with next looks ahead as the line loop places: once the kept paragraph's footnote is on
+/// the page, the next paragraph's leading can't hang into the bottom margin either. Checked where
+/// that paragraph fits only by hanging (without the note): with the note in the heading, the
+/// heading goes along with it (triple spacing: a hang longer than the note's room).
+#[test]
+fn keep_with_next_counts_no_hang_after_its_own_footnote() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |shift: usize, note: bool| {
+        let mut d = Document::from_text("Filler\nHeading\nText");
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.keep_next = Some(true)).unwrap();
+        d.format_paragraphs(&Pos::body(2, 0), &Pos::body(2, 0), &|p| p.line_spacing = Some(LineSpacing::Multiple(3.0))).unwrap();
+        if note {
+            let id = d.add_part(PartKind::Footnote, paras("Note", 1));
+            d.insert_object(&Pos::body(1, 7), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+                .unwrap();
+        }
+        lay(&d)
+    };
+    let page_of = |l: &DocLayout, block: usize| {
+        l.pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(block))))
+    };
+    let bottom = |l: &DocLayout| {
+        l.pages.first()?.items.iter().find_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } if *path == Path::top(2) => item_bottom(*y, para, *l0, *l1),
+            _ => None,
+        })
+    };
+    let mut checked = 0;
+    for shift in 520..640 {
+        if !bottom(&doc(shift, false)).is_some_and(|b| b > 720.01) {
+            continue;
+        }
+        checked += 1;
+        let l = doc(shift, true);
+        assert_eq!(page_of(&l, 1), page_of(&l, 2), "shift {shift}: the heading is left alone");
+    }
+    assert!(checked > 0);
+}
+
+/// Keep with next counts the kept paragraph's space after: the next paragraph starts below it,
+/// so a heading whose next paragraph's first two lines fit only without that space moves on
+/// with it instead of staying alone (docxide-pdf's polish_procurement_statement).
+#[test]
+fn keep_with_next_counts_the_space_after_the_kept_paragraph() {
+    let doc = |shift: usize| {
+        let mut d = Document::from_text(&format!("Filler\nHeading\n{}", "Several words wrap onto more lines. ".repeat(20)));
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| {
+            p.keep_next = Some(true);
+            p.space_after = Some(20.0);
+        })
+        .unwrap();
+        lay(&d)
+    };
+    let page_of = |l: &DocLayout, block: usize| {
+        l.pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(block))))
+    };
+    for shift in 560..680 {
+        let l = doc(shift);
+        assert_eq!(page_of(&l, 1), page_of(&l, 2), "shift {shift}: the heading is left alone");
+    }
+}
+
+/// Keep with next leaves out the next paragraph's space before where placing it does:
+/// contextual spacing drops it after a paragraph of its style, so the heading stays wherever it
+/// would with no space before at all.
+#[test]
+fn keep_with_next_leaves_out_a_space_before_contextual_spacing_drops() {
+    let doc = |shift: usize, before: f32| {
+        let mut d = Document::from_text(&format!("Filler\nHeading\n{}", "Several words wrap onto more lines. ".repeat(20)));
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(2, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| p.keep_next = Some(true)).unwrap();
+        d.format_paragraphs(&Pos::body(2, 0), &Pos::body(2, 0), &|p| {
+            p.contextual_spacing = Some(true);
+            p.space_before = Some(before);
+        })
+        .unwrap();
+        lay(&d)
+    };
+    let page_of = |l: &DocLayout, block: usize| {
+        l.pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(block))))
+    };
+    for shift in 560..680 {
+        assert_eq!(page_of(&doc(shift, 200.0), 1), page_of(&doc(shift, 0.0), 1), "shift {shift}");
+    }
+}
+
+/// The same with a table after the kept paragraph: the table starts below its space after.
+#[test]
+fn keep_with_next_counts_the_space_after_before_a_table() {
+    let doc = |shift: usize| {
+        let mut d = Document::from_text("Filler\nHeading");
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| {
+            p.keep_next = Some(true);
+            p.space_after = Some(20.0);
+        })
+        .unwrap();
+        d.insert_block(StoryRef::Body, &Path::top(2), Block::Table(wordcraft_doc::Table::new(3, 1, 300.0))).unwrap();
+        lay(&d)
+    };
+    let page_of = |l: &DocLayout, block: u32| {
+        l.pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if path.0.first() == Some(&block))))
+    };
+    for shift in 560..680 {
+        let l = doc(shift);
+        assert_eq!(page_of(&l, 1), page_of(&l, 2), "shift {shift}: the heading is left alone");
+    }
+}
+
+/// Keep lines together measures a paragraph whose last line has a footnote as the line loop
+/// places it: that line can't hang its leading into the bottom margin. Checked where the
+/// paragraph fits only by hanging (without the note): with the note it moves on whole instead of
+/// splitting. (The note's own room isn't counted here.)
+#[test]
+fn keep_lines_counts_the_leading_of_a_last_line_with_a_footnote() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |shift: usize, note: bool| {
+        let mut d = Document::from_text("Filler\nalpha bravo");
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(1, 0), &|p| {
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.format_paragraphs(&Pos::body(1, 0), &Pos::body(1, 0), &|p| {
+            p.keep_lines = Some(true);
+            // (Widow control alone would move two lines whole.)
+            p.widow_control = Some(false);
+            p.line_spacing = Some(LineSpacing::Multiple(2.0));
+            // One word a line.
+            p.indent_right = Some(468.0 - 50.0);
+        })
+        .unwrap();
+        if note {
+            let id = d.add_part(PartKind::Footnote, paras("Note", 1));
+            d.insert_object(&Pos::body(1, 11), InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() }, &Default::default())
+                .unwrap();
+        }
+        lay(&d)
+    };
+    // The paragraph's pieces: (page, bottom).
+    let pieces = |l: &DocLayout| -> Vec<(usize, f32)> {
+        l.pages
+            .iter()
+            .enumerate()
+            .flat_map(|(pi, p)| {
+                p.items.iter().filter_map(move |it| match it {
+                    Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } if *path == Path::top(1) => {
+                        Some((pi, item_bottom(*y, para, *l0, *l1)?))
+                    }
+                    _ => None,
+                })
+            })
+            .collect()
+    };
+    let mut checked = 0;
+    for shift in 560..680 {
+        if !matches!(pieces(&doc(shift, false))[..], [(0, bottom)] if bottom > 720.01) {
+            continue;
+        }
+        checked += 1;
+        let l = doc(shift, true);
+        assert_eq!(pieces(&l).len(), 1, "shift {shift}: kept lines split");
+    }
+    assert!(checked > 0);
+}
+
+/// Under Different Odd & Even Pages the leading of multiple spacing doesn't hang into the even
+/// pages' footer either, when it is taller than the default one (here: none; it is inside the
+/// bottom margin, so it doesn't push the body up).
+#[test]
+fn line_spacing_leading_does_not_hang_into_the_even_footer() {
+    use wordcraft_doc::props::LineSpacing;
+    for shift in 0..60 {
+        let mut d = Document::from_text(&"Body line\n".repeat(30));
+        let end = Pos::body(d.body.len() - 1, 0);
+        d.format_paragraphs(&Pos::body(0, 0), &end, &|p| {
+            p.line_spacing = Some(LineSpacing::Multiple(4.0));
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.settings.even_odd_headers = true;
+        let even = d.add_part(PartKind::Footer, paras("Even footer line", 1));
+        d.last_section.footers.even = Some(even);
+        let l = lay(&d);
+        assert!(l.pages.len() >= 2);
+        for (i, p) in l.pages.iter().enumerate().filter(|(_, p)| p.footer_story == Some(even)) {
+            let (_, body_bottom) = extent(&p.items, StoryRef::Body).unwrap();
+            let (top, _) = extent(&p.footer, StoryRef::Part(even)).unwrap();
+            assert!(top > 720.0, "the even footer is inside the margin: {top}");
+            assert!(body_bottom <= top + 0.01, "shift {shift}, page {i}: body ends at {body_bottom}, the even footer starts at {top}");
+        }
+    }
+}
+
+/// The even pages' footer keeps the leading from hanging on even pages only: an odd page,
+/// showing the default footer (here: none), hangs as if there were no even footer.
+#[test]
+fn line_spacing_leading_hangs_on_odd_pages_regardless_of_the_even_footer() {
+    use wordcraft_doc::props::LineSpacing;
+    let doc = |shift: usize, even: bool| {
+        let mut d = Document::from_text(&"Body line\n".repeat(30));
+        let end = Pos::body(d.body.len() - 1, 0);
+        d.format_paragraphs(&Pos::body(0, 0), &end, &|p| {
+            p.line_spacing = Some(LineSpacing::Multiple(4.0));
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
+        d.settings.even_odd_headers = true;
+        if even {
+            let id = d.add_part(PartKind::Footer, paras("Even footer line", 1));
+            d.last_section.footers.even = Some(id);
+        }
+        d
+    };
+    let on_page_one = |d: &Document| lay(d).pages[0].items.iter().filter(|it| matches!(it, Placed::Lines { story: StoryRef::Body, .. })).count();
+    for shift in 0..60 {
+        assert_eq!(on_page_one(&doc(shift, true)), on_page_one(&doc(shift, false)), "shift {shift}");
+    }
+}
+
 #[test]
 fn a_linked_tall_header_pushes_the_next_sections_body_down() {
     // #454: section 2 has no header of its own and shows section 1's (link to previous).
