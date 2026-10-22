@@ -1462,6 +1462,171 @@ fn a_vertical_merge_lays_out_as_one_cell() {
     assert_eq!((hit.2, hit.3), (0, 0));
 }
 
+/// `before` paragraphs, then a table of a repeated header row and `rows` rows at least 20 pt
+/// tall: the first column is one cell merged down all the rows and holding a long paragraph,
+/// the second holds a line per row.
+fn merged_cell_table(before: usize, rows: usize) -> Document {
+    use wordcraft_doc::props::{HeightRule, VMerge};
+    let para = |text: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()));
+    let mut d = Document::from_text(&vec!["before"; before].join("\n"));
+    let mut t = Table::new(rows + 1, 2, 468.0);
+    t.rows[0].props.header = true;
+    for (ri, row) in t.rows.iter_mut().enumerate().skip(1) {
+        row.props.height = Some(20.0);
+        row.props.height_rule = HeightRule::AtLeast;
+        row.cells[0].props.vmerge = if ri == 1 { VMerge::Restart } else { VMerge::Continue };
+        row.cells[1].blocks = vec![para(&format!("row {ri}"))];
+    }
+    t.rows[1].cells[0].blocks = vec![para(&"Merged cell text that runs on. ".repeat(24))];
+    d.insert_block(StoryRef::Body, &Path::top(before), wordcraft_doc::Block::Table(t)).unwrap();
+    d
+}
+
+/// The merged cell's lines on each page, by line index: (line, top, bottom).
+fn merged_cell_lines(l: &DocLayout, block: u32) -> Vec<Vec<(usize, f32, f32)>> {
+    l.pages
+        .iter()
+        .map(|p| {
+            let mut v: Vec<(usize, f32, f32)> = p
+                .items
+                .iter()
+                .filter_map(|i| match i {
+                    Placed::Lines { path, para, l0, l1, y, .. } if path.0.starts_with(&[block, 1, 0]) => {
+                        let base = para.lines[*l0].top;
+                        Some((*l0..*l1).map(move |k| (k, y + para.lines[k].top - base, y + para.lines[k].top - base + para.lines[k].height)))
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .collect();
+            v.sort_by_key(|x| x.0);
+            v
+        })
+        .collect()
+}
+
+/// A page break between the rows of a vertical merge takes the merged cell's text along: it
+/// stays inside the body on the first page and runs on in the table's continuation on the next,
+/// below the repeated header row (Word, LibreOffice), not over the page's bottom margin.
+#[test]
+fn a_page_break_inside_a_vertical_merge_takes_its_text_along() {
+    // Each count of paragraphs before the table breaks the page at another point of the merge,
+    // between lines or through one. Which counts break it depends on the font's line height, so
+    // the ones that don't break through the merge are skipped.
+    let mut broken = 0;
+    for before in 10..40 {
+        let l = lay(&merged_cell_table(before, 12));
+        let pages = merged_cell_lines(&l, before as u32);
+        if pages.len() != 2 || pages[0].is_empty() || pages[1].is_empty() {
+            continue;
+        }
+        broken += 1;
+        for (pi, lines) in pages.iter().enumerate() {
+            for &(k, top, bottom) in lines {
+                assert!(bottom <= 720.01, "before {before}: line {k} on page {pi} runs to {bottom}");
+                // On the next page the text starts below the header row, not reaching into it.
+                if pi > 0 {
+                    let header = l.pages[pi]
+                        .items
+                        .iter()
+                        .find_map(|i| if let Placed::Cell { rect, row: 0, .. } = i { Some(rect.bottom()) } else { None })
+                        .unwrap();
+                    assert!(top >= header - 0.01, "before {before}: line {k} on page {pi} at {top}, header ends at {header}");
+                }
+            }
+        }
+    }
+    assert!(broken >= 3, "only {broken} counts break the page through the merge");
+}
+
+/// A row of a vertical merge that the merged cell's text makes too tall for the page splits
+/// across pages like any row, with the text running on into it: no line is lost or repeated.
+#[test]
+fn a_split_row_inside_a_vertical_merge_keeps_the_merged_text() {
+    let mut d = merged_cell_table(1, 2);
+    let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(1).map(Arc::make_mut) else { panic!("no table") };
+    t.rows[1].cells[0].blocks =
+        vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"Merged cell text that runs on. ".repeat(400), Default::default()))];
+    let l = lay(&d);
+    let pages = merged_cell_lines(&l, 1);
+    assert!(pages.len() >= 2, "{pages:?}");
+    let mut seen: Vec<usize> = pages.iter().flatten().map(|x| x.0).collect();
+    let n = seen.len();
+    seen.dedup();
+    assert_eq!(seen.len(), n, "a line placed twice: {pages:?}");
+    assert!(seen.iter().enumerate().all(|(i, &k)| i == k), "a line lost: {seen:?}");
+    for lines in &pages {
+        assert!(lines.iter().all(|&(_, _, b)| b <= 720.01), "{lines:?}");
+    }
+}
+
+/// Without a page break the merged cell's text is laid out as one: its lines follow each other
+/// as in the paragraph from the top of the first row, across the rows it runs through.
+#[test]
+fn a_vertical_merge_without_a_page_break_keeps_its_lines_in_place() {
+    let l = lay(&merged_cell_table(1, 12));
+    let pages = merged_cell_lines(&l, 1);
+    assert_eq!(pages.len(), 1);
+    let lines = &pages[0];
+    assert!(lines.len() > 10, "{lines:?}");
+    let para = l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Lines { path, para, .. } = i { path.0.starts_with(&[1, 1, 0]).then_some(para.clone()) } else { None })
+        .unwrap();
+    // The first line at the top of the merge, level with the first row's own text.
+    let row1 = l.pages[0]
+        .items
+        .iter()
+        .find_map(|i| if let Placed::Lines { path, y, .. } = i { path.0.starts_with(&[1, 1, 1]).then_some(*y) } else { None })
+        .unwrap();
+    assert_eq!(lines[0].0, 0);
+    assert!((lines[0].1 - row1).abs() < 0.01, "{lines:?} {row1}");
+    for (i, &(k, top, _)) in lines.iter().enumerate() {
+        assert_eq!(k, i);
+        let want = lines[0].1 + para.lines[k].top - para.lines[0].top;
+        assert!((top - want).abs() < 0.01, "line {k} at {top}, want {want}");
+    }
+}
+
+/// A page break inside a vertical merge closes the merged cell on both pages, as Word does: its
+/// part at the foot of the page has a bottom edge and its part at the head of the next a top
+/// edge, whether the break falls between rows or splits one.
+#[test]
+fn a_page_break_closes_a_vertical_merge() {
+    for (rows, text) in [(60, "step"), (6, "a step long enough to wrap over several lines of its cell; ".repeat(12).as_str())] {
+        let mut d = Document::from_text(&"filler\n".repeat(20));
+        let mut t = Table::new(rows, 2, 468.0);
+        for (i, row) in t.rows.iter_mut().enumerate() {
+            row.cells[0].props.vmerge = if i == 0 { wordcraft_doc::props::VMerge::Restart } else { wordcraft_doc::props::VMerge::Continue };
+            row.cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        }
+        d.insert_block(StoryRef::Body, &Path::top(20), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let pages: Vec<_> = l.pages.iter().filter(|p| p.items.iter().any(|i| matches!(i, Placed::Cell { .. }))).collect();
+        assert!(pages.len() >= 2, "{rows} rows: the table runs onto a second page");
+        for (n, p) in pages.iter().enumerate() {
+            // The merged cell's left edge on this page, and the horizontal edges across its middle.
+            let x =
+                p.items.iter().filter_map(|i| if let Placed::Cell { rect, cell: 0, .. } = i { Some(rect.x) } else { None }).fold(f32::MAX, f32::min);
+            let (top, bottom) = p
+                .items
+                .iter()
+                .filter_map(
+                    |i| if let Placed::Rule { x0, y0, x1, y1, .. } = i { (x0 == x1 && (x0 - x).abs() < 0.5).then_some((*y0, *y1)) } else { None },
+                )
+                .fold((f32::MAX, f32::MIN), |(a, b), (y0, y1)| (a.min(y0), b.max(y1)));
+            let edge = |y: f32| {
+                p.items.iter().any(
+                    |i| matches!(i, Placed::Rule { x0, y0, x1, y1, .. } if y0 == y1 && (y0 - y).abs() < 0.5 && *x0 <= x + 1.0 && *x1 >= x + 20.0),
+                )
+            };
+            assert!(edge(top), "{rows} rows, page {n}: the merged cell is closed at its top ({top})");
+            assert!(edge(bottom), "{rows} rows, page {n}: the merged cell is closed at its bottom ({bottom})");
+        }
+    }
+}
+
 /// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
 fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
     let mut d = Document::from_text("before\nafter");
@@ -3227,6 +3392,9 @@ fn split_row_rejects_a_hostile_cut() {
         items: vec![line(0.0), line(150.0)],
         bottom,
         cells: vec![CellPart { top: 2.0, items: 0..2, end: Some(170.0) }],
+        carried: 0,
+        lead: 0.0,
+        open: Vec::new(),
     };
     for cut in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, 0.0, -1.0, 200.0] {
         assert!(split_row(&row(200.0, 4.0), cut).is_none(), "{cut}");
@@ -6050,6 +6218,9 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         items: vec![line_row(0.0), line_row(150.0), fill(0.0, 200.0), fill(150.0, 50.0)],
         bottom: 0.0,
         cells: vec![CellPart { top: 2.0, items: 0..4, end: None }],
+        carried: 0,
+        lead: 0.0,
+        open: Vec::new(),
     };
     let (a, b) = split_row(&row, 100.0).expect("splits");
     let fills = |r: &RowLayout| {
@@ -9252,8 +9423,15 @@ fn split_cell_moves_image_frame() {
         };
         let mut kept = image.clone();
         kept.translate(0.0, top - 150.0);
-        let row =
-            RowLayout { height: 200.0, bottom: 4.0, items: vec![kept, image, frame], cells: vec![CellPart { top, items: 0..3, end: Some(170.0) }] };
+        let row = RowLayout {
+            height: 200.0,
+            bottom: 4.0,
+            items: vec![kept, image, frame],
+            cells: vec![CellPart { top, items: 0..3, end: Some(170.0) }],
+            carried: 0,
+            lead: 0.0,
+            open: Vec::new(),
+        };
         let (first, rest) = split_row(&row, 100.0).unwrap();
         assert_eq!(first.items.len(), 1);
         assert!(matches!(&first.items[0], Placed::Image { rect, .. } if *rect == Rect::new(7.0, top, 20.0, 20.0)));
@@ -9343,6 +9521,37 @@ fn kept_row_moves_with_next() {
         d.para_mut(StoryRef::Body, &Path(vec![1, 0, 0, 0])).unwrap().props.keep_next = None;
         assert_eq!(row_keep_pages(&d), [1, 1], "inherited keep, {rule:?}");
     }
+}
+
+/// A row that a vertical merge in a later column runs on into still takes its keep-with-next
+/// flag from its own first cell: the merged text carried into it does not hide that cell.
+#[test]
+fn kept_row_under_a_merge_in_a_later_column_moves_with_next() {
+    use wordcraft_doc::props::{HeightRule, VMerge};
+    let mut d = row_keep_doc();
+    let plain = d.para(StoryRef::Body, &Path(vec![1, 1, 0, 1])).unwrap().props.clone();
+    let para = |text: &str| {
+        let mut p = Paragraph::with_text(text, Default::default());
+        p.props = plain.clone();
+        wordcraft_doc::para_block(p)
+    };
+    let t = d.table_mut(StoryRef::Body, &Path::top(1)).unwrap();
+    let mut top = t.rows[0].clone();
+    top.props.height = Some(12.0);
+    top.props.height_rule = HeightRule::AtLeast;
+    top.cells[0].blocks = vec![para("Top")];
+    t.rows.insert(0, top);
+    t.grid = vec![164.0, 164.0];
+    for (ri, row) in t.rows.iter_mut().enumerate() {
+        let mut cell = row.cells[0].clone();
+        cell.blocks = vec![para(if ri == 0 { "Merged one\nMerged two\nMerged three" } else { "" })];
+        cell.props.vmerge = if ri == 0 { VMerge::Restart } else { VMerge::Continue };
+        row.cells[0].props.width = Some(164.0);
+        cell.props.width = Some(164.0);
+        row.cells.push(cell);
+    }
+    let pages = row_keep_pages(&d);
+    assert_eq!(pages, [0, 1, 1], "the kept row moves with the next one");
 }
 
 #[test]
