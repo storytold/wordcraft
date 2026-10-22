@@ -274,8 +274,8 @@ impl Writer<'_> {
             }
         }
         w.empty("wp:extent", &[("cx", &cx), ("cy", &cy)]);
-        // Word's effect extent also covers a rotated object's overhang (its rotated bounds).
-        let (px, py) = float.spin_pad(iw, ih);
+        // Word's effect extent also covers a rotated object's overhang (see `effect_spin_pad`).
+        let (px, py) = float.effect_spin_pad(iw, ih);
         let [el, et, er, eb] = float.effect_extent();
         let [el, et, er, eb] = [el + px, et + py, er + px, eb + py].map(emu);
         w.empty("wp:effectExtent", &[("l", &el), ("t", &et), ("r", &er), ("b", &eb)]);
