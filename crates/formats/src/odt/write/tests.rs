@@ -706,6 +706,16 @@ fn lists_nest() {
 }
 
 #[test]
+fn a_list_keeps_the_number_it_starts_at() {
+    let mut d = lists_doc();
+    // `lists_doc` adds the only list.
+    d.numbering.abstracts.last_mut().unwrap().levels[0].start = 5;
+    let o = Odt::new(&d);
+    assert!(o.content.contains("text:level=\"1\" style:num-suffix=\".\" style:num-format=\"1\" text:start-value=\"5\""), "{}", o.content);
+    assert_eq!(o.content.matches("text:start-value").count(), 1, "levels starting at 1 say nothing");
+}
+
+#[test]
 fn tables_spans_and_header_rows() {
     let mut d = Document::new();
     let mut t = Table::new(3, 3, 300.0);
