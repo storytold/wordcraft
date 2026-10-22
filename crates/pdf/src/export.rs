@@ -78,15 +78,23 @@ fn add_form_fields(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[
     if !opts.form_fields || !as_laid_out {
         return Ok(pdf);
     }
-    let mut fields = forms::collect(doc, lay);
-    // Layout pages to output pages; fields on pages left out go too.
-    fields.retain_mut(|f| match pages.iter().position(|p| *p == f.page) {
-        Some(i) => {
-            f.page = i;
-            true
-        }
-        None => false,
-    });
+    // Layout pages to output pages: a field on every page it is printed on (a page listed twice
+    // has its fields twice, unique names keeping them apart); fields on pages left out go too.
+    let mut fields: Vec<forms::FormField> = forms::collect(doc, lay)
+        .into_iter()
+        .flat_map(|f| {
+            pages
+                .iter()
+                .enumerate()
+                .filter(|&(_, &p)| p == f.page)
+                .map(|(i, _)| {
+                    let mut copy = f.clone();
+                    copy.page = i;
+                    copy
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
     forms::unique_names(&mut fields);
     forms::add_acroform(pdf, &fields).map_err(|e| PdfError::Write(format!("form fields: {e}")))
 }

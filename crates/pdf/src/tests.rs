@@ -2916,6 +2916,10 @@ fn form_fields_are_fillable() {
     let got = fields(PdfOptions { form_fields: true, ..Default::default() });
     let names: Vec<(&str, &str, bool)> = got.iter().map(|(t, ft, _, mk)| (t.as_str(), ft.as_str(), *mk)).collect();
     assert_eq!(names, [("List", "Ch", true), ("Box", "Btn", true)]);
+    // A page printed twice has its fields twice, under names of their own.
+    let twice = fields(PdfOptions { form_fields: true, pages: Some(vec![0, 0]), ..Default::default() });
+    let names: Vec<&str> = twice.iter().map(|(t, ..)| t.as_str()).collect();
+    assert_eq!(names, ["List", "List_2", "Box", "Box_2"]);
     assert_eq!(got[0].2, Some(Object::string_literal("Beta")));
     assert_eq!(got[1].2, Some(Object::Name(b"Yes".to_vec())));
     // Print Markup with no comments to show leaves the page as laid out: the fields stay. Another
