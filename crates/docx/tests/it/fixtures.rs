@@ -2475,6 +2475,23 @@ fn vml_lines_and_rectangles() {
     ));
 }
 
+/// A `v:stroke` that is switched off or fully transparent leaves the shape without an outline:
+/// Google Docs writes its horizontal rules as such rectangles, which Word doesn't show.
+#[test]
+fn vml_invisible_strokes_draw_no_outline() {
+    for stroke in [r##"<v:stroke color="#000000" filltype="solid" opacity="0" weight="1.0pt"/>"##, r#"<v:stroke on="f"/>"#, ""] {
+        let body = format!(
+            r#"<w:p><w:r><w:pict><v:rect style="width:475.5pt;height:.05pt" alt="" o:hr="f" o:hrstd="t" o:hralign="center">{stroke}</v:rect></w:pict></w:r></w:p>"#
+        );
+        let d = read_body(&body);
+        let InlineObject::Shape { kind: ShapeKind::Rectangle, stroke: got, .. } = &paras(&d)[0].objects[0] else { panic!("{stroke}") };
+        assert_eq!(*got, stroke.is_empty().then_some(Rgb::BLACK), "{stroke}");
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        let InlineObject::Shape { stroke: saved, .. } = &paras(&again)[0].objects[0] else { panic!("{stroke}") };
+        assert_eq!(saved, got, "{stroke}");
+    }
+}
+
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
 const VML_RIGHT_ARROW_TYPE: &str = r#"<v:shapetype id="_x0000_t13" coordsize="21600,21600" o:spt="13" adj="16200,5400" path="m@0,l@0@1,0@1,0@2@0@2@0,21600,21600,10800xe"><v:stroke joinstyle="miter"/><v:formulas><v:f eqn="val #0"/><v:f eqn="val #1"/></v:formulas><v:path o:connecttype="custom"/></v:shapetype>"#;
 
