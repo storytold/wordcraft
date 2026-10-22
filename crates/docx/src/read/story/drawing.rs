@@ -41,7 +41,7 @@ impl Reader<'_> {
             }
             let source = self.keep_embedded(c.child("a:graphic")?, rels, &[])?;
             float.set_spin(xfrm_spin(content.child("w14:xfrm")));
-            let (px, py) = float.spin_pad(w, h);
+            let (px, py) = float.effect_spin_pad(w, h);
             for (e, p) in float.effect.iter_mut().zip([px, py, px, py]) {
                 if *e != 0.0 {
                     *e = (*e - p).clamp(0.0, 1584.0);
@@ -107,7 +107,7 @@ impl Reader<'_> {
         // Word's effect extent also covers a rotated object's overhang; the model keeps that
         // apart (it follows from the angle), so take it back out.
         if let Some(f) = obj.float_mut() {
-            let (px, py) = f.spin_pad(w, h);
+            let (px, py) = f.effect_spin_pad(w, h);
             for (e, p) in f.effect.iter_mut().zip([px, py, px, py]) {
                 // Zero adds no effects room when rotation contracts this axis.
                 if *e != 0.0 {
