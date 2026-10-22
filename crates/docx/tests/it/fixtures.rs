@@ -2476,20 +2476,33 @@ fn vml_lines_and_rectangles() {
 }
 
 /// A `v:stroke` that is switched off or fully transparent leaves the shape without an outline:
-/// Google Docs writes its horizontal rules as such rectangles, which Word doesn't show.
+/// Google Docs writes its horizontal rules as such rectangles, which Word doesn't show. Its `on`
+/// wins over the shape's `stroked`, in both directions, as in Word.
 #[test]
 fn vml_invisible_strokes_draw_no_outline() {
-    for stroke in [r##"<v:stroke color="#000000" filltype="solid" opacity="0" weight="1.0pt"/>"##, r#"<v:stroke on="f"/>"#, ""] {
+    let red = Some(Rgb(0xC0, 0, 0));
+    for (attrs, stroke, want) in [
+        ("", r##"<v:stroke color="#000000" filltype="solid" opacity="0" weight="1.0pt"/>"##, None),
+        ("", r#"<v:stroke on="f"/>"#, None),
+        ("", "", Some(Rgb::BLACK)),
+        (r##" stroked="t" strokecolor="#c00000""##, r#"<v:stroke on="f"/>"#, None),
+        (r##" stroked="f" strokecolor="#c00000""##, r#"<v:stroke on="t"/>"#, red),
+    ] {
         let body = format!(
-            r#"<w:p><w:r><w:pict><v:rect style="width:475.5pt;height:.05pt" alt="" o:hr="f" o:hrstd="t" o:hralign="center">{stroke}</v:rect></w:pict></w:r></w:p>"#
+            r#"<w:p><w:r><w:pict><v:rect style="width:475.5pt;height:.05pt" alt="" o:hr="f" o:hrstd="t" o:hralign="center"{attrs}>{stroke}</v:rect></w:pict></w:r></w:p>"#
         );
         let d = read_body(&body);
-        let InlineObject::Shape { kind: ShapeKind::Rectangle, stroke: got, .. } = &paras(&d)[0].objects[0] else { panic!("{stroke}") };
-        assert_eq!(*got, stroke.is_empty().then_some(Rgb::BLACK), "{stroke}");
+        let InlineObject::Shape { kind: ShapeKind::Rectangle, stroke: got, .. } = &paras(&d)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(*got, want, "{body}");
         let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
-        let InlineObject::Shape { stroke: saved, .. } = &paras(&again)[0].objects[0] else { panic!("{stroke}") };
-        assert_eq!(saved, got, "{stroke}");
+        let InlineObject::Shape { stroke: saved, .. } = &paras(&again)[0].objects[0] else { panic!("{body}") };
+        assert_eq!(saved, got, "{body}");
     }
+    // A freeform's outline is switched off the same way.
+    let freeform = r##"<w:p><w:r><w:pict><v:shape style="width:200pt;height:40pt" coordsize="200,40" path="m0,0l200,0,200,40,0,40xe" fillcolor="#ffffcc" strokecolor="#c00000"><v:stroke on="f"/></v:shape></w:pict></w:r></w:p>"##;
+    let d = read_body(freeform);
+    let InlineObject::Shape { kind: ShapeKind::Freeform, stroke, .. } = &paras(&d)[0].objects[0] else { panic!("{freeform}") };
+    assert_eq!(*stroke, None);
 }
 
 /// The right arrow's shapetype as Word writes it (ECMA-376 Part 4 `v:shapetype`, `o:spt` 13).
