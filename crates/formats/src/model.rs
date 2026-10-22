@@ -618,29 +618,67 @@ impl<'a> Builder<'a> {
         nid
     }
 
+    /// A nested kind switch needs its own level override, not a new parent counter.
+    fn continue_list(&mut self, group: &[ListInfo], previous: u32) -> u32 {
+        let Some(mut num) = self.doc.numbering.num(previous).cloned() else { return self.new_list(group) };
+        num.id = self.doc.numbering.nums.iter().map(|n| n.id + 1).max().unwrap_or(1).max(1);
+        num.start_overrides.clear();
+        let mut seen = [false; 9];
+        for li in group {
+            let level = li.level.min(8);
+            let index = usize::from(level);
+            if seen[index] {
+                continue;
+            }
+            seen[index] = true;
+            let old_ordered = self.doc.numbering.level(previous, level).is_some_and(|l| l.format != NumFormat::Bullet);
+            if old_ordered == li.ordered {
+                continue;
+            }
+            let mut definition = levels_for(if li.ordered { ListKind::Numbered } else { ListKind::Bullet })[index].clone();
+            definition.start = li.start;
+            if let Some((_, old)) = num.level_overrides.iter_mut().find(|(l, _)| *l == level) {
+                *old = definition;
+            } else {
+                num.level_overrides.push((level, definition));
+            }
+            num.start_overrides.push((level, li.start));
+        }
+        let id = num.id;
+        self.doc.numbering.nums.push(num);
+        id
+    }
+
     fn blocks(&mut self, blocks: &[FBlock], depth: usize) -> Blocks {
         let mut out = Blocks::new();
         let mut i = 0;
+        let mut previous_list = None;
         while let Some(b) = blocks.get(i) {
+            if !matches!(b, FBlock::Para(p) if p.list.is_some()) {
+                previous_list = None;
+            }
             match b {
                 FBlock::Para(p) if p.list.is_some() => {
-                    // A run of consecutive list paragraphs is one list, until a top-level item of
-                    // the other kind (bulleted or numbered) starts a new one.
+                    // Consecutive paragraphs share a list until any used level changes kind.
+                    // A definition cannot describe both bullets and numbers at the same level.
                     let mut j = i;
                     let mut group: Vec<ListInfo> = Vec::new();
-                    let mut top: Option<bool> = None;
+                    let mut kinds: [Option<bool>; 9] = [None; 9];
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
                         let Some(li) = q.list else { break };
-                        if li.level == 0 {
-                            if top.is_some_and(|o| o != li.ordered) {
-                                break;
-                            }
-                            top = Some(li.ordered);
+                        let level = usize::from(li.level.min(8));
+                        if kinds[level].is_some_and(|ordered| ordered != li.ordered) {
+                            break;
                         }
+                        kinds[level] = Some(li.ordered);
                         group.push(li);
                         j += 1;
                     }
-                    let num = self.new_list(&group);
+                    let num = match previous_list.filter(|_| group.first().is_some_and(|li| li.level > 0)) {
+                        Some(previous) => self.continue_list(&group, previous),
+                        None => self.new_list(&group),
+                    };
+                    previous_list = Some(num);
                     for q in blocks.get(i..j).unwrap_or(&[]) {
                         if let FBlock::Para(q) = q {
                             let para = self.para(q, Some(num));

@@ -414,10 +414,25 @@ impl Writer {
         if let Some(c) = &p.fmt_change {
             // RTF 1.9.1: the paragraph formatting before the change, then who changed it and when.
             let old = self.para_ctl(&c.old, intbl);
-            // The old list is the same list instance (only its level may differ).
-            let list = match (c.old.list, &ls) {
-                (Some(li), Some((n, _))) => format!("\\ls{n}\\ilvl{}", li.level.min(8)),
-                _ => String::new(),
+            let list = match c.old.list {
+                Some(li) => {
+                    let level = li.level.min(8);
+                    // Reuse the current list only if it describes the old level's kind too.
+                    // Otherwise reuse a compatible definition before allocating one: repeated
+                    // prior kinds must not exhaust the reader's bounded list table.
+                    let current = ls
+                        .as_ref()
+                        .map(|(n, _)| *n)
+                        .filter(|n| self.lists.get(n.saturating_sub(1)).and_then(|kinds| kinds.get(usize::from(level))) == Some(&li.ordered));
+                    let n = current
+                        .or_else(|| self.lists.iter().position(|kinds| kinds.get(usize::from(level)) == Some(&li.ordered)).map(|i| i + 1))
+                        .unwrap_or_else(|| {
+                            self.lists.push([li.ordered; 9]);
+                            self.lists.len()
+                        });
+                    format!("\\ls{n}\\ilvl{level}")
+                }
+                None => String::new(),
             };
             out.push_str(&format!("{{\\*\\oldpprops {old}{list}}}"));
             let words = self.rev_words("\\prauth", "\\prdate", &c.mark);
@@ -494,7 +509,6 @@ impl Writer {
     fn blocks(&mut self, blocks: &[FBlock], intbl: bool, last_end: &str, out: &mut String, depth: usize) {
         let mut counter = model::ListCounter::default();
         let mut cur_list: Option<usize> = None;
-        let mut top_ordered = false;
         let n = blocks.len();
         for (i, b) in blocks.iter().enumerate() {
             let mut end = if i + 1 == n { last_end.to_string() } else { "\\par".to_string() };
@@ -511,12 +525,12 @@ impl Writer {
                     }
                     let ls = match p.list {
                         Some(li) => {
-                            // A top-level item of the other kind starts a new list.
-                            if li.level == 0 && cur_list.is_some() && top_ordered != li.ordered {
+                            // A different kind at any level needs a different definition;
+                            // reusing the old one would change nested items on reopen.
+                            let continue_parent = cur_list.is_some() && li.level > 0;
+                            let level = usize::from(li.level.min(8));
+                            if cur_list.and_then(|id| self.lists.get(id.saturating_sub(1))).is_some_and(|kinds| kinds[level] != li.ordered) {
                                 cur_list = None;
-                            }
-                            if li.level == 0 {
-                                top_ordered = li.ordered;
                             }
                             let id = match cur_list {
                                 Some(id) => id,
@@ -539,7 +553,9 @@ impl Writer {
                                         }
                                     }
                                     self.lists.push(kinds);
-                                    counter.reset();
+                                    if !continue_parent {
+                                        counter.reset();
+                                    }
                                     self.lists.len()
                                 }
                             };
