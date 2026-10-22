@@ -49,7 +49,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::Paint;
-use wordcraft_layout::display::{Draw, ItemDisplay, Stroke as LineStyle};
+use wordcraft_layout::display::{Draw, ItemDisplay, Stroke as LineStyle, ground};
 use wordcraft_layout::para::{ClKind, LineEnd};
 use wordcraft_layout::{DocLayout, LayoutCache, NumeralMode, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
