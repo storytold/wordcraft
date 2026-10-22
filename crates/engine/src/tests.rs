@@ -5626,6 +5626,70 @@ fn caret_navigation() {
     assert_eq!(s.sel.focus.off, 10);
 }
 
+/// A long inline object that wraps whole to the next line leaves the line above short. Its end
+/// is a caret stop of its own: Right from the last character shows the caret after it, on that
+/// line (not before the character, and not at the start of the next line, which skipped it);
+/// Left from the next line's start comes back to it, Home/End work on that line, and a click
+/// there carries the same affinity.
+#[test]
+fn the_end_of_a_line_shortened_by_a_wrapped_object_is_a_caret_stop() {
+    let mut s = s();
+    let text = "This is an inline formula,";
+    let at = text.len();
+    run(&mut s, "text.insert", json!({"text": text}));
+    let pic = wordcraft_doc::para::InlineObject::Image {
+        media: "picture".into(),
+        w: 400.0,
+        h: 20.0,
+        alt: String::new(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+    };
+    s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
+    s.touch();
+    // Before the last character, on line 1.
+    run(&mut s, "caret.set", json!({"pos": Pos::body(0, at - 1)}));
+    let before = run(&mut s, "document.layout", json!({}));
+    assert_eq!(before["pages"][0]["lines"], 2, "the picture wraps to a line of its own");
+    let line1 = before["caret"]["y"].as_f64().unwrap();
+    // Right: the same offset, drawn after the last character at the end of line 1.
+    run(&mut s, "caret.right", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(s.caret_upstream);
+    let end = run(&mut s, "document.layout", json!({}));
+    assert_eq!(end["caret"]["upstream"], json!(true));
+    assert_eq!(end["caret"]["y"].as_f64(), Some(line1));
+    assert!(end["caret"]["x"].as_f64() > before["caret"]["x"].as_f64());
+    // Right again: the same offset at the start of line 2.
+    run(&mut s, "caret.right", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(!s.caret_upstream);
+    let down = run(&mut s, "document.layout", json!({}));
+    assert_eq!(down["caret"]["upstream"], json!(false));
+    assert!(down["caret"]["y"].as_f64() > Some(line1 + 5.0));
+    // Left comes back to the end of line 1, then before its last character.
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(s.caret_upstream);
+    run(&mut s, "caret.left", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, at - 1));
+    assert!(!s.caret_upstream);
+    // End goes after the last character; Home from there goes to the start of that line.
+    run(&mut s, "caret.end", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(s.caret_upstream);
+    run(&mut s, "caret.home", json!({}));
+    assert_eq!(s.sel.focus, Pos::body(0, 0));
+    assert!(!s.caret_upstream);
+    // A click where the end-of-line caret is drawn lands after the character (the UI's path).
+    let x = end["caret"]["x"].as_f64().unwrap() + 1.0;
+    let y = end["caret"]["y"].as_f64().unwrap() + end["caret"]["h"].as_f64().unwrap() / 2.0;
+    run(&mut s, "caret.set", json!({"page": 0, "x": x, "y": y}));
+    assert_eq!(s.sel.focus, Pos::body(0, at));
+    assert!(s.caret_upstream);
+}
+
 #[test]
 fn text_box_insert_puts_the_caret_inside() {
     let mut s = s();

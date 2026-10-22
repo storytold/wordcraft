@@ -678,6 +678,44 @@ fn hit_and_caret_agree() {
     assert_eq!(up.path, Path::top(0));
 }
 
+/// A long inline object that doesn't fit the room left on its line wraps whole to the next
+/// line, so the line above ends short. Its end is still a caret stop of its own, after the last
+/// character: a click there is that offset with the upstream affinity, drawn on the short line,
+/// not before the last character nor at the start of the next line (which skips it).
+#[test]
+fn the_end_of_a_line_shortened_by_a_wrapped_object_is_a_caret_stop() {
+    let text = "This is an inline formula,";
+    let at = text.len();
+    let mut d = Document::from_text(text);
+    let pic =
+        InlineObject::Image { media: "picture".into(), w: 400.0, h: 20.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+    d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().insert_object(at, pic, &Default::default()).unwrap();
+    let l = lay(&d);
+    let lines = crate::hit::page_lines(&l.pages[0], StoryRef::Body);
+    let first = &lines[0];
+    assert_eq!(first.para.lines[first.li].end, para::LineEnd::Wrap);
+    assert_eq!(first.para.lines[first.li].stop, at, "line 1 ends after the comma; the picture starts line 2");
+    assert!(lines.iter().any(|l| l.li == 1), "the picture has a line of its own");
+    // Line 1 ends well short of the right margin: the space the picture couldn't use.
+    let end_x = first.x + first.para.x_of(first.li, at).unwrap();
+    assert!(end_x < l.pages[0].body.right() - 100.0, "line 1 ends at {end_x}");
+    // A click after the comma, on that short line, is the wrap end upstream.
+    let y = (first.top + first.bottom) / 2.0;
+    let (pos, upstream) = l.hit_affinity(0, end_x + 1.0, y, StoryRef::Body).unwrap();
+    assert_eq!(pos, Pos::body(0, at));
+    assert!(upstream, "the click is line 1's end, not line 2's start");
+    // Drawn after the comma, on line 1; the same offset downstream is line 2's start.
+    let up = l.caret_on_affinity(&pos, 0, true).unwrap();
+    assert!((up.x - end_x).abs() < 0.5 && (up.top - first.top).abs() < 0.5, "upstream caret {up:?} vs line end {end_x}");
+    let down = l.caret_on_affinity(&pos, 0, false).unwrap();
+    assert!(down.top > up.top + 5.0 && down.x < up.x, "downstream caret {down:?} vs {up:?}");
+    // The offset is reachable at its exact place, and a click on the comma lands before it.
+    assert_eq!(first.para.off_at_x(first.li, end_x - first.x), at);
+    let before_x = first.x + first.para.x_of(first.li, at - 1).unwrap();
+    assert_eq!(l.hit(0, before_x + (end_x - before_x) * 0.25, y, StoryRef::Body), Some(Pos::body(0, at - 1)));
+    assert_eq!(l.hit(0, end_x + 1.0, y, StoryRef::Body), Some(pos));
+}
+
 #[test]
 fn selection_bar_finds_the_line_beside_the_pointer() {
     crate::test_fonts();

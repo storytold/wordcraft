@@ -5,7 +5,8 @@ use super::{Color32, DocLayout, Hash, Hasher, Pos, Pos2, WordApp};
 /// Caret position on screen.
 pub fn caret_screen(app: &mut WordApp) -> Option<(Pos2, f32)> {
     let l = app.session.layout();
-    let c = l.caret_on(&app.session.sel.focus, app.session.page_hint)?;
+    let upstream = app.session.caret_upstream && app.session.sel.is_collapsed();
+    let c = l.caret_on_affinity(&app.session.sel.focus, app.session.page_hint, upstream)?;
     let placed = app.canvas.shown.pages.iter().find(|pl| pl.page == c.page)?;
     let p = placed.to_screen(craft::behavior::kurbo::Point::new(f64::from(c.x), f64::from(c.top)));
     Some((p, c.height.max(c.width) * placed.scale as f32))

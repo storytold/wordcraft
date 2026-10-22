@@ -438,6 +438,13 @@ fn band_dist(v: f32, top: f32, h: f32) -> f32 {
 impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
+        self.hit_affinity(page, x, y, story).map(|(pos, _)| pos)
+    }
+
+    /// The position nearest to (x, y) on `page`, in `story`, and whether the caret there belongs
+    /// at the end of the previous line (a wrapped line's end) rather than at the start of the
+    /// line clicked: the same offset, Word's two visual stops at a soft wrap.
+    pub fn hit_affinity(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, bool)> {
         let p = self.pages.get(page)?;
         // Like Word, a click outside a floating table doesn't land in its cells while there's
         // other text on the page: below one, it goes to the text beside or after it (#2038).
@@ -445,15 +452,19 @@ impl DocLayout {
         let away = |path: &Path| floats.iter().any(|(t, r)| path.0.len() > t.0.len() && path.0.starts_with(&t.0) && !r.contains(Point::new(x, y)));
         // Turned cell text takes a click up to 2pt outside it, so outside a floating table too.
         if let Some(pos) = turned_hit(p, story, x, y, &away) {
-            return Some(pos);
+            return Some((pos, false));
         }
         let lines = page_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
-            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
+            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false)).map(|pos| (pos, false));
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
-        let at = |l: &LineHit| Pos { story: l.story, path: l.path.clone(), off: l.para.off_at_x(l.li, x - l.x) };
+        let at = |l: &LineHit| {
+            let off = l.para.off_at_x(l.li, x - l.x);
+            let upstream = l.para.lines.get(l.li).is_some_and(|ln| ln.end == crate::LineEnd::Wrap && ln.stop == off);
+            (Pos { story: l.story, path: l.path.clone(), off }, upstream)
+        };
         if let Some(best) = lines.iter().filter(|l| !away(l.path)).min_by(nearest) {
             return Some(at(best));
         }
@@ -461,6 +472,7 @@ impl DocLayout {
         // text under the point (the table's too), then the nearest of those cells.
         nearest_turned(p, story, x, y, &away)
             .or_else(|| turned_hit(p, story, x, y, &|_: &Path| false))
+            .map(|pos| (pos, false))
             .or_else(|| lines.iter().min_by(nearest).map(at))
     }
 
@@ -705,9 +717,18 @@ impl DocLayout {
     }
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
+        self.caret_on_affinity(pos, page_hint, false)
+    }
+
+    /// Caret geometry for a position; `upstream` draws a wrap point at the end of the previous
+    /// line (after its last character) instead of at the start of the next line. The flag is
+    /// ignored where the position is not such a point.
+    pub fn caret_on_affinity(&self, pos: &Pos, page_hint: usize, upstream: bool) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let down = para.line_of(pos.off);
+            let at_end = upstream.then(|| para.wrap_end_line(pos.off)).flatten().filter(|li| *li >= *l0);
+            let li = at_end.unwrap_or(down);
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -751,9 +772,29 @@ impl DocLayout {
         None
     }
 
+    /// Whether `pos` is the end of a wrapped line (a caret stop of its own, Word's second stop
+    /// at a soft wrap).
+    pub fn at_wrap_end(&self, pos: &Pos, page_hint: usize) -> bool {
+        for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
+            let Placed::Lines { para, l0, l1, .. } = it else { continue };
+            let li = para.line_of(pos.off);
+            if li < *l0 || li >= *l1 {
+                continue;
+            }
+            return para.wrap_end_line(pos.off).is_some_and(|prev| prev >= *l0);
+        }
+        false
+    }
+
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
-        let c = self.caret_on(pos, page_hint)?;
+        self.vertical_affinity(pos, goal_x, dir, page_hint, false).map(|(pos, gx, _)| (pos, gx))
+    }
+
+    /// The position one line up or down from `pos` (which may sit at a wrapped line's end,
+    /// `upstream`), keeping `goal_x`, and whether it lands at such an end.
+    pub fn vertical_affinity(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize, upstream: bool) -> Option<(Pos, f32, bool)> {
+        let c = self.caret_on_affinity(pos, page_hint, upstream)?;
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
@@ -776,7 +817,8 @@ impl DocLayout {
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);
-            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx));
+            let up = l.para.lines.get(l.li).is_some_and(|ln| ln.end == crate::LineEnd::Wrap && ln.stop == off);
+            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx, up));
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
@@ -784,7 +826,8 @@ impl DocLayout {
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
-        Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+        let up = l.para.lines.get(l.li).is_some_and(|ln| ln.end == crate::LineEnd::Wrap && ln.stop == off);
+        Some((Pos { story: l.story, path: l.path.clone(), off }, gx, up))
     }
 
     /// Page Up (`dir < 0`) or Page Down within the caret's page: of the lines above (or below)
@@ -804,20 +847,29 @@ impl DocLayout {
 
     /// Start and end of the visual line holding `pos` (Home / End).
     pub fn line_bounds(&self, pos: &Pos, page_hint: usize) -> Option<(Pos, Pos)> {
+        self.line_bounds_affinity(pos, page_hint, false)
+    }
+
+    /// Start and end of the visual line the caret sits on: with `upstream` a wrap point counts
+    /// as the end of the previous line (where the caret is drawn), so Home goes to that line's
+    /// start.
+    pub fn line_bounds_affinity(&self, pos: &Pos, page_hint: usize, upstream: bool) -> Option<(Pos, Pos)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let down = para.line_of(pos.off);
+            let at_end = upstream.then(|| para.wrap_end_line(pos.off)).flatten().filter(|li| *li >= *l0);
+            let li = at_end.unwrap_or(down);
             if li < *l0 || li >= *l1 {
                 continue;
             }
             let l = para.lines.get(li)?;
             let mut end = l.stop;
-            // Don't put the caret after a trailing break on that line, nor past wrap spaces.
+            // Don't put the caret after a trailing break on that line. A wrapped line's end is
+            // its last offset, drawn after its last character.
             if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > l.start {
                 end = para.clusters.get(l.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
-            } else if l.end == crate::LineEnd::Wrap {
-                // Before the wrapped line's trailing space: its last reachable offset, in logical
-                // order (the far edge is the left one in right-to-left text).
+            } else if l.end == crate::LineEnd::Wrap && !l.vis.is_empty() {
+                // Bidirectional lines: their last reachable offset in logical order.
                 end = para.line_offsets(li).into_iter().max().unwrap_or(end);
             }
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };

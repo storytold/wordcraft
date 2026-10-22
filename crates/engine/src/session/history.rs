@@ -222,6 +222,8 @@ impl Session {
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.redo.push(Arc::new(cur));
+        // The restored selection's wrap stop shows at the start of its line.
+        self.caret_upstream = false;
         // Undo swaps the whole body back: a composition belongs to the text it showed.
         self.note_body_replaced();
         self.refresh_math_session();
@@ -249,6 +251,8 @@ impl Session {
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.history.push(Arc::new(cur));
+        // The restored selection's wrap stop shows at the start of its line.
+        self.caret_upstream = false;
         self.note_body_replaced();
         self.refresh_math_session();
         self.touch();
