@@ -45,8 +45,7 @@ serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
-# "clock" + "wasmbind": the local time zone's UTC offset for Insert ▸ Date & Time and DATE/TIME fields (#1707); on the web `wasmbind` asks the browser's Date.
-chrono = { version = "0.4.45", default-features = false, features = ["std", "clock", "wasmbind"] }
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
 rayon = "1"
 unicode-bidi = "0.3"
@@ -94,9 +93,6 @@ zeroize = "1"
 libc = "0.2"
 
 # time
-# The local time zone's UTC offset for Insert ▸ Date & Time and DATE/TIME fields (#1707): chrono
-# (MIT OR Apache-2.0), `clock` only, native targets only (the web asks the browser's Date).
-chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
 
 # ui
 egui = "0.37"
