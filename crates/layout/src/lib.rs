@@ -3795,8 +3795,11 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // Keep lines together: if it doesn't fit but would on an empty column, move it. Keep with
     // next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
     // that doesn't breaks as usual, its last lines going over with the next paragraph.
+    // A paragraph that opens with a page or column break is moved by its break, once: kept here
+    // too, it went to the next column and the break then took it one further, skipping a column
+    // or leaving a blank page (#3009; Word, observed with synthetic documents).
     let height = pl.height + top_room + bottom_room;
-    if pl.rp.keep_lines || (pl.rp.keep_next && pb.y + height <= pb.bottom + 0.01) {
+    if (pl.rp.keep_lines || (pl.rp.keep_next && pb.y + height <= pb.bottom + 0.01)) && (pb.web || !pl.opens_with_break()) {
         let need = height + if pl.rp.keep_next { next_first_line(ctx, block, width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
@@ -3953,10 +3956,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // A line holding nothing but a page or column break stays at the bottom of the page
             // even when it doesn't fit: it only ends the page, and moving it would leave a blank
             // page behind it (Word does the same).
-            let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
-                && p.text
-                    .get(l.start..l.stop)
-                    .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
+            // (Markers such as a bookmark may stand next to the break: #3009.)
+            let only_break = pl.only_break(l1);
             // An empty paragraph closing a section before a new page: measured in Word, it stays
             // on a full page instead of starting one of its own.
             let closing_mark = pb.next_starts_page && p.section.is_some() && p.text.is_empty();
@@ -4284,6 +4285,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                 fitted: &[],
             };
             let pl = para::layout_para(p, &env);
+            // One that opens with a page or column break needs no room here: its break line stays
+            // at the bottom of the column and the rest goes on past the break (#3009).
+            if pl.opens_with_break() && !matches!(ctx.opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline) {
+                return 0.0;
+            }
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
             let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
