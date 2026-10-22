@@ -345,7 +345,7 @@ impl<'e> Breaker<'e> {
             sc.end = LineEnd::Para;
         }
         let (c1, j, hyphen) = self.settle_clusters(pl, &mut sc);
-        let v = self.measure(pl, (sc.c0, c1));
+        let v = self.measure(pl, (sc.c0, c1), sc.end);
         self.align(pl, &mut sc, c1);
         let start = pl.clusters.get(sc.c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > sc.c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
@@ -359,6 +359,7 @@ impl<'e> Breaker<'e> {
             baseline: v.baseline,
             text_asc: v.text_asc,
             text_desc: v.text_desc,
+            hang: v.hang,
             c0: sc.c0,
             c1,
             xs: sc.xs,
@@ -470,7 +471,7 @@ impl<'e> Breaker<'e> {
     }
 
     /// The line's height, baseline and text extent.
-    fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
+    fn measure(&self, pl: &ParaLayout, range: (usize, usize), end: LineEnd) -> Measure {
         let rp = &self.rp;
         let Extents { mut asc, mut desc, obj_asc, obj_desc, text } = self.extents(pl, range);
         let mut text_natural = asc + desc;
@@ -489,7 +490,12 @@ impl<'e> Breaker<'e> {
         let spacing = if let LineSpacing::Multiple(m) = rp.line_spacing { Some(m) } else { None };
         let pictures_alone = !text && obj_asc + obj_desc > 0.0 && spacing.is_some();
         let below = if pictures_alone { obj_desc } else { desc };
-        let text_pictures = if pictures_alone {
+        // At-least spacing below the pictures' height keeps no descent under a paragraph's last
+        // line of only pictures either (Word 365 probes on #1172: at least 12pt under 100–140pt
+        // pictures adds nothing); a list label is text there. Exact spacing has its own baseline (below).
+        let labelled = self.first && pl.label.is_some();
+        let at_least_alone = matches!(rp.line_spacing, LineSpacing::AtLeast(_)) && !text && !labelled && end == LineEnd::Para;
+        let text_pictures = if pictures_alone || (at_least_alone && obj_asc > asc) {
             obj_asc + obj_desc
         } else if obj_asc > asc || obj_desc > font_desc {
             asc.max(obj_asc) + desc
@@ -530,15 +536,29 @@ impl<'e> Breaker<'e> {
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
+        // The descent the line keeps under its baseline: under a line of only pictures (multiple
+        // spacing, off the grid) only theirs, so all of the room below them may hang. At-least
+        // spacing needs its whole line on the page.
+        let kept_desc = if pictures_alone && !centred { obj_desc } else { desc };
         let baseline = if centred {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else if let Some(m) = spacing.filter(|_| pictures_alone) {
             self.top + (text_natural * m.min(1.0) - text_pictures).max(0.0) + obj_asc
+        } else if obj_asc > asc && matches!(rp.line_spacing, LineSpacing::Exactly(_)) {
+            // A picture taller than the text sits on a baseline four fifths down an exact line,
+            // with text beside it or not (Word 365 probes on #1172: 32pt below it at exactly 160pt,
+            // 2.4pt at exactly 12pt).
+            self.top + height * 0.8
+        } else if obj_asc > asc && at_least_alone {
+            // An at-least line taller than its pictures has them on its bottom edge (ibid.).
+            self.top + height - obj_desc
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, below).max(obj_asc.min(height - below))
         };
-        Measure { height, baseline, text_asc, text_desc }
+        // On a grid the text is centred in its pitches: no evidence that the slack may hang.
+        let hang = if centred || spacing.is_none() { 0.0 } else { (self.top + height - baseline - kept_desc).max(0.0) };
+        Measure { height, baseline, text_asc, text_desc, hang }
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
@@ -625,12 +645,14 @@ impl<'e> Breaker<'e> {
         };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
+        let baseline = self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) };
         self.lines.push(Line {
             top: self.top,
             height: h,
-            baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+            baseline,
             text_asc: asc,
             text_desc: desc,
+            hang: (self.top + h - baseline - desc).max(0.0),
             c0: self.n,
             c1: self.n,
             xs: vec![if self.rtl_para { x0 - shift } else { x0 + shift }],
@@ -707,6 +729,8 @@ struct Measure {
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
+    /// How far the leading below the text may hang past the page bottom ([`Line::hang`]).
+    hang: f32,
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.
