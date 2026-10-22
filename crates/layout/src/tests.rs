@@ -10688,3 +10688,106 @@ fn layout_cache_invalidates_on_changed_filepath() {
     let text_b = shown(&l_b);
     assert_eq!(text_b, "/path/two/a.docx", "second layout with same cache shows /path/two/a.docx");
 }
+
+/// A caption kept with the next paragraph (`keepNext`) before a table goes over with the table
+/// when the table's repeated header row and the start of its first row don't fit under it, as in
+/// Word, instead of staying alone at the foot of the page: keep with next asked a table for a
+/// flat 24 pt. The first row need not fit whole: Word keeps the caption where the row splits
+/// under it with two lines (widow/orphan control in the cell). Swept over the filler lines above,
+/// so the caption lands at every offset from the foot of the page.
+#[test]
+fn a_caption_kept_with_a_table_goes_over_with_the_start_of_its_first_row() {
+    let mut split_under_it = false;
+    for fill in 20..40 {
+        let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+        d.format_paragraphs(&Pos::body(fill, 0), &Pos::body(fill, 0), &|p| p.keep_next = Some(true)).unwrap();
+        let mut t = Table::new(2, 1, 468.0);
+        t.rows[0].props.header = true;
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Header", Default::default()))];
+        t.rows[1].cells[0].blocks =
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"first row words go on and on ".repeat(60), Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = l
+            .pages
+            .iter()
+            .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+            .unwrap();
+        // Lines of the first row's text on a page.
+        let first_row_lines = |pi: usize| -> usize {
+            l.pages.get(pi).map_or(0, |p| {
+                p.items
+                    .iter()
+                    .filter_map(|it| match it {
+                        Placed::Lines { path, l0, l1, .. } if path.0.len() > 1 && path.0.get(1) == Some(&1) => Some(l1 - l0),
+                        _ => None,
+                    })
+                    .sum()
+            })
+        };
+        let here = first_row_lines(page);
+        assert!(here >= 2, "{fill} filler lines: the caption's page {} holds {here} lines of the first row", page + 1);
+        split_under_it |= first_row_lines(page + 1) > 0;
+    }
+    assert!(split_under_it, "the caption never stays above a first row that splits");
+}
+
+/// Looking ahead at a table for keep with next lays it out once more: the list items in its cells
+/// are still counted once, where the table is placed.
+#[test]
+fn list_items_in_a_table_after_a_kept_caption_are_counted_once() {
+    let mut d = Document::from_text("Caption");
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.keep_next = Some(true)).unwrap();
+    let items = numbered(&mut d, &["first item", "second item"], ParaProps::default());
+    let mut t = Table::new(1, 1, 468.0);
+    t.rows[0].cells[0].blocks = items.into_iter().map(wordcraft_doc::para_block).collect();
+    d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+    assert_eq!(labels(&lay(&d)), ["1.", "2."]);
+}
+
+/// Before Word 2013 layout (compatibility mode 15, measured in Word for Mac in modes 12 and 14) a
+/// row split across pages divides its cells' text at any line, the repeated header row may stay
+/// alone at the foot of a page, and a caption kept with the table keeps with the header row only.
+/// The bottom margin shrinks a point at a time, so the caption lands at every offset from the
+/// foot of the page.
+#[test]
+fn before_word_2013_layout_a_kept_caption_goes_with_the_header_row_only() {
+    let (mut one_line, mut header_alone) = (false, false);
+    for extra in 0..40 {
+        let fill = 25;
+        let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+        d.settings.compat_mode = wordcraft_doc::LEGACY_COMPAT_MODE;
+        d.last_section.margin_bottom -= extra as f32;
+        // (No space after the caption: the table starts right under it.)
+        d.format_paragraphs(&Pos::body(fill, 0), &Pos::body(fill, 0), &|p| {
+            p.keep_next = Some(true);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        let mut t = Table::new(2, 1, 468.0);
+        t.rows[0].props.header = true;
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Header", Default::default()))];
+        t.rows[1].cells[0].blocks =
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"first row words go on and on ".repeat(60), Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = l
+            .pages
+            .iter()
+            .find(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+            .unwrap();
+        let rows: Vec<usize> = page.items.iter().filter_map(|it| if let Placed::Cell { row, .. } = it { Some(*row) } else { None }).collect();
+        let lines: usize = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { path, l0, l1, .. } if path.0.len() > 1 && path.0.get(1) == Some(&1) => Some(l1 - l0),
+                _ => None,
+            })
+            .sum();
+        assert!(rows.contains(&0), "bottom margin -{extra}: the caption is alone on its page");
+        one_line |= lines == 1;
+        header_alone |= !rows.contains(&1);
+    }
+    assert!(one_line && header_alone, "one line of the first row: {one_line}, the header row alone: {header_alone}");
+}

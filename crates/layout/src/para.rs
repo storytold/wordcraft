@@ -1442,6 +1442,11 @@ pub(crate) fn left_out(doc: &Document, rc: &ResolvedChar, show_hidden: bool, hid
 pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let doc = env.doc;
     let mut rp = doc.styles.resolve_para_in(&p.props, env.table.map(|t| &t.para));
+    // Before Word 2013 layout (compatibility mode 15) a row split across pages divides its cells'
+    // text at any line: widow/orphan control doesn't apply in a table (measured in modes 12, 14).
+    if env.table.is_some() && doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT {
+        rp.widow_control = false;
+    }
     if let Some(spacing) = env.read_line_spacing.filter(|s| s.is_finite() && (1.0..=2.0).contains(s)) {
         rp.line_spacing = wordcraft_doc::props::LineSpacing::Multiple(spacing);
     }

@@ -4283,9 +4283,39 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     }
             }
         }
+        Some(Block::Table(t)) if t.props.float.is_none() => table_start_need(ctx, t, block + 1, width),
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
     }
+}
+
+/// The room a table in the text needs to start on a page: its repeated header rows and the least
+/// room its first row can start in (whole, or the part of it that splits off). A paragraph kept
+/// with the table goes over with it when that much is not left, as in Word.
+/// Before Word 2013 layout (compatibility mode 15) the header rows may stay alone at the foot of a
+/// page, so the paragraph keeps with them only.
+fn table_start_need(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: usize, width: f32) -> f32 {
+    // A look ahead: list and equation numbers in the cells don't count yet.
+    let (counters, eq_count) = (ctx.counters.clone(), ctx.eq_count);
+    let tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    (ctx.counters, ctx.eq_count) = (counters, eq_count);
+    let headers = t.rows.iter().take_while(|r| r.props.header).count();
+    let head: f32 = tl.rows.iter().take(headers).map(|r| r.height).sum();
+    if headers > 0 && ctx.doc.settings.compat_mode < wordcraft_doc::COMPAT_MODE_CURRENT {
+        return head;
+    }
+    let (Some(row), Some(laid)) = (t.rows.get(headers), tl.rows.get(headers)) else { return head };
+    // ponytail: bisection assumes starting a row gets no harder with more room.
+    let (mut lo, mut hi) = (0.0f32, laid.height);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        if row_can_start(row, laid, mid, f32::MAX) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    head + hi
 }
 
 fn row_keeps_next(row: &table::RowLayout) -> bool {
@@ -4384,9 +4414,11 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         t.rows.get(ri).is_some_and(|r| r.props.height_rule == HeightRule::AtLeast && r.props.height.is_some_and(|h| h > room + 0.01))
     };
     // Like Word, repeated header rows don't stay alone at the bottom of a page: when the first row
-    // after them can't start under them there, the table starts on the next page.
+    // after them can't start under them there, the table starts on the next page. Before Word
+    // 2013 layout (compatibility mode 15) they do (measured in modes 12 and 14).
     let first = header_rows.len();
     if !header_rows.is_empty()
+        && ctx.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT
         && !pb.at_top()
         && let Some(row) = tl.rows.get(first)
     {
