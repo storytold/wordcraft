@@ -8190,6 +8190,65 @@ fn columns_before_a_page_break_or_a_column_break_are_not_balanced() {
     assert!(br > bl + 50.0 && after >= br - 0.5, "columns end at {bl} and {br}, next section at {after}");
 }
 
+/// Issue #3009: a paragraph that opens with a column or page break moves once, by its break, as Word
+/// lays it out, whatever keeps it carries. Keep with next (or keep lines together) used to move it to
+/// the next column first and the break then moved it again: a column skipped (the FCFCOA kit's
+/// "Relevant legislation" heading on a page of its own), or a blank page. For every fill of the
+/// column before it, the heading and the line before it land where they do with no keeps at all:
+/// with keep with next, with a bookmark before the break (a heading in a table of contents), with
+/// keep lines together, and with keep with next on the paragraph before it. The paragraph kept with
+/// the heading starts in the heading's column.
+#[test]
+fn a_paragraph_opening_with_a_break_moves_once_whatever_it_keeps() {
+    #[derive(Clone, Copy, Debug)]
+    enum Keep {
+        None,
+        Next,
+        NextWithBookmark,
+        Lines,
+        NextOnTheLineBefore,
+    }
+    let layout = |brk: char, cols: u32, filler: usize, keep: Keep| {
+        let mut lines: Vec<String> = (0..filler).map(|i| format!("Filler line {i}")).collect();
+        lines.push(format!("{brk}Heading"));
+        lines.push("Kept with the heading. ".repeat(40));
+        let mut d = Document::from_text(&lines.join("\n"));
+        d.last_section.columns.count = cols;
+        d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap().props.keep_lines = Some(true);
+        match keep {
+            Keep::None => d.para_mut(StoryRef::Body, &Path::top(filler + 1)).unwrap().props.keep_lines = None,
+            Keep::Next => d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap().props.keep_next = Some(true),
+            Keep::NextWithBookmark => {
+                d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap().props.keep_next = Some(true);
+                d.insert_object(&Pos::body(filler, 0), InlineObject::BookmarkStart { name: "_Toc1".into() }, &Default::default()).unwrap();
+            }
+            Keep::Lines => d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap().props.keep_lines = Some(true),
+            Keep::NextOnTheLineBefore => {
+                d.para_mut(StoryRef::Body, &Path::top(filler - 1)).unwrap().props.keep_next = Some(true);
+                d.para_mut(StoryRef::Body, &Path::top(filler)).unwrap().props.keep_next = Some(true);
+            }
+        }
+        let l = lay(&d);
+        let mid = l.pages[0].w / 2.0;
+        // The column a paragraph's text ends in (the heading's: after its break; the line holding
+        // only the break stays behind in the column it ends) and the one the kept paragraph starts in.
+        let column = |c: crate::hit::Caret| c.page * cols as usize + usize::from(cols == 2 && c.x > mid);
+        let end = |b: usize| column(l.caret(&Pos::body(b, d.para(StoryRef::Body, &Path::top(b)).unwrap().text.len())).unwrap());
+        (end(filler - 1), end(filler), column(l.caret(&Pos::body(filler + 1, 0)).unwrap()))
+    };
+    for (brk, cols) in [(wordcraft_doc::para::COLUMN_BREAK, 2u32), (wordcraft_doc::para::PAGE_BREAK, 1)] {
+        for filler in 30..56 {
+            let (before, heading, _) = layout(brk, cols, filler, Keep::None);
+            assert_eq!(heading, before + 1, "{cols} column(s), {filler} filler lines, no keeps: the break moves once");
+            for keep in [Keep::Next, Keep::NextWithBookmark, Keep::Lines, Keep::NextOnTheLineBefore] {
+                let (b, h, kept) = layout(brk, cols, filler, keep);
+                assert_eq!((b, h), (before, heading), "{cols} column(s), {filler} filler lines, {keep:?}: moved more than once");
+                assert_eq!(kept, h, "{cols} column(s), {filler} filler lines, {keep:?}: the kept paragraph left the heading");
+            }
+        }
+    }
+}
+
 /// The glyphs of each note reference mark in the body, by note id.
 fn note_marks(l: &DocLayout) -> HashMap<u32, Vec<u32>> {
     let mut marks = HashMap::new();
