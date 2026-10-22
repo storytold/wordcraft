@@ -3939,14 +3939,14 @@ fn zero_effects_stay_zero_rotated() {
     }
 }
 
-/// From 45° up to 135° Word measures a turned picture's overhang against its frame with width
-/// and height exchanged, so a quarter turn records no effect extent. Reading must not take the
-/// turn for effects room, and saving must not write the turn's overhang (Word crops a picture by
-/// the negative extents that gives).
+/// From 45° up to (not including) 135° Word measures a turned picture's overhang against its frame
+/// with width and height exchanged, so a quarter turn records no effect extent; at 135° it uses the
+/// frame as it is again. Reading must not take the turn for effects room, and saving must not
+/// write the turn's overhang (Word crops a picture by the negative extents that gives).
 #[test]
 fn turned_pictures_keep_words_effect_extent() {
-    // A 254 × 337 pt picture with the effect extents Word saves for it turned 90° and 60°.
-    for (degrees, ext) in [(90, [6_350, 0, 0, 0]), (60, [520_700, 869_950, 533_400, 857_250])] {
+    // A 254 × 337 pt picture with the effect extents Word saves for it turned 90°, 60° and 135°.
+    for (degrees, ext) in [(90, [6_350, 0, 0, 0]), (60, [520_700, 869_950, 533_400, 857_250]), (135, [1_047_750, 514_350, 1_041_400, 520_700])] {
         let [l, t, r, b] = ext;
         let body = format!(
             r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="3225800" cy="4279900"/><wp:effectExtent l="{l}" t="{t}" r="{r}" b="{b}"/><wp:docPr id="1" name="Synthetic picture"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rId1"/></pic:blipFill><pic:spPr><a:xfrm rot="{}"><a:off x="0" y="0"/><a:ext cx="3225800" cy="4279900"/></a:xfrm></pic:spPr></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
@@ -3954,7 +3954,7 @@ fn turned_pictures_keep_words_effect_extent() {
         );
         let d = wordcraft_docx::read(&docx(&body, &[("rId1", "image", "media/marker.png")], &[("word/media/marker.png", "synthetic")])).unwrap();
         let effect = paras(&d)[0].objects[0].frame().unwrap().2.effect;
-        assert!(effect.iter().all(|e| *e < 1.5), "{degrees}°: {effect:?}");
+        assert!(effect.iter().all(|e| (0.0..1.5).contains(e)), "{degrees}°: {effect:?}");
         let xml = text(&unzip(&wordcraft_docx::write(&d).unwrap()), "word/document.xml");
         let start = xml.find("<wp:effectExtent ").expect("effect extent");
         let saved = &xml[start..start + xml[start..].find("/>").expect("end")];
