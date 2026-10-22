@@ -237,7 +237,7 @@
 	Clear Character Style	문자 스타일 지우기
 	Clear Formatting Level	서식 수준 지우기
 	Clear Paragraph Formatting	단락 서식 지우기
-	Click a border between two cells to merge them. Esc stops.	두 셀 사이의 테두리를 클릭하면 셀이 병합됩니다. Esc 키를 누르면 중지됩니다.
+	Click a border, or drag across borders, to erase them. Esc stops.	테두리를 클릭하거나 테두리 위로 끌면 지워집니다. Esc 키를 누르면 중지됩니다.
 	Clipboard	클립보드
 	Clipboard Pane	클립보드 창
 	Clipboard Items	클립보드 항목

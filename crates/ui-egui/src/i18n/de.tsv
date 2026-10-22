@@ -75,7 +75,7 @@
 	AutoSave failed: {error}. Save the document to turn AutoSave back on.	AutoSpeichern fehlgeschlagen: {error}. Speichern Sie das Dokument, um AutoSpeichern wieder zu aktivieren.
 	Balloons	Sprechblasen
 	Bottom Margin	Unterer Rand
-	Click a border between two cells to merge them. Esc stops.	Klicken Sie auf eine Rahmenlinie zwischen zwei Zellen, um sie zu verbinden. Esc beendet.
+	Click a border, or drag across borders, to erase them. Esc stops.	Klicken Sie auf eine Rahmenlinie oder ziehen Sie über Rahmenlinien, um sie zu radieren. Esc beendet.
 	Bullet	Aufzählungszeichen
 	By author	Nach Autor
 	Changed lines:	Geänderte Zeilen:

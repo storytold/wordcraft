@@ -438,7 +438,7 @@
 	Clear Character Style	Počisti znakovni slog
 	Clear Formatting Level	Počisti raven oblikovanja
 	Clear Paragraph Formatting	Počisti oblikovanje odstavka
-	Click a border between two cells to merge them. Esc stops.	Kliknite mejo med celicama, da ju spojite. Esc ustavi.
+	Click a border, or drag across borders, to erase them. Esc stops.	Kliknite mejo ali povlecite čez meje, da jih izbrišete. Esc ustavi.
 	Click an item to paste it.	Kliknite element, da ga prilepite.
 	Click level to modify:	Kliknite raven, ki jo želite spremeniti:
 	Click the empty text box the text should continue in (Esc cancels)	Kliknite prazno polje z besedilom, v katerem naj se besedilo nadaljuje (Esc prekliče)

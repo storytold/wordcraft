@@ -1478,7 +1478,7 @@ preview	Title	Örnek
 	Allow Latin text to wrap in the middle of a word	Latin metninin sözcük ortasında alt satıra geçmesine izin ver
 	Apply Asian line-breaking rules (kinsoku)	Asya satır bölme kurallarını uygula (kinsoku)
 	Asian Typography	Asya Tipografisi
-	Click a border between two cells to merge them. Esc stops.	İki hücreyi birleştirmek için aradaki kenarlığa tıklayın. Esc ile bitirin.
+	Click a border, or drag across borders, to erase them. Esc stops.	Kenarlıkları silmek için bir kenarlığa tıklayın veya kenarlıkların üzerinden sürükleyin. Esc ile bitirin.
 	Compress punctuation at the start of a line	Satır başındaki noktalamayı sıkıştır
 	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Tablo çizmek için bir dikdörtgen, hücreleri bölmek için üzerlerinden bir çizgi sürükleyin. Esc ile bitirin.
 	Draw Table	Tablo Çiz

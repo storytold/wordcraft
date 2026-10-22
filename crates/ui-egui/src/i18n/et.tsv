@@ -1156,7 +1156,7 @@
 	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Automaatsalvestus hoiab ainult .docx-, .odt- ja .rtf-faile; {name} ei säilita kogu vormingut. Automaatsalvestuse sisselülitamiseks salvesta .docx-failina.
 	Save the document to turn on AutoSave	Automaatsalvestuse sisselülitamiseks salvesta dokument
 	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Automaatsalvestuse sisselülitamiseks salvesta dokument (ainult avatud faili ei kirjutata üle enne, kui selle salvestad)
-	Click a border between two cells to merge them. Esc stops.	Klõpsa kahe lahtri vahelist äärist, et need ühendada. Esc lõpetab.
+	Click a border, or drag across borders, to erase them. Esc stops.	Klõpsa äärist või lohista üle ääriste, et need kustutada. Esc lõpetab.
 	Clipboard Pane	Lõikelaua paan
 	Clipboard Items	Lõikelaua üksused
 	Paste Clipboard Item	Kleebi lõikelaua üksus

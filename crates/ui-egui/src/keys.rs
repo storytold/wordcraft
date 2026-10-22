@@ -423,7 +423,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     let _ = app.run("draw.select", json!({}));
                     continue;
                 }
-                if key == Key::Escape && crate::table_pen::stop(app) {
+                if key == Key::Escape && crate::table_pen::escape(app) {
                     continue;
                 }
                 // File › Options › Advanced: the Insert key switches overtype only when asked to.

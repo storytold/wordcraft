@@ -71,6 +71,9 @@ impl Pen<'_> {
     }
 }
 
+/// The eraser's pink: the Eraser and Clear Formatting icons, and the table eraser's pointer.
+pub const ERASER_PINK: Color32 = Color32::from_rgb(0xE8, 0x6F, 0xA0);
+
 /// Paint icon `name` into `r`. `c` is the line colour; the accent comes from the theme.
 pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
     let pen = Pen { p, r, c, a: accent, w: 1.25 };
@@ -148,7 +151,7 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         "case" => pen.text(10.0, 10.5, 12.0, "Aa", c, false),
         "clear" => {
             pen.text(8.0, 9.0, 13.0, "A", c, false);
-            pen.fill(&[(10.0, 15.0), (14.0, 11.0), (18.0, 15.0), (14.0, 19.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
+            pen.fill(&[(10.0, 15.0), (14.0, 11.0), (18.0, 15.0), (14.0, 19.0)], ERASER_PINK);
         }
         // Small letters over a large one: text with a reading above it.
         "phonetic" => {
@@ -568,7 +571,7 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         }
         "eraser" => {
             pen.closed(&[(3.0, 13.0), (11.0, 5.0), (17.0, 11.0), (11.0, 17.0), (7.0, 17.0)], c);
-            pen.fill(&[(3.0, 13.0), (7.0, 9.0), (13.0, 15.0), (11.0, 17.0), (7.0, 17.0)], Color32::from_rgb(0xE8, 0x6F, 0xA0));
+            pen.fill(&[(3.0, 13.0), (7.0, 9.0), (13.0, 15.0), (11.0, 17.0), (7.0, 17.0)], ERASER_PINK);
         }
         // Ink thickness: three strokes, thin to thick.
         "thickness" => {

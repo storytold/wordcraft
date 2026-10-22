@@ -166,6 +166,8 @@ pub struct CanvasState {
     pub table_tool: Option<crate::table_pen::TableTool>,
     /// The Draw Table stroke (or eraser press) in progress.
     pub(crate) table_stroke: Option<crate::table_pen::PenStroke>,
+    /// View Gridlines as it was before a table tool showed the gridlines (`table_pen`).
+    pub(crate) table_gridlines: Option<bool>,
     /// A table border or the table's resize handle being dragged (`table_resize`).
     pub(crate) table_resize: Option<crate::table_resize::ResizeDrag>,
     /// The last key ran an Alt shortcut: the text its key sends (it may arrive a frame later)
@@ -298,6 +300,7 @@ impl Default for CanvasState {
             balloon_rects: Vec::new(),
             table_tool: None,
             table_stroke: None,
+            table_gridlines: None,
             table_resize: None,
             link_from: None,
             a11y: Default::default(),

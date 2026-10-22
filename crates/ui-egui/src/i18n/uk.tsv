@@ -255,7 +255,7 @@
 	Clear Character Style	Очистити стиль символів
 	Clear Formatting Level	Очистити рівень форматування
 	Clear Paragraph Formatting	Очистити форматування абзацу
-	Click a border between two cells to merge them. Esc stops.	Клацніть межу між двома клітинками, щоб об'єднати їх. Esc завершує.
+	Click a border, or drag across borders, to erase them. Esc stops.	Клацніть межу або проведіть по межах, щоб стерти їх. Esc завершує.
 	Clipboard	Буфер обміну
 	Clipboard Pane	Панель буфера обміну
 	Clipboard Items	Елементи буфера обміну
