@@ -1629,6 +1629,147 @@ fn left_tab_past_the_right_indent_does_not_add_a_line() {
     assert!((page.x - 72.0).abs() < 0.5, "the text after the tab starts at the indent: {}", page.x);
 }
 
+/// A left tab whose stop lies behind a square-wrapped float, on a row that goes on past it: before
+/// Word 2013 mode the tabs keep counting their stops behind the float and the text after them goes
+/// on beside it, on the same row (a header with a centred logo between two names); in Word 2013
+/// mode the tab starts the span past the float and goes to the first stop there (#1840). Without
+/// room past the float, the tab starts the next line in both.
+#[test]
+fn a_left_tab_behind_a_float_keeps_its_text_on_the_row() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    // (top, beside, x of the line's first text) per line, with a 150pt square at `x`; `gap`
+    // spaces after the tabs.
+    let spaced = |lead: &str, tabs: usize, gap: usize, x: f32, compat: u32| {
+        let mut d = Document::from_text(&format!("{lead}{}{}Right", "\t".repeat(tabs), " ".repeat(gap)));
+        d.settings.compat_mode = compat;
+        let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, ..Default::default() };
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w: 150.0,
+            h: 60.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float,
+            story: None,
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        };
+        d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+        let l = lay(&d);
+        let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+            panic!()
+        };
+        let text = |ln: &para::Line| (ln.c0..ln.c1).position(|k| para.clusters[k].kind == para::ClKind::Text);
+        para.lines.iter().map(|ln| (ln.top, ln.beside, text(ln).and_then(|k| ln.xs.get(k).copied()).unwrap_or(-1.0))).collect::<Vec<_>>()
+    };
+    let lines = |lead: &str, tabs: usize, x: f32, compat: u32| spaced(lead, tabs, 0, x, compat);
+    // Default stops every 36pt: the fifth tab (180) is behind the float (150..300).
+    let beside = |ls: &[(f32, bool, f32)], x: f32| ls.len() == 2 && ls[1].1 && ls[1].0 == ls[0].0 && (ls[1].2 - x).abs() < 0.5;
+    // Word 2010 mode: the tenth tab is at 360; with six the text starts where the span does.
+    let row = lines("Left", 10, 150.0, 14);
+    assert!(beside(&row, 360.0), "{row:?}");
+    let row = lines("Left", 6, 150.0, 14);
+    assert!(beside(&row, 300.0), "{row:?}");
+    // Word 2013 mode: the fifth tab goes to the span's first stop (324), the sixth to 360.
+    let row = lines("Left", 6, 150.0, 15);
+    assert!(beside(&row, 360.0), "{row:?}");
+    // A float at the right edge leaves no span after it: the ninth tab (324) starts the next line
+    // and goes to the first stop there.
+    for compat in [14, 15] {
+        let wrapped = lines("Left", 9, 318.0, compat);
+        assert!(wrapped.len() == 2 && !wrapped[1].1 && (wrapped[1].2 - 36.0).abs() < 0.5, "{wrapped:?}");
+    }
+    // A tab with only the float's anchor before it starts the span past a float at 30..180 and
+    // goes to the first stop there, in both modes.
+    for compat in [14, 15] {
+        let row = lines("", 1, 30.0, compat);
+        assert!(beside(&row, 216.0), "{row:?}");
+    }
+    // Not compared with Word: spaces after the tabs carry the place past the end of the row's
+    // last span (300..468), so the text starts at that span's left rather than past the margin.
+    let row = spaced("Left", 6, 200, 150.0, 14);
+    assert!(beside(&row, 300.0), "{row:?}");
+}
+
+/// Before Word 2013 mode, text carried past a float by its tabs skips a span between two floats
+/// that ends before the carried place, and goes on in the span after them.
+#[test]
+fn text_after_tabs_behind_floats_skips_a_span_that_ends_before_it() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    let mut d = Document::from_text(&format!("Left{}Right", "\t".repeat(10)));
+    d.settings.compat_mode = 14;
+    // Floats at 150..250 and 290..330 leave spans 0..150, 250..290 and 330..468.
+    for (x, w) in [(290.0, 40.0), (150.0, 100.0)] {
+        let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, ..Default::default() };
+        let shape = InlineObject::Shape {
+            kind: ShapeKind::Rectangle,
+            w,
+            h: 60.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float,
+            story: None,
+            effects: Default::default(),
+            freeform: None,
+            extra: Default::default(),
+        };
+        d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+        panic!()
+    };
+    // The tenth tab is at 360, past the end of the middle span: "Right" goes on in the last one,
+    // at the stop rather than at the span's left (330).
+    let right: Vec<_> = para
+        .lines
+        .iter()
+        .filter_map(|ln| (ln.c0..ln.c1).position(|k| para.clusters[k].kind == para::ClKind::Text).filter(|_| ln.c0 > 0).map(|k| (ln.top, ln.xs[k])))
+        .collect();
+    let top = para.lines.first().map_or(-1.0, |ln| ln.top);
+    assert!(right.iter().any(|&(t, x)| t == top && (x - 360.0).abs() < 0.5), "{right:?}");
+}
+
+/// A left tab whose stop lies past the row's end, beside a float, still starts the next line
+/// (#1840) instead of carrying its text past the margin, and never leaves a line of its own.
+#[test]
+fn a_left_tab_past_the_row_beside_a_float_wraps_with_its_text() {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    let mut d = Document::from_text("Name\tPage");
+    d.settings.compat_mode = 14;
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.tabs = Some(vec![TabStop { pos: 500.0, align: TabAlign::Left, leader: TabLeader::None }])
+    })
+    .unwrap();
+    let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 150.0, ..Default::default() };
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::Rectangle,
+        w: 150.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+        panic!()
+    };
+    let text =
+        |ln: &para::Line| (ln.c0..ln.c1).filter(|&k| para.clusters[k].kind == para::ClKind::Text).map(|k| ln.xs[k - ln.c0]).collect::<Vec<_>>();
+    let lines: Vec<_> = para.lines.iter().map(text).collect();
+    assert!(lines.len() == 2 && lines.iter().all(|t| !t.is_empty() && t.iter().all(|x| *x < 468.0)), "{lines:?}");
+}
+
 /// A bookmark before such a tab is not text: the tab does not wrap away from it, and the
 /// paragraph breaks as it does without the bookmark (no line holding only the bookmark).
 #[test]
