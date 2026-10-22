@@ -281,7 +281,7 @@ pub fn page(app: &mut Ctx<'_>, ui: &mut Ui) {
                         let profile_id = id.as_deref().unwrap_or("");
                         let name = format!("{}.json", profile_id);
                         app.law.export_id = id.clone();
-                        app.addin_ask_file(MODULE, FileDialogRequest::Save { name }, "export");
+                        app.addin_ask_file(MODULE, FileDialogRequest::Save { name, dir: None }, "export");
                     }
                 });
             });
