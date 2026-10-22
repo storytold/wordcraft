@@ -148,6 +148,18 @@ impl Reader<'_> {
             })
         };
         let stroke = on("stroked").then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
+        // A `v:stroke` can also switch the outline off (`on`) or make it fully transparent
+        // (`opacity`), as Google Docs writes its invisible horizontal rules (ECMA-376 Part 4
+        // §19.1.2.21). Freeforms keep the stroke's opacity themselves (below).
+        let stroke_el = shape.child("v:stroke").or_else(|| shapetype.and_then(|t| t.child("v:stroke")));
+        let invisible = stroke_el.is_some_and(|s| {
+            s.attr("on").is_some_and(|v| {
+                let t = v.trim();
+                t.eq_ignore_ascii_case("f") || t.eq_ignore_ascii_case("false") || t == "0"
+            }) || s.attr("opacity").and_then(vml_opacity) == Some(0.0)
+        });
+        let freeform_stroke = stroke;
+        let stroke = stroke.filter(|_| !invisible);
         let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
         let fill = vml_fill(shape, shapetype);
         let endcap = shape
@@ -273,7 +285,7 @@ impl Reader<'_> {
         {
             let opacity = |el: &str| shape.child(el).and_then(|e| e.attr("opacity")).and_then(vml_opacity).unwrap_or(1.0);
             let fill = fill.filter(|_| !vp.no_fill && opacity("v:fill") > 0.0);
-            let stroke = stroke.filter(|_| !vp.no_stroke);
+            let stroke = freeform_stroke.filter(|_| !vp.no_stroke);
             if stroke.is_none() && fill.is_none() {
                 return None;
             }
