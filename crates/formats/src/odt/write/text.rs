@@ -1,25 +1,53 @@
 //! Stories: blocks, paragraphs (`text:p`, or `text:h` with the outline level of headings), runs
 //! as spans with their automatic or character styles, links, bookmarks, tabs, line breaks,
 //! spaces (`text:s`) and ruby. Page and column breaks inside a paragraph split it, the part
-//! after the break starting on a new page (column).
+//! after the break starting on a new page (column). Lists go to [`lists`], tables to [`tables`].
 //!
 //! The other inline objects are written as the exchange-flow writer wrote them: pictures in
 //! line, equations as their linear text, fields as their result (`PAGE` and `NUMPAGES` live);
 //! notes, comments and drawings without a picture are left out.
 
+use std::sync::Arc;
+
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, OBJ, PAGE_BREAK};
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Block, Document, Paragraph};
+use wordcraft_doc::{Block, Blocks, Document, Paragraph};
 
-use super::{Ctx, Props, pt, styles};
+use super::{Ctx, Props, lists, pt, styles, tables};
 use crate::odt::x;
 
-/// The body. Only paragraphs reach here: [`super::can_write`] sends documents with tables to
-/// the exchange-flow writer.
+/// The body.
 pub(super) fn body(ctx: &mut Ctx, out: &mut String) {
-    for b in &ctx.doc.body {
-        if let Block::Para(p) = &**b {
-            para(ctx, p, out);
+    run(ctx, &ctx.doc.body, out);
+}
+
+/// A nested story (a cell).
+pub(super) fn blocks(ctx: &mut Ctx, bl: &Blocks, out: &mut String) {
+    let saved = ctx.break_next.take();
+    ctx.nested(out, |ctx, out| {
+        run(ctx, bl, out);
+        // A story ends with a paragraph, as Word writes it (and draws it): one after a table.
+        if bl.last().is_some_and(|b| matches!(**b, Block::Table(_))) {
+            para(ctx, &Paragraph::new(), out);
+        }
+    });
+    ctx.break_next = saved;
+}
+
+/// Blocks one after another: list paragraphs grouped into lists, other paragraphs, tables.
+fn run(ctx: &mut Ctx, bl: &[Arc<Block>], out: &mut String) {
+    let mut i = 0;
+    while let Some(b) = bl.get(i) {
+        match &**b {
+            Block::Para(p) if lists::info(ctx.doc, p).is_some() => i += lists::list(ctx, bl.get(i..).unwrap_or(&[]), out),
+            Block::Para(p) => {
+                para(ctx, p, out);
+                i += 1;
+            }
+            Block::Table(t) => {
+                tables::table(ctx, t, out);
+                i += 1;
+            }
         }
     }
 }
@@ -147,7 +175,7 @@ struct Tag<'a> {
 }
 
 /// Paragraph `p`.
-fn para(ctx: &mut Ctx, p: &Paragraph, out: &mut String) {
+pub(super) fn para(ctx: &mut Ctx, p: &Paragraph, out: &mut String) {
     let mut extra = Props::new();
     if let Some(b) = ctx.break_next.take() {
         extra.insert("fo:break-before", b.into());

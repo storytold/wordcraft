@@ -8,7 +8,7 @@ use std::io::{Cursor, Read};
 use std::sync::Arc;
 
 use wordcraft_doc::para::InlineObject;
-use wordcraft_doc::props::{CharProps, LineSpacing, NumRef, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::props::{CharProps, LineSpacing, NumRef, TabAlign, TabLeader, TabStop, VMerge};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Block, Document, ListKind, Paragraph, PartKind, Revision, RevisionKind, Table, para_block};
@@ -323,16 +323,7 @@ fn documents_it_cannot_write_whole_go_to_the_flow_writer() {
     let mut revised = base.clone();
     revised.revisions.push(Revision::new(RevisionKind::Insert, "A", ""));
     assert!(!super::can_write(&revised));
-    // What later parts of #2669 write: lists, tables, sections, headers.
-    let mut listed = base.clone();
-    let num = listed.numbering.add_list(ListKind::Numbered);
-    let mut item = plain("one");
-    item.props.numbering = Some(NumRef { num, level: 0 });
-    listed.body = vec![para_block(item)];
-    assert!(!super::can_write(&listed));
-    let mut table = base.clone();
-    table.body.push(Arc::new(Block::Table(Table::new(1, 1, 100.0))));
-    assert!(!super::can_write(&table));
+    // What later parts of #2669 write: sections, headers.
     let mut sections = base.clone();
     let mut end1 = plain("One");
     end1.section = Some(Box::new(SectionProps::default()));
@@ -342,8 +333,9 @@ fn documents_it_cannot_write_whole_go_to_the_flow_writer() {
     let h = header.add_part(PartKind::Header, vec![para_block(plain("Head"))]);
     header.last_section.headers.default = Some(h);
     assert!(!super::can_write(&header));
-    // Named styles are written.
+    // Named styles, lists and tables are written.
     assert!(super::can_write(&styled_doc()));
+    assert!(super::can_write(&lists_doc()));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -680,14 +672,103 @@ fn pictures_are_packaged() {
     assert!(o.content.contains("<svg:desc>a dot</svg:desc>"));
 }
 
+// ---------------------------------------------------------------------------------------------
+// Lists and tables (as the Flow writer wrote them)
+
+/// A numbered list: one, its nested one.a, two.
+fn lists_doc() -> Document {
+    let mut d = Document::new();
+    let num = d.numbering.add_list(ListKind::Numbered);
+    let item = |t: &str, level: u8| {
+        let mut p = plain(t).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level });
+        p
+    };
+    d.body = vec![para_block(item("one", 0)), para_block(item("one.a", 1)), para_block(item("two", 0)), para_block(plain("after"))];
+    d
+}
+
+#[test]
+fn lists_nest() {
+    let o = Odt::new(&lists_doc());
+    let lists: Vec<&str> = o.content.split("<text:list ").skip(1).map(|s| s.split('>').next().unwrap_or("")).collect();
+    assert_eq!(lists.len(), 1, "{}", o.content);
+    let style = lists[0].split("text:style-name=\"").nth(1).and_then(|s| s.split('"').next()).unwrap();
+    let ls = o.props("list", style);
+    assert_eq!(ls.get("1/style:num-format").map(String::as_str), Some("1"));
+    assert_eq!(ls.get("2/style:num-format").map(String::as_str), Some("a"));
+    assert!(
+        o.content.contains(">one</text:p><text:list><text:list-item><text:p text:style-name=\"ListParagraph\">one.a"),
+        "nested level: {}",
+        o.content
+    );
+    assert!(o.content.contains(">two</text:p></text:list-item></text:list>"), "{}", o.content);
+}
+
+#[test]
+fn tables_spans_and_header_rows() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 300.0);
+    t.rows[0].cells[0].blocks = vec![para_block(plain("tall"))];
+    t.rows[0].cells[0].props.vmerge = VMerge::Restart;
+    t.rows[1].cells[0].props.vmerge = VMerge::Continue;
+    t.rows[0].cells[1].props.span = 2;
+    t.rows[0].cells.pop();
+    t.rows[0].cells[1].blocks = vec![para_block(plain("wide"))];
+    t.rows[0].props.header = true;
+    d.body = vec![Arc::new(Block::Table(t)), para_block(plain("after"))];
+    let o = Odt::new(&d);
+    assert!(o.content.contains("table:number-rows-spanned=\"2\""), "{}", o.content);
+    assert!(o.content.contains("table:number-columns-spanned=\"2\""));
+    assert_eq!(o.content.matches("<table:covered-table-cell/>").count(), 2);
+    assert_eq!(o.content.matches("<table:table-row>").count(), 3);
+    let header = o.content.split("<table:table-header-rows>").nth(1).and_then(|s| s.split("</table:table-header-rows>").next()).unwrap();
+    assert!(header.contains(">wide<") && header.matches("<table:table-row>").count() == 1, "{header}");
+    assert_eq!(o.para("tall").style, "Standard");
+}
+
+#[test]
+fn only_header_rows_repeat_not_the_first_row_look() {
+    // `look.header_row` is the table style's first-row formatting (`w:firstRow`); only rows marked
+    // `w:tblHeader` repeat on each page, as in Word.
+    let mut t = Table::new(2, 1, 100.0);
+    t.props.look.header_row = true;
+    let mut d = Document::new();
+    d.body = vec![Arc::new(Block::Table(t.clone()))];
+    assert!(!Odt::new(&d).content.contains("<table:table-header-rows>"));
+    t.rows[0].props.header = true;
+    d.body = vec![Arc::new(Block::Table(t))];
+    assert!(Odt::new(&d).content.contains("<table:table-header-rows>"));
+}
+
+#[test]
+fn a_table_ending_a_cell_is_followed_by_a_paragraph() {
+    let mut outer = Table::new(1, 1, 200.0);
+    outer.rows[0].cells[0].blocks = vec![Arc::new(Block::Table(Table::new(1, 1, 100.0)))];
+    let mut d = Document::new();
+    d.body = vec![Arc::new(Block::Table(outer))];
+    let o = Odt::new(&d);
+    assert!(o.content.contains("</table:table><text:p"), "{}", o.content);
+}
+
 #[test]
 fn a_break_ending_a_paragraph_moves_the_next_block() {
     // Word draws the mark of a paragraph that ends with a page break beside the break: the next
-    // paragraph starts the new page, no empty paragraph above it.
-    let o = Odt::new(&doc_of(vec![plain("Before\u{000C}"), plain("Next page"), plain("mid\u{000C}line")]));
+    // paragraph (or table) starts the new page, no empty paragraph above it.
+    let mut d = Document::new();
+    d.body = vec![
+        para_block(plain("Before\u{000C}")),
+        para_block(plain("Next page")),
+        para_block(plain("\u{000C}")),
+        Arc::new(Block::Table(Table::new(1, 1, 100.0))),
+        para_block(plain("mid\u{000C}line")),
+    ];
+    let o = Odt::new(&d);
     assert_eq!(o.para_props("Next page").get("fo:break-before").map(String::as_str), Some("page"));
     assert!(!o.para_props("Before").contains_key("fo:break-before"));
     assert_eq!(o.paras().iter().filter(|p| p.text == "Before" || p.text == "Next page").count(), 2, "no paragraph split off");
+    let ts = o.content.split("<table:table table:name=\"Table1\" table:style-name=\"").nth(1).and_then(|s| s.split('"').next()).unwrap();
+    assert_eq!(o.props("table", ts).get("fo:break-before").map(String::as_str), Some("page"));
     // A break inside a paragraph still splits it.
     assert_eq!(o.para_props("line").get("fo:break-before").map(String::as_str), Some("page"));
 }
