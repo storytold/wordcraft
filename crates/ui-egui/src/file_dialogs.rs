@@ -428,8 +428,7 @@ impl WordApp {
 
     /// File › Export: ask where to save a copy in this format, then write it.
     pub(crate) fn export_dialog(&mut self, ext: &str) {
-        let file_ext = if ext == crate::print_page::EXPORT_WORD_2003 { "xml" } else { ext };
-        let name = format!("{}.{file_ext}", self.title_stem());
+        let name = format!("{}.{}", self.title_stem(), crate::print_page::export_file_ext(ext));
         let _ = self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::Export { ext: ext.to_string() });
     }
 

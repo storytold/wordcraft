@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
 use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
+use crate::print_page::{EXPORT_FORMATS, export_file_ext};
 use crate::theme::{Tokens, regular};
 use crate::{WordApp, icons};
 
@@ -137,6 +138,8 @@ pub(crate) struct FileBrowser {
     /// The file types, as (label, extensions).
     filters: Vec<(String, Vec<String>)>,
     filter: usize,
+    /// Exporting: the format behind each type, which `after` follows; empty otherwise.
+    exports: Vec<String>,
     listing: Result<Listing, String>,
     /// The highlighted entry.
     selected: Option<PathBuf>,
@@ -157,6 +160,15 @@ impl FileBrowser {
                 (name.clone(), f)
             }
         };
+        // Exporting (#3535): File › Export's formats are the types, starting on the one asked for.
+        let (filters, filter, exports) = match &after {
+            AfterPick::Export { ext } => (
+                EXPORT_FORMATS.iter().map(|&(l, f)| (l.to_string(), vec![export_file_ext(f).to_string()])).collect(),
+                EXPORT_FORMATS.iter().position(|&(_, f)| f == ext.as_str()).unwrap_or(0),
+                EXPORT_FORMATS.iter().map(|&(_, f)| f.to_string()).collect(),
+            ),
+            _ => (filters, 0, Vec::new()),
+        };
         let mut b = FileBrowser {
             req,
             after,
@@ -165,7 +177,8 @@ impl FileBrowser {
             location: String::new(),
             name,
             filters,
-            filter: 0,
+            filter,
+            exports,
             listing: Ok(Listing::default()),
             selected: None,
             note: Note::None,
@@ -188,6 +201,18 @@ impl FileBrowser {
         self.note = Note::None;
     }
 
+    /// A type was chosen: when exporting it is the format, and the name's export extension follows it.
+    fn type_changed(&mut self) {
+        let Some(format) = self.exports.get(self.filter).cloned() else { return };
+        let name = Path::new(&self.name);
+        let known =
+            name.extension().and_then(|e| e.to_str()).is_some_and(|e| self.exports.iter().any(|f| export_file_ext(f).eq_ignore_ascii_case(e)));
+        if known {
+            self.name = name.with_extension(export_file_ext(&format)).to_string_lossy().into_owned();
+        }
+        self.after = AfterPick::Export { ext: format };
+    }
+
     fn up(&mut self) {
         if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
             self.navigate(parent);
@@ -195,8 +220,8 @@ impl FileBrowser {
     }
 
     /// OK: a highlighted folder, or a typed folder, is opened; otherwise the typed name is the
-    /// pick. Save adds the chosen type's extension to a name without one and asks once more
-    /// before replacing a file; Open wants a file that exists.
+    /// pick. Save adds the chosen type's extension to a name without one (an export, to a name
+    /// without the export's) and asks once more before replacing a file; Open wants a file that exists.
     pub(crate) fn accept(&mut self) -> Step {
         if let Some(dir) = self.selected.take().filter(|p| p.is_dir()) {
             self.navigate(dir);
@@ -217,7 +242,13 @@ impl FileBrowser {
                 Step::Stay
             }
             FileDialogRequest::Save { .. } => {
-                if path.extension().is_none()
+                if let AfterPick::Export { ext } = &self.after {
+                    // The chosen type is the format, so its extension goes on any name without it.
+                    let want = export_file_ext(ext);
+                    if !path.extension().and_then(|e| e.to_str()).is_some_and(|e| e.eq_ignore_ascii_case(want)) {
+                        path.as_mut_os_string().push(format!(".{want}"));
+                    }
+                } else if path.extension().is_none()
                     && let Some(ext) = self.exts().first().filter(|e| e.as_str() != "*")
                 {
                     path.set_extension(ext);
@@ -272,8 +303,8 @@ impl WordApp {
         self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable)));
     }
 
-    /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save),
-    /// even when a system dialog was asked for and never showed up (it is given up as cancelled).
+    /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save,
+    /// export), even when a system dialog was asked for and never showed up (it is given up as cancelled).
     pub(crate) fn browse_builtin(&mut self, purpose: &str) {
         self.give_up_file_dialog();
         if self.file_browser.open.is_some() {
@@ -286,6 +317,7 @@ impl WordApp {
                 FileDialogRequest::Save { name: self.default_save_name(), dir: None },
                 AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
             ),
+            "export" => (FileDialogRequest::Save { name: format!("{}.pdf", self.title_stem()), dir: None }, AfterPick::Export { ext: "pdf".into() }),
             _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument),
         };
         self.show_file_browser(req, after, false);
@@ -447,6 +479,7 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         refilter = b.filter != before;
     });
     if refilter {
+        b.type_changed();
         b.navigate(b.dir.clone());
     }
     ui.add_space(8.0);
@@ -568,6 +601,36 @@ mod tests {
         assert!(!a.session.dirty);
         let saved = wordcraft_engine::io::open_path(&dir.join("novel.docx")).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved without a portal"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// #3535: exporting offers File › Export's formats as the types; the chosen one is the format,
+    /// the name's extension follows it, and the export writes that format.
+    #[test]
+    fn export_types_choose_the_format_and_the_extension() {
+        let dir = scratch("export");
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.run("text.insert", json!({"text": "Exported in WordCraft"})).unwrap();
+        a.run("ui.fileBrowser", json!({"purpose": "export"})).unwrap();
+        let b = a.file_browser.open.as_mut().expect("the built-in browser is open");
+        assert_eq!(b.filters.len(), EXPORT_FORMATS.len());
+        assert_eq!(b.filters[b.filter].0, "PDF document (*.pdf)");
+        assert!(b.name.ends_with(".pdf"), "{}", b.name);
+        b.filter = b.filters.iter().position(|(l, _)| l == "Plain text (*.txt)").unwrap();
+        b.type_changed();
+        assert!(b.name.ends_with(".txt"), "{}", b.name);
+        assert!(matches!(&b.after, AfterPick::Export { ext } if ext == "txt"));
+        b.navigate(dir.clone());
+        // A name typed afterwards with another extension still gets the chosen format's.
+        b.name = "notes.docx".into();
+        let Step::Pick(path) = b.accept() else { panic!("picked") };
+        assert_eq!(path.file_name().unwrap(), "notes.docx.txt");
+        a.close_file_browser(Some(path.clone()));
+        assert!(std::fs::read_to_string(&path).unwrap().contains("Exported in WordCraft"));
+        // Word 2003 XML starts on its own type, though Word XML writes .xml too.
+        let req = FileDialogRequest::Save { name: "x.xml".into(), dir: None };
+        let b = FileBrowser::new(req, AfterPick::Export { ext: crate::print_page::EXPORT_WORD_2003.into() }, dir.clone(), false);
+        assert_eq!(b.filters[b.filter].0, "Word 2003 XML Document (*.xml)");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

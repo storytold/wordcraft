@@ -330,24 +330,40 @@ fn preview(app: &mut WordApp, ui: &mut Ui, lay: &DocLayout, total: usize) {
 /// The export "format" of a Word 2003 XML Document: an `.xml` file saved with `format: "wordml2003"`.
 pub(crate) const EXPORT_WORD_2003: &str = "wordml2003";
 
+/// The "save a copy" formats as (label, format), also the built-in browser's types when exporting.
+pub(crate) const EXPORT_FORMATS: &[(&str, &str)] = &[
+    ("PDF document (*.pdf)", "pdf"),
+    ("Word document (*.docx)", "docx"),
+    ("Word XML Document (*.xml)", "xml"),
+    ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
+    ("OpenDocument Text (*.odt)", "odt"),
+    ("Rich Text Format (*.rtf)", "rtf"),
+    ("Web page (*.html)", "html"),
+    ("Markdown (*.md)", "md"),
+    ("LaTeX (*.tex)", "tex"),
+    ("Plain text (*.txt)", "txt"),
+    ("Page image (*.png)", "png"),
+];
+
+/// The file extension an export format writes.
+pub(crate) fn export_file_ext(format: &str) -> &str {
+    if format == EXPORT_WORD_2003 { "xml" } else { format }
+}
+
 /// The "save a copy" formats (File › Export, and below the settings on the Print page).
 pub fn export_formats(app: &mut WordApp, ui: &mut Ui) {
-    for (label, ext) in [
-        ("PDF document (*.pdf)", "pdf"),
-        ("Word document (*.docx)", "docx"),
-        ("Word XML Document (*.xml)", "xml"),
-        ("Word 2003 XML Document (*.xml)", EXPORT_WORD_2003),
-        ("OpenDocument Text (*.odt)", "odt"),
-        ("Rich Text Format (*.rtf)", "rtf"),
-        ("Web page (*.html)", "html"),
-        ("Markdown (*.md)", "md"),
-        ("LaTeX (*.tex)", "tex"),
-        ("Plain text (*.txt)", "txt"),
-        ("Page image (*.png)", "png"),
-    ] {
+    for &(label, ext) in EXPORT_FORMATS {
         if ui.add(egui::Button::new(egui::RichText::new(tl!(label)).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
             app.export_dialog(ext);
         }
         ui.add_space(4.0);
+    }
+    // Linux and the BSDs (#3535): WordCraft's own browser when the system dialog doesn't appear.
+    #[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+    {
+        ui.add_space(8.0);
+        if ui.add(egui::Button::new(egui::RichText::new(tl!("Browse in WordCraft…")).font(medium(13.5))).min_size(vec2(320.0, 34.0))).clicked() {
+            let _ = app.run("ui.fileBrowser", json!({"purpose": "export"}));
+        }
     }
 }
