@@ -119,7 +119,7 @@ impl Reader<'_> {
     /// and the result kept as a PNG under its own key (`image5_a10000.png`), made once however
     /// often the picture is used, so layout, screen and PDF need no new path and a save keeps
     /// the fade. `media` itself when the fade is a no-op or the picture can't be decoded
-    /// (a metafile, an unknown format, too large).
+    /// (a metafile, an unknown format, too large), tried once per picture.
     pub fn faded_media(&mut self, media: &str, amt: i64) -> String {
         if amt >= 100_000 {
             return media.to_string();
@@ -132,6 +132,11 @@ impl Reader<'_> {
         if self.doc.media.contains_key(&key) {
             return key;
         }
+        // One failed decode is enough: a picture used many times is not decoded (and warned
+        // about) again.
+        if self.unfadable.contains(media) {
+            return media.to_string();
+        }
         let Some(bytes) = self.doc.media.get(media).cloned() else { return media.to_string() };
         match fade_image(&bytes, amt as f32 / 100_000.0) {
             Some(png) => {
@@ -140,6 +145,7 @@ impl Reader<'_> {
             }
             None => {
                 log::warn!("DOCX: picture `{media}` has an alphaModFix but could not be decoded; drawn opaque");
+                self.unfadable.insert(media.to_string());
                 media.to_string()
             }
         }
