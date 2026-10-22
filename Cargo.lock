@@ -5323,7 +5323,7 @@ version = "0.10.0"
 name = "wordcraft-doc"
 version = "0.10.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "proptest",
  "serde",
  "serde_json",
