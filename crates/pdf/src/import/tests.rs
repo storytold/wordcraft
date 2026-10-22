@@ -165,3 +165,16 @@ fn quarter_turned_scan_keeps_its_pixel_orientation() {
     assert_eq!(image.get_pixel(0, 1).0, [b'd', b'e', b'f', 255]);
     assert!((*w - 100.0).abs() < 0.1 && (*h - 200.0).abs() < 0.1);
 }
+
+#[test]
+fn words_hyphenated_at_line_ends_read_whole() {
+    let bytes = pdf(
+        &[
+            "BT /F1 12 Tf 1 0 0 1 72 720 Tm (courts applied the Chev-) Tj 1 0 0 1 72 705 Tm (ron framework to an Anglo-) Tj 1 0 0 1 72 690 Tm (Saxon rule of 1789 and 18-) Tj 1 0 0 1 72 675 Tm (20 as written in it.) Tj ET",
+        ],
+        &[],
+    );
+    let (doc, _) = read(&bytes, None).unwrap();
+    let text = doc.plain_text(StoryRef::Body);
+    assert!(text.contains("courts applied the Chevron framework to an Anglo-Saxon rule of 1789 and 18- 20 as written in it."), "{text:?}");
+}
