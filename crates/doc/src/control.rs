@@ -496,7 +496,8 @@ fn balance_list(bl: &mut Blocks) -> usize {
 }
 
 impl Document {
-    fn control_stories(&self) -> Vec<StoryRef> {
+    /// The stories that can hold content controls and form fields: the body and every part.
+    pub fn control_stories(&self) -> Vec<StoryRef> {
         std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k))).collect()
     }
 
