@@ -17,9 +17,9 @@ pub(super) fn info(doc: &Document, p: &Paragraph) -> Option<ListInfo> {
 }
 
 /// `text:list-style` with the levels `ordered` says.
-fn list_style(name: &str, ordered: &[bool; 9]) -> String {
+fn list_style(name: &str, ordered: &[bool; 9], starts: &[u32; 9]) -> String {
     let mut s = format!("<text:list-style style:name=\"{name}\">");
-    for (l, ordered) in ordered.iter().enumerate() {
+    for (l, (ordered, start)) in ordered.iter().zip(starts).enumerate() {
         let lv = l + 1;
         let props = format!(
             "<style:list-level-properties text:list-level-position-and-space-mode=\"label-alignment\"><style:list-level-label-alignment text:label-followed-by=\"listtab\" text:list-tab-stop-position=\"{0}\" fo:text-indent=\"-18pt\" fo:margin-left=\"{0}\"/></style:list-level-properties>",
@@ -27,7 +27,8 @@ fn list_style(name: &str, ordered: &[bool; 9]) -> String {
         );
         if *ordered {
             let fmt = ["1", "a", "i"].get(l % 3).copied().unwrap_or("1");
-            s.push_str(&format!("<text:list-level-style-number text:level=\"{lv}\" style:num-suffix=\".\" style:num-format=\"{fmt}\">{props}</text:list-level-style-number>"));
+            let from = if *start == 1 { String::new() } else { format!(" text:start-value=\"{start}\"") };
+            s.push_str(&format!("<text:list-level-style-number text:level=\"{lv}\" style:num-suffix=\".\" style:num-format=\"{fmt}\"{from}>{props}</text:list-level-style-number>"));
         } else {
             let ch = ["•", "◦", "▪"].get(l % 3).copied().unwrap_or("•");
             s.push_str(&format!(
@@ -46,6 +47,7 @@ pub(super) fn list(ctx: &mut Ctx, bl: &[Arc<Block>], out: &mut String) -> usize 
     let mut items: Vec<(&Paragraph, usize)> = Vec::new();
     let mut ordered = [false; 9];
     let mut seen = [false; 9];
+    let mut starts = [1u32; 9];
     for b in bl {
         let Block::Para(p) = &**b else { break };
         let Some(li) = info(doc, p) else { break };
@@ -58,12 +60,13 @@ pub(super) fn list(ctx: &mut Ctx, bl: &[Arc<Block>], out: &mut String) -> usize 
         {
             *s = true;
             *o = li.ordered;
+            starts[l] = li.start;
         }
         items.push((p, l));
     }
     // Every list has a style of its own, so that none continues another by sharing it.
     let id = ctx.name("lst");
-    let style = ctx.auto("L", &id, |name| list_style(name, &ordered));
+    let style = ctx.auto("L", &id, |name| list_style(name, &ordered, &starts));
     // Open lists: per level, whether a list item is open.
     let mut stack: Vec<bool> = Vec::new();
     for (p, lv) in &items {
