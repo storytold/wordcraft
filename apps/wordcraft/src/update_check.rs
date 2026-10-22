@@ -94,6 +94,7 @@ mod tests {
     }
 
     impl Read for Slow {
+        /// Hand out the next piece after the pause; nothing left is the end.
         fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
             if self.pieces.is_empty() {
                 return Ok(0);
@@ -116,6 +117,7 @@ mod tests {
         assert_eq!(got[999], 9);
     }
 
+    /// A body that stops arriving for longer than the stall limit fails.
     #[test]
     fn a_stalled_download_fails() {
         let slow = Slow { pieces: vec![vec![1; 10]], pause: Duration::from_millis(500) };
@@ -123,6 +125,7 @@ mod tests {
         assert!(e.contains("stalled"), "{e}");
     }
 
+    /// A body larger than the byte limit fails.
     #[test]
     fn a_download_over_the_limit_fails() {
         let slow = Slow { pieces: vec![vec![1; 600], vec![2; 600]], pause: Duration::ZERO };

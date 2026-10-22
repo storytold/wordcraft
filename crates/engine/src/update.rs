@@ -660,6 +660,7 @@ pub fn unix_now() -> u64 {
 mod tests {
     use super::*;
 
+    /// An environment whose answers the test sets.
     struct FakeEnv {
         flatpak: bool,
         appimage: Option<String>,
@@ -671,36 +672,46 @@ mod tests {
     }
 
     impl EnvRead for FakeEnv {
+        /// Whether it runs under Flatpak.
         fn flatpak(&self) -> bool {
             self.flatpak
         }
+        /// The AppImage path, if any.
         fn appimage(&self) -> Option<String> {
             self.appimage.clone()
         }
+        /// The forced install kind, if any.
         fn install_override(&self) -> Option<InstallKind> {
             self.override_kind
         }
+        /// Whether it is Windows.
         fn windows(&self) -> bool {
             self.os == "windows"
         }
+        /// Whether it is macOS.
         fn macos(&self) -> bool {
             self.os == "macos"
         }
+        /// Whether it is Linux.
         fn linux(&self) -> bool {
             self.os == "linux"
         }
+        /// Whether the executable came from a `.deb`.
         fn linux_deb_package(&self, _exe: &str) -> bool {
             self.linux_deb
         }
+        /// Whether the executable came from the MSI.
         fn windows_msi_installed(&self, _exe: &str) -> bool {
             self.windows_msi
         }
     }
 
+    /// A Windows environment, installed from the MSI or not.
     fn win_env(windows_msi: bool) -> FakeEnv {
         FakeEnv { flatpak: false, appimage: None, override_kind: None, linux_deb: false, os: "windows", windows_msi }
     }
 
+    /// Each install kind is told apart from the environment and the executable's path.
     #[test]
     fn install_kind_detection() {
         let e = FakeEnv { flatpak: true, appimage: None, override_kind: None, linux_deb: false, os: "linux", windows_msi: false };
@@ -761,6 +772,7 @@ mod tests {
         assert_eq!(detect_install_kind(r"D:\Apps\WordCraft\wordcraft.exe", &no_evidence), InstallKind::Unknown);
     }
 
+    /// Each install kind and arch gets its own release asset name.
     #[test]
     fn asset_names_per_kind() {
         let v = (0, 6, 1);
@@ -787,6 +799,7 @@ mod tests {
         assert_eq!(pick_asset_name(v, InstallKind::LinuxDeb).as_deref(), asset_name(v, InstallKind::LinuxDeb, host_release_arch()).as_deref());
     }
 
+    /// A newer release is offered, the running version is not, and a skipped version is recognised.
     #[test]
     fn versions_and_offers() {
         let json = br#"{"tag_name":"v0.7.0","draft":false,"prerelease":false,"body":"Notes","html_url":"https://github.com/storytold/wordcraft/releases/tag/v0.7.0","assets":[]}"#;
@@ -798,6 +811,7 @@ mod tests {
         assert_eq!(parse_latest_release(json, (0, 7, 0)).unwrap(), None);
     }
 
+    /// Checks are due only with the setting on and at most once a day; a forced check is due anyway.
     #[test]
     fn throttle_and_setting_off() {
         let now = 1_800_000_000;
@@ -808,6 +822,7 @@ mod tests {
         assert!(!due(true, now - 60, now, false));
     }
 
+    /// Checksums are found by file name, and mismatched bytes fail verification.
     #[test]
     fn checksum_verify_and_refuse_mismatch() {
         let data = b"hello";
@@ -818,12 +833,14 @@ mod tests {
         assert!(checksum_for(sums, "missing.deb").unwrap().is_none());
     }
 
+    /// An unknown install kind has no asset to download.
     #[test]
     fn unknown_kind_has_no_asset() {
         let v = (1, 0, 0);
         assert!(pick_asset_name(v, InstallKind::Unknown).is_none());
     }
 
+    /// Windows, portable and macOS installs each name the right asset.
     #[test]
     fn each_install_kind_picks_an_asset_name() {
         let v = (0, 7, 0);

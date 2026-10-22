@@ -230,49 +230,62 @@ mod tests {
 
     use super::*;
 
+    /// The fixed clock the test sessions use.
     fn test_now() -> u64 {
         2_000_000_000
     }
     use crate::update::{EnvRead, EnvReadBox, InstallHandoff, InstallKind, InstallOutcome, MAX_JSON};
 
+    /// The fake download function a test session uses.
     type TestHttp = Arc<dyn Fn(&str, usize) -> Result<Vec<u8>, String> + Send + Sync>;
 
+    /// A Linux environment reporting install kind `kind`, with the no-update switch as given.
     struct TestEnv {
         kind: InstallKind,
         no_update: bool,
     }
 
     impl EnvRead for TestEnv {
+        /// Not under Flatpak.
         fn flatpak(&self) -> bool {
             false
         }
+        /// Not an AppImage.
         fn appimage(&self) -> Option<String> {
             None
         }
+        /// The install kind the test chose.
         fn install_override(&self) -> Option<InstallKind> {
             Some(self.kind)
         }
+        /// Not Windows.
         fn windows(&self) -> bool {
             false
         }
+        /// Not macOS.
         fn macos(&self) -> bool {
             false
         }
+        /// Linux.
         fn linux(&self) -> bool {
             true
         }
+        /// Installed from a `.deb` when the kind says so.
         fn linux_deb_package(&self, _exe: &str) -> bool {
             self.kind == InstallKind::LinuxDeb
         }
+        /// Whether update checks are switched off.
         fn no_update_check(&self) -> bool {
             self.no_update
         }
     }
 
+    /// A session with `http` and install kind `kind` on x86_64.
     fn session_with_kind(http: TestHttp, kind: InstallKind) -> Session {
         session_with_kind_arch(http, kind, "x86_64")
     }
 
+    /// A session with `http`, install kind `kind`, release arch `arch` and the fixed clock.
     fn session_with_kind_arch(http: TestHttp, kind: InstallKind, arch: &str) -> Session {
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.update_http = Some(http);
@@ -283,10 +296,12 @@ mod tests {
         s
     }
 
+    /// A `.deb` session with `http`.
     fn session_with(http: TestHttp) -> Session {
         session_with_kind(http, InstallKind::LinuxDeb)
     }
 
+    /// The lowercase hex SHA-256 of `data`.
     fn sha256_hex(data: &[u8]) -> String {
         use sha2::{Digest, Sha256};
         let mut h = Sha256::new();
@@ -301,6 +316,7 @@ mod tests {
         )
     }
 
+    /// The release arch a test uses for `kind`.
     fn release_arch_for_kind(kind: InstallKind) -> &'static str {
         match kind {
             InstallKind::WindowsMsi => "x64",
@@ -315,6 +331,7 @@ mod tests {
         apply_for_arch(kind, release_arch_for_kind(kind))
     }
 
+    /// [`apply_for`] on release arch `arch`.
     fn apply_for_arch(kind: InstallKind, arch: &str) -> (Value, Option<InstallHandoff>) {
         let bytes = b"hello";
         let asset = pick_asset_name_with_arch((9, 0, 0), kind, arch).expect("asset for a supported install kind");
@@ -344,10 +361,12 @@ mod tests {
         (r, got)
     }
 
+    /// A latest-release JSON offering the 9.0.0 `.deb` for `arch`.
     fn latest_linux_deb(arch: &str) -> String {
         latest_for(&format!("wordcraft-9.0.0-linux-{arch}.deb"))
     }
 
+    /// The running version as the latest release: up to date.
     #[test]
     fn no_newer_version() {
         let cur = env!("CARGO_PKG_VERSION");
@@ -361,6 +380,7 @@ mod tests {
         assert_eq!(r["status"], "current");
     }
 
+    /// A newer release is offered and asks the interface to show the notice.
     #[test]
     fn newer_version_notice() {
         let latest = latest_linux_deb("x86_64");
@@ -373,6 +393,7 @@ mod tests {
         assert_eq!(up.get("version").and_then(Value::as_str), Some("9.0.0"));
     }
 
+    /// A skipped version isn't offered.
     #[test]
     fn skip_this_version() {
         let latest = latest_linux_deb("x86_64");
@@ -383,6 +404,7 @@ mod tests {
         assert_eq!(r["status"], "current");
     }
 
+    /// `file.updatePrefs` records the version to skip.
     #[test]
     fn skip_via_prefs_command() {
         let mut s = Session::new(wordcraft_doc::Document::new());
@@ -390,6 +412,7 @@ mod tests {
         assert_eq!(s.update_prefs.skipped_version, "1.2.3");
     }
 
+    /// A check within a day of the last one makes no request.
     #[test]
     fn once_a_day_throttle() {
         let calls = Arc::new(Mutex::new(0));
@@ -419,6 +442,7 @@ mod tests {
         assert!(*calls.lock().unwrap_or_else(|e| e.into_inner()) > 0);
     }
 
+    /// With the startup setting off, the startup check makes no request.
     #[test]
     fn setting_off_means_no_request_on_startup() {
         let calls = Arc::new(Mutex::new(0));
@@ -433,6 +457,7 @@ mod tests {
         assert_eq!(*calls.lock().unwrap_or_else(|e| e.into_inner()), 0);
     }
 
+    /// A download whose checksum doesn't match is never handed to the installer.
     #[test]
     fn checksum_mismatch_refused() {
         let latest = latest_linux_deb("x86_64");
@@ -452,6 +477,7 @@ mod tests {
         assert!(r["error"].as_str().unwrap_or("").to_ascii_lowercase().contains("checksum"));
     }
 
+    /// An installer larger than the release JSON limit still downloads.
     #[test]
     fn large_asset_download_allowed() {
         let big = vec![b'a'; MAX_JSON + 64];
@@ -487,6 +513,7 @@ mod tests {
         assert!(*got.lock().unwrap_or_else(|e| e.into_inner()));
     }
 
+    /// Windows MSI, macOS and Linux `.deb` installs each hand off the verified download.
     #[test]
     fn every_supported_install_kind_hands_off() {
         for kind in [InstallKind::WindowsMsi, InstallKind::MacApp, InstallKind::LinuxDeb] {
@@ -500,6 +527,7 @@ mod tests {
         }
     }
 
+    /// On macOS the update opens the disk image with instructions and doesn't quit.
     #[test]
     fn mac_apply_requests_manual_dmg_notice_not_quit() {
         let bytes = b"hello";
@@ -529,6 +557,7 @@ mod tests {
         assert_eq!(offer.get("verifiedUpdate").and_then(Value::as_bool), Some(true));
     }
 
+    /// Flatpak, AppImage and unknown installs send the person to the release page.
     #[test]
     fn external_and_unknown_kinds_fall_back_to_release_page() {
         for kind in [InstallKind::Flatpak, InstallKind::AppImage, InstallKind::Unknown] {
@@ -540,6 +569,7 @@ mod tests {
         }
     }
 
+    /// A release without a checksum for the asset is refused with the catalogued message.
     #[test]
     fn missing_checksum_refused_with_catalogued_message() {
         let asset = pick_asset_name_with_arch((9, 0, 0), InstallKind::LinuxDeb, "x86_64").unwrap();
@@ -567,6 +597,7 @@ mod tests {
         assert!(!*called.lock().unwrap_or_else(|e| e.into_inner()), "installer must not run");
     }
 
+    /// The no-update switch stops the startup check before any request.
     #[test]
     fn no_update_check_skips_startup_request() {
         let calls = Arc::new(Mutex::new(0));
@@ -582,6 +613,7 @@ mod tests {
         assert_eq!(*calls.lock().unwrap_or_else(|e| e.into_inner()), 0);
     }
 
+    /// An install asked for with unsaved changes makes no request and runs no installer.
     #[test]
     fn dirty_session_makes_no_request_and_never_invokes_installer() {
         let installs = Arc::new(Mutex::new(0));
@@ -603,6 +635,7 @@ mod tests {
         assert_eq!(*requests.lock().unwrap_or_else(|e| e.into_inner()), 0, "not even the release metadata is fetched before the save prompt");
     }
 
+    /// The aarch64 `.deb` is chosen from the release arch, whatever the host is.
     #[test]
     fn linux_aarch64_asset_selected_independently_of_host() {
         let arch = "aarch64";
@@ -612,6 +645,7 @@ mod tests {
         assert_eq!(h.file_name, format!("wordcraft-9.0.0-linux-{arch}.deb"));
     }
 
+    /// The x64 MSI is chosen from the release arch, whatever the host is.
     #[test]
     fn windows_x64_msi_selected_independently_of_host() {
         let (r, got) = apply_for_arch(InstallKind::WindowsMsi, "x64");
@@ -652,6 +686,7 @@ mod tests {
         );
     }
 
+    /// An oversized or malformed release body is an answer, never a panic.
     #[test]
     fn hostile_json_never_panics() {
         let s = session_with(Arc::new(|_, max| Ok(vec![b'x'; max.saturating_add(1)])));

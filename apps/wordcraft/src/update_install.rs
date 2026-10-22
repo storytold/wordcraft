@@ -395,6 +395,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// A staging file is never written over an existing one.
     #[test]
     fn exclusive_file_refuses_existing() {
         let dir = private_staging_dir().unwrap();
@@ -402,6 +403,7 @@ mod tests {
         assert!(write_exclusive_file(&dir, "pkg.deb", b"two").is_err());
     }
 
+    /// Each run gets its own staging folder.
     #[test]
     fn staging_dirs_are_unique() {
         let a = private_staging_dir().unwrap();
@@ -409,6 +411,7 @@ mod tests {
         assert_ne!(a, b);
     }
 
+    /// Staging folders are readable by their owner only.
     #[cfg(unix)]
     #[test]
     fn staging_dir_is_owner_only() {
@@ -418,12 +421,14 @@ mod tests {
         assert_eq!(mode & 0o777, 0o700, "staging must be private");
     }
 
+    /// A disk-image opener that records what it was asked to open, or fails with `err`.
     struct FakeDmgOpener {
         opened: RefCell<Option<PathBuf>>,
         err: Option<String>,
     }
 
     impl DmgOpener for FakeDmgOpener {
+        /// Record `dmg`, or fail when the fake is set to.
         fn open_in_finder(&self, dmg: &Path) -> Result<(), String> {
             if let Some(e) = &self.err {
                 return Err(e.clone());
@@ -433,6 +438,7 @@ mod tests {
         }
     }
 
+    /// A verified disk image goes to the opener.
     #[test]
     fn mac_open_dmg_uses_opener() {
         let dir = private_staging_dir().unwrap();
@@ -442,6 +448,7 @@ mod tests {
         assert_eq!(fake.opened.borrow().as_ref(), Some(&dmg));
     }
 
+    /// An opener that fails makes the handoff fail.
     #[test]
     fn mac_open_dmg_propagates_failure() {
         let dir = private_staging_dir().unwrap();
@@ -450,6 +457,7 @@ mod tests {
         assert!(mac_open_dmg_with(&dmg, &fake).is_err());
     }
 
+    /// A one-byte handoff of `kind` named `name`.
     fn job(kind: InstallKind, name: &str) -> InstallHandoff {
         InstallHandoff { kind, file_name: name.into(), bytes: b"x".to_vec(), exe_path: String::new() }
     }
@@ -497,6 +505,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&staging);
     }
 
+    /// The sweep removes old staging folders and keeps fresh ones and folders it didn't make.
     #[test]
     fn stale_staging_is_swept_but_fresh_and_foreign_entries_are_kept() {
         let parent = std::env::temp_dir().join(format!("wordcraft-sweep-test-{}", std::process::id()));
@@ -529,18 +538,21 @@ mod tests {
         let _ = std::fs::remove_dir_all(&parent);
     }
 
+    /// An `msiexec` stand-in that exits with `code` and records its arguments.
     struct FakeMsi {
         code: u32,
         calls: RefCell<Vec<Vec<String>>>,
     }
 
     impl MsiRunner for FakeMsi {
+        /// Record `args` and exit with the fake's code.
         fn run(&self, args: &[String], _timeout_secs: u64) -> Result<u32, String> {
             self.calls.borrow_mut().push(args.to_vec());
             Ok(self.code)
         }
     }
 
+    /// Install through a fake `msiexec` exiting with `code`: the outcome and the arguments it got.
     fn run_msi(code: u32) -> (Result<InstallOutcome, String>, Vec<String>) {
         let fake = FakeMsi { code, calls: RefCell::new(Vec::new()) };
         let outcome = windows_msi_with(&fake, Path::new("C:\\tmp\\wordcraft.msi"));
@@ -548,6 +560,7 @@ mod tests {
         (outcome, args)
     }
 
+    /// The MSI install never restarts the computer and never closes WordCraft.
     #[test]
     fn msi_args_suppress_restart_and_forced_shutdown() {
         let args = msi_args("pkg.msi");
@@ -561,6 +574,7 @@ mod tests {
         );
     }
 
+    /// `msiexec` exit code 0 is a finished install.
     #[test]
     fn msi_zero_is_an_install() {
         let (outcome, args) = run_msi(MSI_SUCCESS);
@@ -569,6 +583,7 @@ mod tests {
         assert_eq!(msi_outcome(MSI_SUCCESS), MsiOutcome::Installed);
     }
 
+    /// Exit codes 3010 and 1641 are a finished install that needs a restart.
     #[test]
     fn msi_3010_is_success_with_a_deferred_restart() {
         let (outcome, _) = run_msi(MSI_SUCCESS_REBOOT_REQUIRED);
@@ -577,6 +592,7 @@ mod tests {
         assert_eq!(msi_outcome(MSI_SUCCESS_REBOOT_INITIATED), MsiOutcome::InstalledRebootRequired);
     }
 
+    /// A cancelled MSI install is an error that says so.
     #[test]
     fn msi_cancelled_is_an_error() {
         let (outcome, _) = run_msi(MSI_CANCELLED);
@@ -585,6 +601,7 @@ mod tests {
         assert_eq!(msi_outcome(MSI_CANCELLED), MsiOutcome::Cancelled);
     }
 
+    /// Any other `msiexec` exit code is an error naming the code.
     #[test]
     fn msi_failure_is_an_error() {
         let (outcome, _) = run_msi(1603);
@@ -593,10 +610,13 @@ mod tests {
         assert_eq!(msi_outcome(1603), MsiOutcome::Failed(1603));
     }
 
+    /// An `msiexec` that can't start makes the install fail.
     #[test]
     fn msi_runner_start_failure_is_propagated() {
+        /// An `msiexec` that never starts.
         struct Failing;
         impl MsiRunner for Failing {
+            /// Fail as a missing `msiexec` would.
             fn run(&self, _args: &[String], _timeout_secs: u64) -> Result<u32, String> {
                 Err("msiexec not found".into())
             }
@@ -604,6 +624,7 @@ mod tests {
         assert!(windows_msi_with(&Failing, Path::new("x.msi")).is_err());
     }
 
+    /// An installer that runs past its deadline is stopped at once.
     #[cfg(unix)]
     #[test]
     fn deadline_terminates_the_child_promptly() {

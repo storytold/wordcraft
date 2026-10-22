@@ -518,6 +518,7 @@ fn now_secs() -> u64 {
 mod tests {
     use super::*;
 
+    /// An `update` request from a command builds the notice.
     #[test]
     fn ui_request_update_payload_builds_notice() {
         let up = json!({
@@ -665,6 +666,7 @@ mod tests {
         assert!(app.status_msg.is_some());
     }
 
+    /// Update settings can be changed from the Start screen with no document open.
     #[test]
     fn update_settings_work_without_a_document() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -703,6 +705,7 @@ mod tests {
         }
     }
 
+    /// A check result's release builds the notice.
     #[test]
     fn command_result_release_builds_notice() {
         let r = json!({
@@ -792,6 +795,7 @@ mod tests {
         );
     }
 
+    /// The restart notice holds the update's quit until it is acknowledged.
     #[test]
     fn reboot_notice_defers_update_quit_until_acknowledged() {
         let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
@@ -952,6 +956,7 @@ mod tests {
         assert!(!h.state().update.reboot_notice, "OK acknowledges the restart banner");
     }
 
+    /// The release notice shows over an open document and its buttons work.
     #[test]
     fn release_notice_is_visible_and_actionable_with_open_document() {
         use egui_kittest::kittest::Queryable;
