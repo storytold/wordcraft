@@ -37,6 +37,15 @@ pub(crate) struct Para {
     pub attrs: BTreeMap<String, String>,
 }
 
+/// A master page read back: its page layout and its headers and footers' texts by element
+/// (`header`, `header-first`, `footer-left`…).
+#[derive(Debug)]
+pub(crate) struct Master {
+    pub name: String,
+    pub layout: String,
+    pub parts: BTreeMap<String, String>,
+}
+
 impl Odt {
     /// `doc` written through `odt::export`, which must take this writer for it.
     pub fn new(doc: &Document) -> Odt {
@@ -97,6 +106,40 @@ impl Odt {
     /// The properties in effect for the body paragraph whose text is `text`.
     pub fn para_props(&self, text: &str) -> BTreeMap<String, String> {
         self.props("paragraph", &self.para(text).style)
+    }
+
+    pub fn masters(&self) -> Vec<Master> {
+        let mut out: Vec<Master> = Vec::new();
+        let mut part: Option<(String, String)> = None;
+        events(self.styles.as_bytes(), |ev| match ev {
+            Ev::Start(q, a) if q == "style:master-page" => out.push(Master {
+                name: get(&a, "style:name").unwrap_or("").into(),
+                layout: get(&a, "style:page-layout-name").unwrap_or("").into(),
+                parts: BTreeMap::new(),
+            }),
+            Ev::Start(q, _) if q.starts_with("style:header") || q.starts_with("style:footer") => {
+                if !q.ends_with("-style") {
+                    part = Some((local(&q).to_string(), String::new()));
+                }
+            }
+            Ev::End(q) if q.starts_with("style:header") || q.starts_with("style:footer") => {
+                if let (Some((n, t)), Some(m)) = (part.take(), out.last_mut()) {
+                    m.parts.insert(n, t);
+                }
+            }
+            Ev::Text(t) => {
+                if let Some((_, s)) = part.as_mut() {
+                    s.push_str(&t);
+                }
+            }
+            Ev::Start(q, _) if q == "text:page-number" || q == "text:page-count" => {
+                if let Some((_, s)) = part.as_mut() {
+                    s.push_str(&format!("[{}]", local(&q)));
+                }
+            }
+            _ => {}
+        });
+        out
     }
 }
 
@@ -323,19 +366,10 @@ fn documents_it_cannot_write_whole_go_to_the_flow_writer() {
     let mut revised = base.clone();
     revised.revisions.push(Revision::new(RevisionKind::Insert, "A", ""));
     assert!(!super::can_write(&revised));
-    // What later parts of #2669 write: sections, headers.
-    let mut sections = base.clone();
-    let mut end1 = plain("One");
-    end1.section = Some(Box::new(SectionProps::default()));
-    sections.body.insert(0, para_block(end1));
-    assert!(!super::can_write(&sections));
-    let mut header = base.clone();
-    let h = header.add_part(PartKind::Header, vec![para_block(plain("Head"))]);
-    header.last_section.headers.default = Some(h);
-    assert!(!super::can_write(&header));
-    // Named styles, lists and tables are written.
-    assert!(super::can_write(&styled_doc()));
-    assert!(super::can_write(&lists_doc()));
+    // Everything else is written by this writer.
+    for d in [styled_doc(), lists_doc(), sections_doc()] {
+        assert!(super::can_write(&d));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -376,7 +410,7 @@ fn the_page_is_the_sections() {
     d.last_section.set_landscape(true);
     d.last_section.margin_top = 90.0;
     let o = Odt::new(&d);
-    assert!(o.styles.contains("<style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\"/>"), "{}", o.styles);
+    assert!(o.styles.contains("<style:master-page style:name=\"Standard\" style:page-layout-name=\"pm1\">"), "{}", o.styles);
     let l = o.props("page-layout", "pm1");
     assert_eq!((l.get("fo:page-width").unwrap().as_str(), l.get("style:print-orientation").unwrap().as_str()), ("792pt", "landscape"));
     assert_eq!(l.get("fo:margin-top").map(String::as_str), Some("90pt"));
@@ -593,6 +627,116 @@ fn headings_are_text_h_with_their_level() {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Sections, headers and footers
+
+fn header(d: &mut Document, kind: PartKind, text: &str) -> u32 {
+    d.add_part(kind, vec![para_block(plain(text))])
+}
+
+/// Section 1: portrait, default and first-page headers, a footer with page numbers. Section 2:
+/// landscape, restarts at page 5, inherits the headers, its own footer.
+fn sections_doc() -> Document {
+    let mut d = Document::new();
+    let h = header(&mut d, PartKind::Header, "Running head");
+    let hf = header(&mut d, PartKind::Header, "First head");
+    let mut fp = plain("Page ");
+    let n = fp.len();
+    fp.insert_object(
+        n,
+        InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let n = fp.len();
+    fp.insert_text(n, " of ", &CharProps::default()).unwrap();
+    let n = fp.len();
+    fp.insert_object(
+        n,
+        InlineObject::Field { instr: "NUMPAGES".into(), result: "2".into(), locked: false, dirty: false, code: false, form: String::new() },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let f = d.add_part(PartKind::Footer, vec![para_block(fp)]);
+    let f2 = header(&mut d, PartKind::Footer, "Wide foot");
+    let mut first = SectionProps::default();
+    first.headers.default = Some(h);
+    first.headers.first = Some(hf);
+    first.footers.default = Some(f);
+    first.title_page = true;
+    first.margin_top = 90.0;
+    first.header = 30.0;
+    let mut end1 = plain("End of part one");
+    end1.section = Some(Box::new(first));
+    let mut wide = SectionProps::default();
+    wide.set_landscape(true);
+    wide.page_num_start = Some(5);
+    wide.footers.default = Some(f2);
+    d.last_section = wide;
+    d.body = vec![para_block(plain("Opening")), para_block(end1), para_block(plain("Wide part")), para_block(plain("Last"))];
+    d
+}
+
+#[test]
+fn sections_become_master_pages() {
+    let o = Odt::new(&sections_doc());
+    let masters = o.masters();
+    assert_eq!(masters.len(), 2, "{masters:?}");
+    // The first page is the default one.
+    assert_eq!(masters[0].name, "Standard");
+    assert!(!o.para_props("Opening").contains_key("style:master-page-name"));
+    let wide = o.para_props("Wide part");
+    assert_eq!(wide.get("style:master-page-name").map(String::as_str), Some(masters[1].name.as_str()));
+    assert_eq!(wide.get("style:page-number").map(String::as_str), Some("5"));
+    assert!(!o.para_props("Last").contains_key("style:master-page-name"));
+    let l1 = o.props("page-layout", &masters[0].layout);
+    let l2 = o.props("page-layout", &masters[1].layout);
+    assert_eq!((l1.get("fo:page-width").unwrap().as_str(), l1.get("style:print-orientation").unwrap().as_str()), ("612pt", "portrait"));
+    assert_eq!((l2.get("fo:page-width").unwrap().as_str(), l2.get("style:print-orientation").unwrap().as_str()), ("792pt", "landscape"));
+    // With a header the page margin is the header distance; the header fills the rest.
+    assert_eq!(l1.get("fo:margin-top").map(String::as_str), Some("30pt"));
+    assert_eq!(l1.get("header:fo:min-height").map(String::as_str), Some("60pt"));
+}
+
+#[test]
+fn headers_and_footers_with_first_page_and_inheritance() {
+    let o = Odt::new(&sections_doc());
+    let m = o.masters();
+    assert_eq!(m[0].parts.get("header").map(String::as_str), Some("Running head"));
+    assert_eq!(m[0].parts.get("header-first").map(String::as_str), Some("First head"));
+    assert_eq!(m[0].parts.get("footer").map(String::as_str), Some("Page [page-number]1 of [page-count]2"));
+    // Section 2 links to section 1's header, has its own footer, no different first page.
+    assert_eq!(m[1].parts.get("header").map(String::as_str), Some("Running head"));
+    assert_eq!(m[1].parts.get("footer").map(String::as_str), Some("Wide foot"));
+    assert!(!m[1].parts.contains_key("header-first"));
+}
+
+#[test]
+fn a_continuous_section_on_the_same_page_keeps_its_master() {
+    let mut d = Document::new();
+    let mut end1 = plain("One");
+    end1.section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = wordcraft_doc::section::SectionStart::Continuous;
+    d.body = vec![para_block(end1), para_block(plain("Two"))];
+    let o = Odt::new(&d);
+    assert_eq!(o.masters().len(), 1);
+    assert!(!o.para_props("Two").contains_key("style:master-page-name"));
+}
+
+#[test]
+fn header_paragraph_styles_live_in_styles_xml() {
+    let mut d = Document::new();
+    let mut p = plain("Centered head");
+    p.props.align = Some(wordcraft_doc::Align::Center);
+    let h = d.add_part(PartKind::Header, vec![para_block(p)]);
+    d.last_section.headers.default = Some(h);
+    let o = Odt::new(&d);
+    let hp = paras(&o.styles.replace("office:master-styles", "office:body")).into_iter().find(|p| p.text == "Centered head").unwrap();
+    assert!(hp.style.starts_with('M'), "{}", hp.style);
+    assert_eq!(o.props("paragraph", &hp.style).get("fo:text-align").map(String::as_str), Some("center"));
+    assert!(!o.content.contains(&format!("style:name=\"{}\"", hp.style)));
+}
+
+// ---------------------------------------------------------------------------------------------
 // Paragraph content
 
 #[test]
@@ -759,6 +903,52 @@ fn a_table_ending_a_cell_is_followed_by_a_paragraph() {
     d.body = vec![Arc::new(Block::Table(outer))];
     let o = Odt::new(&d);
     assert!(o.content.contains("</table:table><text:p"), "{}", o.content);
+}
+
+#[test]
+fn lists_nest_and_continue_across_a_section_boundary() {
+    let mut d = Document::new();
+    let num = d.numbering.add_list(ListKind::Numbered);
+    let item = |t: &str, level: u8| {
+        let mut p = plain(t).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level });
+        p
+    };
+    let mut two = item("two", 0);
+    two.section = Some(Box::new(SectionProps::default()));
+    // The second section goes on on the same page in two columns.
+    d.last_section.start = wordcraft_doc::section::SectionStart::Continuous;
+    d.last_section.columns.count = 2;
+    d.body = vec![para_block(item("one", 0)), para_block(item("one.a", 1)), para_block(two), para_block(item("three", 0))];
+    let o = Odt::new(&d);
+    let lists: Vec<&str> = o.content.split("<text:list ").skip(1).map(|s| s.split('>').next().unwrap_or("")).collect();
+    assert_eq!(lists.len(), 2, "{}", o.content);
+    assert!(lists[1].contains("text:continue-list=\"lst1\""), "{lists:?}");
+    let style = lists[0].split("text:style-name=\"").nth(1).and_then(|s| s.split('"').next()).unwrap();
+    let ls = o.props("list", style);
+    assert_eq!(ls.get("1/style:num-format").map(String::as_str), Some("1"));
+    assert_eq!(ls.get("2/style:num-format").map(String::as_str), Some("a"));
+    assert!(
+        o.content.contains(">one</text:p><text:list><text:list-item><text:p text:style-name=\"ListParagraph\">one.a"),
+        "nested level: {}",
+        o.content
+    );
+    assert_eq!(o.masters().len(), 1);
+    let section = o.content.split("<text:section ").nth(1).unwrap_or_default();
+    assert!(section.contains(">three</text:p>"), "{}", o.content);
+    assert!(o.content.contains("<style:columns fo:column-count=\"2\""));
+}
+
+#[test]
+fn a_section_starting_with_a_table_puts_its_master_on_the_table() {
+    let mut d = Document::new();
+    let mut end1 = plain("Before");
+    end1.section = Some(Box::new(SectionProps::default()));
+    d.last_section.set_landscape(true);
+    d.body = vec![para_block(end1), Arc::new(Block::Table(Table::new(1, 1, 100.0)))];
+    let o = Odt::new(&d);
+    let ts = o.content.split("<table:table table:name=\"Table1\" table:style-name=\"").nth(1).and_then(|s| s.split('"').next()).unwrap();
+    assert_eq!(o.props("table", ts).get("style:master-page-name").map(String::as_str), Some("MP2"));
 }
 
 #[test]

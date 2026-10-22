@@ -1,8 +1,8 @@
 # ODT writer
 
-> **Status:** body text, named styles, direct formatting, lists, tables and the page from the
-> full model; documents with several sections or headers still through the exchange-flow
-> writer (#2669)
+> **Status:** styles, page layouts, master pages, headers and footers from the full model; lists,
+> tables and the other content as the exchange-flow writer wrote them; documents with tracked
+> changes still through the exchange-flow writer (#2669)
 
 `odt::export` writes OpenDocument Text (ODF 1.3) from the full `wordcraft_doc::Document`, the
 way the DOCX writer does, instead of lowering it to the exchange `Flow` first (which Markdown,
@@ -21,36 +21,42 @@ an export lose what the flow writer kept. Each part widens `can_write`:
 |---|---|
 | 1 | paragraphs in the default paragraph style, direct paragraph and character formatting, links, bookmarks, tabs, line, page and column breaks, pictures in line; one section without headers and footers |
 | 2 | named paragraph and character styles with their `based on` chain |
-| 3 (this) | lists and tables |
+| 3 | lists and tables |
 | 4 | several sections, headers and footers, page numbering restarts |
 
 Tracked changes stay outside `can_write` through all four parts: a document with revisions, or
 with Track Changes on, is written by the flow writer, which writes the revisions but not what the
 new writer adds (named styles beyond the built-in ones, headers and footers). Toggling Track
 Changes therefore changes which writer saves the document. This is the known limit of the series
-until the writer writes tracked changes itself; `tests::documents_it_cannot_write_whole_go_to_the_flow_writer`
-pins it.
+until the writer writes tracked changes itself;
+`tests::documents_it_cannot_write_whole_go_to_the_flow_writer` pins it.
 
 ## Architecture
 
 `write::write(doc)` walks the document once and builds the two XML parts:
 
-1. `text::body` writes the body into `content.xml`.
-2. `pages::master_styles` writes the page layout and the `Standard` master page into
-   `styles.xml`.
-3. `styles::common` writes `office:styles`: the default style and the document's paragraph and
-   character styles (the model's default paragraph style is `Standard`).
-4. `package::zip` packages `content.xml`, `styles.xml`, `meta.xml`, `settings.xml`, the
+1. `pages::plan` gives every section a master page (`Standard` for the first, `MP2`, `MP3`…) and
+   splits the body into segments. A continuous section that changes nothing a page holds stays
+   on the master page before it, as a `text:section` when its columns differ from the page's.
+2. `text::body` writes the body into `content.xml`. The block that starts a section carries the
+   master page and the page-number restart on its automatic style
+   (`style:master-page-name`, `style:page-number`).
+3. `pages::master_styles` writes the page layouts and master pages into `styles.xml`, with the
+   headers and footers inside them.
+4. `styles::common` writes `office:styles`: the default style and the document's paragraph and
+   character styles.
+5. `package::zip` packages `content.xml`, `styles.xml`, `meta.xml`, `settings.xml`, the
    manifest and the pictures.
 
-Every nested story (a cell) goes through `text::blocks`, which bounds nesting and ends the story
-with a paragraph after a final table, as Word does.
+Every nested story (header, footer, cell) goes through `text::blocks`, which keeps the waiting
+page start out of it, bounds nesting and ends the story with a paragraph after a final table,
+as Word does.
 
 `Ctx` (`mod.rs`) is the state the parts share: `auto_style` and `auto` make automatic styles,
 deduplicated, in the file being written (`target`: automatic styles of headers and footers
 belong in `styles.xml`, their names start with `M`); `font` declares a font face; `picture`
-packages a `Document::media` entry once; `name` makes unique numbered names; `break_next` is a
-page or column break waiting for the next block.
+packages a `Document::media` entry once; `name` makes unique numbered names; `page_start` is the
+master page waiting for the next body paragraph or table.
 
 ### Modules
 
@@ -58,7 +64,7 @@ page or column break waiting for the next block.
 |---|---|
 | `package.rs` | zip, manifest, `meta.xml`, `settings.xml`, font declarations |
 | `styles.rs` | the default style, named paragraph and character styles with `based on`, automatic paragraph and text styles, tab stops, borders |
-| `pages.rs` | the page layout of the section: size, orientation, margins, gutter, columns, page number format |
+| `pages.rs` | page layouts and master pages per section: size, orientation, margins, gutter, columns, page number format, header and footer areas; default, first-page and even-page headers and footers inherited as Word links them; columns-only continuous sections as `text:section` |
 | `text.rs` | blocks, paragraphs and headings, spans, links, bookmarks, tabs, line, page and column breaks, ruby; pictures in line, `PAGE` and `NUMPAGES` fields, other fields as their result, equations as their linear text |
 | `lists.rs` | lists as the `Flow` writer wrote them: a generated list style per list, bullets or `1.`/`a.`/`i.` per level; each item keeps Word's number (`text:start-value` on the item where ODF would count another) |
 | `tables.rs` | tables as the `Flow` writer wrote them: grid widths, header rows, spans, cell shading and vertical alignment, a thin border on every cell. Only rows marked as header rows (`w:tblHeader`) repeat; the table style's first-row look (`w:firstRow`) doesn't, as in Word (the `Flow` writer repeated it) |
@@ -89,6 +95,9 @@ same.
   writes its whole merged list.
 - Widow and orphan control is on when the model leaves it unset; ODF's default is off, so the
   default style says so.
+- Word measures the header from the page edge and the body from the top margin; ODF puts the
+  page margin at the header. With a header, the page margin is the header distance and the
+  header is at least as high as the rest of the margin (footers alike).
 - A paragraph ending with a page break: Word draws its mark beside the break and starts the next
   block on the new page, so the break goes on the next block, not on an empty paragraph.
 
@@ -96,7 +105,8 @@ same.
 
 - Unit tests (`crates/formats/src/odt/write/tests.rs`) build synthetic documents through the
   model API and read the package back with a small normalizer: styles of both files resolved
-  along their parents to the properties in effect, paragraphs with their text. Each test first
+  along their parents to the properties in effect, paragraphs with their text, master pages
+  with their headers and footers. Each test first
   checks that `can_write` takes its document, so it tests this writer and not the flow one.
   Every package is checked as an ODF package (`mimetype` first and stored, the manifest listing
   exactly the files there are); with `ODF_JING` (a jing jar) and `ODF_SCHEMA_DIR` (the OASIS ODF
@@ -105,5 +115,14 @@ same.
   passes with a note without it) opens a list document in LibreOffice and checks that its
   plain-text export shows every item with the label the model gives it: a list continued after
   other paragraphs, nested levels starting again, a restarted list, a second list right after.
+- `crates/engine/tests/it/odt_lo_render.rs` saves a synthetic document as `.docx` and `.odt`, has
+  LibreOffice render both to PDF and compares pages and line positions
+  (`pdftotext -bbox-layout`): three sections with headers, a different first page, page number
+  footers and a landscape part restarting the numbers; named styles with spacing and
+  inheritance; tab stops with leaders; a split paragraph. Every line matches within 1 pt. It is
+  ignored by default (`cargo test -p wordcraft-engine --test it odt_lo_render -- --ignored`) and,
+  run without LibreOffice (`soffice`, or `WORDCRAFT_SOFFICE`) or poppler's `pdftotext`, it prints
+  that it skipped and passes, so CI without them stays green. `WORDCRAFT_LO_KEEP=DIR` keeps the
+  files.
 - The round trips in `crates/formats/src/tests.rs` and the reader's tests pass through whichever
   writer `can_write` picks.

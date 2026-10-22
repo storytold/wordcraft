@@ -2,6 +2,8 @@ mod comment_ids;
 mod date_fields;
 mod macro_packages;
 #[cfg(not(target_arch = "wasm32"))]
+mod odt_lo_render;
+#[cfg(not(target_arch = "wasm32"))]
 mod odt_sections;
 mod recovery_format;
 #[cfg(not(target_arch = "wasm32"))]
