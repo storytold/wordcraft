@@ -3789,7 +3789,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // that doesn't breaks as usual, its last lines going over with the next paragraph.
     let height = pl.height + top_room + bottom_room;
     if pl.rp.keep_lines || (pl.rp.keep_next && pb.y + height <= pb.bottom + 0.01) {
-        let need = height + if pl.rp.keep_next { next_first_line(ctx, block, width, 0, &mut ctx.counters.clone()) } else { 0.0 };
+        // A table starts below the paragraph's space after.
+        let gap = if matches!(ctx.doc.body.get(block + 1).map(|b| &**b), Some(Block::Table(_))) { pl.rp.space_after } else { 0.0 };
+        let need = height + if pl.rp.keep_next { gap + next_first_line(ctx, block, width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         if pb.y + need > pb.bottom && !pb.at_top() && need <= pb.uncapped_bottom() - pb.top {
             pb.advance(block, body_top);
@@ -4283,9 +4285,34 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     }
             }
         }
+        Some(Block::Table(t)) if t.props.float.is_none() => table_start_need(ctx, t, block + 1, width),
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
     }
+}
+
+/// The room a table in the text needs to start on a page: its repeated header rows and the least
+/// room its first row can start in (whole, or the part of it that splits off). A paragraph kept
+/// with the table goes over with it when that much is not left, as in Word.
+fn table_start_need(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: usize, width: f32) -> f32 {
+    // A look ahead: list and equation numbers in the cells don't count yet.
+    let (counters, eq_count) = (ctx.counters.clone(), ctx.eq_count);
+    let tl = table::layout_table(ctx, StoryRef::Body, t, &[block as u32], width, 1);
+    (ctx.counters, ctx.eq_count) = (counters, eq_count);
+    let headers = t.rows.iter().take_while(|r| r.props.header).count();
+    let head: f32 = tl.rows.iter().take(headers).map(|r| r.height).sum();
+    let (Some(row), Some(laid)) = (t.rows.get(headers), tl.rows.get(headers)) else { return head };
+    // ponytail: bisection assumes starting a row gets no harder with more room.
+    let (mut lo, mut hi) = (0.0f32, laid.height);
+    for _ in 0..12 {
+        let mid = (lo + hi) / 2.0;
+        if row_can_start(row, laid, mid, f32::MAX) {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    head + hi
 }
 
 fn row_keeps_next(row: &table::RowLayout) -> bool {
