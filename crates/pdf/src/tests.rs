@@ -2039,7 +2039,7 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let mut drawn = String::new();
     for page in &lay.pages {
-        for draw in page_display(&d, page, &DisplayOptions::default()) {
+        for draw in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
             if let Draw::Glyphs { face, glyphs, text, .. } = draw {
                 assert_eq!(face.data(), bundled.data(), "page glyphs must use the bundled face without system fallback");
                 assert!(glyphs.iter().all(|(id, _, _)| *id != 0), "page glyphs must not use .notdef");
