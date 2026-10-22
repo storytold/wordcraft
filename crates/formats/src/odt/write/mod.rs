@@ -172,6 +172,7 @@ pub(crate) fn can_write(doc: &Document) -> bool {
         && s.headers == HeaderSet::default()
         && s.footers == HeaderSet::default()
         && s.page_num_start.is_none()
+        && styles::names_unique(doc)
         && doc.body.iter().all(|b| match &**b {
             Block::Para(p) => crate::model::para_kind(doc, p).1.is_none(),
             Block::Table(_) => false,

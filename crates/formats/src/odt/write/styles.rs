@@ -35,6 +35,17 @@ pub(super) fn name(id: &str) -> String {
     s
 }
 
+/// Whether every written style gets its own ODF name: ids that normalize alike (`A B`, `A_B`)
+/// would be duplicate definitions, which ODF forbids.
+pub(super) fn names_unique(doc: &Document) -> bool {
+    let mut seen = std::collections::HashSet::new();
+    doc.styles.styles.iter().filter(|s| matches!(s.kind, StyleKind::Paragraph | StyleKind::Character)).all(|s| {
+        let para = s.kind == StyleKind::Paragraph;
+        let n = if para && is_default_para(doc, &s.id) { STANDARD.to_string() } else { name(&s.id) };
+        seen.insert((para, n))
+    })
+}
+
 /// The model's default paragraph style id (what a paragraph without a style has).
 fn default_para_id(doc: &Document) -> &str {
     doc.styles.styles.iter().find(|s| s.kind == StyleKind::Paragraph && s.default).map(|s| s.id.as_str()).unwrap_or("Normal")

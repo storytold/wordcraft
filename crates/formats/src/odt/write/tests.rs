@@ -393,6 +393,20 @@ fn the_page_is_the_sections() {
 // ---------------------------------------------------------------------------------------------
 // Styles
 
+#[test]
+fn styles_whose_names_normalize_alike_go_to_the_flow_writer() {
+    let mut d = doc_of(vec![plain("Text")]);
+    for id in ["A B", "A_B"] {
+        d.styles.upsert(Style { id: id.into(), name: id.into(), kind: StyleKind::Paragraph, ..Default::default() });
+    }
+    assert!(!super::can_write(&d));
+    // The same id in the other family is a different ODF name space.
+    let mut d = doc_of(vec![plain("Text")]);
+    d.styles.upsert(Style { id: "A B".into(), name: "A".into(), kind: StyleKind::Paragraph, ..Default::default() });
+    d.styles.upsert(Style { id: "A_B".into(), name: "A".into(), kind: StyleKind::Character, ..Default::default() });
+    assert!(super::can_write(&d));
+}
+
 /// A style chain: "Base" sets spacing and a font, "Derived" (based on it) only the space after,
 /// a character style "Loud", tab stops with a clear.
 fn styled_doc() -> Document {
