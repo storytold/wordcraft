@@ -923,9 +923,8 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 story,
                 clip: exact && c.h > span_h + 0.01,
             });
-            let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
             let end_here = end.filter(|(band, _)| *band == 0).map(|(_, e)| e);
-            parts.push(CellPart { top, items: first..items.len(), end: end_here, align });
+            parts.push(CellPart { top: c.top, items: first..items.len(), end: end_here, align });
         }
         // The row's own cells come first: `row_keeps_next` reads the first cell's paragraph.
         parts.extend(run_on.into_iter().map(|(_, p)| p));
