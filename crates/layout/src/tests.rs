@@ -5592,6 +5592,149 @@ fn automatic_text_in_a_styled_text_box_takes_the_box_s_colour() {
     assert_eq!(glyph_colors(None), (Some(Rgb::BLACK), Some(Rgb::BLACK), Some(Rgb(0, 0x80, 0))));
 }
 
+/// Issue #3585: automatic text on dark cell or paragraph shading is drawn white, as Word draws it
+/// ("COURT USE ONLY" on a black cell); on light shading it stays black, and text with a colour of
+/// its own keeps it. PDF export draws each item on its own, over the fills drawn before it.
+#[test]
+fn automatic_text_on_dark_cell_and_paragraph_shading_is_white() {
+    use wordcraft_doc::props::{CharProps, TextColor};
+    let red = Rgb(0xC0, 0, 0);
+    let mut d = Document::from_text("Body");
+    let mut t = Table::new(1, 3, 468.0);
+    let cells = [("DarkCell", Some(Rgb::BLACK), None), ("GreyCell", Some(Rgb(0xBF, 0xBF, 0xBF)), None), ("RedCell", Some(Rgb::BLACK), Some(red))];
+    for (i, (text, fill, color)) in cells.into_iter().enumerate() {
+        let props = CharProps { color: color.map(TextColor::Rgb), ..Default::default() };
+        t.rows[0].cells[i].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, props))];
+        t.rows[0].cells[i].props.shading = fill;
+    }
+    let mut shaded = wordcraft_doc::Paragraph::with_text("ShadedPara", Default::default());
+    shaded.props.shading = Some(Rgb(0x33, 0x33, 0x33));
+    d.body.push(std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+    d.body.push(wordcraft_doc::para_block(shaded));
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+    let color_of = |items: &[display::Draw], want: &str| {
+        items.iter().find_map(|i| if let display::Draw::Glyphs { text, color, .. } = i { text.contains(want).then_some(*color) } else { None })
+    };
+    let want = [("Body", Rgb::BLACK), ("DarkCell", Rgb::WHITE), ("GreyCell", Rgb::BLACK), ("RedCell", red), ("ShadedPara", Rgb::WHITE)];
+    // The whole page at once (screen, PNG).
+    let all = display::page_display(&d, page, &opts);
+    for (text, c) in want {
+        assert_eq!(color_of(&all, text), Some(c), "{text} on the page");
+    }
+    // Each item on its own, over the backgrounds drawn before it (PDF export).
+    let shown = display::ItemDisplay::new(&d, page);
+    let mut alone = Vec::new();
+    let mut behind = Vec::new();
+    for it in &page.items {
+        alone.extend(shown.draws_over(it, &opts, &behind));
+        behind.extend(display::ground(it));
+    }
+    for (text, c) in want {
+        assert_eq!(color_of(&alone, text), Some(c), "{text} drawn alone");
+    }
+}
+
+/// Issue #3585 (review): a text box's own fill is what its automatic text is drawn against. A white
+/// box over a dark paragraph keeps black text; an unfilled box shows the dark paragraph through it.
+#[test]
+fn automatic_text_in_a_filled_text_box_reads_the_box_s_fill() {
+    let mut d = Document::from_text(&"Shaded body text. ".repeat(300));
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.first_mut().map(std::sync::Arc::make_mut) {
+        p.props.shading = Some(Rgb::BLACK);
+    }
+    let boxed = |d: &mut Document, text: &str, fill: Option<Fill>, y: f32| {
+        let id = d.add_part(
+            wordcraft_doc::PartKind::TextBox,
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))],
+        );
+        let shape = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::TextBox,
+            w: 200.0,
+            h: 60.0,
+            fill,
+            stroke: None,
+            stroke_width: 0.75,
+            float: page_float(100.0, y),
+            story: Some(id),
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        d.insert_object(&Pos::body(0, 0), shape, &Default::default()).unwrap();
+    };
+    boxed(&mut d, "WhiteBox", Some(Fill::solid(Rgb::WHITE)), 200.0);
+    boxed(&mut d, "ClearBox", None, 400.0);
+    // Transparency is in percent: 30% still reads as the white box, 80% shows the paragraph through.
+    boxed(&mut d, "HazyBox", Some(Fill::Solid { color: Rgb::WHITE, transparency: 30.0 }), 500.0);
+    boxed(&mut d, "GlassBox", Some(Fill::Solid { color: Rgb::WHITE, transparency: 80.0 }), 600.0);
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+    let color_of = |items: &[display::Draw], want: &str| {
+        items.iter().find_map(|i| if let display::Draw::Glyphs { text, color, .. } = i { text.contains(want).then_some(*color) } else { None })
+    };
+    let all = display::page_display(&d, page, &opts);
+    let shown = display::ItemDisplay::new(&d, page);
+    let mut alone = Vec::new();
+    let mut behind = Vec::new();
+    for it in &page.items {
+        alone.extend(shown.draws_over(it, &opts, &behind));
+        behind.extend(display::ground(it));
+    }
+    for items in [&all, &alone] {
+        assert_eq!(color_of(items, "WhiteBox"), Some(Rgb::BLACK));
+        assert_eq!(color_of(items, "ClearBox"), Some(Rgb::WHITE));
+        assert_eq!(color_of(items, "HazyBox"), Some(Rgb::BLACK));
+        assert_eq!(color_of(items, "GlassBox"), Some(Rgb::WHITE));
+        assert_eq!(color_of(items, "Shaded body"), Some(Rgb::WHITE));
+    }
+}
+
+/// Issue #3585 (review): only an unturned rectangle or text box paints its whole frame, so only those
+/// count as the background under text; a gradient counts as its average colour weighted by stop
+/// positions, not its stops' plain average.
+#[test]
+fn a_shape_counts_as_background_only_where_its_frame_is_what_it_paints() {
+    use wordcraft_doc::para::ShapeKind;
+    use wordcraft_doc::wordart::GradStop;
+    let shape = |kind: ShapeKind, spin: wordcraft_geom::Spin, fill: Fill| Placed::Shape {
+        rect: wordcraft_geom::Rect::new(0.0, 0.0, 100.0, 50.0),
+        kind,
+        fill: Some(fill),
+        stroke: None,
+        stroke_width: 0.0,
+        freeform: None,
+        effects: Default::default(),
+        spin,
+        extra: Default::default(),
+        object: None,
+        alt: String::new(),
+    };
+    let white = Fill::solid(Rgb::WHITE);
+    let flat = wordcraft_geom::Spin::default();
+    let turned = wordcraft_geom::Spin::new(30.0, false, false);
+    assert_eq!(display::ground(&shape(ShapeKind::TextBox, flat, white.clone())).map(|g| g.1), Some(Rgb::WHITE));
+    assert_eq!(display::ground(&shape(ShapeKind::Rectangle, turned, white.clone())), None);
+    assert_eq!(display::ground(&shape(ShapeKind::Ellipse, flat, white)), None);
+    // Black over most of its length (0-80%), then fading to white: dark on average (about 26 grey),
+    // where the stops' plain average would be mid grey (128).
+    let stops = vec![
+        GradStop { pos: 0.0, color: Rgb::BLACK, transparency: 0.0 },
+        GradStop { pos: 80.0, color: Rgb::BLACK, transparency: 0.0 },
+        GradStop { pos: 100.0, color: Rgb::WHITE, transparency: 0.0 },
+    ];
+    let g = Fill::Gradient(std::sync::Arc::new(wordcraft_doc::fill::Gradient {
+        stops,
+        kind: wordcraft_doc::fill::GradientKind::Linear { angle: 0.0, scaled: false },
+        tile: None,
+        rot_with_shape: false,
+        flip: Default::default(),
+    }));
+    assert_eq!(display::ground(&shape(ShapeKind::TextBox, flat, g)).map(|g| g.1), Some(Rgb(26, 26, 26)));
+}
+
 /// Issue #1775: a picture watermark anchored in a header that starts with a table sits in a cell;
 /// placed on the page (`o:allowincell="f"`, `layoutInCell="0"`), it's centred on the margins
 /// behind the body text on every page, not drawn in the header's cell. One laid out in the cell

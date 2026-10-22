@@ -60,10 +60,16 @@ impl<'a> ItemDisplay<'a> {
     /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
     /// (and, for a line in a clipped cell, the cell's clip).
     pub fn draws(&self, it: &Placed, opts: &DisplayOptions) -> Vec<Draw> {
+        self.draws_over(it, opts, &[])
+    }
+
+    /// [`ItemDisplay::draws`] over `behind`: the backgrounds its list draws before it (each
+    /// [`ground`] so far), which its automatic text is drawn against (#3585).
+    pub fn draws_over(&self, it: &Placed, opts: &DisplayOptions, behind: &[(Rect, Rgb)]) -> Vec<Draw> {
         let mut out = Vec::new();
         let items = std::slice::from_ref(it);
         let (_, ba) = dimming(opts);
-        stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        stories_display(self.doc, &[items], Some(Shared { clips: &self.clips, behind }), opts, &self.authors, ba, &mut out);
         body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
         out
     }
@@ -94,12 +100,21 @@ fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &Displa
     }
 }
 
+/// What an [`ItemDisplay`] gives [`stories_display`] for one item: the page's clipped cells,
+/// worked out once, and the fills its list drew before the item (#3585).
+#[derive(Clone, Copy)]
+struct Shared<'a> {
+    clips: &'a Clips,
+    behind: &'a [(Rect, Rgb)],
+}
+
 /// Draw items for the placed items of `stories`, faded by `a`.
-/// `shared` gives the page's clipped cells when the caller worked them out already.
+/// `shared` gives the page's clipped cells when the caller worked them out already, and the fills
+/// drawn before the items.
 fn stories_display(
     doc: &Document,
     stories: &[&[Placed]],
-    shared: Option<&Clips>,
+    shared: Option<Shared>,
     opts: &DisplayOptions,
     authors: &Authors,
     a: f32,
@@ -110,16 +125,46 @@ fn stories_display(
         let warps = warped_boxes(doc, items);
         let own;
         let clips = match shared {
-            Some(c) => c,
+            Some(s) => s.clips,
             None => {
                 own = clipped_cells(items);
                 &own
             }
         };
         let mut done: Vec<u32> = Vec::new();
+        // The cell and paragraph fills drawn so far, newest last: the background under later lines.
+        let mut fills: Vec<(Rect, Rgb)> = shared.map_or_else(Vec::new, |s| s.behind.to_vec());
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
+                continue;
+            }
+            if let Some(ground) = ground(it) {
+                fills.push(ground);
+            }
+            if let Placed::Lines { story, path, para, l0, l1, x, y, turn } = it
+                && !turn.is_turned()
+                && !matches!(story, StoryRef::Part(id) if warps.iter().any(|(w, ..)| w == id))
+            {
+                let mut inner = Vec::new();
+                let render = LineRender {
+                    doc,
+                    story: *story,
+                    path,
+                    pl: para,
+                    range: *l0..*l1,
+                    origin: (*x, *y),
+                    opts,
+                    authors,
+                    alpha: a,
+                    down: false,
+                    behind: &fills,
+                };
+                lines(render, &mut inner);
+                match cell_clip(clips, *story, &path.0) {
+                    Some(rect) => out.push(Draw::Clip { rect, items: inner }),
+                    None => out.extend(inner),
+                }
                 continue;
             }
             if let Placed::Lines { story, path, .. } = it
@@ -147,6 +192,53 @@ fn stories_display(
             }
         }
     }
+}
+
+/// The background `it` paints for the text drawn over it: a cell or paragraph fill, or the mostly
+/// opaque fill (transparency, in percent, under 50) of an unturned rectangle or text box, whose frame
+/// is the area it paints, so a white text box over a dark cell keeps its automatic text black. A
+/// gradient counts as its average colour over the shape ([`gradient_average`]). Turned, round and
+/// freeform shapes, and shapes without a fill, leave what is under them.
+pub fn ground(it: &Placed) -> Option<(Rect, Rgb)> {
+    use wordcraft_doc::para::ShapeKind;
+    match it {
+        Placed::Fill { rect, color } => Some((*rect, *color)),
+        Placed::Shape {
+            rect,
+            fill: Some(fill),
+            kind: ShapeKind::Rectangle | ShapeKind::RoundedRectangle | ShapeKind::TextBox,
+            spin,
+            freeform: None,
+            ..
+        } if spin.is_identity() => {
+            let color = match fill {
+                wordcraft_doc::fill::Fill::Solid { color, transparency } => (*transparency < 50.0).then_some(*color),
+                wordcraft_doc::fill::Fill::Gradient(g) => gradient_average(&g.stops),
+            }?;
+            Some((*rect, color))
+        }
+        _ => None,
+    }
+}
+
+/// A gradient's average colour along its length: its mostly opaque stops (positions in percent),
+/// each colour weighted by how much of the gradient it covers, the colour before the first stop and
+/// after the last held flat. `None` when no stop is mostly opaque.
+fn gradient_average(stops: &[wordcraft_doc::wordart::GradStop]) -> Option<Rgb> {
+    let mut opaque: Vec<(f32, Rgb)> = stops.iter().filter(|s| s.transparency < 50.0).map(|s| (s.pos.clamp(0.0, 100.0), s.color)).collect();
+    opaque.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (first, last) = (*opaque.first()?, *opaque.last()?);
+    let channel = |f: fn(&Rgb) -> u8| {
+        let v = |c: &Rgb| f32::from(f(c));
+        let mut area = first.0 * v(&first.1) + (100.0 - last.0) * v(&last.1);
+        for w in opaque.windows(2) {
+            if let [(p0, c0), (p1, c1)] = w {
+                area += (p1 - p0) * (v(c0) + v(c1)) / 2.0;
+            }
+        }
+        (area / 100.0).round().clamp(0.0, 255.0) as u8
+    };
+    Some(Rgb(channel(|c| c.0), channel(|c| c.1), channel(|c| c.2)))
 }
 
 /// One object drawn alone, as its page draws it: the picture, shape or group `o` in `rect` (its
@@ -416,6 +508,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
                     authors,
                     alpha,
                     down: *turn == TextDirection::Down,
+                    behind: &[],
                 },
                 &mut items,
             );
@@ -430,9 +523,10 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
-        Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
-            lines(LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false }, out)
-        }
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(
+            LineRender { doc, story: *story, path, pl: para, range: *l0..*l1, origin: (*x, *y), opts, authors, alpha, down: false, behind: &[] },
+            out,
+        ),
     }
 }
 

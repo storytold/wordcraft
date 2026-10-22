@@ -8,6 +8,7 @@ use super::{
     StoryRef, TextColor, Underline,
 };
 use wordcraft_doc::Paragraph;
+use wordcraft_geom::Point;
 
 /// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
 /// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
@@ -24,6 +25,8 @@ pub(super) struct LineRender<'a, 'authors, 'author_doc> {
     pub authors: &'authors Authors<'author_doc>,
     pub alpha: f32,
     pub down: bool,
+    /// The fills drawn before these lines, newest last: what automatic text is drawn against.
+    pub behind: &'a [(Rect, Rgb)],
 }
 
 struct LineContext<'a, 'authors, 'author_doc> {
@@ -43,6 +46,9 @@ struct LineContext<'a, 'authors, 'author_doc> {
     alpha: f32,
     down: bool,
     auto: Option<Rgb>,
+    /// The cell or paragraph shading behind the line: what automatic text is drawn against when
+    /// the run has no shading or highlight of its own (#3585).
+    under: Option<Rgb>,
 }
 
 impl LineContext<'_, '_, '_> {
@@ -54,8 +60,13 @@ impl LineContext<'_, '_, '_> {
     }
 }
 
+/// The colour of the newest fill in `fills` that covers `p`, if any.
+fn fill_at(fills: &[(Rect, Rgb)], p: Point) -> Option<Rgb> {
+    fills.iter().rev().find(|(r, _)| r.contains(p)).map(|(_, c)| *c)
+}
+
 pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
-    let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, alpha, down } = input;
+    let LineRender { doc, story, path, pl, range, origin: (x, y), opts, authors, alpha, down, behind } = input;
     let (l0, l1) = (range.start, range.end);
     let Some(first) = pl.lines.get(l0) else { return };
     let para = doc.para(story, path);
@@ -67,9 +78,11 @@ pub(super) fn lines(input: LineRender<'_, '_, '_>, out: &mut Vec<Draw>) {
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
         let top = y + (line.top - first.top);
+        let mid = line.xs.first().zip(line.xs.last()).map_or(0.0, |(a, b)| (a + b) / 2.0);
+        let under = fill_at(behind, Point::new(x + mid, top + line.height / 2.0));
         let base = top + (line.baseline - line.top);
         let bottom = top + line.height;
-        let ctx = LineContext { doc, story, path, pl, para, line, li, x, top, base, bottom, opts, authors, alpha, down, auto };
+        let ctx = LineContext { doc, story, path, pl, para, line, li, x, top, base, bottom, opts, authors, alpha, down, auto, under };
         comment_backgrounds(&ctx, out);
         character_backgrounds(&ctx, out);
         draw_label_and_hyphen(&ctx, out);
@@ -216,12 +229,12 @@ fn draw_glyph_runs(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
         // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
         let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
         let color = match (ins, del) {
-            _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
+            _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight).or(ctx.under)),
             (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
             (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
             (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
             (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
-            _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight)),
+            _ => ctx.ink(&rc.color, rc.shading.or(rc.highlight).or(ctx.under)),
         };
         // The highlight or shading drawn under this run (as filled in the backgrounds pass).
         let text_bg = rc.highlight.or(rc.shading);
@@ -554,7 +567,7 @@ fn draw_rubies(ctx: &LineContext<'_, '_, '_>, out: &mut Vec<Draw>) {
                 face: st.face,
                 size: st.size,
                 glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
-                color: ctx.ink(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
+                color: ctx.ink(&st.rc.color, st.rc.shading.or(st.rc.highlight).or(ctx.under)),
                 alpha,
                 synth_bold: st.synth_bold,
                 synth_italic: st.synth_italic,
