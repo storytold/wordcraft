@@ -1,7 +1,8 @@
 # ODT writer
 
-> **Status:** body text, named styles, direct formatting and the page from the full model; the
-> rest of a document still through the exchange-flow writer (#2669)
+> **Status:** body text, named styles, direct formatting, lists, tables and the page from the
+> full model; documents with several sections or headers still through the exchange-flow
+> writer (#2669)
 
 `odt::export` writes OpenDocument Text (ODF 1.3) from the full `wordcraft_doc::Document`, the
 way the DOCX writer does, instead of lowering it to the exchange `Flow` first (which Markdown,
@@ -19,8 +20,8 @@ an export lose what the flow writer kept. Each part widens `can_write`:
 | Part | The new writer takes documents with |
 |---|---|
 | 1 | paragraphs in the default paragraph style, direct paragraph and character formatting, links, bookmarks, tabs, line, page and column breaks, pictures in line; one section without headers and footers |
-| 2 (this) | named paragraph and character styles with their `based on` chain |
-| 3 | lists and tables |
+| 2 | named paragraph and character styles with their `based on` chain |
+| 3 (this) | lists and tables |
 | 4 | several sections, headers and footers, page numbering restarts |
 
 Tracked changes stay outside `can_write` through all four parts: a document with revisions, or
@@ -42,6 +43,9 @@ pins it.
 4. `package::zip` packages `content.xml`, `styles.xml`, `meta.xml`, `settings.xml`, the
    manifest and the pictures.
 
+Every nested story (a cell) goes through `text::blocks`, which bounds nesting and ends the story
+with a paragraph after a final table, as Word does.
+
 `Ctx` (`mod.rs`) is the state the parts share: `auto_style` and `auto` make automatic styles,
 deduplicated, in the file being written (`target`: automatic styles of headers and footers
 belong in `styles.xml`, their names start with `M`); `font` declares a font face; `picture`
@@ -55,7 +59,9 @@ page or column break waiting for the next block.
 | `package.rs` | zip, manifest, `meta.xml`, `settings.xml`, font declarations |
 | `styles.rs` | the default style, named paragraph and character styles with `based on`, automatic paragraph and text styles, tab stops, borders |
 | `pages.rs` | the page layout of the section: size, orientation, margins, gutter, columns, page number format |
-| `text.rs` | paragraphs and headings, spans, links, bookmarks, tabs, line, page and column breaks, ruby; pictures in line, `PAGE` and `NUMPAGES` fields, other fields as their result, equations as their linear text |
+| `text.rs` | blocks, paragraphs and headings, spans, links, bookmarks, tabs, line, page and column breaks, ruby; pictures in line, `PAGE` and `NUMPAGES` fields, other fields as their result, equations as their linear text |
+| `lists.rs` | lists as the `Flow` writer wrote them: a generated list style per list, bullets or `1.`/`a.`/`i.` per level |
+| `tables.rs` | tables as the `Flow` writer wrote them: grid widths, header rows, spans, cell shading and vertical alignment, a thin border on every cell. Only rows marked as header rows (`w:tblHeader`) repeat; the table style's first-row look (`w:firstRow`) doesn't, as in Word (the `Flow` writer repeated it) |
 
 As the exchange-flow writer does, hidden text is left out of the package (with the breaks and
 objects in it), and a picture marked decorative is written with no description.

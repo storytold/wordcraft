@@ -9,9 +9,11 @@
 //! [`Ctx`] is the state shared by the parts: the automatic style registries (one for
 //! `content.xml`, one for `styles.xml`), the fonts used and the pictures to package.
 
+mod lists;
 mod package;
 mod pages;
 mod styles;
+mod tables;
 #[cfg(test)]
 mod tests;
 mod text;
@@ -19,8 +21,8 @@ mod text;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
+use wordcraft_doc::Document;
 use wordcraft_doc::section::HeaderSet;
-use wordcraft_doc::{Block, Document};
 
 /// Element properties (`fo:margin-top` → `6pt`), written in key order.
 pub(super) type Props = BTreeMap<&'static str, String>;
@@ -69,9 +71,14 @@ pub(super) struct Ctx<'d> {
     media_paths: HashMap<String, String>,
     /// Numbered names (`Image3`, `Table2`) by prefix.
     names: HashMap<&'static str, usize>,
+    /// Story nesting (cells), bounded.
+    pub depth: usize,
     /// A page (`"page"`) or column break ending the last paragraph, for the next block.
     pub break_next: Option<&'static str>,
 }
+
+/// Deepest nesting of stories written (tables in cells).
+pub(super) const MAX_DEPTH: usize = 32;
 
 impl<'d> Ctx<'d> {
     fn new(doc: &'d Document) -> Self {
@@ -83,6 +90,7 @@ impl<'d> Ctx<'d> {
             files: Vec::new(),
             media_paths: HashMap::new(),
             names: HashMap::new(),
+            depth: 0,
             break_next: None,
         }
     }
@@ -159,11 +167,21 @@ impl<'d> Ctx<'d> {
         self.media_paths.insert(media.to_string(), path.clone());
         Some(path)
     }
+
+    /// Write a nested story with `f`, unless nesting is already too deep.
+    pub fn nested(&mut self, out: &mut String, f: impl FnOnce(&mut Self, &mut String)) {
+        if self.depth >= MAX_DEPTH {
+            return;
+        }
+        self.depth += 1;
+        f(self, out);
+        self.depth -= 1;
+    }
 }
 
 /// Whether this writer writes everything `doc` holds that the exchange-flow writer would. Not yet:
-/// tracked changes (or Track Changes on), lists, tables, more than one section, headers and
-/// footers. Each later part of #2669 lifts one of these.
+/// tracked changes (or Track Changes on), more than one section, headers and footers. Each later
+/// part of #2669 lifts one of these.
 pub(crate) fn can_write(doc: &Document) -> bool {
     let s = &doc.last_section;
     doc.revisions.is_empty()
@@ -173,10 +191,6 @@ pub(crate) fn can_write(doc: &Document) -> bool {
         && s.footers == HeaderSet::default()
         && s.page_num_start.is_none()
         && styles::names_unique(doc)
-        && doc.body.iter().all(|b| match &**b {
-            Block::Para(p) => crate::model::para_kind(doc, p).1.is_none(),
-            Block::Table(_) => false,
-        })
 }
 
 /// Write `doc` as an `.odt` package.
