@@ -206,19 +206,18 @@ impl PropCtx {
         Some(c)
     }
 
-    /// `w:shd`: its fill colour (a theme fill first), or a solid pattern's colour.
+    /// `w:shd`: the colour it paints. Clear shading is its fill (a theme fill first). A percentage
+    /// pattern (`pct5` … `pct95`, and `solid` = 100%) is its pattern colour (`w:color`, a theme
+    /// one first; automatic = black) laid over the fill (automatic = white) at that coverage, so
+    /// it is drawn as the colour the pattern averages to: `pct80` black on white is `333333`.
     pub fn shd_fill(&self, e: &El) -> Option<Rgb> {
-        if let Some(c) = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade") {
-            return Some(c);
-        }
-        // A solid pattern without a fill is painted in its pattern colour, a theme one first.
-        if e.attr("w:val") == Some("solid")
-            && e.attr("w:fill").and_then(Rgb::parse).is_none()
-            && let Some(c) = self.theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade")
-        {
-            return Some(c);
-        }
-        shd_fill(e)
+        let fill = self.theme_color(e, "w:themeFill", "w:themeFillTint", "w:themeFillShade").or_else(|| shd_fill(e));
+        let Some(cover) = e.attr("w:val").and_then(pattern_cover) else { return fill };
+        let ink = self
+            .theme_color(e, "w:themeColor", "w:themeTint", "w:themeShade")
+            .or_else(|| e.attr("w:color").and_then(Rgb::parse))
+            .unwrap_or(Rgb::BLACK);
+        Some(blend(ink, fill.unwrap_or(Rgb::WHITE), cover))
     }
 
     pub fn rpr(&self, e: &El) -> CharProps {
@@ -463,17 +462,36 @@ pub(crate) fn tab_leader(v: &str) -> TabLeader {
     }
 }
 
-/// `w:shd/@w:fill` (a solid fill colour; `auto` = none), ignoring theme fills ([`PropCtx::shd_fill`]).
+/// `w:shd/@w:fill` (a fill colour; `auto` = none), ignoring theme fills and the pattern
+/// ([`PropCtx::shd_fill`]).
 fn shd_fill(e: &El) -> Option<Rgb> {
-    let fill = e.attr("w:fill").and_then(Rgb::parse);
-    if fill.is_some() {
-        return fill;
+    e.attr("w:fill").and_then(Rgb::parse)
+}
+
+/// How much of the area a `w:shd/@w:val` percentage pattern covers in its pattern colour
+/// (ECMA-376 §17.18.78 `ST_Shd`): `solid` all of it, `pctN` N% (`pct12`, `pct37`, `pct62` and
+/// `pct87` are the eighths, 12.5% … 87.5%). `None` for clear, nil and the stripe and cross
+/// patterns, which keep their fill.
+fn pattern_cover(val: &str) -> Option<f32> {
+    if val == "solid" {
+        return Some(1.0);
     }
-    // A solid pattern uses the pattern colour.
-    if e.attr("w:val") == Some("solid") {
-        return e.attr("w:color").and_then(Rgb::parse);
-    }
-    None
+    let n: u8 = val.strip_prefix("pct")?.parse().ok()?;
+    let pct = match n {
+        12 | 37 | 62 | 87 => f32::from(n) + 0.5,
+        _ => f32::from(n.min(100)),
+    };
+    Some(pct / 100.0)
+}
+
+/// `ink` over `paper` at `cover` (0 to 1), channel by channel: the paper moved towards the ink by
+/// `cover` of the way, that step rounded half away from zero. Word's own PDF export draws these
+/// patterns as such flat fills: `pct10` black on white is `E5E5E5` (255 − 26), `pct15` `D9D9D9`,
+/// `pct25` `BFBFBF`, `pct60` `666666` and `pct80` `333333` (the court forms #3584 names).
+fn blend(ink: Rgb, paper: Rgb, cover: f32) -> Rgb {
+    let c = cover.clamp(0.0, 1.0);
+    let mix = |i: u8, p: u8| (f32::from(p) + (c * (f32::from(i) - f32::from(p))).round()).clamp(0.0, 255.0) as u8;
+    Rgb(mix(ink.0, paper.0), mix(ink.1, paper.1), mix(ink.2, paper.2))
 }
 
 pub fn border(e: &El) -> Border {
