@@ -12,12 +12,15 @@ use wordcraft_layout::{DocLayout, Placed};
 use crate::WordApp;
 use crate::theme::Tokens;
 
-/// The cells of the caret's table drawn on `page`: (row, cell, box in page points).
+/// The cells of the caret's table drawn on `page` (in the main text, or in the header or footer
+/// being edited): (row, cell, box in page points).
 fn cells(app: &WordApp, layout: &DocLayout, page: usize) -> Vec<(usize, usize, wordcraft_geom::Rect)> {
     let story = app.session.sel.focus.story;
     let (Some((tp, _, _)), Some(pg)) = (app.session.sel.focus.path.cell(), layout.pages.get(page)) else { return Vec::new() };
     pg.items
         .iter()
+        .chain(&pg.header)
+        .chain(&pg.footer)
         .filter_map(|it| match it {
             Placed::Cell { rect, table, row, cell, story: st, .. } if *table == tp && *st == story => Some((*row, *cell, *rect)),
             _ => None,

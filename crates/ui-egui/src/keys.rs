@@ -441,6 +441,16 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     app.canvas.context_menu_from_keys = true;
                     continue;
                 }
+                // Escape during a drag on the page goes no further than the drag: it neither
+                // closes the header nor selects the text box the caret is in. A drag that can
+                // cancel reads the key itself; Create Link's wait for a click ends here, wherever
+                // the pointer is, unless a menu or popup nearer took the key.
+                if key == Key::Escape && dragging_on_the_page(app) {
+                    if app.escape_free {
+                        app.canvas.link_from = None;
+                    }
+                    continue;
+                }
                 // Escape in a text box (or WordArt) selects the box itself, so Delete then removes
                 // it (#1538). The anchor position is just after the box's object character.
                 if key == Key::Escape
@@ -475,6 +485,14 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// Whether a drag on the page or its ruler is under way (an object, a table border or the
+/// table, a link being drawn, a tab stop): Escape then goes no further than the drag, which
+/// cancels itself where it can.
+fn dragging_on_the_page(app: &WordApp) -> bool {
+    let c = &app.canvas;
+    c.obj_drag.is_some() || c.table_resize.is_some() || c.table_drag.is_some() || c.link_from.is_some() || c.tab_drag.is_some()
+}
+
 /// Escape leaves Focus or Full Screen View (#1678), then Full Screen (#980), once nothing nearer
 /// took it: a pen, a text box, a header, a dialog, a menu or a popup, a drag on the page, and in
 /// the document (`canvas`) a selection, which Escape collapses first (`select.collapse`), as in a
@@ -485,8 +503,7 @@ fn leave_full_screen(app: &mut WordApp, key: Key, m: Modifiers, canvas: bool) ->
     if key != Key::Escape || !m.is_none() || !app.escape_free {
         return false;
     }
-    let c = &app.canvas;
-    if c.obj_drag.is_some() || c.table_resize.is_some() || c.table_drag.is_some() || c.link_from.is_some() {
+    if dragging_on_the_page(app) {
         return false;
     }
     if canvas && !app.session.sel.is_collapsed() {
@@ -727,6 +744,30 @@ pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1930: Escape cancels Create Link's wait for a click with the pointer off the page too
+    /// (on the ribbon, where the button is), and does nothing else.
+    #[test]
+    fn escape_cancels_create_link_with_the_pointer_off_the_page() {
+        let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let pos = h.state().session.sel.focus.clone();
+        h.state_mut().canvas.link_from = Some(pos);
+        let depth = h.state().session.undo_depth();
+        assert!(h.state().canvas.focused, "the page has the keyboard");
+        h.key_press(egui::Key::Escape);
+        h.run_steps(2);
+        assert!(h.state().canvas.link_from.is_none(), "Escape ends the wait for a click");
+        assert_eq!(h.state().session.undo_depth(), depth, "nothing else happens");
+    }
 
     /// #1678: Ctrl+F1 collapses or expands the ribbon (not on macOS); plain F1 stays Help's.
     #[test]

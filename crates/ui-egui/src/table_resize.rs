@@ -8,7 +8,8 @@
 
 use egui::{Pos2, Rect, Stroke, Ui, pos2};
 use serde_json::json;
-use wordcraft_engine::cmd::table_resize::{self, Edge, Plan, ResizeTarget, Share};
+use wordcraft_engine::cmd::table_mouse;
+use wordcraft_engine::cmd::table_resize::{self, Edge, Layer, Plan, ResizeTarget, Share};
 use wordcraft_layout::DocLayout;
 
 use crate::WordApp;
@@ -88,8 +89,8 @@ pub(crate) fn to_screen(rects: &[Rect], layout: &DocLayout, scale: f32, page: us
 }
 
 /// Whether table resizing is in reach: not while a pen, the eraser, an object drag, a text drag
-/// or a press on a table's selection area or move handle (`table_mouse`) owns the pointer, nor
-/// while editing a header or footer from the body (or back).
+/// or a press on a table's selection area or move handle (`table_mouse`) owns the pointer. Which
+/// tables it reaches, the header's and footer's or the rest of the page's, is `Layer::editing`.
 pub(crate) fn available(app: &WordApp) -> bool {
     app.canvas.table_tool.is_none()
         && app.canvas.table_drag.is_none()
@@ -99,11 +100,17 @@ pub(crate) fn available(app: &WordApp) -> bool {
         && crate::ink::cursor(app).is_none()
 }
 
-/// The border or handle under screen point `p`, if any.
+/// The border or handle under screen point `p`, if any: of the header's and footer's tables while
+/// one of them is being edited, else of the rest of the page's. A handle only where it shows
+/// (`handles_show_on`); a border on any page.
 fn target_at(app: &WordApp, layout: &DocLayout, rects: &[Rect], scale: f32, p: Pos2) -> Option<(usize, f32, f32, ResizeTarget)> {
     let (page, x, y) = crate::canvas::page_at(rects, layout, scale, p)?;
     let sc = page_scale(rects, layout, scale, page)?;
-    let t = table_resize::resize_target(layout, &app.session.doc, page, x, y, REACH_PX / sc)?;
+    let layer = Layer::editing(&app.session, layout);
+    let t = table_resize::resize_target(layout, &app.session.doc, page, x, y, REACH_PX / sc, layer)?;
+    if t.edge == Edge::Corner && !table_mouse::handles_show_on(&app.session, layer, page) {
+        return None;
+    }
     Some((page, x, y, t))
 }
 
@@ -167,7 +174,7 @@ pub(crate) fn grab(app: &mut WordApp, layout: &DocLayout, page: usize, x: f32, y
     if !available(app) {
         return;
     }
-    if let Some(mut target) = table_resize::resize_target(layout, &app.session.doc, page, x, y, 1.0) {
+    if let Some(mut target) = table_resize::resize_target(layout, &app.session.doc, page, x, y, 1.0, Layer::editing(&app.session, layout)) {
         target.limit_to_selection(&app.session, y);
         app.canvas.table_resize = Some(ResizeDrag { page, from: (x, y), to: (x, y), target, ruler: true });
     }
@@ -277,7 +284,13 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos()) else { return };
     let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p) else { return };
     let Some(sc) = page_scale(rects, layout, scale, page) else { return };
-    let Some(tg) = table_resize::table_under(layout, &app.session.doc, page, x, y, REACH_PX / sc) else { return };
+    let layer = Layer::editing(&app.session, layout);
+    if !table_mouse::handles_show_on(&app.session, layer, page) {
+        return;
+    }
+    let Some(tg) = table_resize::table_under(layout, &app.session.doc, page, x, y, REACH_PX / sc, layer) else {
+        return;
+    };
     let h = tg.handle();
     if let (Some(a), Some(b)) = (s(page, h.x, h.y), s(page, h.right(), h.bottom())) {
         let r = Rect::from_two_pos(a, b);
@@ -300,9 +313,11 @@ pub(crate) fn caret_handles(
     rects
         .iter()
         .enumerate()
-        .filter(|(_, r)| r.intersects(clip))
+        .filter(|(page, r)| {
+            r.intersects(clip) && table_mouse::handles_show_on(&app.session, Layer::drawn(layout, &app.session.doc, focus.story, *page), *page)
+        })
         .map(|(page, _)| {
-            let (m, z) = wordcraft_engine::cmd::table_mouse::caret_handles(layout, &app.session.doc, focus.story, &tp, page);
+            let (m, z) = table_mouse::caret_handles(layout, &app.session.doc, focus.story, &tp, page);
             (page, m, z)
         })
         .filter(|(_, m, z)| m.is_some() || z.is_some())
@@ -376,6 +391,106 @@ pub(crate) mod tests {
         for _ in 0..n {
             h.step();
         }
+    }
+
+    /// #1930: while the header is being edited, its table's column border shows the resize arrow,
+    /// has a ruler marker and drags with the mouse in one undo step; editing the main text again,
+    /// the dimmed header's border is neither grabbed nor changed.
+    #[test]
+    fn a_header_tables_border_drags_with_the_mouse_while_the_header_is_edited() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.editHeader", json!({})).unwrap();
+        let story = a.session.sel.focus.story;
+        a.run("insert.table", json!({"rows": 1, "cols": 3})).unwrap();
+        a.run("text.insert", json!({"text": "Logo"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        let header_cell = |h: &mut H, cell: usize| {
+            h.state_mut().session.layout().pages[0]
+                .header
+                .iter()
+                .find_map(|it| match it {
+                    wordcraft_layout::Placed::Cell { rect, cell: c, story: st, .. } if *c == cell && *st == story => Some(*rect),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let (a, b) = (header_cell(&mut h, 0), header_cell(&mut h, 1));
+        let depth = h.state().session.undo_depth();
+        let near = screen(&mut h, a.right(), a.y);
+        assert!((ruler_marker(&h, "Table Column Width", near).center().x - near.x).abs() < 0.5, "a ruler marker on the border");
+        let y = a.y + a.h / 2.0;
+        let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 30.0, y));
+        h.event(egui::Event::PointerMoved(start));
+        steps(&mut h, 2);
+        assert_eq!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeColumn, "the resize arrow over the border");
+        drag(&mut h, start, end);
+        assert_eq!(h.state().session.undo_depth(), depth + 1, "one undo step for the drag");
+        let (a1, b1) = (header_cell(&mut h, 0), header_cell(&mut h, 1));
+        assert!((a1.w - (a.w + 30.0)).abs() < 1.0, "{a:?} → {a1:?}");
+        assert!((b1.w - (b.w - 30.0)).abs() < 1.0, "{b:?} → {b1:?}");
+        h.state_mut().run("insert.closeHeader", json!({})).unwrap();
+        steps(&mut h, 2);
+        let start = screen(&mut h, a1.right(), y);
+        h.event(egui::Event::PointerMoved(start));
+        steps(&mut h, 2);
+        assert_ne!(h.output().platform_output.cursor_icon, egui::CursorIcon::ResizeColumn, "no resize arrow over the dimmed header");
+        drag(&mut h, start, start + egui::vec2(40.0, 0.0));
+        assert_eq!(header_cell(&mut h, 0), a1, "the header's table is untouched");
+    }
+
+    /// Escape while dragging a header table's border drops just the drag: the header stays open
+    /// (the caret in it), the table and the undo history are untouched.
+    #[test]
+    fn escape_during_a_header_table_drag_cancels_only_the_drag() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.editHeader", json!({})).unwrap();
+        let story = a.session.sel.focus.story;
+        a.run("insert.table", json!({"rows": 1, "cols": 3})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        let header_cell = |h: &mut H| {
+            h.state_mut().session.layout().pages[0]
+                .header
+                .iter()
+                .find_map(|it| match it {
+                    wordcraft_layout::Placed::Cell { rect, cell: 0, story: st, .. } if *st == story => Some(*rect),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        let a = header_cell(&mut h);
+        let depth = h.state().session.undo_depth();
+        let y = a.y + a.h / 2.0;
+        let (start, end) = (screen(&mut h, a.right(), y), screen(&mut h, a.right() + 30.0, y));
+        h.event(egui::Event::PointerMoved(start));
+        steps(&mut h, 2);
+        button(&h, start, true);
+        steps(&mut h, 2);
+        h.event(egui::Event::PointerMoved(end));
+        steps(&mut h, 2);
+        assert!(h.state().canvas.table_resize.is_some(), "the drag is under way");
+        h.key_press(egui::Key::Escape);
+        steps(&mut h, 2);
+        button(&h, end, false);
+        steps(&mut h, 2);
+        assert_eq!(h.state().session.sel.focus.story, story, "the header stays open");
+        assert_eq!(h.state().session.undo_depth(), depth, "nothing to undo");
+        assert_eq!(header_cell(&mut h), a, "the table is untouched");
     }
 
     /// A real mouse drag of a column border: the resize arrow on hover, a preview and no change

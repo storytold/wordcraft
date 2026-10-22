@@ -2040,7 +2040,8 @@ fn the_caret_table_has_its_handles() {
     let g = crate::cmd::table_mouse::handle_table(&l, &s.doc, s.sel.focus.story, 0, hx, hy, 4.0).expect("the move handle grabs");
     assert_eq!(crate::cmd::table_mouse::handle(&g), m);
     let (hx, hy) = mid(z);
-    let g = crate::cmd::table_resize::table_under(&l, &s.doc, 0, hx, hy, 4.0).expect("the resize handle grabs");
+    let g =
+        crate::cmd::table_resize::table_under(&l, &s.doc, 0, hx, hy, 4.0, crate::cmd::table_resize::Layer::Body).expect("the resize handle grabs");
     assert_eq!(g.handle(), z);
     let (m, z) = crate::cmd::table_mouse::caret_handles(&l, &s.doc, s.sel.focus.story, &tp, 1);
     assert!(m.is_none() && z.is_none(), "not on a page without the table");
@@ -2080,6 +2081,42 @@ fn the_caret_table_shows_its_handles_where_it_starts_and_ends() {
             assert_eq!((m.is_some(), z.is_some()), (p == 0, p == end), "page {p} (header {header})");
         }
     }
+}
+
+/// #1930: a header's table is drawn whole on every page and has its resize handle on each, where
+/// a press grabs it, and no move handle (only the main text's tables move); as in Word, the
+/// handles show only on the caret's page, a main text table's wherever it is.
+#[test]
+fn the_caret_header_table_shows_its_resize_handle_on_the_carets_page() {
+    let mut s = s();
+    for i in 0..80 {
+        run(&mut s, "text.insert", json!({"text": format!("Line {i}")}));
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    run(&mut s, "insert.editHeader", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let (tp, _, _) = s.sel.focus.path.cell().unwrap();
+    let story = s.sel.focus.story;
+    let l = s.layout();
+    assert!(l.pages.len() >= 2, "two pages, each with the header");
+    let layer = crate::cmd::table_resize::Layer::editing(&s, &l);
+    assert_eq!(layer, crate::cmd::table_resize::Layer::HeaderFooter);
+    for p in 0..l.pages.len() {
+        let (m, z) = crate::cmd::table_mouse::caret_handles(&l, &s.doc, story, &tp, p);
+        assert!(m.is_none(), "no move handle in a header (page {p})");
+        let z = z.unwrap_or_else(|| panic!("the resize handle on page {p}"));
+        let (hx, hy) = (z.x + z.w / 2.0, z.y + z.h / 2.0);
+        let g = crate::cmd::table_resize::table_under(&l, &s.doc, p, hx, hy, 4.0, layer).expect("the resize handle grabs");
+        assert_eq!((g.story, g.handle()), (story, z), "page {p}");
+    }
+    let shown = |s: &Session| (0..l.pages.len()).filter(|p| crate::cmd::table_mouse::handles_show_on(s, layer, *p)).collect::<Vec<_>>();
+    assert_eq!(shown(&s), [s.page_hint], "only on the caret's page");
+    for hint in [0, 1] {
+        s.page_hint = hint;
+        assert_eq!(shown(&s), [hint], "the caret on page {}: there only", hint + 1);
+    }
+    let body = crate::cmd::table_resize::Layer::Body;
+    assert!((0..l.pages.len()).all(|p| crate::cmd::table_mouse::handles_show_on(&s, body, p)), "a main text table's anywhere");
 }
 
 /// Right-to-left tables and sections (#362): `table.rtl` and `layout.sectionRtl` set or toggle

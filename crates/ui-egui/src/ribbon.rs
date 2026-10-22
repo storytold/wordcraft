@@ -2933,46 +2933,66 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What Cell Size's Height and Width boxes show for the caret's cell, in points, and whether the
+/// row's height is exact: the row's set height, else the height its cells are drawn at (in the
+/// body, the header or the footer); the cell's drawn width, else its grid column's. `None` when
+/// the caret isn't in a table.
+fn cell_size_values(app: &mut WordApp) -> Option<(f32, f32, bool)> {
+    let story = app.session.sel.focus.story;
+    let (tp, r, c) = app.session.sel.focus.path.cell()?;
+    let t = app.session.doc.table(story, &tp)?;
+    let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
+    let stored_w = t.grid.get(t.grid_col(r, c)).copied();
+    let page_hint = app.session.page_hint;
+    let (laid, row_h) = drawn_cell_size(&app.session.layout(), page_hint, story, &tp, r, c);
+    let h0 = row.height.or(row_h).unwrap_or(0.0);
+    let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
+    Some((h0, w0, row.height_rule == wordcraft_doc::props::HeightRule::Exact))
+}
+
+/// Where cell `r`, `c` of table `tp` in `story` is drawn: its box, and its row's height (the
+/// shortest box in the row, as a vertically merged cell's box spans several rows). A header's or
+/// footer's table is drawn on every page that shows it, and not always alike (another section's
+/// page width, a page number field), so it is measured on the caret's page `page_hint`, or on the
+/// first page that draws it when that one doesn't.
+fn drawn_cell_size(
+    layout: &wordcraft_layout::DocLayout,
+    page_hint: usize,
+    story: wordcraft_doc::StoryRef,
+    tp: &wordcraft_doc::Path,
+    r: usize,
+    c: usize,
+) -> (Option<wordcraft_geom::Rect>, Option<f32>) {
+    let in_table = |it: &wordcraft_layout::Placed| match it {
+        wordcraft_layout::Placed::Cell { rect, table, row, cell, story: st, .. } if table == tp && *st == story => Some((*row, *cell, *rect)),
+        _ => None,
+    };
+    let repeated = |pg: &wordcraft_layout::Page| pg.header.iter().chain(&pg.footer).filter_map(in_table).collect::<Vec<_>>();
+    let pages = &layout.pages;
+    let hf = pages.get(page_hint).map(repeated).filter(|v| !v.is_empty()).or_else(|| pages.iter().map(repeated).find(|v| !v.is_empty()));
+    let drawn: Vec<_> = pages.iter().flat_map(|pg| pg.items.iter().filter_map(in_table)).chain(hf.unwrap_or_default()).collect();
+    let laid = drawn.iter().find(|(row, cell, _)| *row == r && *cell == c).map(|x| x.2);
+    let row_h = drawn.iter().filter(|x| x.0 == r).map(|x| x.2.h).reduce(f32::min);
+    (laid, row_h)
+}
+
 /// Table Layout › Cell Size: the caret cell's row height and column width, in inches. They show
 /// the size on the page (a row without a set height shows the height its text gives it) and
 /// editing runs `table.rowHeight` / `table.columnWidth`; dragging one is a single Undo.
 fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
-    let story = app.session.sel.focus.story;
-    let Some((tp, r, c)) = app.session.sel.focus.path.cell() else { return };
-    let Some(t) = app.session.doc.table(story, &tp) else { return };
-    let row = t.rows.get(r).map(|x| x.props.clone()).unwrap_or_default();
-    let stored_w = t.grid.get(t.grid_col(r, c)).copied();
-    let laid = app.session.layout().pages.iter().flat_map(|pg| pg.items.iter()).find_map(|it| match it {
-        wordcraft_layout::Placed::Cell { rect, table, row, cell, story: st, .. } if *table == tp && *row == r && *cell == c && *st == story => {
-            Some(*rect)
-        }
-        _ => None,
-    });
-    // The row's own height: a vertically merged cell's box spans several rows, so take the
-    // shortest box in this row.
-    let row_h = app
-        .session
-        .layout()
-        .pages
-        .iter()
-        .flat_map(|pg| pg.items.iter())
-        .filter_map(|it| match it {
-            wordcraft_layout::Placed::Cell { rect, table, row, story: st, .. } if *table == tp && *row == r && *st == story => Some(rect.h),
-            _ => None,
-        })
-        .reduce(f32::min);
+    let Some((h0, w0, exact)) = cell_size_values(app) else { return };
     let unit = crate::options::unit();
     let k = unit.pt_per_unit();
-    let h0 = row.height.or(row_h).unwrap_or(0.0);
-    let w0 = laid.map(|x| x.w).or(stored_w).unwrap_or(0.0);
-    let exact = row.height_rule == wordcraft_doc::props::HeightRule::Exact;
     // The edited value in points, and whether it continues a drag (joins the previous Undo step).
     let boxed = |ui: &mut Ui, label: &str, pt: f32| -> Option<(f32, bool)> {
         let mut out = None;
         crate::widgets::row(ui, |ui| {
             ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
             let mut v = pt / k;
-            let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2));
+            // Not clamped when shown: a size the box can't show (0 when the cell isn't drawn, in
+            // Draft or with the header unlaid) would be raised to the minimum and written back.
+            let value = egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).clamp_existing_to_range(false);
+            let r = ui.add_sized(vec2(72.0, 18.0), value.measure(unit).max_decimals(2));
             if r.changed() {
                 out = Some((v * k, r.dragged() && !r.drag_started()));
             }
@@ -3523,6 +3543,106 @@ mod tests {
         h.run_steps(2);
         // The menu lists a tab that didn't fit (View is among the last on a narrow strip).
         assert!(h.query_by_label(tl!("View")).is_some(), "the » menu lists the tabs left out");
+    }
+
+    /// #1930: Table Layout › Cell Size shows a header table's cell as drawn. Its row has no set
+    /// height, so the Height box shows the height its text gives it, not 0, and the width it is
+    /// drawn at; showing the boxes changes nothing.
+    #[test]
+    fn cell_size_boxes_show_a_header_tables_cell_without_changing_it() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.editHeader", json!({})).unwrap();
+        app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        app.ui.tab = "Table Layout".into();
+        let (story, depth) = (app.session.sel.focus.story, app.session.undo_depth());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        assert_eq!(h.state().ui.tab, "Table Layout");
+        assert_eq!(h.state().session.undo_depth(), depth, "showing the boxes changes nothing");
+        let (tp, ..) = h.state().session.sel.focus.path.cell().unwrap();
+        let t = h.state().session.doc.table(story, &tp).unwrap();
+        assert_eq!(t.rows[0].props.height, None, "no row height written");
+        let (height, width, _) = cell_size_values(h.state_mut()).unwrap();
+        assert!(height > 5.0 && width > 50.0, "the header cell as drawn: {height} × {width}");
+    }
+
+    /// A header's table drawn differently on two pages: Cell Size measures it on the caret's page,
+    /// or on the first page that draws it when the caret's page doesn't (past the last page, or a
+    /// page showing another header). A body table split over pages is looked up on all of them.
+    #[test]
+    fn cell_size_measures_a_header_table_on_the_carets_page() {
+        use wordcraft_doc::{Path, StoryRef};
+        use wordcraft_layout::{DocLayout, Page, Placed};
+        let tp = Path::top(0);
+        let cell = |story, row, cell, w: f32, h: f32| Placed::Cell {
+            rect: wordcraft_geom::Rect::new(72.0, 36.0, w, h),
+            covered: false,
+            table: tp.clone(),
+            row,
+            cell,
+            story,
+            clip: false,
+        };
+        let hdr = StoryRef::Part(3);
+        let page = |header: Vec<Placed>, footer: Vec<Placed>, items: Vec<Placed>| Page { header, footer, items, ..Page::default() };
+        let layout = DocLayout {
+            pages: vec![
+                // Row 0's first cell spans two rows (a vertical merge): the row is as tall as its shortest box.
+                page(vec![cell(hdr, 0, 0, 100.0, 50.0), cell(hdr, 0, 1, 80.0, 20.0)], vec![], vec![cell(StoryRef::Body, 0, 0, 300.0, 40.0)]),
+                page(vec![], vec![cell(hdr, 0, 0, 200.0, 30.0), cell(hdr, 0, 1, 90.0, 30.0)], vec![cell(StoryRef::Body, 0, 0, 300.0, 12.0)]),
+                // Page 3 shows another header, with a table at the same path.
+                page(vec![cell(StoryRef::Part(5), 0, 0, 999.0, 99.0)], vec![], vec![]),
+            ],
+            ..DocLayout::default()
+        };
+        let size = |hint, story| {
+            let (laid, row_h) = drawn_cell_size(&layout, hint, story, &tp, 0, 0);
+            (laid.map(|r| r.w), row_h)
+        };
+        assert_eq!(size(0, hdr), (Some(100.0), Some(20.0)), "page 1's header");
+        assert_eq!(size(1, hdr), (Some(200.0), Some(30.0)), "the caret on page 2: page 2's, not page 1's");
+        assert_eq!(size(2, hdr), (Some(100.0), Some(20.0)), "page 3 doesn't draw it: the first page that does");
+        assert_eq!(size(9, hdr), (Some(100.0), Some(20.0)), "a page past the last: the first page that draws it");
+        assert_eq!(size(1, StoryRef::Body), (Some(300.0), Some(12.0)), "the body's row split over two pages: its shortest part, as before");
+        assert_eq!(size(0, StoryRef::Part(4)), (None, None), "a story not drawn");
+        assert_eq!(drawn_cell_size(&DocLayout::default(), 0, hdr, &tp, 0, 0), (None, None), "no pages");
+    }
+
+    /// In Draft and Web Layout the header isn't laid out, so its table's cell has no box
+    /// and the Height box has nothing to show: still, showing it writes nothing to the row.
+    /// (Outline switches to its own tab, so Cell Size isn't shown there.)
+    #[test]
+    fn cell_size_boxes_change_nothing_when_the_header_isnt_drawn() {
+        for view in ["view.draft", "view.webLayout"] {
+            let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            app.run("insert.editHeader", json!({})).unwrap();
+            app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+            app.run(view, json!({})).unwrap();
+            app.ui.tab = "Table Layout".into();
+            let (story, depth) = (app.session.sel.focus.story, app.session.undo_depth());
+            assert_ne!(story, wordcraft_doc::StoryRef::Body, "{view}: the caret stays in the header");
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                app,
+            );
+            h.run_steps(3);
+            assert_eq!(h.state().ui.tab, "Table Layout", "{view}: Cell Size is shown");
+            assert_eq!(h.state().session.undo_depth(), depth, "{view}: showing the boxes changes nothing");
+            let (tp, ..) = h.state().session.sel.focus.path.cell().unwrap();
+            let t = h.state().session.doc.table(story, &tp).unwrap();
+            assert_eq!(t.rows[0].props.height, None, "{view}: no row height written");
+        }
     }
 
     #[test]

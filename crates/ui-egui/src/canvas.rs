@@ -6398,6 +6398,68 @@ mod tests {
         assert_eq!(names(&d.h_labels), ["1", "2", "3", "4", "5"]);
     }
 
+    /// Escape while dragging a tab stop on the ruler, with the caret in the header, cancels the
+    /// drag only: the header stays open and the stop where it was.
+    #[test]
+    fn escape_during_a_ruler_tab_drag_in_the_header_keeps_it_open() {
+        use egui::{Event, Key, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("insert.editHeader", json!({})).unwrap();
+        let story = a.session.sel.focus.story;
+        a.run("text.insert", json!({"text": "Head"})).unwrap();
+        a.run("view.ruler", json!({"value": true})).unwrap();
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let area = h.state().canvas.canvas_rect.expect("the canvas is laid out");
+        let on_ruler = |h: &mut egui_kittest::Harness<'_, WordApp>, d: f32| {
+            let body_x = h.state_mut().session.layout().pages[0].body.x;
+            pos2(page_to_screen(h.state_mut(), 0, body_x + d, 0.0).expect("on screen").x, area.min.y - 7.0)
+        };
+        let button =
+            |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        let stops = |h: &egui_kittest::Harness<'_, WordApp>| {
+            let s = &h.state().session;
+            s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).tabs.iter().map(|t| t.pos).collect::<Vec<_>>())
+        };
+        let at = on_ruler(&mut h, 144.0);
+        h.event(Event::PointerMoved(at));
+        h.event(button(at, true));
+        h.step();
+        h.event(button(at, false));
+        for _ in 0..32 {
+            h.step();
+        }
+        // The Header style brings its own stops (centre and right); ours is the one at 2".
+        let has = |h: &egui_kittest::Harness<'_, WordApp>, x: f32| stops(h).is_some_and(|s| s.iter().any(|p| (p - x).abs() < 0.5));
+        assert!(has(&h, 144.0), "a stop at 2\" in the header's paragraph: {:?}", stops(&h));
+        let (from, to) = (on_ruler(&mut h, 144.0), on_ruler(&mut h, 216.0));
+        h.event(Event::PointerMoved(from));
+        h.event(button(from, true));
+        h.step();
+        h.event(Event::PointerMoved(from + (to - from) * 0.5));
+        h.step();
+        assert!(h.state().canvas.tab_drag.is_some(), "the stop is being dragged");
+        assert!(h.state().canvas.focused, "the page has the keyboard, so Escape reaches it");
+        h.event(Event::Key { key: Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        h.step();
+        h.event(button(to, false));
+        for _ in 0..32 {
+            h.step();
+        }
+        assert_eq!(h.state().session.sel.focus.story, story, "the header stays open");
+        assert!(has(&h, 144.0) && !has(&h, 216.0), "Escape left the stop where it was: {:?}", stops(&h));
+    }
+
     /// Ruler tab gestures are safe: a click on an indent marker places nothing, only the
     /// primary button places or moves stops, Escape cancels a drag, and a drag whose paragraph
     /// the caret leaves is abandoned instead of applied there.
