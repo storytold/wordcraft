@@ -513,7 +513,10 @@ fn reflow(mut collector: Collector, doc: &mut Document) -> Result<Vec<Paragraph>
                 props.size = Some(glyph.size);
                 props.color = glyph.color;
                 let gap = end.is_some_and(|e| glyph.x - e > f64::from(glyph.size) * 0.2);
-                if (continues && end.is_none() || gap) && !p.text.ends_with(char::is_whitespace) && !glyph.text.starts_with(char::is_whitespace) {
+                let line_start = continues && end.is_none();
+                if line_start && join_hyphenated(p, &glyph.text) {
+                    // The word was split across the lines: it continues with no space.
+                } else if (line_start || gap) && !p.text.ends_with(char::is_whitespace) && !glyph.text.starts_with(char::is_whitespace) {
                     append(p, " ", &props);
                 }
                 append(p, &glyph.text, &props);
@@ -529,6 +532,30 @@ fn reflow(mut collector: Collector, doc: &mut Document) -> Result<Vec<Paragraph>
         paragraphs.push(Paragraph::new());
     }
     Ok(paragraphs)
+}
+
+/// Join a word hyphenated across two lines; `true` when the next line's text follows with no
+/// space. After a hyphen between letters, a lower-case letter means the word was split to fit
+/// the line: the hyphen goes and the word reads whole again ("Chev-" + "ron" is "Chevron", as in
+/// a justified court opinion). A capital keeps the hyphen ("Anglo-" + "Saxon"). A compound split
+/// at its own hyphen ("self-" + "employed") loses it, as the reader can't tell the two apart.
+fn join_hyphenated(p: &mut Paragraph, next: &str) -> bool {
+    let Some(hyphen) = p.text.chars().next_back().filter(|c| matches!(c, '-' | '\u{AD}' | '\u{2010}')) else { return false };
+    let before = p.text[..p.text.len() - hyphen.len_utf8()].chars().next_back();
+    let Some(first) = next.chars().next() else { return false };
+    if !before.is_some_and(char::is_alphabetic) || !first.is_alphabetic() {
+        return false;
+    }
+    if first.is_lowercase() {
+        p.text.truncate(p.text.len() - hyphen.len_utf8());
+        if let Some(run) = p.runs.last_mut() {
+            run.len = run.len.saturating_sub(hyphen.len_utf8());
+            if run.len == 0 {
+                p.runs.pop();
+            }
+        }
+    }
+    true
 }
 
 fn append(p: &mut Paragraph, text: &str, props: &CharProps) {

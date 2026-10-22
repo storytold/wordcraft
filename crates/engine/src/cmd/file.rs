@@ -286,6 +286,8 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     // A reflowed PDF is a new editable document, never an implicit overwrite of the source.
     s.path = if pdf.is_some() { None } else { Some(path.into()) };
     if pdf.is_some() {
+        // Save As suggests the PDF's own name, as a Word document.
+        s.file_name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty());
         s.dirty = true;
         s.status = "PDF imported as an editable copy.".into();
     }

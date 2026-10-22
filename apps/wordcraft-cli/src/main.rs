@@ -782,7 +782,7 @@ mod pdf_import_tests {
         let path = std::env::temp_dir().join(format!("wordcraft-cli-pdf-import-{}.pdf", std::process::id()));
         let bytes = wordcraft_engine::io::save_bytes("sample.pdf", &wordcraft_doc::Document::from_text("CLI import")).unwrap();
         std::fs::write(&path, &bytes).unwrap();
-        let mut session = super::open(&path).unwrap();
+        let mut session = super::open(&path, None).unwrap();
         assert!(session.path.is_none() && session.dirty);
         let result = session.run("file.save", &serde_json::json!({})).unwrap();
         assert_eq!(result["saved"], false);
