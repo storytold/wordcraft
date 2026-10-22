@@ -10,6 +10,7 @@ use std::sync::Arc;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, LineSpacing, NumRef, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::section::SectionProps;
+use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{Block, Document, ListKind, Paragraph, PartKind, Revision, RevisionKind, Table, para_block};
 
 use super::super::{Ev, events, get, local};
@@ -27,11 +28,13 @@ pub(crate) struct Odt {
     map: HashMap<(String, String), (Option<String>, BTreeMap<String, String>)>,
 }
 
-/// A paragraph read back: its style and text.
+/// A paragraph read back: its element (`p`/`h`), style and text.
 #[derive(Debug, Clone)]
 pub(crate) struct Para {
+    pub tag: String,
     pub style: String,
     pub text: String,
+    pub attrs: BTreeMap<String, String>,
 }
 
 impl Odt {
@@ -256,7 +259,12 @@ pub(crate) fn paras(xml: &str) -> Vec<Para> {
             "text:tracked-changes" => in_body = false,
             "text:p" | "text:h" if in_body => {
                 open.push(out.len());
-                out.push(Para { style: get(&a, "text:style-name").unwrap_or("").into(), text: String::new() });
+                out.push(Para {
+                    tag: local(&q).into(),
+                    style: get(&a, "text:style-name").unwrap_or("").into(),
+                    text: String::new(),
+                    attrs: a.into_iter().collect(),
+                });
             }
             "text:s" => {
                 if let Some(p) = open.last().and_then(|i| out.get_mut(*i)) {
@@ -315,11 +323,7 @@ fn documents_it_cannot_write_whole_go_to_the_flow_writer() {
     let mut revised = base.clone();
     revised.revisions.push(Revision::new(RevisionKind::Insert, "A", ""));
     assert!(!super::can_write(&revised));
-    // What later parts of #2669 write: named styles, lists, tables, sections, headers.
-    assert!(!super::can_write(&doc_of(vec![plain("Head").styled("Heading1")])));
-    let mut chr = plain("x");
-    chr.insert_text(1, "y", &CharProps { style: Some("Strong".into()), ..Default::default() }).unwrap();
-    assert!(!super::can_write(&doc_of(vec![chr])));
+    // What later parts of #2669 write: lists, tables, sections, headers.
     let mut listed = base.clone();
     let num = listed.numbering.add_list(ListKind::Numbered);
     let mut item = plain("one");
@@ -338,8 +342,8 @@ fn documents_it_cannot_write_whole_go_to_the_flow_writer() {
     let h = header.add_part(PartKind::Header, vec![para_block(plain("Head"))]);
     header.last_section.headers.default = Some(h);
     assert!(!super::can_write(&header));
-    // The default paragraph style named outright is still the default.
-    assert!(super::can_write(&doc_of(vec![plain("Normal").styled("Normal")])));
+    // Named styles are written.
+    assert!(super::can_write(&styled_doc()));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -384,6 +388,146 @@ fn the_page_is_the_sections() {
     let l = o.props("page-layout", "pm1");
     assert_eq!((l.get("fo:page-width").unwrap().as_str(), l.get("style:print-orientation").unwrap().as_str()), ("792pt", "landscape"));
     assert_eq!(l.get("fo:margin-top").map(String::as_str), Some("90pt"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Styles
+
+/// A style chain: "Base" sets spacing and a font, "Derived" (based on it) only the space after,
+/// a character style "Loud", tab stops with a clear.
+fn styled_doc() -> Document {
+    let mut d = Document::new();
+    let base = Style {
+        id: "Base".into(),
+        name: "Base Text".into(),
+        kind: StyleKind::Paragraph,
+        based_on: Some("Normal".into()),
+        para: wordcraft_doc::props::ParaProps {
+            space_before: Some(12.0),
+            space_after: Some(4.0),
+            contextual_spacing: Some(true),
+            tabs: Some(vec![
+                TabStop { pos: 72.0, align: TabAlign::Left, leader: TabLeader::None },
+                TabStop { pos: 144.0, align: TabAlign::Right, leader: TabLeader::Dot },
+            ]),
+            ..Default::default()
+        },
+        chr: CharProps { font: Some("Serif Face".into()), size: Some(13.0), ..Default::default() },
+        ..Default::default()
+    };
+    let derived = Style {
+        id: "Derived".into(),
+        name: "Derived Text".into(),
+        kind: StyleKind::Paragraph,
+        based_on: Some("Base".into()),
+        para: wordcraft_doc::props::ParaProps {
+            space_after: Some(20.0),
+            tabs: Some(vec![TabStop { pos: 72.0, align: TabAlign::Clear, leader: TabLeader::None }]),
+            ..Default::default()
+        },
+        chr: CharProps { italic: Some(true), ..Default::default() },
+        ..Default::default()
+    };
+    let loud = Style {
+        id: "Loud".into(),
+        name: "Loud".into(),
+        kind: StyleKind::Character,
+        chr: CharProps { bold: Some(true), ..Default::default() },
+        ..Default::default()
+    };
+    for s in [base, derived, loud] {
+        d.styles.upsert(s);
+    }
+    let mut p = plain("In derived ").styled("Derived");
+    let n = p.len();
+    p.insert_text(
+        n,
+        "loud red",
+        &CharProps {
+            style: Some("Loud".into()),
+            color: Some(wordcraft_doc::props::TextColor::Rgb(wordcraft_doc::Rgb(200, 0, 0))),
+            ..Default::default()
+        },
+    )
+    .unwrap();
+    let mut direct = plain("Direct spacing").styled("Derived");
+    direct.props.space_before = Some(30.0);
+    direct.props.line_spacing = Some(LineSpacing::Exactly(18.0));
+    d.body = vec![para_block(plain("Opening")), para_block(p), para_block(direct), para_block(plain("Plain"))];
+    d
+}
+
+#[test]
+fn named_styles_keep_their_chain() {
+    let o = Odt::new(&styled_doc());
+    let p = o.para_props("In derived loud red");
+    assert_eq!(o.para("In derived loud red").style, "Derived", "no direct formatting: the named style itself");
+    assert!(
+        o.styles.contains("style:name=\"Derived\" style:display-name=\"Derived Text\" style:family=\"paragraph\" style:parent-style-name=\"Base\""),
+        "{}",
+        o.styles
+    );
+    assert!(
+        o.styles.contains("style:name=\"Base\" style:display-name=\"Base Text\" style:family=\"paragraph\" style:parent-style-name=\"Standard\"")
+    );
+    assert_eq!(p.get("style:font-name").map(String::as_str), Some("Serif Face"));
+    assert_eq!(p.get("fo:font-style").map(String::as_str), Some("italic"));
+    assert_eq!(p.get("fo:font-size").map(String::as_str), Some("13pt"));
+    // The default paragraph style is Standard, with the model's display name.
+    assert!(o.styles.contains("style:name=\"Standard\" style:display-name=\"Normal\""));
+    assert_eq!(o.para("Plain").style, "Standard");
+}
+
+#[test]
+fn partial_spacing_is_completed_from_the_chain() {
+    let o = Odt::new(&styled_doc());
+    let derived = o.props("paragraph", "Derived");
+    // Derived sets only the space after; the space before and contextual spacing come from Base,
+    // written on Derived itself (LibreOffice would take them from the default style).
+    assert!(o.styles.contains("style:name=\"Derived\""));
+    let own = o.styles.split("style:name=\"Derived\"").nth(1).and_then(|s| s.split("</style:style>").next()).unwrap();
+    assert!(
+        own.contains("fo:margin-top=\"12pt\"") && own.contains("fo:margin-bottom=\"20pt\"") && own.contains("style:contextual-spacing=\"true\""),
+        "{own}"
+    );
+    assert_eq!(derived.get("fo:margin-bottom").map(String::as_str), Some("20pt"));
+    // Direct spacing on a paragraph is completed from its style.
+    let direct = o.styles.len();
+    assert!(direct > 0);
+    let p = o.para("Direct spacing");
+    let auto = o.content.split(&format!("style:name=\"{}\"", p.style)).nth(1).and_then(|s| s.split("</style:style>").next()).unwrap();
+    assert!(
+        auto.contains("fo:margin-top=\"30pt\"") && auto.contains("fo:margin-bottom=\"20pt\"") && auto.contains("style:contextual-spacing=\"true\""),
+        "{auto}"
+    );
+    assert_eq!(o.para_props("Direct spacing").get("fo:line-height").map(String::as_str), Some("18pt"));
+}
+
+#[test]
+fn tabs_are_written_merged() {
+    let o = Odt::new(&styled_doc());
+    // Base: 72 left and 144 right with dots; Derived clears 72.
+    assert_eq!(o.props("paragraph", "Base").get("tabs").map(String::as_str), Some("72pt 144pt:right"));
+    let own = o.styles.split("style:name=\"Derived\"").nth(1).and_then(|s| s.split("</style:style>").next()).unwrap();
+    assert!(own.contains("<style:tab-stops><style:tab-stop style:position=\"144pt\" style:type=\"right\" style:leader-style=\"dotted\" style:leader-text=\".\"/></style:tab-stops>"), "{own}");
+}
+
+#[test]
+fn runs_get_character_styles_and_direct_formatting() {
+    let o = Odt::new(&styled_doc());
+    let span = o.content.split("loud red").next().and_then(|s| s.rsplit("text:style-name=\"").next()).and_then(|s| s.split('"').next()).unwrap();
+    let t = o.props("text", span);
+    assert_eq!(t.get("fo:font-weight").map(String::as_str), Some("bold"), "from the character style");
+    assert_eq!(t.get("fo:color").map(String::as_str), Some("#c80000"));
+    assert!(o.content.contains(&format!("style:name=\"{span}\" style:family=\"text\" style:parent-style-name=\"Loud\"")), "{}", o.content);
+}
+
+#[test]
+fn headings_are_text_h_with_their_level() {
+    let o = Odt::new(&doc_of(vec![plain("A heading").styled("Heading2"), plain("Body")]));
+    assert_eq!(o.para("A heading").tag, "h");
+    assert_eq!(o.para("A heading").attrs.get("text:outline-level").map(String::as_str), Some("2"));
+    assert_eq!(o.para("Body").tag, "p");
 }
 
 // ---------------------------------------------------------------------------------------------

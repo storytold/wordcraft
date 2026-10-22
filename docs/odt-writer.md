@@ -1,7 +1,7 @@
 # ODT writer
 
-> **Status:** body text, direct formatting and the page from the full model; the rest of a
-> document still through the exchange-flow writer (#2669)
+> **Status:** body text, named styles, direct formatting and the page from the full model; the
+> rest of a document still through the exchange-flow writer (#2669)
 
 `odt::export` writes OpenDocument Text (ODF 1.3) from the full `wordcraft_doc::Document`, the
 way the DOCX writer does, instead of lowering it to the exchange `Flow` first (which Markdown,
@@ -18,8 +18,8 @@ an export lose what the flow writer kept. Each part widens `can_write`:
 
 | Part | The new writer takes documents with |
 |---|---|
-| 1 (this) | paragraphs in the default paragraph style, direct paragraph and character formatting, links, bookmarks, tabs, line, page and column breaks, pictures in line; one section without headers and footers |
-| 2 | named paragraph and character styles with their `based on` chain |
+| 1 | paragraphs in the default paragraph style, direct paragraph and character formatting, links, bookmarks, tabs, line, page and column breaks, pictures in line; one section without headers and footers |
+| 2 (this) | named paragraph and character styles with their `based on` chain |
 | 3 | lists and tables |
 | 4 | several sections, headers and footers, page numbering restarts |
 
@@ -37,8 +37,8 @@ pins it.
 1. `text::body` writes the body into `content.xml`.
 2. `pages::master_styles` writes the page layout and the `Standard` master page into
    `styles.xml`.
-3. `styles::common` writes `office:styles`: the default style and `Standard`, the model's default
-   paragraph style.
+3. `styles::common` writes `office:styles`: the default style and the document's paragraph and
+   character styles (the model's default paragraph style is `Standard`).
 4. `package::zip` packages `content.xml`, `styles.xml`, `meta.xml`, `settings.xml`, the
    manifest and the pictures.
 
@@ -53,7 +53,7 @@ page or column break waiting for the next block.
 | File | Writes |
 |---|---|
 | `package.rs` | zip, manifest, `meta.xml`, `settings.xml`, font declarations |
-| `styles.rs` | the default style and `Standard`, automatic paragraph and text styles, tab stops, borders |
+| `styles.rs` | the default style, named paragraph and character styles with `based on`, automatic paragraph and text styles, tab stops, borders |
 | `pages.rs` | the page layout of the section: size, orientation, margins, gutter, columns, page number format |
 | `text.rs` | paragraphs and headings, spans, links, bookmarks, tabs, line, page and column breaks, ruby; pictures in line, `PAGE` and `NUMPAGES` fields, other fields as their result, equations as their linear text |
 
@@ -71,10 +71,10 @@ same.
 - Tab stops are relative to the paragraph indent unless `TabsRelativeToIndent` is false; the
   model measures them from the text column, so `settings.xml` turns it off.
 - The space above, the space below and contextual spacing are one property: one set alone is
-  completed from the default paragraph style, not from the parent. Paragraphs that set any of
-  them get all three, resolved from what they inherit.
-- A paragraph's tab stops replace its style's in ODF and add to them in the model: each
-  paragraph writes its whole merged list.
+  completed from the default paragraph style, not from the parent. Styles and paragraphs that
+  set any of them get all three, resolved along their style chain.
+- A child style's tab stops replace its parent's in ODF and add to them in the model: each style
+  writes its whole merged list.
 - Widow and orphan control is on when the model leaves it unset; ODF's default is off, so the
   default style says so.
 - A paragraph ending with a page break: Word draws its mark beside the break and starts the next

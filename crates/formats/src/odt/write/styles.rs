@@ -1,10 +1,11 @@
-//! Styles: the document defaults as the default style, the default paragraph style as
-//! `Standard`, and direct formatting as automatic styles (ODF 1.3 Part 3 §16).
+//! Styles: the document's named paragraph and character styles as common styles with their
+//! `based on` chain (`style:parent-style-name`), the document defaults as default styles, and
+//! direct formatting as automatic styles (ODF 1.3 Part 3 §16).
 //!
 //! LibreOffice keeps the space above, the space below and contextual spacing as one property: a
 //! style or paragraph that sets only some of them gets the rest from the default paragraph style,
 //! not from its parent. So whenever one is set, all three are written, the missing ones resolved
-//! from what the paragraph inherits ([`complete_spacing`]). Tab stops are written as the whole merged list
+//! along the style chain ([`complete_spacing`]). Tab stops are written as the whole merged list
 //! (a child's stops replace its parent's in ODF, they add to them in the model).
 
 use wordcraft_doc::props::{
@@ -19,13 +20,36 @@ use crate::odt::x;
 /// The name of the default paragraph style in ODF.
 pub(super) const STANDARD: &str = "Standard";
 
+/// An ODF style name (an NCName) for model style id `id`. Names that could clash with the
+/// automatic styles' (`P1`, `MT3`) or the built-in ones get a leading underscore.
+pub(super) fn name(id: &str) -> String {
+    let mut s: String = id.chars().map(|c| if c.is_alphanumeric() || matches!(c, '_' | '-' | '.') { c } else { '_' }).collect();
+    let auto_like = {
+        let t = s.strip_prefix('M').unwrap_or(&s);
+        let letters = t.trim_end_matches(|c: char| c.is_ascii_digit());
+        letters.len() < t.len() && ["P", "T", "Tb", "Co", "Ce", "Se", "X", "L"].contains(&letters)
+    };
+    if auto_like || s == STANDARD || !s.chars().next().is_some_and(|c| c.is_alphabetic() || c == '_') {
+        s.insert(0, '_');
+    }
+    s
+}
+
 /// The model's default paragraph style id (what a paragraph without a style has).
 fn default_para_id(doc: &Document) -> &str {
     doc.styles.styles.iter().find(|s| s.kind == StyleKind::Paragraph && s.default).map(|s| s.id.as_str()).unwrap_or("Normal")
 }
 
-pub(super) fn is_default_para(doc: &Document, id: &str) -> bool {
+fn is_default_para(doc: &Document, id: &str) -> bool {
     id == "Normal" || id == default_para_id(doc)
+}
+
+/// The ODF name of paragraph style `id` (`None`: the default paragraph style).
+pub(super) fn para_style_name(doc: &Document, id: Option<&str>) -> String {
+    match id {
+        Some(id) if !is_default_para(doc, id) && doc.styles.get(id).is_some_and(|s| s.kind == StyleKind::Paragraph) => name(id),
+        _ => STANDARD.to_string(),
+    }
 }
 
 /// `1.5pt solid #000000`, or `none`.
@@ -380,23 +404,42 @@ fn inherited(doc: &Document, id: Option<&str>) -> ParaProps {
     }
 }
 
-/// The default paragraph style `st` as `Standard`.
-fn standard(ctx: &mut Ctx, st: &Style) -> String {
+/// One named paragraph or character style.
+fn named(ctx: &mut Ctx, st: &Style) -> String {
     let doc = ctx.doc;
-    let mut head = format!(" style:name=\"{STANDARD}\" style:display-name=\"{}\" style:family=\"paragraph\"", x(&st.name));
-    if let Some(l) = st.para.outline_level.filter(|l| *l < 9) {
-        head.push_str(&format!(" style:default-outline-level=\"{}\"", l + 1));
+    let para = st.kind == StyleKind::Paragraph;
+    let standard = para && is_default_para(doc, &st.id);
+    let sname = if standard { STANDARD.to_string() } else { name(&st.id) };
+    let mut head =
+        format!(" style:name=\"{sname}\" style:display-name=\"{}\" style:family=\"{}\"", x(&st.name), if para { "paragraph" } else { "text" });
+    let parent = st.based_on.as_deref().filter(|b| *b != st.id).and_then(|b| doc.styles.get(b)).filter(|b| b.kind == st.kind);
+    if let Some(b) = parent.filter(|_| !standard) {
+        let pn = if para { para_style_name(doc, Some(&b.id)) } else { name(&b.id) };
+        head.push_str(&format!(" style:parent-style-name=\"{pn}\""));
     }
     let mut pp = Props::new();
     let mut tp = Props::new();
-    para_props(&st.para, &mut pp, &mut tp);
-    complete_spacing(&doc.styles.default_para, &mut pp);
-    let tabs = st.para.tabs.is_some().then(|| merged_tabs(&[], doc.styles.para_style_props(&st.id).0.tabs.as_deref().unwrap_or(&[])));
+    let mut tabs = None;
+    if para {
+        if let Some(n) = st.next.as_deref().and_then(|n| doc.styles.get(n)).filter(|n| n.kind == StyleKind::Paragraph) {
+            head.push_str(&format!(" style:next-style-name=\"{}\"", para_style_name(doc, Some(&n.id))));
+        }
+        if let Some(l) = st.para.outline_level.filter(|l| *l < 9) {
+            head.push_str(&format!(" style:default-outline-level=\"{}\"", l + 1));
+        }
+        para_props(&st.para, &mut pp, &mut tp);
+        let base = inherited(doc, parent.map(|b| b.id.as_str()));
+        complete_spacing(&base, &mut pp);
+        if st.para.tabs.is_some() {
+            tabs = Some(merged_tabs(&[], doc.styles.para_style_props(&st.id).0.tabs.as_deref().unwrap_or(&[])));
+        }
+    }
     char_props(ctx, &st.chr, &mut tp);
     format!("<style:style{head}>{}</style:style>", props_xml(&pp, tabs.as_deref(), &tp))
 }
 
-/// The contents of `office:styles`: the default style and `Standard`.
+/// The contents of `office:styles`: the default style and the document's paragraph and character
+/// styles.
 pub(super) fn common(ctx: &mut Ctx) -> String {
     let doc = ctx.doc;
     let mut pp = Props::new();
@@ -416,22 +459,29 @@ pub(super) fn common(ctx: &mut Ctx) -> String {
     tp.insert("fo:hyphenate", on(doc.settings.auto_hyphenation, "true", "false"));
     let default_tabs = doc.styles.default_para.tabs.as_deref().map(|t| merged_tabs(&[], t));
     let mut s = format!("<style:default-style style:family=\"paragraph\">{}</style:default-style>", props_xml(&pp, default_tabs.as_deref(), &tp));
-    match doc.styles.styles.iter().find(|st| st.kind == StyleKind::Paragraph && is_default_para(doc, &st.id)) {
-        Some(st) => s.push_str(&standard(ctx, st)),
-        None => s.push_str(&format!("<style:style style:name=\"{STANDARD}\" style:family=\"paragraph\" style:class=\"text\"/>")),
+    if !doc.styles.styles.iter().any(|st| st.kind == StyleKind::Paragraph && is_default_para(doc, &st.id)) {
+        s.push_str(&format!("<style:style style:name=\"{STANDARD}\" style:family=\"paragraph\" style:class=\"text\"/>"));
+    }
+    for st in &doc.styles.styles {
+        if matches!(st.kind, StyleKind::Paragraph | StyleKind::Character) {
+            s.push_str(&named(ctx, st));
+        }
     }
     s
 }
 
-/// The automatic style of paragraph `p` (`Standard` when it has no direct formatting): its
-/// direct formatting and `extra` paragraph properties (page breaks of split paragraphs). `mark`
-/// writes the paragraph mark's formatting too (an empty paragraph is as high as its mark).
+/// The automatic style of paragraph `p` (or its named style when it has no direct formatting):
+/// its direct formatting and `extra` paragraph properties (page breaks of split paragraphs).
+/// `mark` writes the paragraph mark's formatting too (an empty paragraph is as high as its mark).
 pub(super) fn paragraph(ctx: &mut Ctx, p: &Paragraph, extra: &Props, mark: bool) -> String {
     let doc = ctx.doc;
+    let sid = p.props.style.as_deref().filter(|s| doc.styles.get(s).is_some_and(|s| s.kind == StyleKind::Paragraph));
+    let parent = para_style_name(doc, sid);
+    let sid_or_default = sid.unwrap_or_else(|| default_para_id(doc));
     let mut pp = Props::new();
     let mut tp = Props::new();
     para_props(&p.props, &mut pp, &mut tp);
-    let base = inherited(doc, Some(default_para_id(doc)));
+    let base = inherited(doc, Some(sid_or_default));
     complete_spacing(&base, &mut pp);
     let tabs = p.props.tabs.as_deref().map(|t| merged_tabs(base.tabs.as_deref().unwrap_or(&[]), t));
     pp.extend(extra.iter().map(|(k, v)| (*k, v.clone())));
@@ -439,14 +489,21 @@ pub(super) fn paragraph(ctx: &mut Ctx, p: &Paragraph, extra: &Props, mark: bool)
         char_props(ctx, &p.mark.formatting(), &mut tp);
     }
     if pp.is_empty() && tabs.is_none() && tp.is_empty() {
-        return STANDARD.to_string();
+        return parent;
     }
-    ctx.auto_style("paragraph", &format!(" style:parent-style-name=\"{STANDARD}\""), &props_xml(&pp, tabs.as_deref(), &tp))
+    ctx.auto_style("paragraph", &format!(" style:parent-style-name=\"{parent}\""), &props_xml(&pp, tabs.as_deref(), &tp))
 }
 
-/// The automatic text style of a run with formatting `c`, or none.
+/// The style of a run with formatting `c`: an automatic text style over its character style,
+/// the character style alone, or none.
 pub(super) fn text(ctx: &mut Ctx, c: &CharProps) -> Option<String> {
+    let mut f = c.formatting();
+    let style = f.style.take().filter(|s| ctx.doc.styles.get(s).is_some_and(|s| s.kind == StyleKind::Character)).map(|s| name(&s));
     let mut tp = Props::new();
-    char_props(ctx, &c.formatting(), &mut tp);
-    (!tp.is_empty()).then(|| ctx.auto_style("text", "", &format!("<style:text-properties{}/>", attrs(&tp))))
+    char_props(ctx, &f, &mut tp);
+    if tp.is_empty() {
+        return style;
+    }
+    let head = style.map(|s| format!(" style:parent-style-name=\"{s}\"")).unwrap_or_default();
+    Some(ctx.auto_style("text", &head, &format!("<style:text-properties{}/>", attrs(&tp))))
 }

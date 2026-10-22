@@ -1,6 +1,6 @@
-//! ODT export from the full document model (ODF 1.3), the way the DOCX writer works: direct
-//! formatting as automatic styles, the page from the document's section. See
-//! `docs/odt-writer.md` for the module map and what each part covers.
+//! ODT export from the full document model (ODF 1.3), the way the DOCX writer works: named
+//! styles with their inheritance, direct formatting as automatic styles, the page from the
+//! document's section. See `docs/odt-writer.md` for the module map and what each part covers.
 //!
 //! The writer grows in parts (#2669). [`can_write`] says whether it writes everything a document
 //! holds; `odt::export` sends any other document to the exchange-flow writer
@@ -20,8 +20,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use wordcraft_doc::section::HeaderSet;
-use wordcraft_doc::styles::StyleKind;
-use wordcraft_doc::{Block, Document, Paragraph};
+use wordcraft_doc::{Block, Document};
 
 /// Element properties (`fo:margin-top` → `6pt`), written in key order.
 pub(super) type Props = BTreeMap<&'static str, String>;
@@ -163,8 +162,8 @@ impl<'d> Ctx<'d> {
 }
 
 /// Whether this writer writes everything `doc` holds that the exchange-flow writer would. Not yet:
-/// tracked changes (or Track Changes on), named paragraph and character styles, lists, tables,
-/// more than one section, headers and footers. Each later part of #2669 lifts one of these.
+/// tracked changes (or Track Changes on), lists, tables, more than one section, headers and
+/// footers. Each later part of #2669 lifts one of these.
 pub(crate) fn can_write(doc: &Document) -> bool {
     let s = &doc.last_section;
     doc.revisions.is_empty()
@@ -174,19 +173,9 @@ pub(crate) fn can_write(doc: &Document) -> bool {
         && s.footers == HeaderSet::default()
         && s.page_num_start.is_none()
         && doc.body.iter().all(|b| match &**b {
-            Block::Para(p) => para_ok(doc, p),
+            Block::Para(p) => crate::model::para_kind(doc, p).1.is_none(),
             Block::Table(_) => false,
         })
-}
-
-/// Whether paragraph `p` uses only what this writer writes: the default paragraph style, no
-/// character styles, no numbering.
-fn para_ok(doc: &Document, p: &Paragraph) -> bool {
-    let named = |id: Option<&str>, kind: StyleKind| id.and_then(|id| doc.styles.get(id)).is_some_and(|s| s.kind == kind);
-    let style = p.props.style.as_deref();
-    (!named(style, StyleKind::Paragraph) || styles::is_default_para(doc, style.unwrap_or_default()))
-        && crate::model::para_kind(doc, p).1.is_none()
-        && p.run_ranges().all(|(_, c)| !named(c.style.as_deref(), StyleKind::Character))
 }
 
 /// Write `doc` as an `.odt` package.
