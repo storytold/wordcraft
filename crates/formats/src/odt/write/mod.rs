@@ -1,13 +1,16 @@
 //! ODT export from the full document model (ODF 1.3), the way the DOCX writer works: named
-//! styles with their inheritance, direct formatting as automatic styles, the page from the
-//! document's section. See `docs/odt-writer.md` for the module map and what each part covers.
+//! styles with their inheritance, one master page per section with its headers and footers,
+//! direct formatting as automatic styles. See `docs/odt-writer.md` for the module map and what
+//! each part covers.
 //!
 //! The writer grows in parts (#2669). [`can_write`] says whether it writes everything a document
 //! holds; `odt::export` sends any other document to the exchange-flow writer
 //! (`odt::export_flow`), so no part makes an export lose what the flow writer kept.
 //!
 //! [`Ctx`] is the state shared by the parts: the automatic style registries (one for
-//! `content.xml`, one for `styles.xml`), the fonts used and the pictures to package.
+//! `content.xml`, one for `styles.xml`, which holds the automatic styles of headers and footers),
+//! the fonts used, the pictures to package and the page start waiting for the next block.
+//! Stories (header, footer, cell) are written by [`text::blocks`].
 
 mod lists;
 mod package;
@@ -22,7 +25,6 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use wordcraft_doc::Document;
-use wordcraft_doc::section::HeaderSet;
 
 /// Element properties (`fo:margin-top` → `6pt`), written in key order.
 pub(super) type Props = BTreeMap<&'static str, String>;
@@ -53,6 +55,14 @@ struct Auto {
     counts: HashMap<String, usize>,
 }
 
+/// A page change waiting for the next body block: the master page it starts and the page
+/// number it restarts at (ODF puts both on the block's style).
+#[derive(Clone, Debug, PartialEq)]
+pub(super) struct PageStart {
+    pub master: String,
+    pub number: Option<u32>,
+}
+
 /// A packaged file: path in the zip, bytes, media type.
 pub(super) struct Packaged {
     pub path: String,
@@ -69,8 +79,11 @@ pub(super) struct Ctx<'d> {
     /// Pictures to package, and the path each media key went to.
     pub files: Vec<Packaged>,
     media_paths: HashMap<String, String>,
+    /// Set by the body walk at a section start; the next body paragraph or table takes it.
+    pub page_start: Option<PageStart>,
     /// Numbered names (`Image3`, `Table2`) by prefix.
     names: HashMap<&'static str, usize>,
+    pub lists: lists::State,
     /// Story nesting (cells), bounded.
     pub depth: usize,
     /// A page (`"page"`) or column break ending the last paragraph, for the next block.
@@ -91,7 +104,9 @@ impl<'d> Ctx<'d> {
             fonts: BTreeSet::new(),
             files: Vec::new(),
             media_paths: HashMap::new(),
+            page_start: None,
             names: HashMap::new(),
+            lists: Default::default(),
             depth: 0,
             break_next: None,
             counters: Default::default(),
@@ -182,27 +197,20 @@ impl<'d> Ctx<'d> {
     }
 }
 
-/// Whether this writer writes everything `doc` holds that the exchange-flow writer would. Not yet:
-/// tracked changes (or Track Changes on), more than one section, headers and footers. Each later
-/// part of #2669 lifts one of these.
+/// Whether this writer writes everything `doc` holds that the exchange-flow writer would: all but
+/// tracked changes (or Track Changes on), which only the exchange-flow writer writes yet.
 pub(crate) fn can_write(doc: &Document) -> bool {
-    let s = &doc.last_section;
-    doc.revisions.is_empty()
-        && !doc.settings.track_changes
-        && doc.sections().len() == 1
-        && s.headers == HeaderSet::default()
-        && s.footers == HeaderSet::default()
-        && s.page_num_start.is_none()
-        && styles::names_unique(doc)
+    doc.revisions.is_empty() && !doc.settings.track_changes && styles::names_unique(doc)
 }
 
 /// Write `doc` as an `.odt` package.
 pub(crate) fn write(doc: &Document) -> Result<Vec<u8>, String> {
     let mut ctx = Ctx::new(doc);
+    let plan = pages::plan(doc);
     let mut body = String::new();
-    text::body(&mut ctx, &mut body);
+    text::body(&mut ctx, &plan, &mut body);
     ctx.target = Target::Styles;
-    let (layouts, masters) = pages::master_styles(&mut ctx);
+    let (layouts, masters) = pages::master_styles(&mut ctx, &plan);
     let common = styles::common(&mut ctx);
     let [content_auto, styles_auto] = std::mem::take(&mut ctx.auto);
     let fonts = package::font_decls(&ctx.fonts);

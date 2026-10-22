@@ -1,7 +1,7 @@
 //! Tables, as the exchange-flow writer wrote them: the grid's column widths (equal shares of
 //! 6.5 in without a grid), header rows (`w:tblHeader`) repeated on each page, column and row
 //! spans, cell shading and vertical alignment, a thin border and 4 pt padding on every cell. Cell
-//! contents are stories of their own.
+//! contents are stories of their own. A table starting a section carries its master page.
 //!
 //! todo: the table's and its cells' own formatting (borders, margins, heights, horizontal
 //! alignment), its table style.
@@ -10,6 +10,7 @@ use wordcraft_doc::Table;
 use wordcraft_doc::props::{VAlign, VMerge};
 
 use super::{Ctx, Props, attrs, pt, text};
+use crate::odt::x;
 
 /// The rows the cell at row `r`, grid column `g` spans (a vertical merge restarting there).
 fn rows_spanned(t: &Table, r: usize, g: usize) -> usize {
@@ -32,7 +33,12 @@ pub(super) fn table(ctx: &mut Ctx, t: &Table, out: &mut String) {
     if let Some(b) = ctx.break_next.take() {
         tp.insert("fo:break-before", b.into());
     }
-    let tstyle = ctx.auto_style("table", "", &format!("<style:table-properties{}/>", attrs(&tp)));
+    let start = ctx.page_start.take();
+    if let Some(n) = start.as_ref().and_then(|s| s.number) {
+        tp.insert("style:page-number", n.min(32_767).to_string());
+    }
+    let master = start.map(|s| format!(" style:master-page-name=\"{}\"", x(&s.master))).unwrap_or_default();
+    let tstyle = ctx.auto_style("table", &master, &format!("<style:table-properties{}/>", attrs(&tp)));
     let name = ctx.name("Table");
     out.push_str(&format!("<table:table table:name=\"{name}\" table:style-name=\"{tstyle}\">"));
     for w in &widths {

@@ -502,9 +502,10 @@ pub(super) fn common(ctx: &mut Ctx) -> String {
 }
 
 /// The automatic style of paragraph `p` (or its named style when it has no direct formatting):
-/// its direct formatting and `extra` paragraph properties (page breaks of split paragraphs).
-/// `mark` writes the paragraph mark's formatting too (an empty paragraph is as high as its mark).
-pub(super) fn paragraph(ctx: &mut Ctx, p: &Paragraph, extra: &Props, mark: bool) -> String {
+/// its direct formatting, `extra` paragraph properties (page breaks of split paragraphs, the
+/// page number a section restarts at) and the master page it starts, if any. `mark` writes the
+/// paragraph mark's formatting too (an empty paragraph is as high as its mark).
+pub(super) fn paragraph(ctx: &mut Ctx, p: &Paragraph, extra: &Props, master: Option<&str>, mark: bool) -> String {
     let doc = ctx.doc;
     let sid = p.props.style.as_deref().filter(|s| doc.styles.get(s).is_some_and(|s| s.kind == StyleKind::Paragraph));
     let parent = para_style_name(doc, sid);
@@ -519,10 +520,14 @@ pub(super) fn paragraph(ctx: &mut Ctx, p: &Paragraph, extra: &Props, mark: bool)
     if mark {
         char_props(ctx, &p.mark.formatting(), &mut tp);
     }
-    if pp.is_empty() && tabs.is_none() && tp.is_empty() {
+    if pp.is_empty() && tabs.is_none() && tp.is_empty() && master.is_none() {
         return parent;
     }
-    ctx.auto_style("paragraph", &format!(" style:parent-style-name=\"{parent}\""), &props_xml(&pp, tabs.as_deref(), &tp))
+    let mut head = format!(" style:parent-style-name=\"{parent}\"");
+    if let Some(m) = master {
+        head.push_str(&format!(" style:master-page-name=\"{}\"", x(m)));
+    }
+    ctx.auto_style("paragraph", &head, &props_xml(&pp, tabs.as_deref(), &tp))
 }
 
 /// The style of a run with formatting `c`: an automatic text style over its character style,

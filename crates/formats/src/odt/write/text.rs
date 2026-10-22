@@ -13,17 +13,34 @@ use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, OBJ, PAGE_BREA
 use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Block, Blocks, Document, Paragraph};
 
+use super::pages::Plan;
 use super::{Ctx, Props, lists, pt, styles, tables};
 use crate::odt::x;
 
-/// The body.
-pub(super) fn body(ctx: &mut Ctx, out: &mut String) {
-    run(ctx, &ctx.doc.body, out);
+/// The body, section by section: each starts its master page or is a `text:section` with its
+/// columns. A list cut by a section boundary goes on numbering after it.
+pub(super) fn body(ctx: &mut Ctx, plan: &Plan, out: &mut String) {
+    let body = &ctx.doc.body;
+    let is_list = |i: Option<usize>| i.and_then(|i| body.get(i)).is_some_and(|b| matches!(&**b, Block::Para(p) if lists::info(ctx.doc, p).is_some()));
+    for seg in &plan.segments {
+        ctx.page_start.clone_from(&seg.start);
+        ctx.lists.continue_next = is_list(Some(seg.blocks.start)) && is_list(seg.blocks.start.checked_sub(1));
+        if let Some(c) = &seg.columns {
+            let style =
+                ctx.auto_style("section", "", &format!("<style:section-properties>{}</style:section-properties>", crate::odt::columns_xml(c)));
+            let name = ctx.name("Section");
+            out.push_str(&format!("<text:section text:style-name=\"{style}\" text:name=\"{name}\">"));
+        }
+        run(ctx, body.get(seg.blocks.clone()).unwrap_or(&[]), out);
+        if seg.columns.is_some() {
+            out.push_str("</text:section>");
+        }
+    }
 }
 
-/// A nested story (a cell).
+/// A nested story (header, footer, cell): no page starts.
 pub(super) fn blocks(ctx: &mut Ctx, bl: &Blocks, out: &mut String) {
-    let saved = ctx.break_next.take();
+    let saved = (ctx.page_start.take(), ctx.break_next.take(), std::mem::take(&mut ctx.lists.continue_next));
     ctx.nested(out, |ctx, out| {
         run(ctx, bl, out);
         // A story ends with a paragraph, as Word writes it (and draws it): one after a table.
@@ -31,7 +48,7 @@ pub(super) fn blocks(ctx: &mut Ctx, bl: &Blocks, out: &mut String) {
             para(ctx, &Paragraph::new(), out);
         }
     });
-    ctx.break_next = saved;
+    (ctx.page_start, ctx.break_next, ctx.lists.continue_next) = saved;
 }
 
 /// Blocks one after another: list paragraphs grouped into lists, other paragraphs, tables.
@@ -174,13 +191,18 @@ struct Tag<'a> {
     close: &'static str,
 }
 
-/// Paragraph `p`.
+/// Paragraph `p`. A page start waiting for the body (a new section) goes on its style.
 pub(super) fn para(ctx: &mut Ctx, p: &Paragraph, out: &mut String) {
+    let start = ctx.page_start.take();
     let mut extra = Props::new();
+    if let Some(n) = start.as_ref().and_then(|s| s.number) {
+        extra.insert("style:page-number", n.min(32_767).to_string());
+    }
     if let Some(b) = ctx.break_next.take() {
         extra.insert("fo:break-before", b.into());
     }
-    let style = styles::paragraph(ctx, p, &extra, p.text.is_empty());
+    let master = start.as_ref().map(|s| s.master.as_str());
+    let style = styles::paragraph(ctx, p, &extra, master, p.text.is_empty());
     let level = ctx.doc.styles.resolve_para(&p.props).outline_level.filter(|l| *l < 9);
     let (open, close) = match level {
         Some(l) => (format!("<text:h text:style-name=\"{{}}\" text:outline-level=\"{}\">", l + 1), "</text:h>"),
@@ -219,7 +241,7 @@ fn runs(ctx: &mut Ctx, items: &[(Piece<'_>, &CharProps)], tag: &Tag<'_>, prev_sp
                 out.push_str(tag.close);
                 let mut brk = Props::new();
                 brk.insert("fo:break-before", kind.into());
-                let style = styles::paragraph(ctx, tag.p, &brk, false);
+                let style = styles::paragraph(ctx, tag.p, &brk, None, false);
                 out.push_str(&tag.open.replace("{}", &style));
                 *prev_space = true;
             }

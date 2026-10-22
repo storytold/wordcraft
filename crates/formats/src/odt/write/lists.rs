@@ -1,6 +1,7 @@
 //! Lists, as the exchange-flow writer wrote them: each run of numbered paragraphs is a
 //! `text:list` of its own list style, whose levels are bullets or numbers (`1.`, `a.`, `i.` in
-//! turn) as the paragraphs at each level are, with indents of half an inch a level.
+//! turn) as the paragraphs at each level are, with indents of half an inch a level. A list cut by
+//! a section boundary continues the one before it (`text:continue-list`).
 //!
 //! The numbers are Word's: the model's counters run over every list item in document order, and
 //! an item whose number is not the one ODF would count (the level's start, or the previous item's
@@ -16,6 +17,14 @@ use wordcraft_doc::{Block, Document, Paragraph};
 
 use super::{Ctx, pt, text};
 use crate::model::ListInfo;
+
+#[derive(Default)]
+pub(in crate::odt) struct State {
+    /// The next list continues the last one of the body (set at a section boundary).
+    pub continue_next: bool,
+    /// `xml:id` of the last list of the body.
+    last_id: Option<String>,
+}
 
 /// Whether `p` is numbered or bulleted, and at what level.
 pub(super) fn info(doc: &Document, p: &Paragraph) -> Option<ListInfo> {
@@ -81,6 +90,14 @@ pub(super) fn list(ctx: &mut Ctx, bl: &[Arc<Block>], out: &mut String) -> usize 
     // Every list has a style of its own, so that none continues another by sharing it.
     let id = ctx.name("lst");
     let style = ctx.auto("L", &id, |name| list_style(name, &ordered, &starts));
+    let body = ctx.depth == 0;
+    let cont = match &ctx.lists.last_id {
+        Some(prev) if body && std::mem::take(&mut ctx.lists.continue_next) => format!(" text:continue-list=\"{prev}\""),
+        _ => String::new(),
+    };
+    if body {
+        ctx.lists.last_id = Some(id.clone());
+    }
     // Open lists: per level, whether a list item is open.
     let mut stack: Vec<bool> = Vec::new();
     // What ODF has counted at each level so far.
@@ -100,7 +117,7 @@ pub(super) fn list(ctx: &mut Ctx, bl: &[Arc<Block>], out: &mut String) -> usize 
                 *top = true;
             }
             if stack.is_empty() {
-                out.push_str(&format!("<text:list xml:id=\"{id}\" text:style-name=\"{style}\">"));
+                out.push_str(&format!("<text:list xml:id=\"{id}\" text:style-name=\"{style}\"{cont}>"));
             } else {
                 out.push_str("<text:list>");
             }
