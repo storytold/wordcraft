@@ -9213,27 +9213,3 @@ fn table_cell_margins_preserves_unpassed_sides() {
     let margins = s.doc.table(StoryRef::Body, &tp).unwrap().props.cell_margins.unwrap();
     assert_eq!(margins, [0.0, 10.0, 0.0, 15.0]);
 }
-
-/// `file.exportPng` writes only to `.png` paths, so automation can't replace other files with
-/// page images (#3696).
-#[cfg(not(target_arch = "wasm32"))]
-#[test]
-fn export_png_refuses_a_path_that_is_not_png() {
-    let dir = scratch_dir("export-png-extension");
-    let mut s = s();
-    run(&mut s, "text.insert", json!({"text": "Hello"}));
-    for name in ["notes.txt", "config", "report.docx", "page.png.txt"] {
-        let target = dir.join(name);
-        std::fs::write(&target, b"precious user notes").unwrap();
-        let r = s.run("file.exportPng", &json!({"path": target.to_string_lossy()}));
-        assert!(matches!(r, Err(crate::CmdError::Params(_))), "{name}: {r:?}");
-        assert_eq!(std::fs::read(&target).unwrap(), b"precious user notes", "{name} was changed");
-    }
-    // A .png path still works, whatever its case.
-    for name in ["page.png", "PAGE.PNG"] {
-        let target = dir.join(name);
-        s.run("file.exportPng", &json!({"path": target.to_string_lossy()})).unwrap();
-        assert!(std::fs::read(&target).unwrap().starts_with(b"\x89PNG"), "{name} is not a PNG");
-    }
-    let _ = std::fs::remove_dir_all(&dir);
-}

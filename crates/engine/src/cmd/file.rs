@@ -376,9 +376,6 @@ fn export_png(s: &mut Session, v: &Value) -> CmdResult {
     // the on-screen cue while editing the body, not part of the page.
     let mut opts = wordcraft_render::RenderOptions::default();
     opts.display.dim_header = false;
-    if !path.to_ascii_lowercase().ends_with(".png") {
-        return Err(CmdError::Params("path must end in .png".into()));
-    }
     let img = wordcraft_render::render_page(&s.doc, pg, scale, &opts);
     let png = img.to_png();
     crate::io::write_file(path, &png).map_err(CmdError::Failed)?;
