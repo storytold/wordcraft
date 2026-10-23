@@ -2601,6 +2601,18 @@
 	Suggested	Предложения
 	Set Proofing Language…	Задаване на езика за проверка…
 	Language Preferences…	Езикови предпочитания…
+	Places	Места
+	This computer	Този компютър
+	Add a place	Добавяне на място
+	Loading…	Зареждане…
+	Back	Назад
+	This folder is empty.	Тази папка е празна.
+	No access to this folder	Няма достъп до тази папка
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft няма разрешение да чете тази папка. За да отворите документ от нея, използвайте „Преглед“.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	За да се показва тук, разрешете достъпа на WordCraft в Системни настройки › Поверителност и сигурност › Файлове и папки.
+	This folder is no longer there.	Тази папка вече не съществува.
+	It may have been moved or deleted.	Възможно е да е преместена или изтрита.
+	This folder can't be read.	Тази папка не може да бъде прочетена.
 	Printer	Принтер
 	Select a printer	Изберете принтер
 	Refresh printers	Опресняване на принтерите

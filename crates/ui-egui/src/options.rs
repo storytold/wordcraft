@@ -846,6 +846,12 @@ mod tests {
         WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
+    /// A pane row of the Options page: a toggle right of the File page's own column, whose
+    /// entries (Save among them) are toggles too.
+    fn pane_row(n: &egui_kittest::Node<'_>) -> bool {
+        n.accesskit_node().toggled().is_some() && n.rect().min.x >= 200.0
+    }
+
     fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, WordApp> {
         let mut a = app();
         a.run("ui.language", json!({"value": language})).unwrap();
@@ -889,8 +895,7 @@ mod tests {
                     h.run_steps(4);
                     for id in wordcraft_engine::cmd::options::PANES {
                         let label = crate::i18n::tr(crate::i18n::Lang::from_pref(language), super::pane_label(id));
-                        let node =
-                            h.query_all_by_label(label).find(|n| n.accesskit_node().toggled().is_some()).expect("pane has its full accessible name");
+                        let node = h.query_all_by_label(label).find(|n| pane_row(n)).expect("pane has its full accessible name");
                         assert_eq!(
                             node.accesskit_node().toggled(),
                             Some(if id == selected { egui::accesskit::Toggled::True } else { egui::accesskit::Toggled::False })
@@ -934,7 +939,7 @@ mod tests {
                     let lang = crate::i18n::Lang::from_pref(language);
                     let row = h
                         .query_all_by_label(crate::i18n::tr(lang, super::pane_label(id)))
-                        .find(|n| n.accesskit_node().toggled().is_some())
+                        .find(|n| pane_row(n))
                         .expect("pane has its full accessible name")
                         .rect();
                     // Both ends of the row, including its empty left inset, stay clickable.

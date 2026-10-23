@@ -2762,3 +2762,16 @@ template	Letter	Scrisoare
 	cm	cm
 	mm	mm
 	pi	pi
+	Places	Locuri
+	This computer	Acest computer
+	Add a place	Adăugare loc
+	Loading…	Se încarcă…
+	Back	Înapoi
+	This folder is empty.	Acest folder este gol.
+	No access to this folder	Nu există acces la acest folder
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft nu are permisiunea de a citi acest folder. Utilizați Răsfoire pentru a deschide un document din el.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Pentru a-l afișa aici, permiteți accesul pentru WordCraft în Configurări sistem › Confidențialitate și securitate › Fișiere și dosare.
+	This folder is no longer there.	Acest folder nu mai există.
+	It may have been moved or deleted.	Este posibil să fi fost mutat sau șters.
+	This folder can't be read.	Acest folder nu poate fi citit.
+file	Home	Acasă

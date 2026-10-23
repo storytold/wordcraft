@@ -2610,6 +2610,18 @@ preview	Title	Пример
 	Suggested	Предлагаемые
 	Set Proofing Language…	Выбрать язык проверки правописания…
 	Language Preferences…	Языковые параметры…
+	Places	Места
+	This computer	Этот компьютер
+	Add a place	Добавить место
+	Loading…	Загрузка…
+	Back	Назад
+	This folder is empty.	Эта папка пуста.
+	No access to this folder	Нет доступа к этой папке
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	У WordCraft нет разрешения на чтение этой папки. Чтобы открыть из неё документ, используйте «Обзор».
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Чтобы её содержимое показывалось здесь, разрешите доступ для WordCraft в Системных настройках: «Конфиденциальность и безопасность» › «Файлы и папки».
+	This folder is no longer there.	Этой папки больше нет.
+	It may have been moved or deleted.	Возможно, её переместили или удалили.
+	This folder can't be read.	Не удаётся прочитать эту папку.
 	Printer	Принтер
 	Select a printer	Выберите принтер
 	Refresh printers	Обновить принтеры

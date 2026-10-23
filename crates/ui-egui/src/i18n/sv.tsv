@@ -2666,6 +2666,18 @@ preview	Title	Titel
 	Heading text	Rubriktext
 	Insert reference to:	Infoga referens till:
 	Reference type:	Referenstyp:
+	Places	Platser
+	This computer	Den här datorn
+	Add a place	Lägg till en plats
+	Loading…	Läser in…
+	Back	Tillbaka
+	This folder is empty.	Den här mappen är tom.
+	No access to this folder	Ingen åtkomst till den här mappen
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft har inte behörighet att läsa den här mappen. Använd Bläddra för att öppna ett dokument från den.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Om du vill se innehållet här ger du WordCraft åtkomst i Systeminställningar › Integritet och säkerhet › Filer och mappar.
+	This folder is no longer there.	Den här mappen finns inte längre.
+	It may have been moved or deleted.	Den kan ha flyttats eller tagits bort.
+	This folder can't be read.	Det går inte att läsa den här mappen.
 # Reading Mode column widths (#1040)
 	Narrow	Smal
 	Medium	Medel

@@ -2606,6 +2606,18 @@
 	Suggested	Javaslatok
 	Set Proofing Language…	Nyelvi ellenőrzés nyelvének beállítása…
 	Language Preferences…	Nyelvi beállítások…
+	Places	Helyek
+	This computer	Ez a számítógép
+	Add a place	Hely hozzáadása
+	Loading…	Betöltés…
+	Back	Vissza
+	This folder is empty.	Ez a mappa üres.
+	No access to this folder	Nincs hozzáférés ehhez a mappához
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	A WordCraft nem jogosult a mappa olvasására. Ha dokumentumot szeretne megnyitni belőle, használja a Tallózás parancsot.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Ha itt szeretné látni a tartalmát, engedélyezze a WordCraft hozzáférését a Rendszerbeállítások Adatvédelem és biztonság › Fájlok és mappák részében.
+	This folder is no longer there.	Ez a mappa már nem létezik.
+	It may have been moved or deleted.	Lehet, hogy áthelyezték vagy törölték.
+	This folder can't be read.	Ez a mappa nem olvasható.
 	Title Bar	Címsáv
 	Printer	Nyomtató
 	Select a printer	Válasszon nyomtatót

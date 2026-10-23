@@ -2547,6 +2547,19 @@
 	{name}   {height} × {width} in	{name}   {height} × {width} in
 	{name}   {height} × {width} mm	{name}   {height} × {width} mm
 	{width} × {height} mm	{width} × {height} mm
+	Places	Vị trí
+	This computer	Máy tính này
+	Add a place	Thêm vị trí
+	Loading…	Đang tải…
+	Back	Quay lại
+	This folder is empty.	Thư mục này trống.
+	No access to this folder	Không có quyền truy cập thư mục này
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft không có quyền đọc thư mục này. Hãy dùng Duyệt để mở tài liệu từ thư mục này.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Để hiển thị thư mục ở đây, hãy cho phép WordCraft trong Cài đặt hệ thống › Quyền riêng tư & bảo mật › Tệp và thư mục.
+	This folder is no longer there.	Thư mục này không còn nữa.
+	It may have been moved or deleted.	Có thể thư mục đã bị di chuyển hoặc xóa.
+	This folder can't be read.	Không thể đọc thư mục này.
+file	Home	Trang chủ
 
 # Custom paper sizes (#1496)
 	Custom size	Kích thước tùy chỉnh

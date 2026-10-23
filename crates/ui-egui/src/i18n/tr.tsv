@@ -2609,6 +2609,18 @@ preview	Title	Örnek
 	Suggested	Önerilenler
 	Set Proofing Language…	Yazım denetimi dilini ayarla…
 	Language Preferences…	Dil tercihleri…
+	Places	Konumlar
+	This computer	Bu bilgisayar
+	Add a place	Konum ekle
+	Loading…	Yükleniyor…
+	Back	Geri
+	This folder is empty.	Bu klasör boş.
+	No access to this folder	Bu klasöre erişim yok
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft'ın bu klasörü okuma izni yok. Bu klasörden bir belge açmak için Gözat'ı kullanın.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Burada listelenmesi için Sistem Ayarları'nda Gizlilik ve Güvenlik › Dosyalar ve Klasörler bölümünden WordCraft'a izin verin.
+	This folder is no longer there.	Bu klasör artık yok.
+	It may have been moved or deleted.	Taşınmış veya silinmiş olabilir.
+	This folder can't be read.	Bu klasör okunamıyor.
 	Printer	Yazıcı
 	Select a printer	Bir yazıcı seçin
 	Refresh printers	Yazıcıları yenile

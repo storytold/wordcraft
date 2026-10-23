@@ -26,6 +26,16 @@ const ROW: f32 = 24.0;
 pub(crate) struct State {
     pub(crate) open: Option<Box<FileBrowser>>,
     last_dir: Option<PathBuf>,
+    /// The folder File › Open is showing under This computer; `None` while Recent is chosen.
+    pub(crate) page: Option<craft_ui::places::local::LocalFolder>,
+}
+
+impl State {
+    /// File › Open › This computer: show `dir`, with the documents WordCraft opens.
+    pub(crate) fn show_page_dir(&mut self, dir: PathBuf) {
+        let kinds = open_filters("document").first().map(|(_, kinds)| *kinds).unwrap_or(&["*"]);
+        self.page = Some(craft_ui::places::local::LocalFolder::open(dir, kinds));
+    }
 }
 
 /// One subfolder or file in the listing.

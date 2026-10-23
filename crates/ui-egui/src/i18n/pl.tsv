@@ -18,7 +18,7 @@
 	(no suggestions)	(brak propozycji)
 	1.5 Line Spacing	Interlinia 1,5
 	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Darmowy edytor tekstu o otwartym kodzie, napisany od podstaw w języku Rust.\nCzęść rodziny Crafting Apps zespołu ArtCraft.
-	About	Informacje
+	About	O programie
 	About WordCraft	O programie WordCraft
 	Accept	Zaakceptuj
 	Accept All Changes	Zaakceptuj wszystkie zmiany
@@ -2555,6 +2555,17 @@ preview	Title	Tytuł
 	Typing	Pisanie
 	Search	Wyszukaj
 	Title Bar	Pasek tytułu
+	Places	Miejsca
+	This computer	Ten komputer
+	This folder is empty.	Ten folder jest pusty.
+	Back	Wstecz
+file	Home	Strona główna
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft nie ma uprawnień do odczytu tego folderu. Użyj polecenia Przeglądaj, aby otworzyć z niego dokument.
+	This folder is no longer there.	Tego folderu już nie ma.
+	This folder can't be read.	Nie można odczytać tego folderu.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Aby wyświetlić go tutaj, zezwól aplikacji WordCraft w Ustawieniach systemowych, w sekcji Prywatność i ochrona, Pliki i foldery.
+	No access to this folder	Brak dostępu do tego folderu
+	It may have been moved or deleted.	Mógł zostać przeniesiony lub usunięty.
 	Copy to	Kopiuj do
 
 # Document naming and account controls.
@@ -2603,6 +2614,8 @@ preview	Title	Tytuł
 	Suggested	Sugerowane
 	Set Proofing Language…	Ustaw język sprawdzania…
 	Language Preferences…	Preferencje językowe…
+	Add a place	Dodaj miejsce
+	Loading…	Wczytywanie…
 	APA	APA
 	Chicago	Chicago
 	GB/T 7714	GB/T 7714

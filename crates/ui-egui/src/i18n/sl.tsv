@@ -2763,3 +2763,15 @@ preview	Title	Naslov
 	{names} and {n} more	{names} and {n} more
 	{name} options	{name} options
 	{width} × {height} pixels	{width} × {height} pixels
+	Places	Mesta
+	This computer	Ta računalnik
+	Add a place	Dodaj mesto
+	Loading…	Nalaganje …
+	Back	Nazaj
+	This folder is empty.	Ta mapa je prazna.
+	No access to this folder	Ni dostopa do te mape
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft nima dovoljenja za branje te mape. Če želite iz nje odpreti dokument, uporabite Prebrskaj.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Če želite, da se njena vsebina prikaže tukaj, dovolite dostop za WordCraft v Sistemskih nastavitvah › Zasebnost in varnost › Datoteke in mape.
+	This folder is no longer there.	Ta mapa ne obstaja več.
+	It may have been moved or deleted.	Morda je bila premaknjena ali izbrisana.
+	This folder can't be read.	Te mape ni mogoče prebrati.

@@ -2629,6 +2629,18 @@ preview	Title	Ukázka
 	Heading text	Text nadpisu
 	Insert reference to:	Vložit odkaz na:
 	Reference type:	Typ odkazu:
+	Places	Umístění
+	This computer	Tento počítač
+	Add a place	Přidat umístění
+	Loading…	Načítání…
+	Back	Zpět
+	This folder is empty.	Tato složka je prázdná.
+	No access to this folder	K této složce nemáte přístup
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft nemá oprávnění číst tuto složku. Chcete-li z ní otevřít dokument, použijte Procházet.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Aby se zde zobrazil její obsah, povolte WordCraft v Nastavení systému › Soukromí a zabezpečení › Soubory a složky.
+	This folder is no longer there.	Tato složka už neexistuje.
+	It may have been moved or deleted.	Možná byla přesunuta nebo odstraněna.
+	This folder can't be read.	Tuto složku nelze přečíst.
 
 # Dictionaries folder (#1063)
 	Dictionaries	Slovníky

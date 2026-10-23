@@ -2651,6 +2651,18 @@ preview	Title	Naslov
 	Letter   8.50" × 11.00"	Letter   8.50" × 11.00"
 	Statement   5.50" × 8.50"	Statement   5.50" × 8.50"
 	Tabloid   11.00" × 17.00"	Tabloid   11.00" × 17.00"
+	Places	Mjesta
+	This computer	Ovo računalo
+	Add a place	Dodaj mjesto
+	Loading…	Učitavanje…
+	Back	Natrag
+	This folder is empty.	Ova mapa je prazna.
+	No access to this folder	Nema pristupa ovoj mapi
+	WordCraft has no permission to read this folder. Use Browse to open a document from it.	WordCraft nema dopuštenje za čitanje ove mape. Da biste iz nje otvorili dokument, upotrijebite Pregledaj.
+	To list it here, allow WordCraft in System Settings, under Privacy & Security, Files and Folders.	Da bi se ovdje prikazao njezin sadržaj, dopustite pristup aplikaciji WordCraft u Postavkama sustava › Privatnost i sigurnost › Datoteke i mape.
+	This folder is no longer there.	Ova mapa više ne postoji.
+	It may have been moved or deleted.	Možda je premještena ili izbrisana.
+	This folder can't be read.	Ovu mapu nije moguće pročitati.
 # Reading Mode column widths (#1040)
 	Narrow	Usko
 	Medium	Srednje
