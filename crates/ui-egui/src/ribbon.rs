@@ -747,6 +747,38 @@ fn paint_underline(p: &egui::Painter, r: Rect, style: &str, color: egui::Color32
     }
 }
 
+/// The outline weights Word offers, in points: Text Outline, Shape Outline and the border dialogs.
+pub(crate) const OUTLINE_WEIGHTS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
+
+/// An outline's Weight submenu (#3917): each weight as its label and a line sample drawn at that
+/// weight, the `current` one highlighted. Choosing one runs `id` with `params(weight)`.
+pub(crate) fn weight_menu(ui: &mut Ui, app: &mut WordApp, id: &str, current: Option<f32>, params: impl Fn(f32) -> Value) {
+    let enabled = crate::widgets::enabled(app, id);
+    let t = Tokens::get(ui.ctx());
+    let color = if enabled { t.text } else { t.text_disabled };
+    // A hairline under a device pixel would vanish, so the thinnest samples get one.
+    let pixel = 1.0 / ui.ctx().pixels_per_point();
+    let labels = OUTLINE_WEIGHTS.map(|w| crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
+    // The samples start a short gap after the widest label and end as far from the right edge as
+    // the labels start from the left one.
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let widest = labels.iter().map(|l| ui.painter().layout_no_wrap(l.clone(), font.clone(), color).size().x).fold(0.0, f32::max);
+    let pad = ui.spacing().button_padding.x;
+    for (w, label) in OUTLINE_WEIGHTS.into_iter().zip(&labels) {
+        let checked = current.is_some_and(|c| (c - w).abs() < 0.01);
+        let resp = ui.add_enabled(enabled, egui::Button::new(label.as_str()).selected(checked).min_size(vec2(200.0, 22.0)));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, checked, label));
+        let r = resp.rect;
+        let y = r.center().y;
+        let (x0, x1) = (r.left() + pad + widest + 12.0, r.right() - pad);
+        ui.painter().line_segment([pos2(x0, y), pos2(x1, y)], Stroke::new(w.max(pixel), color));
+        if resp.clicked() {
+            crate::widgets::run_from_ribbon(app, id, params(w));
+            ui.close();
+        }
+    }
+}
+
 pub(crate) fn mi(ui: &mut Ui, app: &mut WordApp, label: &str, id: &str, params: Value) {
     mi_text(ui, app, tl!(label), id, params);
 }
@@ -2503,10 +2535,12 @@ pub(crate) fn gradient_menu(ui: &mut Ui, app: &mut WordApp, fill: Option<&wordcr
 
 /// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
 fn shape_format(app: &mut WordApp, ui: &mut Ui) {
-    let (stroke, glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Shape { stroke, effects, fill, .. })) => (stroke, effects.glow.map(|g| g.size), fill),
-        Some((_, o)) => (None, None, o.canvas_style().and_then(|c| c.fill.clone())),
-        _ => (None, None, None),
+    let (stroke, stroke_width, glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, wordcraft_doc::para::InlineObject::Shape { stroke, stroke_width, effects, fill, .. })) => {
+            (stroke, stroke_width, effects.glow.map(|g| g.size), fill)
+        }
+        Some((_, o)) => (None, 0.0, None, o.canvas_style().and_then(|c| c.fill.clone())),
+        _ => (None, 0.0, None, None),
     };
     let theme = app.session.doc.settings.theme_colors.clone();
     group(ui, "Shape Styles", None, app, |ui, app| {
@@ -2523,9 +2557,7 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
                 ui.separator();
                 ui.menu_button(tl!("Weight"), |ui| {
                     let color = stroke.unwrap_or(wordcraft_doc::Rgb::BLACK).hex();
-                    for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0] {
-                        mi(ui, app, &format!("{w} pt"), "shape.outline", json!({"color": color, "width": w}));
-                    }
+                    weight_menu(ui, app, "shape.outline", stroke.map(|_| stroke_width), |w| json!({"color": color, "width": w}));
                 });
             });
             menu_button(ui, app, "shapeEffects", Some("Shape Effects"), "Shadow, glow and soft edges", false, "shape.effects", |ui, app| {
@@ -3119,6 +3151,48 @@ mod tests {
         assert!((gallery.width() - crate::previews::STYLE_SET_GALLERY_W).abs() < 0.01);
         assert!(used.right() <= gallery.right() + 0.01, "{used:?} {gallery:?}");
         assert!(next_x >= gallery.right() + 8.0 - 0.01, "{next_x} {gallery:?}");
+    }
+
+    /// #3917: an outline's Weight submenu offers Word's nine weights, each a named entry with a
+    /// line sample drawn at its weight; the current weight is highlighted, and choosing one sets it.
+    #[test]
+    fn weight_menu_draws_each_weight_and_applies_it() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        a.run("select.all", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let current = crate::wordart_menus::current_outline(app).map(|c| c.1);
+                weight_menu(ui, app, "format.textEffects", current, |w| json!({"outline": {"color": "1F4E79", "width": w}}));
+            },
+            a,
+        );
+        h.run_steps(2);
+        let labels = ["0.25 pt", "0.5 pt", "0.75 pt", "1 pt", "1.5 pt", "2.25 pt", "3 pt", "4.5 pt", "6 pt"];
+        for label in labels {
+            let node = h.get_by_label(label);
+            assert_eq!(node.accesskit_node().toggled(), Some(Toggled::False), "{label} not highlighted with no outline set");
+        }
+        // One line sample per weight, at that weight.
+        let widths: Vec<f32> = h
+            .output()
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::Shape::LineSegment { stroke, .. } => Some(stroke.width),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(widths, [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0].map(|w: f32| w.max(1.0)), "samples, a pixel at least");
+        let outline = |h: &egui_kittest::Harness<'_, WordApp>| crate::wordart_menus::current_outline(h.state());
+        for (label, width) in [("6 pt", 6.0), ("0.25 pt", 0.25)] {
+            h.get_by_label(label).click();
+            h.run_steps(2);
+            assert_eq!(outline(&h), Some((wordcraft_doc::Rgb::parse("1F4E79").unwrap(), width)), "{label}");
+            assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} is highlighted once chosen");
+            assert_eq!(h.get_by_label("1 pt").accesskit_node().toggled(), Some(Toggled::False));
+        }
     }
 
     /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive

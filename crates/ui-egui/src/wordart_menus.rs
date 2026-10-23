@@ -132,9 +132,7 @@ pub fn outline_menu(ui: &mut Ui, app: &mut WordApp, theme: &[Rgb], current: Opti
     ui.separator();
     ui.menu_button(crate::tl!("Weight"), |ui| {
         let color = current.map_or(Rgb::BLACK, |c| c.0).hex();
-        for w in [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0] {
-            mi(ui, app, &format!("{w} pt"), "format.textEffects", json!({"outline": {"color": color, "width": w}}));
-        }
+        crate::ribbon::weight_menu(ui, app, "format.textEffects", current.map(|c| c.1), |w| json!({"outline": {"color": color, "width": w}}));
     });
 }
 
