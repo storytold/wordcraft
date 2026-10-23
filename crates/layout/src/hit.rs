@@ -495,12 +495,32 @@ impl DocLayout {
         None
     }
 
+    /// Lines available to arrow navigation. A repeated table heading is drawn on later pages,
+    /// but its original line is the editable position; a split paragraph's new lines remain.
+    fn navigation_lines(&self, page: usize, story: StoryRef) -> Vec<LineHit<'_>> {
+        let Some(p) = self.pages.get(page) else { return Vec::new() };
+        page_lines(p, story)
+            .into_iter()
+            .filter(|line| {
+                if story != StoryRef::Body || line.path.cell().is_none() {
+                    return true;
+                }
+                if let Some(&(original_page, item)) = self.index.get(&(story, line.path.clone())).and_then(|pieces| pieces.first())
+                    && original_page < page
+                    && let Some(Placed::Lines { l0, l1, .. }) = self.pages.get(original_page).and_then(|p| p.items.get(item))
+                {
+                    return !(*l0..*l1).contains(&line.li);
+                }
+                true
+            })
+            .collect()
+    }
+
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
         let c = self.caret_on(pos, page_hint)?;
         let gx = goal_x.unwrap_or(c.x);
-        let page = self.pages.get(c.page)?;
-        let lines = page_lines(page, pos.story);
+        let lines = self.navigation_lines(c.page, pos.story);
         let cur_mid = c.top + c.height / 2.0;
         let cands: Vec<&LineHit> = lines
             .iter()
@@ -535,9 +555,9 @@ impl DocLayout {
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
-        let p = self.pages.get(np)?;
-        let lines = page_lines(p, pos.story);
-        let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
+        let lines = self.navigation_lines(np, pos.story);
+        let candidates: Vec<&LineHit> = lines.iter().collect();
+        let l = in_row(&candidates, gx, dir)?;
         let off = l.para.off_at_x(l.li, gx - l.x);
         Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
     }
