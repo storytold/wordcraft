@@ -960,6 +960,37 @@ fn right_tab_aligns_text_end() {
     assert!((end - 472.0).abs() < 1.0, "{end}");
 }
 
+/// Native Word moves every ordinary-tab group with centered or right paragraph alignment.
+#[test]
+fn ordinary_tabs_move_as_line() {
+    use wordcraft_doc::props::{TabAlign, TabLeader, TabStop};
+    for stops in [
+        vec![(180.0, TabAlign::Left)],
+        vec![(234.0, TabAlign::Center)],
+        vec![(234.0, TabAlign::Center), (364.5, TabAlign::Right)],
+        vec![(234.0, TabAlign::Center), (468.0, TabAlign::Right)],
+    ] {
+        let text = if stops.len() == 1 { "Label\tfilename" } else { "Label\tfilename\ttime" };
+        let mut d = Document::from_text(text);
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+            p.tabs = Some(stops.iter().map(|(pos, align)| TabStop { pos: *pos, align: *align, leader: TabLeader::None }).collect());
+        })
+        .unwrap();
+        let left = lay(&d);
+        let end = left.caret(&Pos::body(0, text.len())).unwrap().x;
+        let slack = 540.0 - end;
+        for (align, fraction) in [(Align::Center, 0.5), (Align::Right, 1.0)] {
+            d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.align = Some(align)).unwrap();
+            let aligned = lay(&d);
+            for off in [0, 6, text.len()] {
+                let before = left.caret(&Pos::body(0, off)).unwrap().x;
+                let after = aligned.caret(&Pos::body(0, off)).unwrap().x;
+                assert!((after - before - slack * fraction).abs() < 0.1, "{align:?} {stops:?} offset {off}: {before} -> {after}, slack {slack}");
+            }
+        }
+    }
+}
+
 /// A paragraph `before` + positional tab + `after`, with left and right indents and a custom
 /// left tab stop at 50 pt that the positional tab must ignore.
 fn ptab_doc(before: &str, after: &str, ptab: InlineObject, indents: (f32, f32)) -> Document {

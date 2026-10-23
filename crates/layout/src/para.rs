@@ -2509,7 +2509,10 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             _ => 0.0,
         };
         if shift > 0.0 && slack > 0.0 {
-            for v in xs.iter_mut().skip(align_from - c0) {
+            // Ordinary tabs move with paragraph alignment; positional tabs keep their anchors.
+            let whole_line = display.is_none() && pl.label.is_none() && !rtl_para && !pl.ptabs.iter().any(|(ci, ..)| *ci >= c0 && *ci < c1);
+            let shift_from = if whole_line { c0 } else { align_from };
+            for v in xs.iter_mut().skip(shift_from - c0) {
                 *v += shift;
             }
             // After a tab the label stays, as the text before the tab does.
