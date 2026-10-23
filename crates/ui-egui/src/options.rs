@@ -808,9 +808,9 @@ fn numeral_picker(app: &mut WordApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         ui.label(tl!("Numerals:"));
         let mut sel = app.session.view.numeral;
-        egui::ComboBox::from_id_salt("numerals").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("numerals").selected_text(crate::i18n::tc("numerals", sel.label())).width(220.0).show_ui(ui, |ui| {
             for m in [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context, NumeralMode::System] {
-                ui.selectable_value(&mut sel, m, tl!(m.label()));
+                ui.selectable_value(&mut sel, m, crate::i18n::tc("numerals", m.label()));
             }
         });
         if sel != app.session.view.numeral {

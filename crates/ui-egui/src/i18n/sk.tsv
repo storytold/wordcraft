@@ -1,0 +1,2858 @@
+# Slovak (sk) interface catalog. Columns, separated by a TAB:
+#   context <TAB> English source <TAB> translation
+#   context is empty, `preview`, `template` or `numerals`; it distinguishes wording in specific UI places.
+#   Escapes: \n, \t, \\. Preserve {placeholders} and a trailing “…” from the English source.
+#   Missing entries show in English.
+#
+# Translate from the meaning of the English text. Do not copy another product’s localization.
+# Keep product, format and technology names such as WordCraft, PDF and Markdown unchanged.
+# This catalog is an AI-assisted draft and needs review by a native Slovak speaker.
+	% of all commits	% všetkých commitov
+	(All)	(Všetky)
+	(Custom)	(Vlastné)
+	(no style)	(bez štýlu)
+	(no suggestions)	(žiadne návrhy)
+	(none)	(žiadne)
+	(normal text)	(bežný text)
+	(not matched)	(bez zhody)
+	(picture or object)	(obrázok alebo objekt)
+	0 or More Characters	0 alebo viac znakov
+	1. Formatting restrictions	1. Obmedzenia formátovania
+	1.5 Line Spacing	Riadkovanie 1,5
+	1/4 Em Space	Štvrtinová medzera em
+	1×2 Empty Matrix	Prázdna matica 1 × 2
+	1×3 Empty Matrix	Prázdna matica 1 × 3
+	2. Editing restrictions	2. Obmedzenia úprav
+	2×1 Empty Matrix	Prázdna matica 2 × 1
+	2×2 Determinant	Determinant 2 × 2
+	2×2 Empty Matrix	Prázdna matica 2 × 2
+	2×2 Identity Matrix	Jednotková matica 2 × 2
+	2×2 Identity Matrix (sparse)	Riedka jednotková matica 2 × 2
+	2×2 Matrix in Brackets	Matica 2 × 2 v hranatých zátvorkách
+	2×2 Matrix in Double Bars	Matica 2 × 2 medzi dvojitými zvislými čiarami
+	2×2 Matrix in Parentheses	Matica 2 × 2 v okrúhlych zátvorkách
+	2×3 Empty Matrix	Prázdna matica 2 × 3
+	3-D	3D
+	3. Start enforcement	3. Spustiť ochranu
+	3×1 Empty Matrix	Prázdna matica 3 × 1
+	3×2 Empty Matrix	Prázdna matica 3 × 2
+	3×3 Empty Matrix	Prázdna matica 3 × 3
+	3×3 Identity Matrix	Jednotková matica 3 × 3
+	3×3 Identity Matrix (sparse)	Riedka jednotková matica 3 × 3
+	<< Less	<< Menej
+	<< Remove	<< Odstrániť
+	A file dialog is already open.	Dialógové okno na výber súboru je už otvorené.
+	A free, open-source word processor written from scratch in Rust.\nPart of the Crafting Apps from the ArtCraft team.	Bezplatný textový procesor s otvoreným zdrojovým kódom vytvorený od základu v jazyku Rust.\nPatrí do série Crafting Apps od tímu ArtCraft.
+	A mail merge field	Pole hromadnej korešpondencie
+	A numbered sequence (figures, tables…)	Číslovaná postupnosť (obrázky, tabuľky…)
+	A password is required to open this document.	Na otvorenie tohto dokumentu je potrebné heslo.
+	A table of contents	Obsah dokumentu
+	A xor B	A xor B
+	A, B, C, …	A, B, C, …
+	APA	APA
+	ASAP	ASAP
+	AaBbCcDd	AaÁáČčĎď
+	AaBbYyZz	AaÁáÔôŽž
+	About	O aplikácii
+	About WordCraft	O aplikácii WordCraft
+	Above Chart	Nad grafom
+	Above the item	Nad položkou
+	Absolute value cases	Prípady absolútnej hodnoty
+	Accent	Akcent
+	Accent Gradient	Prechodová farba akcentu
+	Accent with Reflection	Akcent s odrazom
+	Accent {n}	Akcent {n}
+	Accents	Akcenty
+	Accept	Prijať
+	Accept All Changes	Prijať všetky zmeny
+	Accept This Change	Prijať túto zmenu
+	Accessed on	Dátum prístupu
+	Accessibility	Prístupnosť
+	Accessibility Pane	Tabla prístupnosti
+	Acute	Dĺžeň
+	Add	Pridať
+	Add >>	Pridať >>
+	Add Chart Element	Pridať prvok grafu
+	Add Field	Pridať pole
+	Add Font…	Pridať písmo…
+	Add New Source…	Pridať nový zdroj…
+	Add Object to Selection	Pridať objekt do výberu
+	Add Pen	Pridať pero
+	Add Row	Pridať riadok
+	Add Series	Pridať rad
+	Add Shape	Pridať tvar
+	Add Space Before Paragraph	Pridať medzeru pred odsekom
+	Add Text	Pridať text
+	Add a Table	Pridať tabuľku
+	Add a comment	Pridať komentár
+	Add at least one field.	Pridajte aspoň jedno pole.
+	Add line numbering	Pridať číslovanie riadkov
+	Add space between Asian and Latin text	Pridať medzeru medzi ázijský a latinský text
+	Add space between Asian text and numbers	Pridať medzeru medzi ázijský text a čísla
+	Add tab stop at:	Pridať zarážku tabulátora na pozíciu:
+	Add the chapter number	Pridať číslo kapitoly
+	Add to Dictionary	Pridať do slovníka
+	Add to Document	Pridať do dokumentu
+	Add to Quick Access Toolbar	Pridať na panel rýchleho prístupu
+	Add to Style Gallery	Pridať do galérie štýlov
+	Add/Edit\nBibliography	Pridať/upraviť\nbibliografiu
+	Add/Edit\nCitation	Pridať/upraviť\ncitáciu
+	Add\nNote	Pridať\npoznámku
+	Add\nPen	Pridať\npero
+	Add\nShape	Pridať\ntvar
+	Added Fonts	Pridané písma
+	Address	Adresa
+	Address Block	Blok adresy
+	Address labels	Adresné štítky
+	Address:	Adresa:
+	Address\nBlock	Adresný\nblok
+	Adjust	Upraviť
+	Advanced	Rozšírené
+	Advanced Find	Rozšírené hľadanie
+	Advanced Find…	Rozšírené hľadanie…
+	After:	Za:
+	Agents	Agenti
+	Align	Zarovnať
+	Align Bottom Center	Zarovnať dolu na stred
+	Align Bottom Left	Zarovnať dolu doľava
+	Align Bottom Right	Zarovnať dolu doprava
+	Align Center	Zarovnať na stred
+	Align Center Left	Zarovnať na stred doľava
+	Align Center Right	Zarovnať na stred doprava
+	Align Left	Zarovnať doľava
+	Align Right	Zarovnať doprava
+	Align Text	Zarovnať text
+	Align Top Center	Zarovnať hore na stred
+	Align Top Left	Zarovnať hore doľava
+	Align Top Right	Zarovnať hore doprava
+	Aligned at:	Zarovnané na pozícii:
+	Alignment	Zarovnanie
+	Alignment:	Zarovnanie:
+	All	Všetko
+	All - Linear	Všetko – lineárne
+	All - Professional	Všetko – profesionálne
+	All Borders	Všetky orámovania
+	All Caps	Všetky veľké písmená
+	All Commands	Všetky príkazy
+	All Levels	Všetky úrovne
+	All Markup	Všetky označenia
+	All caps	Všetky veľké písmená
+	All files	Všetky súbory
+	All pages	Všetky strany
+	All pages in the range	Všetky strany v rozsahu
+	All symbol sets	Všetky sady symbolov
+	Allow Latin text to wrap in the middle of a word	Povoliť zalomenie latinského textu uprostred slova
+	Allow hanging punctuation	Povoliť predsadenú interpunkciu
+	Allow line breaks	Povoliť zalomenie riadkov
+	Allow row to break across pages	Povoliť rozdelenie riadka tabuľky medzi strany
+	Alphabetical	Abecedne
+	Alt Text	Alternatívny text
+	Alt Text Pane	Tabla alternatívneho textu
+	Alt text	Alternatívny text
+	Alt:	Alt:
+	Alt\nText	Alternatívny\ntext
+	Angle Brackets	Lomené zátvorky
+	Angle Brackets with Separator	Lomené zátvorky s oddeľovačom
+	Angle Brackets with Two Separators	Lomené zátvorky s dvoma oddeľovačmi
+	Animate the caret (it glides and fades)	Animovať kurzor (plynulý pohyb a miznutie)
+	Animation	Animácia
+	Animation effects:	Efekty animácie:
+	Annotation Reference	Odkaz na anotáciu
+	Annotation Subject	Predmet anotácie
+	Annotation Text	Text anotácie
+	Another file	Iný súbor
+	Any Character	Ľubovoľný znak
+	Any Digit	Ľubovoľná číslica
+	Any Letter	Ľubovoľné písmeno
+	Anyone can open this document. Encrypt it with a password to keep it private.	Tento dokument môže otvoriť ktokoľvek. Ak ho chcete uchovať v súkromí, zašifrujte ho heslom.
+	Anyone who opens the document will need this password.	Toto heslo bude potrebovať každý, kto dokument otvorí.
+	Apply	Použiť
+	Apply Asian line-breaking rules (kinsoku)	Použiť ázijské pravidlá zalamovania riadkov (kinsoku)
+	Apply Character Style	Použiť znakový štýl
+	Apply Style	Použiť štýl
+	Apply Styles	Použiť štýly
+	Apply as you type	Použiť počas písania
+	Apply formatting to:	Použiť formátovanie na:
+	Apply to:	Použiť na:
+	Arabic	Arabčina
+	Arch Down	Oblúk nadol
+	Arch Up	Oblúk nahor
+	Area	Plocha
+	Arrange	Usporiadať
+	Arrange\nAll	Usporiadať\nvšetko
+	Arrow	Šípka
+	Arrows	Šípky
+	Artistic Effects	Umelecké efekty
+	As Recommended	Podľa odporúčania
+	As you type	Počas písania
+	Asian Typography	Ázijská typografia
+	Asian text font:	Písmo ázijského textu:
+	Assign	Priradiť
+	At least	Najmenej
+	At least {n}	Najmenej {n}
+	Atelier	Atelier
+	Atmosphere	Atmosféra
+	Attach Template	Pripojiť šablónu
+	Attach…	Pripojiť…
+	Author	Autor
+	Auto	Automaticky
+	AutoCorrect	Automatické opravy
+	AutoCorrect Options	Možnosti automatických opráv
+	AutoFit	Automaticky prispôsobiť
+	AutoFit Column by Double-Clicking	Prispôsobiť šírku stĺpca dvojitým kliknutím
+	AutoFit Contents	Prispôsobiť obsahu
+	AutoFit Window	Prispôsobiť oknu
+	AutoFormat As You Type	Automatické formátovanie pri písaní
+	AutoSave	Automatické ukladanie
+	AutoSave documents you have saved in WordCraft	Automaticky ukladať dokumenty uložené vo WordCrafte
+	AutoSave failed: {error}. Save the document to turn AutoSave back on.	Automatické ukladanie zlyhalo: {error}. Uložte dokument, aby sa znova zaplo.
+	AutoSave isn't available in the browser: it can't write to your files. Save downloads a copy.	Automatické ukladanie nie je v prehliadači dostupné: nemôže zapisovať do vašich súborov. Uložením sa stiahne kópia.
+	AutoSave only keeps .docx, .odt and .rtf files; {name} can't keep all formatting. Save as .docx to turn on AutoSave.	Automatické ukladanie podporuje iba súbory .docx, .odt a .rtf; formát {name} nezachová celé formátovanie. Uložte ako .docx, aby sa zaplo automatické ukladanie.
+	AutoSave saves every change to the file (needs a saved document)	Automatické ukladanie zapisuje každú zmenu do súboru (dokument musí byť uložený)
+	AutoSave writes your changes to the file a moment after you stop typing.	Automatické ukladanie zapíše zmeny do súboru krátko po tom, ako prestanete písať.
+	AutoText	Automatický text
+	Automatic	Automaticky
+	Automatic ({language})	Automaticky ({language})
+	Automatic ({region})	Automaticky ({region})
+	Automatic Table 1 (3 levels)	Automatický obsah 1 (3 úrovne)
+	Automatic Table 2 (2 levels)	Automatický obsah 2 (2 úrovne)
+	Automatic bulleted lists	Automatické zoznamy s odrážkami
+	Automatic follows your system's language. Menus and commands change; your documents don't.	Automatický výber nasleduje jazyk systému. Ponuky a príkazy sa zmenia, dokumenty zostanú rovnaké.
+	Automatic numbered lists	Automatické číslované zoznamy
+	Automatically Update Document Styles	Automaticky aktualizovať štýly dokumentu
+	Automatically hyphenate document	Automaticky deliť slová v dokumente
+	Automatically update document styles	Automaticky aktualizovať štýly dokumentu
+	Backspace	Backspace
+	Balloons	Bubliny
+	Banded Columns	Pruhované stĺpce
+	Banded Rows	Pruhované riadky
+	Bar	Pruh
+	Base text:	Základný text:
+	Based on: {style}	Založené na: {style}
+	Baseline Dots	Bodky na základnej čiare
+	Basic Cycle	Základný cyklus
+	Basic List	Základný zoznam
+	Basic Math	Základná matematika
+	Basic Matrix	Základná matica
+	Basic Process	Základný proces
+	Basic Pyramid	Základná pyramída
+	Basic Radial	Základné radiálne usporiadanie
+	Basic Venn	Základný Vennov diagram
+	Bayes' rule	Bayesovo pravidlo
+	Before:	Pred:
+	Beginning of Word	Začiatok slova
+	Behind Text	Za textom
+	Below text	Pod textom
+	Below the item	Pod položkou
+	Between	Medzi
+	Bibliography	Bibliografia
+	Binary assets added	Pridané binárne súbory
+	Binary assets removed	Odstránené binárne súbory
+	Binomial Coefficient	Binomický koeficient
+	Binomial Coefficient (angle)	Binomický koeficient (uhlový)
+	Binomial Coefficient with Angle Brackets	Binomický koeficient v lomených zátvorkách
+	Binomial expansion of (x+a)ⁿ	Binomický rozvoj výrazu (x+a)ⁿ
+	Blank	Prázdne
+	Blank (Three Columns)	Prázdne (tri stĺpce)
+	Blank Page	Prázdna strana
+	Blank document	Prázdny dokument
+	Block\nAuthors	Autori\nv bloku
+	Blue:	Modrá:
+	Body Text	Hlavný text
+	Body text in a short paragraph to show spacing.	Krátky odsek hlavného textu na ukážku rozostupov.
+	Bold	Tučné
+	Book	Kniha
+	Book Title	Názov knihy
+	Book title	Názov knihy
+	Bookmark	Záložka
+	Bookmark name:	Názov záložky:
+	Border Painter	Kresliť orámovanie
+	Border lines	Čiary orámovania
+	Border\nPainter	Kresliť\norámovanie
+	Borders	Orámovania
+	Borders and Shading	Orámovanie a podfarbenie
+	Borders and Shading…	Orámovanie a podfarbenie…
+	Both Sides	Obe strany
+	Bottom	Dole
+	Bottom Border	Dolné orámovanie
+	Bottom Margin	Dolný okraj
+	Bottom of Page	Dolná časť strany
+	Bottom:	Dole:
+	Box	Rámček
+	Boxed Formula	Vzorec v rámčeku
+	Boxed Formula (example)	Vzorec v rámčeku (príklad)
+	Boxed Formulas	Vzorce v rámčeku
+	Braces	Zložené zátvorky
+	Braces with Separator	Zložené zátvorky s oddeľovačom
+	Bracket	Zátvorka
+	Brackets	Zátvorky
+	Brackets with Separators	Zátvorky s oddeľovačmi
+	Break Link	Zrušiť prepojenie
+	Breaks	Zlomy
+	Breve	Oblúčik
+	Bring Forward	Preniesť dopredu
+	Browse in WordCraft…	Prehľadávať vo WordCrafte…
+	Browse…	Prehľadávať…
+	Building Block Gallery Content Control	Ovládací prvok obsahu galérie preddefinovaných prvkov
+	Built-In	Vstavané
+	Built-in style	Vstavaný štýl
+	Built-in styles can't be deleted.	Vstavané štýly nemožno odstrániť.
+	Bullet	Odrážka
+	Bullet Library	Knižnica odrážok
+	Bullets	Odrážky
+	By author	Podľa autora
+	CONFIDENTIAL	DÔVERNÉ
+	Calendar	Kalendár
+	Can't be deleted	Nemožno odstrániť
+	Cancel	Zrušiť
+	Canvas Member	Prvok plátna
+	Capitalize Each Word	Veľké začiatočné písmeno každého slova
+	Capitalize first letter of sentences	Veľké začiatočné písmeno viet
+	Capitalize first letter of table cells	Veľké začiatočné písmeno v bunkách tabuľky
+	Capitalize names of days	Veľké začiatočné písmeno v názvoch dní
+	Capitalize the first word of a sentence	Veľké začiatočné písmeno prvého slova vety
+	Caption	Titulok
+	Caption Numbering	Číslovanie titulkov
+	Caption text	Text titulku
+	Caption:	Titulok:
+	Captions	Titulky
+	Caret Character	Znak striešky
+	Case changes	Zmeny veľkosti písmen
+	Cases (Three Conditions)	Prípady (tri podmienky)
+	Cases (Two Conditions)	Prípady (dve podmienky)
+	Cases and Stacks	Prípady a stĺpce
+	Categories	Kategórie
+	Categories:	Kategórie:
+	Category	Kategória
+	Category {n}	Kategória {n}
+	Ceiling	Horná celá časť
+	Cell	Bunka
+	Cell Margins	Okraje bunky
+	Cell Size	Veľkosť bunky
+	Cell\nMargins	Okraje\nbunky
+	Center	Na stred
+	Centered	Na stred
+	Centered as Group	Na stred ako skupina
+	Centimeters	Centimetre
+	Change	Zmeniť
+	Change Case	Zmeniť veľkosť písmen
+	Change Chart Type	Zmeniť typ grafu
+	Change Colors	Zmeniť farby
+	Change Layout	Zmeniť rozloženie
+	Change List Level	Zmeniť úroveň zoznamu
+	Change Password…	Zmeniť heslo…
+	Change Picture	Zmeniť obrázok
+	Change Picture…	Zmeniť obrázok…
+	Change Shape	Zmeniť tvar
+	Change Structure	Zmeniť štruktúru
+	Change in y over change in x	Zmena y delená zmenou x
+	Change to Display	Zmeniť na samostatnú rovnicu
+	Change to Inline	Zmeniť na rovnicu v riadku
+	Change to Level 1	Zmeniť na úroveň 1
+	Change to Level 2	Zmeniť na úroveň 2
+	Change to Level 3	Zmeniť na úroveň 3
+	Change to Level 4	Zmeniť na úroveň 4
+	Change to Level 5	Zmeniť na úroveň 5
+	Change to Level 6	Zmeniť na úroveň 6
+	Change to Level 7	Zmeniť na úroveň 7
+	Change to Level 8	Zmeniť na úroveň 8
+	Change to Level 9	Zmeniť na úroveň 9
+	Change\nChart Type	Zmeniť\ntyp grafu
+	Change\nColors	Zmeniť\nfarby
+	Changed lines:	Zmenené riadky:
+	Changes	Zmeny
+	Chapter in a book	Kapitola v knihe
+	Chapters begin at:	Kapitoly začínajú na:
+	Character	Znak
+	Character Border	Orámovanie znaku
+	Character Position	Poloha znaku
+	Character Scale	Mierka znaku
+	Character Shading	Podfarbenie znaku
+	Character Spacing	Rozstupy znakov
+	Character code:	Kód znaku:
+	Character in Range	Znak v rozsahu
+	Character level	Úroveň znakov
+	Character spacing	Rozstupy znakov
+	Character style	Znakový štýl
+	Characters	Znaky
+	Characters (no spaces)	Znaky (bez medzier)
+	Characters (with spaces)	Znaky (s medzerami)
+	Characters per line:	Počet znakov na riadok:
+	Chart	Graf
+	Chart Design	Návrh grafu
+	Chart Layouts	Rozloženia grafu
+	Chart Title	Názov grafu
+	Check	Skontrolovať
+	Check Accessibility	Skontrolovať prístupnosť
+	Check Box Content Control	Ovládací prvok obsahu začiarkavacieho políčka
+	Check Compatibility	Skontrolovať kompatibilitu
+	Check Spelling as You Type	Kontrolovať pravopis počas písania
+	Check for Errors	Skontrolovať chyby
+	Check spelling as you type	Kontrolovať pravopis počas písania
+	Check\nAccessibility	Skontrolovať\nprístupnosť
+	Checked styles are allowed:	Začiarknuté štýly sú povolené:
+	Checked symbol	Začiarknutý symbol
+	Chevron Down	Dvojitá šípka nadol
+	Chevron Up	Dvojitá šípka nahor
+	Chicago	Chicago
+	Chinese (Simplified)	Čínština (zjednodušená)
+	Chinese (Traditional)	Čínština (tradičná)
+	Choose List Item	Vybrať položku zoznamu
+	Choose a command	Vybrať príkaz
+	Choose a shortcut	Vybrať klávesovú skratku
+	Choose the sheet that holds the recipients.	Vyberte hárok s príjemcami.
+	Circle	Kruh
+	Circle area from its radius	Obsah kruhu z polomeru
+	Circled Dot	Bodka v kruhu
+	Circled Plus	Plus v kruhu
+	Circled Times	Krížik v kruhu
+	Citation Style	Štýl citácie
+	Citations	Citácie
+	Citations & Bibliography	Citácie a bibliografia
+	City	Mesto
+	Clear	Vymazať
+	Clear All	Vymazať všetko
+	Clear All Formatting	Vymazať všetko formátovanie
+	Clear Character Formatting	Vymazať formátovanie znakov
+	Clear Character Style	Vymazať znakový štýl
+	Clear Formatting Level	Vymazať úroveň formátovania
+	Clear Paragraph Formatting	Vymazať formátovanie odseku
+	Click a border between two cells to merge them. Esc stops.	Kliknite na orámovanie medzi dvoma bunkami, aby sa spojili. Stlačením Esc ukončíte režim.
+	Click an item to paste it.	Kliknutím na položku ju prilepíte.
+	Click level to modify:	Kliknite na úroveň, ktorú chcete upraviť:
+	Click the empty text box the text should continue in (Esc cancels)	Kliknite na prázdne textové pole, v ktorom má text pokračovať (Esc zruší)
+	Click to switch back to inserting	Kliknutím prepnite späť na vkladanie
+	Clipboard	Schránka
+	Clipboard Contents	Obsah schránky
+	Clipboard Items	Položky schránky
+	Clipboard Pane	Tabla schránky
+	Close	Zavrieť
+	Close Equation	Zavrieť rovnicu
+	Close Header and Footer	Zavrieť hlavičku a pätu
+	Close Outline View	Zavrieť zobrazenie osnovy
+	Close Outline\nView	Zavrieť zobrazenie\nosnovy
+	Clustered Bar	Skupinový pruhový graf
+	Clustered Column	Skupinový stĺpcový graf
+	Col #:	Stĺpec č.:
+	Collapse	Zbaliť
+	Collapse Selection	Zbaliť výber
+	Collate copies	Zoradiť kópie
+	Collect entries from:	Zbierať položky z:
+	Colon Equal	Dvojbodka a rovná sa
+	Color	Farba
+	Color model:	Farebný model:
+	Color only	Iba farba
+	Color:	Farba:
+	Color: {color}	Farba: {color}
+	Colorful	Farebné
+	Colors	Farby
+	Colors:	Farby:
+	Column	Stĺpec
+	Column Break	Zlom stĺpca
+	Column Selection	Výber stĺpca
+	Column width	Šírka stĺpca
+	Column:	Stĺpec:
+	Columns	Stĺpce
+	Columns:	Stĺpce:
+	Combine	Spojiť
+	Combine Documents	Spojiť dokumenty
+	Combo Box Content Control	Ovládací prvok obsahu kombinovaného zoznamu
+	Commands	Príkazy
+	Commands:	Príkazy:
+	Comment	Komentár
+	Comments	Komentáre
+	Comments Pane	Tabla komentárov
+	Comments beside each page and tracked changes in PDFs, prints and images; a comment list at the end of web pages, Markdown and text.	Komentáre vedľa každej strany a sledované zmeny v PDF, výtlačkoch a obrázkoch; zoznam komentárov na konci webových stránok, súborov Markdown a textu.
+	Commits	Commity
+	Common Accent Objects	Bežné objekty s akcentmi
+	Common Brackets	Bežné zátvorky
+	Common Fractions	Bežné zlomky
+	Common Functions	Bežné funkcie
+	Common Large Operators	Bežné veľké operátory
+	Common Operator Structures	Bežné štruktúry operátorov
+	Common Operators	Bežné operátory
+	Common Radicals	Bežné odmocniny
+	Common Subscripts and Superscripts	Bežné dolné a horné indexy
+	Communication	Komunikácia
+	Community\nDiscord	Komunitný\nDiscord
+	Compact	Kompaktné
+	Company	Spoločnosť
+	Compare	Porovnať
+	Compare Documents	Porovnať dokumenty
+	Compared: {changes} changes	Porovnané zmeny: {changes}
+	Comparing with another file needs the desktop app.	Na porovnanie s iným súborom je potrebná počítačová aplikácia.
+	Comparison settings	Nastavenia porovnávania
+	Compress Pictures	Komprimovať obrázky
+	Compress punctuation at the start of a line	Zúžiť interpunkciu na začiatku riadka
+	Conference	Konferencia
+	Conference paper	Konferenčný príspevok
+	Confirm password:	Potvrďte heslo:
+	Connect Shapes	Prepojiť tvary
+	Container Title	Názov kontajnera
+	Content Control Properties	Vlastnosti ovládacieho prvku obsahu
+	Content Control at Selection	Ovládací prvok obsahu vo výbere
+	Contents can't be edited	Obsah nemožno upravovať
+	Context	Kontext
+	Continuous	Súvisle
+	Continuous numbering	Súvislé číslovanie
+	Contour Integral	Krivkový integrál
+	Contour Integral with Limits	Krivkový integrál s medzami
+	Contour Integral with Stacked Limits	Krivkový integrál s medzami nad sebou
+	Contour Integrals	Krivkové integrály
+	Contributors	Prispievatelia
+	Controls	Ovládacie prvky
+	Conversions	Prevody
+	Convert	Previesť
+	Convert Notes	Previesť poznámky
+	Convert Text to Table	Previesť text na tabuľku
+	Convert Text to Table…	Previesť text na tabuľku…
+	Convert between built-up and linear form	Previesť medzi zloženým a lineárnym tvarom
+	Convert to Shapes	Previesť na tvary
+	Convert to Text	Previesť na text
+	Copies	Kópie
+	Coproduct	Koprodukt
+	Coproduct with Limits	Koprodukt s medzami
+	Coproduct with Lower Limit	Koprodukt s dolnou medzou
+	Coproduct with Subscript-Superscript Limits	Koprodukt s medzami v dolnom a hornom indexe
+	Copy	Kopírovať
+	Copy Formatting	Kopírovať formátovanie
+	Copy Styles	Kopírovať štýly
+	Copy of the text a bookmark marks	Kópia textu označeného záložkou
+	Copyright	Autorské práva
+	Copyright Sign	Symbol autorských práv
+	Correct TWo INitial CApitals	Opraviť DVe POčiatočné VElké PÍsmená
+	Correct accidental usage of cAPS LOCK key	Opraviť nechcené použitie klávesu CAPS LOCK
+	Corrections	Opravy
+	Cosecant Function	Funkcia kosekans
+	Cosine 2x	Kosínus 2x
+	Cosine Function	Funkcia kosínus
+	Cotangent Function	Funkcia kotangens
+	Couldn't download {name}: {error}	Nepodarilo sa stiahnuť {name}: {error}
+	Couldn't make WordCraft the default: {error}	Nepodarilo sa nastaviť WordCraft ako predvolenú aplikáciu: {error}
+	Couldn't open {path}: {error}	Nepodarilo sa otvoriť {path}: {error}
+	Count by:	Počítať podľa:
+	Count words in text boxes and notes	Počítať slová v textových poliach a poznámkach
+	Country	Krajina
+	Courtesy Title	Oslovenie
+	Cover Page	Titulná strana
+	Craft	Craft
+	Create	Vytvoriť
+	Create Graphic	Vytvoriť grafiku
+	Create Link	Vytvoriť prepojenie
+	Create New Style	Vytvoriť nový štýl
+	Create Source	Vytvoriť zdroj
+	Create a Style	Vytvoriť štýl
+	Create an interactive outline of your document.\n\nIt's a great way to keep track of where you are or quickly move your content around.\n\nTo get started, go to the Home tab and apply Heading styles to the headings in your document.	Vytvorte interaktívnu osnovu dokumentu.\n\nPomôže vám zistiť, kde sa nachádzate, a rýchlo premiestňovať obsah.\n\nZačnite na karte Domov a použite štýly Nadpis na nadpisy v dokumente.
+	Crop	Orezať
+	Cross-reference	Krížový odkaz
+	Cross-reference:	Krížový odkaz:
+	Cube Root	Tretia odmocnina
+	Current	Aktuálne
+	Current - Linear	Aktuálne – lineárne
+	Current - Professional	Aktuálne – profesionálne
+	Current Position	Aktuálna pozícia
+	Current page	Aktuálna strana
+	Current style: {style}	Aktuálny štýl: {style}
+	Curved Arrow Connector	Zakrivený spojovací šíp
+	Curved Connector	Zakrivená spojovacia čiara
+	Custom	Vlastné
+	Custom Margins…	Vlastné okraje…
+	Custom Table of Contents…	Vlastný obsah dokumentu…
+	Custom Watermark	Vlastná vodotlač
+	Custom Watermark…	Vlastná vodotlač…
+	Custom dictionary	Vlastný slovník
+	Custom mark:	Vlastná značka:
+	Custom range	Vlastný rozsah
+	Customize	Prispôsobiť
+	Customize Keyboard	Prispôsobiť klávesnicu
+	Customize Quick Access Toolbar	Prispôsobiť panel rýchleho prístupu
+	Customize Quick Access Toolbar…	Prispôsobiť panel rýchleho prístupu…
+	Customize Ribbon	Prispôsobiť pás s nástrojmi
+	Customize the Ribbon…	Prispôsobiť pás s nástrojmi…
+	Customize…	Prispôsobiť…
+	Cut	Vystrihnúť
+	Cycle	Cyklus
+	Czech	Čeština
+	DO NOT COPY	NEKOPÍROVAŤ
+	DOI	DOI
+	DRAFT	NÁVRH
+	Danish	Dánčina
+	Dark	Tmavé
+	Dark Mode	Tmavý režim
+	Dark page (white text on black)	Tmavá strana (biely text na čiernom pozadí)
+	Dark with Shadow	Tmavé s tieňom
+	Darkroom	Tmavá komora
+	Dashed	Prerušované
+	Data	Údaje
+	Data Labels	Menovky údajov
+	Date & Time	Dátum a čas
+	Date Picker Content Control	Ovládací prvok obsahu na výber dátumu
+	Date and Time	Dátum a čas
+	Date format	Formát dátumu
+	Date formats:	Formáty dátumu:
+	Day	Deň
+	Decimal	Desatinné
+	Decorative objects only add visual interest: screen readers skip them.	Dekoratívne objekty slúžia iba na vzhľad: čítačky obrazovky ich preskakujú.
+	Decrease Font Size	Zmenšiť veľkosť písma
+	Decrease Indent	Zmenšiť odsadenie
+	Default	Predvolené
+	Default Paragraph Font	Predvolené písmo odseku
+	Default tab stops:	Predvolené zarážky tabulátora:
+	Define New Bullet	Definovať novú odrážku
+	Define New Multilevel List	Definovať nový viacúrovňový zoznam
+	Define New Multilevel List…	Definovať nový viacúrovňový zoznam…
+	Define New Number Format	Definovať nový formát číslovania
+	Deflate	Zmenšiť
+	Delete	Odstrániť
+	Delete Back in Equation	Vymazať dozadu v rovnici
+	Delete Cells	Odstrániť bunky
+	Delete Clipboard Item	Odstrániť položku schránky
+	Delete Columns	Odstrániť stĺpce
+	Delete Comment	Odstrániť komentár
+	Delete Label	Odstrániť štítok
+	Delete Next Word	Odstrániť nasledujúce slovo
+	Delete Previous Word	Odstrániť predchádzajúce slovo
+	Delete Rows	Odstrániť riadky
+	Delete Selected Ink	Odstrániť vybraný rukopis
+	Delete Style	Odstrániť štýl
+	Delete Table	Odstrániť tabuľku
+	Delete Table Style	Odstrániť štýl tabuľky
+	Delete in Equation	Vymazať v rovnici
+	Deleted	Odstránené
+	Deletions:	Odstránenia:
+	Delivery address:	Doručovacia adresa:
+	Delta Equal To	Delta sa rovná
+	Delta over arrow	Delta nad šípkou
+	Demote	Znížiť úroveň
+	Demote to Body Text	Znížiť na úroveň hlavného textu
+	Derivative as a limit	Derivácia ako limita
+	Describe what this object shows, for people who can't see it.	Opíšte, čo tento objekt zobrazuje, pre ľudí, ktorí ho nevidia.
+	Describe what this table shows, for people who can't see it.	Opíšte, čo táto tabuľka zobrazuje, pre ľudí, ktorí ju nevidia.
+	Description:	Opis:
+	Design	Návrh
+	Design Mode	Režim návrhu
+	Detach Template	Odpojiť šablónu
+	Detect language automatically	Automaticky rozpoznať jazyk
+	Developer	Vývojár
+	Diagonal	Diagonálne
+	Diagonal Dots	Diagonálne bodky
+	Diamond	Kosoštvorec
+	Dictate	Diktovať
+	Different First Page	Odlišná prvá strana
+	Different Odd & Even Pages	Odlišné párne a nepárne strany
+	Differential	Diferenciál
+	Differential theta	Diferenciál theta
+	Differential x	Diferenciál x
+	Differential y	Diferenciál y
+	Differentials	Diferenciály
+	Direct formatting	Priame formátovanie
+	Direction:	Smer:
+	Directory	Adresár
+	Discord	Discord
+	Discord community	Komunita na Discorde
+	Display	Zobrazenie
+	Display for Review	Zobrazenie revízií
+	Display name	Zobrazované meno
+	Display text	Zobrazený text
+	Distribute Columns	Rovnomerne rozložiť stĺpce
+	Distribute Rows	Rovnomerne rozložiť riadky
+	Distribute letters	Rovnomerne rozložiť písmená
+	Distribute spacing	Rovnomerne rozložiť medzery
+	Distributed	Rovnomerne rozložené
+	Do Not Check Spelling or Grammar	Nekontrolovať pravopis ani gramatiku
+	Do Not Show in TOC	Nezobrazovať v obsahu
+	Do not check spelling or grammar	Nekontrolovať pravopis ani gramatiku
+	Do you want to save changes to {name}?	Chcete uložiť zmeny v súbore {name}?
+	Document	Dokument
+	Document End	Koniec dokumentu
+	Document Formatting	Formátovanie dokumentu
+	Document Grid	Mriežka dokumentu
+	Document Information	Informácie o dokumente
+	Document Property	Vlastnosť dokumentu
+	Document Start	Začiatok dokumentu
+	Document Text	Text dokumentu
+	Document Title	Názov dokumentu
+	Document template:	Šablóna dokumentu:
+	Document1	Dokument1
+	Document\nPreferences	Predvoľby\ndokumentu
+	Documents	Dokumenty
+	Documents you open will show up here.	Dokumenty, ktoré otvoríte, sa zobrazia tu.
+	Don't Save	Neukladať
+	Don't add space between paragraphs of the same style	Nepridávať medzeru medzi odseky s rovnakým štýlom
+	Don't capitalize after:	Nepísať veľké začiatočné písmeno po:
+	Don't hyphenate	Nedeliť slová
+	Don't read Zotero, Mendeley or EndNote citations and bibliographies	Nečítať citácie a bibliografie Zotero, Mendeley ani EndNote
+	Dot	Bodka
+	Dot dash	Bodka a pomlčka
+	Dot-dash	Bodka a pomlčka
+	Dots	Bodky
+	Dotted	Bodkované
+	Double	Dvojité
+	Double Bar	Dvojitá zvislá čiara
+	Double Closing Quote	Dvojitá koncová úvodzovka
+	Double Dot	Dvojitá bodka
+	Double Integral	Dvojný integrál
+	Double Integral with Limits	Dvojný integrál s medzami
+	Double Integral with Stacked Limits	Dvojný integrál s medzami nad sebou
+	Double Left Arrow with Text Above	Dvojitá šípka doľava s textom nad ňou
+	Double Left Arrow with Text Below	Dvojitá šípka doľava s textom pod ňou
+	Double Left Right Arrow with Text Above	Dvojitá obojsmerná šípka s textom nad ňou
+	Double Left Right Arrow with Text Below	Dvojitá obojsmerná šípka s textom pod ňou
+	Double Opening Quote	Dvojitá začiatočná úvodzovka
+	Double Right Arrow with Text Above	Dvojitá šípka doprava s textom nad ňou
+	Double Right Arrow with Text Below	Dvojitá šípka doprava s textom pod ňou
+	Double Spacing	Dvojité riadkovanie
+	Double Square Brackets	Dvojité hranaté zátvorky
+	Double Strikethrough	Dvojité prečiarknutie
+	Double Underline	Dvojité podčiarknutie
+	Double Vertical Bars	Dvojité zvislé čiary
+	Double strikethrough	Dvojité prečiarknutie
+	Double summation	Dvojný súčet
+	Doughnut	Prstencový graf
+	Down	Nadol
+	Draft	Koncept
+	Drag a rectangle to draw a table, or a line across cells to split them. Esc stops.	Potiahnutím nakreslite obdĺžnik pre tabuľku alebo čiaru cez bunky na ich rozdelenie. Stlačením Esc ukončíte režim.
+	Draw	Kresliť
+	Draw Ink	Kresliť rukopis
+	Draw Table	Kresliť tabuľku
+	Draw\nTable	Kresliť\ntabuľku
+	Drawing Canvas	Kresliace plátno
+	Drawing Tools	Nástroje na kreslenie
+	Drawing\nCanvas	Kresliace\nplátno
+	Drop Cap	Iniciála
+	Drop cap	Iniciála
+	Drop-Down List Content Control	Ovládací prvok obsahu rozbaľovacieho zoznamu
+	Drops all formatting and pastes plain text.	Odstráni všetko formátovanie a prilepí obyčajný text.
+	Dutch	Holandčina
+	E-mail Messages	E-mailové správy
+	Edit Comment	Upraviť komentár
+	Edit Data	Upraviť údaje
+	Edit Document	Upraviť dokument
+	Edit Equation	Upraviť rovnicu
+	Edit Field Code	Upraviť kód poľa
+	Edit Field…	Upraviť pole…
+	Edit Footer	Upraviť pätu
+	Edit Header	Upraviť hlavičku
+	Edit Items	Upraviť položky
+	Edit Recipient List	Upraviť zoznam príjemcov
+	Edit Source	Upraviť zdroj
+	Edit\nData	Upraviť\núdaje
+	Edit\nRecipient List	Upraviť\nzoznam príjemcov
+	Edited	Upravené
+	Editing	Úpravy
+	Editing header/footer	Úprava hlavičky alebo päty
+	Editing in this document is restricted.	Úpravy v tomto dokumente sú obmedzené.
+	Editing — edit the document directly	Úpravy – upravovať dokument priamo
+	Edition	Vydanie
+	Editor	Editor
+	Edit…	Upraviť…
+	Effects	Efekty
+	Elbow Arrow Connector	Zalomená spojovacia šípka
+	Elbow Connector	Zalomená spojovacia čiara
+	Ellipsis	Tri bodky
+	Em Dash	Dlhá pomlčka
+	Em Space	Medzera em
+	Emboss	Reliéf
+	Emphasis	Zvýraznenie
+	Empty Matrices	Prázdne matice
+	En Dash	Krátka pomlčka
+	En Space	Medzera en
+	Enclose Characters	Ohraničiť znaky
+	Enclosure	Ohraničenie
+	Encrypt with Password	Zašifrovať heslom
+	Encrypt with Password…	Zašifrovať heslom…
+	End of Word	Koniec slova
+	End of document	Koniec dokumentu
+	End of section	Koniec oddielu
+	Endnote Reference	Odkaz na koncovú poznámku
+	Endnote Text	Text koncovej poznámky
+	Endnotes	Koncové poznámky
+	Endnotes to footnotes	Previesť koncové poznámky na poznámky pod čiarou
+	English (United Kingdom)	Angličtina (Spojené kráľovstvo)
+	English (United States)	Angličtina (Spojené štáty)
+	Engrave	Rytina
+	Enlarge symbol	Zväčšiť symbol
+	Enter formatting for number:	Zadajte formát čísla:
+	Enter in Equation	Zadať v rovnici
+	Enter page number:	Zadajte číslo strany:
+	Entry marked.	Položka označená.
+	Envelope #10	Obálka č. 10
+	Envelope Address	Adresa na obálke
+	Envelope DL	Obálka DL
+	Envelope Return	Spiatočná adresa na obálke
+	Envelope size:	Veľkosť obálky:
+	Envelopes	Obálky
+	Equal Equal	Dvojité rovná sa
+	Equal by Definition	Rovná sa podľa definície
+	Equal column width	Rovnaká šírka stĺpcov
+	Equals:	Rovná sa:
+	Equation	Rovnica
+	Equation Gallery	Galéria rovníc
+	Equation Info	Informácie o rovnici
+	Equation Number	Číslo rovnice
+	Equation Options	Možnosti rovnice
+	Erase Ink	Vymazať rukopis
+	Eraser	Guma
+	Errors ({n})	Chyby ({n})
+	Estonian	Estónčina
+	Euler's identity	Eulerova identita
+	Even Page	Párna strana
+	Even pages only	Iba párne strany
+	Every change is recorded as a tracked change.	Každá zmena sa zaznamená ako sledovaná zmena.
+	Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel.	Každý príkaz je dostupný skriptom a agentom AI: spustite `wordcraft-cli mcp` pre server MCP alebo aplikáciu spustite s `--control <port>` pre riadiaci kanál JSON.
+	Every field needs a name.	Každé pole musí mať názov.
+	Everyone	Všetci
+	Exactly	Presne
+	Exactly {n}	Presne {n}
+	Example: {sample}	Príklad: {sample}
+	Exceptions (optional)	Výnimky (voliteľné)
+	Exceptions…	Výnimky…
+	Expand	Rozbaliť
+	Expand or Collapse Heading	Rozbaliť alebo zbaliť nadpis
+	Exponential	Exponenciálna
+	Exponential series	Exponenciálny rad
+	Export	Exportovať
+	Export PDF	Exportovať PDF
+	Export Page as PNG	Exportovať stranu ako PNG
+	Export a copy to share (PDF, Word document)	Exportovať kópiu na zdieľanie (PDF, dokument Word)
+	Exported {path}	Exportované do {path}
+	Expression	Výraz
+	Extend Selection	Rozšíriť výber
+	Extend Selection by Units	Rozšíriť výber po jednotkách
+	Extra space	Nadbytočná medzera
+	Field	Pole
+	Field Codes	Kódy polí
+	Field code:	Kód poľa:
+	Field codes:	Kódy polí:
+	Field name	Názov poľa
+	Field name:	Názov poľa:
+	Field names must be different.	Názvy polí musia byť odlišné.
+	Field names:	Názvy polí:
+	Field properties	Vlastnosti poľa
+	Field:	Pole:
+	Fields	Polia
+	Fields:	Polia:
+	Field…	Pole…
+	Figure	Obrázok
+	File	Súbor
+	File name:	Názov súboru:
+	Fill	Výplň
+	Fill color:	Farba výplne:
+	Filling in forms	Vypĺňanie formulárov
+	Film	Film
+	Find	Nájsť
+	Find Next	Nájsť ďalšie
+	Find Next Editable Region	Nájsť ďalšiu upraviteľnú oblasť
+	Find Previous	Nájsť predchádzajúce
+	Find Recipient	Nájsť príjemcu
+	Find What Expression	Nájsť hľadaný výraz
+	Find What Text	Nájsť hľadaný text
+	Find and Replace	Nájsť a nahradiť
+	Find what:	Hľadať:
+	Find:	Nájsť:
+	Finding printers…	Hľadajú sa tlačiarne…
+	Finish	Dokončiť
+	Finish & Merge	Dokončiť a zlúčiť
+	Finish &\nMerge	Dokončiť a\nzlúčiť
+	Finished	Dokončené
+	Finnish	Fínčina
+	First	Prvý
+	First Column	Prvý stĺpec
+	First Name	Krstné meno
+	First commit	Prvý commit
+	First line	Prvý riadok
+	First line:	Prvý riadok:
+	First row of data contains column headers	Prvý riadok údajov obsahuje hlavičky stĺpcov
+	Fit	Prispôsobiť
+	Fix Position on Page	Ukotviť pozíciu na strane
+	Fixed Column Width	Pevná šírka stĺpca
+	Flip Horizontal	Prevrátiť vodorovne
+	Flip Vertical	Prevrátiť zvisle
+	Floor	Dolná celá časť
+	Focus	Sústredenie
+	Follow number with:	Za číslom vložiť:
+	Font	Písmo
+	Font Color	Farba písma
+	Font Dialog	Dialógové okno Písmo
+	Font Size	Veľkosť písma
+	Font color	Farba písma
+	Font color:	Farba písma:
+	Font:	Písmo:
+	Font: {font}	Písmo: {font}
+	Fonts	Písma
+	Font…	Písmo…
+	Footer	Päta
+	Footnote Reference	Odkaz na poznámku pod čiarou
+	Footnote Text	Text poznámky pod čiarou
+	Footnote and Endnote	Poznámka pod čiarou a koncová poznámka
+	Footnotes	Poznámky pod čiarou
+	Footnotes and endnotes	Poznámky pod čiarou a koncové poznámky
+	Footnotes to endnotes	Previesť poznámky pod čiarou na koncové poznámky
+	Format	Formátovať
+	Format Page Numbers	Formátovať čísla strán
+	Format Page Numbers…	Formátovať čísla strán…
+	Format Painter	Kopírovať formátovanie
+	Format:	Formát:
+	Formatted	Naformátované
+	Formatted Text	Formátovaný text
+	Formatting	Formátovanie
+	Formatting at Selection	Formátovanie výberu
+	Formatting exceptions	Výnimky formátovania
+	Formatting marks	Formátovacie značky
+	Formatting, case changes, white space and tables are compared; the other settings are kept for later.	Porovnávajú sa formátovanie, zmeny veľkosti písmen, biele znaky a tabuľky; ostatné nastavenia sa zachovajú na neskôr.
+	Formula	Vzorec
+	Forward	Dopredu
+	Fraction	Zlomok
+	Fractions (1/2) as fraction characters (½)	Zlomky (1/2) ako zlomkové znaky (½)
+	French (France)	Francúzština (Francúzsko)
+	From text:	Z textu:
+	Full page of the same label	Celá strana s rovnakým štítkom
+	Function	Funkcia
+	Functions	Funkcie
+	GB/T 7714	GB/T 7714
+	GOST (name sort)	GOST (zoradenie podľa mena)
+	GOST (title sort)	GOST (zoradenie podľa názvu)
+	Gallery	Galéria
+	General	Všeobecné
+	Geometry	Geometria
+	German (Germany)	Nemčina (Nemecko)
+	Glow	Žiara
+	Glow Colors	Farby žiary
+	Go Back	Späť
+	Go To	Prejsť na
+	Go To (⌘⌥G)	Prejsť na (⌘⌥G)
+	Go To…	Prejsť na…
+	Go to	Prejsť na
+	Go to what:	Prejsť na čo:
+	Good afternoon	Dobré popoludnie
+	Good evening	Dobrý večer
+	Good morning	Dobré ráno
+	Grab bag	Rôzne
+	Graphic	Grafika
+	Grave	Gravis
+	Grayscale	Odtiene sivej
+	Greek	Gréčtina
+	Greek Letters	Grécke písmená
+	Green:	Zelená:
+	Greeting Line	Riadok s oslovením
+	Greeting\nLine	Riadok s\noslovením
+	Grid Table 1 Light	Svetlá mriežková tabuľka 1
+	Grid Table 4 – Blue	Mriežková tabuľka 4 – modrá
+	Grid Table 4 – Green	Mriežková tabuľka 4 – zelená
+	Grid Table 4 – Orange	Mriežková tabuľka 4 – oranžová
+	Grid Table 4 – Purple	Mriežková tabuľka 4 – fialová
+	Gridlines	Čiary mriežky
+	Group	Zoskupiť
+	Grouping Character Above	Zoskupovací znak nad
+	Grouping Character Below	Zoskupovací znak pod
+	Grow Font 1 Point	Zväčšiť písmo o 1 bod
+	H:	V:
+	HTML Format	Formát HTML
+	Hanging Indent	Predsadenie
+	Harvard (Anglia)	Harvard (Anglia)
+	Hat	Strieška
+	Header	Hlavička
+	Header & Footer	Hlavička a päta
+	Header Row	Riadok hlavičky
+	Header/Footer Position	Umiestnenie hlavičky/päty
+	Headers and footers	Hlavičky a päty
+	Heading 1	Nadpis 1
+	Heading 2	Nadpis 2
+	Heading 3	Nadpis 3
+	Heading styles (levels 1–{n})	Štýly nadpisov (úrovne 1 – {n})
+	Heading {n}	Nadpis {n}
+	Headings	Nadpisy
+	Heart	Srdce
+	Hebrew	Hebrejčina
+	Height:	Výška:
+	Help	Pomocník
+	Hex:	Hex:
+	Hidden	Skryté
+	Hidden text	Skrytý text
+	Hide Codes	Skryť kódy
+	Hide Ink	Skryť rukopis
+	Hide White Space	Skryť prázdne miesto
+	Hide from style lists	Skryť v zoznamoch štýlov
+	Hide\nInk	Skryť\nrukopis
+	Hierarchy	Hierarchia
+	Highlight	Zvýrazniť
+	Highlight Merge Fields	Zvýrazniť zlučovacie polia
+	Highlight\nMerge Fields	Zvýrazniť\nzlučovacie polia
+	Highlighter	Zvýrazňovač
+	Hindi	Hindčina
+	Hollow	Dutý
+	Home	Domov
+	Home folder	Domovský priečinok
+	Horizontal	Vodorovne
+	Horizontal Line	Vodorovná čiara
+	How many pages the whole document has	Počet strán celého dokumentu
+	How many pages this section has	Počet strán tohto oddielu
+	How many words the document holds	Počet slov v dokumente
+	Hue:	Odtieň:
+	Hyperbolic Cosecant Function	Hyperbolický kosekans
+	Hyperbolic Cosine Function	Hyperbolický kosínus
+	Hyperbolic Cotangent Function	Hyperbolický kotangens
+	Hyperbolic Functions	Hyperbolické funkcie
+	Hyperbolic Secant Function	Hyperbolický sekans
+	Hyperbolic Sine Function	Hyperbolický sínus
+	Hyperbolic Tangent Function	Hyperbolický tangens
+	Hyperlink	Hypertextové prepojenie
+	Hyphenate at:	Deliť slová pri:
+	Hyphenate words in CAPS	Deliť slová napísané VEĽKÝMI PÍSMENAMI
+	Hyphenation	Delenie slov
+	Hyphenation Options…	Možnosti delenia slov…
+	Hyphenation zone:	Oblasť delenia slov:
+	Hyphens (--) as dashes (—)	Spojovníky (--) ako pomlčky (—)
+	Hypotenuse	Prepona
+	I, II, III, …	I, II, III, …
+	IEEE	IEEE
+	ISO 690 (author-date)	ISO 690 (autor – dátum)
+	ISO 690 (numerical)	ISO 690 (číselný štýl)
+	Icon Color	Farba ikon
+	Icons	Ikony
+	Identity Matrices	Jednotkové matice
+	If…Then…Else	Ak…Potom…Inak
+	If…Then…Else…	Ak…Potom…Inak…
+	Ignore All	Ignorovať všetko
+	Ignore punctuation characters	Ignorovať interpunkčné znaky
+	Ignore web and file addresses	Ignorovať webové a súborové adresy
+	Ignore white-space characters	Ignorovať biele znaky
+	Ignore words in capitals	Ignorovať slová napísané veľkými písmenami
+	Ignore words with numbers	Ignorovať slová s číslami
+	Illustrations	Ilustrácie
+	Immersive	Pohlcujúci režim
+	Immersive Reader	Pohlcujúca čítačka
+	Immersive\nReader	Pohlcujúca\nčítačka
+	In Default apps, choose WordCraft for the document types you want it to open.	V časti Predvolené aplikácie vyberte WordCraft pre typy dokumentov, ktoré ním chcete otvárať.
+	In Front of Text	Pred textom
+	In Line with Text	V riadku s textom
+	In equations, typing a name after a backslash replaces it with its symbol.	Keď v rovnici napíšete za spätnú lomku názov, nahradí sa príslušným symbolom.
+	Inches	Palce
+	Include level number from:	Zahrnúť číslo úrovne z:
+	Include page numbers	Zahrnúť čísla strán
+	Increase Font Size	Zväčšiť veľkosť písma
+	Increase Indent	Zväčšiť odsadenie
+	Indent	Odsadenie
+	Indent from left:	Odsadenie zľava:
+	Indentation	Odsadenie
+	Indented	Odsadené
+	Indents	Odsadenia
+	Indents and Spacing	Odsadenia a medzery
+	Index	Register
+	Index Heading	Nadpis registra
+	Index and Tables	Register a tabuľky
+	Index {n}	Register {n}
+	Inflate	Nafúknuť
+	Info	Informácie
+	Initials:	Iniciály:
+	Ink	Rukopis
+	Ink Replay	Prehrať rukopis
+	Ink to Shape	Rukopis na tvar
+	Ink to\nMath	Rukopis na\nmatematický zápis
+	Ink to\nShape	Rukopis na\ntvar
+	Ink\nReplay	Prehrať\nrukopis
+	Inline	V riadku
+	Input Format	Vstupný formát
+	Insert	Vložiť
+	Insert Above	Vložiť nad
+	Insert Below	Vložiť pod
+	Insert Caption	Vložiť titulok
+	Insert Caption…	Vložiť titulok…
+	Insert Chart	Vložiť graf
+	Insert Citation	Vložiť citáciu
+	Insert Columns to the Left	Vložiť stĺpce vľavo
+	Insert Columns to the Right	Vložiť stĺpce vpravo
+	Insert Date Field	Vložiť pole dátumu
+	Insert Endnote	Vložiť koncovú poznámku
+	Insert Footnote	Vložiť poznámku pod čiarou
+	Insert Hyperlink	Vložiť hypertextové prepojenie
+	Insert Index	Vložiť register
+	Insert Left	Vložiť vľavo
+	Insert Merge Field	Vložiť zlučovacie pole
+	Insert Merge\nField	Vložiť zlučovacie\npole
+	Insert New Equation	Vložiť novú rovnicu
+	Insert Page Field	Vložiť pole čísla strany
+	Insert Right	Vložiť vpravo
+	Insert Row or Column by Clicking	Vložiť riadok alebo stĺpec kliknutím
+	Insert Rows Above	Vložiť riadky nad
+	Insert Rows Below	Vložiť riadky pod
+	Insert Shapes	Vložiť tvary
+	Insert SmartArt	Vložiť SmartArt
+	Insert Structure	Vložiť štruktúru
+	Insert Symbol	Vložiť symbol
+	Insert Table	Vložiť tabuľku
+	Insert Table of Authorities	Vložiť zoznam právnych citácií
+	Insert Table of Figures	Vložiť zoznam obrázkov
+	Insert Table…	Vložiť tabuľku…
+	Insert Time Field	Vložiť pole času
+	Insert a new equation (Alt+=)	Vložiť novú rovnicu (Alt+=)
+	Insert one text or another, depending on a field's value.	Vložiť jeden alebo druhý text podľa hodnoty poľa.
+	Insert\nAbove	Vložiť\nnad
+	Insert\nCaption	Vložiť\ntitulok
+	Insert\nCitation	Vložiť\ncitáciu
+	Insert\nFootnote	Vložiť\npoznámku pod čiarou
+	Insertions and Deletions	Vložený a odstránený text
+	Insertions:	Vložený text:
+	Inside Borders	Vnútorné orámovanie
+	Inside:	Vnútri:
+	Inspect Document	Skontrolovať dokument
+	Inspect Styles at Selection	Skontrolovať štýly výberu
+	Institution	Inštitúcia
+	Integral	Integrál
+	Integral of e^(−x²)	Integrál z e^(−x²)
+	Integral with Limits	Integrál s medzami
+	Integral with Stacked Limits	Integrál s medzami nad a pod
+	Integrals	Integrály
+	Intense Emphasis	Výrazné zvýraznenie
+	Intense Quote	Výrazný citát
+	Intense Reference	Výrazný odkaz
+	Interface	Rozhranie
+	Interface Theme	Motív rozhrania
+	Interface language	Jazyk rozhrania
+	Interface language:	Jazyk rozhrania:
+	Interface size:	Veľkosť rozhrania:
+	Interface theme:	Motív rozhrania:
+	Interface\nTheme	Motív\nrozhrania
+	Internet addresses as links	Internetové adresy ako odkazy
+	Intersection	Prienik
+	Intersection with Limits	Prienik s medzami
+	Intersection with Lower Limit	Prienik s dolnou medzou
+	Intersection with Subscript-Superscript Limits	Prienik s dolným a horným indexom
+	Inverse Cosecant Function	Inverzný kosekans
+	Inverse Cosine Function	Inverzný kosínus
+	Inverse Cotangent Function	Inverzný kotangens
+	Inverse Functions	Inverzné funkcie
+	Inverse Hyperbolic Cosecant Function	Inverzný hyperbolický kosekans
+	Inverse Hyperbolic Cosine Function	Inverzný hyperbolický kosínus
+	Inverse Hyperbolic Cotangent Function	Inverzný hyperbolický kotangens
+	Inverse Hyperbolic Functions	Inverzné hyperbolické funkcie
+	Inverse Hyperbolic Secant Function	Inverzný hyperbolický sekans
+	Inverse Hyperbolic Sine Function	Inverzný hyperbolický sínus
+	Inverse Hyperbolic Tangent Function	Inverzný hyperbolický tangens
+	Inverse Secant Function	Inverzný sekans
+	Inverse Sine Function	Inverzný sínus
+	Inverse Tangent Function	Inverzný tangens
+	Ionosphere	Ionosféra
+	Issue	Číslo
+	Italian	Taliančina
+	Italic	Kurzíva
+	Japanese	Japončina
+	Join the ArtCraft community on Discord	Pripojte sa ku komunite ArtCraft na Discorde
+	Join us on Discord: discord.gg/artcraft	Pridajte sa k nám na Discorde: discord.gg/artcraft
+	Journal	Časopis
+	Justification	Zarovnanie do bloku
+	Justification of a display equation	Zarovnanie zobrazenej rovnice
+	Justified	Zarovnané do bloku
+	Justify	Zarovnať do bloku
+	Keep Lines Together	Zviazať riadky
+	Keep Text Only	Ponechať len text
+	Keep lines together	Zviazať riadky
+	Keep the password somewhere safe: without it nobody, WordCraft included, can open the document. Leave both boxes empty to remove the password.	Heslo si bezpečne uschovajte: bez neho dokument neotvorí nikto vrátane WordCraftu. Ak chcete heslo odstrániť, nechajte obe polia prázdne.
+	Keep with Next	Zviazať s nasledujúcim
+	Keep with next	Zviazať s nasledujúcim
+	Keeps the fonts and formatting of the copied text.	Zachová písma a formátovanie skopírovaného textu.
+	Keyboard shortcuts:	Klávesové skratky:
+	Keys for this command:	Klávesy pre tento príkaz:
+	Keywords	Kľúčové slová
+	Korean	Kórejčina
+	Label changes with:	Štítok sa mení s:
+	Label:	Štítok:
+	Labels	Štítky
+	Landscape	Na šírku
+	Language	Jazyk
+	Large	Veľké
+	Large\nOperator	Veľký\noperátor
+	Largest Only	Len najväčšie
+	Lasso	Laso
+	Lasso Select	Výber lasom
+	Last	Posledný
+	Last Column	Posledný stĺpec
+	Last Name	Priezvisko
+	Last commit	Posledný commit
+	Last, First; Last, First	Priezvisko, meno; priezvisko, meno
+	Latin text font:	Písmo latinského textu:
+	Layout	Rozloženie
+	Layout Summary	Súhrn rozloženia
+	Layouts	Rozloženia
+	Leader	Vodiace znaky
+	Leave Equation	Opustiť rovnicu
+	Leave a recipient out of the merge when a field has this value.	Vynechať príjemcu zo zlúčenia, keď má pole túto hodnotu.
+	Leave the equation (Esc)	Opustiť rovnicu (Esc)
+	Leave the label out of the caption	Vynechať štítok z titulku
+	Left	Vľavo
+	Left Arrow with Text Above	Šípka doľava s textom nad ňou
+	Left Arrow with Text Below	Šípka doľava s textom pod ňou
+	Left Border	Ľavé orámovanie
+	Left Bracket Twice	Dvojitá ľavá zátvorka
+	Left Margin	Ľavý okraj
+	Left Only	Len vľavo
+	Left Right Arrow Above	Obojsmerná šípka nad výrazom
+	Left Right Arrow with Text Above	Obojsmerná šípka s textom nad ňou
+	Left Right Arrow with Text Below	Obojsmerná šípka s textom pod ňou
+	Left Subscript-Superscript	Dolný a horný index vľavo
+	Left border	Ľavé orámovanie
+	Left indent	Odsadenie zľava
+	Left-to-Right Text Direction	Smer textu zľava doprava
+	Left-to-right	Zľava doprava
+	Left:	Vľavo:
+	Leftwards Arrow Above	Šípka doľava nad výrazom
+	Leftwards Harpoon Above	Háčiková šípka doľava nad výrazom
+	Legal style numbering	Číslovanie v právnom štýle
+	Legend	Legenda
+template	Letter	List
+	Letter	Písmeno
+	Letter headings	Nadpisy listov
+	Letter-Like Symbols	Symboly podobné písmenám
+	Letters	Písmená
+	Level 1	Úroveň 1
+	Level 2	Úroveň 2
+	Level 3	Úroveň 3
+	Level 4	Úroveň 4
+	Level 5	Úroveň 5
+	Level 6	Úroveň 6
+	Level 7	Úroveň 7
+	Level 8	Úroveň 8
+	Level 9	Úroveň 9
+	Level {n}	Úroveň {n}
+	Levels:	Úrovne:
+	Light	Svetlé
+	Light with Outline	Svetlé s obrysom
+	Limit	Limita
+	Limit Example	Príklad limity
+	Limit and	Limita a
+	Limit and\nLog	Limita a\nlogaritmus
+	Limit consecutive hyphens to:	Obmedziť počet po sebe idúcich spojovníkov na:
+	Limit formatting to a selection of styles	Obmedziť formátovanie na vybrané štýly
+	Line	Riadok
+	Line Break	Zalomenie riadka
+	Line End	Koniec riadka
+	Line Number	Číslo riadka
+	Line Numbering Options…	Možnosti číslovania riadkov…
+	Line Numbers	Čísla riadkov
+	Line Spacing	Riadkovanie
+	Line Spacing Options…	Možnosti riadkovania…
+	Line Start	Začiatok riadka
+	Line and Page Breaks	Riadky a zlomy strán
+	Line and Paragraph Spacing	Riadkovanie a medzery medzi odsekmi
+	Line between	Čiara medzi
+	Line breaking	Zalamovanie riadkov
+	Line delta	Rozdiel riadkov
+	Line spacing	Riadkovanie
+	Line spacing:	Riadkovanie:
+	Linear	Lineárne
+	Linear Fraction	Lineárny zlomok
+	Lines	Riadky
+	Lines +/−	Riadky +/−
+	Lines added	Pridané riadky
+	Lines and characters	Riadky a znaky
+	Lines deleted	Odstránené riadky
+	Lines only	Len riadky
+	Lines per page:	Riadkov na stranu:
+	Link	Prepojenie
+	Link entries to their headings	Prepojiť položky s ich nadpismi
+	Link level to style:	Prepojiť úroveň so štýlom:
+	Link to Previous	Prepojiť s predchádzajúcim
+	Linked style (paragraph and character)	Prepojený štýl (odsek a znak)
+	Links	Prepojenia
+	Links and References	Prepojenia a odkazy
+	Link…	Prepojenie…
+	List	Zoznam
+	List Definition	Definícia zoznamu
+	List Paragraph	Odsek zoznamu
+	List Table 3 – Blue	Tabuľka zoznamu 3 – modrá
+	List Table 3 – Green	Tabuľka zoznamu 3 – zelená
+	List Table 3 – Orange	Tabuľka zoznamu 3 – oranžová
+	List Table 3 – Purple	Tabuľka zoznamu 3 – fialová
+	List entries	Položky zoznamu
+	Location	Umiestnenie
+	Location: {path}	Umiestnenie: {path}
+	Lock Fields	Zamknúť polia
+	Log	Log
+	Logarithm	Logaritmus
+	Logarithm with Base	Logaritmus so základom
+	Logical AND	Logické A
+	Logical AND with Limits	Logické A s medzami
+	Logical OR	Logické ALEBO
+	Logical OR with Limits	Logické ALEBO s medzami
+	Lum:	Svetlosť:
+	MIT OR Apache-2.0. Copyright (c) 2026 ArtCraft Team and the WordCraft contributors.	MIT OR Apache-2.0. Autorské práva (c) 2026 ArtCraft Team a prispievatelia projektu WordCraft.
+	MLA	MLA
+	Macros	Makrá
+	Made from the author and year when empty	Ak je prázdne, vytvorí sa z autora a roka
+	Magazine or newspaper article	Článok v časopise alebo novinách
+	Mail Merge	Hromadná korešpondencia
+	Mailings	Korešpondencia
+	Main entry:	Hlavná položka:
+	Make WordCraft the default for Word documents…	Nastaviť WordCraft ako predvolenú aplikáciu pre dokumenty Wordu…
+	Manage Sources	Spravovať zdroje
+	Manage Styles	Spravovať štýly
+	Manage Styles…	Spravovať štýly…
+	Manual Hyphenation	Ručné delenie slov
+	Manual Line Break	Ručné zalomenie riadka
+	Manual Page Break	Ručné zalomenie strany
+	Manual hyphenation is complete.	Ručné delenie slov je dokončené.
+	Manual…	Ručne…
+	Many pages	Viac strán
+	Margins	Okraje
+	Mark	Označiť
+	Mark All	Označiť všetko
+	Mark Citation	Označiť citáciu
+	Mark Entry	Označiť položku
+	Mark Entry…	Označiť položku…
+	Mark Index Entry	Označiť položku registra
+	Mark as decorative	Označiť ako dekoratívne
+	Mark grammar errors as you type	Označovať gramatické chyby počas písania
+	Mark selected text as:	Označiť vybraný text ako:
+	Mark\nCitation	Označiť\ncitáciu
+	Mark\nEntry	Označiť\npoložku
+	Markdown (*.md)	Markdown (*.md)
+	Match Fields	Priradiť polia
+	Match case	Rozlišovať veľké a malé písmená
+	Match prefix	Zhoda na začiatku slova
+	Match suffix	Zhoda na konci slova
+	Math AutoCorrect	Automatické opravy matematiky
+	Matrices with Brackets	Matice so zátvorkami
+	Matrix	Matica
+	Maximum	Maximum
+	Maximum Example	Príklad maxima
+	Measured By	Merané podľa
+	Measurement units:	Merné jednotky:
+	Merge	Zlúčiť
+	Merge Cells	Zlúčiť bunky
+	Merge Formatting	Zlúčiť formátovanie
+	Merge Record #	Zlučovaný záznam č.
+	Merged PRs	Zlúčené PR
+	Mesosphere	Mezosféra
+	Middle	Stred
+	Midline Dots	Bodky v strede riadka
+	Millimeters	Milimetre
+	Minimum	Minimum
+	Minus Equal	Mínus rovná sa
+	Mirror indents	Zrkadliť odsadenia
+	Mirrored	Zrkadlové
+	Model	Model
+	Models	Modely
+	Moderate	Mierne
+	Modify Style	Upraviť štýl
+	Modify Table Style	Upraviť štýl tabuľky
+	Modify Table Style…	Upraviť štýl tabuľky…
+	Modify…	Upraviť…
+	Mon	Po
+	Month	Mesiac
+	More >>	Viac >>
+	More Colors…	Ďalšie farby…
+	More Columns…	Ďalšie stĺpce…
+	More Commands…	Ďalšie príkazy…
+	More Symbols…	Ďalšie symboly…
+	More templates →	Ďalšie šablóny →
+	Move Down	Posunúť nadol
+	Move Paragraph Down	Posunúť odsek nadol
+	Move Paragraph Up	Posunúť odsek nahor
+	Move Past Citation	Prejsť za citáciu
+	Move Past\nCitation	Prejsť za\ncitáciu
+	Move Selected Ink	Presunúť vybraný rukopis
+	Move Table by Dragging	Presunúť tabuľku potiahnutím
+	Move Up	Posunúť nahor
+	Move in Equation	Pohybovať sa v rovnici
+	Move or Resize	Presunúť alebo zmeniť veľkosť
+	Move with Text	Presúvať s textom
+	Moved from	Presunuté z
+	Moved to	Presunuté do
+	Moves	Presuny
+	Multilevel List	Viacúrovňový zoznam
+	Multilevel List Library	Knižnica viacúrovňových zoznamov
+	Article I.	Článok I.
+	Chapter 1	Kapitola 1
+	Section 1.01	Oddiel 1.01
+	Multiple Pages	Viac strán
+	Name	Meno
+	Name (A–Z)	Meno (A – Z)
+	Name of the file this document is saved as	Názov súboru, pod ktorým je tento dokument uložený
+	Name:	Názov:
+	Narrow  {size} all	Úzke okraje: {size} zo všetkých strán
+	Natural Logarithm	Prirodzený logaritmus
+	Nature	Príroda
+	Navigation	Navigácia
+	Navigation Pane	Navigačná tabla
+	Negated Relations	Negované relácie
+	New	Nový
+	New Comment	Nový komentár
+	New Document	Nový dokument
+	New Drawing Canvas	Nové kresliace plátno
+	New Entry	Nová položka
+	New Group	Nová skupina
+	New Label	Nový štítok
+	New Label…	Nový štítok…
+	New Paragraph	Nový odsek
+	New Style…	Nový štýl…
+	New Tab	Nová karta
+	New Table Style	Nový štýl tabuľky
+	New Table Style…	Nový štýl tabuľky…
+	New Window	Nové okno
+	New comments and tracked changes are recorded under this name and these initials.	Nové komentáre a sledované zmeny sa budú zaznamenávať pod týmto menom a týmito iniciálami.
+	New document	Nový dokument
+	New from Template	Nový zo šablóny
+	New shortcut:	Nová skratka:
+	New word	Nové slovo
+	New\nComment	Nový\nkomentár
+	New\nWindow	Nové\nokno
+	New…	Nový…
+	Next	Ďalší
+	Next Change	Ďalšia zmena
+	Next Comment	Ďalší komentár
+	Next Field	Ďalšie pole
+	Next Footnote	Ďalšia poznámka pod čiarou
+	Next Page	Ďalšia strana
+	Next Record	Ďalší záznam
+	Next Section	Ďalší oddiel
+	Next Sentence	Ďalšia veta
+	Next sentence	Ďalšia veta
+	No	Nie
+	No Border	Bez orámovania
+	No Color	Bez farby
+	No Fill	Bez výplne
+	No Glow	Bez žiary
+	No Markup	Bez označení
+	No Outline	Bez obrysu
+	No Paragraph Space	Bez medzery medzi odsekmi
+	No Reflection	Bez odrazu
+	No Shadow	Bez tieňa
+	No Soft Edges	Bez mäkkých okrajov
+	No Spacing	Bez medzier
+	No Transform	Bez transformácie
+	No accessibility issues found.	Nenašli sa žiadne problémy s prístupnosťou.
+	No changes (read only)	Žiadne zmeny (iba na čítanie)
+	No contributor data was built into this copy.	Táto kópia neobsahuje údaje o prispievateľoch.
+	No errors found: every merge field is in the recipient list.	Nenašli sa chyby: každé zlučovacie pole je v zozname príjemcov.
+	No grid	Bez mriežky
+	No icons match your search.	Vášmu hľadaniu nezodpovedajú žiadne ikony.
+	No limit	Bez obmedzenia
+	No model credits were built into this copy.	Táto kópia neobsahuje údaje o použitých modeloch.
+	No printers found. Configure a system printer or export a PDF.	Nenašli sa tlačiarne. Nastavte systémovú tlačiareň alebo exportujte PDF.
+	No sources yet.	Zatiaľ žiadne zdroje.
+	No templates match your search.	Vášmu hľadaniu nezodpovedajú žiadne šablóny.
+	No words yet. Add to Dictionary on a misspelled word puts it here.	Zatiaľ žiadne slová. Pridáte ich sem voľbou Pridať do slovníka pri nesprávne napísanom slove.
+	No-Width Non Break	Nezalomiteľný znak s nulovou šírkou
+	No-Width Optional Break	Voliteľné zalomenie s nulovou šírkou
+	Nonbreaking Hyphen	Nedeliteľný spojovník
+	Nonbreaking Space	Nedeliteľná medzera
+	None	Žiadne
+	Normal	Normálne
+	Normal  {size} all	Normálne okraje: {size} zo všetkých strán
+	Normal Indent	Normálne odsadenie
+	Normal Style	Normálny štýl
+	Normal Table	Normálna tabuľka
+	Normal Text	Normálny text
+	Normal Word Document	Normálny dokument Wordu
+	Normal probability density	Normálna hustota pravdepodobnosti
+	Normal speed	Normálna rýchlosť
+	North	Sever
+	Norwegian (Bokmål)	Nórčina (bokmål)
+	Not	Nie
+	Not available right now	Momentálne nedostupné
+	Not linked: click a text box	Neprepojené: kliknite na textové pole
+	Not saved	Neuložené
+	Not saved yet	Ešte neuložené
+	Not used by any command	Nepoužíva sa v žiadnom príkaze
+	Not {name}	Nie {name}
+	Nothing	Nič
+	Nothing collected yet. Items you copy or cut appear here.	Zatiaľ sa nič nezhromaždilo. Položky, ktoré skopírujete alebo vystrihnete, sa zobrazia tu.
+	Now used by {command}	Teraz používa príkaz {command}
+	Nudge	Jemne posunúť
+	Num Occurrences	Počet výskytov
+	Number	Číslo
+	Number alignment:	Zarovnanie čísla:
+	Number format	Formát čísla
+	Number of columns:	Počet stĺpcov:
+	Number of rows:	Počet riadkov:
+	Number of the page the field sits on	Číslo strany, na ktorej je pole
+	Number of the section the field sits in	Číslo oddielu, v ktorom je pole
+	Number style for this level:	Štýl číslovania tejto úrovne:
+	Number the equation; the number sits at the right margin (or type # then the number)	Očíslovať rovnicu; číslo sa zobrazí pri pravom okraji (alebo napíšte # a číslo)
+	Numbering	Číslovanie
+	Numbering:	Číslovanie:
+	Numbering…	Číslovanie…
+	Numerals	Číslice
+	Numerals:	Číslice:
+	OK	OK
+	Object	Objekt
+	Odd Page	Nepárna strana
+	Odd pages only	Len nepárne strany
+	Off	Vypnuté
+	Office	Office
+	Office 2003 Default	Predvolené nastavenie Office 2003
+	Offset (pt):	Posun (b.):
+	Offset: Bottom	Posun: dole
+	Offset: Bottom Left	Posun: vľavo dole
+	Offset: Bottom Right	Posun: vpravo dole
+	Offset: Center	Posun: na stred
+	Offset: Left	Posun: vľavo
+	Offset: Right	Posun: vpravo
+	Offset: Top	Posun: hore
+	Offset: Top Left	Posun: vľavo hore
+	Offset: Top Right	Posun: vpravo hore
+	Omit	Vynechať
+	On	Zapnuté
+	On: WordCraft opens on File › Home, with a blank document, the templates and your recent documents. Off: it opens a blank document.	Zapnuté: WordCraft sa otvorí v Súbor › Domov s prázdnym dokumentom, šablónami a vašimi nedávnymi dokumentmi. Vypnuté: otvorí sa prázdny dokument.
+	On: the caret glides to its new place when you type or use the arrow keys, and its blink fades. Off: it jumps and blinks on and off.	Zapnuté: kurzor sa pri písaní alebo použití šípok plynulo presúva na nové miesto a jeho blikanie sa postupne stráca. Vypnuté: kurzor skáče a prudko bliká.
+	One	Jeden
+	One Page	Jedna strana
+	One half	Jedna polovica
+	One label per recipient	Jeden štítok na príjemcu
+	One line per item. Enter adds an item.	Jedna položka na riadok. Kláves Enter pridá položku.
+	One-sided	Jednostranne
+	Only allow this kind of editing:	Povoliť len tento druh úprav:
+	Only comments can be added, except in regions marked editable.	Pridávať možno len komentáre, okrem oblastí označených ako upraviteľné.
+	Only form fields can be filled in.	Vyplniť možno len polia formulára.
+	Only the allowed styles can be applied.	Použiť možno len povolené štýly.
+	Only web (http, https) and email (mailto) links can be followed	Otvárať možno len webové odkazy (http, https) a e-mailové odkazy (mailto)
+	Open	Otvoriť
+	Open a file with WordCraft's own browser when the system file dialog doesn't appear.	Keď sa nezobrazí systémové okno na výber súboru, otvorte súbor vo vlastnom prehliadači súborov WordCraftu.
+	OpenDocument Text (*.odt)	Text OpenDocument (*.odt)
+	Opening print dialog…	Otvára sa okno tlače…
+	Opens .docx, .doc, .rtf and .odt files and Word templates with WordCraft from now on.	Odteraz sa súbory .docx, .doc, .rtf a .odt a šablóny Wordu budú otvárať vo WordCrafte.
+	Opens Settings › Default apps, where you choose WordCraft for .docx and the other document types.	Otvorí nastavenia › Predvolené aplikácie, kde vyberiete WordCraft pre súbory .docx a ďalšie typy dokumentov.
+	Operator	Operátor
+	Operator Structures	Štruktúry operátorov
+	Operators	Operátory
+	Optional Hyphen	Voliteľný spojovník
+	Options	Možnosti
+	Options…	Možnosti…
+	Or save a copy in another format:	Alebo uložiť kópiu v inom formáte:
+	Ordinals (1st) as superscript	Prípony radových čísloviek (1st) ako horný index
+	Organizer	Organizátor
+	Organizer…	Organizátor…
+	Orientation	Orientácia
+	Original document	Pôvodný dokument
+	Other	Iné
+	Other Large Operators	Ďalšie veľké operátory
+	Other styles and their TOC level:	Ďalšie štýly a ich úroveň obsahu:
+	Otherwise insert:	Inak vložiť:
+	Outline	Osnova
+	Outline Level	Úroveň osnovy
+	Outline State	Stav osnovy
+	Outline Tools	Nástroje osnovy
+	Outline level	Úroveň osnovy
+	Outline levels	Úrovne osnovy
+	Outlining	Práca s osnovou
+	Outside Borders	Vonkajšie orámovanie
+	Outside border	Vonkajšie orámovanie
+	Outside:	Zvonka:
+	Outward Brackets	Zátvorky smerom von
+	Oval	Ovál
+	Overbar	Horná čiara
+	Overbars and Underbars	Horné a dolné čiary
+	Overbrace	Horná zložená zátvorka
+	Overtype	Prepisovanie
+	Overtype (typing replaces the characters after the caret)	Prepisovanie (písanie nahrádza znaky za kurzorom)
+	PDF document (*.pdf)	Dokument PDF (*.pdf)
+	PRs	PR
+	Page	Strana
+	Page Background	Pozadie strany
+	Page Border	Orámovanie strany
+	Page Borders	Orámovanie strán
+	Page Break	Zalomenie strany
+	Page Break Before	Zalomenie strany pred
+	Page Breaks	Zalomenia strán
+	Page Color	Farba strany
+	Page Down	O stranu nadol
+	Page Movement	Posúvanie strán
+	Page Number	Číslo strany
+	Page Setup	Nastavenie strany
+	Page Up	O stranu nahor
+	Page Width	Šírka strany
+	Page X of Y	Strana X z Y
+	Page break before	Zalomenie strany pred
+	Page display	Zobrazenie strán
+	Page image (*.png)	Obrázok strany (*.png)
+	Page number style	Štýl číslovania strán
+	Page numbers at the right margin	Čísla strán pri pravom okraji
+	Page on which a bookmarked passage falls	Strana, na ktorej je záložkou označený text
+	Page title	Názov strany
+	Page width	Šírka strany
+	Page {page}	Strana {page}
+	Page {page} of {pages}	Strana {page} z {pages}
+	Page\nBorders	Orámovanie\nstrán
+	Page\nColor	Farba\nstrany
+	Page\nNumber	Číslo\nstrany
+	Pages	Strany
+	Pages like 1-3, 5	Strany, napr. 1–3, 5
+	Pages of bookmark:	Strany záložky:
+	Paragraph	Odsek
+	Paragraph Character	Znak odseku
+	Paragraph Details	Podrobnosti odseku
+	Paragraph Down	Odsek nadol
+	Paragraph Mark	Značka odseku
+	Paragraph Settings	Nastavenia odseku
+	Paragraph Spacing	Medzery medzi odsekmi
+	Paragraph Up	Odsek nahor
+	Paragraph marks	Značky odsekov
+	Paragraph style	Štýl odseku
+	Paragraphs	Odseky
+	Paragraph…	Odsek…
+	Parentheses	Okrúhle zátvorky
+	Parentheses with Separator	Okrúhle zátvorky s oddeľovačom
+	Partial Differential	Parciálna derivácia
+	Password	Heslo
+	Password:	Heslo:
+	Paste	Prilepiť
+	Paste (⌘V)	Prilepiť (⌘V)
+	Paste All	Prilepiť všetko
+	Paste Clipboard Item	Prilepiť položku zo schránky
+	Paste Formatting	Prilepiť formátovanie
+	Paste Special	Prilepiť špeciálne
+	Paste Special…	Prilepiť špeciálne…
+	Paste as:	Prilepiť ako:
+	Paste: Keep Text Only	Prilepiť: ponechať len text
+	Paste: Merge Formatting	Prilepiť: zlúčiť formátovanie
+	Pastes the clipboard's picture.	Prilepí obrázok zo schránky.
+	Pause	Pozastaviť
+	Paused	Pozastavené
+	Pen	Pero
+	Pencil	Ceruzka
+	Pens	Perá
+	People	Ľudia
+	Periodical	Periodikum
+	Personalize	Prispôsobiť
+	Phonetic Guide	Fonetický prepis
+	Pi Over 2	Pí delené dvomi
+	Picas	Pica (12 bodov)
+	Pick a custom group (New Group makes one)	Vyberte vlastnú skupinu (tlačidlom Nová skupina ju vytvoríte)
+	Pick a field from the list	Vyberte pole zo zoznamu
+	Picture	Obrázok
+	Picture Border	Orámovanie obrázka
+	Picture Content Control	Ovládací prvok pre obrázok
+	Picture Format	Formát obrázka
+	Picture Styles	Štýly obrázkov
+	Pictures	Obrázky
+	Pie	Koláčový graf
+	Placeholder text	Zástupný text
+	Plain Table 1	Jednoduchá tabuľka 1
+	Plain Text Content Control	Ovládací prvok pre obyčajný text
+	Plain text (*.txt)	Obyčajný text (*.txt)
+	Play	Prehrať
+	Play/Pause	Prehrať/Pozastaviť
+	Plus Equal	Plus rovná sa
+	Points	Body
+	Polish	Poľština
+	Portrait	Na výšku
+	Portuguese (Brazil)	Portugalčina (Brazília)
+	Portuguese (Portugal)	Portugalčina (Portugalsko)
+	Position	Pozícia
+	Position:	Pozícia:
+	Possible spelling mistake	Možná pravopisná chyba
+	Postal Code	PSČ
+	Power series of (1+x)ⁿ	Mocninový rad pre (1+x)ⁿ
+	Preferred width:	Preferovaná šírka:
+	Preserve formatting during updates	Zachovať formátovanie pri aktualizácii
+	Presets	Predvoľby
+	Press a key combination	Stlačte kombináciu klávesov
+	Preview	Ukážka
+	Preview Results	Ukážka výsledkov
+	Preview\nResults	Ukážka\nvýsledkov
+	Previous	Predchádzajúci
+	Previous 1 or More	Predchádzajúci 1 alebo viac
+	Previous Change	Predchádzajúca zmena
+	Previous Comment	Predchádzajúci komentár
+	Previous Field	Predchádzajúce pole
+	Previous Page	Predchádzajúca strana
+	Previous Record	Predchádzajúci záznam
+	Previous Section	Predchádzajúci oddiel
+	Previous Sentence	Predchádzajúca veta
+	Previous sentence	Predchádzajúca veta
+	Print	Tlačiť
+	Print Layout	Rozloženie pri tlači
+	Print Markup	Tlačiť značky
+	Print failed: the printing worker stopped.	Tlač zlyhala: proces tlače sa zastavil.
+	Print failed: {error}	Tlač zlyhala: {error}
+	Print job submitted.	Tlačová úloha bola odoslaná.
+	Print job submitted: {receipt}	Tlačová úloha bola odoslaná: {receipt}
+	Print the page color	Tlačiť farbu strany
+	Print to PDF	Tlačiť do PDF
+	Print\nLayout	Rozloženie\npri tlači
+	Printer	Tlačiareň
+	Printer default	Predvolené nastavenie tlačiarne
+	Printer discovery failed.	Zisťovanie tlačiarní zlyhalo.
+	Printing	Tlač
+	Process	Proces
+	Product	Súčin
+	Product of A	Súčin prvkov A
+	Product with Limits	Súčin s medzami
+	Product with Lower Limit	Súčin s dolnou medzou
+	Product with Subscript-Superscript Limits	Súčin s dolným a horným indexom
+	Products and Coproducts	Súčiny a koprodukty
+	Professional	Profesionálne
+	Promote	Povýšiť
+	Promote to Heading 1	Povýšiť na Nadpis 1
+	Proofing	Pravopis a gramatika
+	Proofing Issues	Problémy s pravopisom a gramatikou
+	Proofing language	Jazyk kontroly pravopisu
+	Properties	Vlastnosti
+	Protect	Chrániť
+	Protect Document	Chrániť dokument
+	Publisher	Vydavateľ
+	Put the caret in a content control first.	Najprv umiestnite kurzor do ovládacieho prvku obsahu.
+	Put the default commands back on the Quick Access Toolbar?	Obnoviť predvolené príkazy na paneli rýchleho prístupu?
+	Pyramid	Pyramída
+	Quadratic Root	Koreň kvadratickej rovnice
+	Quick Access Toolbar	Panel rýchleho prístupu
+	Quick Parts	Rýchle časti
+	Quick Tables	Rýchle tabuľky
+	Quote	Citát
+	Radical	Odmocnina
+	Radical with Degree	Odmocnina so stupňom
+	Radicals	Odmocniny
+	Raised/lowered	Zvýšené/znížené
+	Read Aloud	Čítať nahlas
+	Read Aloud Status	Stav hlasného čítania
+	Read Mode	Režim čítania
+	Read\nAloud	Čítať\nnahlas
+	Read\nMode	Režim\nčítania
+	Reading	Čítanie
+	Reading Column Width	Šírka stĺpca pri čítaní
+	Reading Highlight	Zvýraznenie pri čítaní
+	Reading Line Spacing	Riadkovanie pri čítaní
+	Reading Mode	Režim čítania
+	Reading Speed	Rýchlosť čítania
+	Reading Text Size	Veľkosť textu pri čítaní
+	Reads the clipboard's rich text and keeps its formatting.	Načíta formátovaný text zo schránky a zachová jeho formátovanie.
+	Reads the clipboard's web content and keeps its formatting.	Načíta webový obsah zo schránky a zachová jeho formátovanie.
+	Real name	Skutočné meno
+	Recent	Nedávne
+	Recent Colors	Nedávne farby
+	Recent documents to show:	Počet zobrazených nedávnych dokumentov:
+	Recently used symbols:	Nedávno použité symboly:
+	Recipient List	Zoznam príjemcov
+	Recipient lists	Zoznamy príjemcov
+	Recipients: {count}	Príjemcovia: {count}
+	Recolor Selected Ink	Zmeniť farbu vybraného rukopisu
+	Recolor a one-color picture, such as an icon	Zmeniť farbu jednofarebného obrázka, napríklad ikony
+	Record Macro	Zaznamenať makro
+	Recover Unsaved Documents	Obnoviť neuložené dokumenty
+	Rectangle	Obdĺžnik
+	Red:	Červená:
+	Redo	Znova
+	Reduce Hanging Indent	Zmenšiť predsadenie
+	References	Odkazy
+	Reflection	Odraz
+	Refresh	Obnoviť
+	Refresh printers	Obnoviť zoznam tlačiarní
+	Region:	Oblasť:
+	Registered	Registrované
+	Registered Sign	Symbol registrovanej ochrannej známky
+	Regular expressions	Regulárne výrazy
+	Reject	Odmietnuť
+	Reject All Changes	Odmietnuť všetky zmeny
+	Reject Change	Odmietnuť zmenu
+	Relationship	Vzťah
+	Relaxed	Voľné
+	Remove	Odstrániť
+	Remove Added Font	Odstrániť pridané písmo
+	Remove Background	Odstrániť pozadie
+	Remove Content Control	Odstrániť ovládací prvok obsahu
+	Remove Footer	Odstrániť pätu
+	Remove Header	Odstrániť hlavičku
+	Remove Hyperlink	Odstrániť hypertextové prepojenie
+	Remove Password	Odstrániť heslo
+	Remove Pen	Odstrániť pero
+	Remove Space After Paragraph	Odstrániť medzeru za odsekom
+	Remove Table of Contents	Odstrániť automatický obsah
+	Remove Watermark	Odstrániť vodotlač
+	Remove every custom shortcut and restore the built-in keys?	Odstrániť všetky vlastné skratky a obnoviť vstavané klávesové skratky?
+	Remove every custom tab and group and show all tabs again?	Odstrániť všetky vlastné karty a skupiny a znova zobraziť všetky karty?
+	Remove field	Odstrániť pole
+	Remove from Quick Access Toolbar	Odstrániť z panela rýchleho prístupu
+	Hide Quick Access Toolbar	Skryť panel rýchleho prístupu
+	Show Quick Access Toolbar	Zobraziť panel rýchleho prístupu
+	Remove recipient	Odstrániť príjemcu
+	Remove row	Odstrániť riadok
+	Remove series	Odstrániť rad
+	Remove the control once edited	Po úprave odstrániť ovládací prvok
+	Remove the space before the punctuation	Odstrániť medzeru pred interpunkciou
+	Rename Style	Premenovať štýl
+	Rename…	Premenovať…
+	Reopen	Znova otvoriť
+	Repeat	Opakovať
+	Repeat Header Rows	Opakovať riadky hlavičky
+	Repeat as header row on each page	Opakovať ako riadok hlavičky na každej strane
+	Repeating Section Content Control	Ovládací prvok pre opakujúci sa oddiel
+	Replace	Nahradiť
+	Replace All	Nahradiť všetko
+	Replace Document Text	Nahradiť text dokumentu
+	Replace as you type	Nahradiť počas písania
+	Replace text as you type	Nahrádzať text počas písania
+	Replace with:	Nahradiť čím:
+	Replace:	Nahradiť:
+	Replay	Prehrať znova
+	Reply	Odpovedať
+	Report	Správa
+	Research	Výskum
+	Researcher	Výskumník
+	Researcher needs an online service; WordCraft keeps your documents offline.	Výskumník potrebuje online službu; WordCraft uchováva vaše dokumenty offline.
+	Reset	Obnoviť
+	Reset All…	Obnoviť všetko…
+	Reset Character Formatting	Obnoviť formátovanie znakov
+	Reset Crop	Obnoviť orezanie
+	Reset Graphic	Obnoviť grafiku
+	Reset Paragraph Formatting	Obnoviť formátovanie odseku
+	Reset Picture	Obnoviť obrázok
+	Reset to Normal	Nastaviť štýl Normálny
+	Reset\nGraphic	Obnoviť\ngrafiku
+	Reset…	Obnoviť…
+	Resize Table by Dragging	Zmeniť veľkosť tabuľky ťahaním
+	Resolve	Vyriešiť
+	Resolved	Vyriešené
+	Restart Each Page	Začať odznova na každej strane
+	Restart Each Section	Začať odznova v každom oddiele
+	Restart at 1	Začať od 1
+	Restart list after:	Začať zoznam odznova po:
+	Restrict Editing	Obmedziť úpravy
+	Restrict\nEditing	Obmedziť\núpravy
+	Result	Výsledok
+	Results	Výsledky
+	Return address labels	Štítky so spiatočnou adresou
+	Return address:	Spiatočná adresa:
+	Reverse the order	Obrátiť poradie
+	Review	Revízia
+	Reviewing	Revidovanie
+	Reviewing Pane	Tabla revízií
+	Reviewing — edits become suggestions	Revidovanie — úpravy sa menia na návrhy
+	Revised document	Revidovaný dokument
+	Rewind	Pretočiť späť
+	Ribbon	Pás s nástrojmi
+	Ribbon and Quick Access Toolbar:	Pás s nástrojmi a panel rýchleho prístupu:
+	Ribbon tabs	Karty pásu s nástrojmi
+	Rich Text Content Control	Ovládací prvok obsahu s formátovaným textom
+	Rich Text Format (*.rtf)	Formátovaný text (*.rtf)
+	Rich Text Format (RTF)	Formátovaný text (RTF)
+	Right	Vpravo
+	Right (vertical)	Vpravo (zvisle)
+	Right Arrow with Text Above	Šípka doprava s textom nad ňou
+	Right Arrow with Text Below	Šípka doprava s textom pod ňou
+	Right Border	Pravé orámovanie
+	Right Bracket Twice	Dvojitá pravá hranatá zátvorka
+	Right Margin	Pravý okraj
+	Right Only	Iba vpravo
+	Right border	Pravé orámovanie
+	Right indent	Odsadenie sprava
+	Right-to-Left Section	Oddiel sprava doľava
+	Right-to-Left Table	Tabuľka sprava doľava
+	Right-to-Left Text Direction	Smer textu sprava doľava
+	Right-to-left	Sprava doľava
+	Right:	Vpravo:
+	Rightwards Arrow Above	Šípka doprava nad výrazom
+	Rightwards Harpoon Above	Háčiková šípka doprava nad výrazom
+	Roots of ax²+bx+c	Korene rovnice ax²+bx+c
+	Rotate	Otočiť
+	Rotate Left 90°	Otočiť doľava o 90°
+	Rotate Right 90°	Otočiť doprava o 90°
+	Rotate all text 270°	Otočiť všetok text o 270°
+	Rotate all text 90°	Otočiť všetok text o 90°
+	Rotation	Otočenie
+	Rotation:	Otočenie:
+	Rounded Rectangle	Zaoblený obdĺžnik
+	Row	Riadok
+	Row:	Riadok:
+	Rows & Columns	Riadky a stĺpce
+	Ruby text:	Doplnkový text nad znakmi:
+	Ruler	Pravítko
+	Rules	Pravidlá
+	Run-in	Vložený do textu
+	Russian	Ruština
+	Résumé	Životopis
+	SAMPLE	UKÁŽKA
+	SIST02	SIST02
+	Sat:	So:
+	Save	Uložiť
+	Save As	Uložiť ako
+	Save a copy in another format. Printing goes through a PDF you can print from any viewer.	Uložte kópiu v inom formáte. Tlačí sa cez PDF, ktoré môžete vytlačiť v ľubovoľnom prehliadači.
+	Save as Template	Uložiť ako šablónu
+	Save documents	Ukladať dokumenty
+	Save the document to turn on AutoSave	Ak chcete zapnúť automatické ukladanie, uložte dokument
+	Save the document to turn on AutoSave (a file you have only opened isn't rewritten until you save it)	Ak chcete zapnúť automatické ukladanie, uložte dokument (súbor, ktorý ste iba otvorili, sa prepíše až po uložení)
+	Save these pages as PDF…	Uložiť tieto strany ako PDF…
+	Saved	Uložené
+	Scale	Mierka
+	Scale Drawing	Zmeniť mierku kresby
+	Scatter	Bodový graf
+	Script	Index
+	Scripts	Indexy
+	Scroll ribbon left	Posunúť pás s nástrojmi doľava
+	Scroll ribbon right	Posunúť pás s nástrojmi doprava
+	Search	Hľadať
+	Search Commands	Hľadať príkazy
+	Search Options	Možnosti hľadania
+	Search commands and help	Hľadať príkazy a pomoc
+	Search document	Hľadať v dokumente
+	Search for templates	Hľadať šablóny
+	Search icons	Hľadať ikony
+	Secant Function	Funkcia sekans
+	Section Break	Zlom oddielu
+	Section Breaks	Zlomy oddielov
+	Section Character	Znak oddielu
+	Section Mark	Značka oddielu
+	Section Properties	Vlastnosti oddielu
+	Section direction:	Smer oddielu:
+	Sections	Oddiely
+	See	Pozri
+	Select	Vybrať
+	Select All	Vybrať všetko
+	Select Cell	Vybrať bunku
+	Select Column	Vybrať stĺpec
+	Select Heading and Content	Vybrať nadpis a obsah
+	Select Line	Vybrať riadok
+	Select Objects	Vybrať objekty
+	Select Paragraph	Vybrať odsek
+	Select Range	Vybrať rozsah
+	Select Recipients	Vybrať príjemcov
+	Select Row	Vybrať riadok tabuľky
+	Select Sentence	Vybrať vetu
+	Select Table	Vybrať tabuľku
+	Select Table Cells by Clicking	Vyberať bunky tabuľky kliknutím
+	Select Text	Vybrať text
+	Select Text with Similar Formatting	Vybrať text s podobným formátovaním
+	Select Word	Vybrať slovo
+	Select a picture, shape, chart or table to describe it.	Vyberte obrázok, tvar, graf alebo tabuľku a pridajte k nim opis.
+	Select a printer	Vyberte tlačiareň
+	Select recipients first to choose from their fields.	Ak chcete vybrať z polí príjemcov, najprv ich vyberte.
+	Select recipients first to match their fields.	Ak chcete priradiť polia príjemcov, najprv ich vyberte.
+	Select text, then tick who can still edit it.	Vyberte text a potom označte, kto ho ešte môže upravovať.
+	Select\nRecipients	Vybrať\npríjemcov
+	Selected Fields	Vybrané polia
+	Selected pages	Vybrané strany
+	Selection	Výber
+	Selection Pane	Tabla výberu
+	Send Backward	Posunúť dozadu
+	Send the document straight to the system print dialog, or save a copy in another format below.	Odošlite dokument priamo do systémového dialógového okna tlače alebo nižšie uložte kópiu v inom formáte.
+	Sentence	Veta
+	Sentence case.	Prvé písmeno veľké.
+	Separator:	Oddeľovač:
+	Sequence name:	Názov sekvencie:
+	Serbian (Cyrillic)	Srbčina (cyrilika)
+	Serbian (Latin)	Srbčina (latinka)
+	Series name	Názov radu
+	Series {n}	Rad {n}
+	Set	Nastaviť
+	Set As Default	Nastaviť ako predvolené
+	Set Caret	Nastaviť kurzor
+	Set Character Formatting	Nastaviť formátovanie znakov
+	Set Date	Nastaviť dátum
+	Set Equation	Nastaviť rovnicu
+	Set Numbering Value	Nastaviť hodnotu číslovania
+	Set Paragraph Formatting	Nastaviť formátovanie odseku
+	Set as Default	Nastaviť ako predvolené
+	Setting:	Nastavenie:
+	Settings…	Nastavenia…
+	Shading	Podfarbenie
+	Shadow	Tieň
+	Shadow, glow and soft edges	Tieň, žiara a mäkké okraje
+	Shape Effects	Efekty tvaru
+	Shape Fill	Výplň tvaru
+	Shape Format	Formát tvaru
+	Shape Outline	Obrys tvaru
+	Shape Styles	Štýly tvarov
+	Shapes	Tvary
+	Share	Zdieľať
+	Shift+Tab	Shift+Tab
+	Shipping labels	Prepravné štítky
+	Shortcut key:	Klávesová skratka:
+	Show	Zobraziť
+	Show All Levels	Zobraziť všetky úrovne
+	Show Comments	Zobraziť komentáre
+	Show First Line Only	Zobraziť iba prvý riadok
+	Show KeyTips (Alt or F10)	Zobraziť klávesové tipy (Alt alebo F10)
+	Show Level	Zobraziť úroveň
+	Show Level 1	Zobraziť úroveň 1
+	Show Level 2	Zobraziť úroveň 2
+	Show Level 3	Zobraziť úroveň 3
+	Show Level 4	Zobraziť úroveň 4
+	Show Level 5	Zobraziť úroveň 5
+	Show Level 6	Zobraziť úroveň 6
+	Show Level 7	Zobraziť úroveň 7
+	Show Level 8	Zobraziť úroveň 8
+	Show Level 9	Zobraziť úroveň 9
+	Show Markup	Zobraziť označenia
+	Show Notes	Zobraziť poznámky
+	Show Text Formatting	Zobraziť formátovanie textu
+	Show all formatting marks	Zobraziť všetky značky formátovania
+	Show all revisions inline	Zobraziť všetky revízie v texte
+	Show changes at:	Zobraziť zmeny na úrovni:
+	Show changes in:	Zobraziť zmeny v:
+	Show documents with their colours inverted, like View › Switch Modes. Saving, printing and PDFs are unchanged.	Zobraziť dokumenty s prevrátenými farbami, ako pri Zobraziť › Prepnúť režimy. Ukladanie, tlač ani PDF sa nemenia.
+	Show every bibliography field	Zobraziť všetky polia bibliografie
+	Show in the Styles gallery	Zobraziť v galérii štýlov
+	Show only comments and formatting in balloons	V bublinách zobraziť iba komentáre a formátovanie
+	Show or Hide Style	Zobraziť alebo skryť štýl
+	Show revisions in balloons	Zobraziť revízie v bublinách
+	Show rulers	Zobraziť pravítka
+	Show the Start screen when WordCraft starts	Pri spustení WordCraftu zobraziť úvodnú obrazovku
+	Show the community button in the title bar	Zobraziť tlačidlo komunity v záhlaví okna
+	Show the equation in the line of text	Zobraziť rovnicu v riadku textu
+	Show the equation on a line of its own	Zobraziť rovnicu na samostatnom riadku
+	Show the mini toolbar when text is selected	Pri výbere textu zobraziť minipanel nástrojov
+	Show/Hide ¶	Zobraziť alebo skryť ¶
+	Show\nComments	Zobraziť\nkomentáre
+	Showing the first {count} items.	Zobrazené položky od začiatku: {count}.
+	Shows a tree: each item below the item it belongs to.	Zobrazuje strom: každá položka je pod položkou, ku ktorej patrí.
+	Shows items around a central idea: the first item is the centre.	Zobrazuje položky okolo ústrednej myšlienky: prvá položka je v strede.
+	Shows items of equal weight as blocks in rows.	Zobrazuje rovnocenné položky ako bloky v riadkoch.
+	Shows overlapping ideas as overlapping circles.	Zobrazuje prekrývajúce sa myšlienky ako prekrývajúce sa kruhy.
+	Shows parts of a whole as quadrants.	Zobrazuje časti celku ako štyri kvadranty.
+	Shows parts that build on each other, largest at the bottom.	Zobrazuje časti, ktoré nadväzujú jedna na druhú, s najväčšou naspodku.
+	Shows steps in order, left to right, with arrows between them.	Zobrazuje kroky v poradí zľava doprava, so šípkami medzi nimi.
+	Shows steps that repeat, around a circle.	Zobrazuje opakujúce sa kroky usporiadané do kruhu.
+	Shrink Font 1 Point	Zmenšiť písmo o 1 bod
+	Shrink text	Zmenšiť text
+	Side to Side	Vedľa seba
+	Side\nto Side	Vedľa\nseba
+	Sides of a right triangle	Strany pravouhlého trojuholníka
+	Signature Line	Riadok na podpis
+	Sine Function	Funkcia sínus
+	Sine and cosine series of f(x)	Sínusový a kosínusový rad funkcie f(x)
+	Sine theta	Sínus uhla téta
+	Single	Jednoduché
+	Single Brackets	Jednoduché hranaté zátvorky
+	Single Closing Quote	Jednoduchá koncová úvodzovka
+	Single Left Angle	Jednoduchá ľavá uhlová zátvorka
+	Single Left Bar	Jednoduchá ľavá zvislá čiara
+	Single Left Brace	Jednoduchá ľavá zložená zátvorka
+	Single Left Bracket	Jednoduchá ľavá hranatá zátvorka
+	Single Left Parenthesis	Jednoduchá ľavá okrúhla zátvorka
+	Single Opening Quote	Jednoduchá začiatočná úvodzovka
+	Single Right Brace	Jednoduchá pravá zložená zátvorka
+	Single Right Bracket	Jednoduchá pravá hranatá zátvorka
+	Single Right Parenthesis	Jednoduchá pravá okrúhla zátvorka
+	Single Spacing	Jednoduché riadkovanie
+	Single label	Jeden štítok
+	Site name	Názov webu
+	Size	Veľkosť
+	Size (pt):	Veľkosť (b):
+	Size and Crop…	Veľkosť a orezanie…
+	Size:	Veľkosť:
+	Sketchbook	Skicár
+	Skewed Fraction	Šikmý zlomok
+	Skip Citations and Bibliography	Vynechať citácie a bibliografiu
+	Skip Record If	Vynechať záznam, ak
+	Skip Record If…	Vynechať záznam, ak…
+	Skip citations & bibliography	Vynechať citácie a bibliografiu
+	Slant Down	Šikmo nadol
+	Slant Up	Šikmo nahor
+	Small Caps	Kapitálky
+	Small caps	Kapitálky
+	Small change	Malá zmena
+	Smart quotes instead of straight quotes	Typografické úvodzovky namiesto rovných
+	SmartArt	SmartArt
+	SmartArt Design	Návrh SmartArt
+	SmartArt Styles	Štýly SmartArt
+	Smooth scrolling and zooming, and menus and buttons that fade in. Off shows every change at once.	Plynulé posúvanie a približovanie a ponuky a tlačidlá, ktoré sa postupne zobrazujú. Po vypnutí sa každá zmena zobrazí naraz.
+	Soft Edges	Mäkké okraje
+	Soft Glow	Jemná žiara
+	Solid Accent	Plná akcentová farba
+	Sort	Zoradiť
+	Sort order:	Poradie zoradenia:
+	Source Manager	Správca zdrojov
+	Source code: github.com/storytold/wordcraft	Zdrojový kód: github.com/storytold/wordcraft
+	Source type:	Typ zdroja:
+	Sources in this document:	Zdroje v tomto dokumente:
+	South	Juh
+	Space	Medzera
+	Space after	Medzera za
+	Space after: {pt} pt	Medzera za: {pt} b
+	Space before	Medzera pred
+	Space before/after:	Medzera pred/za:
+	Space before: {pt} pt	Medzera pred: {pt} b
+	Spaces	Medzery
+	Spacing	Rozostupy
+	Spacing (pt):	Rozostupy (b):
+	Kerning for fonts:	Vyrovnávanie párov znakov:
+	Points and above	Bodov a viac
+	Spacing:	Rozostupy:
+	Spanish (Mexico)	Španielčina (Mexiko)
+	Spanish (Spain)	Španielčina (Španielsko)
+	Sparse Matrices	Riedke matice
+	Special	Špeciálne
+	Special Characters	Špeciálne znaky
+	Specify height:	Zadajte výšku:
+	Speech	Reč
+	Speed	Rýchlosť
+	Spelling	Pravopis
+	Spelling & Grammar	Pravopis a gramatika
+	Spelling &\nGrammar	Pravopis a\ngramatika
+	Spelling Suggestions	Návrhy na opravu pravopisu
+	Spelling and grammar are checked in English (United States).	Pravopis a gramatika sa kontrolujú v angličtine (Spojené štáty).
+	Split	Rozdeliť
+	Split Cells	Rozdeliť bunky
+	Split Table	Rozdeliť tabuľku
+	Spreadsheet Table	Tabuľka z tabuľkového procesora
+	Square	Štvorec
+	Square Root	Druhá odmocnina
+	Square Root with Degree	Odmocnina so stupňom
+	Square Union	Štvorcové zjednotenie
+	Stack Object	Zvisle usporiadané objekty
+	Stack Object (Three)	Tri zvisle usporiadané objekty
+	Stacked	Skladaný
+	Stacked Bar	Skladaný pruhový graf
+	Stacked Column	Skladaný stĺpcový graf
+	Stacked Fraction	Zlomok s čitateľom nad menovateľom
+	Stacked, no bar	Zlomok nad sebou bez deliacej čiary
+	Standard	Štandardné
+	Standard Colors	Štandardné farby
+	Star	Hviezda
+	Start Enforcing Protection	Zapnúť vynucovanie ochrany
+	Start Mail Merge	Spustiť hromadnú korešpondenciu
+	Start Mail\nMerge	Spustiť hromadnú\nkorešpondenciu
+	Start at:	Začať od:
+	Start-up	Spustenie
+	State	Štát/provincia
+	Statistics	Štatistika
+	Status Bar	Stavový riadok
+	Stop	Zastaviť
+	Stop Protection	Vypnúť ochranu
+	Stop Reading	Zastaviť čítanie
+	Stopped	Zastavené
+	Straight Arrow Connector	Spojnica s priamou šípkou
+	Straight Connector	Priama spojnica
+	Strikethrough	Prečiarknutie
+	Stroke {n} of {total}	Ťah {n} z {total}
+	Strong	Silné zvýraznenie
+	Structure Actions	Akcie so štruktúrou
+	Structures	Štruktúry
+	Studio	Štúdio
+	Studio cover	Obal štúdia
+	Studio handbook (sample)	Príručka štúdia (ukážka)
+	Style	Štýl
+	Style Inspector	Inšpektor štýlov
+	Style Set	Sada štýlov
+	Style based on:	Štýl založený na:
+	Style:	Štýl:
+	Style: APA	Štýl: APA
+	Style: {style}	Štýl: {style}
+	Styles	Štýly
+	Styles Pane	Tabla štýlov
+	Styles:	Štýly:
+	Subentry:	Podpoložka:
+	Subject	Predmet
+	Submitting print job…	Odosiela sa tlačová úloha…
+	Subscript	Dolný index
+	Subscript-Superscript	Dolný a horný index
+	Subscripts and Superscripts	Dolné a horné indexy
+	Subset:	Podmnožina:
+	Subtitle	Podnadpis
+	Subtle Emphasis	Jemné zvýraznenie
+	Subtle Reference	Nenápadný odkaz
+	Suggested	Navrhnuté
+	Sum	Súčet
+	Sum of cosines	Súčet kosínusov
+	Sum or difference of sines	Súčet alebo rozdiel sínusov
+	Summation	Sumácia
+	Summation from 0 to n	Sumácia od 0 do n
+	Summation over binomials	Sumácia nad binomickými koeficientmi
+	Summation with Limits	Sumácia s medzami
+	Summation with Lower Limit	Sumácia s dolnou medzou
+	Summation with Subscript Limit	Sumácia s medzou v dolnom indexe
+	Summation with Subscript-Superscript Limits	Sumácia s medzami v dolnom a hornom indexe
+	Summations	Sumácie
+	Superscript	Horný index
+	Suppress line numbers	Potlačiť číslovanie riadkov
+	Surface Integral	Plošný integrál
+	Surface Integral with Limits	Plošný integrál s medzami
+	Surface Integral with Stacked Limits	Plošný integrál s medzami nad a pod symbolom
+	Swap footnotes and endnotes	Zameniť poznámky pod čiarou a koncové poznámky
+	Swedish	Švédčina
+	Switch Modes	Prepnúť režimy
+	Switch\nModes	Prepnúť\nrežimy
+	Symbol	Symbol
+	Symbols	Symboly
+	Synonyms	Synonymá
+	System	Systém
+	TC entry fields	Polia položiek obsahu (TC)
+	TOA Heading	Nadpis zoznamu právnych citácií
+	TOC Heading	Nadpis obsahu
+	TOC {n}	Obsah {n}
+	Tab	Tabulátor
+	Tab Character	Znak tabulátora
+	Tab character	Znak tabulátora
+	Tab characters	Znaky tabulátora
+	Tab leader:	Vodiaci znak tabulátora:
+	Tab stop position:	Pozícia zarážky tabulátora:
+	Tab stops to be cleared:	Zarážky tabulátora na odstránenie:
+	Table	Tabuľka
+	Table Column Width	Šírka stĺpca tabuľky
+	Table Design	Návrh tabuľky
+	Table Grid	Mriežka tabuľky
+	Table Layout	Rozloženie tabuľky
+	Table Properties	Vlastnosti tabuľky
+	Table Properties…	Vlastnosti tabuľky…
+	Table Row Height	Výška riadka tabuľky
+	Table Style Options	Možnosti štýlu tabuľky
+	Table Styles	Štýly tabuliek
+	Table direction:	Smer tabuľky:
+	Table of Authorities	Zoznam právnych citácií
+	Table of Contents	Obsah
+	Table of Contents Options	Možnosti obsahu
+	Table of Contents Styles	Štýly obsahu
+	Table of Figures	Zoznam obrázkov
+	Table of\nContents	Obsah\ndokumentu
+	Table style	Štýl tabuľky
+	Tables	Tabuľky
+	Tabs	Tabulátory
+	Tabs…	Tabulátory…
+	Tabular List	Tabuľkový zoznam
+	Tag	Značka
+	Tangent Function	Funkcia tangens
+	Tangent formula	Vzorec pre tangens
+	Technology	Technológia
+	Templates	Šablóny
+	Templates and Add-ins	Šablóny a doplnky
+	Text	Text
+	Text Box	Textové pole
+	Text Direction	Smer textu
+	Text Effects	Efekty textu
+	Text Effects and Typography	Efekty textu a typografia
+	Text Fill	Výplň textu
+	Text Highlight Color	Farba zvýraznenia textu
+	Text Outline	Obrys textu
+	Text Pane	Tabla textu
+	Text Wrapping	Obtekanie textu
+	Text boxes	Textové polia
+	Text from File	Text zo súboru
+	Text indent at:	Odsadenie textu na:
+	Text over Colon Equal	Text nad dvojbodkou a znamienkom rovnosti
+	Text over Equal	Text nad znamienkom rovnosti
+	Text size	Veľkosť textu
+	Text snaps to characters	Text sa prichytáva k znakom
+	Text to display:	Zobrazovaný text:
+	Text:	Text:
+	Text\nBox	Textové\npole
+	Text\nDirection	Smer\ntextu
+	That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.	Tento formát nezachová všetko, preto dokument zostáva otvorený. Ak chcete pokračovať, uložte ho ako dokument Wordu (.docx).
+	That password isn't right. Check it (passwords are case-sensitive) and try again.	Heslo je nesprávne. Skontrolujte ho (rozlišujú sa veľké a malé písmená) a skúste to znova.
+	The clipboard is empty.	Schránka je prázdna.
+	The date it is today	Dnešný dátum
+	The document has no bookmarks yet.	Dokument zatiaľ nemá záložky.
+	The document is read only, except for regions marked editable.	Dokument je iba na čítanie okrem oblastí označených ako upraviteľné.
+	The document will be saved with a password. Save it to protect it.	Dokument sa uloží s heslom. Uložte ho, aby bol chránený.
+	The new style takes the formatting of the current paragraph.	Nový štýl prevezme formátovanie aktuálneho odseku.
+	The password is optional; without it anyone can stop the protection.	Heslo je voliteľné; bez neho môže ochranu vypnúť ktokoľvek.
+	The password is removed. Save the document to keep the change.	Heslo bolo odstránené. Uložte dokument, aby sa zmena zachovala.
+	The passwords don't match.	Heslá sa nezhodujú.
+	The printer, two-sided printing and pages per sheet are chosen in that dialog.	V tomto dialógovom okne sa vyberá tlačiareň, obojstranná tlač a počet strán na hárok.
+	The recipient-list field that fills each part of an address block and greeting line.	Pole zoznamu príjemcov, ktorým sa vypĺňajú jednotlivé časti bloku adresy a riadka s oslovením.
+	The spelling and grammar check is complete.	Kontrola pravopisu a gramatiky sa dokončila.
+	The system file dialog isn't available, so WordCraft shows its own. To get the system dialog, install a file chooser portal (such as xdg-desktop-portal-gtk) or zenity.	Systémové dialógové okno výberu súboru nie je dostupné, preto WordCraft zobrazuje vlastné. Ak chcete používať systémové okno, nainštalujte portál na výber súborov (napríklad xdg-desktop-portal-gtk) alebo zenity.
+	The time right now	Aktuálny čas
+	Theme Colors	Farby motívu
+	Theme Fonts	Písma motívu
+	Theme List	Zoznam motívov
+	Themes	Motívy
+	Then insert:	Potom vložiť:
+	Thesaurus	Slovník synoným
+	These marks show even when Show/Hide ¶ is off.	Tieto značky sa zobrazujú, aj keď je vypnuté Zobraziť alebo skryť ¶.
+	These merge fields aren't in the recipient list:	Tieto zlučovacie polia nie sú v zozname príjemcov:
+	These settings will be used for new documents.	Tieto nastavenia sa použijú pre nové dokumenty.
+	Thick	Hrubá
+	Thickness	Hrúbka
+	This document	Tento dokument
+	This field has no options.	Toto pole nemá možnosti.
+	This folder can't be read: {error}	Tento priečinok sa nedá prečítať: {error}
+	This font has no characters to show.	Toto písmo neobsahuje žiadne znaky na zobrazenie.
+	This page	Táto strana
+	This password type isn't supported.	Tento typ hesla nie je podporovaný.
+	This point forward	Od tohto miesta ďalej
+	This section	Tento oddiel
+	Selected text	Vybraný text
+	Three	Tri
+	Through	Cez
+	Tight	Tesné
+	Tilde	Vlnovka
+	Tips ({n})	Tipy ({n})
+	Title	Názov
+preview	Title	Názov
+	Title Bar	Záhlavie okna
+	Title from the document properties	Názov z vlastností dokumentu
+	Title:	Názov:
+	To open Word documents with WordCraft by default: select one in Finder, choose File › Get Info, pick WordCraft under Open with, then click Change All.	Ak chcete otvárať dokumenty Wordu predvolene vo WordCrafte, vo Finderi vyberte dokument, zvoľte Súbor › Informácie, v časti Otvoriť pomocou vyberte WordCraft a potom kliknite na Zmeniť všetky.
+	Today	Dnes
+	Toggle Check Box	Prepnúť začiarkavacie políčko
+	Toggle Field Codes	Prepnúť kódy polí
+	Toggle Unicode Character	Prepnúť znak Unicode
+	Tools	Nástroje
+	Top	Hore
+	Top Border	Horné orámovanie
+	Top Margin	Horný okraj
+	Top and Bottom	Hore a dole
+	Top of Page	Horná časť strany
+	Top:	Hore:
+	Total	Spolu
+	Total Row	Riadok súčtu
+	Track Changes	Sledovať zmeny
+	Track Changes Options	Možnosti sledovania zmien
+	Track Changes: On	Sledovať zmeny: zapnuté
+	Track formatting	Sledovať formátovanie
+	Track\nChanges	Sledovať\nzmeny
+	Track\nChanges ✓	Sledovať\nzmeny ✓
+	Tracked changes	Sledované zmeny
+	Tracking	Sledovanie
+	Trademark	Ochranná známka
+	Trademark Sign	Symbol ochrannej známky
+	Transform	Transformovať
+	Translate	Preložiť
+	Transparency	Priehľadnosť
+	Transport	Doprava
+	Triangle	Trojuholník
+	Triangle Down	Trojuholník nadol
+	Triangle Up	Trojuholník nahor
+	Trigonometric Functions	Goniometrické funkcie
+	Triple	Trojité
+	Triple Dot	Trojitá bodka
+	Triple Integral	Trojný integrál
+	Triple Integral with Limits	Trojný integrál s medzami
+	Triple Integral with Stacked Limits	Trojný integrál s medzami nad a pod symbolom
+	Tue	Ut
+	Turabian	Turabian
+	Turkish	Turečtina
+	Two	Dva
+	Two-sided printing	Obojstranná tlač
+	Two-sided: long edge	Obojstranná tlač: dlhá hrana
+	Two-sided: short edge	Obojstranná tlač: krátka hrana
+	Type	Typ
+	Type +2 or -1 to move from the page you are on.	Ak sa chcete posunúť z aktuálnej strany, zadajte +2 alebo -1.
+	Type Text	Zadať text
+	Type a New List…	Zadať nový zoznam…
+	Type a command, e.g. "insert table"	Zadajte príkaz, napríklad „vložiť tabuľku“
+	Type at least one recipient.	Zadajte aspoň jedného príjemcu.
+	Type equations in LaTeX	Zapisovať rovnice v LaTeXu
+	Type equations in the linear format (UnicodeMath)	Zapisovať rovnice v lineárnom formáte (UnicodeMath)
+	Type in Equation	Písať do rovnice
+	Type normal (non-math) text in the equation	Písať do rovnice bežný text (nie matematický)
+	Type the categories down the side and a column of values per series.	Zadajte kategórie po riadkoch a pre každý rad stĺpec hodnôt.
+	Type the field's name and its switches, for example PAGE \\* roman.	Zadajte názov poľa a jeho prepínače, napríklad PAGE \\* roman.
+	Type the password to stop the protection.	Zadajte heslo na vypnutie ochrany.
+	Type the recipients, or load them from a file.	Zadajte príjemcov alebo ich načítajte zo súboru.
+	Type:	Typ:
+	Typing	Písanie
+	Typing replaces selected text	Písanie nahrádza vybraný text
+	UPPERCASE	VEĽKÉ PÍSMENÁ
+	URGENT	NALIEHAVÉ
+	URL	URL
+	Ukrainian	Ukrajinčina
+	Unchecked symbol	Nezačiarknutý symbol
+	Underbar	Spodná čiara
+	Underbrace	Spodná zložená zátvorka
+	Underline	Podčiarknutie
+	Underline Words Only	Podčiarknuť iba slová
+	Underline color	Farba podčiarknutia
+	Undo	Späť
+	Undo 1 Action	Vrátiť späť 1 akciu
+	Undo Actions	Vrátiť späť akcie
+	Undo History	História vrátených akcií
+	Undo {action}	Vrátiť späť: {action}
+	Undo {n} Actions	Vrátiť späť akcie ({n})
+	Unformatted Text	Neformátovaný text
+	Ungroup	Zrušiť zoskupenie
+	Union	Zjednotenie
+	Union of intersections	Zjednotenie prienikov
+	Union with Limits	Zjednotenie s medzami
+	Union with Lower Limit	Zjednotenie s dolnou medzou
+	Union with Plus	Zjednotenie so znamienkom plus
+	Union with Subscript-Superscript Limits	Zjednotenie s medzami v dolnom a hornom indexe
+	Unions and Intersections	Zjednotenia a prieniky
+	Unlink Fields	Zrušiť prepojenie polí
+	Unlink\nCitations	Zrušiť prepojenie\ncitácií
+	Unlock Fields	Odomknúť polia
+	Up	Hore
+	Up Diagonal Dots	Stúpajúce uhlopriečne bodky
+	Up one level	O úroveň vyššie
+	Update Field	Aktualizovať pole
+	Update Index	Aktualizovať register
+	Update Style to Match Selection	Aktualizovať štýl podľa výberu
+	Update Styles from Template	Aktualizovať štýly zo šablóny
+	Update Table	Aktualizovať tabuľku
+	Update Table of Figures	Aktualizovať zoznam obrázkov
+	Update fields before printing	Aktualizovať polia pred tlačou
+	Update to Match	Aktualizovať podľa vzoru
+	Update to Match Selection	Aktualizovať podľa výberu
+	Use "a" before a consonant sound	Použiť „a“ pred spoluhláskovým zvukom
+	Use "an" before a vowel sound	Použiť „an“ pred samohláskovým zvukom
+	Use an Existing List…	Použiť existujúci zoznam…
+	Use system setting	Použiť systémové nastavenie
+	Use the Insert key to switch overtype on and off	Klávesom Insert zapínať a vypínať prepisovanie
+	Use wildcards	Používať zástupné znaky
+	User Name	Meno používateľa
+	User name:	Meno používateľa:
+	Username	Používateľské meno
+	Value	Hodnota
+	Vector A	Vektor A
+	Vector AB	Vektor AB
+	Version	Verzia
+	Version History	História verzií
+	Version {version} ({build})	Verzia {version} ({build})
+	Vertical	Zvisle
+	Vertical Alignment	Zvislé zarovnanie
+	Vertical Bars	Zvislé čiary
+	Vertical Dots	Zvislé bodky
+	Vertical alignment:	Zvislé zarovnanie:
+	View	Zobraziť
+	View Alt Text…	Zobraziť alternatívny text…
+	View Gridlines	Zobraziť mriežku
+	View State	Stav zobrazenia
+	Views	Zobrazenia
+	Visual effects	Vizuálne efekty
+	Voice	Hlas
+	Volume	Hlasitosť
+	Volume Integral	Objemový integrál
+	Volume Integral with Limits	Objemový integrál s medzami
+	Volume Integral with Stacked Limits	Objemový integrál s medzami nad a pod symbolom
+	W:	Š:
+	Waiting for Zotero…	Čaká sa na Zotero…
+	Warm Gradient with Outline	Teplý farebný prechod s obrysom
+	Warnings ({n})	Upozornenia ({n})
+	Watermark	Vodotlač
+	Wave	Vlna
+	Weather	Počasie
+	Web Layout	Webové rozloženie
+	Web page (*.html)	Webová stránka (*.html)
+	Web\nLayout	Webové\nrozloženie
+	Website	Webová lokalita
+	Wed	St
+	Weight	Hrúbka
+	West	Západ
+	When this document was first created	Kedy bol tento dokument prvýkrát vytvorený
+	When this document was most recently printed	Kedy bol tento dokument naposledy vytlačený
+	When this document was most recently saved	Kedy bol tento dokument naposledy uložený
+	White Space	Prázdne miesto
+	White space	Prázdne miesto
+	Who the document properties name as author	Autor uvedený vo vlastnostiach dokumentu
+	Whole Table	Celá tabuľka
+	Whole document	Celý dokument
+	Whole page	Celá strana
+	Whole words	Celé slová
+	Wide	Široké
+	Widow/Orphan Control	Kontrola osamotených riadkov
+	Widow/Orphan control	Kontrola osamotených riadkov
+	Width and spacing	Šírka a rozostupy
+	Width:	Šírka:
+	Wildcards (regex)	Zástupné znaky (regulárne výrazy)
+	Window	Okno
+	With:	S:
+	Word Count	Počet slov
+	Word Left	O slovo doľava
+	Word Right	O slovo doprava
+	Word XML Document (*.xml)	Dokument Word XML (*.xml)
+	Word document	Dokument Wordu
+	Word document (*.docx)	Dokument Wordu (*.docx)
+	Word level	Úroveň slova
+	WordArt	WordArt
+	WordArt Styles	Štýly WordArt
+	WordCraft	WordCraft
+	WordCraft is now the default app for Word documents.	WordCraft je teraz predvolenou aplikáciou pre dokumenty Wordu.
+	Words	Slová
+	Words only	Iba slová
+	Wrap Text	Obtekanie textu
+	Wrap Text Sides	Obtekanie textu po stranách
+	Wrap\nText	Obtekanie\ntextu
+	Write & Insert Fields	Napísať a vložiť polia
+	Write a reply	Napísať odpoveď
+	Year	Rok
+	Yes	Áno
+	Yields	Dáva
+	Your changes will be lost if you don't save them.	Ak zmeny neuložíte, stratia sa.
+	Your system doesn't report an animation setting, so animation effects stay on.	Systém neposkytuje informáciu o nastavení animácií, preto animované efekty zostávajú zapnuté.
+	Your system has animation effects turned off.	V systéme sú animované efekty vypnuté.
+	Your system has animation effects turned on.	V systéme sú animované efekty zapnuté.
+	Zoom	Priblíženie
+	Zoom In	Priblížiť
+	Zoom Out	Oddialiť
+	Zotero	Zotero
+	Zotero: cancelled	Zotero: zrušené
+	Zotero: done	Zotero: dokončené
+	a, b, c, …	a, b, c, …
+	can't split at the first row	Nedá sa rozdeliť pri prvom riadku
+	development build	Vývojová zostava
+	from Unicode (hex)	Z Unicode (hexadecimálne)
+	getartcraft.com/apps/wordcraft	getartcraft.com/apps/wordcraft
+	i, ii, iii, …	i, ii, iii, …
+	lowercase	Malé písmená
+	n×n Identity Matrix	Jednotková matica n×n
+	n×n Matrix	Matica n×n
+	pt	b
+	select two or more cells to merge	Na zlúčenie vyberte aspoň dve bunky
+	tOGGLE cASE	pREPNÚŤ vEĽKOSŤ pÍSMEN
+	there is no ink to replay	Nie sú žiadne ťahy pera na opätovné prehratie
+	there's no citation after the caret	Za kurzorom nie je žiadna citácia
+	this item is already at the top level	Táto položka je už na najvyššej úrovni
+	x bar	x s pruhom
+	{cols}×{rows} Table	Tabuľka {cols}×{rows}
+	{contributors} contributors · {commits} commits	Počet prispievateľov: {contributors} · počet commitov: {commits}
+	{count} items highlighted	Zvýraznených položiek: {count}
+	{count} of {total} pages will print	Počet strán na tlač: {count} z {total}
+	{group} settings	Nastavenia: {group}
+	{key}+Click to follow link	Odkaz otvoríte pomocou {key}+kliknutia
+	{language} is now the document's default language.	Predvoleným jazykom dokumentu je teraz {language}.
+	{name} already exists. Choose Save again to replace it.	{name} už existuje. Ak ho chcete nahradiť, znova zvoľte Uložiť.
+	{name} is protected with a password.	{name} je chránený heslom.
+	{name} wasn't found.	{name} sa nenašiel.
+	{n} entries marked.	Označených položiek: {n}.
+	{n} lines	Počet riadkov: {n}
+	{n} pt	{n} b
+	{selected} of {words} words	Počet slov: {words}; vo výbere: {selected}
+	{size} pt	{size} b
+	{words} words	Počet slov: {words}
+	“{text}” ({row}, {series}) isn't a number.	„{text}“ ({row}, {series}) nie je číslo.
+	✓ None	✓ Žiadne
+	➕ New comment	➕ Nový komentár
+	📂  Browse…	📂  Prehľadávať…
+	Account	Účet
+	Add Condition	Pridať podmienku
+	Add whether it is above or below	Pridať údaj, či je nad alebo pod
+	All system fonts are already available.	Všetky systémové písma sú už dostupné.
+	And	A
+	Ascending	Vzostupne
+	Auto ({percent}%)	Automaticky ({percent} %)
+	Column {n}	Stĺpec {n}
+	Compare to	Porovnať s
+	Comparison	Porovnanie
+	Contains	Obsahuje
+	Copy to	Kopírovať do
+	Croatian	Chorvátčina
+	Indonesian	Indonézština
+	Custom size	Vlastná veľkosť
+	Delete Bookmark	Odstrániť záložku
+	Descending	Zostupne
+	Dictionaries	Slovníky
+	Dictionaries folder:	Priečinok so slovníkmi:
+	Document name	Názov dokumentu
+	Does not contain	Neobsahuje
+	Enter bookmark name:	Zadajte názov záložky:
+	Equal to	Rovná sa
+	Existing File or Web Page	Existujúci súbor alebo webová stránka
+	Filter Recipients	Filtrovať príjemcov
+	Filter and Sort	Filtrovať a zoradiť
+	Find “{text}” in the document	Nájsť „{text}“ v dokumente
+	For which item:	Pre ktorú položku:
+	Formula:	Vzorec:
+	Full Screen	Celá obrazovka
+	Full\nScreen	Celá\nobrazovka
+	Greater than	Väčšie ako
+	Greater than or equal	Väčšie alebo rovné
+	Header row	Riadok hlavičky
+	Heading	Nadpis
+	Heading text	Text nadpisu
+	Hidden bookmarks	Skryté záložky
+	Hunspell .aff and .dic files here (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) are used before the system's.	Súbory Hunspell .aff a .dic v tomto priečinku (pl_PL, pt_BR, it_IT, hr_HR, tr_TR) majú prednosť pred systémovými slovníkmi.
+	In the margin	Na okraji
+	Insert reference to:	Vložiť odkaz na:
+	Is blank	Je prázdne
+	Is not blank	Nie je prázdne
+	Language Preferences…	Jazykové nastavenia…
+	Leave out the date and time of comments and tracked changes when saving	Pri ukladaní vynechať dátum a čas komentárov a sledovaných zmien
+	Less than	Menšie ako
+	Less than or equal	Menšie alebo rovné
+	Link to:	Prepojiť s:
+	Load System Installed Fonts…	Načítať systémové písma…
+	Loaded {count} system fonts.	Načítaných systémových písiem: {count}.
+	Local font access is not supported by your browser.	Prehliadač nepodporuje prístup k miestnym písmam.
+	Local font access was denied.	Prístup k miestnym písmam bol zamietnutý.
+	Makes the ribbon, menus and dialogs larger or smaller. Auto follows your system's display scaling; 100% is one screen pixel per point. Document zoom is separate.	Zväčšuje alebo zmenšuje pás s nástrojmi, ponuky a dialógové okná. Automatická veľkosť sa riadi mierkou zobrazenia systému; pri 100 % zodpovedá jeden bod jednému pixelu obrazovky. Priblíženie dokumentu sa nastavuje samostatne.
+	Mirror margins	Zrkadlové okraje
+	More Paper Sizes…	Ďalšie veľkosti papiera…
+	Moved objects snap to the page's edges and centre, the margins and other objects. Hold Alt to move freely.	Presúvané objekty sa prichytávajú k hranám a stredu strany, k jej nastaveným okrajom a k ďalším objektom. Ak ich chcete presúvať voľne, podržte Alt.
+	My list has	Môj zoznam obsahuje
+	No document is open. Create a document or open one first.	Nie je otvorený žiadny dokument. Najprv vytvorte alebo otvorte dokument.
+	No header row	Bez riadka hlavičky
+	No spelling dictionary for {language} is installed, so it isn't checked. WordCraft looks for the Hunspell dictionary {name} in the WORDCRAFT_DICTIONARIES folder and in the usual system locations.	Pre jazyk {language} nie je nainštalovaný pravopisný slovník, preto sa nekontroluje. WordCraft hľadá slovník Hunspell {name} v priečinku WORDCRAFT_DICTIONARIES a v bežných systémových umiestneniach.
+	Not equal to	Nerovná sa
+	Not set: the system's usual places	Nenastavené: bežné systémové umiestnenia
+	Number only, without the label's words	Iba číslo, bez textu označenia
+	Only for the selected text	Iba pre vybraný text
+	Or	Alebo
+	Paper	Papier
+	Paper size:	Veľkosť papiera:
+	Paste function:	Funkcia prilepenia:
+	Place in This Document	Umiestniť do tohto dokumentu
+	Print settings	Nastavenia tlače
+	Privacy Options	Možnosti ochrany súkromia
+	Privacy Settings	Nastavenia ochrany súkromia
+	Privacy for this document	Ochrana súkromia v tomto dokumente
+	Recover	Obnoviť
+	Reference type:	Typ odkazu:
+	Remove condition	Odstrániť podmienku
+	Remove my name from comments, changes and file properties when saving	Pri ukladaní odstrániť moje meno z komentárov, zmien a vlastností súboru
+	Rename	Premenovať
+	Rename Document	Premenovať dokument
+	Saving {name} was cancelled, so it is still open and nothing was lost.	Ukladanie dokumentu {name} sa zrušilo, preto zostáva otvorený a nič sa nestratilo.
+	Set Proofing Language…	Nastaviť jazyk kontroly pravopisu…
+	Show alignment guides when moving pictures and shapes	Pri presúvaní obrázkov a tvarov zobrazovať vodiace čiary zarovnania
+	Show its list number	Zobraziť číslo položky zoznamu
+	Show its number relative to this field	Zobraziť číslo položky vzhľadom na toto pole
+	Show its number with all higher levels	Zobraziť číslo položky so všetkými vyššími úrovňami
+	Sort Recipients	Zoradiť príjemcov
+	Sort by	Zoradiť podľa
+	Sort by:	Zoradiť podľa:
+	Style name:	Názov štýlu:
+	Submit print job	Odoslať tlačovú úlohu
+	Take the last match on the page	Použiť posledný výskyt na strane
+	Text of the nearest paragraph with a given style (running headers)	Text najbližšieho odseku s daným štýlom (priebežné záhlavia)
+	The document you are editing keeps the names and dates; only the saved file leaves them out.	V upravovanom dokumente mená a dátumy zostanú; vynechajú sa iba z uloženého súboru.
+	The margins don't fit on a page this size; make the margins smaller first.	Okraje sa na stranu tejto veľkosti nezmestia; najprv ich zmenšite.
+	Then by	Potom podľa
+	This document has no bookmarks.	Tento dokument nemá žiadne záložky.
+	Trust Center	Centrum dôveryhodnosti
+	Type Character Code	Zadať kód znaku
+	Type a page number, or +2 / -1.	Zadajte číslo strany alebo +2 / -1.
+	Use the browser's full screen (F11)	Použiť režim celej obrazovky prehliadača (F11)
+	Wait for the print job to finish submitting before closing.	Pred zatvorením počkajte na dokončenie odosielania tlačovej úlohy.
+	Waiting for the save to finish…	Čaká sa na dokončenie ukladania…
+	Word 2003 XML Document (*.xml)	Dokument Word 2003 XML (*.xml)
+	{count} of {total} recipients will be merged.	Príjemcovia na zlúčenie: {count} z {total}.
+	Find in list:	Nájsť v zozname:
+	Any field	Ľubovoľné pole
+	Matches: {count}	Zhody: {count}
+	Show only records that will be merged	Zobraziť iba záznamy, ktoré sa zlúčia
+	{kind}, {columns} × {rows}, {size} ({paper})	{kind}, {columns} × {rows}, {size} ({paper})
+	{language} (no dictionary)	{language} (bez slovníka)
+	{language}: no dictionary found	{language}: slovník sa nenašiel
+	{language}: {file}	{language}: {file}
+	{name}   {height} × {width} in	{name}   {height} × {width} in
+	{name}   {height} × {width} mm	{name}   {height} × {width} mm
+	{width} × {height} mm	{width} × {height} mm
+	B4 (JIS)   10.12" × 14.33"	B4 (JIS)   10,12" × 14,33"
+	B5 (JIS)   7.17" × 10.12"	B5 (JIS)   7,17" × 10,12"
+	Envelope #10   4.12" × 9.50"	Obálka č. 10   4,12" × 9,50"
+	Envelope DL   4.33" × 8.66"	Obálka DL   4,33" × 8,66"
+	Executive   7.25" × 10.50"	Executive   7,25" × 10,50"
+	Legal   8.50" × 14.00"	Legal   8,50" × 14,00"
+	Letter   8.50" × 11.00"	Letter   8,50" × 11,00"
+	Statement   5.50" × 8.50"	Statement   5,50" × 8,50"
+	Tabloid   11.00" × 17.00"	Tabloid   11,00" × 17,00"
+	Narrow	Úzke
+	Medium	Stredné
+	Odd Banded Rows	Nepárne pruhované riadky
+	Even Banded Rows	Párne pruhované riadky
+	Odd Banded Columns	Nepárne pruhované stĺpce
+	Even Banded Columns	Párne pruhované stĺpce
+	Top Left Cell	Ľavá horná bunka
+	Top Right Cell	Pravá horná bunka
+	Bottom Left Cell	Ľavá dolná bunka
+	Bottom Right Cell	Pravá dolná bunka
+	Inside Horizontal Border	Vnútorné vodorovné orámovanie
+	Inside Vertical Border	Vnútorné zvislé orámovanie
+	Merge cells before split	Pred rozdelením zlúčiť bunky
+	Table size	Veľkosť tabuľky
+	AutoFit behavior	Automatické prispôsobenie
+	Initial column width:	Počiatočná šírka stĺpca:
+	AutoFit to contents	Prispôsobiť obsahu
+	AutoFit to window	Prispôsobiť oknu
+	Separate text at	Oddeliť text podľa
+	Commas	Čiarky
+	Other:	Iné:
+	The number must be between 1 and {max}.	Číslo musí byť od 1 do {max}.
+	The measurement must be between {min} and {max}.	Rozmer musí byť od {min} do {max}.
+	Recently Used Fonts	Nedávno použité písma
+	All Fonts	Všetky písma
+	Moved from:	Presunuté z:
+	Moved to:	Presunuté do:
+	Spike	Zásobník výstrižkov
+	Insert Spike	Vložiť obsah zásobníka výstrižkov
+	Added 1 font	Pridané 1 písmo
+	Added {n} fonts	Pridaných písiem: {n}
+	{added}; {count} couldn't be read: {names}	{added}; nepodarilo sa prečítať písma ({count}): {names}
+	{names} and {n} more	{names}; ďalšie položky: {n}
+	{added}; {n} skipped (limit {max})	{added}; preskočené: {n} (limit {max})
+	nothing is selected	Nie je nič vybrané
+	select a picture or shape first	Najprv vyberte obrázok alebo tvar
+	select recipients first	Najprv vyberte príjemcov
+	select two or more pictures or shapes first (Shift+click)	Najprv vyberte aspoň dva obrázky alebo tvary (Shift+kliknutie)
+	text boxes can't go inside a text box	Textové pole nemožno vložiť do iného textového poľa
+	the cursor isn't in a table	Kurzor nie je v tabuľke
+	{name} options	Možnosti pre {name}
+	Dropped	Zapustená iniciála
+	In margin	Na okraji
+	Drop Cap Options…	Možnosti iniciály…
+	Lines to drop:	Počet riadkov iniciály:
+	Distance from text:	Vzdialenosť od textu:
+	Distance from text	Vzdialenosť od textu
+	the paragraph is empty	Odsek je prázdny
+	the paragraph starts with a space	Odsek sa začína medzerou
+	Lock aspect ratio	Zamknúť pomer strán
+	Relative to original picture size	Vzhľadom na pôvodnú veľkosť obrázka
+	Original size	Pôvodná veľkosť
+	{width} × {height} pixels	{width} × {height} px
+	Type a size in any unit, such as 5 cm or 300 px. The other side follows, so the picture keeps its proportions.	Zadajte veľkosť v ľubovoľnej jednotke, napríklad 5 cm alebo 300 px. Druhá strana sa prispôsobí, takže obrázok si zachová proporcie.
+	Import…	Importovať…
+	Restore opens an unsaved copy. Your original file stays unchanged.	Obnovením sa otvorí neuložená kópia. Pôvodný súbor zostane nezmenený.
+	Recovery is disabled while this document has a password.	Obnova nie je dostupná, kým má tento dokument nastavené heslo.
+	Local recovery is unavailable or still loading.	Lokálna obnova nie je dostupná alebo sa ešte načítava.
+	No recovery copies.	Žiadne kópie na obnovenie.
+	Recovery copy	Kópia na obnovenie
+	Restore	Obnoviť
+	Discard…	Zahodiť…
+	Continue without restoring	Pokračovať bez obnovenia
+	Current Document	Aktuálny dokument
+	{language} (dictionary unreadable)	{language} (slovník sa nedá prečítať)
+	The spelling dictionary for {language} couldn't be read, so it isn't checked. File: {file}. Reason: {reason}	Pravopisný slovník pre jazyk {language} sa nepodarilo prečítať, preto sa pravopis tohto jazyka nekontroluje. Súbor: {file}. Dôvod: {reason}
+	select a picture first	Najprv vyberte obrázok
+	Crop on the page works on unturned pictures: set Rotation to 0° first, or use the crop boxes	Orezávanie priamo na stránke funguje len pri neotočených obrázkoch: najprv nastavte Otočenie na 0° alebo použite polia na orezanie
+	Select a place in this document:	Vyberte miesto v tomto dokumente:
+	Top of the Document	Začiatok dokumentu
+	Bookmarks	Záložky
+	Discard the recovery copy of {name}?	Zahodiť kópiu na obnovenie dokumentu {name}?
+	This cannot be undone. Your original file stays unchanged.	Tento krok sa nedá vrátiť späť. Pôvodný súbor zostane nezmenený.
+	Discard	Zahodiť
+	The number must be a divisor of {max}.	Číslo musí byť deliteľom čísla {max}.
+	Nothing of this type in the document.	V dokumente nie sú žiadne položky tohto typu.
+	Automatically add words to list (First Letter)	Automaticky pridávať slová do zoznamu (veľké začiatočné písmeno)
+	Automatically add words to list (INitial CAps)	Automaticky pridávať slová do zoznamu (dve veľké začiatočné písmená)
+	No new sources in that file	V tomto súbore sa nenašli žiadne nové zdroje
+	Imported 1 source	Importoval sa 1 zdroj
+	Imported {n} sources	Importovaných zdrojov: {n}
+	Couldn't save {name}, so it is still open and nothing was lost: {error}	Dokument {name} sa nepodarilo uložiť, preto zostal otvorený a nič sa nestratilo: {error}
+	{language}: {file} (unreadable: {reason})	{language}: {file} (nedá sa prečítať: {reason})
+	Scale to paper size	Prispôsobiť veľkosti papiera
+	{paper}   {width} × {height}	{paper}   {width} × {height}
+	Open a document first	Najprv otvorte dokument
+	No items to show.	Žiadne položky na zobrazenie.
+	Recover documents	Obnoviť dokumenty
+	Border	Orámovanie
+	Sharpen	Zaostriť
+	Soften	Zjemniť
+	Sepia	Sépiový tón
+	Washout	Vyblednutie
+	Brightness, contrast and sharpness	Jas, kontrast a ostrosť
+	Saturation and recolor	Sýtosť a zmena farby
+	Picture transparency	Priehľadnosť obrázka
+	Frames and effects	Rámy a efekty
+	Picture border	Orámovanie obrázka
+	Brighter +20%	Jas +20 %
+	Darker −20%	Jas −20 %
+	More Contrast +20%	Kontrast +20 %
+	Less Contrast −20%	Kontrast −20 %
+	Full Saturation 100%	Plná sýtosť 100 %
+	Muted 50%	Tlmené farby 50 %
+	Gray 0%	Odtiene sivej 0 %
+	Vivid 200%	Výrazné farby 200 %
+	Simple Frame	Jednoduchý rám
+	Thick Frame	Hrubý rám
+	Rounded	Zaoblené
+	Soft Edge	Mäkké okraje
+	Page number	Číslo strany
+	Above/below	Nad/pod
+	Bookmark text	Text záložky
+	Entire caption	Celý popis
+	Only label and number	Len označenie a číslo
+	Journal article	Článok v odbornom časopise
+	Auto orientation	Automatická orientácia
+	No Scaling	Bez zmeny mierky
+	Thin	Tenké
+	Word sources	Zdroje programu Word
+numerals	Arabic	Západné číslice
+numerals	Hindi	Východoarabské číslice
+numerals	Context	Podľa okolitého textu
+numerals	System	Podľa systému
+	Add gradient stop	Pridať zarážku prechodu
+	Angle	Uhol
+	Center Glow	Žiara zo stredu
+	Continue from previous section	Pokračovať z predchádzajúcej sekcie
+	Dark Variations	Tmavé varianty
+	Deep	Sýty
+	Direction	Smer
+	Dot-dot-dash	Bodka-bodka-pomlčka
+	Editing endnote	Úprava vysvetlivky
+	Editing footnote	Úprava poznámky pod čiarou
+	English (Australia)	Angličtina (Austrália)
+	English (Canada)	Angličtina (Kanada)
+	English (India)	Angličtina (India)
+	English (Ireland)	Angličtina (Írsko)
+	English (New Zealand)	Angličtina (Nový Zéland)
+	English (South Africa)	Angličtina (Juhoafrická republika)
+	File locations	Umiestnenia súborov
+	File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.	Súbor › Nový zobrazuje šablóny .dotx a .dotm odtiaľto v časti Osobné; Uložiť ako šablónu Wordu začína tu.
+	Format Shape	Formát tvaru
+	Format Shape Pane	Podokno Formát tvaru
+	Format Shape…	Formátovať tvar…
+	From Bottom Left Corner	Z ľavého dolného rohu
+	From Bottom Right Corner	Z pravého dolného rohu
+	From Center	Zo stredu
+	From Top Left Corner	Z ľavého horného rohu
+	From Top Right Corner	Z pravého horného rohu
+	Full Screen View	Zobrazenie na celú obrazovku
+	Gradient	Prechod
+	Gradient fill	Prechodová výplň
+	Gradient stops	Zarážky prechodu
+	Include label and number	Zahrnúť označenie a číslo
+	Light Variations	Svetlé varianty
+	Linear Diagonal - Bottom Left to Top Right	Lineárny uhlopriečny – zľava dole doprava hore
+	Linear Diagonal - Bottom Right to Top Left	Lineárny uhlopriečny – sprava dole doľava hore
+	Linear Diagonal - Top Left to Bottom Right	Lineárny uhlopriečny – zľava hore doprava dole
+	Linear Diagonal - Top Right to Bottom Left	Lineárny uhlopriečny – sprava hore doľava dole
+	Linear Down	Lineárny nadol
+	Linear Left	Lineárny doľava
+	Linear Right	Lineárny doprava
+	Linear Up	Lineárny nahor
+	Lit from Bottom	Osvetlený zdola
+	Lit from Top	Osvetlený zhora
+	More Gradients…	Ďalšie prechody…
+	More Underlines…	Ďalšie podčiarknutia…
+	More tabs	Ďalšie karty
+	No Gradient	Bez prechodu
+	No fill	Bez výplne
+	Not set	Nenastavené
+	Old menu keys: Alt, {keys}. Keep typing, or press Esc to cancel.	Staré klávesy ponúk: Alt, {keys}. Pokračujte v písaní alebo zrušte klávesom Esc.
+	Page Number Format	Formát čísel strán
+	Page numbering	Číslovanie strán
+	Path	Cesta
+	Personal	Osobné
+	Personal Templates	Osobné šablóny
+	Preset gradients	Predvolené prechody
+	Print job submitted: spooled {count} sheet(s)	Tlačová úloha odoslaná. Hárky vo fronte: {count}.
+	Radial	Radiálny
+	Rectangular	Obdĺžnikový
+	Remove gradient stop	Odstrániť zarážku prechodu
+	Rotate with shape	Otáčať s tvarom
+	Save as Word Template…	Uložiť ako šablónu Wordu…
+	Saves a .dotx template in your templates folder. It shows up in File › New under Personal.	Uloží šablónu .dotx do vášho priečinka so šablónami. Zobrazí sa v ponuke Súbor › Nový v časti Osobné.
+	Select a shape, text box or drawing canvas to format its fill.	Vyberte tvar, textové pole alebo kresliace plátno a upravte jeho výplň.
+	Show the ribbon	Zobraziť pás s nástrojmi
+	Soft	Jemný
+	Solid fill	Plná výplň
+	Templates you save in your templates folder show up here.	Šablóny, ktoré uložíte do priečinka so šablónami, sa zobrazia tu.
+	Underline Color	Farba podčiarknutia
+	User templates:	Používateľské šablóny:
+	cm	cm
+	mm	mm
+	pi	pi
+	First Record	Prvý záznam
+	Last Record	Posledný záznam
+	Go to Record	Prejsť na záznam
+	Edit Individual Documents…	Upraviť jednotlivé dokumenty…
+	Print Documents…	Tlačiť dokumenty…
+	Print Documents	Tlačiť dokumenty
+	Current record	Aktuálny záznam
+	From:	Od:
+	To:	Do:
+	Enter a number.	Zadajte číslo.
+	a drawing canvas can't be ungrouped	Kresliace plátno nemožno rozdeliť na samostatné objekty
+	a drawing canvas can't go inside a text box	Kresliace plátno nemožno vložiť do textového poľa
+	charts and diagrams can't be moved or resized yet	Grafy a diagramy zatiaľ nemožno presúvať ani meniť ich veľkosť
+	no equation at the caret	Na pozícii kurzora nie je rovnica
+	not editing an equation	Práve sa neupravuje rovnica
+	only in Outline view	Dostupné iba v zobrazení Osnova
+	select a SmartArt graphic first	Najprv vyberte grafiku SmartArt
+	select a chart first	Najprv vyberte graf
+	select a connector first	Najprv vyberte spojnicu
+	select a drawing canvas first	Najprv vyberte kresliace plátno
+	select a floating picture or shape first	Najprv vyberte plávajúci obrázok alebo tvar
+	select a group first	Najprv vyberte skupinu
+	select a shape first	Najprv vyberte tvar
+	select a text box first	Najprv vyberte textové pole
+	select a text box linked to another first	Najprv vyberte textové pole prepojené s iným
+	the Clipboard pane is empty	Tabla schránky je prázdna
+	there is nothing to undo	Nie je čo vrátiť späť
+	this SmartArt was made in another program: WordCraft shows it but can't edit it	Tento objekt SmartArt bol vytvorený v inom programe: WordCraft ho zobrazí, ale nemôže ho upraviť
+	this chart was made in another program: WordCraft shows it but can't edit it	Tento graf bol vytvorený v inom programe: WordCraft ho zobrazí, ale nemôže ho upraviť
+	this text box is already linked: break the link first	Toto textové pole je už prepojené: najprv zrušte prepojenie
+	leave the equation first	Najprv ukončite úpravu rovnice
+	the Spike is empty	Zásobník výstrižkov je prázdny
+	a group holding Word ink can't be ungrouped yet	Zoskupenie s rukopisom z Wordu zatiaľ nemožno zrušiť
+	drop caps can't go in a table	Iniciálu nemožno vložiť do tabuľky
+	the document is protected	Dokument je chránený

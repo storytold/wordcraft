@@ -23,7 +23,9 @@ pub struct Entry {
 /// - `template`: the name of a built-in document template (Home and New), which may need other
 ///   wording than the same English word elsewhere (the "Letter" template and the "Letter" paper
 ///   size); it falls back to the plain entry.
-pub const CONTEXTS: &[&str] = &["preview", "template"];
+/// - `numerals`: digit forms in File > Options, where "Arabic" and "Hindi" name numeral systems
+///   rather than languages; it falls back to the plain entry.
+pub const CONTEXTS: &[&str] = &["preview", "template", "numerals"];
 
 /// A parsed catalog. Values are owned for the life of the process (catalogs are built once).
 #[derive(Debug, Default)]

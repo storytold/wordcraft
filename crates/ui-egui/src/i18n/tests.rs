@@ -38,6 +38,24 @@ fn system_locales_map_to_languages() {
     assert_eq!(lang_from_tag("de_AT.UTF-8"), Some(lang("de")));
     assert_eq!(lang_from_tag("de-CH"), Some(lang("de")));
     assert_eq!(lang_from_tag("DE_de.UTF-8@euro"), Some(lang("de")));
+    assert_eq!(lang_from_tag("sk-SK"), Some(lang("sk")));
+    assert_eq!(lang_from_tag("sk_SK.UTF-8"), Some(lang("sk")));
+}
+
+#[test]
+fn slovak_interface_can_be_selected_and_saved_without_changing_the_document_language() {
+    let sk = lang("sk");
+    assert_eq!(sk.name(), "Slovenčina");
+    assert_eq!(sk.editing_lang(), None);
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "SK"})).unwrap();
+    assert_eq!(result["effective"], "sk");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "sk" && l["name"] == "Slovenčina"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), sk);
 }
 
 /// A language tag no catalog will ever have: `qaa`–`qtz` are reserved for local use (ISO 639-2),
