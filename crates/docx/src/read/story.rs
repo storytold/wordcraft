@@ -724,7 +724,8 @@ impl Reader<'_> {
                 if sc.fields.iter().any(|f| f.phase == Phase::Instr) {
                     return;
                 }
-                let c = match k.attr("w:type") {
+                let ty = k.attr("w:type").map(|t| t.trim().to_ascii_lowercase());
+                let c = match ty.as_deref() {
                     Some("page") => "\u{000C}",
                     Some("column") => "\u{000E}",
                     _ => "\n",
@@ -739,7 +740,13 @@ impl Reader<'_> {
             "w:noBreakHyphen" => self.emit_text(sc, pb, "\u{2011}", props),
             "w:softHyphen" => self.emit_text(sc, pb, "\u{00AD}", props),
             "w:sym" => {
-                let ch = k.attr("w:char").and_then(|h| u32::from_str_radix(h.trim(), 16).ok()).and_then(char::from_u32).filter(|c| *c as u32 >= 0x20);
+                let h_str = k.attr("w:char").map(|h| {
+                    let s = h.trim();
+                    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+                    let s = s.strip_prefix("U+").or_else(|| s.strip_prefix("u+")).unwrap_or(s);
+                    s.strip_prefix("#x").or_else(|| s.strip_prefix("#X")).unwrap_or(s)
+                });
+                let ch = h_str.and_then(|h| u32::from_str_radix(h, 16).ok()).and_then(char::from_u32).filter(|c| *c as u32 >= 0x20);
                 if let Some(ch) = ch {
                     let mut p = props.clone();
                     // The symbol's own font, kept apart from the run's (ECMA-376 §17.3.3.30).
@@ -783,7 +790,7 @@ impl Reader<'_> {
                 }
             }
             "w:footnoteReference" | "w:endnoteReference" => {
-                let foot = k.name == "w:footnoteReference";
+                let foot = k.local() == "footnoteReference";
                 let fid = k.attr("w:id").and_then(int).unwrap_or(i64::MIN);
                 let map = if foot { &self.footnotes } else { &self.endnotes };
                 if let Some(id) = map.get(&fid).copied() {
@@ -794,7 +801,7 @@ impl Reader<'_> {
             }
             // The note's own number at the start of its text: a reference to the note being read.
             "w:footnoteRef" | "w:endnoteRef" => {
-                let kind = if k.name == "w:footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
+                let kind = if k.local() == "footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
                 if let Some((nk, id)) = self.current_note
                     && nk == kind
                 {

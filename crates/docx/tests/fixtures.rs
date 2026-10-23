@@ -340,6 +340,18 @@ fn pcl6_symbol_roundtrip() {
 }
 
 #[test]
+fn sym_hex_prefixes_and_break_type_casing() {
+    let body = r##"
+<w:p>
+ <w:r><w:sym w:font="Wingdings" w:char="0xF0FC"/><w:sym w:font="Symbol" w:char="U+F061"/><w:sym w:font="Webdings" w:char="#xF061"/></w:r>
+ <w:r><w:br w:type="Page"/><w:br w:type="Column"/><w:br w:type="textWrapping"/></w:r>
+</w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let p = paras(&d);
+    assert_eq!(p[0].plain_text(), "\u{F0FC}\u{F061}\u{F061}\u{C}\u{E}\n");
+}
+
+#[test]
 fn alternate_content_choice_and_fallback() {
     let body = r#"
 <w:p><w:r><mc:AlternateContent>
