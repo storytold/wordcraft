@@ -232,7 +232,16 @@ pub fn show_in_context_menu(app: &mut WordApp, ui: &mut egui::Ui) {
 fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
     let st: Value = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
-    let align = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props).align).unwrap_or_default();
+    // As on the ribbon, the buttons show alignment as seen on the page (#3579).
+    let align = app
+        .session
+        .doc
+        .para_at(&app.session.sel.focus)
+        .map(|p| {
+            let r = app.session.doc.styles.resolve_para(&p.props);
+            r.align.visual(r.bidi)
+        })
+        .unwrap_or_default();
     let row = |ui: &mut egui::Ui, app: &mut WordApp, add: &dyn Fn(&mut egui::Ui, &mut WordApp)| {
         ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
             ui.set_min_height(ROW_H);
@@ -900,5 +909,61 @@ mod tests {
         click_at(&mut h, first + Vec2::new(9.0, 9.0));
         assert!(h.state().canvas.want_focus, "the swatch pick returns focus to the document");
         assert!(format_state(&mut h).get("highlight").is_some_and(|v| !v.is_null()), "the first swatch applied a highlight");
+    }
+
+    /// #3579: in a right-to-left paragraph the bar lit Align Left for a paragraph that sits on
+    /// the right. Like the ribbon, it marks the alignment as seen on the page, the one its buttons
+    /// set. Only the bar is drawn, so the ribbon's own alignment buttons can't answer for it.
+    #[test]
+    fn alignment_buttons_mark_the_alignment_seen_on_the_page_in_a_right_to_left_paragraph() {
+        use egui_kittest::kittest::Queryable;
+        // A left-to-right paragraph first: a bar that always swapped the two would pass the RTL cases alone.
+        for (rtl, cmd, lit, unlit) in [
+            (false, None, "Align Left", "Align Right"),
+            (true, None, "Align Right", "Align Left"),
+            (true, Some("para.alignLeft"), "Align Left", "Align Right"),
+        ] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("سلام دنیا")), Default::default());
+            a.run("select.all", json!({})).unwrap();
+            if rtl {
+                a.run("para.rtl", json!({})).unwrap();
+            }
+            if let Some(cmd) = cmd {
+                a.run(cmd, json!({})).unwrap();
+            }
+            // The bar writes in the interface fonts, which take effect the frame after they are set.
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(500.0, 200.0)).build_ui_state(
+                move |ui, app: &mut WordApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx());
+                        fonts = true;
+                        return;
+                    }
+                    egui::Area::new(egui::Id::new("mini_align_probe")).fixed_pos(pos2(10.0, 10.0)).show(ui.ctx(), |ui| {
+                        let t = Tokens::get(ui.ctx());
+                        content(app, ui, &t);
+                    });
+                },
+                a,
+            );
+            steps(&mut h);
+            let checked = Tokens::get(&h.ctx).checked;
+            let marked: Vec<Rect> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.fill == checked => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            let is_marked = |label: &str| {
+                let r = h.get_by_label(label).rect();
+                marked.iter().any(|m| m.contains(r.center()))
+            };
+            assert!(is_marked(lit), "rtl={rtl} {cmd:?}: {lit} is marked");
+            assert!(!is_marked(unlit), "rtl={rtl} {cmd:?}: {unlit} is not marked");
+        }
     }
 }
