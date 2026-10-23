@@ -9,7 +9,7 @@ pub type Submit = Box<dyn Fn(Vec<u8>, Settings, bool, Vec<(String, String)>) -> 
 pub fn commands(app: &crate::WordApp) -> Vec<serde_json::Value> {
     use serde_json::json;
     let enabled = if app.services.print_native.is_some() { app.printing.ready() } else { app.services.print.is_some() };
-    let submit_params = "range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape; paper?: none|Letter|Legal|A4|… (Layout › Size names: Scale to paper size, every page scaled onto that paper and centred; the document is unchanged). Native uses the selected printer, duplex and grayscale from ui.printSettings; omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
+    let submit_params = "pagesPerSheet?: 1|2|4|6|9|16|booklet|bookletReverse; range?: all|current|selection|custom; pages?: string (1-3,5); parity?: all|odd|even; copies?: integer 1..999; collate?: bool; orientation?: auto|portrait|landscape; paper?: none|Letter|Legal|A4|… (Layout › Size names: Scale to paper size, every page scaled onto that paper and centred; the document is unchanged). Native uses the selected printer, duplex and grayscale from ui.printSettings; omitted copies/collation use current settings. Browser printing opens its dialog. Submits only when explicitly executed.";
     vec![
         json!({"id":"ui.printSettings", "label":"Print settings", "location":"File › Print", "shortcut":null,
             "params":"printer?: discovered name; copies?: integer 1..999; duplex?: printerDefault|off|longEdge|shortEdge|null; grayscale?: bool; refresh?: bool. Empty params inspect printer/copies/duplex/grayscale, printers, busy/discovering/ready and status/detail. Updates are atomic; refresh discovers only on native hosts. Never submits or opens a dialog.",
@@ -188,7 +188,14 @@ pub fn submit(app: &mut crate::WordApp, params: &serde_json::Value) -> Result<se
         if let Some(submit) = &app.services.print_native {
             let mut print_options = Vec::new();
             let orientation = params.get("orientation").and_then(|v| v.as_str()).unwrap_or(&app.ui.print.orientation);
-            let is_landscape = if orientation == "landscape" {
+            let mode = wordcraft_engine::print::imposition(params).map_err(|e| e.to_string())?;
+            let is_landscape = if mode != wordcraft_engine::print::Imposition::Single {
+                let lay = app.session.export_layout();
+                wordcraft_engine::print::sheets(params, &lay, app.session.current_pages(&lay))
+                    .map_err(|e| e.to_string())?
+                    .first()
+                    .is_some_and(|s| s.width > s.height)
+            } else if orientation == "landscape" {
                 true
             } else if orientation == "portrait" {
                 false

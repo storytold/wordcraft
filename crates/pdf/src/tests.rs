@@ -1243,6 +1243,7 @@ fn metafile_text_records_are_drawn_as_text() {
 
 /// #455: a link to a bookmark after a page break inside its paragraph goes to the page the
 /// bookmark is on, not the paragraph's first page.
+/// A bookmark after a page break targets its laid-out start, independent of paragraph origin.
 #[test]
 fn bookmark_destination_is_the_page_of_its_start() {
     let mut d = Document::new();
@@ -1259,7 +1260,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         doc: &d,
         lay: &lay,
         opts: &PdfOptions::default(),
-        out_index: pages.iter().enumerate().map(|(o, p)| (*p, o)).collect(),
+        out_index: pages.iter().enumerate().map(|(o, p)| (*p, (o, Fit::of(&lay.pages[*p], None)))).collect(),
         fonts: HashMap::new(),
         font_error: None,
         outlined: &outlined,
@@ -2311,4 +2312,110 @@ fn borders_are_dashed_with_words_patterns() {
     assert!(raw.contains("[1 1]0 d") || raw.contains("[1 1] 0 d"), "the dotted border");
     assert!(raw.contains("[6 2]0 d") || raw.contains("[6 2] 0 d"), "the dashed border");
     assert!(raw.contains("[3 1 1 1]0 d") || raw.contains("[3 1 1 1] 0 d"), "the dash-dot border");
+}
+
+/// Exported text remains selectable; copies repeat complete padded sheet plans.
+#[test]
+fn imposed_pdf_keeps_text_sheet_geometry_and_copy_boundaries() {
+    use crate::imposition::Imposition;
+    let d = Document::from_text("PAGEONE\u{c}PAGETWO\u{c}PAGETHREE\u{c}PAGEFOUR\u{c}PAGEFIVE");
+    for (mode, expected) in [
+        (Imposition::NUp(2), vec!["PAGEONEPAGETWO", "PAGETHREEPAGEFOUR", "PAGEFIVE"]),
+        (Imposition::NUp(4), vec!["PAGEONEPAGETWOPAGETHREEPAGEFOUR", "PAGEFIVE"]),
+        (Imposition::Booklet { reverse: false }, vec!["PAGEONE", "PAGETWO", "PAGETHREE", "PAGEFOURPAGEFIVE"]),
+        (Imposition::Booklet { reverse: true }, vec!["PAGEONE", "PAGETWO", "PAGETHREE", "PAGEFIVEPAGEFOUR"]),
+    ] {
+        for collate in [true, false] {
+            let opts = PdfOptions {
+                imposition: mode,
+                sheet_copies: 2,
+                sheet_collate: collate,
+                tagged: false,
+                paper: Some((612.0, 792.0)),
+                ..Default::default()
+            };
+            let bytes = export(&d, &opts).unwrap();
+            let actual: Vec<_> = extract_text(&bytes).iter().map(|s| s.split_whitespace().collect::<String>()).collect();
+            let want: Vec<_> = if collate {
+                expected.iter().chain(expected.iter()).copied().collect()
+            } else if matches!(mode, Imposition::Booklet { .. }) {
+                expected.chunks(2).flat_map(|pair| pair.iter().chain(pair.iter())).copied().collect()
+            } else {
+                expected.iter().flat_map(|p| [*p, *p]).collect()
+            };
+            assert_eq!(actual, want, "{mode:?}, collate={collate}");
+            let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+            assert_eq!(pdf.pages().len(), want.len());
+        }
+    }
+}
+
+/// Every supported grid preserves chosen page order and stays within the sheet.
+#[test]
+fn imposed_grids_are_bounded_and_invalid_modes_fail() {
+    use crate::imposition::Imposition;
+    let doc = Document::from_text("a\u{c}b\u{c}c\u{c}d\u{c}e");
+    let lay = layout(&doc, &mut Default::default(), &Default::default());
+    for n in [2, 4, 6, 9, 16] {
+        let sheets = Imposition::NUp(n).sheets(&lay, &[4, 1, 3, 0, 2], Some((595.0, 842.0))).unwrap();
+        assert_eq!(sheets.len(), 5usize.div_ceil(n as usize));
+        assert_eq!(sheets.iter().flat_map(|s| &s.slots).map(|s| s.page).collect::<Vec<_>>(), [4, 1, 3, 0, 2]);
+        for sheet in sheets {
+            for slot in sheet.slots {
+                assert!(slot.x >= 0.0 && slot.y >= 0.0 && slot.x + slot.width <= sheet.width + 0.01 && slot.y + slot.height <= sheet.height + 0.01);
+            }
+        }
+    }
+    for n in [0, 1, 3, 255] {
+        assert!(Imposition::NUp(n).sheets(&lay, &[0], None).is_err());
+    }
+    assert!(Imposition::NUp(2).sheets(&lay, &[usize::MAX], None).is_err());
+    for paper in [(f32::NAN, 3.0), (0.0, 4.0), (1.0, f32::INFINITY), (20000.0, 2.0)] {
+        assert!(Imposition::NUp(2).sheets(&lay, &[0], Some(paper)).is_err());
+    }
+}
+
+/// A one-page booklet retains its blank back, and tags remain valid on multi-page sheet sides.
+#[test]
+fn imposed_tagged_pdf_and_blank_booklet_backs_are_valid() {
+    use crate::imposition::Imposition;
+    let doc = Document::from_text("Front cover");
+    let bytes = export(&doc, &PdfOptions { imposition: Imposition::Booklet { reverse: false }, ..Default::default() }).unwrap();
+    assert_eq!(extract_text(&bytes), ["Front cover".to_owned(), String::new()]);
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(pdf.pages().len(), 2);
+    for mode in [Imposition::NUp(2), Imposition::NUp(16), Imposition::Booklet { reverse: false }] {
+        let bytes = export(&sample(), &PdfOptions { imposition: mode, ..Default::default() }).unwrap();
+        assert!(String::from_utf8_lossy(&bytes).contains("/StructTreeRoot"));
+        assert!(squash(&extract_text(&bytes).concat()).contains("Second page"));
+    }
+}
+
+/// Internal links and heading outlines point to physical sheet pages after imposition.
+#[test]
+fn imposed_links_and_outlines_target_physical_sheets() {
+    use crate::imposition::Imposition;
+    use hayro_syntax::object::{Array, Dict};
+    let bytes = export(&sample(), &PdfOptions { imposition: Imposition::NUp(2), ..Default::default() }).unwrap();
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    assert_eq!(pdf.pages().len(), 1);
+    let physical = pdf.pages()[0].raw();
+    let annotations = physical.get::<Array>(b"Annots").unwrap();
+    let mut internal = 0;
+    for annotation in annotations.iter::<Dict>() {
+        if let Some(dest) = annotation.get::<Array>(b"Dest") {
+            assert_eq!(dest.raw_iter().next().unwrap().as_obj_ref().map(Into::into), physical.obj_id());
+            internal += 1;
+        }
+    }
+    assert!(internal > 0);
+    let root = pdf.xref().get::<Dict>(pdf.xref().root_id()).unwrap();
+    let mut entry = root.get::<Dict>(b"Outlines").unwrap().get::<Dict>(b"First");
+    let mut headings = 0;
+    while let Some(e) = entry {
+        assert_eq!(e.get::<Array>(b"Dest").unwrap().raw_iter().next().unwrap().as_obj_ref().map(Into::into), physical.obj_id());
+        headings += 1;
+        entry = e.get::<Dict>(b"Next");
+    }
+    assert!(headings >= 2);
 }

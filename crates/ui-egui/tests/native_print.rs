@@ -295,3 +295,65 @@ fn native_print_scales_to_the_chosen_paper() {
     assert_eq!(jobs.borrow().len(), before);
     assert_eq!((app.session.doc.last_section.page_w, app.session.doc.last_section.page_h), page, "the document is unchanged");
 }
+
+/// Native copies stay in the spooler; booklet pairing and padding happen once in its PDF.
+#[test]
+fn native_booklet_uses_landscape_sheets_without_multiplying_copies() {
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5")), Services::default());
+    let jobs = Rc::new(RefCell::new(Vec::new()));
+    let observed = jobs.clone();
+    app.services.print_native = Some(Box::new(move |bytes, settings, collate, options| {
+        observed.borrow_mut().push((bytes, settings, collate, options));
+        let (tx, rx) = std::sync::mpsc::channel();
+        tx.send(Ok("test spooler".into())).unwrap();
+        rx
+    }));
+    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.run("ui.printSettings", json!({"printer":"Queue","copies":2,"duplex":"shortEdge"})).unwrap();
+    app.run("ui.printSubmit", json!({"pagesPerSheet":"booklet"})).unwrap();
+    let jobs = jobs.borrow();
+    let (bytes, settings, collate, options) = &jobs[0];
+    assert_eq!(settings.copies, 2);
+    assert_eq!(settings.duplex, Some(Duplex::ShortEdge));
+    assert!(*collate);
+    assert_eq!(String::from_utf8_lossy(bytes).matches("/MediaBox[").count(), 4);
+    assert!(options.contains(&("orientation-requested".into(), "4".into())));
+}
+
+/// Real combo-box input changes both the submitted parameters and physical preview page count.
+#[test]
+fn print_booklet_choice_updates_sheet_preview() {
+    use egui_kittest::kittest::{By, Queryable};
+    let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("1\u{c}2\u{c}3\u{c}4\u{c}5")), Services::default());
+    app.ui.language = "en".into();
+    app.run("file.print", json!({})).unwrap();
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1000.0)).with_pixels_per_point(1.0).build_ui_state(
+        |ui, app: &mut WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        app,
+    );
+    for _ in 0..4 {
+        let mut raw = std::mem::take(h.input_mut());
+        h.state_mut().raw_input_hook(&mut raw);
+        *h.input_mut() = raw;
+        h.step();
+    }
+    h.get(By::new().role(egui::accesskit::Role::ComboBox).value("1")).click();
+    h.run_steps(2);
+    h.get_by_label("Booklet (left binding)").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.print.params()["pagesPerSheet"], "booklet");
+    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Page 1 of 4")).is_some());
+    h.get_by_label("Next Page").click();
+    h.run_steps(3);
+    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Page 2 of 4")).is_some());
+    h.get(By::new().role(egui::accesskit::Role::ComboBox).value("Booklet (left binding)")).click();
+    h.run_steps(2);
+    h.get_by_label("4").click();
+    h.run_steps(4);
+    assert_eq!(h.state().ui.print.params()["pagesPerSheet"], 4);
+    assert!(h.query(By::new().role(egui::accesskit::Role::Image).label("Page 2 of 2")).is_some());
+}

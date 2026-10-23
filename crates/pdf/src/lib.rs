@@ -22,6 +22,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![forbid(unsafe_code)]
 
+pub mod imposition;
+
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroU16;
 use std::sync::Arc;
@@ -77,6 +79,12 @@ impl From<WriteError> for PdfError {
 /// Export options.
 #[derive(Clone, Debug)]
 pub struct PdfOptions {
+    /// Physical sheet layout used only by printing.
+    pub imposition: imposition::Imposition,
+    /// Repeat complete sheet plans (padding never spills into another copy).
+    pub sheet_copies: u32,
+    /// Collate physical sheet sides when repeating a print job.
+    pub sheet_collate: bool,
     /// Pages to export (0-based layout page indexes, in output order); `None` = all.
     pub pages: Option<Vec<usize>>,
     /// Title / author overrides (default: the document properties).
@@ -98,8 +106,21 @@ pub struct PdfOptions {
 }
 
 impl Default for PdfOptions {
+    /// Keep ordinary document export unchanged unless a print layout is requested.
     fn default() -> Self {
-        PdfOptions { pages: None, title: None, author: None, tagged: true, include_markup: false, comments: false, compress: true, paper: None }
+        PdfOptions {
+            imposition: Default::default(),
+            sheet_copies: 1,
+            sheet_collate: true,
+            pages: None,
+            title: None,
+            author: None,
+            tagged: true,
+            include_markup: false,
+            comments: false,
+            compress: true,
+            paper: None,
+        }
     }
 }
 
@@ -119,7 +140,11 @@ pub fn export_layout(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Resu
     write::guard(|| export_layout_inner(doc, lay, opts))
 }
 
+/// Validate selected pages and retry embedding failures with outlined fonts.
 fn export_layout_inner(doc: &Document, lay: &DocLayout, opts: &PdfOptions) -> Result<Vec<u8>, PdfError> {
+    let mut adjusted = opts.clone();
+    adjusted.tagged &= adjusted.sheet_copies <= 1;
+    let opts = &adjusted;
     let pages: Vec<usize> = match &opts.pages {
         Some(v) => {
             if let Some(bad) = v.iter().find(|p| **p >= lay.pages.len()) {
@@ -156,7 +181,28 @@ enum Attempt {
     BadFont(u32, String),
 }
 
+/// Serialize physical sheet sides while mapping link and outline destinations onto their cells.
 fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[usize], outlined: &HashSet<u32>) -> Result<Attempt, PdfError> {
+    let one_copy = opts.imposition.sheets(lay, pages, opts.paper)?;
+    let copies = opts.sheet_copies.clamp(1, 999) as usize;
+    if (opts.imposition != imposition::Imposition::Single || copies > 1) && one_copy.len().checked_mul(copies).is_none_or(|n| n > 5000) {
+        return Err(PdfError::Write("the print job exceeds 5000 sheet sides".into()));
+    }
+    let sheets: Vec<_> = if opts.sheet_collate {
+        (0..copies).flat_map(|_| one_copy.iter()).collect()
+    } else if matches!(opts.imposition, imposition::Imposition::Booklet { .. }) {
+        // A booklet's front/back pair must remain one physical sheet even without collation.
+        one_copy.chunks(2).flat_map(|pair| (0..copies).flat_map(move |_| pair.iter())).collect()
+    } else {
+        one_copy.iter().flat_map(|s| std::iter::repeat_n(s, copies)).collect()
+    };
+    let mut destinations = HashMap::new();
+    for (output, sheet) in sheets.iter().enumerate() {
+        for slot in &sheet.slots {
+            let page = lay.pages.get(slot.page).ok_or(PdfError::BadPage(slot.page.saturating_add(1)))?;
+            destinations.entry(slot.page).or_insert((output, Fit::in_slot(page, *slot)));
+        }
+    }
     let settings = krilla::SerializeSettings { compress_content_streams: opts.compress, enable_tagging: opts.tagged, ..Default::default() };
     let language = doc.styles.default_chr.lang.clone().filter(|l| !l.is_empty() && l.is_ascii());
     let mut writer = Writer::new_with_language(settings, metadata(doc, opts), language);
@@ -166,7 +212,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         doc,
         lay,
         opts,
-        out_index: pages.iter().enumerate().map(|(o, p)| (*p, o)).collect(),
+        out_index: destinations,
         fonts: HashMap::new(),
         font_error: None,
         outlined,
@@ -181,27 +227,30 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
     if let Some(o) = ex.outline(pages) {
         pdf.set_outline(o);
     }
-    for &pi in pages {
-        let Some(page) = lay.pages.get(pi) else { return Err(PdfError::BadPage(pi.saturating_add(1))) };
-        let fit = Fit::of(page, opts.paper);
-        let size = Size::from_wh(clamp_side(fit.paper_w), clamp_side(fit.paper_h)).ok_or(PdfError::NoPages)?;
+    for sheet in sheets {
+        let size = Size::from_wh(clamp_side(sheet.width), clamp_side(sheet.height)).ok_or(PdfError::NoPages)?;
         let mut kp = pdf.start_page_with(PageSettings::new(size));
-        let mut s = kp.surface();
-        ex.links.clear();
-        // A page with a markup area is scaled down to fit its paper with the area beside it; a
-        // print on other paper is scaled to it and centred.
-        let scaled = fit.k != 1.0 || fit.dx != 0.0 || fit.dy != 0.0;
-        if scaled {
-            s.push_transform(&Transform::from_row(fit.k, 0.0, 0.0, fit.k, fit.dx, fit.dy));
+        let mut annotations = Vec::new();
+        let mut surface = kp.surface();
+        for slot in &sheet.slots {
+            let page = lay.pages.get(slot.page).ok_or(PdfError::BadPage(slot.page.saturating_add(1)))?;
+            let fit = Fit::in_slot(page, *slot);
+            ex.links.clear();
+            let clip = rect_path(&Rect::new(slot.x, slot.y, slot.width, slot.height));
+            if let Some(clip) = &clip {
+                surface.push_clip_path(clip, &FillRule::NonZero);
+            }
+            surface.push_transform(&Transform::from_row(fit.k, 0.0, 0.0, fit.k, fit.dx, fit.dy));
+            ex.page(&mut surface, page, clamp_side(fit.page_w), clamp_side(page.h));
+            surface.pop();
+            if clip.is_some() {
+                surface.pop();
+            }
+            annotations.extend(ex.annotations(fit));
         }
-        // `page_w` is the document page's width: the page colour and watermark stay off the markup area.
-        ex.page(&mut s, page, clamp_side(fit.page_w), clamp_side(page.h));
-        if scaled {
-            s.pop();
-        }
-        s.finish();
-        for a in ex.annotations(fit) {
-            kp.add_annotation(a);
+        surface.finish();
+        for annotation in annotations {
+            kp.add_annotation(annotation);
         }
         kp.finish();
     }
@@ -244,6 +293,21 @@ struct Fit {
 }
 
 impl Fit {
+    /// Fit the complete logical page (including markup) within one fixed sheet cell.
+    fn in_slot(page: &Page, slot: imposition::Slot) -> Self {
+        let own = Self::of(page, None);
+        let k = (slot.width / own.paper_w).min(slot.height / own.paper_h);
+        Self {
+            paper_w: slot.width,
+            paper_h: slot.height,
+            page_w: own.page_w,
+            k: own.k * k,
+            dx: slot.x + (slot.width - own.paper_w * k) / 2.0,
+            dy: slot.y + (slot.height - own.paper_h * k) / 2.0 + own.dy * k,
+        }
+    }
+
+    /// Map one document page and its markup area onto its requested paper.
     fn of(page: &Page, paper: Option<(f32, f32)>) -> Fit {
         let paper_w = page.w - page.markup;
         let own = if page.markup > 0.0 && ok(page.markup) && ok(page.w) && paper_w > 1.0 {
@@ -727,8 +791,8 @@ struct Exporter<'a> {
     doc: &'a Document,
     lay: &'a DocLayout,
     opts: &'a PdfOptions,
-    /// Layout page index → output page index.
-    out_index: HashMap<usize, usize>,
+    /// Layout page index to the first output sheet side and its placement transform.
+    out_index: HashMap<usize, (usize, Fit)>,
     /// Embedded fonts by face id (`None`: krilla can't read it).
     fonts: HashMap<u32, (FaceRef, Option<Font>)>,
     font_error: Option<PdfError>,
@@ -1545,7 +1609,7 @@ impl Exporter<'_> {
         });
         let pos = marks.get(name).or_else(|| marks.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?.clone();
         if let Some(c) = self.lay.caret(&pos)
-            && let Some(out) = self.out_index.get(&c.page)
+            && let Some((out, fit)) = self.out_index.get(&c.page)
         {
             // The left edge of the paragraph's piece on that page, at the top of the line.
             let x = self
@@ -1560,7 +1624,7 @@ impl Exporter<'_> {
                     _ => None,
                 })
                 .unwrap_or(c.x);
-            let (x, y) = self.lay.pages.get(c.page).map(|p| Fit::of(p, self.opts.paper).point(x, c.top)).unwrap_or((x, c.top));
+            let (x, y) = fit.point(x, c.top);
             return Some((*out, x, y));
         }
         self.locate(pos.story, &pos.path)
@@ -1570,10 +1634,10 @@ impl Exporter<'_> {
     fn locate(&self, story: StoryRef, path: &DocPath) -> Option<(usize, f32, f32)> {
         let places = self.lay.index.get(&(story, path.clone()))?;
         for (pi, ii) in places {
-            let Some(out) = self.out_index.get(pi) else { continue };
+            let Some((out, fit)) = self.out_index.get(pi) else { continue };
             let Some(page) = self.lay.pages.get(*pi) else { continue };
             let (x, y) = match page.items.get(*ii) {
-                Some(Placed::Lines { x, y, .. }) => Fit::of(page, self.opts.paper).point(*x, *y),
+                Some(Placed::Lines { x, y, .. }) => fit.point(*x, *y),
                 _ => (0.0, 0.0),
             };
             return Some((*out, x, y));
@@ -1606,7 +1670,8 @@ impl Exporter<'_> {
     /// The outline from body headings (outline levels 1–9) on the exported pages.
     fn outline(&self, pages: &[usize]) -> Option<Outline> {
         let mut flat: Vec<(u8, String, usize, f32, f32)> = Vec::new();
-        for (out, pi) in pages.iter().enumerate() {
+        for pi in pages {
+            let Some((out, fit)) = self.out_index.get(pi) else { continue };
             let Some(page) = self.lay.pages.get(*pi) else { continue };
             for it in &page.items {
                 let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, x, y, .. } = it else { continue };
@@ -1633,8 +1698,8 @@ impl Exporter<'_> {
                 if title.is_empty() {
                     continue;
                 }
-                let (x, y) = Fit::of(page, self.opts.paper).point(*x, *y + line.top - piece.top);
-                flat.push((level.min(8), title, out, x, y));
+                let (x, y) = fit.point(*x, *y + line.top - piece.top);
+                flat.push((level.min(8), title, *out, x, y));
             }
         }
         if flat.is_empty() {

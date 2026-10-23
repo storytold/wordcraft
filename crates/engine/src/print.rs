@@ -2,7 +2,8 @@
 //!
 //! WordCraft prints through a PDF (the host opens it in the system's print flow), so the settings
 //! that can be delivered are the ones that shape the PDF: the page range, odd/even pages, copies
-//! and collation. Printer choice, duplex and pages per sheet belong to the OS print dialog.
+//! and collation. Physical sheet imposition is shared with the preview; printer choice and duplex
+//! are handled by the host.
 //!
 //! Page ranges and copies come from users and control channels, so they are bounded: a range
 //! text is at most [`MAX_SPEC_CHARS`] long, copies are clamped to [`MAX_COPIES`], and the
@@ -10,6 +11,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_layout::DocLayout;
+pub use wordcraft_pdf::imposition::Imposition;
 
 use crate::{CmdError, Session, p};
 
@@ -142,6 +144,47 @@ pub fn paper(v: &Value) -> Result<Option<(&'static str, f32, f32)>, CmdError> {
     }
 }
 
+/// Validate the physical sheet layout without touching document page setup.
+pub fn imposition(v: &Value) -> Result<wordcraft_pdf::imposition::Imposition, CmdError> {
+    match v.get("pagesPerSheet") {
+        None => Ok(Imposition::Single),
+        Some(Value::Number(n)) => match n.as_u64() {
+            Some(1) => Ok(Imposition::Single),
+            Some(n @ (2 | 4 | 6 | 9 | 16)) => Ok(Imposition::NUp(n as u8)),
+            _ => Err(CmdError::Params("pagesPerSheet must be 1, 2, 4, 6, 9, 16, booklet or bookletReverse".into())),
+        },
+        Some(Value::String(s)) if s == "booklet" || s == "bookletReverse" => Ok(Imposition::Booklet { reverse: s == "bookletReverse" }),
+        _ => Err(CmdError::Params("pagesPerSheet must be 1, 2, 4, 6, 9, 16, booklet or bookletReverse".into())),
+    }
+}
+
+/// Resolve physical paper orientation for imposed jobs; ordinary export keeps its existing policy.
+fn imposed_paper(v: &Value, lay: &DocLayout, pages: &[usize]) -> Result<Option<(f32, f32)>, CmdError> {
+    let paper = paper(v)?.map(|(_, w, h)| (w, h));
+    if imposition(v)? == Imposition::Single {
+        return Ok(paper);
+    }
+    let own = pages.first().and_then(|p| lay.pages.get(*p)).map(|p| (p.w - p.markup, p.h));
+    let Some((w, h)) = paper.or(own) else { return Ok(paper) };
+    match v.get("orientation").and_then(Value::as_str).unwrap_or("auto") {
+        "auto" => Ok(paper),
+        "portrait" => Ok(Some((w.min(h), w.max(h)))),
+        "landscape" => Ok(Some((w.max(h), w.min(h)))),
+        _ => Err(CmdError::Params("orientation must be auto, portrait or landscape".into())),
+    }
+}
+
+/// Plan physical sheet sides for one copy, using the same selection and geometry as printing.
+pub fn sheets(v: &Value, lay: &DocLayout, current: (usize, usize)) -> Result<Vec<wordcraft_pdf::imposition::Sheet>, CmdError> {
+    if !v.is_object() {
+        return Err(CmdError::Params("print settings must be an object".into()));
+    }
+    let mut single = v.clone();
+    single["copies"] = json!(1);
+    let pages = plan(&single, lay.pages.len(), current)?.pages;
+    imposition(v)?.sheets(lay, &pages, imposed_paper(v, lay, &pages)?).map_err(|e| CmdError::Failed(e.to_string()))
+}
+
 impl Session {
     /// The pages the caret (or selection) is on, in the output layout: (first, last).
     pub fn current_pages(&self, lay: &DocLayout) -> (usize, usize) {
@@ -154,13 +197,22 @@ impl Session {
     /// The document as the PDF of a print job `v` describes (see [`plan`]), with the number of
     /// distinct pages chosen and copies. Does not touch the document.
     pub fn print_pdf(&self, v: &Value) -> Result<(Vec<u8>, PrintPlan), CmdError> {
+        if !v.is_object() {
+            return Err(CmdError::Params("print settings must be an object".into()));
+        }
         // Print Markup (File › Print) decides whether tracked changes and comments print.
         let markup = crate::cmd::file::export_options(self, v);
         let lay = self.export_layout_with(markup.markup);
         let plan = plan(v, lay.pages.len(), self.current_pages(&lay))?;
-        let paper = paper(v)?.map(|(_, w, h)| (w, h));
+        let mut single = v.clone();
+        single["copies"] = json!(1);
+        let single_plan = self::plan(&single, lay.pages.len(), self.current_pages(&lay))?;
+        let paper = imposed_paper(v, &lay, &single_plan.pages)?;
         let opts = wordcraft_pdf::PdfOptions {
-            pages: Some(plan.pages.clone()),
+            pages: Some(single_plan.pages),
+            imposition: imposition(v)?,
+            sheet_copies: plan.copies,
+            sheet_collate: p::bool(v, "collate").unwrap_or(true),
             // Repeated pages would repeat the structure tree's entries too.
             tagged: plan.copies <= 1,
             include_markup: markup.markup,
@@ -291,5 +343,33 @@ mod tests {
         s.run("file.printPdf", &json!({"path": outside})).unwrap();
         assert!(base.join("outside/job.pdf").is_file());
         let _ = std::fs::remove_dir_all(&base);
+    }
+}
+
+#[cfg(test)]
+mod imposition_tests {
+    use super::*;
+    /// Sheet printing leaves document bytes, dirty state, selection and undo history untouched.
+    #[test]
+    fn print_imposition_is_pure_and_rejects_hostile_modes() {
+        let s = Session::new(wordcraft_doc::Document::from_text("one\u{c}two\u{c}three\u{c}four\u{c}five"));
+        let before = (s.rev(), s.dirty, s.sel.clone(), serde_json::to_value(&s.doc).unwrap());
+        for (mode, sides) in
+            [(json!(2), 3), (json!(4), 2), (json!(6), 1), (json!(9), 1), (json!(16), 1), (json!("booklet"), 4), (json!("bookletReverse"), 4)]
+        {
+            let params = json!({"pagesPerSheet":mode, "copies":2});
+            let lay = s.export_layout();
+            assert_eq!(sheets(&params, &lay, s.current_pages(&lay)).unwrap().len(), sides);
+            let (bytes, plan) = s.print_pdf(&params).unwrap();
+            assert_eq!(plan.copies, 2);
+            assert_eq!(String::from_utf8_lossy(&bytes).matches("/MediaBox[").count(), sides * 2);
+        }
+        for bad in [json!(0), json!(3), json!(-1), json!(1.5), json!(true), json!(null), json!({}), json!("2"), json!("x".repeat(10000))] {
+            assert!(s.print_pdf(&json!({"pagesPerSheet":bad})).is_err());
+        }
+        for params in [json!(null), json!([]), json!(false)] {
+            assert!(s.print_pdf(&params).is_err());
+        }
+        assert_eq!((s.rev(), s.dirty, s.sel.clone(), serde_json::to_value(&s.doc).unwrap()), before);
     }
 }
