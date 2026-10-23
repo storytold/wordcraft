@@ -23,8 +23,8 @@ fn text_frame(k: &El) -> wordcraft_doc::props::TextFrame {
     let word = |name: &str, allowed: &[&str], default: &str| k.attr(name).filter(|v| allowed.contains(v)).unwrap_or(default).to_string();
     let align = |name: &str, allowed: &[&str]| k.attr(name).filter(|v| allowed.contains(v)).map(str::to_string);
     wordcraft_doc::props::TextFrame {
-        w: len("w:w").filter(|v| *v > 0.0),
-        h: len("w:h").map(f32::abs).filter(|v| *v > 0.0),
+        w: len("w:w").filter(|v| *v >= 0.0),
+        h: len("w:h").map(f32::abs),
         h_exact: k.attr("w:hRule") == Some("exact"),
         x: len("w:x").unwrap_or(0.0),
         y: len("w:y").unwrap_or(0.0),
