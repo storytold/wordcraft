@@ -2004,6 +2004,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     // spaces (`space_room`); never on lines with tabs.
     let shrink_spaces = rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+    // Word stretches a justified line ending in a manual line break unless the document says not to.
+    let expand_break = !env.doc.settings.do_not_expand_shift_return;
     let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     // Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
     let zone = Some(env.doc.settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0);
@@ -2527,7 +2529,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 *label_shift = shift;
             }
         }
-        let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
+        // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
+        let stretch_end = end == LineEnd::Wrap || (end == LineEnd::LineBreak && expand_break);
+        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {

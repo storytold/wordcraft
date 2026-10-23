@@ -4509,6 +4509,41 @@ fn space_shrinking_is_only_for_justified_text() {
     }
 }
 
+/// #3924: a justified line that ends in a manual line break is stretched to the margin like a
+/// wrapped one; the last line of the paragraph stays short. `w:doNotExpandShiftReturn` keeps it short.
+#[test]
+fn justified_line_ending_in_line_break_is_stretched() {
+    let text = "We tie the spend\nto a pipe";
+    let ends = |no_expand: bool| {
+        let mut d = Document::from_text("");
+        d.settings.do_not_expand_shift_return = no_expand;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { align: Some(Align::Justify), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let mut out = Vec::new();
+        for pg in &l.pages {
+            for it in &pg.items {
+                if let Placed::Lines { para, l0, l1, x, .. } = it {
+                    for li in *l0..*l1 {
+                        let line = &para.lines[li];
+                        let content = text[line.start..line.stop].trim_end().len();
+                        out.push(para.x_of(li, line.start + content).unwrap() + x);
+                    }
+                }
+            }
+        }
+        out
+    };
+    let stretched = ends(false);
+    assert_eq!(stretched.len(), 2, "{stretched:?}");
+    assert!((stretched[0] - 540.0).abs() < 0.05, "the line before the break ends at {}", stretched[0]);
+    assert!(stretched[1] < 400.0, "the last line stays short: {}", stretched[1]);
+    let kept = ends(true);
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept[0] < 400.0, "doNotExpandShiftReturn keeps the line before the break short: {}", kept[0]);
+}
+
 #[test]
 fn lines_with_tabs_never_shrink() {
     let text = "Item\tWe tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(30);

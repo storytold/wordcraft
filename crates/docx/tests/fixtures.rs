@@ -3494,6 +3494,22 @@ fn html_auto_spacing_off_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// `w:doNotExpandShiftReturn` in the settings' `w:compat`: justified lines ending in a manual line
+/// break keep their spacing (#3924).
+#[test]
+fn do_not_expand_shift_return_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
+    };
+    assert_eq!(settings("<w:doNotExpandShiftReturn/>"), (true, true));
+    assert_eq!(settings(r#"<w:doNotExpandShiftReturn w:val="0"/>"#), (false, false));
+    assert_eq!(settings(""), (false, false));
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]
