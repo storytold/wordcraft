@@ -6,6 +6,8 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+// Installers run as child processes on the platforms that have one (no BSD installer).
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 use std::process::Command;
 
 use wordcraft_engine::update::{InstallFn, InstallHandoff, InstallKind, InstallOutcome};
@@ -153,6 +155,7 @@ fn safe_name(name: &str) -> String {
     name.chars().filter(|c| c.is_ascii_alphanumeric() || *c == '.' || *c == '-' || *c == '_').collect()
 }
 
+#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows", test))]
 /// Wait for `child` to exit, killing it and failing after `secs` seconds.
 fn wait_child(mut child: std::process::Child, secs: u64) -> Result<std::process::ExitStatus, String> {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
@@ -172,7 +175,7 @@ fn wait_child(mut child: std::process::Child, secs: u64) -> Result<std::process:
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 const INSTALLER_WAIT_SECS: u64 = 60 * 60;
 
 #[cfg(any(target_os = "windows", test))]
@@ -268,7 +271,7 @@ fn windows_msi(_path: &Path) -> Result<InstallOutcome, String> {
 /// a directory only root can reach, check it against the hash this process verified (`$1`), and
 /// install that copy. Nothing the user's other programs can write is opened by root, so a file
 /// swapped while the password prompt is up can't reach `dpkg`.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 const DEB_INSTALL_SCRIPT: &str = r#"set -eu
 umask 077
 d=$(mktemp -d)
@@ -279,14 +282,14 @@ dpkg -i "$d/update.deb"
 "#;
 
 /// The `sh` arguments that run [`DEB_INSTALL_SCRIPT`] for a package with SHA-256 `sha`.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn deb_install_args(sha: &str) -> Vec<String> {
     vec!["-c".into(), DEB_INSTALL_SCRIPT.into(), "wordcraft-update".into(), sha.into()]
 }
 
 /// Start the install script as root through `pkexec` and write `bytes` to
 /// it. A cancelled prompt closes the pipe; that write error is the cancel's, reported by its status.
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn run_deb_install(bytes: &[u8], wait_secs: u64) -> Result<std::process::ExitStatus, String> {
     let sha = wordcraft_engine::update::sha256_hex(bytes);
     let mut child =
@@ -302,14 +305,14 @@ fn run_deb_install(bytes: &[u8], wait_secs: u64) -> Result<std::process::ExitSta
 }
 
 /// Install a verified `.deb` through `pkexec` and [`DEB_INSTALL_SCRIPT`].
-#[cfg(all(unix, not(target_os = "macos")))]
+#[cfg(target_os = "linux")]
 fn linux_deb(bytes: &[u8]) -> Result<InstallOutcome, String> {
     let status = run_deb_install(bytes, INSTALLER_WAIT_SECS)?;
     if status.success() { Ok(InstallOutcome::default()) } else { Err("dpkg install was cancelled or failed.".into()) }
 }
 
-/// `.deb` installs exist only on Linux.
-#[cfg(not(all(unix, not(target_os = "macos"))))]
+/// `.deb` installs exist only on Linux (not the BSDs: the script relies on GNU `sha256sum`).
+#[cfg(not(target_os = "linux"))]
 fn linux_deb(_bytes: &[u8]) -> Result<InstallOutcome, String> {
     Err(".deb install is only on Linux".into())
 }
@@ -366,7 +369,7 @@ mod tests {
 
     /// The install script gets the package over its input, checks it against the hash it was
     /// given, and hands `dpkg` its own private copy; a mismatch never reaches `dpkg`.
-    #[cfg(all(unix, not(target_os = "macos")))]
+    #[cfg(target_os = "linux")]
     #[test]
     fn deb_install_reads_the_package_from_its_input_and_checks_it() {
         use std::os::unix::fs::PermissionsExt;
