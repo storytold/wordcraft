@@ -465,7 +465,7 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                     }
                     continue;
                 }
-                if leave_full_screen(app, key, modifiers, true) {
+                if leave_full_screen(app, ctx, key, modifiers, true) {
                     continue;
                 }
                 app.canvas.swallow_text = dispatch(app, key, modifiers) && modifiers.alt;
@@ -479,10 +479,14 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
 /// took it: a pen, a text box, a header, a dialog, a menu or a popup, a drag on the page, and in
 /// the document (`canvas`) a selection, which Escape collapses first (`select.collapse`), as in a
 /// normal window.
-fn leave_full_screen(app: &mut WordApp, key: Key, m: Modifiers, canvas: bool) -> bool {
+fn leave_full_screen(app: &mut WordApp, ctx: &egui::Context, key: Key, m: Modifiers, canvas: bool) -> bool {
     let screen = crate::chrome::Screen::of(&app.session.view).exit_command();
     let Some(id) = screen.or(app.session.view.full_screen.then_some("view.fullScreen")) else { return false };
     if key != Key::Escape || !m.is_none() || !app.escape_free {
+        return false;
+    }
+    // A Paste Options button showing takes this Escape: it closes first.
+    if crate::paste_options::wants_escape(app, ctx) {
         return false;
     }
     let c = &app.canvas;
@@ -714,7 +718,7 @@ pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
     let events = ctx.input(|i| i.events.clone());
     for e in events {
         if let egui::Event::Key { key, pressed: true, modifiers, .. } = e {
-            if leave_full_screen(app, key, modifiers, false) {
+            if leave_full_screen(app, ctx, key, modifiers, false) {
                 continue;
             }
             if is_global_shortcut(key, modifiers) {

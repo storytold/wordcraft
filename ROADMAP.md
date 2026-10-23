@@ -294,6 +294,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-16 | Text with the legacy Outline, Shadow, Emboss or Engrave font effects (`w:outline`, `w:shadow`, `w:emboss`, `w:imprint`) is drawn with them on screen and in PDFs, no longer as plain text: hollow outlined letters, or a grey copy behind the letters; the PDF keeps the text (#2534) |
 | 2026-10-15 | Table Layout › Cell Margins opens an editable dialog initialized from the table defaults; confirming an unchanged dialog preserves imported margins, and changing one side retains the others (#1960) |
 | 2026-10-15 | Word's native ink inside groups and drawing canvases survives DOCX saves (gap 2): the ink member keeps its InkML part, relationship, content type and picture fallback, stays in its place among the members, moves with the group and is drawn from its fallback picture; deleting the group drops its part |
+| 2026-10-15 | Paste Options (#1747): after a paste with a choice a button under the pasted text, or a Ctrl tap, redoes it in place as Keep Source Formatting, Keep Text Only, Merge Formatting or Picture (the pasted content drawn as an image), with the current option highlighted. HTML pastes read browsers' `rgb()` backgrounds and the CSS `font:` shorthand; pasted paragraphs without their own alignment take the destination's; HTML tables without widths follow their content. |
 | 2026-10-15 | Crash recovery copies and native .json files store pictures and kept parts as base64 text instead of arrays of numbers (#586 follow-up, #518): with a 27 MiB picture a recovery copy is 36 MiB instead of 96 MiB and a .json file 36 MiB instead of 286 MiB, written and read about five times faster. Copies and files written before still open |
 | 2026-10-14 | Consistent preferred cell widths override a stale table grid when both totals agree, for fixed and AutoFit tables. Conflicting widths, spans and percentages remain unchanged. |
 | 2026-10-14 | Legacy VML freeforms (`v:shape` with its own `path`), such as the rule lines in many older headers, are read as freeform shapes: they show on screen and in PDFs and are saved back as DrawingML custom geometry instead of vanishing |
@@ -697,6 +698,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
 | 2026-10-15 | trivial | Progress log: caret inside ligatures (#1974) |
+| 2026-10-15 | minor | Progress log: Paste Options, paste fixes (#1747) |
 | 2026-10-17 | trivial | Progress log: the ribbon's paste choices in the context menu (#2583) |
 | 2026-10-16 | trivial | Progress log: live rotation preview while dragging (#2277); readiness estimates unchanged |
 | 2026-10-16 | trivial | Progress log: a text frame in the paragraph defaults frames nothing (#2360) |

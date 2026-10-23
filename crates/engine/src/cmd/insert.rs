@@ -245,7 +245,7 @@ pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
 /// its natural size at 96 ppi), never wider than the text column. The caret ends after it, so a
 /// script's next typing doesn't replace it (#965); Picture Format commands still act on it. The
 /// app selects a picture the person inserts (`WordApp::run`).
-fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str) -> CmdResult {
+pub(crate) fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str) -> CmdResult {
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }

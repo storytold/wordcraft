@@ -672,6 +672,24 @@ pub fn css_len_pt(v: &str) -> Option<f32> {
     }
 }
 
+/// The colour in a `background` value: the whole value, else an `rgb()` / `rgba()` call inside a
+/// shorthand (`rgb(255, 255, 0) repeat-x`, whose spaces would split it apart), else the first
+/// word that is a colour.
+fn background_color(v: &str) -> Option<wordcraft_doc::Rgb> {
+    parse_color(v).or_else(|| {
+        let lower = v.to_ascii_lowercase();
+        for call in ["rgba(", "rgb("] {
+            if let Some(i) = lower.find(call)
+                && let Some(len) = lower.get(i..).and_then(|t| t.find(')'))
+                && let Some(c) = v.get(i..=i + len).and_then(parse_color)
+            {
+                return Some(c);
+            }
+        }
+        v.split_whitespace().find_map(parse_color)
+    })
+}
+
 fn strip_important(v: &str) -> &str {
     let s = v.trim();
     if let Some(pos) = s.rfind('!') {
@@ -711,13 +729,66 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
                 }
             }
             "background-color" | "background" => {
-                if let Some(c) = v.split_whitespace().find_map(parse_color) {
+                // The whole value first: browsers write `rgb(255, 255, 0)`, whose spaces would
+                // split a function apart. A shorthand (`#ff0 url(…) no-repeat`) goes word by word.
+                if let Some(c) = background_color(v) {
                     f.background = Some(c);
                 }
             }
             "font-size" => {
                 if let Some(p) = css_len_pt(v).filter(|p| *p >= 1.0 && *p <= 1638.0) {
                     f.size = Some(p);
+                }
+            }
+            // The shorthand (`bold italic 22px/1.2 "Courier New", monospace`) resets style, weight,
+            // size and family together: read it as the longhands it stands for.
+            "font" => {
+                let (mut weight, mut style, mut size) = ("normal", "normal", None);
+                let mut rest = lv.as_str();
+                let mut family = "";
+                while let Some(tok) = rest.split_whitespace().next() {
+                    let after = rest.trim_start().strip_prefix(tok).unwrap_or("");
+                    let head = tok.split('/').next().unwrap_or(tok);
+                    match tok {
+                        "italic" | "oblique" => style = "italic",
+                        "bold" | "bolder" => weight = "bold",
+                        "normal" | "lighter" | "small-caps" => {}
+                        _ if tok.parse::<u32>().is_ok_and(|w| (1..=1000).contains(&w)) => {
+                            weight = if tok.parse::<u32>().is_ok_and(|w| w >= 600) { "bold" } else { "normal" };
+                        }
+                        _ if css_len_pt(head).is_some() => {
+                            size = css_len_pt(head);
+                            // An optional `/ line-height`, with or without spaces around the slash.
+                            let mut tail = after.trim_start();
+                            fn drop_word(t: &str) -> &str {
+                                t.trim_start().split_once(char::is_whitespace).map_or("", |(_, r)| r)
+                            }
+                            if tok.ends_with('/') {
+                                tail = drop_word(tail);
+                            } else if !tok.contains('/')
+                                && let Some(r) = tail.strip_prefix('/')
+                            {
+                                tail = drop_word(r);
+                            }
+                            family = tail.trim();
+                            break;
+                        }
+                        _ => break,
+                    }
+                    rest = after;
+                }
+                // The family is required: `font: 12pt` and `font: 12pt inherit` are invalid, and an
+                // invalid declaration changes nothing.
+                let family_ok = !family.is_empty() && !matches!(family, "inherit" | "initial" | "unset" | "revert");
+                if let Some(pt) = size.filter(|_| family_ok) {
+                    // The shorthand sets the family too: an outer span's font or code styling goes.
+                    f.code = false;
+                    f.font = None;
+                    // Keep the family's original case (the match above was on the lowercased text).
+                    let at = v.len().saturating_sub(family.len());
+                    let family = v.get(at..).unwrap_or("");
+                    let css = format!("font-weight:{weight};font-style:{style};font-size:{pt}pt;font-family:{family}");
+                    apply_style(&css, f, align, preserve, page_break, page_break_after);
                 }
             }
             "font-family" => {
@@ -2068,6 +2139,83 @@ mod tests {
             assert_eq!(f.meta.author, "Ann");
             assert_eq!(texts(&f), vec!["NormalNone:Hello world"], "{body}");
         }
+    }
+
+    #[test]
+    fn background_colour_functions_and_shorthands_become_character_shading() {
+        // Browsers copy highlighted text as `rgb(255, 255, 0)`, spaces included.
+        for css in [
+            "background-color: rgb(255, 255, 0);",
+            "background-color:#ffff00",
+            "background:#ff0 none no-repeat",
+            "background: rgb(255, 255, 0) repeat-x",
+            "background: url(x.png) no-repeat rgba(255,255,0,1)",
+        ] {
+            let f = parse(&format!("<p><span style=\"{css}\">hi</span></p>"));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+            assert!(
+                matches!(&p.inlines[0], Inline::Text(t, f) if t == "hi" && f.background == Some(wordcraft_doc::Rgb(255, 255, 0))),
+                "{css}: {:?}",
+                p.inlines
+            );
+        }
+    }
+
+    /// A line-height may have spaces around its slash, any weight 1–1000 is a weight, and a
+    /// shorthand without a family is invalid and changes nothing.
+    #[test]
+    fn font_shorthand_edge_cases() {
+        let para = |css: &str| {
+            let f = parse(&format!("<p><span style=\"{css}\">t</span></p>"));
+            let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+            p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap()
+        };
+        for css in ["font: 12px / 1.4 Arial", "font: 12px /1.4 Arial", "font: 12px/ 1.4 Arial", "font: 12px/1.4 Arial"] {
+            let f = para(css);
+            assert!(f.font.as_deref() == Some("Arial") && f.size == Some(9.0), "{css}: {:?} {:?}", f.font, f.size);
+        }
+        let f = para("font: 1000 12pt Arial");
+        assert!(f.bold && f.size == Some(12.0), "1000 is a weight, not the size");
+        for css in ["font: 12pt", "font: 12pt inherit"] {
+            let f = para(css);
+            assert!(f.size.is_none() && f.font.is_none(), "{css} is invalid and changes nothing");
+        }
+    }
+
+    #[test]
+    fn font_shorthand_sets_weight_size_and_family() {
+        let f =
+            parse("<p><span style=\"font:bold 22px 'Courier New'\">big</span> <span style=\"font: italic 600 12pt/1.4 Georgia, serif\">g</span></p>");
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        assert!(matches!(&p.inlines[0], Inline::Text(t, f) if t == "big" && f.bold && f.code && f.size == Some(16.5)), "{:?}", p.inlines);
+        assert!(
+            p.inlines.iter().any(
+                |i| matches!(i, Inline::Text(t, f) if t == "g" && f.italic && f.bold && f.size == Some(12.0) && f.font.as_deref() == Some("Georgia"))
+            ),
+            "{:?}",
+            p.inlines
+        );
+    }
+
+    #[test]
+    fn a_table_without_widths_follows_its_content() {
+        let d = crate::html::import("<table><tr><td>a</td><td>b</td></tr></table>");
+        let t = d.body.iter().find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t) } else { None }).unwrap();
+        assert_eq!(t.props.width, None);
+        assert!(t.rows[0].cells.iter().all(|c| c.props.width.is_none()), "automatic widths, so AutoFit sizes them");
+    }
+
+    #[test]
+    fn a_font_shorthand_replaces_the_family_of_an_outer_span() {
+        let f = parse(
+            "<p><span style=\"font-family:Georgia\"><span style=\"font: 12pt serif\">a</span> <span style=\"font: 12pt Arial\">b</span></span><span style=\"font-family:'Courier New'\"><span style=\"font: 12pt Georgia\">c</span></span></p>",
+        );
+        let FBlock::Para(p) = &f.blocks[0] else { panic!() };
+        let font =
+            |text: &str| p.inlines.iter().find_map(|i| if let Inline::Text(t, f) = i { (t == text).then(|| (f.font.clone(), f.code)) } else { None });
+        assert_eq!(font("a"), Some((None, false)), "a generic family clears Georgia");
+        assert_eq!(font("b"), Some((Some("Arial".into()), false)));
+        assert_eq!(font("c"), Some((Some("Georgia".into()), false)), "and the code styling of the outer span");
     }
 
     #[test]

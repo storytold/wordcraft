@@ -67,6 +67,7 @@ pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
 pub mod panes;
+pub mod paste_options;
 pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
@@ -530,6 +531,8 @@ pub struct WordApp {
     pub canvas: canvas::CanvasState,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
+    /// The Paste Options button under a fresh paste (#1747).
+    pub paste_options: paste_options::PasteOptionsUi,
     pub dialog: Option<dialogs::Dialog>,
     /// The Colors dialog (More Colors…), shown above any other dialog (#606).
     pub colors: Option<colors::ColorsDialog>,
@@ -694,6 +697,7 @@ impl WordApp {
             print_feedback_seen: None,
             canvas: canvas::CanvasState::default(),
             controls: Default::default(),
+            paste_options: Default::default(),
             dialog: None,
             colors: None,
             restrict: Default::default(),
@@ -2404,6 +2408,7 @@ impl WordApp {
             }
         }
         content_controls::popup(self, &ctx);
+        paste_options::show(self, &ctx);
         dialogs::show(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, &ctx);

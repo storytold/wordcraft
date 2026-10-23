@@ -252,8 +252,12 @@ fn paste(s: &mut Session, v: &Value) -> CmdResult {
 /// Merge Formatting: the pasted text takes the destination's formatting, keeping its emphasis.
 fn paste_merge(s: &mut Session, v: &Value) -> CmdResult {
     let mut frag = super::paste::paste_fragment(s, v)?;
+    let source = frag.clone();
     super::paste::merge_formatting(s, &mut frag);
-    super::paste::insert(s, frag)?;
+    super::paste::insert_from(s, frag, Some(source))?;
+    if let Some(lp) = s.last_paste.as_mut() {
+        lp.mode = "merge";
+    }
     sel_result(s)
 }
 

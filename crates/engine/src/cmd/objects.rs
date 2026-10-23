@@ -768,7 +768,7 @@ fn copy_to(s: &mut Session, v: &Value) -> CmdResult {
     }
     let frag = s.doc.copy_range(&pos, &end);
     s.sel = Selection::caret(end.clone());
-    super::paste::insert(s, frag)?;
+    super::paste::insert_plain(s, frag)?;
     s.touch(); // lay out the copy before moving it
     // The copy sits right after the original; select it and move it like a drag would.
     s.sel = Selection { anchor: end.clone(), focus: Pos { off: end.off + len, ..end } };
