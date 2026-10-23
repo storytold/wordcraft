@@ -1,4 +1,4 @@
-//! Hostile input: every case must return `Err` or a document, never panic.
+////! Hostile input: every case must return `Err` or a document, never panic.
 
 use std::io::Write;
 
@@ -129,6 +129,21 @@ fn many_fields_and_huge_attribute_values() {
     x.push_str("</w:p><w:p><w:r><w:t>later</w:t></w:r></w:p></w:body></w:document>");
     let d = read(&doc_zip(x.as_bytes())).unwrap();
     assert!(d.plain_text(wordcraft_doc::StoryRef::Body).contains("later"));
+}
+
+/// A paragraph with 2,000,000 attributes deflates to ~15 KB. Opening it is refused with a
+/// limit error, or the extras are dropped and the text survives (#3702, WC-06).
+#[test]
+fn millions_of_attributes_on_one_paragraph_are_capped() {
+    let attrs: String = (0..2_000_000).map(|i| format!(" a{i}=\"\"")).collect();
+    let x = format!("<w:document {W_NS}><w:body><w:p{attrs}><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
+    let start = std::time::Instant::now();
+    match read(&doc_zip(x.as_bytes())) {
+        Err(DocxError::Limit(_)) => {}
+        Ok(d) => assert!(d.plain_text(wordcraft_doc::StoryRef::Body).contains("kept")),
+        Err(e) => panic!("expected a Limit error or a document, got {e}"),
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
 }
 
 /// A small valid document.xml to mutate.
