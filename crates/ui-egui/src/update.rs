@@ -474,7 +474,9 @@ pub fn handle_quit(app: &mut WordApp, ctx: &egui::Context) -> bool {
     }
     if app.update_quit_requested() {
         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
-    } else {
+    } else if ctx.input(|i| i.viewport().close_requested()) {
+        // Only a close the window asked for this frame needs cancelling; a pending quit with
+        // no close request (the reboot notice is up, say) leaves the viewport alone.
         ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
     }
     true

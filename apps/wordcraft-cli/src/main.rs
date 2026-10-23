@@ -166,6 +166,8 @@ fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> 
 /// same paper (#1381).
 fn session(doc: wordcraft_doc::Document) -> Session {
     let mut s = Session::new(doc);
+    // `run --cmd file.checkForUpdates` reaches the release feed like `update --check` does.
+    s.update_http = Some(update_check::http_get());
     s.system_region = system_region();
     s
 }
