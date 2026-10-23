@@ -2533,14 +2533,28 @@ pub(crate) fn gradient_menu(ui: &mut Ui, app: &mut WordApp, fill: Option<&wordcr
     }
 }
 
+/// The outline (colour, width) Shape Outline changes: the selected shape's, or the selected
+/// drawing canvas's border.
+fn selected_outline(s: &wordcraft_engine::Session) -> Option<(wordcraft_doc::Rgb, f32)> {
+    match wordcraft_engine::cmd::objects::selected(s)?.1 {
+        wordcraft_doc::para::InlineObject::Shape { stroke, stroke_width, .. } => stroke.map(|c| (c, stroke_width)),
+        o => o.canvas_style().and_then(|c| c.stroke.map(|stroke| (stroke, c.stroke_width))),
+    }
+}
+
+/// Shape Outline › Weight: a new weight keeps the outline's colour (black when it has none).
+fn shape_weight_menu(ui: &mut Ui, app: &mut WordApp) {
+    let outline = selected_outline(&app.session);
+    let color = outline.map_or(wordcraft_doc::Rgb::BLACK, |o| o.0).hex();
+    weight_menu(ui, app, "shape.outline", outline.map(|o| o.1), |w| json!({"color": color, "width": w}));
+}
+
 /// Shape Format: fill, outline and effects of the selected shape, and its arrangement.
 fn shape_format(app: &mut WordApp, ui: &mut Ui) {
-    let (stroke, stroke_width, glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
-        Some((_, wordcraft_doc::para::InlineObject::Shape { stroke, stroke_width, effects, fill, .. })) => {
-            (stroke, stroke_width, effects.glow.map(|g| g.size), fill)
-        }
-        Some((_, o)) => (None, 0.0, None, o.canvas_style().and_then(|c| c.fill.clone())),
-        _ => (None, 0.0, None, None),
+    let (glow_size, fill) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        Some((_, wordcraft_doc::para::InlineObject::Shape { effects, fill, .. })) => (effects.glow.map(|g| g.size), fill),
+        Some((_, o)) => (None, o.canvas_style().and_then(|c| c.fill.clone())),
+        _ => (None, None),
     };
     let theme = app.session.doc.settings.theme_colors.clone();
     group(ui, "Shape Styles", None, app, |ui, app| {
@@ -2555,10 +2569,7 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "No Color", "shape.outline", json!({"color": null}));
                 crate::colors::menu(ui, app, &theme, Target::cmd("shape.outline"));
                 ui.separator();
-                ui.menu_button(tl!("Weight"), |ui| {
-                    let color = stroke.unwrap_or(wordcraft_doc::Rgb::BLACK).hex();
-                    weight_menu(ui, app, "shape.outline", stroke.map(|_| stroke_width), |w| json!({"color": color, "width": w}));
-                });
+                ui.menu_button(tl!("Weight"), |ui| shape_weight_menu(ui, app));
             });
             menu_button(ui, app, "shapeEffects", Some("Shape Effects"), "Shadow, glow and soft edges", false, "shape.effects", |ui, app| {
                 shape_effects_menu(ui, app, &theme, glow_size)
@@ -3193,6 +3204,26 @@ mod tests {
             assert_eq!(h.get_by_label(label).accesskit_node().toggled(), Some(Toggled::True), "{label} is highlighted once chosen");
             assert_eq!(h.get_by_label("1 pt").accesskit_node().toggled(), Some(Toggled::False));
         }
+    }
+
+    /// #3917 review: Shape Outline › Weight on a drawing canvas reads the canvas's border, so its
+    /// weight is highlighted and a new weight keeps the border's colour instead of turning it black.
+    #[test]
+    fn shape_outline_weight_keeps_a_canvas_borders_colour() {
+        use egui::accesskit::Toggled;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("insert.canvas", json!({})).unwrap();
+        a.run("shape.outline", json!({"color": "1F4E79", "width": 1.5})).unwrap();
+        let blue = wordcraft_doc::Rgb::parse("1F4E79");
+        assert_eq!(selected_outline(&a.session), blue.map(|c| (c, 1.5)), "the canvas's border");
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| shape_weight_menu(ui, app), a);
+        h.run_steps(2);
+        assert_eq!(h.get_by_label("1.5 pt").accesskit_node().toggled(), Some(Toggled::True), "the border's weight");
+        h.get_by_label("3 pt").click();
+        h.run_steps(2);
+        assert_eq!(selected_outline(&h.state().session), blue.map(|c| (c, 3.0)), "a new weight keeps the border blue");
     }
 
     /// #2738: Home › Underline's drop-down: every line sample is a named entry (assistive
