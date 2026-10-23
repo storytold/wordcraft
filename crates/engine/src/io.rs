@@ -47,6 +47,18 @@ pub fn is_word_package(ext: &str) -> bool {
     wordcraft_docx::Flavor::from_ext(ext).is_some()
 }
 
+/// Is `name` a Word template? A template opened from the shell starts a new document based on
+/// it, as in Word (#3433); one opened from File > Open is the template itself.
+///
+/// The OOXML templates (.dotx/.dotm) are Word's own kinds; `.dot` is the Word 97-2003 one,
+/// which Word also opens as a new document. `.doc` is not a template: it is a document.
+pub fn is_template_name(name: &str) -> bool {
+    match ext_of(name).as_str() {
+        "dot" => true,
+        ext => matches!(wordcraft_docx::Flavor::from_ext(ext), Some(wordcraft_docx::Flavor::Template | wordcraft_docx::Flavor::MacroTemplate)),
+    }
+}
+
 /// How a copy in another format is written.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ExportOptions {

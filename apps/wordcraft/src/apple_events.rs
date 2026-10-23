@@ -43,8 +43,9 @@ pub fn poll(inbox: &Inbox, app: &mut WordApp, ctx: &egui::Context) {
         match e {
             Event::Open(paths) => {
                 for p in paths.iter().filter_map(|p| p.to_str()) {
-                    match app.open_file(p, None) {
-                        // Leave Backstage, as opening from the Open dialog does.
+                    // macOS Finder/Open With/drop on Dock uses the same semantics as the command line:
+                    // a template becomes a new document, any other file opens as itself (#3433).
+                    match app.open_from_shell(p, None) {
                         Ok(_) => app.ui.backstage = false,
                         Err(e) => {
                             log::warn!("{p}: {e}");
