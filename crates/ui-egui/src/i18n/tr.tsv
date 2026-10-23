@@ -2772,3 +2772,11 @@ preview	Title	Örnek
 	More tabs	Diğer sekmeler
 # #3013: Insert Table of Figures
 	Include label and number	Etiketi ve numarayı ekle
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Yaprak başına sayfa
+	Booklet (left binding)	Kitapçık (soldan ciltli)
+	Booklet (right binding)	Kitapçık (sağdan ciltli)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Kitapçıklar: kısa kenardan çift taraflı yazdırın. Boş sayfalar sona eklenir.
+	Auto orientation	Otomatik yönlendirme
+	Scale to paper size	Kağıt boyutuna sığdır
+	No Scaling	Ölçeklendirme yok

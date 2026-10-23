@@ -2763,3 +2763,11 @@ preview	Title	Naslov
 	{names} and {n} more	{names} and {n} more
 	{name} options	{name} options
 	{width} × {height} pixels	{width} × {height} pixels
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Strani na list
+	Booklet (left binding)	Knjižica (vezava levo)
+	Booklet (right binding)	Knjižica (vezava desno)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Knjižice: obojestransko tiskanje po kratkem robu. Prazne strani se dodajo na koncu.
+	Auto orientation	Samodejna usmerjenost
+	Scale to paper size	Prilagodi velikosti papirja
+	No Scaling	Brez spreminjanja merila

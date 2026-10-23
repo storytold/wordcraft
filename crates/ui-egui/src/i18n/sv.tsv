@@ -2802,3 +2802,11 @@ template	Letter	Brev
 	More tabs	Fler flikar
 # #3013: Insert Table of Figures
 	Include label and number	Ta med etikett och nummer
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Sidor per ark
+	Booklet (left binding)	Häfte (bindning till vänster)
+	Booklet (right binding)	Häfte (bindning till höger)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Häften: dubbelsidig utskrift längs kortsidan. Tomma sidor läggs till i slutet.
+	Auto orientation	Automatisk orientering
+	Scale to paper size	Anpassa till pappersstorlek
+	No Scaling	Ingen skalning

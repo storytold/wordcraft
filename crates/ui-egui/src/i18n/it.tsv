@@ -2799,3 +2799,11 @@ template	Letter	Lettera
 	More tabs	Altre schede
 # #3013: Insert Table of Figures
 	Include label and number	Includi etichetta e numero
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Pagine per foglio
+	Booklet (left binding)	Opuscolo (rilegatura a sinistra)
+	Booklet (right binding)	Opuscolo (rilegatura a destra)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Opuscoli: stampa fronte-retro sul lato corto. Le pagine vuote vengono aggiunte alla fine.
+	Auto orientation	Orientamento automatico
+	Scale to paper size	Adatta al formato carta
+	No Scaling	Nessun ridimensionamento

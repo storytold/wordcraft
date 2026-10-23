@@ -2379,3 +2379,11 @@
 	More tabs	Mais guias
 # #3013: Insert Table of Figures
 	Include label and number	Incluir rótulo e número
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Páginas por folha
+	Booklet (left binding)	Livreto (encadernação à esquerda)
+	Booklet (right binding)	Livreto (encadernação à direita)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Livretos: impressão frente e verso pela borda curta. Páginas em branco são adicionadas no final.
+	Auto orientation	Orientação automática
+	Scale to paper size	Ajustar ao tamanho do papel
+	No Scaling	Sem dimensionamento

@@ -2367,3 +2367,11 @@
 	More tabs	その他のタブ
 # #3013: Insert Table of Figures
 	Include label and number	ラベルと番号を含める
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	1枚あたりのページ数
+	Booklet (left binding)	小冊子（左綴じ）
+	Booklet (right binding)	小冊子（右綴じ）
+	Booklets: duplex on the short edge. Blank pages are added at the end.	小冊子は短辺綴じで両面印刷してください。空白ページは末尾に追加されます。
+	Auto orientation	自動で向きを設定
+	Scale to paper size	用紙サイズに合わせる
+	No Scaling	拡大縮小なし

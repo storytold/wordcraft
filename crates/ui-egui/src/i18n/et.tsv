@@ -2401,3 +2401,11 @@
 	More tabs	Veel vahekaarte
 # #3013: Insert Table of Figures
 	Include label and number	Lisa silt ja number
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Lehekülgi lehel
+	Booklet (left binding)	Brošüür (köide vasakul)
+	Booklet (right binding)	Brošüür (köide paremal)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Brošüürid: kahepoolne printimine mööda lühikest serva. Tühjad leheküljed lisatakse lõppu.
+	Auto orientation	Automaatne suund
+	Scale to paper size	Sobita paberi suurusega
+	No Scaling	Ilma mastaapimiseta

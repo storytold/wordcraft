@@ -2766,3 +2766,11 @@ preview	Title	Ukázka
 	More tabs	Další karty
 # #3013: Insert Table of Figures
 	Include label and number	Zahrnout popisek a číslo
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Stránek na list
+	Booklet (left binding)	Brožura (vazba vlevo)
+	Booklet (right binding)	Brožura (vazba vpravo)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Brožury: oboustranný tisk přes krátký okraj. Prázdné stránky se přidají na konec.
+	Auto orientation	Automatická orientace
+	Scale to paper size	Přizpůsobit velikosti papíru
+	No Scaling	Bez změny měřítka

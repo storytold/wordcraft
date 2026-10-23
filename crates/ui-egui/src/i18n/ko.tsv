@@ -2617,3 +2617,11 @@ preview	Title	제목
 	More tabs	탭 더 보기
 # #3013: Insert Table of Figures
 	Include label and number	레이블 및 번호 포함
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	용지당 페이지 수
+	Booklet (left binding)	소책자(왼쪽 제본)
+	Booklet (right binding)	소책자(오른쪽 제본)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	소책자는 짧은 가장자리를 기준으로 양면 인쇄하세요. 빈 페이지는 끝에 추가됩니다.
+	Auto orientation	자동 방향
+	Scale to paper size	용지 크기에 맞춤
+	No Scaling	배율 조정 안 함

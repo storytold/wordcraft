@@ -2770,3 +2770,11 @@
 	More tabs	További lapok
 # #3013: Insert Table of Figures
 	Include label and number	Címkével és számmal
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Oldal laponként
+	Booklet (left binding)	Füzet (bal oldali kötés)
+	Booklet (right binding)	Füzet (jobb oldali kötés)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Füzetek: kétoldalas nyomtatás a rövid él mentén. Az üres oldalak a végére kerülnek.
+	Auto orientation	Automatikus tájolás
+	Scale to paper size	Igazítás a papírmérethez
+	No Scaling	Nincs átméretezés

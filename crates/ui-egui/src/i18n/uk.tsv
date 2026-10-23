@@ -2379,3 +2379,11 @@
 	More tabs	Інші вкладки
 # #3013: Insert Table of Figures
 	Include label and number	Додавати мітку й номер
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Сторінок на аркуші
+	Booklet (left binding)	Брошура (палітурка ліворуч)
+	Booklet (right binding)	Брошура (палітурка праворуч)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Для брошури виберіть двобічний друк по короткому краю. Порожні сторінки додаються в кінці.
+	Auto orientation	Автоматична орієнтація
+	Scale to paper size	Підігнати під розмір паперу
+	No Scaling	Без масштабування

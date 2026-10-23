@@ -2366,3 +2366,11 @@
 	More tabs	Weitere Registerkarten
 # #3013: Insert Table of Figures
 	Include label and number	Bezeichnung und Nummer einbeziehen
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Seiten pro Blatt
+	Booklet (left binding)	Broschüre (Bindung links)
+	Booklet (right binding)	Broschüre (Bindung rechts)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Broschüren: beidseitig an der kurzen Kante drucken. Leere Seiten werden am Ende ergänzt.
+	Auto orientation	Automatische Ausrichtung
+	Scale to paper size	An Papiergröße anpassen
+	No Scaling	Keine Skalierung

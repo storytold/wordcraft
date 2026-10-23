@@ -2762,3 +2762,11 @@ template	Letter	Scrisoare
 	cm	cm
 	mm	mm
 	pi	pi
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Pagini pe foaie
+	Booklet (left binding)	Broșură (legare la stânga)
+	Booklet (right binding)	Broșură (legare la dreapta)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Broșuri: imprimare față-verso pe marginea scurtă. Paginile goale sunt adăugate la sfârșit.
+	Auto orientation	Orientare automată
+	Scale to paper size	Ajustare la dimensiunea hârtiei
+	No Scaling	Fără scalare

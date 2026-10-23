@@ -2795,3 +2795,11 @@ preview	Title	Tytuł
 	This document has no bookmarks.	This document has no bookmarks.
 	Type a page number, or +2 / -1.	Type a page number, or +2 / -1.
 	Wait for the print job to finish submitting before closing.	Wait for the print job to finish submitting before closing.
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Stron na arkuszu
+	Booklet (left binding)	Broszura (oprawa z lewej)
+	Booklet (right binding)	Broszura (oprawa z prawej)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Broszury: druk dwustronny przy krótkiej krawędzi. Puste strony są dodawane na końcu.
+	Auto orientation	Orientacja automatyczna
+	Scale to paper size	Dopasuj do rozmiaru papieru
+	No Scaling	Bez skalowania

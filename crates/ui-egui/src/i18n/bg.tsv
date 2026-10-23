@@ -2764,3 +2764,11 @@
 	More tabs	Още раздели
 # #3013: Insert Table of Figures
 	Include label and number	Включване на етикета и номера
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Страници на лист
+	Booklet (left binding)	Брошура (подвързване отляво)
+	Booklet (right binding)	Брошура (подвързване отдясно)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Брошури: двустранен печат по късия ръб. Празните страници се добавят в края.
+	Auto orientation	Автоматична ориентация
+	Scale to paper size	Мащабиране според размера на хартията
+	No Scaling	Без мащабиране

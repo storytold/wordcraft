@@ -2381,3 +2381,11 @@
 	More tabs	Још картица
 # #3013: Insert Table of Figures
 	Include label and number	Укључи ознаку и број
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Страница по листу
+	Booklet (left binding)	Књижица (повез лево)
+	Booklet (right binding)	Књижица (повез десно)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Књижице: двострано штампање по краћој ивици. Празне странице се додају на крају.
+	Auto orientation	Аутоматска оријентација
+	Scale to paper size	Прилагоди величини папира
+	No Scaling	Без скалирања

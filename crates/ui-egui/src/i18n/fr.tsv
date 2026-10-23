@@ -2775,3 +2775,11 @@ template	Letter	Lettre
 	More tabs	Plus d'onglets
 # #3013: Insert Table of Figures
 	Include label and number	Inclure l’étiquette et le numéro
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Pages par feuille
+	Booklet (left binding)	Livret (reliure à gauche)
+	Booklet (right binding)	Livret (reliure à droite)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Livrets : recto verso sur le bord court. Des pages vierges sont ajoutées à la fin.
+	Auto orientation	Orientation automatique
+	Scale to paper size	Adapter au format du papier
+	No Scaling	Aucune mise à l’échelle

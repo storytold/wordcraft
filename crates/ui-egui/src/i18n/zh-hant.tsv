@@ -2368,3 +2368,11 @@
 	More tabs	更多索引標籤
 # #3013: Insert Table of Figures
 	Include label and number	包含標籤和編號
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	每張紙的頁數
+	Booklet (left binding)	小冊子（左側裝訂）
+	Booklet (right binding)	小冊子（右側裝訂）
+	Booklets: duplex on the short edge. Blank pages are added at the end.	小冊子：沿短邊雙面列印。空白頁將加入末尾。
+	Auto orientation	自動方向
+	Scale to paper size	縮放至紙張大小
+	No Scaling	不縮放

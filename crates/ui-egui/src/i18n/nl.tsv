@@ -2669,3 +2669,11 @@ preview	Title	Titel
 	Full Screen View	Full Screen View
 	Personal Templates	Personal Templates
 	Underline Color	Underline Color
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Pagina’s per vel
+	Booklet (left binding)	Boekje (links gebonden)
+	Booklet (right binding)	Boekje (rechts gebonden)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Boekjes: dubbelzijdig afdrukken langs de korte zijde. Lege pagina’s worden aan het einde toegevoegd.
+	Auto orientation	Automatische afdrukstand
+	Scale to paper size	Aanpassen aan papierformaat
+	No Scaling	Niet schalen

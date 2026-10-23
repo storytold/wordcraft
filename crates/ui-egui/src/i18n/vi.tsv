@@ -2814,3 +2814,11 @@ template	Letter	Thư
 	More tabs	Các tab khác
 # #3013: Insert Table of Figures
 	Include label and number	Bao gồm nhãn và số
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Số trang trên mỗi tờ
+	Booklet (left binding)	Sách nhỏ (đóng gáy trái)
+	Booklet (right binding)	Sách nhỏ (đóng gáy phải)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Sách nhỏ: in hai mặt theo cạnh ngắn. Các trang trống được thêm vào cuối.
+	Auto orientation	Hướng tự động
+	Scale to paper size	Vừa với khổ giấy
+	No Scaling	Không co giãn

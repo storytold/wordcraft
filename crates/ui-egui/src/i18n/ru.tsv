@@ -2773,3 +2773,11 @@ preview	Title	Пример
 	More tabs	Другие вкладки
 # #3013: Insert Table of Figures
 	Include label and number	Включить подпись и номер
+# #641: print sheet controls (independent translation review)
+	Pages per sheet	Страниц на листе
+	Booklet (left binding)	Брошюра (переплёт слева)
+	Booklet (right binding)	Брошюра (переплёт справа)
+	Booklets: duplex on the short edge. Blank pages are added at the end.	Для брошюры выберите двустороннюю печать по короткому краю. Пустые страницы добавляются в конце.
+	Auto orientation	Автоматическая ориентация
+	Scale to paper size	Подогнать под размер бумаги
+	No Scaling	Без масштабирования
