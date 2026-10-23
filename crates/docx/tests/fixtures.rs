@@ -590,6 +590,87 @@ fn styles_with_qformat_keep_their_gallery() {
     assert_eq!(gallery_ids(&styles), vec!["Normal".to_string()]);
 }
 
+/// #3909: Word writes a built-in style out only once it is used; a new document's file defines
+/// Normal and leaves Heading 1, Title, Quote and the rest latent. The gallery shows the latent
+/// styles marked `w:qFormat` and not `w:semiHidden`, in `w:uiPriority` order, as Word does; hidden
+/// ones (Heading 2 until used), ones without `w:qFormat`, and names with no built-in style stay
+/// out, and a style the file defines keeps its own `w:qFormat`.
+#[test]
+fn latent_quick_styles_fill_the_gallery() {
+    let lsd = |name: &str, prio: u32, hidden: bool, quick: bool| {
+        let h = if hidden { r#" w:semiHidden="1" w:unhideWhenUsed="1""# } else { "" };
+        let q = if quick { r#" w:qFormat="1""# } else { "" };
+        format!(r#"<w:lsdException w:name="{name}"{h} w:uiPriority="{prio}"{q}/>"#)
+    };
+    let mut latent = String::new();
+    for (name, prio, hidden, quick) in [
+        ("Normal", 0, false, true),
+        ("heading 1", 9, false, true),
+        ("heading 2", 9, true, true),
+        ("caption", 35, true, true),
+        ("Title", 10, false, true),
+        ("Subtitle", 11, false, true),
+        ("Strong", 22, false, true),
+        ("Emphasis", 20, false, true),
+        ("Plain Text", 99, false, false),
+        ("No Spacing", 1, false, true),
+        ("List Paragraph", 34, false, true),
+        ("Quote", 29, false, true),
+        ("Intense Quote", 30, false, true),
+        ("Subtle Emphasis", 19, false, true),
+        ("Intense Emphasis", 21, false, true),
+        ("Subtle Reference", 31, false, true),
+        ("Intense Reference", 32, false, true),
+        ("Book Title", 33, false, true),
+        ("Nothing Built In", 5, false, true),
+    ] {
+        latent.push_str(&lsd(name, prio, hidden, quick));
+    }
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:latentStyles w:defLockedState="0" w:defUIPriority="99" w:defSemiHidden="0" w:defUnhideWhenUsed="0" w:defQFormat="0" w:count="376">{latent}</w:latentStyles>
+ <w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>
+ <w:style w:type="character" w:default="1" w:styleId="DefaultParagraphFont"><w:name w:val="Default Paragraph Font"/><w:uiPriority w:val="1"/><w:semiHidden/><w:unhideWhenUsed/></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let names: Vec<&str> = d.styles.gallery().iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "Normal",
+            "No Spacing",
+            "Heading 1",
+            "Title",
+            "Subtitle",
+            "Subtle Emphasis",
+            "Emphasis",
+            "Intense Emphasis",
+            "Strong",
+            "Quote",
+            "Intense Quote",
+            "Subtle Reference",
+            "Intense Reference",
+            "Book Title",
+            "List Paragraph"
+        ]
+    );
+    // Heading 1 is usable as the built-in: based on Normal, with its own look.
+    let h1 = d.styles.find("Heading 1").unwrap();
+    assert_eq!((h1.id.as_str(), h1.based_on.as_deref()), ("Heading1", Some("Normal")));
+    assert!(h1.chr.size.is_some(), "the built-in heading's size");
+    // A style the file defines without w:qFormat stays out, latent w:qFormat or not.
+    let defined = styles.replace(
+        "</w:styles>",
+        r#"<w:style w:type="paragraph" w:styleId="Title"><w:name w:val="Title"/><w:basedOn w:val="Normal"/></w:style></w:styles>"#,
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &defined)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    assert!(!d.styles.gallery().iter().any(|s| s.name == "Title"), "the file's own Title isn't quick");
+    assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Title").count(), 1, "no second Title");
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]
