@@ -23,7 +23,8 @@
 //! - **`ha`, `ho`, `hanno`**: the verb without its `h` before a past participle, after a subject
 //!   or clitic pronoun (`lui a detto` → `lui ha detto`, `io o capito` → `io ho capito`, `loro
 //!   anno fatto` → `loro hanno fatto`). Participles of verbs that take `essere` (`andato`,
-//!   `rimasto`) and capitalised words (`chi a Prato`) are left alone.
+//!   `rimasto`) and capitalised words (`chi a Prato`) are left alone, and a feminine participle
+//!   counts only after a clitic (`mi a vista`), not in `non a vista` or `non a portata di mano`.
 //! - **`miei`, `tuoi`, `suoi`**: after a masculine plural article, and `mie`, `tue`, `sue` after
 //!   a feminine one (`i mie amici` → `i miei amici`, `le tuoi cose` → `le tue cose`).
 //!
@@ -352,6 +353,9 @@ const AVERE_SUBJECTS: &[(&str, &str, &[&str])] = &[
     ("anno", "hanno", &["loro", "non", "mi", "ti", "ci", "gli", "le", "ne"]),
 ];
 
+/// Clitic pronouns a feminine participle can agree with (`mi ha vista`, `ne ha fatta una`).
+const CLITICS: &[&str] = &["mi", "ti", "ci", "gli", "le", "ne"];
+
 /// Irregular past participles common after `ha` (the regular ones end in `-ato`, `-uto`, `-ito`).
 const IRREGULAR_PARTICIPLES: &[&str] = &[
     "detto", "fatto", "scritto", "preso", "messo", "visto", "letto", "chiesto", "risposto", "aperto", "chiuso", "vinto", "perso", "corso", "rotto",
@@ -407,17 +411,22 @@ fn ce_e(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
 }
 
 /// `lui a detto` → `lui ha detto`: `a`, `o`, `anno` between a pronoun and a past participle.
-/// `non anno passato` may be the noun phrase.
+/// `non anno passato` may be the noun phrase. A feminine form agrees only with a clitic before
+/// it (`ne a fatta una`); after `lui`, `non` or `chi` it is a noun (`a vista`, `a portata`).
 fn avere_without_h(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     for triple in ws.windows(3) {
         let [(a0, b0), (a1, b1), (a2, b2)] = triple else { continue };
         let (Some(w0), Some(w1), Some(w2)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*a2..*b2)) else { continue };
         let (Some(g0), Some(g1)) = (text.get(*b0..*a1), text.get(*b1..*a2)) else { continue };
-        if g0 != " " || g1 != " " || !past_participle(w2) || (w0.to_lowercase() == "non" && w1 == "anno" && w2 == "passato") {
+        let w0 = w0.to_lowercase();
+        if g0 != " " || g1 != " " || !past_participle(w2) || (w0 == "non" && w1 == "anno" && w2 == "passato") {
+            continue;
+        }
+        if w2.ends_with('a') && !CLITICS.contains(&w0.as_str()) {
             continue;
         }
         for (bare, verb, subjects) in AVERE_SUBJECTS {
-            if w1 == *bare && subjects.contains(&w0.to_lowercase().as_str()) {
+            if w1 == *bare && subjects.contains(&w0.as_str()) {
                 v.push(issue(*a1, *b1, format!("Qui è il verbo avere: «{verb}», con l'acca"), vec![(*verb).to_string()]));
             }
         }
@@ -597,6 +606,8 @@ mod tests {
         assert_eq!(fixes("Io o mangiato"), [pair("o", "ho")]);
         assert_eq!(fixes("Loro anno finito"), [pair("anno", "hanno")]);
         assert_eq!(fixes("Loro anno passato l'esame"), [pair("anno", "hanno")]);
+        assert_eq!(fixes("Non mi a vista"), [pair("a", "ha")]);
+        assert_eq!(fixes("Ne a fatta una"), [pair("a", "ha")]);
         for ok in [
             "Lui ha detto di no",
             "Vado a Roma",
@@ -611,6 +622,9 @@ mod tests {
             "Io o andato",
             "Lei a stata",
             "Chi a Prato organizza l'evento?",
+            "I depositi non a vista rendono di più",
+            "Non a portata di mano",
+            "Lui a messa la domenica",
         ] {
             assert!(fixes(ok).is_empty(), "{ok}: {:?}", fixes(ok));
         }
