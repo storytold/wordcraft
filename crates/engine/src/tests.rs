@@ -9329,3 +9329,278 @@ fn table_cell_margins_preserves_unpassed_sides() {
     let margins = s.doc.table(StoryRef::Body, &tp).unwrap().props.cell_margins.unwrap();
     assert_eq!(margins, [0.0, 10.0, 0.0, 15.0]);
 }
+
+/// #3658: char props tracked as deleted (`accept`, revision 0) or inserted (revision 0).
+fn tracked_char(accept: bool) -> wordcraft_doc::props::CharProps {
+    let mut c = wordcraft_doc::props::CharProps::default();
+    if accept {
+        c.del = Some(0);
+    } else {
+        c.ins = Some(0);
+    }
+    c
+}
+
+/// #3658: a session whose revision 0 is a deletion (`accept`) or an insertion by "A".
+fn tracked_session(accept: bool) -> Session {
+    use wordcraft_doc::{Revision, RevisionKind};
+    let mut s = s();
+    let kind = if accept { RevisionKind::Delete } else { RevisionKind::Insert };
+    s.doc.revisions.push(Revision { kind, author: "A".into(), date: String::new(), move_name: None });
+    s
+}
+
+/// #3658: a body of `n` paragraphs whose marks are all tracked (deleted, or inserted when
+/// `!accept`), so resolving them joins everything; paragraph 0's text is tracked too, so it is
+/// left empty and goes away whole (its style with it). Returns the session and the text an
+/// untracked deletion of the same marks (and text) leaves.
+fn tracked_marks_doc(n: usize, accept: bool) -> (Session, String) {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Paragraph, para_block};
+    let mut s = tracked_session(accept);
+    let mut expected = String::new();
+    s.doc.body = (0..n)
+        .map(|i| {
+            let mut p = if i == 0 {
+                Paragraph::with_text("gone ", tracked_char(accept)).styled("Title")
+            } else {
+                let t = format!("para{i} with some more text in it so that copying it costs something ");
+                expected.push_str(&t);
+                Paragraph::with_text(&t, CharProps::default())
+            };
+            p.mark = tracked_char(accept);
+            para_block(p)
+        })
+        .collect();
+    (s, expected)
+}
+
+/// #3658: the same body as [`tracked_marks_doc`] with untracked marks and one tracked word in
+/// each paragraph instead: resolving it touches every paragraph once and joins none.
+fn tracked_words_doc(n: usize, accept: bool) -> Session {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Paragraph, para_block};
+    let mut s = tracked_session(accept);
+    s.doc.body = (0..n)
+        .map(|i| {
+            let mut p = Paragraph::with_text(&format!("para{i} with some more text in it so that copying it costs something "), CharProps::default());
+            p.insert_text(0, "word ", &tracked_char(accept)).unwrap();
+            para_block(p)
+        })
+        .collect();
+    s
+}
+
+#[test]
+fn accept_and_reject_all_join_many_paragraph_marks_in_linear_time() {
+    // #3658: every joined mark used to re-copy the growing tail of the story (quadratic). The
+    // cost is compared with resolving one tracked word in each of as many paragraphs (linear),
+    // timed alongside, so the machine's speed and load cancel out: one pass over the paragraphs
+    // costs about as much either way, while joining one at a time took about 90x as long.
+    let n = 12000;
+    for (id, accept) in [("review.acceptAll", true), ("review.rejectAll", false)] {
+        // The fastest of a few runs, so a run slowed by other work doesn't decide the ratio.
+        let (mut joins, mut words) = (f64::MAX, f64::MAX);
+        for _ in 0..3 {
+            let mut w = tracked_words_doc(n, accept);
+            let t = std::time::Instant::now();
+            run(&mut w, id, json!({}));
+            words = words.min(t.elapsed().as_secs_f64());
+            assert_eq!(w.doc.body.len(), n, "{id}: no mark joined");
+
+            let (mut s, expected) = tracked_marks_doc(n, accept);
+            let t = std::time::Instant::now();
+            run(&mut s, id, json!({}));
+            joins = joins.min(t.elapsed().as_secs_f64());
+            assert!(text(&s) == expected, "{id}: text differs from the untracked deletion");
+            assert_eq!(s.doc.body.len(), 1, "{id}");
+            let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+            assert_eq!(p.props.style, None, "{id}: the emptied first paragraph went whole");
+            assert!(p.mark.ins.is_none() && p.mark.del.is_none(), "{id}");
+            assert!(s.doc.revisions.is_empty());
+        }
+        let ratio = joins / words.max(1e-6);
+        assert!(ratio < 12.0, "{id}: joining {n} marks took {ratio:.1}x as long as resolving {n} words ({joins:.3}s, {words:.3}s)");
+    }
+}
+
+/// #3658: a body mixing what joining paragraph marks has to carry along: character formatting,
+/// an inline field, section breaks (with their own headers) inside and at the end of runs of
+/// removed marks, empty paragraphs with and without a break, a mark before a table (which
+/// can't go), and a table cell whose paragraphs' marks go, one with a section break. Every mark
+/// is tracked except the last ones of the body and of the cell. Returns the session and the
+/// top-level indices of the tracked marks.
+fn joined_marks_mix(accept: bool) -> (Session, Vec<wordcraft_doc::Path>) {
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::section::SectionProps;
+    use wordcraft_doc::{Block, InlineObject, Paragraph, Path, Table, para_block};
+    let mut s = tracked_session(accept);
+    let bold = CharProps { bold: Some(true), ..Default::default() };
+    let italic = CharProps { italic: Some(true), ..Default::default() };
+    let section = |h: u32| {
+        let mut x = SectionProps::default();
+        x.headers.default = Some(h);
+        Some(Box::new(x))
+    };
+    let mut paras: Vec<Paragraph> = Vec::new();
+    // 0: plain then bold, a paragraph style.
+    let mut p = Paragraph::with_text("Alpha ", CharProps::default()).styled("Heading1");
+    p.insert_text(p.len(), "bold ", &bold).unwrap();
+    paras.push(p);
+    // 1: an empty paragraph (goes whole on Accept/Reject All).
+    paras.push(Paragraph::new().styled("Title"));
+    // 2: italic text, a field, plain text; ends a section with header 7.
+    let mut p = Paragraph::with_text("ital ", italic.clone());
+    let field = InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() };
+    p.insert_object(p.len(), field, &CharProps::default()).unwrap();
+    p.insert_text(p.len(), " after ", &CharProps::default()).unwrap();
+    p.section = section(7);
+    paras.push(p);
+    // 3: an empty paragraph ending a section with header 8 (joins: it has a break).
+    let mut p = Paragraph::new();
+    p.section = section(8);
+    paras.push(p);
+    // 4: bold text ending a section with only a first-page header (9); its mark stays.
+    let mut p = Paragraph::with_text("Beta", bold.clone());
+    let mut last = SectionProps::default();
+    last.headers.first = Some(9);
+    p.section = Some(Box::new(last));
+    paras.push(p);
+    // 5: a paragraph before the table: its mark is tracked but can't go.
+    paras.push(Paragraph::with_text("before table", CharProps::default()));
+    let mut body: Vec<_> = paras.into_iter().map(para_block).collect();
+    // 6: a table whose first cell has three paragraphs; the first ends a section (header 5).
+    let mut t = Table::new(1, 2, 200.0);
+    let mut c0 = Paragraph::with_text("cell ", italic.clone());
+    c0.section = section(5);
+    let c1 = Paragraph::with_text("one ", bold.clone());
+    let c2 = Paragraph::with_text("two", CharProps::default());
+    t.rows[0].cells[0].blocks = vec![para_block(c0), para_block(c1), para_block(c2)];
+    body.push(std::sync::Arc::new(Block::Table(t)));
+    // 7, 8: two paragraphs, the second the body's last.
+    body.push(para_block(Paragraph::with_text("Gamma ", italic)));
+    body.push(para_block(Paragraph::with_text("Delta", CharProps::default())));
+    s.doc.body = body;
+    let tracked: Vec<Path> = [0, 1, 2, 3, 5, 7].into_iter().map(Path::top).chain([Path(vec![6, 0, 0, 0]), Path(vec![6, 0, 0, 1])]).collect();
+    for path in &tracked {
+        s.doc.para_mut(StoryRef::Body, path).unwrap().mark = tracked_char(accept);
+    }
+    (s, tracked)
+}
+
+#[test]
+fn accept_and_reject_all_join_marks_like_one_mark_at_a_time() {
+    // #3658: joining the removed marks in one pass leaves what removing them one at a time, from
+    // the last, did (`remove_empty_para`, else `join_next_para`, as before).
+    for (id, accept) in [("review.acceptAll", true), ("review.rejectAll", false)] {
+        let (mut s, tracked) = joined_marks_mix(accept);
+        let mut want = s.doc.clone();
+        {
+            let mut r = Session::new(std::mem::take(&mut want));
+            for path in tracked.iter().rev() {
+                let p = r.doc.para_mut(StoryRef::Body, path).unwrap();
+                (p.mark.ins, p.mark.del) = (None, None);
+                if !cmd::remove_empty_para(&mut r, StoryRef::Body, path).unwrap() {
+                    cmd::join_next_para(&mut r, StoryRef::Body, path).unwrap();
+                }
+            }
+            r.doc.revisions.clear();
+            want = r.doc;
+        }
+        run(&mut s, id, json!({}));
+        assert_eq!(s.doc.body, want.body, "{id}");
+        assert_eq!(s.doc.last_section, want.last_section, "{id}");
+
+        // And spelled out.
+        let para = |s: &Session, path: wordcraft_doc::Path| s.doc.para(StoryRef::Body, &path).unwrap().clone();
+        assert_eq!(s.doc.body.len(), 4, "{id}: Alpha…Beta, before table, the table, Gamma Delta");
+        let p = para(&s, wordcraft_doc::Path::top(0));
+        assert_eq!(p.text, format!("Alpha bold ital {} after Beta", wordcraft_doc::para::OBJ), "{id}");
+        assert_eq!(p.props.style.as_deref(), Some("Heading1"), "{id}: the first paragraph's properties");
+        let fmt: Vec<_> = p.run_ranges().map(|(r, c)| (r.start, r.end, c.bold, c.italic)).collect();
+        let obj = wordcraft_doc::para::OBJ.len_utf8();
+        assert_eq!(
+            fmt,
+            [
+                (0, 6, None, None),
+                (6, 11, Some(true), None),
+                (11, 16, None, Some(true)),
+                (16, 23 + obj, None, None),
+                (23 + obj, 27 + obj, Some(true), None)
+            ],
+            "{id}"
+        );
+        assert!(matches!(p.objects.as_slice(), [wordcraft_doc::InlineObject::Field { instr, .. }] if instr == "PAGE"), "{id}");
+        // The last break of the run ends the joined paragraph; the ones before it join that
+        // section, the nearest first.
+        let headers = p.section.as_ref().map(|x| (x.headers.default, x.headers.first));
+        assert_eq!(headers, Some((Some(8), Some(9))), "{id}");
+        assert!(p.mark.ins.is_none() && p.mark.del.is_none(), "{id}");
+        let p = para(&s, wordcraft_doc::Path::top(1));
+        assert_eq!(p.text, "before table", "{id}: a mark before a table stays");
+        assert!(p.mark.ins.is_none() && p.mark.del.is_none(), "{id}");
+        // In a cell, the break goes with its mark.
+        let c = para(&s, wordcraft_doc::Path(vec![2, 0, 0, 0]));
+        assert_eq!(c.text, "cell one two", "{id}");
+        assert_eq!(c.section, None, "{id}");
+        let fmt: Vec<_> = c.run_ranges().map(|(r, c)| (r.start, r.end, c.bold, c.italic)).collect();
+        assert_eq!(fmt, [(0, 5, None, Some(true)), (5, 9, Some(true), None), (9, 12, None, None)], "{id}");
+        assert_eq!(text(&s).matches("Gamma Delta").count(), 1, "{id}");
+        assert_eq!(s.doc.body.len(), 4, "{id}");
+    }
+}
+
+#[test]
+fn accepting_a_move_joins_its_source_paragraphs() {
+    // #3658: the moved paragraph mark of a move's source goes when the move is accepted (and the
+    // destination's when it is rejected): the paragraphs join with their formatting kept.
+    use wordcraft_doc::props::CharProps;
+    use wordcraft_doc::{Paragraph, Path, Revision, RevisionKind, para_block};
+    for accept in [true, false] {
+        let mut s = s();
+        let rev = |kind| Revision { kind, author: "A".into(), date: String::new(), move_name: Some("m".into()) };
+        s.doc.revisions = vec![rev(RevisionKind::Delete), rev(RevisionKind::Insert)];
+        let from = CharProps { del: Some(0), ..Default::default() };
+        let to = CharProps { ins: Some(1), ..Default::default() };
+        let bold = CharProps { bold: Some(true), ..Default::default() };
+        let italic = CharProps { italic: Some(true), ..Default::default() };
+        // The destination: two paragraphs, its first mark moved in.
+        let mut d0 = Paragraph::with_text("Moved", CharProps { bold: Some(true), ..to.clone() });
+        d0.mark = to.clone();
+        let mut d1 = Paragraph::with_text("Here ", CharProps { italic: Some(true), ..Default::default() });
+        d1.insert_text(d1.len(), "end", &CharProps::default()).unwrap();
+        // The source: the same text moved out, its first mark with it.
+        let mut s0 = Paragraph::with_text("Moved", CharProps { bold: Some(true), ..from.clone() });
+        s0.insert_text(0, "Keep ", &bold).unwrap();
+        s0.mark = from.clone();
+        let mut s1 = Paragraph::with_text("Tail ", italic.clone());
+        s1.insert_text(s1.len(), "plain", &CharProps::default()).unwrap();
+        s.doc.body = vec![para_block(d0), para_block(d1), para_block(s0), para_block(s1)];
+        s.sel = crate::Selection::caret(Pos { story: StoryRef::Body, path: Path::top(0), off: 2 });
+        run(&mut s, if accept { "review.accept" } else { "review.reject" }, json!({}));
+        let paras: Vec<(String, Vec<(usize, usize, Option<bool>, Option<bool>)>)> = (0..s.doc.body.len())
+            .map(|i| {
+                let p = s.doc.para(StoryRef::Body, &Path::top(i)).unwrap();
+                assert!(p.mark.ins.is_none() && p.mark.del.is_none(), "{accept}: mark {i}");
+                assert!(p.runs.iter().all(|r| r.props.ins.is_none() && r.props.del.is_none()), "{accept}: runs of {i}");
+                (p.text.clone(), p.run_ranges().map(|(r, c)| (r.start, r.end, c.bold, c.italic)).collect())
+            })
+            .collect();
+        // Accepting keeps the destination's mark and joins the source's first paragraph to the
+        // next; rejecting joins the destination's first paragraph instead and keeps the source.
+        let want: Vec<(String, Vec<(usize, usize, Option<bool>, Option<bool>)>)> = if accept {
+            vec![
+                ("Moved".into(), vec![(0, 5, Some(true), None)]),
+                ("Here end".into(), vec![(0, 5, None, Some(true)), (5, 8, None, None)]),
+                ("Keep Tail plain".into(), vec![(0, 5, Some(true), None), (5, 10, None, Some(true)), (10, 15, None, None)]),
+            ]
+        } else {
+            vec![
+                ("Here end".into(), vec![(0, 5, None, Some(true)), (5, 8, None, None)]),
+                ("Keep Moved".into(), vec![(0, 10, Some(true), None)]),
+                ("Tail plain".into(), vec![(0, 5, None, Some(true)), (5, 10, None, None)]),
+            ]
+        };
+        assert_eq!(paras, want, "{accept}");
+    }
+}

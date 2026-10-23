@@ -217,6 +217,94 @@ pub fn remove_empty_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc:
     Ok(true)
 }
 
+/// Remove the paragraph marks of the paragraphs at `gone` (in `story`, any order) all at once,
+/// as [`join_next_para`] (after [`remove_empty_para`] when `drop_empty`) on each of them from the
+/// last to the first would, but rebuilding each container in one pass: joining one at a time
+/// re-copies the growing joined tail for every mark (#3658). A run of removed marks becomes one
+/// paragraph with the first kept paragraph's properties and mark formatting and the last one's
+/// mark revisions and section break; in the body's top level, the section breaks in between join
+/// the following section, elsewhere they go with their marks (as in `delete_range`).
+pub fn join_paras(s: &mut Session, story: StoryRef, gone: &[wordcraft_doc::Path], drop_empty: bool) -> Result<(), CmdError> {
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::Arc;
+    use wordcraft_doc::{Block, Paragraph, para_block};
+    let mut groups: BTreeMap<Vec<u32>, (wordcraft_doc::Path, BTreeSet<usize>)> = BTreeMap::new();
+    for p in gone {
+        groups.entry(p.parent().to_vec()).or_insert_with(|| (p.clone(), BTreeSet::new())).1.insert(p.last());
+    }
+    let mut groups: Vec<_> = groups.into_values().collect();
+    // Innermost containers first: rebuilding one moves no block of the containers around it.
+    groups.sort_by_key(|(p, _)| std::cmp::Reverse(p.0.len()));
+    for (sample, marks) in groups {
+        let top = story == StoryRef::Body && sample.0.len() == 1;
+        // Section breaks joined into a paragraph: its new index and the breaks, nearest first.
+        let mut joined_sections = Vec::new();
+        let bl = s.doc.container_mut(story, &sample)?;
+        let old = std::mem::take(bl);
+        let is_para: Vec<bool> = old.iter().map(|b| matches!(&**b, Block::Para(_))).collect();
+        let mut out = Vec::with_capacity(old.len());
+        // The paragraphs of the current run of removed marks, in order.
+        let mut chain: Vec<Paragraph> = Vec::new();
+        for (i, b) in old.into_iter().enumerate() {
+            // A mark goes only when a paragraph follows it in the container.
+            let joins = marks.contains(&i) && is_para.get(i) == Some(&true) && is_para.get(i + 1) == Some(&true);
+            if chain.is_empty() && !joins {
+                out.push(b);
+                continue;
+            }
+            // Here `b` is a paragraph: either its own mark goes or the previous one's did.
+            let p = match Arc::try_unwrap(b).unwrap_or_else(|a| (*a).clone()) {
+                Block::Para(p) => p,
+                other => {
+                    debug_assert!(false, "a joined paragraph mark is followed by a table");
+                    out.extend(chain.drain(..).map(para_block));
+                    out.push(Arc::new(other));
+                    continue;
+                }
+            };
+            if joins {
+                chain.push(p);
+                continue;
+            }
+            // `p` ends the run: its mark stays.
+            let mut tail = p;
+            // Empty paragraphs without a section break go whole, so the next keeps its own
+            // properties.
+            let mut kept = chain.drain(..).filter(|p| !(drop_empty && p.is_empty() && p.section.is_none()));
+            let Some(mut head) = kept.next() else {
+                out.push(para_block(tail));
+                continue;
+            };
+            let mut breaks: Vec<_> = head.section.take().into_iter().collect();
+            let mut rest: Vec<Paragraph> = kept.collect();
+            for p in &mut rest {
+                breaks.extend(p.section.take());
+            }
+            let sect = tail.section.take();
+            let revs = (tail.mark.ins, tail.mark.del);
+            rest.push(tail);
+            head.append_all(rest);
+            head.section = sect;
+            (head.mark.ins, head.mark.del) = revs;
+            if top && !breaks.is_empty() {
+                breaks.reverse();
+                joined_sections.push((out.len(), breaks));
+            }
+            out.push(para_block(head));
+        }
+        // Never reached (a run ends at a paragraph whose mark stays), but nothing is dropped.
+        out.extend(chain.into_iter().map(para_block));
+        *bl = out;
+        // Last first, as joining from the last mark absorbs them.
+        for (i, breaks) in joined_sections.into_iter().rev() {
+            for b in &breaks {
+                s.doc.section_mut(i).absorb(b);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Tracked deletion: own insertions are removed, other text is marked deleted.
 pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
     let rid = new_revision(s, RevisionKind::Delete);
