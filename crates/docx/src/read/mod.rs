@@ -1005,10 +1005,17 @@ impl Reader<'_> {
                     st.priority = prio_of(e);
                 }
             }
-            let gallery: Vec<(String, Option<u32>)> = exceptions
+            // Each built-in style: the latent defaults, overridden by its own exception if any.
+            let builtin = StyleSheet::builtin();
+            let gallery: Vec<(String, Option<u32>)> = builtin
+                .styles
                 .iter()
-                .filter(|e| on(e, "w:qFormat", quick) && !on(e, "w:semiHidden", hidden))
-                .filter_map(|e| Some((e.attr("w:name")?.to_string(), prio_of(e))))
+                .filter(|b| b.kind != StyleKind::Table)
+                .filter_map(|b| {
+                    let e = exceptions.iter().find(|e| e.attr("w:name").is_some_and(|n| n.eq_ignore_ascii_case(&b.name)));
+                    let shown = e.map_or(quick, |e| on(e, "w:qFormat", quick)) && !e.map_or(hidden, |e| on(e, "w:semiHidden", hidden));
+                    shown.then(|| (b.name.clone(), e.map_or(priority, |e| prio_of(e))))
+                })
                 .collect();
             sheet.add_latent_gallery(&gallery);
         }

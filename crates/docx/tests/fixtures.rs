@@ -671,6 +671,37 @@ fn latent_quick_styles_fill_the_gallery() {
     assert_eq!(d.styles.styles.iter().filter(|s| s.name == "Title").count(), 1, "no second Title");
 }
 
+/// #3909: the latent defaults count for every built-in style the file has no exception for:
+/// with `w:defQFormat="1"` the built-ins are quick unless an exception says otherwise, and with
+/// `w:defSemiHidden="1"` only those an exception shows are in the gallery.
+#[test]
+fn latent_defaults_apply_to_styles_without_an_exception() {
+    let gallery = |latent: &str| {
+        let styles = format!(
+            r#"<w:styles {W_NS}>{latent}<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style></w:styles>"#
+        );
+        let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+        let d = wordcraft_docx::read(&bytes).unwrap();
+        d.styles.gallery().iter().map(|s| s.name.clone()).collect::<Vec<_>>()
+    };
+    // Quick by default; Title says it isn't.
+    let names = gallery(
+        r#"<w:latentStyles w:defQFormat="1" w:defSemiHidden="0" w:defUIPriority="99"><w:lsdException w:name="Title" w:qFormat="0"/></w:latentStyles>"#,
+    );
+    for n in ["Normal", "Heading 1", "Subtitle", "Quote", "Strong"] {
+        assert!(names.iter().any(|x| x == n), "{n} in {names:?}");
+    }
+    assert!(!names.iter().any(|x| x == "Title"), "{names:?}");
+    // Quick but hidden by default; only Heading 1 is shown.
+    let names = gallery(
+        r#"<w:latentStyles w:defQFormat="1" w:defSemiHidden="1"><w:lsdException w:name="heading 1" w:semiHidden="0" w:uiPriority="9"/></w:latentStyles>"#,
+    );
+    // Neither has a priority here, so only which styles count, not their order.
+    let mut names = names;
+    names.sort();
+    assert_eq!(names, ["Heading 1", "Normal"]);
+}
+
 /// Word starts every note with a `w:footnoteRef` / `w:endnoteRef` mark: the note's own number.
 /// It reads as a reference to the note itself, so the note text shows its number.
 #[test]
