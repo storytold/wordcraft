@@ -22,7 +22,8 @@
 //!   `c'è un problema`); `ce lo`, `ce la`, `ce ne` and `ce l'ho` are left alone.
 //! - **`ha`, `ho`, `hanno`**: the verb without its `h` before a past participle, after a subject
 //!   or clitic pronoun (`lui a detto` → `lui ha detto`, `io o capito` → `io ho capito`, `loro
-//!   anno fatto` → `loro hanno fatto`).
+//!   anno fatto` → `loro hanno fatto`). Participles of verbs that take `essere` (`andato`,
+//!   `rimasto`) and capitalised words (`chi a Prato`) are left alone.
 //! - **`miei`, `tuoi`, `suoi`**: after a masculine plural article, and `mie`, `tue`, `sue` after
 //!   a feminine one (`i mie amici` → `i miei amici`, `le tuoi cose` → `le tue cose`).
 //!
@@ -354,12 +355,40 @@ const AVERE_SUBJECTS: &[(&str, &str, &[&str])] = &[
 /// Irregular past participles common after `ha` (the regular ones end in `-ato`, `-uto`, `-ito`).
 const IRREGULAR_PARTICIPLES: &[&str] = &[
     "detto", "fatto", "scritto", "preso", "messo", "visto", "letto", "chiesto", "risposto", "aperto", "chiuso", "vinto", "perso", "corso", "rotto",
-    "speso", "deciso", "acceso", "spento", "offerto", "sofferto", "scelto", "tolto", "rimasto", "detta", "fatta", "scritta", "presa", "messa",
-    "vista",
+    "speso", "deciso", "acceso", "spento", "offerto", "sofferto", "scelto", "tolto", "detta", "fatta", "scritta", "presa", "messa", "vista",
 ];
 
-/// Is `w` (lower case) a past participle, as far as its form tells?
+/// Regular participles of verbs that take `essere`: `io o andato` needs `sono`, not `ho`.
+const ESSERE_PARTICIPLES: &[&str] = &[
+    "andato",
+    "venuto",
+    "partito",
+    "arrivato",
+    "uscito",
+    "entrato",
+    "tornato",
+    "stato",
+    "nato",
+    "caduto",
+    "diventato",
+    "divenuto",
+    "riuscito",
+    "piaciuto",
+    "sembrato",
+    "costato",
+    "bastato",
+];
+
+/// Is `w` a past participle taken by `avere`, as far as its form tells? A capitalised word is a
+/// name (`Prato`), not a participle.
 fn past_participle(w: &str) -> bool {
+    if !w.chars().all(char::is_lowercase) {
+        return false;
+    }
+    let masculine = w.strip_suffix('a').map_or_else(|| w.to_string(), |stem| format!("{stem}o"));
+    if ESSERE_PARTICIPLES.contains(&masculine.as_str()) {
+        return false;
+    }
     (w.chars().count() >= 4 && ["ato", "uto", "ito", "ata", "uta", "ita"].iter().any(|e| w.ends_with(e))) || IRREGULAR_PARTICIPLES.contains(&w)
 }
 
@@ -378,12 +407,13 @@ fn ce_e(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
 }
 
 /// `lui a detto` → `lui ha detto`: `a`, `o`, `anno` between a pronoun and a past participle.
+/// `non anno passato` may be the noun phrase.
 fn avere_without_h(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
     for triple in ws.windows(3) {
         let [(a0, b0), (a1, b1), (a2, b2)] = triple else { continue };
         let (Some(w0), Some(w1), Some(w2)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*a2..*b2)) else { continue };
         let (Some(g0), Some(g1)) = (text.get(*b0..*a1), text.get(*b1..*a2)) else { continue };
-        if g0 != " " || g1 != " " || !past_participle(&w2.to_lowercase()) || (w1 == "anno" && w2 == "passato") {
+        if g0 != " " || g1 != " " || !past_participle(w2) || (w0.to_lowercase() == "non" && w1 == "anno" && w2 == "passato") {
             continue;
         }
         for (bare, verb, subjects) in AVERE_SUBJECTS {
@@ -566,6 +596,7 @@ mod tests {
         assert_eq!(fixes("Non a capito"), [pair("a", "ha")]);
         assert_eq!(fixes("Io o mangiato"), [pair("o", "ho")]);
         assert_eq!(fixes("Loro anno finito"), [pair("anno", "hanno")]);
+        assert_eq!(fixes("Loro anno passato l'esame"), [pair("anno", "hanno")]);
         for ok in [
             "Lui ha detto di no",
             "Vado a Roma",
@@ -576,6 +607,10 @@ mod tests {
             "Non anno passato",
             "A detta di tutti",
             "Lei va a mangiare",
+            "Lui a rimasto",
+            "Io o andato",
+            "Lei a stata",
+            "Chi a Prato organizza l'evento?",
         ] {
             assert!(fixes(ok).is_empty(), "{ok}: {:?}", fixes(ok));
         }
