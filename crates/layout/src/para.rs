@@ -34,7 +34,7 @@ use chars::{MISSING_ROMAN_FONT, lookup_family};
 pub(crate) use chars::{caps_char, push_caps};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
-pub use grid::{Exclusion, Grid, is_east_asian};
+pub use grid::{Exclusion, Grid, east_asian, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
