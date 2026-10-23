@@ -44,7 +44,10 @@
 //! [`check_text`] checks a paragraph whose runs are in different languages.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-pub mod affix;
+/// The affix engine, from the shared `craft-proof` crate.
+pub use craft_proof::affix;
+#[cfg(test)]
+pub(crate) mod affix_fixtures;
 pub mod bg;
 pub mod cs;
 pub mod dict;

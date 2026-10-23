@@ -9,6 +9,10 @@ description = "WordCraft proofing per language: spelling, suggestions, grammar c
 workspace = true
 
 [dependencies]
+# Hunspell affix dictionaries, installed-dictionary discovery and language tags, shared with
+# the other Craft apps (storytold/craft-libs#30). Pinned to the commit of storytold/craft-libs#31
+# until it merges.
+craft-proof = { git = "https://github.com/brzuchal/craft-libs", rev = "a3d4d487b6b717305085f65a235c973de8c15d59" }
 log = { workspace = true }
 miniz_oxide = "0.8"
 
