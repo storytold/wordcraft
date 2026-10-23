@@ -1785,28 +1785,64 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
-            // Indents in the File › Options unit.
+            // Indents in the File › Options unit. Not `clamp_existing_to_range`: egui would clamp
+            // a document's value outside the range (a −1000 pt indent) and report it as a change,
+            // rewriting the paragraph unasked.
             let u = crate::options::unit();
             let k = u.pt_per_unit();
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
             ui.label(egui::RichText::new(tl!("Left:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut l)
+                        .speed(3.6 / k)
+                        .range(-792.0 / k..=1584.0 / k)
+                        .clamp_existing_to_range(false)
+                        .measure(u)
+                        .max_decimals(2),
+                )
+                .changed()
+            {
                 let _ = app.run("para.indents", json!({"left": l * k}));
             }
             spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).clamp_existing_to_range(false).suffix(format!(" {}", tl!("pt"))),
+                )
+                .changed()
+            {
                 let _ = app.run("para.spacing", json!({"before": b}));
             }
             ui.end_row();
             let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
             ui.label(egui::RichText::new(tl!("Right:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut r)
+                        .speed(3.6 / k)
+                        .range(-792.0 / k..=1584.0 / k)
+                        .clamp_existing_to_range(false)
+                        .measure(u)
+                        .max_decimals(2),
+                )
+                .changed()
+            {
                 let _ = app.run("para.indents", json!({"right": r * k}));
             }
             spaced(ui, egui::RichText::new(tl!("After:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).clamp_existing_to_range(false).suffix(format!(" {}", tl!("pt"))),
+                )
+                .changed()
+            {
                 let _ = app.run("para.spacing", json!({"after": a}));
             }
             ui.end_row();
@@ -3079,6 +3115,36 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
 mod tests {
     use super::*;
     use wordcraft_engine::Session;
+
+    /// #3943: showing Layout leaves a paragraph alone when its indents or spacing lie outside the
+    /// Paragraph group's fields' ranges (indents from -792 pt, spacing up to 1584 pt): egui clamps
+    /// such a value by default and reports it as a change, which the fields would apply.
+    #[test]
+    fn layout_leaves_out_of_range_indents_and_spacing_alone() {
+        let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        a.run("para.indents", json!({"left": -1000.0, "right": -1200.0})).unwrap();
+        // Spacing past 1584 pt comes only from a file (`para.spacing` caps it), so set it directly.
+        let (story, path) = (a.session.sel.focus.story, a.session.sel.focus.path.clone());
+        let props = &mut a.session.doc.para_mut(story, &path).unwrap().props;
+        props.space_before = Some(2000.0);
+        props.space_after = Some(3000.0);
+        a.run("ui.tab", json!({"tab": "Layout"})).unwrap();
+        let (doc, undo) = (a.session.doc.clone(), a.session.undo_depth());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(6);
+        let p = &h.state().session.doc.para(story, &path).unwrap().props;
+        assert_eq!((p.indent_left, p.indent_right), (Some(-1000.0), Some(-1200.0)), "indents shown, not rewritten");
+        assert_eq!((p.space_before, p.space_after), (Some(2000.0), Some(3000.0)), "spacing shown, not rewritten");
+        assert!(h.state().session.doc == doc, "the document untouched");
+        assert_eq!(h.state().session.undo_depth(), undo, "no undo step");
+    }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
     #[test]
