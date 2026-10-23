@@ -8358,6 +8358,53 @@ fn a_frame_inside_a_text_box_flows_with_its_text() {
     assert!(commissioner > secretary + 5.0, "the text after them follows: {commissioner} vs {secretary}");
 }
 
+/// Paragraphs that share a text frame's placement are one frame: Word stacks them, one under
+/// the other, inside it. WordCraft placed each of them at the frame's own offset, so the
+/// paragraphs of a letterhead's signature block were all drawn on top of each other.
+#[test]
+fn paragraphs_sharing_a_text_frame_stack_inside_it() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::new();
+    // A letterhead's signature block: four paragraphs in one frame, at the page's left.
+    let frame = TextFrame { x: 12.45, y: 108.25, h_anchor: "page".into(), v_anchor: "page".into(), wrap: "notBeside".into(), ..Default::default() };
+    let para = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        wordcraft_doc::para_block(p)
+    };
+    d.body = vec![para("CHARLES D. BAKER"), para("Governor"), para("KARYN E. POLITO"), para("Lieutenant Governor")];
+    let l = lay(&d);
+    let top = |i: usize| l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: 0 }).unwrap().top;
+    let (baker, governor, polito, lt) = (top(0), top(1), top(2), top(3));
+    assert!(governor > baker + 1.0, "the second paragraph goes under the first: {governor} vs {baker}");
+    assert!(polito > governor + 1.0, "the third goes under the second: {polito} vs {governor}");
+    assert!(lt > polito + 1.0, "the fourth goes under the third: {lt} vs {polito}");
+}
+
+/// The same, in a table cell: a letterhead's signature block is a one-cell table whose
+/// paragraphs each carry the same frame. Word stacks them inside the frame; WordCraft placed
+/// every one of them at the frame's own offset, so they were all drawn over each other.
+#[test]
+fn paragraphs_sharing_a_text_frame_in_a_cell_stack_inside_it() {
+    use wordcraft_doc::props::TextFrame;
+    let mut d = Document::new();
+    let frame = TextFrame { x: 12.45, y: 108.25, h_anchor: "page".into(), v_anchor: "page".into(), wrap: "notBeside".into(), ..Default::default() };
+    let para = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.frame = Some(frame.clone());
+        wordcraft_doc::para_block(p)
+    };
+    let mut t = Table::new(1, 1, 176.0);
+    t.rows[0].cells[0].blocks = vec![para("CHARLES D. BAKER"), para("Governor"), para("KARYN E. POLITO"), para("Lieutenant Governor")];
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let top = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, i]), off: 0 }).unwrap().top;
+    let (baker, governor, polito, lt) = (top(0), top(1), top(2), top(3));
+    assert!(governor > baker + 1.0, "the second paragraph goes under the first: {governor} vs {baker}");
+    assert!(polito > governor + 1.0, "the third goes under the second: {polito} vs {governor}");
+    assert!(lt > polito + 1.0, "the fourth goes under the third: {lt} vs {polito}");
+}
+
 /// Where a list paragraph's text starts when its style has indents of its own (measured in Word,
 /// `plan/word` R16): the list level's indents go on top of the most derived style that gives the
 /// list, so that style's own indent (and those of styles based on it) win, its base styles' don't
@@ -11653,36 +11700,7 @@ fn layout_cache_invalidates_on_changed_filepath() {
     let l_b = layout(&doc, &mut cache, &opts_b);
     let text_b = shown(&l_b);
     assert_eq!(text_b, "/path/two/a.docx", "second layout with same cache shows /path/two/a.docx");
-/// Paragraphs that share a text frame's placement are one frame: Word stacks them, one under
-/// the other, inside it. WordCraft placed each of them at the frame's own offset, so the
-/// paragraphs of a letterhead's signature block were all drawn on top of each other.
-#[test]
-fn paragraphs_sharing_a_text_frame_stack_inside_it() {
-    use wordcraft_doc::props::TextFrame;
-    let mut d = Document::new();
-    // A letterhead's signature block: four paragraphs in one frame, at the page's left.
-    let frame = TextFrame {
-        x: 12.45,
-        y: 108.25,
-        h_anchor: "page".into(),
-        v_anchor: "page".into(),
-        wrap: "notBeside".into(),
-        ..Default::default()
-    };
-    let para = |text: &str| {
-        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
-        p.props.frame = Some(frame.clone());
-        wordcraft_doc::para_block(p)
-    };
-    d.body = vec![para("CHARLES D. BAKER"), para("Governor"), para("KARYN E. POLITO"), para("Lieutenant Governor")];
-    let l = lay(&d);
-    let top = |i: usize| l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: 0 }).unwrap().top;
-    let (baker, governor, polito, lt) = (top(0), top(1), top(2), top(3));
-    assert!(governor > baker + 1.0, "the second paragraph goes under the first: {governor} vs {baker}");
-    assert!(polito > governor + 1.0, "the third goes under the second: {polito} vs {governor}");
-    assert!(lt > polito + 1.0, "the fourth goes under the third: {lt} vs {polito}");
 }
-
 
 /// Keep with next takes the same 0.01 pt of slack as the other fit checks: a kept paragraph and
 /// the next one's first line that fill the page to within it stay on the page.
@@ -11936,26 +11954,14 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
 fn paragraphs_sharing_a_text_frame_in_a_cell_stack_inside_it() {
     use wordcraft_doc::props::TextFrame;
     let mut d = Document::new();
-    let frame = TextFrame {
-        x: 12.45,
-        y: 108.25,
-        h_anchor: "page".into(),
-        v_anchor: "page".into(),
-        wrap: "notBeside".into(),
-        ..Default::default()
-    };
+    let frame = TextFrame { x: 12.45, y: 108.25, h_anchor: "page".into(), v_anchor: "page".into(), wrap: "notBeside".into(), ..Default::default() };
     let para = |text: &str| {
         let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
         p.props.frame = Some(frame.clone());
         wordcraft_doc::para_block(p)
     };
     let mut t = Table::new(1, 1, 176.0);
-    t.rows[0].cells[0].blocks = vec![
-        para("CHARLES D. BAKER"),
-        para("Governor"),
-        para("KARYN E. POLITO"),
-        para("Lieutenant Governor"),
-    ];
+    t.rows[0].cells[0].blocks = vec![para("CHARLES D. BAKER"), para("Governor"), para("KARYN E. POLITO"), para("Lieutenant Governor")];
     d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
     let l = lay(&d);
     let top = |i: u32| l.caret(&Pos { story: StoryRef::Body, path: Path(vec![0, 0, 0, i]), off: 0 }).unwrap().top;
@@ -11963,6 +11969,4 @@ fn paragraphs_sharing_a_text_frame_in_a_cell_stack_inside_it() {
     assert!(governor > baker + 1.0, "the second paragraph goes under the first: {governor} vs {baker}");
     assert!(polito > governor + 1.0, "the third goes under the second: {polito} vs {governor}");
     assert!(lt > polito + 1.0, "the fourth goes under the third: {lt} vs {polito}");
-
-
-
+}

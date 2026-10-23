@@ -1043,7 +1043,7 @@ fn layout_box(
                         _ => y,
                     };
                     let r = float_rect(frame, (0.0, width), at, fw, h, &float);
-                    push_para(&mut items, story, &path, &pf, 0, pf.lines.len(), r.x, r.y, fw);
+                    push_para(&mut items, story, &path, &pf, 0, pf.lines.len(), r.x, r.y, fw, Edges::own(&pf, 0, pf.lines.len()));
                     frame_run = Some((key, r.y + h));
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
