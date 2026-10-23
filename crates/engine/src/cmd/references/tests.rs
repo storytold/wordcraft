@@ -210,6 +210,42 @@ fn doc_with_header_fields() -> (wordcraft_doc::Document, u32) {
     (doc, hdr)
 }
 
+/// #3651: one Update Fields pass shares one cell budget across all its table formulas, so
+/// many fields each reading a large range can't add up to an unbounded amount of work.
+#[test]
+fn update_fields_shares_one_formula_budget() {
+    use wordcraft_doc::{CharProps, Paragraph};
+    let mut t = wordcraft_doc::Table::new(201, 50, 468.0);
+    for row in t.rows.iter_mut().take(200) {
+        for cell in row.cells.iter_mut() {
+            *cell = wordcraft_doc::Cell::with_text("1");
+        }
+    }
+    for cell in t.rows[200].cells.iter_mut() {
+        let mut p = Paragraph::new();
+        let field = InlineObject::Field {
+            instr: "=SUM(A1:AX200)".into(),
+            result: "stale".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object(0, field, &CharProps::default()).unwrap();
+        cell.blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    let mut doc = wordcraft_doc::Document::new();
+    doc.body.insert(0, std::sync::Arc::new(wordcraft_doc::Block::Table(t)));
+    let mut s = Session::new(doc);
+    s.run("references.updateFields", &json!({})).unwrap();
+    let results: Vec<String> = story_fields(&s, StoryRef::Body).into_iter().map(|(_, r)| r).collect();
+    assert_eq!(results.len(), 50);
+    // Each field reads 10,000 cells, plus 101 more looking for the language to show its
+    // result in: nine fit in the shared 100,000-cell budget.
+    assert!(results[..9].iter().all(|r| r == "10000"), "{results:?}");
+    assert!(results[9..].iter().all(|r| r == "!Formula too complex"), "{results:?}");
+}
+
 fn story_fields(s: &Session, story: StoryRef) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for path in s.doc.para_paths(story) {

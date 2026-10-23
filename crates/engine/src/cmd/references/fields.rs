@@ -344,6 +344,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     // REF before the SET shows the last value set, as Word's bookmark does after an update.
     let last_set = set_values(s, &paths);
     let mut set: std::collections::HashMap<String, String> = Default::default();
+    // Every table formula in this pass reads cells against one shared budget.
+    let formula_budget = crate::cmd::table_formula::FormulaBudget::new();
     for (story, path) in paths {
         let Some(p) = s.doc.para(story, &path) else { continue };
         if !p.objects.iter().any(|o| matches!(o, InlineObject::Field { .. })) {
@@ -358,7 +360,15 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     && let Some(t) = s.doc.table(StoryRef::Body, &tp)
                 {
                     let default_lang = crate::cmd::default_lang(s);
-                    let text = match crate::cmd::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
+                    let text = match crate::cmd::table_formula::evaluate_field_budgeted(
+                        t,
+                        Some(&s.doc),
+                        default_lang.as_deref(),
+                        r,
+                        c,
+                        instr,
+                        &formula_budget,
+                    ) {
                         Ok(text) => text,
                         Err(e) => format!("!{e}"),
                     };
