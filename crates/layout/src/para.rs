@@ -35,7 +35,7 @@ pub(crate) use chars::{caps_char, push_caps};
 pub use chars::{draws_something, east_asian_substitute_face, reported_font_name, substitute_face};
 #[cfg(test)]
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
-pub use grid::{Exclusion, Grid, is_east_asian};
+pub use grid::{Exclusion, Grid, east_asian, is_east_asian};
 #[cfg(test)]
 use lines::break_lines;
 pub(crate) use lines::takes_room;
