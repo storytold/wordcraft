@@ -2030,6 +2030,7 @@ preview	Title	Örnek
 	Expand	Genişlet
 	Scale Drawing	Çizimi Ölçeklendir
 	Canvas Member	Tuval Öğesi
+	Select Canvas Member	Tuval Öğesini Seç
 	Choose the sheet that holds the recipients.	Alıcıları içeren sayfayı seçin.
 	First row of data contains column headers	Verinin ilk satırı sütun başlıklarını içerir
 	Communication	İletişim
@@ -2808,6 +2809,7 @@ preview	Title	Örnek
 	the Spike is empty	biriktirici boş
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	Word mürekkebi içeren bir grubun grubu henüz çözülemez
+	a shape inside a drawing canvas is placed by the canvas	çizim tuvalindeki bir şekli tuval yerleştirir
 	drop caps can't go in a table	tabloya büyük başlangıç harfi konamaz
 	the document is protected	belge korumalı
 	Open a document first	Önce bir belge açın

@@ -311,6 +311,7 @@
 	Can't be deleted	Ne može se izbrisati
 	Cancel	Odustani
 	Canvas Member	Član platna
+	Select Canvas Member	Odaberi člana platna
 	Capitalize Each Word	Svaka riječ velikim početnim slovom
 	Capitalize first letter of sentences	Veliko početno slovo rečenica
 	Capitalize first letter of table cells	Veliko početno slovo u ćelijama tablice
@@ -2810,6 +2811,7 @@ preview	Title	Naslov
 	the Spike is empty	skupljač je prazan
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	skupina s Wordovom tintom još se ne može razgrupirati
+	a shape inside a drawing canvas is placed by the canvas	oblik unutar platna za crtanje postavlja platno
 	drop caps can't go in a table	početno slovo ne može ići u tablicu
 	the document is protected	dokument je zaštićen
 	Open a document first	Prvo otvorite dokument

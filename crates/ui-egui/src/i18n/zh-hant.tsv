@@ -1668,6 +1668,7 @@
 	Expand	擴展
 	Scale Drawing	縮放繪圖
 	Canvas Member	畫布成員
+	Select Canvas Member	選取畫布成員
 	Arrows	箭頭
 	Communication	通訊
 	Office	辦公
@@ -2410,6 +2411,7 @@
 	the Spike is empty	收集區是空的
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	包含 Word 筆跡的群組暫時無法取消群組
+	a shape inside a drawing canvas is placed by the canvas	繪圖畫布中的圖形由畫布定位
 	drop caps can't go in a table	首字放大不能放在表格中
 	the document is protected	文件受保護
 	the paragraph is empty	段落是空的

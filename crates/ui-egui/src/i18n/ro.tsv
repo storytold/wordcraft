@@ -332,6 +332,7 @@
 	Can't be deleted	Nu poate fi șters
 	Cancel	Anulare
 	Canvas Member	Membru al canvasului
+	Select Canvas Member	Selectare membru al canvasului
 	Capitalize Each Word	Fiecare cuvânt cu majusculă
 	Capitalize first letter of sentences	Prima literă a propozițiilor cu majusculă
 	Capitalize first letter of table cells	Prima literă a celulelor din tabel cu majusculă
@@ -2776,6 +2777,7 @@ template	Letter	Scrisoare
 	a drawing canvas can't be ungrouped	un panou de desen nu poate fi degrupat
 	a drawing canvas can't go inside a text box	un panou de desen nu poate intra într-o casetă de text
 	a group holding Word ink can't be ungrouped yet	un grup cu cerneală Word nu poate fi încă degrupat
+	a shape inside a drawing canvas is placed by the canvas	o formă dintr-un canvas de desen este poziționată de canvas
 	charts and diagrams can't be moved or resized yet	diagramele și graficele nu pot fi încă mutate sau redimensionate
 	drop caps can't go in a table	o inițială decorativă nu poate intra într-un tabel
 	leave the equation first	ieșiți mai întâi din ecuație

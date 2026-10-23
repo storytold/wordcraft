@@ -1503,6 +1503,7 @@
 	Expand	Разширяване
 	Scale Drawing	Мащабиране на рисунката
 	Canvas Member	Елемент на платното
+	Select Canvas Member	Избиране на елемент на платното
 	Arrows	Стрелки
 	Communication	Комуникация
 	Office	Офис
@@ -2800,6 +2801,7 @@
 	the Spike is empty	натрупването е празно
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	група с мастило от Word още не може да се разгрупира
+	a shape inside a drawing canvas is placed by the canvas	фигура в платно за рисуване се позиционира от платното
 	drop caps can't go in a table	буквицата не може да се постави в таблица
 	the document is protected	документът е защитен
 	Open a document first	Първо отворете документ

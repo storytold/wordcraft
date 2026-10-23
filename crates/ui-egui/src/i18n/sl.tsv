@@ -327,6 +327,7 @@
 	can't split at the first row	tabele ni mogoče razdeliti pri prvi vrstici
 	Cancel	Prekliči
 	Canvas Member	Element platna
+	Select Canvas Member	Izberi element platna
 	Capitalize Each Word	Vsaka Beseda Z Veliko Začetnico
 	Capitalize first letter of sentences	Prva črka stavka velika
 	Capitalize first letter of table cells	Prva črka v celicah tabele velika
@@ -2777,6 +2778,7 @@ preview	Title	Naslov
 	a drawing canvas can't be ungrouped	risalnega platna ni mogoče razdružiti
 	a drawing canvas can't go inside a text box	risalnega platna ni mogoče postaviti v besedilno polje
 	a group holding Word ink can't be ungrouped yet	skupine s Wordovim črnilom še ni mogoče razdružiti
+	a shape inside a drawing canvas is placed by the canvas	obliko v risalnem platnu postavi platno
 	charts and diagrams can't be moved or resized yet	grafikonov in diagramov še ni mogoče premikati ali spreminjati njihove velikosti
 	drop caps can't go in a table	začetnice ni mogoče postaviti v tabelo
 	leave the equation first	najprej zapustite enačbo

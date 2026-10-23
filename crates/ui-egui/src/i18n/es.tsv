@@ -1707,6 +1707,7 @@
 	Expand	Expandir
 	Scale Drawing	Escalar dibujo
 	Canvas Member	Elemento del lienzo
+	Select Canvas Member	Seleccionar elemento del lienzo
 	Arrows	Flechas
 	Communication	Comunicación
 	Office	Oficina
@@ -2771,6 +2772,7 @@ preview	Title	Título
 	the Spike is empty	el acumulador está vacío
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	un grupo con tinta de Word aún no se puede desagrupar
+	a shape inside a drawing canvas is placed by the canvas	una forma dentro de un lienzo de dibujo la coloca el lienzo
 	drop caps can't go in a table	no se puede poner una letra capital en una tabla
 	the document is protected	el documento está protegido
 	the paragraph is empty	el párrafo está vacío

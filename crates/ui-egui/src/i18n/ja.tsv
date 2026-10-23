@@ -1667,6 +1667,7 @@
 	Expand	拡大
 	Scale Drawing	描画の拡大縮小
 	Canvas Member	キャンバス内の図形
+	Select Canvas Member	キャンバス内の図形の選択
 	Arrows	矢印
 	Communication	コミュニケーション
 	Office	オフィス
@@ -2409,6 +2410,7 @@
 	the Spike is empty	スパイクは空です
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	Word のインクを含むグループはまだグループ解除できません
+	a shape inside a drawing canvas is placed by the canvas	描画キャンバス内の図形はキャンバスによって配置されます
 	drop caps can't go in a table	ドロップキャップは表の中に入れられません
 	the document is protected	文書は保護されています
 	the paragraph is empty	段落が空です

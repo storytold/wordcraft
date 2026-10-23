@@ -1644,6 +1644,7 @@
 	Expand	확장
 	Scale Drawing	그리기 크기 조정
 	Canvas Member	캔버스 구성원
+	Select Canvas Member	캔버스 구성원 선택
 	Arrows	화살표
 	Communication	통신
 	Office	사무실
@@ -2660,6 +2661,7 @@ preview	Title	제목
 	the Spike is empty	스파이크가 비어 있습니다
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	Word 잉크가 들어 있는 그룹은 아직 그룹 해제할 수 없습니다
+	a shape inside a drawing canvas is placed by the canvas	그리기 캔버스 안의 도형은 캔버스가 배치합니다
 	drop caps can't go in a table	표 안에는 첫 글자 장식을 넣을 수 없습니다
 	the document is protected	문서가 보호되어 있습니다
 	the paragraph is empty	단락이 비어 있습니다

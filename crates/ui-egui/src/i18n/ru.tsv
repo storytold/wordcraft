@@ -2022,6 +2022,7 @@ preview	Title	Пример
 	Expand	Расширить
 	Scale Drawing	Масштабировать рисунок
 	Canvas Member	Элемент полотна
+	Select Canvas Member	Выделить элемент полотна
 	Choose the sheet that holds the recipients.	Выберите лист с получателями.
 	First row of data contains column headers	Первая строка данных содержит заголовки столбцов
 	Communication	Связь
@@ -2809,6 +2810,7 @@ preview	Title	Пример
 	the Spike is empty	копилка пуста
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	группу с рукописным вводом Word пока нельзя разгруппировать
+	a shape inside a drawing canvas is placed by the canvas	фигуру внутри полотна для рисования размещает полотно
 	drop caps can't go in a table	буквицу нельзя поместить в таблицу
 	the document is protected	документ защищён
 	Open a document first	Сначала откройте документ

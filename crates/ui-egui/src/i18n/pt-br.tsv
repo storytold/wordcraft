@@ -1679,6 +1679,7 @@
 	Expand	Expandir
 	Scale Drawing	Dimensionar desenho
 	Canvas Member	Item da tela
+	Select Canvas Member	Selecionar item da tela
 	Arrows	Setas
 	Communication	Comunicação
 	Office	Escritório
@@ -2421,6 +2422,7 @@
 	the Spike is empty	o coletor está vazio
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	um grupo com tinta do Word ainda não pode ser desagrupado
+	a shape inside a drawing canvas is placed by the canvas	uma forma dentro de uma tela de desenho é posicionada pela tela
 	drop caps can't go in a table	não é possível colocar capitular em uma tabela
 	the document is protected	o documento está protegido
 	the paragraph is empty	o parágrafo está vazio

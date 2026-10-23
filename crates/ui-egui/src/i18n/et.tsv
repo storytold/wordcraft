@@ -1630,6 +1630,7 @@
 	Expand	Laienda
 	Scale Drawing	Muuda joonise mõõtkava
 	Canvas Member	Lõuendi element
+	Select Canvas Member	Vali lõuendi element
 	Arrows	Nooled
 	Communication	Suhtlus
 	Office	Kontor
@@ -2443,6 +2444,7 @@
 	the Spike is empty	koguja on tühi
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	Wordi tindiga rühma ei saa veel lahutada
+	a shape inside a drawing canvas is placed by the canvas	joonistuslõuendi sees oleva kujundi paigutab lõuend
 	drop caps can't go in a table	tabelisse ei saa lisada hiidtähte
 	the document is protected	dokument on kaitstud
 	the paragraph is empty	lõik on tühi

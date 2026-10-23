@@ -1396,6 +1396,7 @@
 	Both Sides	Beide zijden
 	Break Link	Link verbreken
 	Canvas Member	Canvasobject
+	Select Canvas Member	Canvasobject selecteren
 	Choose the sheet that holds the recipients.	Kies het werkblad met de geadresseerden.
 	Circle	Cirkel
 	Click the empty text box the text should continue in (Esc cancels)	Klik op het lege tekstvak waarin de tekst verdergaat (Esc annuleert)
@@ -2683,6 +2684,7 @@ preview	Title	Titel
 	a drawing canvas can't be ungrouped	de groepering van een tekenvlak kan niet worden opgeheven
 	a drawing canvas can't go inside a text box	een tekenvlak kan niet in een tekstvak
 	a group holding Word ink can't be ungrouped yet	een groep met Word-inkt kan nog niet worden opgeheven
+	a shape inside a drawing canvas is placed by the canvas	een vorm in een tekencanvas wordt door het canvas geplaatst
 	charts and diagrams can't be moved or resized yet	grafieken en diagrammen kunnen nog niet worden verplaatst of van grootte veranderd
 	drop caps can't go in a table	een initiaal kan niet in een tabel
 	leave the equation first	verlaat eerst de vergelijking

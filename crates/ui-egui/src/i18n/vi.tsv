@@ -1491,6 +1491,7 @@
 	Expand	Mở rộng
 	Scale Drawing	Tỉ lệ bản vẽ
 	Canvas Member	Thành phần khung vẽ
+	Select Canvas Member	Chọn thành phần khung vẽ
 	Arrows	Mũi tên
 	Communication	Liên lạc
 	Office	Văn phòng
@@ -2850,6 +2851,7 @@ template	Letter	Thư
 	the Spike is empty	bộ gom đang trống
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	chưa thể tách nhóm chứa mực Word
+	a shape inside a drawing canvas is placed by the canvas	hình dạng bên trong khung vẽ do khung vẽ định vị
 	drop caps can't go in a table	không thể đặt chữ cái lớn đầu đoạn trong bảng
 	the document is protected	tài liệu đang được bảo vệ
 	Open a document first	Hãy mở một tài liệu trước

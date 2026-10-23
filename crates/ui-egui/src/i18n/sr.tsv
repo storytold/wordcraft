@@ -1681,6 +1681,7 @@
 	Expand	Прошири
 	Scale Drawing	Скалирај цртеж
 	Canvas Member	Члан платна
+	Select Canvas Member	Изабери члана платна
 	Arrows	Стрелице
 	Communication	Комуникација
 	Office	Канцеларија
@@ -2423,6 +2424,7 @@
 	the Spike is empty	сакупљач је празан
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	група са Word мастилом још не може да се разгрупише
+	a shape inside a drawing canvas is placed by the canvas	облик унутар платна за цртање поставља платно
 	drop caps can't go in a table	почетно слово не може у табелу
 	the document is protected	документ је заштићен
 	the paragraph is empty	пасус је празан

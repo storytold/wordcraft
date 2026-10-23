@@ -1679,6 +1679,7 @@
 	Expand	Розширити
 	Scale Drawing	Масштабувати малюнок
 	Canvas Member	Об’єкт полотна
+	Select Canvas Member	Виділити об’єкт полотна
 	Arrows	Стрілки
 	Communication	Спілкування
 	Office	Офіс
@@ -2421,6 +2422,7 @@
 	the Spike is empty	накопичувач порожній
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	групу з рукописним введенням Word поки не можна розгрупувати
+	a shape inside a drawing canvas is placed by the canvas	фігуру в полотні малювання розміщує полотно
 	drop caps can't go in a table	буквицю не можна помістити в таблицю
 	the document is protected	документ захищено
 	the paragraph is empty	абзац порожній

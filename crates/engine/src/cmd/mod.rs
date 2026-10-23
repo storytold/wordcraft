@@ -150,11 +150,16 @@ pub fn selected_paths(s: &Session) -> Vec<wordcraft_doc::Path> {
     s.doc.para_paths_in(&a, &b)
 }
 
-/// Delete the selection (respecting track changes); returns the collapsed position.
+/// Delete the selection (respecting track changes); returns the collapsed position. With a
+/// Drawing Canvas member picked (#2637) the selection is the whole canvas, which a command that
+/// replaces the selection (Insert › Table, Equation, Symbol, Field…) would take away: refused.
 pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
     let (a, b) = s.sel.ordered();
     if a == b {
         return Ok(a);
+    }
+    if canvas::selected_member(s).is_some() {
+        return Err(CmdError::Disabled("a shape inside a drawing canvas is selected".into()));
     }
     controls::check_delete(s, &a, &b)?;
     let at = if s.doc.settings.track_changes { track_delete(s, &a, &b)? } else { s.doc.delete_range(&a, &b)? };

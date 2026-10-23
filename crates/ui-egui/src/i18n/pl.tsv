@@ -1447,6 +1447,7 @@
 	Both Sides	Obie strony
 	Break Link	Przerwij łącze
 	Canvas Member	Element kanwy
+	Select Canvas Member	Zaznacz element kanwy
 	Choose the sheet that holds the recipients.	Wybierz arkusz zawierający adresatów.
 	Circle	Okrąg
 	Click the empty text box the text should continue in (Esc cancels)	Kliknij puste pole tekstowe, w którym ma być kontynuowany tekst (Esc anuluje)
@@ -2831,6 +2832,7 @@ preview	Title	Tytuł
 	the Spike is empty	zbieracz jest pusty
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	grupy z atramentem programu Word nie można jeszcze rozgrupować
+	a shape inside a drawing canvas is placed by the canvas	kształt wewnątrz kanwy rysunku jest umieszczany przez kanwę
 	drop caps can't go in a table	inicjału nie można umieścić w tabeli
 	the document is protected	dokument jest chroniony
 	Open a document first	Najpierw otwórz dokument

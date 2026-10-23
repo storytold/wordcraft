@@ -19,6 +19,11 @@
 //!
 //! A selected connector shows a handle at each end instead of a frame: dragging one onto a shape
 //! glues it to the nearest connection site there (`shape.connect`), elsewhere leaves it free.
+//!
+//! Inside a Drawing Canvas, a press on a member picks that member (`select.member`, #2637): it
+//! gets the frame and handles, inside the canvas's frame, and is dragged, resized and turned on
+//! its own; a press in a text box member's text puts the caret there. The canvas itself is
+//! picked where no member is.
 
 use egui::{Color32, Painter, Pos2, Rect, Ui};
 use serde_json::json;
@@ -126,12 +131,83 @@ fn active_story(app: &WordApp, layout: &DocLayout) -> StoryRef {
 /// and deleted, not moved or resized (they aren't written back on save yet), so they get no
 /// handles, no move cursor and no drag.
 fn fixed(app: &WordApp, hit: &ObjectHit) -> bool {
-    let pos = hit.pos();
-    matches!(app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)), Some(InlineObject::Graphic { .. }))
+    matches!(hit_object(app, hit), Some(InlineObject::Graphic { .. }))
 }
 
-/// The story of the selected text box.
+/// The object a hit is: the object at its position, or the canvas member it names.
+fn hit_object<'a>(app: &'a WordApp, hit: &ObjectHit) -> Option<&'a InlineObject> {
+    let pos = hit.pos();
+    let o = app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off))?;
+    match (hit.member, o) {
+        (None, _) => Some(o),
+        (Some(i), InlineObject::Group { children, canvas: Some(_), .. }) => children.get(i).map(|c| &c.obj),
+        _ => None,
+    }
+}
+
+/// Member `index` of the canvas laid out at `canvas`, as a hit of its own: its frame where the
+/// canvas draws it, its own turn. `None` when it isn't drawn, or the canvas is turned (its
+/// members aren't picked on their own yet).
+fn member_hit(app: &WordApp, canvas: &ObjectHit, index: usize) -> Option<ObjectHit> {
+    let (o, r) = (pickable_canvas(app, canvas)?, canvas.rect);
+    let (_, frame) = o.member_rects(r.x, r.y, r.w, r.h).into_iter().find(|(i, _)| *i == index)?;
+    member_with_frame(app, canvas, o, index, frame)
+}
+
+/// The canvas object of hit `canvas` when its members can be picked: a canvas, hit as a whole,
+/// not turned.
+fn pickable_canvas<'a>(app: &'a WordApp, canvas: &ObjectHit) -> Option<&'a InlineObject> {
+    let pos = canvas.pos();
+    let o = app.session.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).filter(|o| o.is_canvas())?;
+    (canvas.member.is_none() && canvas.spin.is_identity()).then_some(o)
+}
+
+/// [`member_hit`] for member `index` of canvas `o`, whose frame on the page (`[x, y, w, h]`) is
+/// already worked out.
+fn member_with_frame(app: &WordApp, canvas: &ObjectHit, o: &InlineObject, index: usize, [x, y, w, h]: [f32; 4]) -> Option<ObjectHit> {
+    let InlineObject::Group { children, .. } = o else { return None };
+    let member = children.get(index).filter(|c| wordcraft_engine::cmd::canvas::pickable(c))?;
+    let text_box = match &member.obj {
+        InlineObject::Shape { story: Some(id), .. } if app.session.doc.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox) => Some(*id),
+        _ => None,
+    };
+    Some(ObjectHit {
+        rect: wordcraft_geom::Rect::new(x, y, w, h),
+        spin: member.obj.frame().map(|(_, _, f)| f.spin()).unwrap_or_default(),
+        text_box,
+        // Placed by the canvas, not the text: dragging any handle may move its top-left.
+        wrap: Wrap::InFrontOfText,
+        member: Some(index),
+        ..canvas.clone()
+    })
+}
+
+/// The member of the canvas hit `canvas` under the page point (x, y), topmost first; a text box
+/// member is grabbed anywhere on it too (inside, [`in_text`] tells its text from its border).
+/// The members' frames are worked out once for all of them.
+fn member_at(app: &WordApp, canvas: &ObjectHit, x: f32, y: f32, edge: f32) -> Option<ObjectHit> {
+    let (o, r) = (pickable_canvas(app, canvas)?, canvas.rect);
+    // Members are drawn clipped to the canvas: only what shows is grabbed.
+    if !r.contains(wordcraft_geom::Point::new(x, y)) {
+        return None;
+    }
+    o.member_rects(r.x, r.y, r.w, r.h)
+        .into_iter()
+        .rev()
+        .filter_map(|(i, frame)| member_with_frame(app, canvas, o, i, frame))
+        .find(|m| m.rect.expand(edge).contains(m.unspin(x, y)))
+}
+
+/// Whether the page point (x, y) is in a text box member's text rather than on its border.
+fn in_text(m: &ObjectHit, x: f32, y: f32, edge: f32) -> bool {
+    m.text_box.is_some() && m.rect.w.min(m.rect.h) > edge * 3.0 && m.rect.expand(-edge).contains(m.unspin(x, y))
+}
+
+/// The story of the selected text box (a picked canvas member too).
 fn selected_text_box(app: &WordApp) -> Option<u32> {
+    if let Some((_, _, InlineObject::Shape { story: Some(id), .. })) = wordcraft_engine::cmd::canvas::selected_member(&app.session) {
+        return app.session.doc.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox).then_some(*id);
+    }
     match selected(app)? {
         (_, InlineObject::Shape { story: Some(id), .. }) if app.session.doc.parts.get(id).is_some_and(|p| p.kind == PartKind::TextBox) => Some(*id),
         _ => None,
@@ -142,7 +218,11 @@ fn selected_text_box(app: &WordApp) -> Option<u32> {
 pub fn active(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, bool)> {
     let hint = app.session.page_hint;
     if let Some((pos, _)) = selected(app) {
-        return layout.object(&pos, hint).map(|o| (o, false));
+        let canvas = layout.object(&pos, hint)?;
+        if let Some((_, i, _)) = wordcraft_engine::cmd::canvas::selected_member(&app.session) {
+            return member_hit(app, &canvas, i).or(Some(canvas)).map(|o| (o, false));
+        }
+        return Some((canvas, false));
     }
     match app.session.sel.focus.story {
         StoryRef::Part(id) if crate::canvas::in_text_box(app) => layout.text_box(id, hint).map(|o| (o, true)),
@@ -200,7 +280,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
         }
         if ui.input(|i| i.pointer.primary_down()) {
             let shift = ui.input(|i| i.modifiers.shift);
-            d.copy = ui.input(|i| i.modifiers.command) && d.drag.grab == Grab::Move;
+            d.copy = ui.input(|i| i.modifiers.command) && d.drag.grab == Grab::Move && d.object.member.is_none();
             if d.drag.grab == Grab::Rotate {
                 d.drag.turn_to(at, pages, scale, shift);
             } else {
@@ -212,7 +292,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
                 if d.drag.grab == Grab::Move && d.drag.moved && !d.object.floating() {
                     // An inline one lands in the text: the insertion cursor follows the pointer.
                     d.drop_at = drop_point(app, layout, pages, scale, at, &d);
-                } else if d.drag.grab == Grab::Move && d.drag.moved && app.ui.alignment_guides && !ui.input(|i| i.modifiers.alt) {
+                } else if d.drag.grab == Grab::Move
+                    && d.drag.moved
+                    && d.object.member.is_none()
+                    && app.ui.alignment_guides
+                    && !ui.input(|i| i.modifiers.alt)
+                {
                     snap_move(layout, &mut d, scale);
                 }
             }
@@ -260,6 +345,17 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     }
     // Shift/Ctrl+click adds an object to the selected ones (or takes it out), for Group.
     let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
+    if let Some(index) = object.member.filter(|_| pressed && !adding) {
+        return press_member(app, layout, pages, scale, at, object, index, grab);
+    }
+    // Adding to the selection takes the whole canvas.
+    let object = match object.member {
+        Some(_) => match layout.object(&object.pos(), object.page) {
+            Some(o) => o,
+            None => return false,
+        },
+        None => object,
+    };
     // Ctrl on the object that is already selected starts a copy-drag instead.
     let again = selected(app).is_some_and(|(p, _)| p == object.pos());
     if pressed && adding && grab == Grab::Move && selected(app).is_some() && !(again && !ui.input(|i| i.modifiers.shift)) {
@@ -313,13 +409,54 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     true
 }
 
+/// A press on member `index` of a canvas (`object` is the member's hit): in a text box member's
+/// text it puts the caret there; elsewhere it picks the member (selecting its canvas first) and
+/// starts dragging it, or the handle `grab`.
+#[allow(clippy::too_many_arguments)]
+fn press_member(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2, object: ObjectHit, index: usize, grab: Grab) -> bool {
+    let edge = EDGE / scale.max(0.01);
+    if grab == Grab::Move
+        && let (Some(id), Some((page, x, y))) = (object.text_box, crate::canvas::page_at(pages, layout, scale, at))
+        && in_text(&object, x, y, edge)
+    {
+        // A box linked from another shows (and edits) that box's story.
+        let id = app.session.doc.text_box_chain(id).and_then(|c| c.first().copied()).unwrap_or(id);
+        if let Some(pos) = layout.hit(page, x, y, StoryRef::Part(id)) {
+            let _ = app.run("caret.set", json!({"pos": pos}));
+        }
+        return true;
+    }
+    let pos = object.pos();
+    let end = Pos { off: pos.off + OBJ.len_utf8(), ..pos.clone() };
+    let _ = app.run("select.range", json!({"anchor": pos, "focus": end}));
+    if app.run("select.member", json!({"index": index})).is_err() {
+        return true;
+    }
+    let Some(o) = hit_object(app, &object) else { return true };
+    let (min, picture) = (wordcraft_engine::cmd::objects::min_size(o), matches!(o, InlineObject::Image { .. }));
+    app.canvas.obj_drag = Some(ObjectDrag {
+        drag: Drag::new(grab, object.page, object.rect, object.spin.deg, at),
+        object,
+        min,
+        picture,
+        pending_behind: false,
+        end: None,
+        guides: Vec::new(),
+        preview: None,
+        copy: false,
+        drop_at: None,
+    });
+    true
+}
+
 /// The object a move has taken off its page (which page, and where it is in the document): the
 /// page is rendered again without it while the preview follows the pointer, so the object is not
 /// left behind where it was. Only for a move — resizing and turning show the object itself, and
-/// dragging a connector's end onto a shape still shows that connector.
+/// dragging a connector's end onto a shape still shows that connector. Nor for a member of a
+/// drawing canvas: its position is the canvas's, and the canvas stays.
 pub(crate) fn dragged_off_page(drag: Option<&ObjectDrag>) -> Option<(usize, Pos)> {
     let d = drag?;
-    if !d.drag.moved || d.end.is_some() || d.drag.grab != Grab::Move {
+    if !d.drag.moved || d.end.is_some() || d.drag.grab != Grab::Move || d.object.member.is_some() {
         return None;
     }
     Some((d.object.page, d.object.pos()))
@@ -452,15 +589,18 @@ fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Po
             return selected_picture;
         }
         // Selectable: body objects (table cells too) or the header/footer's own objects;
-        // notes' objects aren't yet.
-        layout.object_at_in(page, x, y, EDGE / scale.max(0.01), story).map(|o| (o, Grab::Move))
+        // notes' objects aren't yet. Inside a canvas, the member there.
+        let edge = EDGE / scale.max(0.01);
+        let o = layout.object_at_in(page, x, y, edge, story)?;
+        Some((member_at(app, &o, x, y, edge).unwrap_or(o), Grab::Move))
     })
 }
 
 /// Objects that can be dragged to a new place: those in the own paragraphs of the body or of a
 /// header/footer.
 fn movable(app: &WordApp, o: &ObjectHit) -> bool {
-    o.path.depth() == 0 && selectable_story(app, o.story)
+    // A canvas member moves inside its canvas, wherever the canvas is.
+    (o.member.is_some() || o.path.depth() == 0) && selectable_story(app, o.story)
 }
 
 /// Whether a Behind Text object of this kind is grabbed by pressing its body. Pictures, shapes and
@@ -505,7 +645,7 @@ fn shows_pixels(d: &ObjectDrag) -> bool {
 /// `o` drawn alone over its rotated bounds, as a texture, at the canvas's `scale` (screen points
 /// per page point).
 fn preview(app: &WordApp, ctx: &egui::Context, layout: &DocLayout, o: &ObjectHit, scale: f32) -> Option<egui::TextureHandle> {
-    let obj = app.session.doc.para_at(&o.pos()).and_then(|p| p.object_at(o.off))?;
+    let obj = hit_object(app, o)?;
     let page = layout.pages.get(o.page)?;
     let mut opts = crate::canvas::screen_render_options();
     opts.dark = app.session.view.dark_mode;
@@ -621,6 +761,13 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     if let Some((o, editing)) = active(app, layout)
         && let Some(f) = screen(pages, scale, o.page, o.rect)
     {
+        // A picked canvas member: the canvas's frame around it, without handles.
+        if o.member.is_some()
+            && let Some(c) = layout.object(&o.pos(), o.page)
+            && let Some(cf) = screen(pages, scale, c.page, c.rect)
+        {
+            frame::paint(painter, t, cf, c.spin.deg, false, false, false);
+        }
         // Handles where it can be resized and turned (body and header/footer objects,
         // not charts): else a plain frame.
         let handles = selectable_story(app, o.story) && !fixed(app, &o);
@@ -693,7 +840,18 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
     if connector_end_at(app, layout, pages, scale, at).is_some() {
         return Some(egui::CursorIcon::Crosshair);
     }
-    grab_at(app, layout, pages, scale, at).map(|(o, g)| if fixed(app, &o) { egui::CursorIcon::Default } else { g.cursor() })
+    let in_member_text = |o: &ObjectHit| {
+        crate::canvas::page_at(pages, layout, scale, at).is_some_and(|(_, x, y)| o.member.is_some() && in_text(o, x, y, EDGE / scale.max(0.01)))
+    };
+    grab_at(app, layout, pages, scale, at).map(|(o, g)| {
+        if fixed(app, &o) {
+            egui::CursorIcon::Default
+        } else if g == Grab::Move && in_member_text(&o) {
+            egui::CursorIcon::Text
+        } else {
+            g.cursor()
+        }
+    })
 }
 
 /// Keys for a selected object: arrows nudge a floating one; typing or Enter goes into a text box.
@@ -830,6 +988,100 @@ mod tests {
         assert!(guides.is_empty(), "{guides:?}");
         let r = shape(&mut h);
         assert!((r.x + r.w / 2.0 - centre - 1.5).abs() < 0.01, "{r:?}");
+    }
+    /// #2637: inside a Drawing Canvas the mouse works on the members, as in Word. A click on a
+    /// shape picks that shape (the canvas stays the selection in the text) and shows its frame;
+    /// dragging it moves it inside the canvas; a click in a text box member's text puts the
+    /// caret there. Before, the canvas took every click, as one static object.
+    #[test]
+    fn clicking_and_dragging_inside_a_canvas_works_on_its_members() {
+        use egui::{Event, PointerButton};
+        use wordcraft_engine::cmd::canvas::selected_member;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("insert.canvas", json!({"width": 400, "height": 300})).unwrap();
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 100, "height": 40})).unwrap();
+        a.run("canvas.member", json!({"index": 0, "x": 40, "y": 30})).unwrap();
+        a.run("insert.textBox", json!({"text": "Label"})).unwrap();
+        a.run("select.objects", json!({"index": 0})).unwrap();
+        a.run("canvas.member", json!({"index": 1, "x": 200, "y": 100, "width": 150, "height": 80})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let frame = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).expect("the canvas is laid out").rect;
+        let at = |h: &mut egui_kittest::Harness<'_, WordApp>, x: f32, y: f32| {
+            crate::canvas::page_to_screen(h.state_mut(), 0, frame.x + x, frame.y + y).unwrap()
+        };
+        let button =
+            |at: Pos2, pressed: bool| Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        let members = |h: &egui_kittest::Harness<'_, WordApp>| match h
+            .state()
+            .session
+            .doc
+            .body
+            .first()
+            .and_then(|b| b.as_para())
+            .and_then(|p| p.objects.first())
+        {
+            Some(InlineObject::Group { children, .. }) => children.iter().map(|c| (c.x, c.y)).collect::<Vec<_>>(),
+            o => panic!("{o:?}"),
+        };
+
+        // A click on the rectangle picks it.
+        let on_rect = at(&mut h, 90.0, 50.0);
+        h.event(Event::PointerMoved(on_rect));
+        h.event(button(on_rect, true));
+        h.step();
+        h.event(button(on_rect, false));
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(selected_member(&h.state().session).map(|(_, i, _)| i), Some(0), "the rectangle is picked, not the whole canvas");
+        let shown = {
+            let app = h.state_mut();
+            let layout = app.session.layout();
+            active(app, &layout).map(|(o, _)| (o.member, o.rect))
+        };
+        assert_eq!(shown, Some((Some(0), wordcraft_geom::Rect::new(frame.x + 40.0, frame.y + 30.0, 100.0, 40.0))), "its frame is the one shown");
+
+        // Dragged 50 pt right and 20 pt down, it moves inside the canvas; the canvas stays put.
+        let to = at(&mut h, 140.0, 70.0);
+        h.event(Event::PointerMoved(on_rect));
+        h.event(button(on_rect, true));
+        h.step();
+        for p in [on_rect + egui::vec2(0.0, 30.0), to + egui::vec2(0.0, 30.0), to] {
+            h.event(Event::PointerMoved(p));
+            h.step();
+        }
+        h.event(button(to, false));
+        for _ in 0..3 {
+            h.step();
+        }
+        let moved = members(&h);
+        let near = |(x, y): (f32, f32), (ex, ey): (f32, f32)| (x - ex).abs() < 0.01 && (y - ey).abs() < 0.01;
+        assert!(near(moved[0], (90.0, 50.0)) && near(moved[1], (200.0, 100.0)), "{moved:?}");
+        assert_eq!(h.state_mut().session.layout().object(&Pos::body(0, 0), 0).map(|o| o.rect), Some(frame));
+
+        // A click in the text box's text puts the caret in it.
+        let in_box = at(&mut h, 275.0, 140.0);
+        h.event(Event::PointerMoved(in_box));
+        h.event(button(in_box, true));
+        h.step();
+        h.event(button(in_box, false));
+        for _ in 0..3 {
+            h.step();
+        }
+        let story = h.state().session.sel.focus.story;
+        let is_box = matches!(story, StoryRef::Part(id) if h.state().session.doc.parts.get(&id).is_some_and(|p| p.kind == PartKind::TextBox));
+        assert!(is_box, "the caret is in the text box's text: {story:?}");
     }
     /// #1738: a floating shape dragged from page 1 onto page 2 leaves the view where it is, even
     /// though the command that drops it (`arrange.bounds`) is not a view command.

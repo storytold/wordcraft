@@ -1829,6 +1829,7 @@
 	Expand	Rozšířit
 	Scale Drawing	Škálovat kresbu
 	Canvas Member	Prvek plátna
+	Select Canvas Member	Vybrat prvek plátna
 	Arrows	Šipky
 	Communication	Komunikace
 	Office	Kancelář
@@ -2802,6 +2803,7 @@ preview	Title	Ukázka
 	the Spike is empty	sběrač je prázdný
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	skupinu s rukopisem z Wordu zatím nelze zrušit
+	a shape inside a drawing canvas is placed by the canvas	tvar uvnitř kreslicího plátna umisťuje plátno
 	drop caps can't go in a table	iniciálu nelze vložit do tabulky
 	the document is protected	dokument je chráněný
 	Open a document first	Nejprve otevřete dokument

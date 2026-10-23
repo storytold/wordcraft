@@ -498,6 +498,10 @@ pub struct Session {
     /// More pictures and shapes selected along with the one the selection holds (Shift+click),
     /// for Group. Cleared by any edit or selection change other than adding to it.
     pub also_selected: Vec<Pos>,
+    /// The member of the selected Drawing Canvas picked on its own (#2637), which Shape Format,
+    /// Delete, Copy and the frame act on; see [`crate::cmd::canvas::selected_member`]. Cleared by
+    /// any selection change, caret movement or undo.
+    pub member: Option<crate::cmd::canvas::CanvasMember>,
     /// Column (block) selection, if one was made (see [`Session::column_segments`]).
     pub column: Option<ColumnBlock>,
     /// Column selection mode (Ctrl+Shift+F8): caret movement extends the block.
@@ -726,6 +730,7 @@ impl Session {
             math_latex: false,
             math_normal_text: false,
             also_selected: Vec::new(),
+            member: None,
             prefs: Prefs::default(),
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),
@@ -1230,6 +1235,7 @@ impl Session {
         self.pending = None;
         self.typing = None;
         self.also_selected.clear();
+        self.member = None;
         self.column = None;
         self.column_mode = false;
         self.widened = None;
@@ -1329,6 +1335,7 @@ impl Session {
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
             also_selected: _,
+            member: _,
             // Column selection and a widened selection's ends, like `sel`'s shape: valid only while
             // `sel` matches them.
             column: _,
@@ -1367,6 +1374,7 @@ impl Session {
         self.doc = doc;
         self.sel = sel;
         self.also_selected.clear();
+        self.member = None;
         self.history.truncate(history_len);
         self.redo = redo;
         self.typing_open = typing_open;
@@ -1515,7 +1523,10 @@ impl Session {
         let default_language_before = self.prefs.default_language.clone();
         let run = spec.run;
         let mutates = spec.mutates;
-        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| match crate::cmd::canvas::member_command(self, id, params) {
+            Some(r) => r,
+            None => crate::cmd::column::dispatch(self, id, mutates, run, params),
+        }));
         let mut result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -1565,6 +1576,15 @@ impl Session {
                 if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != sel_before)
                 {
                     self.also_selected.clear();
+                }
+                // A canvas member stays picked while its canvas does and nothing else is selected.
+                if id != "select.member"
+                    && (self.sel != sel_before
+                        || id.starts_with("select.")
+                        || id.starts_with("caret.")
+                        || matches!(id, "edit.undo" | "edit.undoTo" | "edit.redo"))
+                {
+                    self.member = None;
                 }
                 self.note_typing(id, before_doc.as_ref().map(|b| &b.0), &sel_before);
             }

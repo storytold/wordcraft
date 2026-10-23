@@ -1571,6 +1571,7 @@
 	Expand	Étendre
 	Scale Drawing	Mettre le dessin à l’échelle
 	Canvas Member	Élément de la zone de dessin
+	Select Canvas Member	Sélectionner l'élément de la zone de dessin
 	Arrows	Flèches
 	Communication	Communication
 	Office	Bureau
@@ -2817,6 +2818,7 @@ template	Letter	Lettre
 	the Spike is empty	le pique-notes est vide
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	un groupe contenant de l'encre Word ne peut pas encore être dissocié
+	a shape inside a drawing canvas is placed by the canvas	une forme dans une zone de dessin est placée par la zone de dessin
 	drop caps can't go in a table	une lettrine ne peut pas aller dans un tableau
 	the document is protected	le document est protégé
 	the paragraph is empty	le paragraphe est vide

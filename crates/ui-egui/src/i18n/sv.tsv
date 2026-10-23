@@ -1687,6 +1687,7 @@
 	Expand	Expandera
 	Scale Drawing	Skala ritningen
 	Canvas Member	Del av ritytan
+	Select Canvas Member	Markera del av ritytan
 	Arrows	Pilar
 	Communication	Kommunikation
 	Office	Kontor
@@ -2838,6 +2839,7 @@ template	Letter	Brev
 	the Spike is empty	samlaren är tom
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	en grupp med Word-bläck kan inte avgrupperas än
+	a shape inside a drawing canvas is placed by the canvas	en form i en rityta placeras av ritytan
 	drop caps can't go in a table	en anfang kan inte läggas i en tabell
 	the document is protected	dokumentet är skyddat
 	Open a document first	Öppna först ett dokument

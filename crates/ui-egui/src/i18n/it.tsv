@@ -1730,6 +1730,7 @@
 	Expand	Espandi
 	Scale Drawing	Ridimensiona disegno
 	Canvas Member	Elemento dell'area di disegno
+	Select Canvas Member	Seleziona elemento dell'area di disegno
 	Templates	Modelli
 	Templates and Add-ins	Modelli e componenti aggiuntivi
 	Attach Template	Collega modello
@@ -2835,6 +2836,7 @@ template	Letter	Lettera
 	the Spike is empty	il raccoglitore è vuoto
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	un gruppo con inchiostro di Word non può ancora essere separato
+	a shape inside a drawing canvas is placed by the canvas	una forma dentro un'area di disegno è posizionata dall'area di disegno
 	drop caps can't go in a table	un capolettera non può stare in una tabella
 	the document is protected	il documento è protetto
 	Open a document first	Aprire prima un documento

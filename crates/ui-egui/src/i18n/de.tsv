@@ -1664,6 +1664,7 @@
 	Expand	Erweitern
 	Scale Drawing	Zeichnung skalieren
 	Canvas Member	Element der Zeichenfläche
+	Select Canvas Member	Element der Zeichenfläche auswählen
 	Arrows	Pfeile
 	Communication	Kommunikation
 	Office	Büro
@@ -2408,6 +2409,7 @@
 	the Spike is empty	die Sammlung ist leer
 # More reasons a ribbon control is off (#2678)
 	a group holding Word ink can't be ungrouped yet	eine Gruppe mit Word-Freihandtinte lässt sich noch nicht aufheben
+	a shape inside a drawing canvas is placed by the canvas	eine Form in einer Zeichenfläche wird von der Zeichenfläche platziert
 	drop caps can't go in a table	ein Initial passt nicht in eine Tabelle
 	the document is protected	das Dokument ist geschützt
 	the paragraph is empty	der Absatz ist leer
