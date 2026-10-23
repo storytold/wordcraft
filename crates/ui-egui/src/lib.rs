@@ -3468,6 +3468,31 @@ mod tests {
         assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
     }
 
+    /// The status bar's zoom slider stays put when the percentage gains a digit (99% → 100%), so
+    /// it doesn't move under the pointer while being dragged.
+    #[test]
+    fn zoom_slider_does_not_move_when_the_percentage_gains_a_digit() {
+        use egui_kittest::kittest::{Queryable, by};
+        let slider_at = |percent: f64| {
+            let mut a = app();
+            a.run("view.zoom", json!({"value": percent})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(4);
+            let sliders: Vec<egui::Rect> = h.query_all(by().role(egui::accesskit::Role::Slider)).map(|n| n.rect()).collect();
+            *sliders.iter().max_by(|a, b| a.min.y.total_cmp(&b.min.y)).expect("the status bar has a zoom slider")
+        };
+        let (narrow, wide) = (slider_at(99.0), slider_at(100.0));
+        assert_eq!(narrow.min.x, wide.min.x, "{narrow:?} vs {wide:?}");
+        assert_eq!(slider_at(10.0).min.x, slider_at(500.0).min.x);
+    }
+
     /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
     /// kept between runs; settings saved before it existed show the toolbar; it works with no
     /// document open, like the other interface settings.

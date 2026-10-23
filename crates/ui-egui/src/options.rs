@@ -471,12 +471,18 @@ fn accessibility(app: &mut WordApp, ui: &mut Ui) {
     animations_picker(app, ui);
     ui.add_space(8.0);
     section(ui, "Read Aloud");
-    let mut rate = app.session.read_aloud.rate();
+    let rate = app.session.read_aloud.rate();
     ui.horizontal(|ui| {
         ui.label(tl!("Speed"));
-        let r = ui.add(egui::Slider::new(&mut rate, MIN_RATE..=MAX_RATE).step_by(0.05).custom_formatter(|v, _| format!("{v:.2}×")));
+        let style = crate::widgets::slider_style(&crate::theme::Tokens::get(ui.ctx()));
+        let mut v = f64::from(rate);
+        let r = craft_ui::slider::Slider::new(&mut v, f64::from(MIN_RATE)..=f64::from(MAX_RATE), tl!("Speed"), &style)
+            .step(0.05)
+            .mark(1.0)
+            .editable(2, "×")
+            .show(ui);
         if r.changed() {
-            let _ = app.run("readAloud.speed", json!({"value": rate}));
+            let _ = app.run("readAloud.speed", json!({"value": v}));
         }
     });
     let mut skip = app.session.read_aloud.skip_citations;

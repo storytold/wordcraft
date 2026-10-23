@@ -889,7 +889,7 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d#d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d"
+source = "git+https://github.com/brzuchal/craft-libs?rev=58eb50f1673c1ae98badddc57d0eb53d9ac7136c#58eb50f1673c1ae98badddc57d0eb53d9ac7136c"
 dependencies = [
  "egui",
 ]

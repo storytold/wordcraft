@@ -2433,8 +2433,19 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             });
             // Logarithmic like the status bar slider, and wide enough to aim: the default 100 pt
             // linear slider jumped from 100% to 480% within a short drag (issue #67).
-            ui.spacing_mut().slider_width = 220.0;
-            ui.add(egui::Slider::new(percent, 10.0..=500.0).logarithmic(true).step_by(1.0).suffix("%"));
+            let style = crate::widgets::slider_style(&crate::theme::Tokens::get(ui.ctx()));
+            let mut v = f64::from(*percent);
+            if craft_ui::slider::Slider::new(&mut v, 10.0..=500.0, tl!("Zoom"), &style)
+                .width(220.0)
+                .scale(craft_ui::slider::Scale::Logarithmic)
+                .step(1.0)
+                .mark(100.0)
+                .editable(0, "%")
+                .show(ui)
+                .changed()
+            {
+                *percent = v as f32;
+            }
             let mut fit = None;
             ui.horizontal(|ui| {
                 if ui.button(tl!("Page width")).clicked() {

@@ -620,41 +620,20 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 let mut controls_left = f32::INFINITY;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing = vec2(4.0, 0.0);
+                    // Zoom: `−`, slider, `+` and the percentage, the shared Office-style zoom bar.
+                    // Reading zoom changes only reading presentation, never the normal view zoom.
                     let reading = app.session.view.read_mode;
-                    let z = (if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT } * 100.0).round();
-                    let ztxt = format!("{z}%");
-                    let zfont = TypeRung::Caption.regular();
-                    let ztrack = TypeRung::Caption.tracking();
-                    let zw = text_width(ui.painter(), &ztxt, &zfont, ztrack, t.text_dim);
-                    // A fixed width for three digits plus a small reserve, so the controls to the
-                    // left don't shift as the percentage gains or loses digits (#1975).
-                    let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
-                    let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
-                    paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
-                    if zresp.clicked() && !reading {
+                    let mut v = f64::from(if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT }) * 100.0;
+                    let style = crate::widgets::zoom_bar_style(&t);
+                    let labels = craft_ui::slider::ZoomBarLabels { zoom: tl!("Zoom"), zoom_in: tl!("Zoom In"), zoom_out: tl!("Zoom Out") };
+                    let range = if reading { 75.0..=150.0 } else { 10.0..=500.0 };
+                    let bar = craft_ui::slider::ZoomBar::new(&mut v, range, labels, &style).show(ui);
+                    if bar.percent_clicked && !reading {
                         let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
                     }
-                    if small_icon(ui, "plus", tl!("Zoom In")) {
-                        if reading {
-                            let _ = app.run("view.readTextSize", json!({"value": (z + 10.0).min(150.0)}));
-                        } else {
-                            let _ = app.run("view.zoomIn", json!({}));
-                        }
-                    }
-                    // Reading zoom changes only reading presentation, never the normal view zoom.
-                    let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                    let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
-                    ui.spacing_mut().slider_width = 110.0;
-                    if ui.add(slider).changed() {
+                    if bar.changed {
                         let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                        let _ = app.run(command, json!({"value": (v * 100.0).round()}));
-                    }
-                    if small_icon(ui, "minus", tl!("Zoom Out")) {
-                        if reading {
-                            let _ = app.run("view.readTextSize", json!({"value": (z - 10.0).max(75.0)}));
-                        } else {
-                            let _ = app.run("view.zoomOut", json!({}));
-                        }
+                        let _ = app.run(command, json!({"value": v.round()}));
                     }
                     ui.add_space(10.0);
                     let mode = app.session.view.mode;
@@ -723,16 +702,6 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-}
-
-fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
-    let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
-    if resp.hovered() {
-        ui.painter().rect_filled(r, 3.0, t.hover);
-    }
-    icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
-    resp.on_hover_text(tip).clicked()
 }
 
 impl WordApp {
