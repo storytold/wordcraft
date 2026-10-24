@@ -23,12 +23,45 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<Value>,
+    /// Shared with the waiter: whichever of "start" and "give up" happens first wins.
+    state: std::sync::Arc<std::sync::atomic::AtomicU8>,
+}
+
+const QUEUED: u8 = 0;
+const STARTED: u8 = 1;
+const CANCELLED: u8 = 2;
+
+/// The waiter's side of a [`ControlRequest`]: it gives up on a request that has not started.
+#[derive(Clone)]
+pub struct ControlWaiter(std::sync::Arc<std::sync::atomic::AtomicU8>);
+
+impl ControlWaiter {
+    /// Cancel the request. True when it had not started: it will never run. False when the UI
+    /// already started it: its outcome is unknown to the waiter.
+    pub fn cancel(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.0.compare_exchange(QUEUED, CANCELLED, SeqCst, SeqCst).is_ok()
+    }
 }
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>) {
+        let (req, rx, _) = Self::with_waiter(method, params);
+        (req, rx)
+    }
+
+    /// Like [`ControlRequest::new`], plus the handle the waiter uses to cancel a queued request.
+    pub fn with_waiter(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>, ControlWaiter) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        let state = std::sync::Arc::new(std::sync::atomic::AtomicU8::new(QUEUED));
+        (Self { method: method.into(), params, reply: tx, state: state.clone() }, rx, ControlWaiter(state))
+    }
+
+    /// The UI is about to run the request. False when the waiter already gave up on it: it
+    /// must not run.
+    pub fn start(&self) -> bool {
+        use std::sync::atomic::Ordering::SeqCst;
+        self.state.compare_exchange(QUEUED, STARTED, SeqCst, SeqCst).is_ok()
     }
 }
 

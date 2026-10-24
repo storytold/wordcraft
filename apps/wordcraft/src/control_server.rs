@@ -9,6 +9,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::time::{Duration, Instant};
 
@@ -20,6 +21,38 @@ const MAX_LINE: usize = 1 << 20;
 
 /// A connection that sends no authorised request in this time is closed.
 const FIRST_REQUEST: Duration = Duration::from_secs(30);
+
+/// How long a caller waits for the UI to answer a request. A request still queued after this
+/// is cancelled and never runs.
+const REPLY_WAIT: Duration = Duration::from_secs(60);
+
+/// Connections that have not yet sent an authorised request are limited to this many; more are
+/// closed at once. Each one holds a thread until its first request or [`FIRST_REQUEST`].
+const MAX_UNAUTHENTICATED: usize = 64;
+
+/// Counts one unauthenticated connection until it authenticates or ends.
+struct Admission(Option<Arc<AtomicUsize>>);
+
+impl Admission {
+    fn enter(count: &Arc<AtomicUsize>, max: usize) -> Option<Self> {
+        if count.fetch_add(1, Ordering::SeqCst) >= max {
+            count.fetch_sub(1, Ordering::SeqCst);
+            return None;
+        }
+        Some(Self(Some(count.clone())))
+    }
+    fn release(&mut self) {
+        if let Some(c) = self.0.take() {
+            c.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
 
 /// The key file of a running control server; [`KeyFile::remove`] it when the window closes.
 pub struct KeyFile(PathBuf);
@@ -104,14 +137,37 @@ fn keys_match(given: &str, key: &str) -> bool {
 }
 
 fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Duration) -> Receiver<ControlRequest> {
+    serve_with(listener, ctx, key, Limits { first, wait: REPLY_WAIT, max_unauthenticated: MAX_UNAUTHENTICATED })
+}
+
+/// The time and count budgets of a server (small ones in tests).
+#[derive(Clone, Copy)]
+struct Limits {
+    first: Duration,
+    wait: Duration,
+    max_unauthenticated: usize,
+}
+
+fn serve_with(listener: TcpListener, ctx: egui::Context, key: String, limits: Limits) -> Receiver<ControlRequest> {
     let (tx, rx) = channel::<ControlRequest>();
     let key: Arc<str> = key.into();
-    std::thread::spawn(move || {
+    let unauthenticated = Arc::new(AtomicUsize::new(0));
+    let accept = move || {
         for stream in listener.incoming().flatten() {
+            let Some(admission) = Admission::enter(&unauthenticated, limits.max_unauthenticated) else {
+                log::warn!("control server: too many unauthenticated connections, one closed");
+                continue;
+            };
             let (tx, ctx, key) = (tx.clone(), ctx.clone(), key.clone());
-            std::thread::spawn(move || serve(stream, tx, ctx, &key, first));
+            // A thread that cannot start closes this connection only (the guard releases its slot).
+            if let Err(e) = std::thread::Builder::new().name("control-conn".into()).spawn(move || serve(stream, tx, ctx, &key, limits, admission)) {
+                log::warn!("control server: no thread for a connection: {e}");
+            }
         }
-    });
+    };
+    if let Err(e) = std::thread::Builder::new().name("control-accept".into()).spawn(accept) {
+        log::error!("control server: cannot start the accept thread: {e}");
+    }
     rx
 }
 
@@ -175,11 +231,11 @@ fn discard_rest_of_line(r: &mut BufReader<Timed>) {
     }
 }
 
-fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key: &str, first: Duration) {
+fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key: &str, limits: Limits, mut admission: Admission) {
     let Ok(read) = stream.try_clone() else { return };
     let mut out = stream;
     // One overall deadline from accept to the first authorised request; after it, none.
-    let mut reader = BufReader::new(Timed { s: read, deadline: Some(Instant::now() + first) });
+    let mut reader = BufReader::new(Timed { s: read, deadline: Some(Instant::now() + limits.first) });
     let mut authorised = false;
     // The key an `auth` request gave this connection.
     let mut conn_key: Option<String> = None;
@@ -228,6 +284,7 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
         }
         if !authorised {
             authorised = true;
+            admission.release();
             reader.get_mut().set_deadline(None);
         }
         if method == "auth" {
@@ -237,12 +294,18 @@ fn serve(stream: TcpStream, tx: Sender<ControlRequest>, ctx: egui::Context, key:
             }
             continue;
         }
-        let (req, rrx) = ControlRequest::new(method, params);
+        let (req, rrx, waiter) = ControlRequest::with_waiter(method, params);
         if tx.send(req).is_err() {
             break;
         }
         ctx.request_repaint();
-        let r = rrx.recv_timeout(Duration::from_secs(60)).unwrap_or_else(|_| json!({"ok": false, "error": "timeout"}));
+        let r = rrx.recv_timeout(limits.wait).unwrap_or_else(|_| {
+            if waiter.cancel() {
+                json!({"ok": false, "error": "timeout before execution: the request was not run and never will be"})
+            } else {
+                json!({"ok": false, "error": "timeout: outcome unknown, the request had started when the wait ended; inspect the document to check"})
+            }
+        });
         if !reply(r) {
             break;
         }
@@ -531,5 +594,53 @@ mod tests {
             assert_eq!(std::fs::metadata(&p).unwrap().permissions().mode() & 0o777, 0o600);
         }
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    fn boot_limits(limits: Limits) -> (u16, Receiver<ControlRequest>) {
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        (port, serve_with(listener, egui::Context::default(), KEY.to_string(), limits))
+    }
+
+    fn small(wait_ms: u64, max_unauthenticated: usize) -> Limits {
+        Limits { first: FIRST_REQUEST, wait: Duration::from_millis(wait_ms), max_unauthenticated }
+    }
+
+    #[test]
+    fn a_request_that_timed_out_in_the_queue_never_runs() {
+        let (port, rx) = boot_limits(small(150, 8));
+        let mut c = Conn::open(port);
+        let r = c.call(&format!(r#"{{"id":1,"key":"{KEY}","method":"engine.execute","params":{{"command":"text.insert"}}}}"#));
+        assert_eq!(r["ok"], false);
+        assert!(r["error"].as_str().unwrap_or("").starts_with("timeout before execution"), "{r}");
+        // The UI gets to it late: it must not run it.
+        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!req.start(), "a cancelled request was started");
+    }
+
+    #[test]
+    fn a_request_that_started_before_the_timeout_reports_an_unknown_outcome() {
+        let (port, rx) = boot_limits(small(150, 8));
+        let mut c = Conn::open(port);
+        c.send(&format!(r#"{{"id":1,"key":"{KEY}","method":"engine.execute","params":{{"command":"text.insert"}}}}"#));
+        let req = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(req.start());
+        let r = c.recv();
+        assert!(r["error"].as_str().unwrap_or("").contains("outcome unknown"), "{r}");
+    }
+
+    #[test]
+    fn unauthenticated_connections_are_limited() {
+        let (port, rx) = boot_limits(small(5_000, 2));
+        let mut idle = [Conn::open(port), Conn::open(port)];
+        // Give the server time to count both.
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(Conn::open(port).closed(), "the third idle connection was admitted");
+        // One authenticates: its slot is free again.
+        assert_eq!(idle[0].call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
+        std::thread::sleep(Duration::from_millis(200));
+        let mut again = Conn::open(port);
+        assert_eq!(again.call(&format!(r#"{{"id":1,"method":"auth","key":"{KEY}"}}"#))["ok"], true);
+        assert!(rx.try_recv().is_err());
     }
 }
