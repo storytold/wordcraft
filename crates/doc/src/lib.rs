@@ -762,6 +762,10 @@ pub struct Document {
     /// The document's own building blocks (its glossary document), in file order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<BuildingBlock>,
+    /// Parts of the source file that could not be read and were left out; empty for a sound file.
+    /// Set on open only: not saved, and not part of the file.
+    #[serde(skip)]
+    pub skipped_parts: Vec<String>,
 }
 
 impl Default for Document {
@@ -790,6 +794,7 @@ impl Document {
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
+            skipped_parts: Vec::new(),
         }
     }
 

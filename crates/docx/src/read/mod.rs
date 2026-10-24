@@ -311,6 +311,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         keep_glued_ids(&mut r.doc, &r.glued);
     }
     let mut doc = r.doc;
+    doc.skipped_parts = pkg.skipped().to_vec();
     doc.ensure_nonempty();
     Ok(doc)
 }

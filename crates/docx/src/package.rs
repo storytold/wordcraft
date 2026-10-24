@@ -191,6 +191,7 @@ pub fn rel_is(t: &str, full: &str) -> bool {
 /// picture, an embedded object) is handed over rather than copied.
 pub struct Package {
     files: BTreeMap<String, Arc<Vec<u8>>>,
+    skipped: Vec<String>,
 }
 
 impl Package {
@@ -203,13 +204,18 @@ impl Package {
         if zip.len() > MAX_ENTRIES {
             return Err(DocxError::Limit(format!("{} zip entries", zip.len())));
         }
+        // Keep central-directory names separately: `by_index` can fail while reading a local
+        // header, but the caller still needs to know which package part was skipped.
+        let names = zip.file_names().map(|name| name.trim_start_matches('/').to_string()).collect::<Vec<_>>();
         let mut files = BTreeMap::new();
+        let mut skipped = Vec::new();
         let mut total: u64 = 0;
         for i in 0..zip.len() {
             let mut f = match zip.by_index(i) {
                 Ok(f) => f,
                 Err(e) => {
                     log::warn!("docx: skipping unreadable zip entry {i}: {e}");
+                    skipped.push(names.get(i).cloned().unwrap_or_else(|| format!("entry {i}")));
                     continue;
                 }
             };
@@ -226,6 +232,7 @@ impl Package {
             if let Err(e) = read {
                 // A corrupt entry: keep going unless it's a part we can't do without.
                 log::warn!("docx: zip entry {name} unreadable: {e}");
+                skipped.push(name);
                 continue;
             }
             if buf.len() as u64 > room {
@@ -234,13 +241,18 @@ impl Package {
             total = total.saturating_add(buf.len() as u64);
             files.insert(name, Arc::new(buf));
         }
-        Ok(Package { files })
+        Ok(Package { files, skipped })
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
     /// name without the leading `/`.
     pub fn from_parts(files: BTreeMap<String, Vec<u8>>) -> Package {
-        Package { files: files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect() }
+        Package { files: files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect(), skipped: Vec::new() }
+    }
+
+    /// The entries of the zip that could not be read and were left out (their names).
+    pub fn skipped(&self) -> &[String] {
+        &self.skipped
     }
 
     /// Part bytes by name (leading `/` ignored; case-insensitive fallback).
