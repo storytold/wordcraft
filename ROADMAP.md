@@ -136,6 +136,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-25: Text Highlight Color shows the last colour as the button's bar in the ribbon and mini toolbar; after No Color it shows the pen without a misleading yellow bar, and the button removes highlighting (#4087).
 - 2026-10-23: DOCX: a document whose default font size is unset keeps its size when saved and reopened. The size was left out of the file, and the reader read the missing size as 10 pt while the document resolved it as 11 pt; the file now says 11 pt (`DEFAULT_FONT_SIZE`). Files from other programs without a size are read as before.
 - 2026-10-23: Insert › Table: hovering the grid shows the table on the page where it would go, as Word's Live Preview does, and the preview follows the pointer from square to square. It is laid out on a copy of the document, so nothing changes, and Undo has nothing new, until a square is clicked (#3931).
 - 2026-10-22: Mail merge (#3028): Preview Results has First Record and Last Record buttons and a box with the previewed record number; type a number and press Enter to go there (past either end stops at the first or last record). Finish & Merge is now a menu. Edit Individual Documents… and Print Documents… ask for all records, the current record, or a From and To range by record number, and Print Documents opens Print for the merged document. Scripts get `mailings.first`, `mailings.last`, `mailings.goToRecord`, `mailings.printDocuments` and a `records` choice on `mailings.finish`; a range with no records in it is refused instead of leaving an empty document.
@@ -597,6 +598,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
 | 2026-10-23 | trivial | Progress log: interface translations from storytold/craft-i18n through the `craft-i18n` crate |
 | 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |

@@ -76,6 +76,7 @@ Footnote and endnote editing keeps body and note text at normal opacity, on ligh
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | Text Highlight Color shows the remembered colour on the ribbon and mini-toolbar buttons; No Color leaves the pen without a misleading yellow bar (#4087) |
 | 2026-10-23 | trivial | Insert › Table: hovering the grid shows the table on the page, at the caret, as Word's Live Preview does; it follows the pointer and is laid out on a copy, so the document and Undo change only when a square is clicked (#3931) |
 | 2026-10-22 | trivial | Mail merge: First Record, Last Record, a record number box, and record choices for Edit Individual Documents and Print Documents (#3028) |
 | 2026-10-22 | trivial | While editing a header, a single click in the footer (or the reverse, or another page's own header) edits that one with the caret where clicked; the click was placed in the header being edited, and the view scrolled back to it, so a double-click on the footer rarely landed |
