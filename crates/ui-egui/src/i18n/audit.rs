@@ -178,6 +178,7 @@ impl Exempt {
             || plain.starts_with("Style") || plain.starts_with("Table Style ") // a new style's default name
             || plain.contains('┬') || plain.contains('\u{2061}') // equation input (UnicodeMath), drawn as math
             || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii." | "I, II, III, …" | "i, ii, iii, …")
+            || plain == wordcraft_languagetool::DEFAULT_SERVER // the server box's hint: an address, not words
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
             || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
     }
@@ -392,6 +393,7 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
             "LaTeX"
                 | "LaTeX (*.tex)"
                 | "Unicode"
+                | "LanguageTool"
                 | "I. II. III."
                 | "i. ii. iii."
                 | "I, II, III, …"

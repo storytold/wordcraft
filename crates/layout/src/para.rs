@@ -1905,7 +1905,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         text_len: p.text.len(),
         has_page_fields,
         notes,
-        issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
+        issues: env
+            .proofing
+            .map(|o| {
+                // Only asked for when an external checker has results: the key is the paragraph's
+                // table-free view, as the app and the Review commands see it.
+                let external = if wordcraft_proof::external::is_empty() { String::new() } else { external_language(env.doc, p) };
+                proof_issues(p, &runs, &external, &o, env.typing_word, is_list_item(doc, p))
+            })
+            .unwrap_or_default(),
         drop_cap,
         hyph_after: Vec::new(),
         bidi_levels: b.levels,
@@ -3159,12 +3167,19 @@ impl ParaLayout {
 pub struct ProofRun {
     pub range: std::ops::Range<usize>,
     pub lang: wordcraft_proof::ProofLang,
+    /// The language tag as the document gives it (an external checker is asked in it).
+    pub tag: Option<String>,
     pub skip: bool,
 }
 
 impl ProofRun {
     fn of(range: std::ops::Range<usize>, rc: &ResolvedChar) -> ProofRun {
-        ProofRun { range, lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()), skip: rc.no_proof || rc.hidden || rc.link.is_some() }
+        ProofRun {
+            range,
+            lang: wordcraft_proof::ProofLang::from_tag(rc.lang.as_deref()),
+            tag: rc.lang.clone(),
+            skip: rc.no_proof || rc.hidden || rc.link.is_some(),
+        }
     }
 }
 
@@ -3189,6 +3204,7 @@ fn lang_at(runs: &[ProofRun], off: usize) -> wordcraft_proof::ProofLang {
 pub fn paragraph_issues(
     p: &Paragraph,
     runs: &[ProofRun],
+    external_language: &str,
     spelling: &wordcraft_proof::Options,
     grammar: bool,
     list_item: bool,
@@ -3199,6 +3215,19 @@ pub fn paragraph_issues(
     let text = proof_text(p);
     let spans: Vec<(std::ops::Range<usize>, wordcraft_proof::ProofLang)> = runs.iter().map(|r| (r.range.clone(), r.lang)).collect();
     let skip = |a: usize, b: usize| runs.iter().any(|r| r.skip && r.range.start < b && a < r.range.end);
+    // The external checker's result for this text when it has one (#575), each issue in the
+    // language of the run it is in; grammar marks only with `grammar`.
+    if let Some(found) = wordcraft_proof::check_external(&text, external_language) {
+        let lang_at = |at: usize| spans.iter().find(|(r, _)| r.contains(&at)).map(|(_, l)| *l).unwrap_or_default();
+        return found
+            .into_iter()
+            .filter(|i| !skip(i.start, i.end) && (grammar || i.kind != wordcraft_proof::IssueKind::Grammar))
+            .filter(|i| {
+                i.kind != wordcraft_proof::IssueKind::Spelling || !wordcraft_proof::spelling_ignored_by_options(&text, i.start, i.end, spelling)
+            })
+            .map(|i| wordcraft_proof::Issue { lang: lang_at(i.start), ..i })
+            .collect();
+    }
     wordcraft_proof::check_text_with(&text, &spans, spelling, grammar, list_item).into_iter().filter(|i| !skip(i.start, i.end)).collect()
 }
 
@@ -3211,24 +3240,61 @@ pub fn is_list_item(doc: &Document, p: &Paragraph) -> bool {
 fn proof_issues(
     p: &Paragraph,
     runs: &[ProofRun],
+    external_language: &str,
     opts: &crate::ProofOptions,
     typing: Option<(usize, usize)>,
     list_item: bool,
 ) -> Vec<(usize, usize, bool)> {
-    paragraph_issues(p, runs, &opts.spelling, opts.grammar, list_item)
+    paragraph_issues(p, runs, external_language, &opts.spelling, opts.grammar, list_item)
         .into_iter()
         .map(|i| (i.start, i.end, i.kind == wordcraft_proof::IssueKind::Grammar))
         .filter(|&(a, b, grammar)| grammar || !typing.is_some_and(|(s, e)| a < e && s < b))
         .collect()
 }
 
+/// The language key an external checker's result for `p` is stored under: the setting, or the
+/// language of its first run (the one the checker is asked in). A paragraph mixing languages (#763)
+/// adds the runs' language tags and byte ranges ([`language_key`]), so identical text with another
+/// mix of languages has its own result (#2679). Built without table-style formatting
+/// ([`proof_runs`] with `None`), so the app, layout and the Review commands agree.
+pub fn external_language(doc: &Document, p: &Paragraph) -> String {
+    let plain = CharProps::default();
+    let first = p.run_ranges().next().map(|(_, c)| c).unwrap_or(&plain);
+    let base = wordcraft_proof::external::wanted(doc.styles.resolve_char(p.props.style.as_deref(), first).lang.as_deref());
+    let runs = proof_runs(doc, p, None);
+    match runs.first() {
+        Some(f) if runs.iter().any(|r| r.tag != f.tag) => format!("{base}|{}", language_key(&runs)),
+        _ => base,
+    }
+}
+
+/// The paragraph's language tags with the byte ranges they cover, adjacent runs in one language
+/// merged. `runs` should come from [`proof_runs`] with `None`.
+pub fn language_key(runs: &[ProofRun]) -> String {
+    let mut spans: Vec<(&str, usize, usize)> = Vec::new();
+    for r in runs {
+        let tag = r.tag.as_deref().unwrap_or("");
+        match spans.last_mut() {
+            Some((t, _, end)) if *t == tag && *end == r.range.start => *end = r.range.end,
+            _ => spans.push((tag, r.range.start, r.range.end)),
+        }
+    }
+    spans.iter().map(|(t, a, b)| format!("{t}@{a}-{b}")).collect::<Vec<_>>().join(",")
+}
+
 /// Text for proofing with the same byte offsets: inline objects and tracked deletions become
 /// U+0001 bytes (neither words nor spaces).
 pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
+    // Nothing to blank: the text as it is (the usual case, and no per-character work).
+    if !p.text.contains(wordcraft_doc::para::OBJ) && p.runs.iter().all(|r| r.props.del.is_none()) {
+        return p.text.clone();
+    }
     let mut out = String::with_capacity(p.text.len());
+    let mut ranges = p.run_ranges().peekable();
     for (i, c) in p.text.char_indices() {
-        let deleted = c == wordcraft_doc::para::OBJ || p.props_of_char(i).del.is_some();
-        if deleted {
+        while ranges.next_if(|(r, _)| r.end <= i).is_some() {}
+        let in_deleted = ranges.peek().is_some_and(|(r, props)| r.start <= i && props.del.is_some());
+        if c == wordcraft_doc::para::OBJ || in_deleted {
             for _ in 0..c.len_utf8() {
                 out.push('\u{1}');
             }
