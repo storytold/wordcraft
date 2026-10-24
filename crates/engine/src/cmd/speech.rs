@@ -25,6 +25,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("readAloud.skipCitations", "Skip Citations and Bibliography", "Review › Speech", skip_citations)
             .params(r#"{"value"?: bool}"#)
             .pure(),
+        CommandSpec::new("readAloud.voice", "Voice", "Review › Speech", voice)
+            .params(r#"{"value"?: string (a voice id from the list) | null (the voice of each sentence's language)}; without `value`: the installed voices"#)
+            .pure(),
         CommandSpec::new("readAloud.status", "Read Aloud Status", "Review › Speech", status).pure(),
         CommandSpec::new("caret.pastCitation", "Move Past Citation", "Zotero › Citations", past_citation).pure(),
     ]
@@ -85,6 +88,26 @@ fn speed(s: &mut Session, v: &Value) -> CmdResult {
     let r = p::f32(v, "value").or_else(|| p::f32(v, "rate")).ok_or_else(|| CmdError::Params("`value` (number, 0.5…3) is required".into()))?;
     s.read_aloud.set_rate(r);
     status(s, v)
+}
+
+/// Choose the voice to read in (`value`: an id from the list), or with `value` null go back to
+/// the voice of each sentence's language; a reading in progress carries on from the same
+/// sentence in the new voice. Every call answers with the installed voices (`id`, `name`, `lang`)
+/// and the chosen one, so without `value` it only lists them; `pending` is true while the system
+/// is still being asked: ask again shortly.
+fn voice(s: &mut Session, v: &Value) -> CmdResult {
+    match v.get("value").or_else(|| v.get("voice")) {
+        None => {}
+        Some(Value::Null) => s.read_aloud.set_voice(None),
+        Some(Value::String(id)) => s.read_aloud.set_voice(Some(id)),
+        Some(_) => return Err(CmdError::Params("`value` must be a voice id (string) or null".into())),
+    }
+    let list = speech::installed_voices();
+    Ok(serde_json::json!({
+        "voices": list.unwrap_or_default().iter().map(speech::Voice::to_json).collect::<Vec<_>>(),
+        "pending": list.is_none(),
+        "voice": s.read_aloud.voice(),
+    }))
 }
 
 /// Turn skipping citations on or off; a reading in progress carries on from the same sentence.
@@ -214,6 +237,13 @@ mod tests {
         assert_eq!(s.run("readAloud.previous", &json!({})).unwrap()["index"], 0);
         assert_eq!(s.run("readAloud.speed", &json!({"value": 1.5})).unwrap()["rate"], 1.5);
         assert!(s.run("readAloud.speed", &json!({})).is_err());
+        assert_eq!(s.run("readAloud.voice", &json!({"value": "urj/hu"})).unwrap()["voice"], "urj/hu");
+        let listed = s.run("readAloud.voice", &json!({})).unwrap();
+        assert_eq!(listed["voice"], "urj/hu", "no `value`: the choice stays");
+        assert!(listed["voices"].is_array());
+        assert_eq!(s.run("readAloud.status", &json!({})).unwrap()["voice"], "urj/hu");
+        assert_eq!(s.run("readAloud.voice", &json!({"value": null})).unwrap()["voice"], serde_json::Value::Null);
+        assert!(s.run("readAloud.voice", &json!({"value": 7})).is_err());
         // Pressing Read Aloud again pauses, then carries on.
         assert_eq!(s.run("review.readAloud", &json!({})).unwrap()["state"], "paused");
         assert_eq!(s.run("readAloud.playPause", &json!({})).unwrap()["state"], "playing");

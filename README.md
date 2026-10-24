@@ -282,6 +282,14 @@ adapter. The log file records the choice (lines starting with
 RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compiled for glibc 2.39+
 (Ubuntu 24.04, Debian 13 and newer).
 
+**Read Aloud** (Review › Read Aloud) speaks through a speech program installed on the system: it
+tries `espeak-ng`, then `espeak`, and when neither is installed it talks to Speech Dispatcher.
+The `.rpm` package recommends `espeak-ng`; the `.deb` recommends `espeak-ng` or
+`speech-dispatcher`, so the package manager installs one of the two by default. With the
+AppImage or the tarball, install one yourself if neither is there (`sudo apt install espeak-ng`,
+`sudo dnf install espeak-ng`, `sudo pacman -S espeak-ng`). The Flatpak doesn't speak yet: it has
+no audio access and doesn't include `espeak-ng`, `espeak` or Speech Dispatcher.
+
 **Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
 winit (the windowing library) supports dragging files into the window only on X11. To use the
 native Wayland backend instead (for example for sharper text with fractional scaling, at the cost

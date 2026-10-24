@@ -292,6 +292,9 @@ pub struct UiState {
     /// Read Aloud speed (1 = normal) and whether it skips citations and bibliographies.
     pub read_aloud_rate: f32,
     pub read_aloud_skip_citations: bool,
+    /// The Read Aloud voice the user chose (an id from `readAloud.voices`); `None` reads each
+    /// sentence in the voice of its language.
+    pub read_aloud_voice: Option<String>,
     /// Show ribbon and Quick Access Toolbar KeyTips on Alt/F10 (#620).
     pub keytips_enabled: bool,
     /// Digits entered for a multi-key Quick Access Toolbar badge; never persisted.
@@ -402,6 +405,7 @@ impl Default for UiState {
             editing: wordcraft_engine::Prefs::default(),
             read_aloud_rate: 1.0,
             read_aloud_skip_citations: true,
+            read_aloud_voice: None,
             keytips_enabled: true,
             keytip_prefix: String::new(),
             keytips: crate::keytips::Phase::Off,
@@ -803,6 +807,7 @@ impl WordApp {
         ui.editing = self.session.prefs.clone();
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
+        ui.read_aloud_voice = self.session.read_aloud.voice();
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
         ui.check_spelling = self.session.view.proofing;
@@ -851,6 +856,7 @@ impl WordApp {
         }
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
+        self.session.read_aloud.set_voice(self.ui.read_aloud_voice.as_deref());
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.proofing = self.ui.check_spelling;
@@ -2843,6 +2849,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "font.remove"
             | "readAloud.speed"
             | "readAloud.skipCitations"
+            | "readAloud.voice"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
