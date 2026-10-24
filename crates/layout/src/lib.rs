@@ -2439,9 +2439,12 @@ fn layout_pass(
     // Vertical sections are laid out on their pages turned on their side (see `vertical`).
     let turned: Vec<Option<SectionProps>> = sections
         .iter()
-        .map(|(_, s)| {
+        .enumerate()
+        .map(|(si, (_, s))| {
             (!web && s.text_direction.is_turned()).then(|| {
-                let top = body_top_for(&mut ctx, s, s.headers.default);
+                // Page-colour ownership follows the resolved story, including inherited IDs.
+                let header = if doc.settings.page_color.is_some() { linked(&sections, si, |s| s.headers).default } else { s.headers.default };
+                let top = body_top_for(&mut ctx, s, header, si);
                 vertical::unturned_sect(s, top)
             })
         })
@@ -2471,12 +2474,12 @@ fn layout_pass(
         let body_top = if reflow || turn.is_turned() {
             sect.margin_top
         } else {
-            with_pct_base(&mut ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default))
+            with_pct_base(&mut ctx, hb(heads.default), |c| body_top_for(c, sect, heads.default, si))
         };
         let first_top = if reflow || turn.is_turned() || !sect.title_page {
             body_top
         } else {
-            with_pct_base(&mut ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first))
+            with_pct_base(&mut ctx, hb(heads.first), |c| body_top_for(c, sect, heads.first, si))
         };
         let foot_top =
             if reflow || turn.is_turned() { f32::MAX } else { with_pct_base(&mut ctx, fb(feet.default), |c| foot_top_for(c, sect, feet.default)) };
@@ -2508,7 +2511,7 @@ fn layout_pass(
                 pb.sect = prev;
                 pb.sect_idx = si - 1;
                 let (ph, pf) = (linked(&sections, si - 1, |s| s.headers), linked(&sections, si - 1, |s| s.footers));
-                let top = body_top_for(&mut ctx, prev, ph.default);
+                let top = body_top_for(&mut ctx, prev, ph.default, si - 1);
                 pb.foot_top = foot_top_for(&mut ctx, prev, pf.default);
                 pb.new_page(block, top);
                 pb.sect = sect;
@@ -2943,19 +2946,49 @@ fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(&mut Ctx) -
 }
 
 /// Where body text starts: the top margin, or below the header if it's taller.
-fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 {
-    let Some(id) = header else { return sect.margin_top };
-    let Some(part) = ctx.doc.parts.get(&id) else { return sect.margin_top };
-    let blocks = part.blocks.clone();
+fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>, section: usize) -> f32 {
+    let background = background_header(ctx.doc, header, section);
+    let mut blocks = header.and_then(|id| ctx.doc.parts.get(&id)).map(|p| p.blocks.clone()).unwrap_or_default();
+    if blocks.is_empty() && background {
+        blocks.push(wordcraft_doc::para_block(Paragraph::new()));
+    }
+    if background {
+        // Word 16.113.2 reserves an empty Header-style paragraph for the page colour,
+        // owned by the initial header stories and retained when those stories are linked.
+        let mut p = Paragraph::new();
+        p.props.style = Some("Header".into());
+        if ctx.doc.styles.get("Header").is_none() {
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+        }
+        blocks.push(wordcraft_doc::para_block(p));
+    }
+    if blocks.is_empty() {
+        return sect.margin_top;
+    }
+    let story = header.map(StoryRef::Part).unwrap_or(StoryRef::Body);
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (h, ..) = with_pin(ctx, id, sect, 1, |ctx| {
-        layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).height
-    });
+    let measure = |ctx: &mut Ctx| layout_box(ctx, story, &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).height;
+    let h = match header {
+        Some(id) => with_pin(ctx, id, sect, 1, measure).0,
+        None => measure(ctx),
+    };
     ctx.track_totals = track;
     // Word starts the body right below a header that reaches past the top margin, no gap.
     sect.margin_top.max(sect.header + h)
+}
+
+fn background_header(doc: &Document, header: Option<u32>, section: usize) -> bool {
+    if doc.settings.page_color.is_none() {
+        return false;
+    }
+    let first = doc.body.iter().find_map(|b| b.as_para().and_then(|p| p.section.as_deref())).unwrap_or(&doc.last_section);
+    match header {
+        None => section == 0,
+        Some(id) => [first.headers.default, first.headers.first, first.headers.even].contains(&Some(id)),
+    }
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
