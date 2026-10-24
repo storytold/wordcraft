@@ -97,7 +97,7 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
 pub fn on_off(e: &El) -> bool {
     match e.attr("w:val") {
         None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
+        Some(v) => !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "off"),
     }
 }
 
@@ -156,5 +156,30 @@ mod tests {
         assert_eq!(measure("1e+2pt", 20.0), Some(100.0));
         assert_eq!(int("12.6"), Some(13));
         assert_eq!(u32_of("-5"), Some(0));
+    }
+
+    #[test]
+    fn on_off_values() {
+        let el = |val: Option<&str>| El {
+            name: "w:b".into(),
+            attrs: val.map(|v| vec![("w:val".into(), v.into())]).unwrap_or_default(),
+            ..Default::default()
+        };
+        assert!(on_off(&el(None)));
+        assert!(on_off(&el(Some("1"))));
+        assert!(on_off(&el(Some("true"))));
+        assert!(on_off(&el(Some("True"))));
+        assert!(on_off(&el(Some("TRUE"))));
+        assert!(on_off(&el(Some("on"))));
+        assert!(on_off(&el(Some("On"))));
+        assert!(on_off(&el(Some("ON"))));
+
+        assert!(!on_off(&el(Some("0"))));
+        assert!(!on_off(&el(Some("false"))));
+        assert!(!on_off(&el(Some("False"))));
+        assert!(!on_off(&el(Some("FALSE"))));
+        assert!(!on_off(&el(Some("off"))));
+        assert!(!on_off(&el(Some("Off"))));
+        assert!(!on_off(&el(Some("OFF"))));
     }
 }
