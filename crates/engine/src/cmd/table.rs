@@ -516,6 +516,9 @@ pub(super) fn col(s: &mut Session, right: bool) -> CmdResult {
         let k = before / total;
         t.grid.iter_mut().for_each(|w| *w *= k);
     }
+    // The inserted cells carry the pre-scale column width, and the layout prefers a cell width
+    // over the grid: sync them, or the shrink never reaches the layout or the saved `w:tcW`.
+    sync_cell_widths(t);
     fix_caret(s, &tp, r, if right { c + 1 } else { c })
 }
 

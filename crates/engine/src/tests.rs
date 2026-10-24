@@ -1674,6 +1674,54 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+#[test]
+fn inserting_a_column_keeps_cell_widths_in_step_with_the_grid() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let widths = |s: &Session| {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        (t.grid.clone(), t.rows[0].cells.iter().map(|c| c.props.width.unwrap_or(0.0)).collect::<Vec<_>>())
+    };
+    let (grid_before, _) = widths(&s);
+    assert!(grid_before.iter().all(|w| *w > 0.0));
+    run(&mut s, "table.insertColumnRight", json!({}));
+    let (grid_after, cells) = widths(&s);
+    // The table keeps its total width, and each cell carries its grid columns' width: the
+    // layout and the saved `w:tcW` see the same shrink the grid got.
+    let sum = |v: &[f32]| v.iter().sum::<f32>();
+    assert!((sum(&grid_after) - sum(&grid_before)).abs() < 0.5, "{grid_after:?} vs {grid_before:?}");
+    assert_eq!(cells.len(), grid_after.len());
+    for (g, w) in grid_after.iter().zip(cells.iter()) {
+        assert!((w - g).abs() < 0.01, "cell width {w} vs grid {g}");
+    }
+}
+
+#[test]
+fn a_rejected_version_restore_saves_nothing() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Original text."));
+    s.run("review.restrict", &json!({"mode": "readOnly", "password": "pw"})).unwrap();
+    s.run("file.versions", &json!({"save": "before"})).unwrap();
+    // One command asking for both a save and a restore the protection refuses: the save must
+    // not happen either.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": 0})).unwrap_err().to_string();
+    assert!(e.contains("stop protection"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+    // A bad index is refused before anything is saved, too.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": 99})).unwrap_err().to_string();
+    assert!(e.contains("no such version"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+    // A restore that is there but not a non-negative integer is refused, not read as absent:
+    // {"save": "mid", "restore": -1} must not save quietly without restoring.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": -1})).unwrap_err().to_string();
+    assert!(e.contains("restore (non-negative integer)"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+    // An index too large for `usize` names no version: on a 32-bit target `as usize` would wrap
+    // it to 0 and restore the first version instead.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": 4294967296u64})).unwrap_err().to_string();
+    assert!(e.contains("no such version"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+}
+
 /// #3931: the page as a command would leave it, laid out without running it on the document:
 /// Insert › Table's grid previews the table it would insert. The document, the caret, the undo
 /// history and Repeat stay as they were.

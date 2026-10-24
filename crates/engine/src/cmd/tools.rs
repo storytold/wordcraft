@@ -466,18 +466,30 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"mode": "none|readOnly|comments|trackedChanges"} (starting enforcement; "none" doesn't stop a protected document — use review.restrict {"stop": true})"#),
         CommandSpec::new("file.versions", "Version History", "File › Info", |s, v| {
+            // Validate a restore before anything is saved: a rejected command must leave the
+            // version list as it was. A `restore` that is there but not a non-negative integer
+            // is refused, not read as absent.
+            let restore = if v.get("restore").is_some_and(|x| !x.is_null()) {
+                let i = p::u64(v, "restore").ok_or_else(|| CmdError::Params("restore (non-negative integer) is required".into()))?;
+                // A `u64` that doesn't fit in `usize` names no version: `as usize` would wrap it
+                // to a small index on a 32-bit target and restore the wrong document.
+                let i = usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?;
+                let version = s.versions.get(i).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
+                // The restore replaces the whole document, including the content the protection
+                // kept read-only, so the protection is stopped first (with its password, when it
+                // has one) — a restore must not go around it.
+                super::protect::check_version_restore(s)?;
+                Some(version)
+            } else {
+                None
+            };
             if let Some(label) = p::str(v, "save") {
                 s.versions.push((label.to_string(), super::now_iso(), s.doc.clone()));
                 if s.versions.len() > 50 {
                     s.versions.remove(0);
                 }
             }
-            if let Some(i) = p::u64(v, "restore") {
-                let (_, _, d) = s.versions.get(i as usize).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
-                // The restore replaces the whole document, including the content the protection
-                // kept read-only, so the protection is stopped first (with its password, when it
-                // has one) — a restore must not go around it.
-                super::protect::check_version_restore(s)?;
+            if let Some((_, _, d)) = restore {
                 s.checkpoint("Restore Version");
                 // A snapshot's own protection is stale: it was taken at some earlier moment, and
                 // restoring it must not bring a protection back that the live document doesn't
