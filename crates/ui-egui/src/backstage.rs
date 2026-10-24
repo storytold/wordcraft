@@ -294,7 +294,7 @@ fn matching_templates(query: &str) -> Vec<(&'static str, &'static str)> {
 /// Home: a greeting, Blank plus a short row of templates with a link to New, then Recent.
 fn home_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
-    let hour = wordcraft_engine::cmd::now_iso().get(11..13).and_then(|h| h.parse::<u32>().ok()).unwrap_or(9);
+    let hour = wordcraft_engine::cmd::local_now().3.0;
     heading(
         ui,
         if hour < 12 {

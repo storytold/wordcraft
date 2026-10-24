@@ -168,6 +168,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 
 | Date | What landed |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
+| 2026-10-14 | Insert › Date & Time and DATE, TIME and other date fields show the computer's local date, time and weekday, daylight saving included, as Word does (#1707); they showed UTC, so a user in New Zealand at noon on 31 October got 30 October 23:00. Timestamps saved in files (revisions, comments, document properties) stay UTC. Backstage's greeting follows the local hour too |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
 | 2026-10-20 | A version snapshot belongs to the document it was taken from: the snapshots went with the document, so a restore can only ever bring back a version of the document that is open |
@@ -596,6 +597,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 |---|---|---|
 | 2026-10-23 | trivial | Progress log: interface translations from storytold/craft-i18n through the `craft-i18n` crate |
 | 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
+| 2026-10-14 | trivial | Progress log: Insert Date and Time and DATE/TIME fields use local time (#1707) |
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |
 | 2026-10-21 | trivial | Progress log: a document with many relationships opens in the time its part takes (#3411) |
 | 2026-10-23 | trivial | Progress log: an empty paragraph with a hidden mark draws no list number (#3982) |

@@ -35,6 +35,8 @@ js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = { workspace = true }
+# The local time zone's offset for Insert ▸ Date & Time and date fields (#1707); the web asks the browser's Date.
+chrono = { workspace = true, features = ["clock"] }
 
 [dev-dependencies]
 encoding_rs = { workspace = true }

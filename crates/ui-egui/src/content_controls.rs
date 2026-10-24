@@ -148,7 +148,8 @@ fn date_of(app: &WordApp, at: &Pos) -> Option<(i64, u32, u32)> {
 }
 
 fn today() -> (i64, u32, u32) {
-    let (y, m, d) = wordcraft_engine::cmd::civil_from_days((wordcraft_engine::cmd::now_unix() / 86_400) as i64);
+    // The local day, as Word's date picker shows it (#1707).
+    let (y, m, d, ..) = wordcraft_engine::cmd::local_now();
     (y, m, d)
 }
 
