@@ -384,6 +384,9 @@ pub struct Session {
     /// HTML for the system clipboard beside [`Self::clipboard_text`]: the copy's formatting for
     /// programs that read HTML, equations as MathML (#816); empty when nothing was copied.
     pub clipboard_html: String,
+    /// RTF for the system clipboard beside [`Self::clipboard_html`], for programs that read RTF
+    /// rather than HTML; empty when nothing was copied.
+    pub clipboard_rtf: String,
     /// Items collected by Copy and Cut this session, for the Clipboard pane.
     pub clip_history: crate::cmd::edit::ClipHistory,
     pub find: FindState,
@@ -692,6 +695,7 @@ impl Session {
             pending_move: None,
             clipboard_text: String::new(),
             clipboard_html: String::new(),
+            clipboard_rtf: String::new(),
             clip_history: Default::default(),
             find: FindState::default(),
             goal_x: None,
@@ -1333,6 +1337,7 @@ impl Session {
             pending_move: _,
             clipboard_text: _,
             clipboard_html: _,
+            clipboard_rtf: _,
             clip_history: _,
             find: _,
             goal_x: _,

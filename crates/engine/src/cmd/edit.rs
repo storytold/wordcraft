@@ -179,16 +179,21 @@ fn copy(s: &mut Session, _: &Value) -> CmdResult {
 }
 
 /// What Copy and Cut return: the clipboard's text, and the copy as HTML (equations as MathML,
-/// #816) for the host to put on the system clipboard too, so other programs keep the formatting;
-/// and for a copy of one equation alone, its MathML (#1297).
+/// #816) and as RTF for the host to put on the system clipboard too, so other programs keep the
+/// formatting; and for a copy of one equation alone, its MathML (#1297).
 pub(crate) fn copy_result(s: &mut Session) -> Value {
-    s.clipboard_html = match &s.clipboard {
-        Some(f) => wordcraft_formats::html::export_fragment(&f.to_document()),
-        None => String::new(),
+    (s.clipboard_html, s.clipboard_rtf) = match &s.clipboard {
+        Some(f) => {
+            let d = f.to_document();
+            (wordcraft_formats::html::export_fragment(&d), wordcraft_formats::rtf::export(&d))
+        }
+        None => (String::new(), String::new()),
     };
     let mut r = json!({"text": s.clipboard_text});
-    if !s.clipboard_html.is_empty() {
-        r["html"] = json!(s.clipboard_html);
+    for (k, v) in [("html", &s.clipboard_html), ("rtf", &s.clipboard_rtf)] {
+        if !v.is_empty() {
+            r[k] = json!(v);
+        }
     }
     // A copy of one equation alone, as MathML for the clipboard formats equation editors read
     // ("MathML" on Windows, `public.mathml.presentation` on macOS; #1297). Word looks for them
