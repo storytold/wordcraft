@@ -83,3 +83,6 @@ pollster = "0.4"
 arboard = { workspace = true, features = ["image-data"] }
 # The control server's random key.
 getrandom = "0.3"
+# The daily "new version available" check (#201): one HTTPS GET to the GitHub API. Pure-Rust TLS
+# (rustls with ring, Mozilla's roots from webpki-roots): no OpenSSL, nothing to install.
+ureq = { version = "3", default-features = false, features = ["rustls"] }

@@ -23,6 +23,7 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+mod update_check;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -238,7 +239,8 @@ fn write_prefs(path: &std::path::Path, bytes: &[u8]) -> std::io::Result<()> {
 /// Native file dialogs, shown without blocking the window (`file_dialogs`, #94), File › Print
 /// through the system spooler (`print`), the system clipboard's text, formatted copies,
 /// pictures and format names (`clipboard`, #45, #584, #687, #833), the system's animation setting
-/// (`animations`), and making WordCraft the default app for Word documents (`default_apps`, #295).
+/// (`animations`), making WordCraft the default app for Word documents (`default_apps`, #295), and
+/// the daily update check (`update_check`, #201).
 fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
     Services {
         file_dialog: Some(file_dialog),
@@ -254,6 +256,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         set_clipboard_html: Some(Box::new(clipboard::set_html)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
+        check_update: update_check::service(prefs_enabled()),
         ..Default::default()
     }
 }
