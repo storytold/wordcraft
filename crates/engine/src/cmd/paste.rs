@@ -42,11 +42,12 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// Clipboard text from the params (system clipboard), else WordCraft's own copy.
+/// Clipboard text from the params (system clipboard), else WordCraft's own copy: the text Copy
+/// put on the clipboard, list labels and all (#2015).
 fn clip_text(s: &Session, v: &Value) -> Option<String> {
     match p::str(v, "text") {
         Some(t) => Some(t.replace("\r\n", "\n")),
-        None => s.clipboard.as_ref().map(Fragment::plain_text),
+        None => s.clipboard.as_ref().map(|f| if s.clipboard_text.is_empty() { f.plain_text() } else { s.clipboard_text.clone() }),
     }
 }
 
@@ -64,10 +65,11 @@ fn source(s: &Session, v: &Value, fmt: &str) -> Option<String> {
     let non_empty = |t: String| if t.is_empty() { None } else { Some(t) };
     match fmt {
         "formatted" => {
-            let f = s.clipboard.as_ref()?;
+            s.clipboard.as_ref()?;
             // System clipboard text that isn't our own copy means someone else copied since.
+            // (Compared with the text Copy put there, list labels and all, #2015.)
             match p::str(v, "text") {
-                Some(t) if f.clipboard_text() != t.replace("\r\n", "\n") => None,
+                Some(t) if s.clipboard_text != t.replace("\r\n", "\n") => None,
                 _ => Some(String::new()),
             }
         }
@@ -270,7 +272,7 @@ pub enum Pasted {
 pub fn paste_content(s: &mut Session, v: &Value) -> Result<Pasted, CmdError> {
     let text = p::str(v, "text").map(|t| t.replace("\r\n", "\n"));
     if let Some(f) = &s.clipboard
-        && text.as_ref().is_none_or(|t| f.clipboard_text() == *t)
+        && text.as_ref().is_none_or(|t| s.clipboard_text == *t)
         && (text.is_some() || (p::str(v, "html").is_none() && p::str(v, "rtf").is_none()))
     {
         return Ok(Pasted::Fragment(f.clone()));
