@@ -1,7 +1,8 @@
 //! [`wordcraft_doc::math`] tree → Office Math (OMML).
 
 use wordcraft_doc::math::{
-    Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MNode, MRun, MScr, MSty, Math, MathJc, MathProps, ScriptKind, parse_linear,
+    Arg, BrkBin, BrkBinSub, ColJc, FracKind, LimLoc, MAX_DEPTH, MAX_MATRIX_COLS, MAX_MATRIX_ROWS, MNode, MRun, MScr, MSty, Math, MathJc, MathProps,
+    ScriptKind, parse_linear,
 };
 use wordcraft_doc::props::Rgb;
 
@@ -376,7 +377,10 @@ fn node(w: &mut W, n: &MNode, depth: usize) {
             w.close("m:eqArr");
         }
         MNode::Matrix { rows, col_jc } => {
-            let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).max(1);
+            // Every row is padded to the widest one, so a ragged matrix is clamped to the reader's
+            // caps rather than written as rows × widest cells (#3643).
+            let rows = rows.get(..rows.len().min(MAX_MATRIX_ROWS)).unwrap_or_default();
+            let cols = rows.iter().map(|r| r.len()).max().unwrap_or(0).clamp(1, MAX_MATRIX_COLS);
             w.open("m:m", &[]);
             w.open("m:mPr", &[]);
             w.open("m:mcs", &[]);
