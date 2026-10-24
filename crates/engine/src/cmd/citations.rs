@@ -825,7 +825,26 @@ fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option
         seed.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Right, leader }]);
         s.doc.insert_block(StoryRef::Body, &Path::top(i.saturating_add(1)), Block::Para(seed))?;
     }
-    update_generated(s)
+    // Rebuilding a list above this one can change its number of entries and so this list's
+    // place: find it again afterwards as the same-numbered list title.
+    let ordinal = s.doc.body.iter().take(i).filter(|b| b.as_para().and_then(list_kind).is_some()).count();
+    update_generated(s)?;
+    let i = s.doc.body.iter().enumerate().filter(|(_, b)| b.as_para().and_then(list_kind).is_some()).nth(ordinal).map_or(i, |(k, _)| k);
+    // Like Word, the caret lands in a paragraph right after the list, ready to keep typing — not
+    // inside its own title or entries, where typing (or Enter) would corrupt them (the same fix
+    // as references.toc's insert_toc, for its sibling generated lists: bibliography, table of
+    // figures, table of authorities and, through insert_index's first-creation path, the index).
+    let mut after = i + 1;
+    while s.doc.body.get(after).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)) {
+        after += 1;
+    }
+    // Another generated list's title right after it is no place to type either.
+    let is_para = s.doc.body.get(after).and_then(|b| b.as_para()).is_some_and(|p| list_kind(p).is_none());
+    if !is_para {
+        s.doc.insert_block(StoryRef::Body, &Path::top(after), Block::Para(Paragraph::new()))?;
+    }
+    s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(after), off: 0 });
+    Ok(())
 }
 
 fn list_kind(p: &Paragraph) -> Option<String> {
@@ -1406,6 +1425,53 @@ mod tests {
         assert!(fields(&s).contains(&(format!("REF {name} \\h"), "Figure 1".to_string())), "{:?}", fields(&s));
     }
 
+    /// Inserting a generated list (bibliography, table of figures, table of authorities, index)
+    /// must leave the caret in a paragraph right after it, like `references.toc` does for the
+    /// table of contents — not inside the list's own title or entries, where typing next (the
+    /// ordinary next step after inserting one) would corrupt them.
+    #[test]
+    fn a_generated_list_leaves_the_caret_after_it_not_inside_it() {
+        // In a paragraph of its own, not the list's, and right after the list: the block before
+        // it is the list's last entry or (an empty list) its title.
+        let after = |s: &Session| {
+            let here = s.sel.focus.path.last();
+            let own = s.doc.para_at(&s.sel.focus).is_some_and(|p| {
+                p.props.style.as_deref() != Some("Heading1") && p.props.style.as_deref() != Some(ENTRY_STYLE) && list_kind(p).is_none()
+            });
+            let follows = here
+                .checked_sub(1)
+                .and_then(|k| s.doc.body.get(k))
+                .and_then(|b| b.as_para())
+                .is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE) || list_kind(p).is_some());
+            own && follows
+        };
+
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("references.bibliography", &json!({})).unwrap();
+        assert!(after(&s), "bibliography: {:?}", s.sel.focus);
+        s.run("text.insert", &json!({"text": "Body text."})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body).matches("References").count(), 1);
+        assert!(s.doc.plain_text(StoryRef::Body).contains("Body text."));
+
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("references.tableOfAuthorities", &json!({})).unwrap();
+        assert!(after(&s), "table of authorities: {:?}", s.sel.focus);
+
+        let mut s = Session::new(wordcraft_doc::Document::from_text("A plan"));
+        s.run("select.all", &json!({})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "A plan"})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({})).unwrap();
+        assert!(after(&s), "table of figures: {:?}", s.sel.focus);
+
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln"));
+        s.run("select.all", &json!({})).unwrap();
+        s.run("references.markEntry", &json!({})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("references.index", &json!({})).unwrap();
+        assert!(after(&s), "index: {:?}", s.sel.focus);
+    }
+
     /// #2940: a caption with a label of the person's own (Insert Caption › New Label) is a
     /// cross-reference type of its own, `label:<Name>`, next to Figure, Table and Equation.
     #[test]
@@ -1561,6 +1627,48 @@ mod tests {
         let want = [("Figure 1: Kiln\t1", TabLeader::Dot), ("Figure 2: Rock\t1", TabLeader::Dot), ("Table 1: Press\t1", TabLeader::Hyphen)];
         let want: Vec<(String, Option<TabLeader>)> = want.iter().map(|(t, l)| (t.to_string(), Some(*l))).collect();
         assert_eq!(list_entries(&s), want);
+    }
+
+    /// #3230 review: the caret lands after the new list even when a list above it is out of date
+    /// and gains an entry while every list is rebuilt, moving the new one down.
+    #[test]
+    fn a_generated_list_below_a_stale_one_still_leaves_the_caret_after_it() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\nPress\nRock\n"));
+        for (text, label) in [("Kiln", "Figure"), ("Press", "Table")] {
+            s.run("select.text", &json!({"text": text})).unwrap();
+            s.run("references.caption", &json!({"label": label, "text": text})).unwrap();
+        }
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({})).unwrap();
+        s.run("select.text", &json!({"text": "Rock"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "Rock"})).unwrap();
+        assert_eq!(list_entries(&s).len(), 1, "the list of figures is out of date");
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({"label": "Table"})).unwrap();
+        let here = s.sel.focus.path.last();
+        let para = s.doc.para_at(&s.sel.focus).unwrap();
+        assert!(list_kind(para).is_none() && para.props.style.as_deref() != Some(ENTRY_STYLE), "caret in the list: {here}");
+        let before = s.doc.body.get(here - 1).and_then(|b| b.as_para()).unwrap();
+        assert_eq!(before.plain_text(), "Table 1: Press\t1", "right after the new list's last entry");
+        s.run("text.insert", &json!({"text": "Body text."})).unwrap();
+        let entries: Vec<String> = list_entries(&s).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(entries, ["Figure 1: Kiln\t1", "Figure 2: Rock\t1", "Table 1: Press\t1"], "typing left the lists alone");
+    }
+
+    /// #3230 review: a list inserted at the start of another generated list's title leaves the
+    /// caret in a new paragraph between them, not in the older list's title.
+    #[test]
+    fn a_generated_list_inserted_before_another_leaves_the_caret_between_them() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("references.tableOfAuthorities", &json!({})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        assert!(s.doc.para_at(&s.sel.focus).and_then(list_kind).is_some(), "at the older list's title");
+        s.run("references.bibliography", &json!({})).unwrap();
+        let para = s.doc.para_at(&s.sel.focus).unwrap();
+        assert!(list_kind(para).is_none() && para.props.style.as_deref() != Some(ENTRY_STYLE), "caret in a list: {:?}", s.sel.focus);
+        let next = s.doc.body.get(s.sel.focus.path.last() + 1).and_then(|b| b.as_para());
+        assert!(next.and_then(list_kind).is_some_and(|k| k.starts_with("TOA")), "the older list follows");
     }
 
     /// #3013 review: a table of figures from Word whose saved list sits in the field's result (one
