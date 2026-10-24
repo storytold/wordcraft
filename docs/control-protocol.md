@@ -123,3 +123,10 @@ and their parameter documentation. Search is case-insensitive across IDs, labels
 and parameter descriptions. Listing commands never discovers printers, submits a job or opens
 a dialog. Settings inspection is always available; submission becomes enabled when the native
 printer is ready, or when the browser host provides its print flow.
+
+### Native save conflicts
+
+`ui.saveConflict` answers the native Save conflict dialog: `{"answer":"cancel"}` keeps
+editing, and `{"answer":"copy"}` opens a Save Copy picker for the same document.
+A replaced document is refused. Picker cancellation or a failed copy preserves unsaved edits.
+A pending result means a picker was opened; an already busy picker returns an error.

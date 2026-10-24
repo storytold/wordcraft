@@ -397,6 +397,14 @@ pub enum Dialog {
     About {
         tab: u8,
     },
+    /// A native Save or AutoSave refused because the file changed or became unavailable since
+    /// it was opened or last saved (`ui.saveConflict`). Neither choice overwrites the external
+    /// version: Keep editing closes it, Save copy… asks for another file.
+    SaveConflict {
+        name: String,
+        #[serde(skip)]
+        document: u64,
+    },
     /// Confirm before deleting a recovery copy.
     DiscardRecovery {
         id: String,
@@ -993,6 +1001,7 @@ impl Dialog {
             Dialog::Icons { .. } => "icons",
             Dialog::PasteSpecial { .. } => "pasteSpecial",
             Dialog::About { .. } => "about",
+            Dialog::SaveConflict { .. } => "saveConflict",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::RecipientList { .. } => "recipientList",
@@ -1042,6 +1051,11 @@ impl Dialog {
     }
 
     pub fn open(name: &str, app: &mut WordApp) -> Option<Dialog> {
+        if name == "saveConflict" {
+            let conflict = app.save_conflict.take()?;
+            let name = conflict.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| conflict.path.display().to_string());
+            return Some(Dialog::SaveConflict { name, document: app.session.document_id() });
+        }
         if let Some(d) = crate::dialogs_insert::open(name, app) {
             return Some(Dialog::Insert(Box::new(d)));
         }
@@ -1468,6 +1482,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Icons { .. } => "Icons",
         Dialog::PasteSpecial { .. } => "Paste Special",
         Dialog::About { .. } => "About WordCraft",
+        Dialog::SaveConflict { .. } => "Save conflict",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::RecipientList { .. } => "Recipient List",
@@ -2738,6 +2753,32 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             let (ok, cancel) = buttons(ui, tl!("Close"));
             ok || cancel
+        }
+        Dialog::SaveConflict { name, .. } => {
+            ui.label(egui::RichText::new(tl!("The file changed or is unavailable")).font(semibold(15.0)));
+            ui.label(tl!("Your edits are still here. Save them to a different file to keep both versions."));
+            ui.label(egui::RichText::new(&*name).strong());
+            ui.add_space(8.0);
+            let (keep, copy) = ui
+                .horizontal(|ui| {
+                    let keep = ui.button(tl!("Keep editing"));
+                    let copy = ui.add(crate::widgets::primary_button(ui, tl!("Save copy…")));
+                    (keep, copy)
+                })
+                .inner;
+            let answer = if keep.clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                Some("cancel")
+            } else if copy.clicked() {
+                Some("copy")
+            } else {
+                None
+            };
+            if let Some(answer) = answer {
+                app.dialog = Some(d.clone());
+                let _ = app.run("ui.saveConflict", json!({"answer": answer}));
+                return true;
+            }
+            false
         }
         Dialog::DiscardRecovery { name, .. } => {
             ui.label(crate::i18n::fmt(tl!("Discard the recovery copy of {name}?"), &[("name", name)]));

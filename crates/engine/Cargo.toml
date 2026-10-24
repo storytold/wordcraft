@@ -33,10 +33,19 @@ zeroize = { workspace = true }
 # The browser clock for `now_iso` (`SystemTime::now()` panics on wasm32-unknown-unknown).
 js-sys = "0.3"
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-getrandom = { workspace = true }
-
 [dev-dependencies]
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+sha2 = { workspace = true }
+same-file = "1"
+unicode-normalization = "0.1.26"
+getrandom = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+rustix = { version = "1", features = ["fs"] }
+
+[target.'cfg(windows)'.dependencies]
+winapi-util = "0.1.11"

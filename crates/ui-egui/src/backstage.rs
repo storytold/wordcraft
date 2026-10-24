@@ -559,7 +559,7 @@ pub(crate) fn save_as_error_id() -> egui::Id {
 /// Drop the Save As page's error once File is closed or a later save succeeds, so it doesn't
 /// come back next time.
 pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
-    ctx.data_mut(|d| d.remove::<String>(save_as_error_id()));
+    ctx.data_mut(|d| d.remove::<(u64, String)>(save_as_error_id()));
 }
 
 /// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
@@ -594,7 +594,15 @@ fn open_page(app: &mut WordApp, ui: &mut Ui) {
 /// opens it, which is not what Save As is for.
 fn save_as_page(app: &mut WordApp, ui: &mut Ui) {
     heading(ui, "Save As");
-    let error = ui.ctx().data(|d| d.get_temp::<String>(save_as_error_id())).unwrap_or_default();
+    let document = app.session.document_id();
+    let error = app
+        .save_as_error
+        .as_ref()
+        .filter(|(id, _)| *id == document)
+        .cloned()
+        .or_else(|| ui.ctx().data(|d| d.get_temp::<(u64, String)>(save_as_error_id())).filter(|(id, _)| *id == document))
+        .map(|(_, error)| error)
+        .unwrap_or_default();
     if !error.is_empty() {
         ui.label(egui::RichText::new(&error).color(ui.visuals().error_fg_color));
         ui.add_space(6.0);

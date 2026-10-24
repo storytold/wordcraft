@@ -62,6 +62,8 @@ pub(crate) enum AfterPick {
     Picture,
     /// Save the document there, then carry on.
     SaveAs { after: AfterSave, document: u64 },
+    /// A conflict copy belongs to the document that opened its picker.
+    SaveCopy { document: u64 },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
     Export { ext: String },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
@@ -100,6 +102,23 @@ pub(crate) struct PendingDialog {
     rx: Receiver<FileDialogAnswer>,
     req: FileDialogRequest,
     after: AfterPick,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl AfterPick {
+    pub(crate) fn native_open_id(&self) -> Option<u64> {
+        match self {
+            Self::SaveAs { after: AfterSave::Continue { params, .. }, .. } => params.get("nativeRead").and_then(Value::as_u64),
+            _ => None,
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PendingDialog {
+    pub(crate) fn native_open_id(&self) -> Option<u64> {
+        self.after.native_open_id()
+    }
 }
 
 /// How asking for a file went.
@@ -314,6 +333,13 @@ impl WordApp {
                 }
                 r
             }
+            AfterPick::SaveCopy { document } => {
+                if document != self.session.document_id() {
+                    return Err("the document for this copy has been replaced".into());
+                }
+                let Some(path) = picked else { return Ok(json!({"saved": false})) };
+                self.run("file.saveAs", json!({"path": path}))
+            }
             AfterPick::SaveAs { after, document } => {
                 if document != self.session.document_id() {
                     return Err("the document for this save has been replaced".into());
@@ -371,7 +397,7 @@ impl WordApp {
     fn fail_save_as(&mut self, error: &str) {
         self.status(error.to_string());
         if let Some(ctx) = self.ctx.clone() {
-            ctx.data_mut(|d| d.insert_temp(crate::backstage::save_as_error_id(), error.to_string()));
+            ctx.data_mut(|d| d.insert_temp(crate::backstage::save_as_error_id(), (self.session.document_id(), error.to_string())));
         }
     }
 
@@ -703,6 +729,71 @@ mod tests {
     }
 
     /// Dialogs the fake host was asked to show, each with the channel its answer goes through.
+    /// A native Save As refusal stays readable on File, where the editor status bar is absent.
+    #[test]
+    fn native_save_as_failure_remains_visible_until_retry_or_document_change() {
+        use egui_kittest::kittest::Queryable;
+        for dark in [false, true] {
+            let dir = scratch(if dark { "save-error-dark" } else { "save-error-light" });
+            let failed = dir.join("missing").join("draft.docx");
+            let saved = dir.join("retry.docx");
+            let (mut a, shown) = async_app();
+            typed(&mut a);
+            a.run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            h.run_steps(4);
+            h.get_by_label("Browse…").click();
+            h.run_steps(4);
+            answer(&shown, Some(&failed.to_string_lossy()));
+            h.run_steps(4);
+            let error = h.state().status_msg.as_ref().unwrap().0.clone();
+            assert!(error.contains("draft.docx"), "{error}");
+            assert!(h.state().ui.backstage && h.state().session.dirty);
+            assert!(!failed.exists());
+            assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), UNSAVED);
+            h.state_mut().status_msg.as_mut().unwrap().1 -= 10_000.0;
+            h.run_steps(4);
+            assert!(h.query_by_label(&error).is_some(), "the save refusal stays visible after the editor status expires: {error}");
+
+            h.get_by_label("Browse…").click();
+            h.run_steps(4);
+            answer(&shown, None);
+            h.run_steps(4);
+            assert!(h.state().ui.backstage && h.state().session.dirty);
+            assert!(!failed.exists() && !saved.exists());
+
+            h.get_by_label("Browse…").click();
+            h.run_steps(4);
+            answer(&shown, Some(&saved.to_string_lossy()));
+            h.run_steps(4);
+            assert!(!h.state().ui.backstage && !h.state().session.dirty);
+            assert!(saved_text(&saved).contains(UNSAVED));
+            h.state_mut().run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+            h.run_steps(4);
+            assert!(h.query_by_label(&error).is_none(), "a successful retry clears the old error");
+
+            h.get_by_label("Browse…").click();
+            h.run_steps(4);
+            answer(&shown, Some(&failed.to_string_lossy()));
+            h.run_steps(4);
+            let error = h.state().status_msg.as_ref().unwrap().0.clone();
+            assert!(h.query_by_label(&error).is_some());
+            h.state_mut().execute("file.new", json!({})).unwrap();
+            h.state_mut().run("ui.backstage", json!({"value": true, "page": "saveAs"})).unwrap();
+            h.run_steps(4);
+            assert!(h.query_by_label(&error).is_none(), "a new document does not inherit another document error");
+            let _ = std::fs::remove_dir_all(dir);
+        }
+    }
+
     type Shown = Rc<RefCell<Vec<(FileDialogRequest, Sender<FileDialogAnswer>)>>>;
 
     /// An app whose host shows dialogs asynchronously: nothing is answered until the test does.

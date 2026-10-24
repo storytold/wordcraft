@@ -46,6 +46,9 @@ pub enum CmdError {
     Disabled(String),
     #[error("{0}")]
     Failed(String),
+    /// Native destination changed since this session opened or saved it.
+    #[error("{0}")]
+    FileConflict(io::FileConflict),
 }
 
 impl From<wordcraft_doc::DocError> for CmdError {

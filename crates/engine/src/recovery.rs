@@ -104,16 +104,29 @@ impl Session {
         }
     }
     /// Only an explicit protect/save action waits for the worker and removes plaintext copies.
-    /// A failure prevents applying the password; typing never waits.
-    pub(crate) fn clear_recovery_before_password(&mut self) -> Result<(), CmdError> {
+    /// Returns whether a copy was removed. A failure prevents applying the password; typing never waits.
+    pub(crate) fn clear_recovery_before_password(&mut self) -> Result<bool, CmdError> {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let document = self.document_id();
             if let Some(r) = &mut self.recovery
                 && r.document_is(document)
             {
-                r.purge().map_err(CmdError::Failed)?;
+                return r.purge().map_err(CmdError::Failed);
             }
+        }
+        Ok(false)
+    }
+    /// A failed save cannot leave an unprotected dirty document dependent only on memory.
+    pub(crate) fn restore_recovery_after_failed_password_save(&mut self) -> Result<(), String> {
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(mut recovery) = self.recovery.take() {
+            let result = recovery.restore_after_failed_password_save(self);
+            if let Err(error) = &result {
+                recovery.error = Some(error.clone());
+            }
+            self.recovery = Some(recovery);
+            return result;
         }
         Ok(())
     }

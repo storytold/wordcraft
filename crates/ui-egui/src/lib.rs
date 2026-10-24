@@ -536,6 +536,8 @@ pub struct WordApp {
     /// The Restrict Editing pane (#412).
     pub restrict: dialogs_review::RestrictPane,
     pub status_msg: Option<(String, f64)>,
+    /// A refused interactive save stays readable on File, bound to its document.
+    save_as_error: Option<(u64, String)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
     pub change_picture_target: Option<String>,
@@ -640,12 +642,16 @@ pub struct WordApp {
     /// there. A file that was merely opened isn't rewritten until the user saves it: saving drops
     /// whatever WordCraft can't represent (content controls, charts, macros…).
     autosave_path: Option<std::path::PathBuf>,
+    /// Typed native error kept long enough for the user command to offer Save Copy.
+    save_conflict: Option<wordcraft_engine::io::FileConflict>,
     /// Web: saves the browser's picker hasn't finished yet ([`async_saves`], #1315).
     saves_in_flight: Vec<SaveInFlight>,
     /// Web: the command a Save Changes prompt held back until its picker save ends (#1315).
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    #[cfg(not(target_arch = "wasm32"))]
+    native_opens: std::collections::BTreeMap<u64, wordcraft_engine::cmd::file::NativeOpen>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -700,6 +706,7 @@ impl WordApp {
             colors: None,
             restrict: Default::default(),
             status_msg: None,
+            save_as_error: None,
             previews: previews::Previews::default(),
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
@@ -750,6 +757,7 @@ impl WordApp {
             read_aloud_at: None,
             read_aloud_error: None,
             autosave_path: None,
+            save_conflict: None,
             saves_in_flight: Vec::new(),
             awaiting_save: None,
             change_picture_target: None,
@@ -757,6 +765,8 @@ impl WordApp {
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             dialog_pick: None,
             file_dialog: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            native_opens: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: file_browser::State::default(),
             info_editing: None,
@@ -885,6 +895,31 @@ impl WordApp {
         let r = self.run(id, params);
         self.canvas.keep_view = false;
         r
+    }
+
+    /// Open a native path with a request-owned baseline, including non-Unicode names.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn open_native_path(&mut self, path: &std::path::Path) -> Result<Value, String> {
+        let (params, guard) = self.session.prepare_native_open(path)?;
+        self.native_opens.insert(guard.id(), guard);
+        let result = self.run("file.open", params);
+        self.retain_native_opens();
+        result
+    }
+
+    /// Release reads whose dialogs or save continuations have finished or been abandoned.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn retain_native_opens(&mut self) {
+        let dialog = match &self.dialog {
+            Some(dialogs::Dialog::SaveChanges { params, .. } | dialogs::Dialog::Password { params, .. }) => {
+                params.get("nativeRead").and_then(Value::as_u64)
+            }
+            _ => None,
+        };
+        let asynchronous = self.awaiting_save.as_ref().and_then(|save| save.params.get("nativeRead")).and_then(Value::as_u64);
+        let picker = self.file_dialog.as_ref().and_then(file_dialogs::PendingDialog::native_open_id);
+        let browser = self.file_browser.open.as_ref().and_then(|browser| browser.after.native_open_id());
+        self.native_opens.retain(|id, _| [dialog, asynchronous, picker, browser].contains(&Some(*id)));
     }
 
     /// Run a command the user asked for (ribbon, shortcut, Backstage, file drop). New, Open,
@@ -1057,7 +1092,15 @@ impl WordApp {
         }
         let document = self.session.document_id();
         let old_path = self.session.path.clone();
-        let r = self.session.run(id, &params).map_err(|e| e.to_string());
+        let result = self.session.run(id, &params);
+        self.save_conflict = match &result {
+            Err(wordcraft_engine::CmdError::FileConflict(conflict)) => Some(conflict.clone()),
+            _ => None,
+        };
+        if self.save_conflict.is_some() {
+            self.autosave_path = None;
+        }
+        let r = result.map_err(|e| e.to_string());
         // Copy and Cut put what they took on the system clipboard, whichever control ran them
         // (the ribbon, a context menu, the native menu, or the Cmd+C/X event). Only the key event
         // used to write it, so a Cut button deleted the words without copying them.
@@ -1075,7 +1118,7 @@ impl WordApp {
             // Older copies remain available through File > Recover.
             self.recovery_seen = true;
             self.autosave_path = None;
-            if matches!(self.dialog, Some(dialogs::Dialog::SaveChanges { .. })) {
+            if matches!(self.dialog, Some(dialogs::Dialog::SaveChanges { .. } | dialogs::Dialog::SaveConflict { .. })) {
                 self.dialog = None;
             }
             crate::table_pen::stop(self);
@@ -1216,6 +1259,12 @@ impl WordApp {
         }
         let retry = (id == "file.open").then(|| params.clone());
         let r = self.execute(id, params);
+        if matches!(id, "file.save" | "file.saveAs") {
+            self.save_as_error = r.as_ref().err().map(|error| (self.session.document_id(), error.clone()));
+        }
+        if r.is_err() {
+            self.show_save_conflict();
+        }
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
         {
@@ -1227,6 +1276,41 @@ impl WordApp {
         r
     }
 
+    fn show_save_conflict(&mut self) {
+        if let Some(conflict) = self.save_conflict.take() {
+            let name = conflict.path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_else(|| conflict.path.display().to_string());
+            self.dialog = Some(dialogs::Dialog::SaveConflict { name, document: self.session.document_id() });
+        }
+    }
+
+    fn answer_save_conflict(&mut self, answer: &str) -> Result<Value, String> {
+        if !matches!(answer, "copy" | "cancel") {
+            return Err("`answer` must be copy or cancel".into());
+        }
+        let Some(dialogs::Dialog::SaveConflict { document, .. }) = self.dialog.as_ref() else {
+            return Err("no save conflict dialog is open".into());
+        };
+        let document = *document;
+        if document != self.session.document_id() {
+            self.dialog = None;
+            return Err("the document has been replaced".into());
+        }
+        if answer == "cancel" {
+            self.dialog = None;
+            return Ok(json!({"saved": false}));
+        }
+        let name = copy_name(&self.default_save_name());
+        let keep = self.dialog.take();
+        match self.ask_file(file_dialogs::FileDialogRequest::Save { name, dir: None }, file_dialogs::AfterPick::SaveCopy { document }) {
+            file_dialogs::Asked::Done(r) => r,
+            file_dialogs::Asked::Pending => Ok(json!({"pending": "saveCopy"})),
+            file_dialogs::Asked::Busy => {
+                self.dialog = keep;
+                Err(tl!("A file dialog is already open.").into())
+            }
+        }
+    }
+
     /// Save before New/Open/Close (and the mailings that replace the document): true once the
     /// document is safely written. A save in a format that doesn't keep everything (a page
     /// image, plain text) writes a copy and leaves the document unsaved, so it doesn't count:
@@ -1236,7 +1320,10 @@ impl WordApp {
     /// tells the user).
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
-        let v = self.execute("file.save", json!({}))?;
+        let result = self.execute("file.save", json!({}));
+        // Save Changes owns this failure and its pending command, including conflicts.
+        self.save_conflict = None;
+        let v = result?;
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
@@ -1711,6 +1798,7 @@ impl WordApp {
                 let lang = i18n::Lang::from_pref(&self.ui.language);
                 json!({"language": self.ui.language, "effective": lang.code(), "available": i18n::Lang::all().map(|l| json!({"code": l.code(), "name": l.name()})).collect::<Vec<_>>()})
             }
+            "ui.saveConflict" => return Some(self.answer_save_conflict(s("answer").unwrap_or(""))),
             "ui.recoveryDiscard" => {
                 if let Some(answer) = s("answer") {
                     let Some(dialogs::Dialog::DiscardRecovery { id, .. }) = self.dialog.clone() else {
@@ -2139,6 +2227,8 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        #[cfg(not(target_arch = "wasm32"))]
+        self.retain_native_opens();
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // New documents are written in the interface's language when WordCraft can proof it
@@ -2371,6 +2461,13 @@ impl WordApp {
             if let Err(e) = self.session.run("file.save", &json!({})) {
                 log::warn!("AutoSave failed: {e}");
                 self.autosave_path = None;
+                if let wordcraft_engine::CmdError::FileConflict(conflict) = &e {
+                    self.save_conflict = Some(conflict.clone());
+                    // Background saves must not replace a dialog or its pending command.
+                    if self.dialog.is_none() {
+                        self.show_save_conflict();
+                    }
+                }
                 self.status(i18n::fmt(tl!("AutoSave failed: {error}. Save the document to turn AutoSave back on."), &[("error", &e.to_string())]));
             }
         }
@@ -2725,6 +2822,17 @@ impl AutoSaveBlock {
 pub fn keeps_everything(name: &str) -> bool {
     let ext = std::path::Path::new(name).extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
     matches!(ext.as_str(), "docx" | "docm" | "dotx" | "dotm" | "odt" | "rtf" | "json" | "xml")
+}
+
+/// The name Save copy… suggests for `name`: `Report copy.docx`, or `Report copy` when `name` has
+/// no extension (no trailing dot).
+fn copy_name(name: &str) -> String {
+    let path = std::path::Path::new(name);
+    let stem = path.file_stem().map(|s| s.to_string_lossy()).unwrap_or_default();
+    match path.extension().map(|e| e.to_string_lossy()).filter(|e| !e.is_empty()) {
+        Some(ext) => format!("{stem} copy.{ext}"),
+        None => format!("{stem} copy"),
+    }
 }
 
 /// The dialog a user-run command opens when it lacks the input it needs (scripts and agents get
@@ -9104,3 +9212,6 @@ mod tests {
         assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
     }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests_file_conflict;

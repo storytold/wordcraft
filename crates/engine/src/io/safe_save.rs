@@ -5,32 +5,61 @@
 //! folder), an existing destination is never written in place: it is left exactly as it was and
 //! the error says to use Save As to another folder or to give WordCraft access to this one. Only
 //! a destination that doesn't exist yet, so has no previous version to lose, is created directly;
-//! a failed direct write removes it again.
+//! a failed direct write leaves the path alone and reports that an incomplete new file may remain.
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 pub(super) fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    prepare(path, bytes)?.commit(path)
+}
+
+/// A replacement is complete before the version check; a direct new-file fallback has no
+/// filesystem effect until commit, so a missing owned destination can still be refused.
+pub(super) enum Prepared<'a> {
+    Replacement(Temporary),
+    NewFile { bytes: &'a [u8], refused: io::Error },
+}
+
+impl Prepared<'_> {
+    pub(super) fn commit(self, path: &Path) -> io::Result<()> {
+        match self {
+            Self::Replacement(temp) => temp.commit(path),
+            Self::NewFile { bytes, refused } => create_directly(path, refused, |file| {
+                file.write_all(bytes)?;
+                file.sync_all()
+            }),
+        }
+        .map_err(explain)
+    }
+}
+
+pub(super) fn prepare<'a>(path: &Path, bytes: &'a [u8]) -> io::Result<Prepared<'a>> {
+    prepare_with(path, bytes, Temporary::create).map_err(explain)
+}
+
+fn prepare_with<'a>(path: &Path, bytes: &'a [u8], create: impl FnOnce(&Path, bool) -> io::Result<Temporary>) -> io::Result<Prepared<'a>> {
     let permissions = match fs::metadata(path) {
         Ok(meta) if meta.is_file() => Some(meta.permissions()),
         Ok(_) => None,
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
         Err(e) => return Err(e),
     };
-    // A new document gets the usual mode (0666 less the umask); a replaced one keeps its own,
-    // and its temporary file stays private until that mode is applied.
-    let private = permissions.is_some();
-    let written = replace_with(path, private, |file| {
+    let mut temp = match create(path, permissions.is_some()) {
+        Ok(temp) => temp,
+        Err(refused) if refused.kind() == io::ErrorKind::PermissionDenied => return Ok(Prepared::NewFile { bytes, refused }),
+        Err(e) => return Err(e),
+    };
+    {
+        let file = temp.file()?;
         file.write_all(bytes)?;
         if let Some(permissions) = permissions {
             keep_permissions(file.set_permissions(permissions))?;
         }
-        // Synchronize the prepared file before replacing the destination. Directory durability
-        // and network-filesystem/power-loss guarantees are outside this operation's contract.
-        file.sync_all()
-    });
-    written.map_err(explain)
+        file.sync_all()?;
+    }
+    Ok(Prepared::Replacement(temp))
 }
 
 /// A folder that keeps no Unix modes refuses to set one with "Operation not supported": a NAS
@@ -61,6 +90,7 @@ fn not_supported(e: &io::Error) -> bool {
     e.kind() == io::ErrorKind::Unsupported || e.raw_os_error().is_some_and(|code| CODES.contains(&code))
 }
 
+#[cfg(test)]
 fn replace_with(path: &Path, private: bool, prepare: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     let mut temp = match Temporary::create(path, private) {
         Ok(temp) => temp,
@@ -75,9 +105,10 @@ fn replace_with(path: &Path, private: bool, prepare: impl FnOnce(&mut File) -> i
 }
 
 /// No temporary file may be created beside `path` (`refused` says why). A file that doesn't exist
-/// yet is created directly (there is no previous version to lose) and removed again if the save
-/// fails. Anything already at `path` is left untouched: overwriting it in place could destroy the
-/// only copy, so the error says how to save safely instead.
+/// yet is created directly (there is no previous version to lose). After a write failure, leave
+/// the path alone: another writer may have replaced it. Report that an incomplete file may remain.
+/// Anything already at `path` is left untouched: overwriting it in place could destroy the only
+/// copy, so the error says how to save safely instead.
 fn create_directly(path: &Path, refused: io::Error, prepare: impl FnOnce(&mut File) -> io::Result<()>) -> io::Result<()> {
     // `create_new` never opens an existing file or follows a link, so it can't touch one.
     let mut file = match OpenOptions::new().write(true).create_new(true).open(path) {
@@ -95,10 +126,11 @@ fn create_directly(path: &Path, refused: io::Error, prepare: impl FnOnce(&mut Fi
         return Ok(());
     };
     drop(file);
-    match fs::remove_file(path) {
-        Ok(()) => Err(failed),
-        Err(e) => Err(io::Error::new(failed.kind(), format!("{failed}; removing the incomplete new file also failed ({e})"))),
-    }
+    // Checking the file's identity before unlinking would still race with replacement.
+    Err(io::Error::new(
+        failed.kind(),
+        format!("{failed}. An incomplete new file may remain at {}. Use Save As with a different file name to retry.", path.display()),
+    ))
 }
 
 /// A save refused for want of folder access, already worded with what to do about it.
@@ -138,7 +170,7 @@ fn explain(e: io::Error) -> io::Error {
     e
 }
 
-struct Temporary {
+pub(super) struct Temporary {
     path: PathBuf,
     file: Option<File>,
     committed: bool,
@@ -178,7 +210,7 @@ impl Temporary {
         self.file.as_mut().ok_or_else(|| io::Error::other("save temporary file is closed"))
     }
 
-    fn commit(mut self, destination: &Path) -> io::Result<()> {
+    pub(super) fn commit(mut self, destination: &Path) -> io::Result<()> {
         // Close before replacement, including on Windows.
         drop(self.file.take());
         fs::rename(&self.path, destination)?;
@@ -387,8 +419,36 @@ mod tests {
         assert_eq!(fs::read_dir(&d.0).unwrap().count(), 1);
     }
 
+    /// A failed direct create must not unlink a different file moved to the destination.
+    #[cfg(unix)]
     #[test]
-    fn a_failed_direct_save_of_a_new_file_leaves_nothing() {
+    fn failed_direct_save_preserves_an_external_replacement() {
+        for complete in [false, true] {
+            let d = Scratch::new();
+            let path = d.target();
+            let replacement = d.0.join("external.docx");
+            let refused = io::Error::from(io::ErrorKind::PermissionDenied);
+            let err = create_directly(&path, refused, |file| {
+                file.write_all(if complete { b"Complete local save." } else { b"Partial" })?;
+                if complete {
+                    file.sync_all()?;
+                }
+                fs::write(&replacement, b"External version.")?;
+                fs::rename(&replacement, &path)?;
+                assert_eq!(fs::read(&path)?, b"External version.");
+                Err(io::Error::new(io::ErrorKind::WriteZero, "injected direct-save failure"))
+            })
+            .unwrap_err();
+            assert_eq!(err.kind(), io::ErrorKind::WriteZero);
+            assert_eq!(fs::read(&path).unwrap(), b"External version.", "a refused save must retain the external replacement");
+            assert!(err.to_string().contains("injected direct-save failure"));
+            assert!(err.to_string().contains("incomplete new file may remain") && err.to_string().contains("Save As"), "{err}");
+            assert_eq!(fs::read_dir(&d.0).unwrap().count(), 1);
+        }
+    }
+
+    #[test]
+    fn a_failed_direct_save_retains_the_new_file_and_reports_how_to_retry() {
         let d = Scratch::new();
         let path = d.target();
         let refused = io::Error::from(io::ErrorKind::PermissionDenied);
@@ -398,7 +458,12 @@ mod tests {
         })
         .unwrap_err();
         assert!(err.to_string().contains("injected"));
-        assert!(!path.exists());
+        assert!(err.to_string().contains("incomplete new file may remain") && err.to_string().contains("Save As"), "{err}");
+        assert_eq!(fs::read(&path).unwrap(), b"Partial");
+        let retry = d.0.join("retry.docx");
+        create_directly(&retry, io::Error::from(io::ErrorKind::PermissionDenied), |file| file.write_all(b"Complete retry.")).unwrap();
+        assert_eq!(fs::read(&retry).unwrap(), b"Complete retry.");
+        assert_eq!(fs::read(&path).unwrap(), b"Partial");
     }
 
     /// The direct path never opens an existing file and never runs the save: the original is
@@ -447,5 +512,25 @@ mod tests {
         write(&path, b"Saved again.").unwrap();
         assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o640);
         assert_eq!(fs::read(&path).unwrap(), b"Saved again.");
+    }
+
+    #[test]
+    fn direct_fallback_is_deferred_until_commit() {
+        let d = Scratch::new();
+        let path = d.target();
+        let prepared = prepare_with(&path, b"New document.", |_, _| Err(io::Error::from(io::ErrorKind::PermissionDenied))).unwrap();
+        assert!(!path.exists());
+        prepared.commit(&path).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), b"New document.");
+    }
+    #[test]
+    fn deferred_fallback_preserves_a_destination_created_before_commit() {
+        let d = Scratch::new();
+        let path = d.target();
+        let prepared = prepare_with(&path, b"Local edit.", |_, _| Err(io::Error::from(io::ErrorKind::PermissionDenied))).unwrap();
+        fs::write(&path, b"External document.").unwrap();
+        let err = prepared.commit(&path).unwrap_err();
+        assert!(err.to_string().contains("left unchanged"));
+        assert_eq!(fs::read(&path).unwrap(), b"External document.");
     }
 }

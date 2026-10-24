@@ -84,13 +84,8 @@ fn missing_argument() -> Failure {
 fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
     // A file that gives no page size (HTML, Markdown, plain text) opens on the system region's
     // paper, as in the app: A4 in Italy, Letter in the US (#1381).
-    let region = system_region();
-    let (doc, encrypted) = wordcraft_engine::io::open_path_in(path, password, &region)?;
-    let mut s = session(doc);
-    s.path = Some(path.into());
-    if encrypted {
-        s.password = password.map(wordcraft_engine::io::Password::new);
-    }
+    let mut s = session(wordcraft_doc::Document::new());
+    s.open_path(path, password).map_err(|e| e.to_string())?;
     Ok(s)
 }
 
@@ -832,6 +827,22 @@ mod tests {
 
         assert!(set_author(&mut s, "Alice").is_err(), "--author changed the identity used for a protected exception");
         assert!(s.run("text.insert", &json!({"text": "Changed"})).is_err());
+    }
+
+    #[test]
+    fn cli_open_retains_native_file_identity_for_saves() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-cli-conflict-{}", std::process::id()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("input.docx");
+        wordcraft_engine::io::save_path(&path, &wordcraft_doc::Document::from_text("Original A")).unwrap();
+        let mut s = open(&path, None).unwrap();
+        s.run("document.setText", &json!({"text": "Local edit"})).unwrap();
+        let external = wordcraft_engine::io::save_bytes("external.docx", &wordcraft_doc::Document::from_text("External B")).unwrap();
+        std::fs::write(&path, &external).unwrap();
+        assert!(matches!(s.run("file.save", &json!({})), Err(wordcraft_engine::CmdError::FileConflict(_))));
+        assert!(s.dirty);
+        assert_eq!(std::fs::read(&path).unwrap(), external);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
