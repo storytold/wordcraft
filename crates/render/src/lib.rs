@@ -330,14 +330,14 @@ fn rgba_color(c: [u8; 4]) -> peniko::Color {
 /// their width under non-uniform scaling), bitmaps stretched, all clipped to `r` and faded by `alpha`.
 /// Strokes have round caps and joins, as GDI draws them, and are at least one device pixel wide, so
 /// cosmetic (width 0) pens show as hairlines at any zoom.
-fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, crop: &[f32; 4], alpha: f32, view: Affine) {
+fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, crop: &[f32; 4], alpha: f32, view: Affine, clip: &BezPath) {
     ctx.set_transform(view);
     let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
     let faded = alpha < 1.0;
     if faded {
         ctx.push_opacity_layer(alpha);
     }
-    ctx.push_clip_layer(&r.to_path(0.1));
+    ctx.push_clip_layer(clip);
     let pixel = device_pixel(view);
     for it in v.pic.place(*r, *crop) {
         match it {
@@ -941,19 +941,24 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 gx += face.advance(gid) * k;
             }
         }
-        Draw::Image { rect, media, crop, alpha, .. } => {
+        Draw::Image { rect, media, crop, alpha, shape, .. } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             if !r.overlaps(*visible) {
                 return;
             }
+            // Crop to Shape: the picture shows inside the shape's outline only.
+            let clip = match shape {
+                Some(k) => shape_path(*k, r, None),
+                None => r.to_path(0.1),
+            };
             if let Some(v) = vector_for(doc, media) {
-                draw_vector(ctx, &v, &r, crop, *alpha, view);
+                draw_vector(ctx, &v, &r, crop, *alpha, view, &clip);
                 return;
             }
             let Some(pm) = pixmap_for(doc, media) else {
                 ctx.set_transform(view);
                 ctx.set_paint(color(opts.ink(Rgb(0xD0, 0xD0, 0xD0)), 1.0));
-                ctx.fill_rect(&r);
+                ctx.fill_path(&clip);
                 return;
             };
             let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
@@ -971,8 +976,19 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 image: vello_cpu::ImageSource::Pixmap(pm),
                 sampler: peniko::ImageSampler::default().with_quality(peniko::ImageQuality::Medium),
             });
-            ctx.set_paint_transform(Affine::translate((r.x0 - cl * pw * sx, r.y0 - ct * ph * sy)) * Affine::scale_non_uniform(sx, sy));
-            ctx.fill_rect(&r);
+            let (x0, y0) = (r.x0 - cl * pw * sx, r.y0 - ct * ph * sy);
+            ctx.set_paint_transform(Affine::translate((x0, y0)) * Affine::scale_non_uniform(sx, sy));
+            // The source's own area within the frame (smaller than it when padded).
+            let src = r.intersect(kurbo::Rect::new(x0, y0, x0 + pw * sx, y0 + ph * sy));
+            if shape.is_some() {
+                ctx.push_clip_layer(&clip);
+            }
+            if src.width() > 0.0 && src.height() > 0.0 {
+                ctx.fill_rect(&src);
+            }
+            if shape.is_some() {
+                ctx.pop_layer();
+            }
             ctx.reset_paint_transform();
             if faded {
                 ctx.pop_layer();
@@ -1647,6 +1663,7 @@ mod tests {
             float: Default::default(),
             crop: [0.0; 4],
             ole: None,
+            shape: None,
         };
         hp.insert_object(0, obj, &Default::default()).unwrap();
         let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
@@ -2009,6 +2026,7 @@ mod tests {
             float: Default::default(),
             crop: [0.0; 4],
             ole: None,
+            shape: None,
         };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
@@ -2027,6 +2045,42 @@ mod tests {
         let left = img.pixel((rect.x + rect.w * 0.25) as u32, y);
         assert!(right[0] > 200 && right[1] < 60 && right[2] < 60, "right half should be red: {right:?}");
         assert!(left[..3].iter().all(|c| *c > 200), "left half should be paper, not the grey box: {left:?}");
+    }
+
+    /// Fit on a metafile: padding is left empty, the drawing keeps its proportions (it used to
+    /// be stretched over the whole frame).
+    #[test]
+    fn padded_metafile_picture_keeps_its_proportions() {
+        let mut d = Document::new();
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0, -0.5, 0.0, -0.5],
+            ole: None,
+            shape: None,
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        let rect = page_display(&d, &l.pages[0], &opts.display)
+            .iter()
+            .find_map(|i| match i {
+                Draw::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        let img = render_page(&d, &l.pages[0], 1.0, &opts);
+        let at = |fx: f32, fy: f32| img.pixel((rect.x + rect.w * fx) as u32, (rect.y + rect.h * fy) as u32);
+        assert!(at(0.75, 0.5)[0] > 200 && at(0.75, 0.5)[1] < 60, "the red half in the middle: {:?}", at(0.75, 0.5));
+        for fy in [0.1, 0.9] {
+            assert!(at(0.75, fy)[..3].iter().all(|c| *c > 200), "padding at {fy} is paper: {:?}", at(0.75, fy));
+        }
     }
 
     /// #1899: a crop that keeps a sliver of the picture (3% here; a header's bar can be 2.7% of a
@@ -2052,6 +2106,7 @@ mod tests {
                     float: Default::default(),
                     crop,
                     ole: None,
+                    shape: None,
                 };
                 p.insert_object(0, obj, &Default::default()).unwrap();
                 d.body = vec![wordcraft_doc::para_block(p)];
@@ -2089,6 +2144,7 @@ mod tests {
             float: Default::default(),
             crop: [0.0; 4],
             ole: None,
+            shape: None,
         };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
@@ -2135,6 +2191,7 @@ mod tests {
             float: Default::default(),
             crop: [0.0; 4],
             ole: None,
+            shape: None,
         };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
@@ -2169,6 +2226,7 @@ mod tests {
             float: Default::default(),
             crop: [0.0; 4],
             ole: None,
+            shape: None,
         };
         p.insert_object(0, obj, &Default::default()).unwrap();
         d.body = vec![wordcraft_doc::para_block(p)];
@@ -2183,6 +2241,68 @@ mod tests {
             .expect("a picture on the page");
         let img = render_page(&d, &l.pages[0], 1.0, &opts);
         assert_eq!(img.pixel((rect.x + rect.w / 2.0) as u32, (rect.y + rect.h / 2.0) as u32), [0xD0, 0xD0, 0xD0, 255]);
+    }
+
+    /// A solid red 40 × 40 px picture shown 100 × 100 pt with `shape` and `crop`: the page and
+    /// the picture's frame.
+    fn red_picture(shape: Option<ShapeKind>, crop: [f32; 4]) -> (Rendered, wordcraft_geom::Rect) {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(40, 40, image::Rgba([255, 0, 0, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut d = Document::new();
+        let media = d.add_media(png, "png");
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 100.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop,
+            ole: None,
+            shape: shape.map(wordcraft_doc::para::PictureShape::new),
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let opts = RenderOptions::default();
+        let rect = page_display(&d, &l.pages[0], &opts.display)
+            .iter()
+            .find_map(|i| match i {
+                Draw::Image { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("a picture on the page");
+        (render_page(&d, &l.pages[0], 1.0, &opts), rect)
+    }
+
+    /// Crop to Shape: an ellipse-cropped picture leaves its frame's corners unpainted.
+    #[test]
+    fn ellipse_cropped_picture_leaves_its_corners_unpainted() {
+        let red = |p: [u8; 4]| p[0] > 200 && p[1] < 60 && p[2] < 60;
+        let (img, r) = red_picture(Some(ShapeKind::Ellipse), [0.0; 4]);
+        let at = |fx: f32, fy: f32| img.pixel((r.x + r.w * fx) as u32, (r.y + r.h * fy) as u32);
+        assert!(red(at(0.5, 0.5)), "centre: {:?}", at(0.5, 0.5));
+        for (fx, fy) in [(0.05, 0.05), (0.95, 0.05), (0.05, 0.95), (0.95, 0.95)] {
+            assert!(at(fx, fy)[..3].iter().all(|c| *c > 200), "corner {fx},{fy} is paper: {:?}", at(fx, fy));
+        }
+        // Without the outline the corners are the picture's.
+        let (img, r) = red_picture(None, [0.0; 4]);
+        assert!(red(img.pixel((r.x + r.w * 0.05) as u32, (r.y + r.h * 0.05) as u32)));
+    }
+
+    /// Fit: negative crop is padding, drawn transparent (not the picture's edge pixels smeared).
+    #[test]
+    fn negative_crop_pads_the_picture_with_nothing() {
+        let red = |p: [u8; 4]| p[0] > 200 && p[1] < 60 && p[2] < 60;
+        // Padded by half its height above and below: the middle half of the frame is picture.
+        let (img, r) = red_picture(None, [0.0, -0.5, 0.0, -0.5]);
+        let at = |fx: f32, fy: f32| img.pixel((r.x + r.w * fx) as u32, (r.y + r.h * fy) as u32);
+        assert!(red(at(0.5, 0.5)), "middle: {:?}", at(0.5, 0.5));
+        for fy in [0.1, 0.9] {
+            assert!(at(0.5, fy)[..3].iter().all(|c| *c > 200), "padding at {fy} is paper: {:?}", at(0.5, fy));
+        }
     }
 
     #[test]

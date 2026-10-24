@@ -1,7 +1,8 @@
 //! Crop mode on the canvas (Picture Format › Size › Crop, `ui.crop`): black crop handles replace
 //! the selected picture's resize handles; dragging one trims that side (a corner, two sides)
 //! while what stays visible keeps its scale and its place on the page, and dragging back out
-//! restores what was cropped away (never past the source's edge). The cropped-away part shows
+//! restores what was cropped away. Dragged further out, past the source's edge, a handle adds
+//! empty padding (a negative crop, as in Word) and the box grows with it. The cropped-away part shows
 //! around the picture under a dark dim. Esc, Enter, a click outside the picture or Crop again
 //! leave crop mode and keep the crop. A drop is one `picture.crop` with the crop and the new size,
 //! so one undo step. Only unturned pictures: a turned one stays out of crop mode (status message).
@@ -52,10 +53,12 @@ const MAX_SIZE: f32 = 4000.0;
 fn axis(len: f32, lo: f32, hi: f32, grab: i8, d: f32) -> (f32, f32, f32, f32) {
     // The source's full length at this scale; the visible part is 1-lo-hi of it.
     let full = len / (1.0 - lo - hi).max(0.05);
-    // How far the grabbed side's crop may go: at most MAX_SIDE, and the length within its range.
+    // How far the grabbed side's crop may go: at most MAX_SIDE inward (the two sides of an axis
+    // together too), down to the most padding (negative crop) outward, and the length within its
+    // range.
     let range = |cur: f32, other: f32| {
-        let most = (1.0 - other - MIN_SIZE / full).min(MAX_SIDE - other).max(cur);
-        let least = (1.0 - other - MAX_SIZE / full).max(0.0).min(cur);
+        let most = (1.0 - other - MIN_SIZE / full).min(MAX_SIDE - other.max(0.0)).max(cur);
+        let least = (1.0 - other - MAX_SIZE / full).max(wordcraft_doc::para::MIN_CROP).min(cur);
         (least, most)
     };
     let (mut lo2, mut hi2) = (lo, hi);
@@ -87,7 +90,8 @@ pub fn cropped(w: f32, h: f32, crop: [f32; 4], handle: Handle, dx: f32, dy: f32)
 #[allow(clippy::too_many_arguments)]
 pub fn cropped_on_screen(w: f32, h: f32, crop: [f32; 4], flip_h: bool, flip_v: bool, handle: Handle, dx: f32, dy: f32) -> Cropped {
     let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
-    let crop = crop.map(|c| fin(c).clamp(0.0, MAX_SIDE));
+    // Padding (negative crop, as Fit leaves) is kept on the sides a handle doesn't move.
+    let crop = crop.map(|c| fin(c).clamp(wordcraft_doc::para::MIN_CROP, MAX_SIDE));
     let (w, h) = (fin(w), fin(h));
     let (dx, dy) = (fin(dx), fin(dy));
     if w <= 0.0 || h <= 0.0 || (dx == 0.0 && dy == 0.0) {
@@ -299,6 +303,13 @@ fn source(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<egui::Textu
     tex
 }
 
+/// The part of frame `f` that is over the source's `full` rect (none when they don't overlap);
+/// the rest of `f` is padding.
+fn source_part(f: Rect, full: Rect) -> Option<Rect> {
+    let r = f.intersect(full);
+    (r.width() > 0.0 && r.height() > 0.0).then_some(r)
+}
+
 /// Draw crop mode: the cropped-away part dimmed around the picture, its frame and the crop
 /// handles; while dragging, the picture as the drop would leave it. Returns whether crop mode
 /// drew (then the usual frame isn't drawn).
@@ -331,7 +342,10 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     if let (Some(tex), Some(_)) = (&tex, drag) {
         // Dragging: the page still shows the old crop, so show the new visible part too.
         painter.rect_filled(f, 0.0, Color32::WHITE);
-        painter.image(tex.id(), f, uv(f), Color32::WHITE);
+        // Padding (outside the source) stays empty, as after the drop.
+        if let Some(r) = source_part(f, full) {
+            painter.image(tex.id(), r, uv(r), Color32::WHITE);
+        }
     }
     // The cropped-away bands: top, bottom, left, right.
     let bands = [
@@ -388,6 +402,13 @@ mod tests {
         a.crop.iter().zip(b.crop).all(|(x, y)| n(*x, y)) && n(a.w, b.w) && n(a.h, b.h) && n(a.dx, b.dx) && n(a.dy, b.dy)
     }
 
+    /// A padded (Fit) picture keeps its padding on the sides a handle doesn't move.
+    #[test]
+    fn a_handle_keeps_the_padding_of_the_other_sides() {
+        let r = cropped(100.0, 100.0, [0.0, -0.5, 0.0, -0.5], H(-1, 0), 25.0, 0.0);
+        assert!(close(r, Cropped { crop: [0.25, -0.5, 0.0, -0.5], w: 75.0, h: 100.0, dx: 25.0, dy: 0.0 }), "{r:?}");
+    }
+
     #[test]
     fn each_handle_trims_its_own_sides_and_keeps_the_scale() {
         let c = |crop, w, h, dx, dy| Cropped { crop, w, h, dx, dy };
@@ -413,11 +434,45 @@ mod tests {
         // At most 0.95 a side.
         let r = cropped(200.0, 100.0, [0.0; 4], H(-1, 0), 1000.0, 0.0);
         assert!((r.crop[0] - 0.95).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3 && (r.dx - 190.0).abs() < 1e-3, "{r:?}");
-        // Out past the original edge: back to uncropped, no further.
+    }
+
+    /// Dragged outward past the picture's edge a handle adds padding (a negative crop), as in
+    /// Word; the box grows with it, and dragging back in works through 0.
+    #[test]
+    fn outward_drag_past_the_edge_adds_padding() {
+        // Right handle out by 50 of a 200 pt picture: a quarter of the source as padding.
+        let r = cropped(200.0, 100.0, [0.0; 4], H(1, 0), 50.0, 0.0);
+        assert!(close(r, Cropped { crop: [0.0, 0.0, -0.25, 0.0], w: 250.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{r:?}");
+        // Cropped 0.2 on the right: 40 pt restore it, the other 60 pad.
         let r = cropped(160.0, 100.0, [0.0, 0.0, 0.2, 0.0], H(1, 0), 100.0, 0.0);
-        assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{r:?}");
-        let r = cropped(200.0, 90.0, [0.0, 0.1, 0.0, 0.0], H(0, -1), 0.0, -500.0);
-        assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: -10.0 }), "{r:?}");
+        assert!(close(r, Cropped { crop: [0.0, 0.0, -0.3, 0.0], w: 260.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{r:?}");
+        // Top handle out by 10: the frame's corner moves up.
+        let r = cropped(200.0, 100.0, [0.0; 4], H(0, -1), 0.0, -10.0);
+        assert!(close(r, Cropped { crop: [0.0, -0.1, 0.0, 0.0], w: 200.0, h: 110.0, dx: 0.0, dy: -10.0 }), "{r:?}");
+        // And back in past 0 trims again.
+        let a = cropped(200.0, 100.0, [0.0; 4], H(1, 0), 50.0, 0.0);
+        let b = cropped(a.w, a.h, a.crop, H(1, 0), -100.0, 0.0);
+        assert!(close(b, Cropped { crop: [0.0, 0.0, 0.25, 0.0], w: 150.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{b:?}");
+    }
+
+    /// A huge outward drag stops at the engine's most padding (and at 4000 pt), all finite.
+    #[test]
+    fn the_drag_preview_draws_the_source_only_where_it_overlaps_the_frame() {
+        let r = |a, b, c, d| Rect::from_min_max(pos2(a, b), pos2(c, d));
+        // Padded on the right: the frame (0..250) is wider than the source (0..200).
+        assert_eq!(source_part(r(0.0, 0.0, 250.0, 100.0), r(0.0, 0.0, 200.0, 100.0)), Some(r(0.0, 0.0, 200.0, 100.0)));
+        // Cropped: the frame is inside the source.
+        assert_eq!(source_part(r(10.0, 0.0, 90.0, 100.0), r(0.0, 0.0, 200.0, 100.0)), Some(r(10.0, 0.0, 90.0, 100.0)));
+        // Apart: nothing to draw.
+        assert_eq!(source_part(r(300.0, 0.0, 400.0, 100.0), r(0.0, 0.0, 200.0, 100.0)), None);
+    }
+
+    #[test]
+    fn outward_drag_clamps_at_the_most_padding() {
+        let r = cropped(100.0, 100.0, [0.0; 4], H(1, 0), 1.0e9, 0.0);
+        assert!(r.crop[2] >= wordcraft_doc::para::MIN_CROP && r.crop[2] < 0.0 && r.w <= 4000.01 && r.w.is_finite(), "{r:?}");
+        let r = cropped(10.0, 10.0, [0.0; 4], H(-1, -1), -1.0e30, -1.0e30);
+        assert!(r.crop.iter().all(|c| (wordcraft_doc::para::MIN_CROP..=MAX_SIDE).contains(c)) && r.w <= 4000.01, "{r:?}");
     }
 
     /// #3135: a side can take almost the whole source (5% stays), so any part of the picture can
@@ -451,9 +506,10 @@ mod tests {
         assert_eq!(cropped(0.0, 100.0, [0.0; 4], H(-1, 0), 10.0, 0.0), same(0.0, 100.0, [0.0; 4]));
         assert_eq!(cropped(-5.0, 100.0, [0.0; 4], H(1, 1), 10.0, 10.0), same(-5.0, 100.0, [0.0; 4]));
         assert_eq!(cropped(200.0, f32::NAN, [0.0; 4], H(0, 1), 0.0, 10.0), same(200.0, 0.0, [0.0; 4]));
-        // A junk crop reads as uncropped / at most 0.95 a side; a zero drag leaves that be.
-        let r = cropped(200.0, 100.0, [f32::NAN, -1.0, 0.7, 0.0], H(-1, -1), 0.0, 0.0);
-        assert_eq!(r, same(200.0, 100.0, [0.0, 0.0, 0.7, 0.0]));
+        // A junk crop reads as uncropped / at most 0.95 a side / padded at most 100 times the
+        // source (negative is Fit's padding); a zero drag leaves that be.
+        let r = cropped(200.0, 100.0, [f32::NAN, -1.0, 0.7, -500.0], H(-1, -1), 0.0, 0.0);
+        assert_eq!(r, same(200.0, 100.0, [0.0, -1.0, 0.7, -100.0]));
     }
 
     /// Sizes stay within what `picture.crop` accepts (1–4000 pt) at the same scale, so the
@@ -492,7 +548,7 @@ mod tests {
     fn app_with_picture(rot: f32) -> WordApp {
         let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
         let float = wordcraft_doc::para::Float { rot, ..Default::default() };
-        let pic = InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float, crop: [0.0; 4], ole: None };
+        let pic = InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float, crop: [0.0; 4], ole: None, shape: None };
         app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
         let end = Pos::body(0, OBJ.len_utf8());
         app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
@@ -545,7 +601,16 @@ mod tests {
     }
 
     fn test_picture() -> InlineObject {
-        InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None }
+        InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            shape: None,
+        }
     }
 
     /// The whole window with `n` 200×100 pt pictures in the first paragraph, the first one
@@ -613,6 +678,30 @@ mod tests {
         assert!(active(h.state()).is_some(), "crop mode stays on after a drop");
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(image_at(&h, 0), (200.0, 100.0, [0.0; 4]));
+    }
+
+    /// A real mouse drag of the right crop handle outward past the picture's edge: the drop
+    /// stores a negative (padding) crop and a wider box at the same scale; one undo brings back
+    /// the crop there was before.
+    #[test]
+    fn dragging_a_crop_handle_outward_with_the_mouse_pads_and_undoes() {
+        let mut h = crop_window(1);
+        h.state_mut().run("picture.crop", json!({"left": 0.1, "width": 180.0, "height": 100.0})).unwrap();
+        steps(&mut h, 2);
+        let before = image_at(&h, 0);
+        let r = rect_of(&mut h, 0);
+        let from = screen(&mut h, r.right(), r.y + r.h / 2.0);
+        let to = from + egui::vec2(60.0, 0.0);
+        drag(&mut h, from, to);
+        assert_eq!(image_at(&h, 0), before, "nothing changes while dragging");
+        button(&h, to, false);
+        steps(&mut h, 3);
+        let (w, ht, crop) = image_at(&h, 0);
+        assert!(crop[2] < -0.05 && crop[0] == 0.1 && crop[1] == 0.0 && crop[3] == 0.0, "padding on the right: {crop:?}");
+        assert!(w > 190.0 && ht == 100.0, "the box grows: {w}×{ht}");
+        assert!((w / (1.0 - crop[0] - crop[2]) - 200.0).abs() < 0.5, "scale kept: {w} {crop:?}");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(image_at(&h, 0), before, "undo restores the prior crop");
     }
 
     /// A click outside the picture leaves crop mode, keeping the crop.

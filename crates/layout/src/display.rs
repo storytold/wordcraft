@@ -183,6 +183,8 @@ pub enum Draw {
         media: String,
         crop: [f32; 4],
         alpha: f32,
+        /// Crop to Shape: the outline the picture is clipped to (None: `rect`).
+        shape: Option<ShapeKind>,
         /// The picture's alt text (empty for a floating or diagram picture, which tag themselves).
         alt: String,
         /// Marked decorative (Alt Text › Mark as decorative): an artifact in tagged PDF, which
@@ -797,10 +799,10 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
-        Placed::Image { rect, media, crop, spin, .. } => spun(
+        Placed::Image { rect, media, crop, spin, shape, .. } => spun(
             *spin,
             *rect,
-            vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, alt: String::new(), decorative: false }],
+            vec![Draw::Image { rect: *rect, media: media.clone(), crop: *crop, alpha, shape: *shape, alt: String::new(), decorative: false }],
             out,
         ),
         Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
@@ -1555,9 +1557,15 @@ fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Dra
                 out.push(Draw::Path { segs, fill: fill.map(Paint::solid), stroke: *stroke, stroke_width: stroke_width * k, dash: Vec::new() })
             }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
-            GraphicItem::Image { rect: r, media } => {
-                out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha, alt: String::new(), decorative: false })
-            }
+            GraphicItem::Image { rect: r, media } => out.push(Draw::Image {
+                rect: inside(r),
+                media: media.clone(),
+                crop: [0.0; 4],
+                alpha,
+                shape: None,
+                alt: String::new(),
+                decorative: false,
+            }),
         }
     }
     out
@@ -1873,9 +1881,10 @@ fn spun(spin: Spin, rect: Rect, items: Vec<Draw>, out: &mut Vec<Draw>) {
 fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let own = o.frame().map(|(_, _, f)| f.spin()).unwrap_or_default();
     match o {
-        InlineObject::Image { media, crop, alt, .. } => {
+        InlineObject::Image { media, crop, alt, shape, .. } => {
             let decorative = o.is_decorative();
-            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, alt: alt.clone(), decorative }], out)
+            let shape = shape.as_ref().map(|s| s.kind);
+            spun(own, rect, vec![Draw::Image { rect, media: media.clone(), crop: *crop, alpha, shape, alt: alt.clone(), decorative }], out)
         }
         InlineObject::Shape { kind, fill, stroke, stroke_width, effects, freeform, extra, .. } => {
             let effects = effects_in(*effects, own.within(outer));
@@ -1918,6 +1927,7 @@ fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32, opts: &Di
                         media: media.clone(),
                         crop: [0.0; 4],
                         alpha,
+                        shape: None,
                         alt: String::new(),
                         decorative: false,
                     }),

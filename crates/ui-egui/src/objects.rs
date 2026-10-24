@@ -987,8 +987,16 @@ mod tests {
             Default::default(),
         );
         a.run("view.commentsPane", json!({"value": false})).unwrap();
-        let picture =
-            InlineObject::Image { media: String::new(), w: 80.0, h: 40.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        let picture = InlineObject::Image {
+            media: String::new(),
+            w: 80.0,
+            h: 40.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+            shape: None,
+        };
         a.session.doc.insert_object(&Pos::body(1, 0), picture, &Default::default()).unwrap();
         a.session.touch();
         let mut h: H = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(0.25).build_ui_state(
@@ -1276,6 +1284,7 @@ mod tests {
                 },
                 crop: [0.0; 4],
                 ole: None,
+                shape: None,
             };
             let (mut app, _) = app_with(picture);
             app.session.doc.media.insert("rotation-test".into(), Arc::new(bytes));
