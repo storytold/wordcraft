@@ -536,6 +536,30 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// While a Zotero command runs: "Waiting for Zotero…" and a Cancel link (`ui.zotero.cancel`),
+/// so a person can always get out of a command Zotero never finishes.
+fn zotero_cancel(app: &mut WordApp, ui: &mut Ui, t: &Tokens) {
+    if app.zotero.busy.is_none() {
+        return;
+    }
+    let font = TypeRung::Caption.regular();
+    let track = TypeRung::Caption.tracking();
+    for (s, color, button) in [(tl!("Waiting for Zotero…"), t.text_dim, false), (tl!("Cancel"), t.accent_text, true)] {
+        let w = text_width(ui.painter(), s, &font, track, color);
+        let sense = if button { Sense::click() } else { Sense::hover() };
+        let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), sense);
+        paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, color);
+        let kind = if button { egui::WidgetType::Button } else { egui::WidgetType::Label };
+        resp.widget_info(|| egui::WidgetInfo::labeled(kind, true, s));
+        if !button {
+            continue;
+        }
+        if resp.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+            let _ = app.run("ui.zotero.cancel", json!({}));
+        }
+    }
+}
+
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")
@@ -547,8 +571,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 .stroke(Stroke::new(1.0, t.border)),
         )
         .show(ui, |ui| {
-            // No document open (#1129): an empty status bar.
+            // No document open (#1129): an empty status bar, but for a Zotero command to cancel.
             if !app.has_document() {
+                ui.horizontal_centered(|ui| zotero_cancel(app, ui, &t));
                 return;
             }
             ui.horizontal_centered(|ui| {
@@ -619,6 +644,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                     let _ = app.run("text.overtype", json!({"value": false}));
                 }
+                zotero_cancel(app, ui, &t);
                 // The message is drawn where the row is now; the controls on the right are laid
                 // out first, so the message can be shortened to the space they leave (#2402): a
                 // long one (the path of a file that isn't there) must not be drawn over the

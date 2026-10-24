@@ -2868,6 +2868,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.zotero.cancel"
     ) || id.starts_with("help.")
 }
 
