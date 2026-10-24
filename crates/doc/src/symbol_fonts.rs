@@ -10,7 +10,10 @@
 //! Sources (Unicode's own published data; no font file was read):
 //! - Symbol: the Adobe Symbol encoding table published by Unicode,
 //!   <https://www.unicode.org/Public/MAPPINGS/VENDORS/ADOBE/symbol.txt> (codes it maps to the
-//!   private use area are left out; 0x6D maps to GREEK SMALL LETTER MU).
+//!   private use area are left out; 0x6D maps to GREEK SMALL LETTER MU). The exceptions are the
+//!   bracket and integral pieces at 0xE6–0xEF, 0xF4 and 0xF6–0xFE (`parenlefttp` … `bracerightbt`),
+//!   which equation editors stack into tall brackets: Unicode 3.2 encoded the same pieces at
+//!   U+239B–U+23AE, and each takes the character of the same name (LEFT PARENTHESIS UPPER HOOK…).
 //! - Wingdings, Wingdings 2, Wingdings 3, Webdings: the correspondence tables in "Status of
 //!   encoding of Wingdings and Webdings Symbols", Unicode L2/12-368 (WG2 N4384, M. Suignard,
 //!   2012), the frozen repertoire of the Unicode 7.0 encoding (earlier drafts L2/11-052,
@@ -94,10 +97,10 @@ const SYMBOL: [u32; 224] = [
     0x222A, 0x2283, 0x2287, 0x2284, 0x2282, 0x2286, 0x2208, 0x2209, // 0xC8
     0x2220, 0x2207, 0x0000, 0x0000, 0x0000, 0x220F, 0x221A, 0x22C5, // 0xD0
     0x00AC, 0x2227, 0x2228, 0x21D4, 0x21D0, 0x21D1, 0x21D2, 0x21D3, // 0xD8
-    0x25CA, 0x2329, 0x0000, 0x0000, 0x0000, 0x2211, 0x0000, 0x0000, // 0xE0
-    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, // 0xE8
-    0x0000, 0x232A, 0x222B, 0x2320, 0x0000, 0x2321, 0x0000, 0x0000, // 0xF0
-    0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, 0x0000, // 0xF8
+    0x25CA, 0x2329, 0x0000, 0x0000, 0x0000, 0x2211, 0x239B, 0x239C, // 0xE0
+    0x239D, 0x23A1, 0x23A2, 0x23A3, 0x23A7, 0x23A8, 0x23A9, 0x23AA, // 0xE8
+    0x0000, 0x232A, 0x222B, 0x2320, 0x23AE, 0x2321, 0x239E, 0x239F, // 0xF0
+    0x23A0, 0x23A4, 0x23A5, 0x23A6, 0x23AB, 0x23AC, 0x23AD, 0x0000, // 0xF8
 ];
 
 const WEBDINGS: [u32; 224] = [
@@ -269,6 +272,16 @@ mod tests {
         assert_eq!(symbol_char("Symbol", '\u{F0D6}'), Some('√'));
         // The radical extender is private use in the Adobe table: no equivalent.
         assert_eq!(symbol_char("Symbol", '\u{F060}'), None);
+    }
+
+    #[test]
+    fn symbol_bracket_pieces_are_the_unicode_pieces() {
+        let pieces: String = ('\u{F0E6}'..='\u{F0EF}')
+            .chain('\u{F0F4}'..='\u{F0F4}')
+            .chain('\u{F0F6}'..='\u{F0FE}')
+            .filter_map(|c| symbol_char("Symbol", c))
+            .collect();
+        assert_eq!(pieces, "⎛⎜⎝⎡⎢⎣⎧⎨⎩⎪⎮⎞⎟⎠⎤⎥⎦⎫⎬⎭");
     }
 
     #[test]

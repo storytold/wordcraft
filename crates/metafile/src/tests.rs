@@ -1053,3 +1053,145 @@ fn plain_wmf_target_comes_from_a_window_that_was_read() {
     let (x0, y0, x1, y1) = rect_extent(&p.items[0]);
     assert!(close(x0, 0.0) && close(y0, 0.0) && close(x1, 200.0) && close(y1, 100.0), "{x0} {y0} {x1} {y1}");
 }
+
+/// META_CREATEFONTINDIRECT: height, width, escapement, orientation, weight, italic, underline,
+/// strike-out, charset, three precision/quality bytes, pitch and family, then the face name's bytes.
+fn wmf_font(height: i16, weight: i16, italic: bool, charset: u8, face: &[u8]) -> Vec<u8> {
+    let mut p = cat(vec![h16(i32::from(height)), h16(0), h16(0), h16(0), h16(i32::from(weight))]);
+    p.extend([u8::from(italic), 0, 0, charset, 0, 0, 0, 0]);
+    let mut name = face.to_vec();
+    name.resize(32, 0);
+    p.extend(name);
+    wrec(0x02FB, &p)
+}
+
+/// META_EXTTEXTOUT at (x, y) with no options: the string (padded to a word), then one dx per byte.
+fn wmf_ext_text_out(x: i16, y: i16, s: &[u8], dx: &[i16]) -> Vec<u8> {
+    let mut p = cat(vec![h16(i32::from(y)), h16(i32::from(x)), h16(s.len() as i32), h16(0)]);
+    p.extend(s);
+    if !s.len().is_multiple_of(2) {
+        p.push(0);
+    }
+    for d in dx {
+        p.extend(h16(i32::from(*d)));
+    }
+    wrec(0x0A32, &p)
+}
+
+/// A 200 x 100 window, so picture units are logical units.
+fn wmf_window() -> [Vec<u8>; 2] {
+    [wrec(0x020B, &cat(vec![h16(0), h16(0)])), wrec(0x020C, &cat(vec![h16(100), h16(200)]))]
+}
+
+fn texts(p: &crate::Picture) -> Vec<&crate::Text> {
+    p.items
+        .iter()
+        .filter_map(|i| match i {
+            Item::Text(t) => Some(t),
+            _ => None,
+        })
+        .collect()
+}
+
+#[test]
+fn wmf_text_records_become_text() {
+    let recs = [
+        wmf_window().to_vec(),
+        vec![
+            wmf_font(-20, 700, true, 0, b"Times New Roman"),
+            wrec(0x012D, &h16(0)),
+            wrec(0x0209, &h32(0x0000_00FF)),
+            wrec(0x012E, &h16(24)),
+            // "x²" in Windows-1252, with its advances.
+            wmf_ext_text_out(10, 30, b"x\xB2", &[9, 7]),
+        ],
+    ]
+    .concat();
+    let p = parse(&wmf(&recs, None)).unwrap();
+    let t = texts(&p);
+    assert_eq!(t.len(), 1, "{:?}", p.items);
+    let t = t[0];
+    assert_eq!(t.text, "x²");
+    assert_eq!(t.font, "Times New Roman");
+    assert!(t.bold && t.italic);
+    assert_eq!(t.color, [255, 0, 0, 255]);
+    assert_eq!(t.valign, crate::VAlign::Baseline);
+    assert!(close(t.x, 10.0) && close(t.y, 30.0), "{} {}", t.x, t.y);
+    assert!(close(t.size, 20.0) && !t.cell, "{} {}", t.size, t.cell);
+    assert_eq!(t.dx, vec![9.0, 7.0]);
+}
+
+#[test]
+fn wmf_text_with_update_cp_starts_at_the_current_point_and_moves_it() {
+    // What Equation Editor and MathType write: TA_BASELINE | TA_UPDATECP, MOVETO, text at (0, 0).
+    let recs = [
+        wmf_window().to_vec(),
+        vec![
+            wmf_font(-20, 400, false, 0, b"Times New Roman"),
+            wrec(0x012D, &h16(0)),
+            wrec(0x012E, &h16(25)),
+            wrec(0x0214, &cat(vec![h16(40), h16(5)])),
+            wmf_ext_text_out(0, 0, b"ab", &[6, 6]),
+            wmf_ext_text_out(0, 0, b"c", &[6]),
+        ],
+    ]
+    .concat();
+    let p = parse(&wmf(&recs, None)).unwrap();
+    let t = texts(&p);
+    assert_eq!(t.iter().map(|t| (t.text.as_str(), t.x, t.y)).collect::<Vec<_>>(), [("ab", 5.0, 40.0), ("c", 17.0, 40.0)]);
+}
+
+#[test]
+fn wmf_text_bytes_and_face_name_are_read_in_the_font_charset() {
+    // GB2312 (charset 134): the face name 宋体 and the text 数 are GBK bytes.
+    let recs = [
+        wmf_window().to_vec(),
+        vec![wmf_font(-20, 400, false, 134, b"\xCB\xCE\xCC\xE5"), wrec(0x012D, &h16(0)), wmf_ext_text_out(10, 30, b"\xCA\xFD", &[])],
+    ]
+    .concat();
+    let p = parse(&wmf(&recs, None)).unwrap();
+    let t = texts(&p);
+    assert_eq!(t.iter().map(|t| (t.font.as_str(), t.text.as_str())).collect::<Vec<_>>(), [("宋体", "数")]);
+}
+
+#[test]
+fn wmf_symbol_font_text_keeps_its_symbol_codes() {
+    // The Symbol font's own 8-bit codes, stored as U+F000 + code like Word's symbol characters,
+    // whether the font says SYMBOL_CHARSET (2) or DEFAULT_CHARSET (1, as MathType writes).
+    for charset in [1, 2] {
+        let recs = [
+            wmf_window().to_vec(),
+            vec![wmf_font(-20, 400, false, charset, b"Symbol"), wrec(0x012D, &h16(0)), wmf_ext_text_out(10, 30, b"p\xA5", &[])],
+        ]
+        .concat();
+        let p = parse(&wmf(&recs, None)).unwrap();
+        let t = texts(&p);
+        assert_eq!(t.iter().map(|t| t.text.as_str()).collect::<Vec<_>>(), ["\u{F070}\u{F0A5}"], "charset {charset}");
+    }
+}
+
+#[test]
+fn wmf_textout_draws_its_odd_length_string() {
+    // META_TEXTOUT: length, the string padded to a word, then y and x.
+    let recs = [
+        wmf_window().to_vec(),
+        vec![wmf_font(-20, 400, false, 0, b"Arial"), wrec(0x012D, &h16(0)), wrec(0x0521, &cat(vec![h16(3), b"abc\0".to_vec(), h16(30), h16(10)]))],
+    ]
+    .concat();
+    let p = parse(&wmf(&recs, None)).unwrap();
+    let t = texts(&p);
+    assert_eq!(t.iter().map(|t| (t.text.as_str(), t.x, t.y)).collect::<Vec<_>>(), [("abc", 10.0, 30.0)]);
+}
+
+#[test]
+fn wmf_short_font_still_takes_its_handle_slot() {
+    let recs = [
+        wrec(0x02FB, &[0u8; 4]),
+        wrec(0x02FA, &cat(vec![h16(0), h16(4), h16(0), h32(0x0000_FF00)])),
+        wrec(0x012D, &h16(1)),
+        wrec(0x0325, &cat(vec![h16(2), h16(0), h16(0), h16(50), h16(0), h16(50)])),
+    ];
+    let p = parse(&wmf(&recs, None)).unwrap();
+    let (_, _, stroke, _) = path_segs(&p.items[0]);
+    assert_eq!(stroke, Some(([0, 255, 0, 255], 4.0)));
+}

@@ -1688,14 +1688,27 @@ impl Exporter<'_> {
     /// Draws a metafile text run as PDF text (outlines when the font cannot be embedded). `tf` maps
     /// the run's own space (see [`PlacedItem::Text`]) to the page.
     fn vector_text(&mut self, s: &mut Surface, t: &wordcraft_metafile::Text, tf: kurbo::Affine) {
-        let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
-        let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
-        let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
+        let resolved = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic);
+        let face = resolved.face;
+        // A symbol font that isn't installed: its codes drawn as their Unicode equivalents.
+        let mapped;
+        let t = if resolved.substituted && wordcraft_doc::symbol_fonts::is_symbol_font(&t.font) {
+            mapped = wordcraft_metafile::Text { text: wordcraft_doc::symbol_fonts::map_text(&t.font, &t.text), ..t.clone() };
+            &mapped
+        } else {
+            t
+        };
+        let shaped = wordcraft_fonts::shape_with_fallback(face, &t.text, t.bold, t.italic);
+        // Fallback glyphs' metrics in the run face's units.
+        let upem = face.upem.max(1.0);
+        let glyphs: Vec<_> = shaped
+            .iter()
+            .map(|(f, g)| {
+                let k = upem / f.upem.max(1.0);
+                (g.cluster, f64::from(g.x_advance) * k, f64::from(g.x_offset) * k, f64::from(g.y_offset) * k)
+            })
+            .collect();
         let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
-        let font = self.font(&face);
-        if font.is_none() && !self.outlined.contains(&face.id()) {
-            return;
-        }
         let em = lay.em as f32;
         let c = tf.as_coeffs().map(|v| v as f32);
         if !c.iter().all(|v| v.is_finite()) || !em.is_finite() {
@@ -1705,31 +1718,43 @@ impl Exporter<'_> {
         s.push_transform(&Transform::from_row(c[0], c[1], c[2], c[3], c[4], c[5]));
         s.set_stroke(None);
         s.set_fill(Some(Fill { paint: paint.into(), opacity, rule: FillRule::NonZero }));
-        match font {
-            Some(font) => {
-                let upem = face.upem.max(1.0) as f32;
-                let kg: Vec<KrillaGlyph> = shaped
-                    .iter()
-                    .enumerate()
-                    .map(|(i, g)| {
-                        let end = shaped.iter().skip(i + 1).map(|n| n.cluster).find(|cl| *cl > g.cluster).unwrap_or(t.text.len());
-                        let start = g.cluster.min(end);
-                        let x = lay.glyphs.get(i).map_or(0.0, |p| p.0);
-                        let adv = match lay.glyphs.get(i + 1) {
-                            Some(n) => ((n.0 - x) / lay.em) as f32,
-                            None => g.x_advance as f32 / upem,
-                        };
-                        let dy = lay.glyphs.get(i).map_or(0.0, |p| ((lay.baseline - p.1) / lay.em) as f32);
-                        KrillaGlyph::new(GlyphId::new(g.gid), adv, 0.0, dy, 0.0, start..end, None)
-                    })
-                    .collect();
-                let x0 = lay.glyphs.first().map_or(0.0, |p| p.0) as f32;
-                s.draw_glyphs(Point::from_xy(x0, lay.baseline as f32), &kg, font, &t.text, em, false);
+        // One drawing call per face, in order.
+        let mut i = 0;
+        while let Some((f, _)) = shaped.get(i) {
+            let f = *f;
+            let n = shaped.iter().skip(i).take_while(|(g, _)| *g == f).count();
+            let run = i..i + n;
+            i += n;
+            let font = self.font(&f);
+            if font.is_none() && !self.outlined.contains(&f.id()) {
+                continue;
             }
-            None => {
-                let pen: Vec<(u32, f32, f32)> = shaped.iter().zip(&lay.glyphs).map(|(g, (x, y))| (g.gid, *x as f32, *y as f32)).collect();
-                if let Some(path) = glyph_outlines(&face, em, &pen) {
-                    s.draw_path(&path);
+            match font {
+                Some(font) => {
+                    let kg: Vec<KrillaGlyph> = run
+                        .clone()
+                        .filter_map(|j| {
+                            let (_, g) = shaped.get(j)?;
+                            let end = shaped.iter().skip(j + 1).map(|(_, n)| n.cluster).find(|cl| *cl > g.cluster).unwrap_or(t.text.len());
+                            let start = g.cluster.min(end);
+                            let x = lay.glyphs.get(j).map_or(0.0, |p| p.0);
+                            let adv = match lay.glyphs.get(j + 1).filter(|_| j + 1 < run.end) {
+                                Some(n) => ((n.0 - x) / lay.em) as f32,
+                                None => g.x_advance as f32 / f.upem.max(1.0) as f32,
+                            };
+                            let dy = lay.glyphs.get(j).map_or(0.0, |p| ((lay.baseline - p.1) / lay.em) as f32);
+                            Some(KrillaGlyph::new(GlyphId::new(g.gid), adv, 0.0, dy, 0.0, start..end, None))
+                        })
+                        .collect();
+                    let x0 = lay.glyphs.get(run.start).map_or(0.0, |p| p.0) as f32;
+                    s.draw_glyphs(Point::from_xy(x0, lay.baseline as f32), &kg, font, &t.text, em, false);
+                }
+                None => {
+                    let pen: Vec<(u32, f32, f32)> =
+                        run.filter_map(|j| Some((shaped.get(j)?.1.gid, lay.glyphs.get(j)?.0 as f32, lay.glyphs.get(j)?.1 as f32))).collect();
+                    if let Some(path) = glyph_outlines(&f, em, &pen) {
+                        s.draw_path(&path);
+                    }
                 }
             }
         }

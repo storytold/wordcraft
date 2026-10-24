@@ -381,16 +381,32 @@ fn draw_vector(ctx: &mut RenderContext, v: &Vector, r: &kurbo::Rect, crop: &[f32
 
 /// Draws a metafile text run: `tf` maps the run's own space (see [`PlacedItem::Text`]) to the device.
 fn draw_vector_text(ctx: &mut RenderContext, t: &wordcraft_metafile::Text, tf: Affine) {
-    let face = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic).face;
-    let shaped = wordcraft_fonts::shape(&face, &t.text, &[], |c| c);
-    let glyphs: Vec<_> = shaped.iter().map(|g| (g.cluster, f64::from(g.x_advance), f64::from(g.x_offset), f64::from(g.y_offset))).collect();
+    let resolved = wordcraft_fonts::word::resolve(&t.font, t.bold, t.italic);
+    let face = resolved.face;
+    // A symbol font that isn't installed: its codes drawn as their Unicode equivalents.
+    let mapped;
+    let t = if resolved.substituted && wordcraft_doc::symbol_fonts::is_symbol_font(&t.font) {
+        mapped = wordcraft_metafile::Text { text: wordcraft_doc::symbol_fonts::map_text(&t.font, &t.text), ..t.clone() };
+        &mapped
+    } else {
+        t
+    };
+    let shaped = wordcraft_fonts::shape_with_fallback(face, &t.text, t.bold, t.italic);
+    // Fallback glyphs' metrics in the run face's units.
+    let upem = face.upem.max(1.0);
+    let glyphs: Vec<_> = shaped
+        .iter()
+        .map(|(f, g)| {
+            let s = upem / f.upem.max(1.0);
+            (g.cluster, f64::from(g.x_advance) * s, f64::from(g.x_offset) * s, f64::from(g.y_offset) * s)
+        })
+        .collect();
     let Some(lay) = t.layout(face.upem, face.ascent, face.descent, &glyphs) else { return };
-    let k = lay.em / face.upem.max(1.0);
     ctx.set_paint(rgba_color(t.color));
     let db = FontDb::global();
-    for (g, (x, y)) in shaped.iter().zip(&lay.glyphs) {
-        let o = db.outline(&face, g.gid);
-        ctx.set_transform(tf * Affine::translate((*x, *y)) * Affine::scale(k));
+    for ((f, g), (x, y)) in shaped.iter().zip(&lay.glyphs) {
+        let o = db.outline(f, g.gid);
+        ctx.set_transform(tf * Affine::translate((*x, *y)) * Affine::scale(lay.em / f.upem.max(1.0)));
         ctx.fill_path(&o);
     }
 }

@@ -178,6 +178,46 @@ pub fn shape(face: &FontFace, text: &str, features: &[Feature], map: impl Fn(cha
     out
 }
 
+/// Shape `text` with `face`, taking each run of characters the face can't draw from a fallback face
+/// that can (styled `bold` / `italic` when one is), as paragraph layout does. Whitespace and
+/// control characters stay in the run's face. Clusters are byte offsets in `text`.
+pub fn shape_with_fallback(face: FaceRef, text: &str, bold: bool, italic: bool) -> Vec<(FaceRef, ShapedGlyph)> {
+    let db = FontDb::global();
+    let mut runs: Vec<(usize, usize, FaceRef)> = Vec::new();
+    for (i, c) in text.char_indices() {
+        let prev = runs.last().map(|r| r.2);
+        let f = if face.covers(c) {
+            face
+        } else if c.is_whitespace() || c.is_control() || is_private_use(c) {
+            // A private-use code means something else in every font: never another face's glyph.
+            prev.unwrap_or(face)
+        } else {
+            match prev {
+                // Stay in the fallback face while it covers the characters.
+                Some(p) if p != face && p.covers(c) => p,
+                _ => db.fallback_styled(c, face.id(), bold, italic).map_or(face, |f| FaceRef::of(&f)),
+            }
+        };
+        match runs.last_mut() {
+            Some(r) if r.2 == f => r.1 = i + c.len_utf8(),
+            _ => runs.push((i, i + c.len_utf8(), f)),
+        }
+    }
+    let mut out = Vec::with_capacity(text.len());
+    for (start, end, f) in runs {
+        let Some(sub) = text.get(start..end) else { continue };
+        out.extend(shape(&f, sub, &[], |c| c).into_iter().map(|mut g| {
+            g.cluster += start;
+            (f, g)
+        }));
+    }
+    out
+}
+
+fn is_private_use(c: char) -> bool {
+    matches!(u32::from(c), 0xE000..=0xF8FF | 0xF_0000..=0x10_FFFF)
+}
+
 /// Shape `text` as one run in a known direction (the caller ran the bidi algorithm: `rtl` is an
 /// odd embedding level). Right-to-left runs get Arabic joining, mirrored brackets and right-to-left
 /// mark positioning. Glyphs come back in logical order like [`shape`]: clusters in text order,
@@ -248,6 +288,34 @@ pub fn first_glyph(face: &FontFace, chars: &[char]) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Characters the face can't draw come from a face that can; the rest, spaces included, stay in
+    /// the face, and clusters stay byte offsets in the whole string.
+    #[test]
+    fn shape_with_fallback_takes_missing_characters_from_another_face() {
+        let face = word::resolve("Source Sans 3", false, false).face;
+        assert!(!face.covers('数'));
+        let text = "a数 b";
+        let shaped = shape_with_fallback(face, text, false, false);
+        let face_of = |byte: usize| shaped.iter().find(|(_, g)| g.cluster == byte).map(|(f, _)| *f);
+        for (i, c) in text.char_indices().filter(|(_, c)| *c != '数') {
+            assert_eq!(face_of(i), Some(face), "{c:?}");
+        }
+        let cjk = face_of(1).expect("a glyph for 数");
+        if FontDb::global().fallback_for('数', face.id()).is_some() {
+            assert!(cjk.covers('数'), "{}", cjk.family);
+        } else {
+            assert_eq!(cjk, face);
+        }
+    }
+
+    #[test]
+    fn shape_with_fallback_keeps_private_use_characters_in_the_face() {
+        let face = word::resolve("Source Sans 3", false, false).face;
+        let text = "a\u{F0E6}";
+        assert!(!face.covers('\u{F0E6}'));
+        assert!(shape_with_fallback(face, text, false, false).iter().all(|(f, _)| *f == face));
+    }
 
     #[test]
     fn last_resort_face_parses() {

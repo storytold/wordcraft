@@ -60,14 +60,16 @@ pub(crate) struct Brush {
     pub color: [u8; 4],
 }
 
-/// A logical font (EMF LogFont): height in logical units (negative = character height, positive =
-/// cell height, 0 = default), escapement in tenths of a degree, face name as UTF-16 (NUL-padded).
+/// A logical font (EMF LogFont, WMF Font): height in logical units (negative = character height,
+/// positive = cell height, 0 = default), escapement in tenths of a degree, the character set a WMF
+/// string's bytes are in, face name as UTF-16 (NUL-padded).
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub(crate) struct Font {
     pub height: i32,
     pub escapement: i32,
     pub weight: i32,
     pub italic: bool,
+    pub charset: u8,
     pub face: [u16; 32],
 }
 
@@ -633,6 +635,11 @@ impl Canvas {
         }
     }
 
+    /// The selected font; None is the default font.
+    pub fn font(&self) -> Option<Font> {
+        self.font
+    }
+
     pub fn set_text_color(&mut self, c: [u8; 4]) {
         self.text_color = c;
     }
@@ -648,7 +655,7 @@ impl Canvas {
         if text.is_empty() || self.in_path {
             return;
         }
-        let font = self.font.unwrap_or(Font { height: 0, escapement: 0, weight: 400, italic: false, face: [0; 32] });
+        let font = self.font.unwrap_or(Font { height: 0, escapement: 0, weight: 400, italic: false, charset: 1, face: [0; 32] });
         let at = if self.text_align & TA_UPDATECP != 0 { self.pos } else { at };
         if self.text_align & TA_UPDATECP != 0 {
             self.pos = (at.0 + dx.iter().sum::<f64>(), at.1);

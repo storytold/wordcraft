@@ -2,13 +2,33 @@
 //! records of (size in 16-bit words, function, parameters). Parameters are read at byte 6 of each record.
 
 use crate::bytes::Bytes;
-use crate::canvas::{Brush, Canvas, Obj, Pen, colorref};
+use crate::canvas::{Brush, Canvas, Font, Obj, Pen, colorref};
 use crate::dib;
 use crate::geom::{self, ArcKind, P};
 use crate::{Error, Frame, MAX_PATH_OPS};
 
 const PLACEABLE_KEY: u32 = 0x9AC6_CDD7;
 const DEFAULT_INCH: f64 = 1440.0;
+/// EXTTEXTOUT options: a clipping or opaquing rectangle follows them; the string holds glyph indices.
+const ETO_OPAQUE: u16 = 0x0002;
+const ETO_CLIPPED: u16 = 0x0004;
+const ETO_GLYPH_INDEX: u16 = 0x0010;
+const SYMBOL_CHARSET: u8 = 2;
+/// Fonts whose 8-bit codes are their own symbols rather than letters, whatever charset a file
+/// gives them: Word's symbol fonts and the MathType and Equation Editor fonts.
+const SYMBOL_FACES: [&str; 11] = [
+    "Symbol",
+    "Wingdings",
+    "Wingdings 2",
+    "Wingdings 3",
+    "Webdings",
+    "MT Extra",
+    "MT Symbol",
+    "Euclid Symbol",
+    "Euclid Extra",
+    "Euclid Math One",
+    "Euclid Math Two",
+];
 
 pub(crate) fn is_wmf(b: Bytes) -> bool {
     if b.u32(0) == Some(PLACEABLE_KEY) {
@@ -128,9 +148,14 @@ fn record(cv: &mut Canvas, func: u16, r: Bytes) {
         }),
         0x02FA => create_pen(cv, r),
         0x02FC => create_brush(cv, r),
-        // Fonts, palettes, pattern brushes and regions take a handle slot too, so later SELECTOBJECT
+        0x02FB => create_font(cv, r),
+        0x0209 => r.u32(6).map(|c| cv.set_text_color(colorref(c))),
+        0x012E => r.u16(6).map(|a| cv.set_text_align(u32::from(a))),
+        0x0A32 => ext_text_out(cv, r),
+        0x0521 => text_out(cv, r),
+        // Palettes, pattern brushes and regions take a handle slot too, so later SELECTOBJECT
         // handles count them; selecting one draws nothing.
-        0x02FB | 0x00F7 | 0x01F9 | 0x0142 | 0x06FF => {
+        0x00F7 | 0x01F9 | 0x0142 | 0x06FF => {
             cv.add_object(None, Obj::Other);
             Some(())
         }
@@ -174,6 +199,132 @@ fn create_brush(cv: &mut Canvas, r: Bytes) -> Option<()> {
     let color = r.u32(8)?;
     cv.add_object(None, Obj::Brush(Brush { style: u32::from(style), color: colorref(color) }));
     Some(())
+}
+
+/// CREATEFONTINDIRECT: height, width, escapement, orientation, weight, italic, underline, strike-out,
+/// charset, three precision and quality bytes, pitch and family, then the face name: up to 32 bytes
+/// in the font's own charset, NUL-terminated. A font too short to read still takes its handle slot.
+fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    cv.add_object(None, read_font(r).map_or(Obj::Other, Obj::Font));
+    Some(())
+}
+
+fn read_font(r: Bytes) -> Option<Font> {
+    let charset = *r.0.get(19)?;
+    let name = r.0.get(24..).unwrap_or(&[]);
+    let name = name.get(..name.iter().take(32).position(|b| *b == 0).unwrap_or(name.len().min(32))).unwrap_or(&[]);
+    let mut face = [0u16; 32];
+    for (slot, u) in face.iter_mut().zip(decode(name, charset).0.encode_utf16()) {
+        *slot = u;
+    }
+    Some(Font {
+        height: i32::from(r.i16(6)?),
+        escapement: i32::from(r.i16(10)?),
+        weight: i32::from(r.i16(14)?),
+        italic: *r.0.get(16)? != 0,
+        charset,
+        face,
+    })
+}
+
+/// EXTTEXTOUT: y, x, string length, options, a rectangle when clipped or opaque, the string (padded
+/// to a word), then an optional advance per byte. Glyph-index strings can't be read back as text.
+fn ext_text_out(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    let at = xy16(r, 6)?;
+    let n = r.u16(10)? as usize;
+    let options = r.u16(12)?;
+    if options & ETO_GLYPH_INDEX != 0 || n == 0 {
+        return None;
+    }
+    let start = if options & (ETO_OPAQUE | ETO_CLIPPED) != 0 { 22 } else { 14 };
+    let bytes = r.slice(start, n)?;
+    let dx_at = start.checked_add(n.checked_add(n % 2)?)?;
+    let dx: Vec<f64> = (0..n).map_while(|i| r.i16(dx_at + i * 2).map(f64::from)).collect();
+    draw_text(cv, at, bytes, if dx.len() == n { &dx } else { &[] });
+    Some(())
+}
+
+/// TEXTOUT: string length, the string (padded to a word), then y and x.
+fn text_out(cv: &mut Canvas, r: Bytes) -> Option<()> {
+    let n = r.u16(6)? as usize;
+    let bytes = r.slice(8, n)?;
+    let at = xy16(r, 8usize.checked_add(n.checked_add(n % 2)?)?)?;
+    draw_text(cv, at, bytes, &[]);
+    Some(())
+}
+
+/// Draws a string of bytes in the selected font's charset. A character takes the advances of all
+/// its bytes.
+fn draw_text(cv: &mut Canvas, at: P, bytes: &[u8], dx: &[f64]) {
+    let font = cv.font();
+    let charset = font.map_or(1, |f| f.charset);
+    let face = font.map(|f| String::from_utf16_lossy(&f.face)).unwrap_or_default();
+    let face = face.trim_end_matches('\0').trim();
+    let symbol = charset == SYMBOL_CHARSET || SYMBOL_FACES.iter().any(|s| s.eq_ignore_ascii_case(face));
+    let (text, widths) = if symbol {
+        // Word's convention for a symbol font's codes: U+F000 + code.
+        (
+            bytes
+                .iter()
+                .map(|b| if *b >= 0x20 { char::from_u32(0xF000 + u32::from(*b)).unwrap_or(char::from(*b)) } else { char::from(*b) })
+                .collect(),
+            vec![1; bytes.len()],
+        )
+    } else {
+        decode(bytes, charset)
+    };
+    let text = text.trim_end_matches('\0').to_string();
+    let n = text.chars().count();
+    let mut char_dx = Vec::new();
+    if !dx.is_empty() {
+        let mut i = 0usize;
+        for w in widths.iter().take(n) {
+            char_dx.push(dx.get(i..i.saturating_add(*w)).map_or(0.0, |d| d.iter().sum()));
+            i = i.saturating_add(*w);
+        }
+    }
+    cv.text(at, text, &char_dx);
+}
+
+/// Bytes in a WMF charset (MS-WMF CharacterSet) as text, with the number of bytes behind each
+/// character. Charsets with no decoder here (and DEFAULT and OEM) are read as Windows-1252.
+fn decode(bytes: &[u8], charset: u8) -> (String, Vec<usize>) {
+    use encoding_rs::*;
+    let enc: &'static Encoding = match charset {
+        77 => MACINTOSH,
+        128 => SHIFT_JIS,
+        129 => EUC_KR,
+        134 => GBK,
+        136 => BIG5,
+        161 => WINDOWS_1253,
+        162 => WINDOWS_1254,
+        163 => WINDOWS_1258,
+        177 => WINDOWS_1255,
+        178 => WINDOWS_1256,
+        186 => WINDOWS_1257,
+        204 => WINDOWS_1251,
+        222 => WINDOWS_874,
+        238 => WINDOWS_1250,
+        _ => WINDOWS_1252,
+    };
+    // One byte at a time, so each character's byte count is known.
+    let mut dec = enc.new_decoder_without_bom_handling();
+    let (mut text, mut widths, mut pending) = (String::new(), Vec::new(), 0usize);
+    for (i, b) in bytes.iter().enumerate() {
+        let mut buf = String::with_capacity(8);
+        let _ = dec.decode_to_string(std::slice::from_ref(b), &mut buf, i + 1 == bytes.len());
+        text.push_str(&buf);
+        pending += 1;
+        let added = buf.chars().count();
+        if added > 0 {
+            // The bytes go with the first new character; any others (a malformed sequence's
+            // replacements) take none.
+            widths.push(pending);
+            widths.extend(std::iter::repeat_n(0, added - 1));
+            pending = 0;
+        }
+    }
+    (text, widths)
 }
 
 /// (x, y) from a Y-then-X pair stored at `off`.

@@ -5331,6 +5331,7 @@ dependencies = [
 name = "wordcraft-metafile"
 version = "0.10.0"
 dependencies = [
+ "encoding_rs",
  "kurbo",
  "thiserror 2.0.21",
 ]

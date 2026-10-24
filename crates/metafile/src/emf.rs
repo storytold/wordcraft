@@ -265,7 +265,7 @@ fn create_font(cv: &mut Canvas, r: Bytes) -> Option<()> {
     for (i, u) in face.iter_mut().enumerate() {
         *u = r.u16(40 + i * 2).unwrap_or(0);
     }
-    let font = Font { height: r.i32(12)?, escapement: r.i32(20)?, weight: r.i32(28)?, italic: *r.0.get(32)? != 0, face };
+    let font = Font { height: r.i32(12)?, escapement: r.i32(20)?, weight: r.i32(28)?, italic: *r.0.get(32)? != 0, charset: *r.0.get(35)?, face };
     cv.add_object(Some(slot), Obj::Font(font));
     Some(())
 }

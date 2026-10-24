@@ -9,5 +9,6 @@ description = "WordCraft metafiles: parses Windows WMF and EMF records into a ne
 workspace = true
 
 [dependencies]
+encoding_rs = { workspace = true }
 kurbo = { workspace = true }
 thiserror = { workspace = true }
