@@ -1,11 +1,16 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+use crate::server::{BoundedLine, read_bounded_line};
+
+/// Longest reply line accepted from the app (screenshots and `document.inspect` are large).
+const MAX_REPLY_LINE: usize = 256 << 20;
 
 /// Something that answers control-channel methods (`engine.execute`, `document.inspect`,
 /// `ui.pointer`, `ui.render`, …). See `wordcraft_ui_egui::control` for the full list.
@@ -148,11 +153,11 @@ impl Remote {
         writer.write_all(line.as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
-        let mut reply = String::new();
-        if reader.read_line(&mut reply)? == 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
+        match read_bounded_line(reader, MAX_REPLY_LINE)? {
+            BoundedLine::Line(reply) => Ok(reply),
+            BoundedLine::Eof => Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed")),
+            BoundedLine::TooLong => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long")),
         }
-        Ok(reply)
     }
 
     /// One request and its reply, with one retry on a new connection (the app may have
@@ -226,6 +231,7 @@ impl Backend for Remote {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
     use std::net::{SocketAddr, TcpListener};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
