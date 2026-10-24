@@ -39,7 +39,7 @@ pub type FileDialogAnswer = Result<Vec<String>, String>;
 const MAX_FONTS_PER_PICK: usize = 2000;
 
 const PICTURES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
-const DOCUMENTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
+const DOCUMENTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "epub", "txt", "md", "html", "htm", "tex", "json", "xml"];
 
 /// The file types Open offers, as (label, extensions; `*` is any file): pictures for Insert/Change
 /// Picture, recipient lists for Select Recipients › Use an Existing List…, documents otherwise.
@@ -516,6 +516,150 @@ mod tests {
             file.create_stream(name).unwrap().write_all(&data).unwrap();
         }
         file.into_inner().into_inner()
+    }
+
+    /// A minimal valid EPUB 3 package: one chapter whose body is `chapter_text`.
+    fn minimal_epub_bytes(chapter_text: &str) -> Vec<u8> {
+        use std::io::{Cursor, Write};
+        let container = br#"<?xml version="1.0"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+<rootfiles><rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles>
+</container>"#;
+        let opf = br#"<?xml version="1.0"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
+<metadata><dc:title xmlns:dc="http://purl.org/dc/elements/1.1/">Novella</dc:title></metadata>
+<manifest><item id="c1" href="chapter1.xhtml" media-type="application/xhtml+xml"/></manifest>
+<spine><itemref idref="c1"/></spine>
+</package>"#;
+        let chapter = format!(r#"<html xmlns="http://www.w3.org/1999/xhtml"><body><p>{chapter_text}</p></body></html>"#);
+        let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let o = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
+        for (name, data) in
+            [("META-INF/container.xml", &container[..]), ("OEBPS/content.opf", &opf[..]), ("OEBPS/chapter1.xhtml", chapter.as_bytes())]
+        {
+            z.start_file(name, o).unwrap();
+            z.write_all(data).unwrap();
+        }
+        z.finish().unwrap().into_inner()
+    }
+
+    /// #3117: Save on an imported EPUB asks for DOCX, preserving the import on Cancel (the same
+    /// behaviour #2445 gives legacy Word files: EPUB has a reader but no writer).
+    #[test]
+    fn imported_epub_save_asks_for_docx_and_preserves_the_original() {
+        let dir = scratch("imported-epub");
+        let original = dir.join("novella.epub");
+        let bytes = minimal_epub_bytes("Once upon a time.");
+        std::fs::write(&original, &bytes).unwrap();
+        let (mut a, shown) = async_app();
+        a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+        assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Once upon a time."));
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        let draft = a.session.doc.clone();
+        let revision = a.session.rev();
+        let result = a.run("file.save", json!({})).unwrap();
+        assert_eq!(result["pending"], "saveAs");
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "novella.docx".into(), dir: None });
+        answer(&shown, None);
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
+        assert_eq!(a.session.doc, draft);
+        assert_eq!(a.session.rev(), revision);
+        assert!(a.session.dirty);
+        assert_eq!(a.session.path.as_deref(), Some(original.as_path()));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+
+        a.run("file.save", json!({})).unwrap();
+        let saved = dir.join("revised.docx");
+        answer(&shown, Some(&saved.to_string_lossy()));
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], true);
+        assert!(!a.session.dirty);
+        assert_eq!(a.session.path.as_deref(), Some(saved.as_path()));
+        assert!(saved_text(&saved).contains("Revised Once upon a time."));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #3117: the Save Changes prompt's own `SaveChoice::Save` (`ui.saveChanges {"answer":
+    /// "save"}`) is a separate code path from `execute_user`'s direct `file.save`, covered above
+    /// — this exercises it through File › Close instead, as
+    /// `imported_word_close_waits_for_save_as_and_keeps_failed_or_cancelled_drafts` does for
+    /// legacy Word files.
+    #[test]
+    fn imported_epub_close_prompt_save_asks_for_docx_and_preserves_the_original() {
+        let dir = scratch("imported-epub-close");
+        let original = dir.join("novella.epub");
+        let bytes = minimal_epub_bytes("Once upon a time.");
+        std::fs::write(&original, &bytes).unwrap();
+        let (mut a, shown) = async_app();
+        a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Revised "})).unwrap();
+        let draft = a.session.doc.clone();
+
+        a.run("file.close", json!({})).unwrap();
+        assert_eq!(a.run("ui.saveChanges", json!({"answer": "save"})).unwrap()["pending"], "saveAs");
+        assert!(a.has_document() && !a.quit_requested);
+        answer(&shown, None);
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["done"], false);
+        assert!(a.has_document() && a.session.dirty && !a.quit_requested);
+        assert_eq!(a.session.path.as_deref(), Some(original.as_path()));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        assert_eq!(a.session.doc, draft);
+
+        a.run("file.close", json!({})).unwrap();
+        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        let saved = dir.join("novella.docx");
+        answer(&shown, Some(&saved.to_string_lossy()));
+        assert_eq!(a.poll_file_dialog().unwrap().unwrap()["done"], true);
+        assert!(!a.has_document() && !a.quit_requested, "Close runs only after the DOCX save succeeds");
+        assert!(saved_text(&saved).contains("Revised Once upon a time."));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #3117: the backstage Save button and the Mod+S shortcut both ask for a supported target
+    /// too, not just the commands the tests above call directly — mirrors
+    /// `imported_word_save_controls_ask_for_docx` for legacy Word files.
+    #[test]
+    fn imported_epub_save_controls_ask_for_docx() {
+        use egui_kittest::kittest::Queryable;
+        let dir = scratch("imported-epub-entry-points");
+        let original = dir.join("novella.epub");
+        let bytes = minimal_epub_bytes("Once upon a time.");
+        std::fs::write(&original, &bytes).unwrap();
+        let (mut a, shown) = async_app();
+        a.run("ui.language", json!({"value": "en"})).unwrap();
+        a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
+        typed(&mut a);
+        a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_label("Save").click();
+        h.run_steps(3);
+        assert!(h.state().file_dialog_open(), "the Save button asks for a supported target");
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "novella.docx".into(), dir: None });
+        answer(&shown, None);
+        h.run_steps(3);
+
+        h.state_mut().run("ui.backstage", json!({"value": false})).unwrap();
+        h.state_mut().canvas.want_focus = true;
+        h.run_steps(6);
+        assert!(h.state().canvas.focused, "Mod+S starts in the editor");
+        h.event(egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.run_steps(3);
+        assert!(h.state().file_dialog_open(), "the focused editor's Mod+S asks too");
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "novella.docx".into(), dir: None });
+        answer(&shown, None);
+        h.run_steps(3);
+        assert!(h.state().session.dirty);
+        assert_eq!(h.state().session.path.as_deref(), Some(original.as_path()));
+        assert_eq!(std::fs::read(&original).unwrap(), bytes);
     }
 
     /// #2445: Save on an imported binary Word file asks for DOCX, preserving the import on Cancel.

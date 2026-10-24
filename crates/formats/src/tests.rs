@@ -556,7 +556,7 @@ fn garbage_never_panics() {
                 seed as u8
             })
             .collect();
-        for ext in ["txt", "md", "html", "rtf", "odt", "tex"] {
+        for ext in ["txt", "md", "html", "rtf", "odt", "tex", "epub"] {
             let _ = import(ext, &bytes);
         }
         let mut rtf = b"{\\rtf1".to_vec();
@@ -565,6 +565,9 @@ fn garbage_never_panics() {
         let mut odt = b"PK\x03\x04".to_vec();
         odt.extend(&bytes);
         let _ = import("odt", &odt);
+        let mut epub = b"PK\x03\x04".to_vec();
+        epub.extend(&bytes);
+        let _ = import("epub", &epub);
     }
     // A zip that is not an ODF text document.
     let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
