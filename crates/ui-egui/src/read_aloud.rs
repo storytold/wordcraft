@@ -151,7 +151,7 @@ fn button(ui: &mut Ui, t: &Tokens, icon: &str, tip: &str, enabled: bool) -> bool
         ui.painter().rect_filled(rect, 4.0, if resp.is_pointer_button_down_on() { t.pressed } else { t.hover });
     }
     let c = if enabled { t.icon } else { t.text_disabled };
-    let r = Rect::from_center_size(rect.center(), vec2(20.0, 20.0));
+    let r = Rect::from_center_size(rect.center(), vec2(16.0, 16.0));
     crate::icons::paint(ui.painter(), r, icon, c, if enabled { t.accent } else { Color32::TRANSPARENT });
     enabled && resp.clicked()
 }

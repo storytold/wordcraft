@@ -249,6 +249,7 @@ Footnote and endnote editing keeps body and note text at normal opacity, on ligh
 | 2026-10-11 | trivial | Dialog primary buttons, the Discord pill, the table eraser line and the Navigation search highlight take their colours from the theme in both themes (`widgets::primary_button`); a test bans the old fixed values (#656) |
 | 2026-10-11 | trivial | Dark theme: Share, the avatar initials, the AutoSave knob and keytips use dark `on_accent` text on the light accent (6.2:1, 8.4:1 on hover; white was 2.9:1) (#655) |
 | 2026-10-11 | trivial | Text field and combo outlines reach 3:1 against their fill and surroundings in both themes (light #8A8A8A, dark #7A7A7A); a test pins the ratios (#657) |
+| 2026-10-11 | trivial | Every icon is painted at 16 or 32 px: drop-down markers, group launchers, Share, Discord, pane and title-bar buttons, Read Aloud, gallery arrows and the Backstage back button (16), recent-file tiles (32) (#660) |
 | 2026-10-11 | trivial | Customize Ribbon (custom tabs and groups, hidden and reordered tabs) and a customizable Quick Access Toolbar with a working … menu (#379, #376) |
 | 2026-10-11 | trivial | Customize Keyboard dialog (Tools › Customize Keyboard, File › Options › Keyboard shortcuts): custom keys override built-ins and persist (#368) |
 | 2026-10-11 | minor | Keyboard shortcuts 101 → 125 commands (#330): Reset Paragraph/Character Formatting, symbols, DATE/TIME/PAGE fields, view switches, Word Count, mail merge, F4 Repeat now reachable |

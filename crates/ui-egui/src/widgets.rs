@@ -224,8 +224,8 @@ pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
-/// the `dropdown` icon, everywhere; no text glyph).
-pub const DROPDOWN: f32 = 10.0;
+/// the `dropdown` icon, everywhere; no text glyph). 16 px, on the icon grid like every icon (#660).
+pub const DROPDOWN: f32 = 16.0;
 
 /// One centred label line (top at `y`); `marker` draws the drop-down icon after the text, in the
 /// text's colour, and the pair is centred together.
@@ -280,7 +280,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
@@ -315,14 +315,12 @@ pub fn split(
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
+    let ic = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    // Colour commands (font colour, highlight, shading) draw their colour bar in the accent, so the
+    // swatch is the colour that will be applied.
+    let (c, a) = if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(sw) = swatch {
-        let sw = if on { sw } else { t.text_disabled };
-        ui.painter().rect_filled(Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0)), 0.0, sw);
-    }
-    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
+    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
@@ -386,14 +384,14 @@ pub fn menu_button(
         resp
     } else {
         let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
-        let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 14.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0)), icon, c, a);
         if let Some(l) = label {
             ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
         }
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 6.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
+        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.max.x - 8.0, r.center().y), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
         resp
     };
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
@@ -473,7 +471,7 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     let title_y = r.center().y;
     ui.painter().text(pos2(r.center().x, title_y), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
     if let Some(cmd) = launcher {
-        let lr = Rect::from_center_size(pos2(r.max.x - 6.0, title_y), vec2(11.0, 11.0));
+        let lr = Rect::from_center_size(pos2(r.max.x - 8.0, title_y), vec2(16.0, 16.0));
         let resp = ui.interact(lr, ui.id().with(("launch", id_title)), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(lr.expand(2.0), 2.0, t.hover);
@@ -1204,13 +1202,13 @@ pub fn primary_button(ui: &Ui, text: impl Into<String>) -> egui::Button<'static>
     egui::Button::new(egui::RichText::new(text.into()).color(t.on_accent)).fill(t.accent)
 }
 
-/// A frameless 22 px icon button (pane close buttons): ribbon-style hover and press feedback.
+/// A frameless 22 px icon button (pane close buttons) with a 16 px icon: ribbon-style hover and press feedback.
 pub fn icon_button(ui: &mut Ui, icon: &str, tip: &str) -> Response {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, CornerRadius::same(4), st.fill);
-    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), icon, t.icon, t.accent);
+    icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, t.icon, t.accent);
     resp.on_hover_text(tip)
 }
 
@@ -1312,6 +1310,84 @@ mod tests {
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let h = ctx.fonts_mut(|f| f.layout_no_wrap("Page Number Mail Merge gjpqy".into(), crate::theme::regular(11.5), Color32::WHITE).size().y);
         assert!(h <= LABEL_LINE_H, "label line is {h} px tall");
+    }
+
+    fn press(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2) {
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() });
+        }
+        h.run_steps(4);
+    }
+
+    fn doc_app() -> WordApp {
+        use serde_json::json;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "The quick brown fox"})).unwrap();
+        a.run("select.text", json!({"text": "brown fox"})).unwrap();
+        a
+    }
+
+    /// The left part of a split button is a no-op while its command is disabled (here: no document
+    /// is open); the same press runs it when the command is enabled.
+    #[test]
+    fn a_press_on_a_disabled_split_button_runs_nothing() {
+        use serde_json::json;
+        let probe = egui::Id::new("split_probe");
+        let build = |app: WordApp| {
+            egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 100.0)).build_ui_state(
+                move |ui, app: &mut WordApp| {
+                    let at = ui.cursor().min;
+                    ui.ctx().data_mut(|d| d.insert_temp(probe, at));
+                    split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": "yellow"}), false, None, |_, _| {});
+                },
+                app,
+            )
+        };
+        // The icon half is the first 24 x 22 box at the ui's cursor.
+        let centre = |h: &egui_kittest::Harness<'static, WordApp>| {
+            h.ctx.data(|d| d.get_temp::<egui::Pos2>(probe)).expect("the split button was laid out") + vec2(12.0, 11.0)
+        };
+
+        let mut h = build(doc_app());
+        h.run_steps(2);
+        let (rev, at) = (h.state().session.rev(), centre(&h));
+        press(&mut h, at);
+        assert_ne!(h.state().session.rev(), rev, "enabled: the press runs format.highlight");
+
+        let mut a = doc_app();
+        a.no_document = Some(a.session.document_id());
+        assert!(!enabled(&a, "format.highlight"), "no document open disables the command");
+        let mut h = build(a);
+        h.run_steps(2);
+        let (rev, at) = (h.state().session.rev(), centre(&h));
+        press(&mut h, at);
+        assert_eq!(h.state().session.rev(), rev, "disabled: the press must not run the command");
+    }
+
+    /// The group launcher is a 16 x 16 box (it was 11 x 11): a press in the added margin opens the
+    /// dialog.
+    #[test]
+    fn the_group_launcher_takes_a_press_in_its_outer_margin() {
+        let launcher = |ui: &egui::Ui| ui.id().with(("launch", "Page Setup"));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(300.0, 120.0)).build_ui_state(
+            move |ui, app: &mut WordApp| {
+                let id = launcher(ui);
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new("launcher_probe"), id));
+                group_titled(ui, "Page Setup", "Page Setup", Some("layout.pageSetup"), app, |ui, _| {
+                    ui.allocate_space(vec2(60.0, 10.0));
+                });
+            },
+            doc_app(),
+        );
+        h.run_steps(3);
+        let id = h.ctx.data(|d| d.get_temp::<egui::Id>(egui::Id::new("launcher_probe"))).expect("the group was drawn");
+        let lr = h.ctx.read_response(id).expect("the launcher was laid out").rect;
+        assert_eq!(lr.size(), vec2(16.0, 16.0));
+        assert!(h.state().dialog.is_none());
+        // 7 points right of the centre: inside the 16-point box, outside the old 11-point one.
+        press(&mut h, lr.center() + vec2(7.0, 0.0));
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("pageSetup"));
     }
 
     /// #1945: a ribbon button's right-click menu offers Show Quick Access Toolbar only while the

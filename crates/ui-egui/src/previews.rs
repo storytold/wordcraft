@@ -584,7 +584,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }
-        crate::icons::paint(ui.painter(), br.shrink(2.0), icon, t.icon, t.accent);
+        crate::icons::paint(ui.painter(), Rect::from_center_size(br.center(), vec2(16.0, 16.0)), icon, t.icon, t.accent);
         if resp.clicked() {
             if *delta == 0 {
                 let _ = app.run("view.stylesPane", json!({"value": true}));
