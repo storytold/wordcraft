@@ -172,6 +172,14 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("outline.close", "Close Outline View", "Outlining › Close", |s, _| s.run("view.printLayout", &json!({})))
             .when(in_outline)
             .pure(),
+        // Collapsed headings in the other views (#1745) are the stored "Collapsed by default"
+        // flag (Word for Mac's only control), so a fold is undoable and saved with the file.
+        CommandSpec::new("outline.expandHeading", "Expand Heading", "Home › Paragraph", |s, v| fold_heading(s, v, Some(false))).params(BLOCK),
+        CommandSpec::new("outline.collapseHeading", "Collapse Heading", "Home › Paragraph", |s, v| fold_heading(s, v, Some(true))).params(BLOCK),
+        // The fold arrow beside a heading in the left margin.
+        CommandSpec::new("outline.toggleHeading", "Expand or Collapse Heading", "Home › Paragraph", |s, v| fold_heading(s, v, None)).params(BLOCK),
+        CommandSpec::new("outline.expandAllHeadings", "Expand All Headings", "Home › Paragraph", |s, _| fold_all(s, false)),
+        CommandSpec::new("outline.collapseAllHeadings", "Collapse All Headings", "Home › Paragraph", |s, _| fold_all(s, true)),
         CommandSpec::new("outline.state", "Outline State", "Outlining", |s, _| {
             let levels = ol::levels(&s.doc);
             let hidden = ol::hidden(&levels, &s.view.outline.view());
@@ -187,6 +195,125 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
     ]
+}
+
+/// What "Collapsed by default" headings hide in the body (#1745), by top-level block: nothing
+/// in Outline view, which collapses headings its own way (as the layout does).
+pub(crate) fn folded(s: &Session) -> Vec<bool> {
+    if s.view.mode == ViewMode::Outline && !s.view.read_mode {
+        return Vec::new();
+    }
+    ol::folded(&s.doc)
+}
+
+/// Whether body block `i` is a heading its stored flag collapses.
+pub(crate) fn folds(s: &Session, i: usize) -> bool {
+    let Some(Block::Para(p)) = s.doc.body.get(i).map(|b| &**b) else { return false };
+    let rp = s.doc.styles.resolve_para(&p.props);
+    rp.collapsed && rp.outline_level.is_some()
+}
+
+/// Collapse or expand body heading `i` through its stored flag, with as little direct formatting
+/// as it takes: none when its style already says so, `false` over a style that collapses.
+fn set_fold(s: &mut Session, i: usize, on: bool) -> Result<(), CmdError> {
+    let Some(Block::Para(p)) = s.doc.body.get(i).map(|b| &**b) else { return Ok(()) };
+    let mut inherited = p.props.clone();
+    inherited.collapsed = None;
+    let style_on = s.doc.styles.resolve_para(&inherited).collapsed;
+    let want = if on { (!style_on).then_some(true) } else { style_on.then_some(false) };
+    if p.props.collapsed != want {
+        let para = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(i))?;
+        para.props.collapsed = want;
+        para.touch();
+    }
+    Ok(())
+}
+
+/// Expand body heading `i` when it is collapsed (Enter in a collapsed heading).
+pub(crate) fn expand_heading(s: &mut Session, i: usize) {
+    if folds(s, i) {
+        let _ = set_fold(s, i, false);
+    }
+}
+
+/// Expand (`Some(false)`), collapse or toggle (`None`) the headings [`targets`] names.
+fn fold_heading(s: &mut Session, v: &Value, on: Option<bool>) -> CmdResult {
+    let targets = targets(s, v);
+    if targets.is_empty() {
+        return Err(CmdError::Failed("no heading to expand or collapse".into()));
+    }
+    for h in targets {
+        let on = on.unwrap_or_else(|| !folds(s, h));
+        set_fold(s, h, on)?;
+    }
+    keep_caret_shown(s);
+    sel_result(s)
+}
+
+/// Expand every heading in the body, or collapse every one with something under it.
+fn fold_all(s: &mut Session, on: bool) -> CmdResult {
+    let levels = ol::levels(&s.doc);
+    for (i, l) in levels.iter().enumerate() {
+        if *l < BODY && (!on || ol::has_children(&levels, i)) {
+            set_fold(s, i, on)?;
+        }
+    }
+    keep_caret_shown(s);
+    sel_result(s)
+}
+
+/// After a fold, a selection it hides (either end) becomes a caret on the heading (#1745).
+pub(crate) fn keep_caret_shown(s: &mut Session) {
+    let (focus, anchor) = (s.sel.focus.clone(), s.sel.anchor.clone());
+    let to = super::caret::shown_pos(s, &focus, focus.clone(), false);
+    if to != focus || super::caret::shown_pos(s, &anchor, anchor.clone(), false) != anchor {
+        s.sel = Selection::caret(to);
+    }
+}
+
+/// The top-level body block `p` is in, when that block is hidden by a collapsed heading.
+fn hidden_block(folded: &[bool], p: &Pos) -> Option<usize> {
+    let top = (p.story == StoryRef::Body).then(|| p.path.0.first().map(|b| *b as usize)).flatten()?;
+    folded.get(top).copied().unwrap_or(false).then_some(top)
+}
+
+/// Expand every collapsed heading whose fold hides body block `top` (nested folds too), so it
+/// shows. Returns whether anything changed.
+pub(crate) fn show_block(s: &mut Session, top: usize) -> bool {
+    let levels = ol::levels(&s.doc);
+    let mut changed = false;
+    for i in (0..top.min(levels.len())).rev() {
+        if folds(s, i) && ol::subtree_end(&levels, i) > top {
+            changed |= set_fold(s, i, false).is_ok();
+        }
+    }
+    changed
+}
+
+/// Whether either end of the selection is in text a collapsed heading hides.
+pub(crate) fn selection_hidden(s: &Session) -> bool {
+    let folded = folded(s);
+    !folded.is_empty() && (hidden_block(&folded, &s.sel.focus).is_some() || hidden_block(&folded, &s.sel.anchor).is_some())
+}
+
+/// Open the folds hiding the selection's ends (Find landing in hidden text, Word for Mac; Go To,
+/// `select.text`, `caret.set`, paste).
+pub(crate) fn show_selection(s: &mut Session) -> bool {
+    let folded = folded(s);
+    let ends = [hidden_block(&folded, &s.sel.focus), hidden_block(&folded, &s.sel.anchor)];
+    let mut changed = false;
+    for top in ends.into_iter().flatten() {
+        changed |= show_block(s, top);
+    }
+    changed
+}
+
+/// Before several paragraphs are inserted at `at`: a collapsed heading there opens, so they don't
+/// land in its fold out of sight (#1745).
+pub(crate) fn open_for_insert(s: &mut Session, at: &Pos, blocks: usize) {
+    if blocks > 1 && at.story == StoryRef::Body && at.path.0.len() == 1 {
+        expand_heading(s, at.path.last());
+    }
 }
 
 /// The top-level body blocks the selection touches (none outside the body text or in a table).

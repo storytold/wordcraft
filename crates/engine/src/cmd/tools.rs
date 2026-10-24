@@ -587,6 +587,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 blocks: lines.iter().map(|l| Block::Para(Paragraph::with_text(l, CharProps::default()).styled("NoSpacing"))).collect(),
                 ..Default::default()
             };
+            super::outline::open_for_insert(s, &at, frag.blocks.len());
             let end = s.doc.insert_fragment(&at, &frag)?;
             s.sel = Selection::caret(end);
             sel_result(s)
@@ -1846,6 +1847,7 @@ fn quick_parts(s: &mut Session, v: &Value, gallery: &str) -> CmdResult {
             }
         };
         let at = delete_selection(s)?;
+        super::outline::open_for_insert(s, &at, frag.blocks.len());
         let end = s.doc.insert_fragment(&at, &frag)?;
         s.sel = Selection::caret(end);
     }

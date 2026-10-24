@@ -733,6 +733,8 @@ struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     table_keys: Vec<(para::CellText, u64)>,
+    /// Body blocks collapsed headings hide ([`outline::folded`]; empty when none are hidden).
+    folded: Vec<bool>,
     /// While a header or footer with tables is laid out: its page, for floats in its cells placed
     /// on the page (see [`with_pin`]).
     pin: Option<Pin>,
@@ -859,6 +861,20 @@ impl Ctx<'_> {
             .filter(|n| n.num != 0)
             .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
     }
+    /// Whether body block `block` is hidden by a collapsed heading.
+    fn is_folded(&self, block: usize) -> bool {
+        self.folded.get(block).copied().unwrap_or(false)
+    }
+
+    /// The body block shown after `block` (skipping what collapsed headings hide), if any.
+    fn next_shown(&self, block: usize) -> Option<usize> {
+        let next = block.checked_add(1)?;
+        if self.folded.is_empty() {
+            return Some(next);
+        }
+        (next..self.doc.body.len()).find(|b| !self.is_folded(*b))
+    }
+
     fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
         self.counters.next_label(&self.doc.numbering, n.num, n.level)
@@ -2329,6 +2345,7 @@ fn layout_pass(
         quiet_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        folded: Vec::new(),
         fitted: HashMap::new(),
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
@@ -2357,6 +2374,11 @@ fn layout_pass(
     ctx.quiet_marks.sort_unstable();
     ctx.quiet_marks.dedup();
     let outline = (opts.view == ViewMode::Outline).then(|| OutlinePass::new(doc, opts.outline.clone().unwrap_or_default()));
+    // Outline view collapses headings its own way (view state); the other views hide what
+    // "Collapsed by default" headings fold.
+    if outline.is_none() {
+        ctx.folded = outline::folded(doc);
+    }
     let default_sect = SectionProps::default();
     let mut web_sect;
     let first_sect = match sections.first() {
@@ -2422,12 +2444,31 @@ fn layout_pass(
     };
     // Endnotes in document order, with the section of their reference; placed at the end of a
     // section that keeps them there, else at the end of the document.
+    // Endnotes referenced only from text collapsed headings hide are left out, as their
+    // footnotes are (#1745).
+    let mut folded_notes = HashSet::new();
+    let mut visible_notes = HashSet::new();
+    if !ctx.folded.is_empty() {
+        doc.objects_in_reading_order_by_block(&mut |block, p, k| {
+            if let Some(InlineObject::NoteRef { id, .. }) = p.objects.get(k) {
+                if ctx.folded.get(block).copied().unwrap_or(false) {
+                    folded_notes.insert(*id);
+                } else {
+                    visible_notes.insert(*id);
+                }
+            }
+            true
+        });
+    }
     let mut endnotes: std::collections::VecDeque<(u32, usize)> = {
         let mut ids: Vec<(u32, u32, usize)> = ctx
             .fields
             .notes
             .iter()
-            .filter(|(id, _)| doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Endnote))
+            .filter(|(id, _)| {
+                doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::Endnote)
+                    && (!folded_notes.contains(*id) || visible_notes.contains(*id))
+            })
             .map(|(id, n)| (n.order, *id, n.section))
             .collect();
         ids.sort();
@@ -2548,8 +2589,7 @@ fn layout_pass(
             match (&**b, &outline) {
                 (Block::Para(p), Some(o)) => place_outline_para(&mut ctx, &mut pb, p, block, o),
                 (Block::Table(_), Some(o)) if o.hidden.get(block).copied().unwrap_or(false) => {}
-                (Block::Para(p), None) => place_para(&mut ctx, &mut pb, p, block, body_top),
-                (Block::Table(t), _) => place_table(&mut ctx, &mut pb, t, block, body_top),
+                (b, _) => place_block(&mut ctx, &mut pb, b, block, body_top),
             }
             if let Some((pages, snap)) = before
                 && pb.pages.len() != pages
@@ -2728,11 +2768,8 @@ fn balance_pass<'a>(
     pb.balance = Some((page, h));
     pb.cap_columns();
     for block in first..end {
-        match ctx.doc.body.get(block).map(|b| &**b) {
-            Some(Block::Para(p)) => place_para(ctx, pb, p, block, body_top),
-            Some(Block::Table(t)) => place_table(ctx, pb, t, block, body_top),
-            None => break,
-        }
+        let Some(b) = ctx.doc.body.get(block) else { break };
+        place_block(ctx, pb, b, block, body_top);
         // Spilled onto another page: too short (and no need to lay out the rest).
         if pb.pages.len() > page + 1 {
             break;
@@ -3612,6 +3649,21 @@ fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<(usize, u32
     notes
 }
 
+/// A body block outside Outline view. A block a collapsed heading hides (#1745) takes no room
+/// and draws nothing, though its list numbers still count (folding doesn't renumber the list).
+fn place_block(ctx: &mut Ctx, pb: &mut PageBuilder, b: &Block, block: usize, body_top: f32) {
+    if ctx.is_folded(block) {
+        if let Block::Para(p) = b {
+            let _ = ctx.next_label(p);
+        }
+        return;
+    }
+    match b {
+        Block::Para(p) => place_para(ctx, pb, p, block, body_top),
+        Block::Table(t) => place_table(ctx, pb, t, block, body_top),
+    }
+}
+
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
@@ -4215,7 +4267,7 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
     if after <= 0.0 {
         return 0.0;
     }
-    if let Some(Block::Para(next)) = ctx.doc.body.get(block + 1).map(|b| &**b) {
+    if let Some(Block::Para(next)) = ctx.next_shown(block).and_then(|b| ctx.doc.body.get(b)).map(|b| &**b) {
         let nrp = ctx.doc.styles.resolve_para(&next.props);
         if nrp.style == rp.style && rp.contextual_spacing {
             return 0.0;
@@ -4234,7 +4286,8 @@ fn space_after_kept(ctx: &Ctx, block: usize, rp: &wordcraft_doc::resolve::Resolv
 /// kept with the next too (a chain moves together in Word). Word carries a kept heading over
 /// when the paragraph after it cannot start on the page (#966).
 fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counters: &mut Counters) -> f32 {
-    match ctx.doc.body.get(block + 1).map(|b| &**b) {
+    let Some(next) = ctx.next_shown(block) else { return 0.0 };
+    match ctx.doc.body.get(next).map(|b| &**b) {
         Some(Block::Para(p)) => {
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
@@ -4262,10 +4315,11 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             let pl = para::layout_para(p, &env);
             // Its border room, unless it joins the paragraph before (or after) in one box.
             let own = Edges::own(&pl, 0, pl.lines.len());
-            let top = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block), None) { 0.0 } else { own.top };
+            let top = if joined(ctx.doc, &ctx.doc.body, next, Some(block), None) { 0.0 } else { own.top };
             if pl.rp.keep_next && depth < 8 {
-                let bottom = if joined(ctx.doc, &ctx.doc.body, block + 1, Some(block + 2), None) { 0.0 } else { own.bottom };
-                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, block + 1, width, depth + 1, counters)
+                let after = ctx.next_shown(next);
+                let bottom = if joined(ctx.doc, &ctx.doc.body, next, after, None) { 0.0 } else { own.bottom };
+                pl.rp.space_before + top + pl.height + bottom + pl.rp.space_after + next_first_line(ctx, next, width, depth + 1, counters)
             } else {
                 // The room this one needs to start on the page with the kept paragraph before
                 // it (#966).
@@ -4905,6 +4959,8 @@ mod tests_autospace;
 mod tests_bidi;
 #[cfg(test)]
 mod tests_complex;
+#[cfg(test)]
+mod tests_fold;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]

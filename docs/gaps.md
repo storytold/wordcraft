@@ -37,6 +37,7 @@ Additive paragraph spacing retains the full before-space after a section page br
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Other pagination gaps remain open.
 
 Legacy Word imports (#2445): interactive Save for `.doc`/`.dot` uses the existing DOCX Save As dialog. Cancel and write failures retain the draft and original path; Save before Close continues only after a successful supported-format save. This narrows save reliability under gap #3; binary `.doc` writing remains unsupported. Late Save As answers are rejected before writing if automation has replaced the document.
+Collapsible headings landed (#1745): "Collapsed by default" (`w15:collapsed`) is read, written and laid out (hidden on the page, in PDF and in print), with a fold arrow, a context submenu and the Paragraph dialog box; see [layout-parity.md](layout-parity.md) and [typing-parity.md](typing-parity.md#collapsed-headings-1745). Not a ranked gap; noted so it isn't picked up again.
 
 Active footnote and endnote text stays readable while editing (#2545). This fixes a display-context defect; the broader fidelity, accessibility and readiness gates below are unchanged.
 
@@ -193,6 +194,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
 | 2026-10-16 | trivial | #8: English is three proofing languages — American, British spelling (en-GB, en-AU, en-NZ, en-IE, en-ZA, en-IN…) and Canadian — each flagging the other's spellings (#1281, #1045) |
 | 2026-10-16 | trivial | #10 narrowed: pictures and shapes without text stories preview rotation while dragging (#2277); remaining object gaps and estimates unchanged |
+| 2026-10-16 | minor | Collapsible headings landed (#1745) |
 | 2026-10-14 | trivial | Row table border exceptions fixed; other row table exceptions remain unsupported |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |

@@ -419,6 +419,10 @@ impl PropCtx {
                 }
                 "w:jc" => p.align = k.attr("w:val").map(align),
                 "w:outlineLvl" => p.outline_level = k.attr("w:val").and_then(u32_of).map(|v| v.min(9) as u8),
+                // [MS-DOCX] "Collapsed by default" (an on/off with `w:val`; `w15:val` seen too).
+                "w15:collapsed" => {
+                    p.collapsed = Some(k.attr("w:val").or_else(|| k.attr("w15:val")).is_none_or(|v| !matches!(v.trim(), "0" | "false" | "off")))
+                }
                 "w:rPr" => mark = self.rpr(k),
                 _ => {}
             }
