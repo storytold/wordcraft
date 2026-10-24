@@ -3411,6 +3411,8 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
     if picture {
         item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
         item(ui, app, "Reset Picture", "picture.reset", json!({}));
+        // Crop on the menu, as in Word: it toggles crop mode, whose handles trim the picture.
+        item(ui, app, "Crop", "ui.crop", json!({}));
         item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
     }
     if picture || object {
@@ -5476,6 +5478,61 @@ mod tests {
                 }
             }
         }
+    }
+
+    /// The picture's right-click menu offers Crop, as in Word, and it turns crop mode on
+    /// (its handles then trim the picture; Esc, Enter or Crop again keep the crop and leave).
+    #[test]
+    fn context_menu_offers_crop_for_a_picture() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let pic = wordcraft_doc::para::InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
+        a.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
+        a.session.relayout();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h, 6);
+        let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).expect("laid out").rect;
+        let at = screen(&mut h, r.x + 10.0, r.y + 10.0);
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+        assert!(crate::objects::selected(h.state()).is_some(), "the right-click selects the picture");
+        let label = format!("Crop {}", crate::widgets::shortcut_text(h.state(), "ui.crop"));
+        h.get_by_label(&label).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(crate::crop::active(h.state()).is_some(), "Crop turns crop mode on");
+        // Crop again (the menu item toggles, as the ribbon button does) leaves crop mode.
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: true, modifiers: Default::default() });
+        h.step();
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed: false, modifiers: Default::default() });
+        h.step();
+        h.step();
+        let label = format!("Crop {}", crate::widgets::shortcut_text(h.state(), "ui.crop"));
+        h.get_by_label(&label).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(crate::crop::active(h.state()).is_none(), "Crop again leaves crop mode");
     }
 
     /// Word's frame around the equation being edited: as wide as the equation plus the options

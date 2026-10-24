@@ -283,9 +283,11 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
     let bar = app.mac_titlebar;
     let left = if mac { bar.content_left as i8 } else { 8 };
     let control_h = if mac { 22.0 } else { 26.0 };
+    // Frameless (Linux): the caption buttons sit flush at the bar's right end, so no right margin.
+    let right = if app.frameless { 0 } else { 10 };
     egui::Panel::top("title_bar")
         .exact_size(if mac { bar.height } else { 38.0 })
-        .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right: 10, top: 0, bottom: 0 }))
+        .frame(egui::Frame::NONE.fill(t.title_bar).inner_margin(egui::Margin { left, right, top: 0, bottom: 0 }))
         .show(ui, |ui| {
             let full = ui.max_rect();
             // Drag the window by the title bar (integrated title bar on macOS).
@@ -344,6 +346,11 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 }
                 qat_end = ui.min_rect().max.x;
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    // Frameless (Linux): the window's caption buttons, flush at the right end.
+                    if app.frameless {
+                        crate::caption_buttons::draw(ui, 38.0);
+                        ui.add_space(8.0);
+                    }
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
@@ -513,6 +520,12 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
         } else {
             ui.scope_builder(egui::UiBuilder::new().max_rect(Rect::from_center_size(full.center(), vec2(260.0, 22.0))), |ui| {
                 search_box(app, ui, 22.0);
+            });
+        }
+        // Frameless (Linux): the window's buttons stay reachable in Focus and Full Screen.
+        if app.frameless {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                crate::caption_buttons::draw(ui, SCREEN_BAR_HEIGHT);
             });
         }
     });

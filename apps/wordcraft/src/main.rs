@@ -388,6 +388,13 @@ fn main() -> eframe::Result {
     if let Some(icon) = app_icon() {
         options.viewport = options.viewport.with_icon(icon);
     }
+    // Linux: the native title bar stays off, and the app's own title bar carries the caption
+    // buttons and the resize edges (`crates/ui-egui/src/caption_buttons.rs`), as Office's window
+    // does on Windows.
+    #[cfg(target_os = "linux")]
+    {
+        options.viewport = options.viewport.with_decorations(false);
+    }
     // Before eframe creates the wgpu instance: default Windows to DirectX 12 only, or OpenGL when
     // DirectX 12 has no GPU driver or this is a 32-bit build, and compile DirectX 12 shaders with
     // FXC, which needs no DLL of ours (#603; see graphics.rs).
@@ -448,6 +455,10 @@ fn main() -> eframe::Result {
             }
             app.ui.window = restored;
             app.integrated_titlebar = cfg!(target_os = "macos");
+            #[cfg(target_os = "linux")]
+            {
+                app.frameless = true;
+            }
             #[cfg(target_os = "macos")]
             if let Some(bar) = traffic_lights::title_bar() {
                 log::info!("title bar: {bar:?}");

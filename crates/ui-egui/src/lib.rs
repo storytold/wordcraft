@@ -26,6 +26,7 @@ pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
 pub mod canvas;
+pub mod caption_buttons;
 pub mod caret_glide;
 pub mod chrome;
 pub mod colors;
@@ -550,6 +551,9 @@ pub struct WordApp {
     pub(crate) dialog_pick: Option<String>,
     /// macOS: the window has no title bar; leave room for the traffic lights.
     pub integrated_titlebar: bool,
+    /// Linux (and anywhere else the native title bar is dropped): the app's title bar carries
+    /// the caption buttons and the resize edges (`caption_buttons`).
+    pub frameless: bool,
     /// macOS: the title bar's height and where its content starts, around the traffic lights.
     pub mac_titlebar: chrome::MacTitleBar,
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
@@ -702,6 +706,7 @@ impl WordApp {
             status_msg: None,
             previews: previews::Previews::default(),
             integrated_titlebar: false,
+            frameless: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             focus_ribbon: false,
             control_rx: None,
@@ -2459,6 +2464,9 @@ impl WordApp {
                 chrome::focus_ribbon(self, &ctx);
             }
         }
+        // Frameless (Linux): thin strips along the window's edges resize it. Above the panels,
+        // below the popups.
+        caption_buttons::resize_edges(self, &ctx);
         content_controls::popup(self, &ctx);
         dialogs::show(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]

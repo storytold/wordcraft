@@ -2798,7 +2798,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
     });
     // The launcher opens the Size dialog: scale, Lock aspect ratio, the original size (#2573).
     group(ui, "Size", Some("picture.size"), app, |ui, app| {
-        let (media, off, w0, h0, crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
+        let (media, off, w0, h0, _crop0, alt0) = match wordcraft_engine::cmd::objects::selected(&app.session) {
             Some((pos, wordcraft_doc::para::InlineObject::Image { media, w, h, alt, crop, .. })) => (media, pos.off, w, h, crop, alt),
             _ => (String::new(), 0, 0.0, 0.0, [0.0; 4], String::new()),
         };
@@ -2839,24 +2839,12 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
             });
             ui.add_space(2.0);
             crate::widgets::row(ui, |ui| {
+                // Cropping is drag-first, as in Word: this toggles crop mode on the picture, where
+                // the black crop handles trim each side (crates/ui-egui/src/crop.rs); the drop is
+                // one `picture.crop`, one undo step. Precise values stay on `picture.crop`
+                // (shortcuts, CLI, MCP); the ribbon has no crop-position fields, like Word's.
                 let cropping = crate::crop::active(app).is_some();
                 small(ui, app, "crop", Some("Crop"), "Crop", "ui.crop", json!({}), cropping);
-                for (i, side) in ["L", "T", "R", "B"].iter().enumerate() {
-                    ui.label(egui::RichText::new(tl!(side)).small());
-                    let mut v = crop0[i] * 100.0;
-                    let r = ui.add(egui::DragValue::new(&mut v).speed(0.5).range(0.0..=95.0).suffix("%"));
-                    if r.changed() {
-                        if r.dragged() && !r.drag_started() {
-                            app.session.join_next_undo();
-                        }
-                        let mut c = crop0;
-                        c[i] = (v / 100.0).clamp(0.0, 0.95);
-                        // The two sides of an axis keep 5% of the source between them.
-                        let other = c[if i < 2 { i + 2 } else { i - 2 }];
-                        c[i] = c[i].min((0.95 - other).max(0.0));
-                        let _ = app.run("picture.crop", json!({"left": c[0], "top": c[1], "right": c[2], "bottom": c[3]}));
-                    }
-                }
                 if ui.button(egui::RichText::new(tl!("Reset")).small()).on_hover_text(tl!("Reset Crop")).clicked() {
                     let _ = app.run("picture.crop", json!({"left": 0.0, "top": 0.0, "right": 0.0, "bottom": 0.0}));
                 }

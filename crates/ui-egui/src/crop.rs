@@ -184,7 +184,7 @@ pub fn toggle(app: &mut WordApp) -> Result<Value, String> {
         return Err(tl!("select a picture first").to_string());
     };
     let Some(Picture { pos, .. }) = picture(app) else {
-        let msg = tl!("Crop on the page works on unturned pictures: set Rotation to 0° first, or use the crop boxes").to_string();
+        let msg = tl!("Crop on the page works on unturned pictures: set Rotation to 0° first").to_string();
         app.status(msg.clone());
         return Err(msg);
     };
