@@ -1,9 +1,9 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -21,10 +21,48 @@ pub trait Backend {
 /// Looks up the control key for an address (`HOST:PORT`).
 type KeyFinder = Box<dyn Fn(&str) -> Result<String, String> + Send>;
 
+/// The longest one request write plus its whole reply may take. The app answers within 60 s
+/// (its own timeout); leave headroom. Short in tests.
+const EXCHANGE: Duration = if cfg!(test) { Duration::from_secs(1) } else { Duration::from_secs(90) };
+
+/// The read side of a connection with an overall deadline: each read waits only for the time
+/// left, so a slow drip of bytes cannot extend a reply.
+struct Timed {
+    s: TcpStream,
+    deadline: Instant,
+}
+
+impl Read for Timed {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.s.set_read_timeout(Some(time_left(self.deadline)?))?;
+        self.s.read(buf)
+    }
+}
+
+/// The time until `deadline`; an error once it has passed.
+fn time_left(deadline: Instant) -> std::io::Result<Duration> {
+    deadline.checked_duration_since(Instant::now()).filter(|l| !l.is_zero()).ok_or_else(|| std::io::ErrorKind::TimedOut.into())
+}
+
+/// Write all of `buf` before `deadline`, in chunks that each wait only for the time left, so a
+/// peer that drains slowly cannot extend the write.
+fn write_all_by(s: &mut TcpStream, mut buf: &[u8], deadline: Instant) -> std::io::Result<()> {
+    while !buf.is_empty() {
+        s.set_write_timeout(Some(time_left(deadline)?))?;
+        match s.write(buf.get(..buf.len().min(1 << 16)).unwrap_or(buf)) {
+            Ok(0) => return Err(std::io::ErrorKind::WriteZero.into()),
+            Ok(n) => buf = buf.get(n..).unwrap_or_default(),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(())
+}
+
 /// A running WordCraft app, reached through its loopback control port.
 pub struct Remote {
     addr: String,
-    conn: Option<(BufReader<TcpStream>, TcpStream)>,
+    conn: Option<(BufReader<Timed>, TcpStream)>,
     next_id: u64,
     /// The connection leads to a loopback address: requests carry the control key.
     send_key: bool,
@@ -113,11 +151,9 @@ impl Remote {
             match TcpStream::connect_timeout(&sa, Duration::from_millis(800)) {
                 Ok(s) => {
                     s.set_nodelay(true).ok();
-                    // The app answers within 60 s (its own timeout); leave headroom.
-                    s.set_read_timeout(Some(Duration::from_secs(90))).ok();
                     self.send_key = may_send_key(&self.addr, s.peer_addr().ok());
                     let read = s.try_clone()?;
-                    self.conn = Some((BufReader::new(read), s));
+                    self.conn = Some((BufReader::new(Timed { s: read, deadline: Instant::now() + EXCHANGE }), s));
                     return Ok(());
                 }
                 Err(e) => last = e,
@@ -145,9 +181,10 @@ impl Remote {
         let Some((reader, writer)) = self.conn.as_mut() else {
             return Err(std::io::Error::new(std::io::ErrorKind::NotConnected, "not connected"));
         };
-        writer.write_all(line.as_bytes())?;
-        writer.write_all(b"\n")?;
-        writer.flush()?;
+        // One overall deadline for the request and its whole reply.
+        let deadline = Instant::now() + EXCHANGE;
+        reader.get_mut().deadline = deadline;
+        write_all_by(writer, format!("{line}\n").as_bytes(), deadline)?;
         let mut reply = String::new();
         if reader.read_line(&mut reply)? == 0 {
             return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
@@ -361,6 +398,33 @@ mod tests {
         let keys: Vec<Value> = seen.try_iter().map(|v| v["key"].clone()).collect();
         assert_eq!(keys.first(), Some(&json!("key-0")), "{keys:?}");
         assert_eq!(keys.last(), Some(&json!("key-1")), "{keys:?}");
+    }
+
+    #[test]
+    fn a_drip_fed_reply_hits_the_exchange_deadline() {
+        // The peer reads the request, then sends one byte every 50 ms and never a newline.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                std::thread::spawn(move || {
+                    let mut out = stream.try_clone().unwrap();
+                    let mut line = String::new();
+                    let _ = BufReader::new(stream).read_line(&mut line);
+                    while out.write_all(b" ").is_ok() {
+                        std::thread::sleep(Duration::from_millis(50));
+                    }
+                });
+            }
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k")).unwrap();
+        let (tx, rx) = channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(r.call("document.inspect", json!({})));
+        });
+        // Tests use a 1 s exchange deadline; the call (with its one retry) ends well within 5 s.
+        let result = rx.recv_timeout(WAIT).expect("Remote::call still blocked on a drip-fed reply");
+        assert!(result.is_err(), "{result:?}");
     }
 
     #[test]
