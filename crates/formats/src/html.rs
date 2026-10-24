@@ -290,16 +290,135 @@ pub fn unescape(s: &str) -> String {
     out
 }
 
-fn sniff_charset(head: &str) -> Option<&str> {
-    let (i, n) = head.find("charset").map(|i| (i, 7)).or_else(|| head.find("encoding").map(|i| (i, 8)))?;
-    let after = head.get(i + n..)?.trim_start().strip_prefix('=')?;
-    let trimmed = after.trim_start().trim_start_matches(['"', '\'']);
-    let end = trimmed.find(|c: char| c.is_whitespace() || matches!(c, '"' | '\'' | ';' | '>' | '/')).unwrap_or(trimmed.len());
-    let label = trimmed[..end].trim();
-    if label.is_empty() { None } else { Some(label) }
+/// An attribute value, quoted or bare; returns the value and the text after it.
+fn attr_value(s: &str) -> (&str, &str) {
+    for q in ['"', '\''] {
+        if let Some(v) = s.strip_prefix(q) {
+            let end = v.find(q).unwrap_or(v.len());
+            return (v.get(..end).unwrap_or(v), v.get(end..).and_then(|r| r.get(1..)).unwrap_or(""));
+        }
+    }
+    let end = s.find(|c: char| c.is_whitespace() || c == '>' || c == '/').unwrap_or(s.len());
+    (s.get(..end).unwrap_or(s), s.get(end..).unwrap_or(""))
 }
 
-/// Decode HTML bytes: BOM, then a `charset` in the first 2 KB, else UTF-8 with a legacy fallback.
+/// The value of the tag attribute `key` (`name=value`, quoted or bare), if it is there. `tag`
+/// starts right after the tag's name.
+fn tag_attr<'a>(tag: &'a str, key: &str) -> Option<&'a str> {
+    let mut s = tag;
+    loop {
+        s = s.trim_start();
+        if s.is_empty() || s.starts_with('>') {
+            return None;
+        }
+        // A `/` here is the self-closing slash of `<meta … />`, which `tag_end` leaves in `tag`
+        // because it stops at the `>`; it names no attribute, and skipping it keeps the loop
+        // moving (`find` would return 0 and leave `s` unchanged).
+        if let Some(rest) = s.strip_prefix('/') {
+            s = rest;
+            continue;
+        }
+        let end = s.find(|c: char| c == '=' || c == '>' || c.is_whitespace() || c == '/').unwrap_or(s.len());
+        if end == 0 {
+            // Not reachable through the checks above, but a loop that cannot advance is worse
+            // than one that stops.
+            return None;
+        }
+        let name = s.get(..end)?.to_ascii_lowercase();
+        let after = s.get(end..)?;
+        if let Some(v) = after.strip_prefix('=') {
+            let (value, rest) = attr_value(v.trim_start());
+            if name == key {
+                return Some(value);
+            }
+            s = rest;
+        } else {
+            s = after;
+        }
+    }
+}
+
+/// The encoding label after `charset=` (or `encoding=`), quoted or bare.
+fn charset_label(s: &str) -> Option<&str> {
+    let (label, _) = attr_value(s.trim_start().strip_prefix('=')?);
+    let label = label.trim();
+    (!label.is_empty()).then_some(label)
+}
+
+/// The `charset` a `<meta>` tag declares: its `charset` attribute, or the charset inside the
+/// `content` of an `http-equiv=content-type` meta — WHATWG's prescan rules. A `charset=` in
+/// prose or in another attribute's value is not a declaration.
+fn meta_charset(tag: &str) -> Option<&str> {
+    if let Some(c) = tag_attr(tag, "charset") {
+        let c = c.trim();
+        return (!c.is_empty()).then_some(c);
+    }
+    if tag_attr(tag, "http-equiv").is_some_and(|v| v.eq_ignore_ascii_case("content-type"))
+        && let Some(c) = tag_attr(tag, "content")
+        && let Some(i) = c.to_ascii_lowercase().find("charset")
+    {
+        return charset_label(c.get(i + 7..)?);
+    }
+    None
+}
+
+/// The end of a tag whose text starts right after the tag's name: its `>`, quoted values skipped.
+fn tag_end(s: &str) -> usize {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut quote = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' | b'\'' if quote.is_none() => quote = Some(bytes[i]),
+            c if Some(c) == quote => quote = None,
+            b'>' if quote.is_none() => return i,
+            _ => {}
+        }
+        i += 1;
+    }
+    s.len()
+}
+
+/// A declared encoding, from a `<meta>` tag in the head or the XML prolog's `encoding=`. The
+/// word `charset` counts only inside such a tag: prose or a commented-out declaration must not
+/// pick the document's encoding. A prolog without an `encoding=` leaves the decision to a
+/// `<meta>` later in the head.
+fn sniff_charset(head: &str) -> Option<&str> {
+    let mut rest = head;
+    while let Some(i) = rest.find('<') {
+        rest = rest.get(i..)?;
+        if let Some(after) = rest.strip_prefix("<!--") {
+            rest = after.split_once("-->")?.1;
+        } else if rest.starts_with("<meta") && rest.get(5..6).is_some_and(|c| matches!(c, ">" | "/" | " " | "\t" | "\n" | "\r" | "\u{b}" | "\u{c}")) {
+            let tag = rest.get(5..)?;
+            let tag = tag.get(..tag_end(tag))?;
+            if let Some(label) = meta_charset(tag) {
+                return Some(label);
+            }
+            rest = tag;
+        } else if rest.starts_with("<?xml") {
+            let tag = rest.get(5..)?;
+            let tag = tag.get(..tag_end(tag))?;
+            if let Some(label) = tag_attr(tag, "encoding").and_then(charset_label_from_value) {
+                return Some(label);
+            }
+            rest = tag;
+        } else {
+            rest = rest.get(1..)?;
+        }
+    }
+    None
+}
+
+/// `charset_label` for a value that is already the label (an attribute's value, not `charset=…`).
+fn charset_label_from_value(value: &str) -> Option<&str> {
+    let label = value.trim();
+    (!label.is_empty()).then_some(label)
+}
+
+/// Decode HTML bytes: BOM, then an encoding declared in the first 2 KB — the spec's prescan
+/// reads 1,024 bytes, and this deliberately reads 2, like the old reader did — else UTF-8 with a
+/// legacy fallback.
 pub fn decode(b: &[u8]) -> String {
     if b.starts_with(&[0xFF, 0xFE]) || b.starts_with(&[0xFE, 0xFF]) || b.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return crate::txt::decode(b);
@@ -1184,7 +1303,11 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        if is_void(name) || self_close && block_kind(name).is_none() && !matches!(name, "a" | "span") {
+        // HTML5 ignores a self-closing slash on HTML elements: `<b/>` opens like `<b>` and its
+        // end tag closes it, so the formatting applies (dropping the tag lost the formatting
+        // instead). Foreign elements honour the slash and close at once, or their style would
+        // leak into the text after them.
+        if is_void(name) || self_close && matches!(name, "svg" | "math") {
             return;
         }
         if self.stack.len() >= MAX_STACK {
@@ -2203,6 +2326,82 @@ mod tests {
 
         let xml = b"<?xml version=\"1.0\" encoding=\"utf-8\"?><html><body>hello</body></html>";
         assert!(decode(xml).contains("hello"));
+    }
+
+    #[test]
+    fn charset_outside_a_tag_is_not_a_declaration() {
+        // Prose and a commented-out declaration don't pick the encoding: the file stays UTF-8.
+        let prose = "中文 mentions charset=gb2312 in a sentence";
+        assert_eq!(decode(prose.as_bytes()), prose);
+        let commented = "<!-- <meta charset=\"x-mac-roman\"> --><p>café</p>";
+        assert!(decode(commented.as_bytes()).contains("café"));
+        // Another attribute's value mentioning a charset is prose too.
+        let described =
+            "<html><head><meta name=\"description\" content=\"we mention charset=x-mac-roman here\"></head><body><p>café</p></body></html>";
+        assert!(decode(described.as_bytes()).contains("café"));
+    }
+
+    #[test]
+    fn a_prolog_without_an_encoding_leaves_the_meta_in_charge() {
+        // `<?xml version="1.0"?>` says nothing about encodings: the `<meta>` after it decides,
+        // as it did before the prolog was read at all.
+        let xhtml = b"<?xml version=\"1.0\"?><html><head><meta charset=\"windows-1252\"></head><body>\xE9l\xE8ve</body></html>";
+        assert!(decode(xhtml).contains("élève"));
+    }
+
+    #[test]
+    fn a_longer_tag_name_is_not_a_meta() {
+        let metadata = "<html><head><metadata charset=\"x-mac-roman\">gone</metadata></head><body><p>café</p></body></html>";
+        assert!(decode(metadata.as_bytes()).contains("café"));
+    }
+
+    #[test]
+    fn a_self_closing_meta_tag_is_still_read() {
+        // XHTML writes `<meta … />`. The tag text keeps the trailing slash, and scanning past it
+        // as if it named an attribute used to spin: every open of such a file hung. The bytes are
+        // windows-1252 (`café` ends in 0xE9), so reading the declaration is what makes the text.
+        const CAFE: &[u8] = b"caf\xe9";
+        let mut head = b"<html><head><meta http-equiv=\"Content-Type\" content=\"text/html; charset=windows-1252\" /></head><body><p>".to_vec();
+        head.extend_from_slice(CAFE);
+        head.extend_from_slice(b"</p></body></html>");
+        assert!(decode(&head).contains("café"));
+        let mut viewport =
+            b"<html><head><meta name=\"viewport\" content=\"width=device-width\" /><meta charset=\"windows-1252\"></head><body><p>".to_vec();
+        viewport.extend_from_slice(CAFE);
+        viewport.extend_from_slice(b"</p></body></html>");
+        assert!(decode(&viewport).contains("café"));
+        // A slash directly after the name, and a space before it, are both just skipped.
+        let mut bare = b"<html><head><meta/charset=windows-1252></head><body><p>".to_vec();
+        bare.extend_from_slice(CAFE);
+        bare.extend_from_slice(b"</p></body></html>");
+        assert!(decode(&bare).contains("café"));
+        let mut spaced = b"<html><head><meta charset=\"windows-1252\" / ></head><body><p>".to_vec();
+        spaced.extend_from_slice(CAFE);
+        spaced.extend_from_slice(b"</p></body></html>");
+        assert!(decode(&spaced).contains("café"));
+    }
+
+    #[test]
+    fn a_self_closing_foreign_element_closes_at_once() {
+        // HTML5 honours the slash on foreign elements: `<svg/>` is complete, and its style must
+        // not leak into the text after it.
+        let f = parse("<p><svg style=\"font-weight:bold\"/>plain</p>");
+        let FBlock::Para(p) = &f.blocks[0] else { panic!("expected para, got {:?}", f.blocks[0]) };
+        assert!(p.inlines.iter().all(|i| !matches!(i, Inline::Text(_, fm) if fm.bold)), "{:?}", p.inlines);
+        assert!(p.text().contains("plain"));
+        // Without the slash the svg opens, and its style takes the text it wraps.
+        let f = parse("<p><svg style=\"font-weight:bold\">taken</svg></p>");
+        let FBlock::Para(p) = &f.blocks[0] else { panic!("expected para, got {:?}", f.blocks[0]) };
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fm) if t == "taken" && fm.bold)), "{:?}", p.inlines);
+    }
+
+    #[test]
+    fn a_self_closing_inline_tag_opens_normally() {
+        // HTML5 ignores the slash on non-void tags: `<b/>` opens like `<b>`.
+        let f = parse("<p><b/>bold</b> plain");
+        let FBlock::Para(p) = &f.blocks[0] else { panic!("expected para, got {:?}", f.blocks[0]) };
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fm) if t == "bold" && fm.bold)));
+        assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, fm) if t == " plain" && !fm.bold)));
     }
 
     #[test]
