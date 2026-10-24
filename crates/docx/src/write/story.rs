@@ -429,7 +429,7 @@ impl Writer<'_> {
     }
 
     /// `w:id`, `w:author` and `w:date` of a tracked change by revision `idx`.
-    fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
+    pub(crate) fn change_attrs(&mut self, idx: u32) -> ChangeAttrs {
         let (id, author, date) = self.rev_attrs(idx);
         let mut a = vec![("w:id", id), ("w:author", author)];
         if !date.is_empty() {

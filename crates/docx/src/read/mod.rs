@@ -21,8 +21,7 @@ use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
 use wordcraft_doc::para::OBJ;
-use wordcraft_doc::props::Rgb;
-use wordcraft_doc::props::VAlign;
+use wordcraft_doc::props::{PropChange, Rgb, VAlign};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::styles::{PartFormat, Style, StyleKind, StyleSheet, TablePart, TableStyleParts};
 use wordcraft_doc::{
@@ -963,6 +962,32 @@ impl Reader<'_> {
             if kind == StyleKind::Table {
                 let parts = self.table_style_parts(s, &mut st);
                 st.table = (parts != TableStyleParts::default()).then_some(parts);
+            }
+            // A tracked change of the style definition (§17.13.5.25): the style as it was.
+            if let Some(ch) = s.child("w:stylePrChange") {
+                let old = ch
+                    .child("w:style")
+                    .map(|o| {
+                        // The id is the enclosing style's, whatever the record says.
+                        let mut old = Style {
+                            id: id.clone(),
+                            name: o.child_val("w:name").map(ui_style_name).unwrap_or_else(|| id.clone()),
+                            kind,
+                            based_on: o.child_val("w:basedOn").filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v)),
+                            next: o.child_val("w:next").filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v)),
+                            linked: o.child_val("w:link").filter(|v| !v.is_empty()).map(|v| self.pc.style_id(v)),
+                            ..Default::default()
+                        };
+                        if let Some(p) = o.child("w:pPr") {
+                            old.para = self.pc.ppr(p).0;
+                        }
+                        if let Some(rp) = o.child("w:rPr") {
+                            old.chr = self.pc.rpr(rp);
+                        }
+                        old
+                    })
+                    .unwrap_or_default();
+                st.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
             // A style defined twice (some generators write their own Heading 1 after a
             // placeholder one) is the last definition, whole: Word drops the earlier one rather

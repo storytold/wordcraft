@@ -6,8 +6,8 @@ use wordcraft_doc::fill::Fill;
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
-    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, PropChange, Rgb, RowProps, TabAlign,
+    TabLeader, TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -262,6 +262,7 @@ fn styles_and_lists_round_trip() {
         locked: true,
         default: false,
         table: None,
+        fmt_change: None,
     });
     d.styles.upsert(Style {
         id: "MyStyleChar".into(),
@@ -295,6 +296,29 @@ fn styles_and_lists_round_trip() {
     }
     assert_eq!(r.styles.styles.len(), d.styles.styles.len());
     assert_eq!(paras(&r)[1].props.numbering, Some(NumRef { num: nums, level: 1 }));
+}
+
+/// A tracked change of a style definition (`w:stylePrChange`, #2697): the change, the style as
+/// it was and the revision survive the round trip.
+#[test]
+fn tracked_style_definition_change_round_trips() {
+    let mut d = Document::new();
+    d.revisions.push(Revision { kind: RevisionKind::Format, author: "Ana".into(), date: "2026-10-17T10:00:00Z".into(), move_name: None });
+    d.styles.upsert(Style {
+        id: "Mine".into(),
+        name: "Mine".into(),
+        kind: StyleKind::Paragraph,
+        chr: CharProps { bold: Some(true), size: Some(14.0), ..Default::default() },
+        fmt_change: PropChange::boxed(0, Style { chr: CharProps { italic: Some(true), ..Default::default() }, ..Default::default() }),
+        ..Default::default()
+    });
+    d.body = vec![para_block(Paragraph::with_text("x", CharProps::default()))];
+    let r = rt(&d);
+    let st = r.styles.get("Mine").expect("the style");
+    let ch = st.fmt_change.as_ref().expect("the change survives");
+    assert_eq!(st.chr.bold, Some(true));
+    assert_eq!((ch.old.chr.italic, ch.old.chr.bold), (Some(true), None), "the style as it was");
+    assert_eq!(r.revisions.get(ch.rev as usize).map(|x| (x.kind, x.author.as_str())), Some((RevisionKind::Format, "Ana")));
 }
 
 #[test]
