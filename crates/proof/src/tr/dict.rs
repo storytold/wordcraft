@@ -26,6 +26,21 @@ pub struct TrDict {
     max_suffix_len: usize,
 }
 
+impl crate::slot::Dictionary for TrDict {
+    fn load(aff: &std::path::Path, dic: &std::path::Path) -> Result<Self, String> {
+        let read = |p: &std::path::Path| std::fs::read_to_string(p).map_err(|e| e.to_string());
+        TrDict::from_hunspell(&read(aff)?, &read(dic)?)
+    }
+
+    fn parse(aff: &str, dic: &str) -> Result<Self, String> {
+        TrDict::from_hunspell(aff, dic)
+    }
+
+    fn is_empty(&self) -> bool {
+        TrDict::is_empty(self)
+    }
+}
+
 impl TrDict {
     /// Returns true if empty (no dictionary loaded).
     pub fn is_empty(&self) -> bool {

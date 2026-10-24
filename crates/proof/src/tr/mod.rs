@@ -15,71 +15,37 @@ pub mod dict;
 pub mod grammar;
 pub mod hyphen;
 pub mod suggest;
+#[cfg(test)]
+pub(crate) mod test_dict;
 
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use crate::slot::DictSlot;
 
 pub use dict::TrDict;
 pub use suggest::suggest;
 
-/// The Turkish dictionary: `None` until first use, then the installed one (or an empty one).
-static DICT: RwLock<Option<Arc<TrDict>>> = RwLock::new(None);
-
 /// File names of a Turkish Hunspell dictionary.
 const NAMES: &[&str] = &["tr_TR", "tr-TR", "tr"];
+
+/// The Turkish dictionary, found on first use (see [`DictSlot`]).
+pub(crate) static DICT: DictSlot<TrDict> = DictSlot::new(NAMES, "Turkish");
 
 /// The Turkish dictionary: the installed Hunspell `tr_TR` (read on first use), one given with
 /// [`install_dictionary`], or an empty one when none is available.
 pub fn dictionary() -> Arc<TrDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
-        return d.clone();
-    }
-    let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
-    slot.get_or_insert(loaded).clone()
+    DICT.get()
 }
 
-fn load_installed() -> TrDict {
-    let Some((aff, dic)) = crate::hunspell::find(NAMES) else {
-        crate::hunspell::clear_load_error(NAMES[0]);
-        log::info!("Turkish spelling: no Hunspell tr_TR dictionary installed");
-        return TrDict::default();
-    };
-    let read = |p: &std::path::Path| std::fs::read_to_string(p);
-    match (read(&aff), read(&dic)) {
-        (Ok(aff_text), Ok(dic_text)) => crate::hunspell::note_load(NAMES[0], &dic, TrDict::from_hunspell(&aff_text, &dic_text)).unwrap_or_else(|e| {
-            log::warn!("Turkish spelling: {e}");
-            TrDict::default()
-        }),
-        (a, d) => {
-            let reason = a.err().or(d.err()).map_or_else(String::new, |e| e.to_string());
-            let _ = crate::hunspell::note_load::<()>(NAMES[0], &dic, Err(reason));
-            TrDict::default()
-        }
-    }
-}
-
-/// Use this Turkish dictionary from now on.
+/// Use this Turkish dictionary from now on (Hunspell `.aff` and `.dic` text). On error the
+/// current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
-    let d = TrDict::from_hunspell(aff, dic)?;
-    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(d));
-    Ok(())
-}
-
-/// Reload the dictionary on next check.
-pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-}
-
-/// The `.dic` file of the Hunspell `tr_TR` dictionary found in the dictionaries folder or the
-/// system locations now (File › Options › Proofing shows it, #1063); `None` when there is none.
-/// A dictionary given with [`install_dictionary`] has no file and isn't reported.
-pub fn installed_path() -> Option<std::path::PathBuf> {
-    crate::hunspell::find(NAMES).map(|(_, dic)| dic)
+    DICT.install(aff, dic)
 }
 
 /// Is a Turkish dictionary available?
 pub fn has_dictionary() -> bool {
-    !dictionary().is_empty()
+    DICT.has_dictionary()
 }
 
 /// Is `word` spelled correctly in Turkish?
@@ -87,15 +53,26 @@ pub fn is_correct(word: &str) -> bool {
     is_correct_with(&dictionary(), word)
 }
 
+/// [`is_correct`] with the File › Options › Proofing choices: with Ignore words that contain
+/// numbers off, words with digits are checked against the dictionary too.
+pub fn is_correct_with_options(word: &str, opts: &crate::Options) -> bool {
+    check(&dictionary(), word, opts)
+}
+
 /// [`is_correct`] against a given dictionary.
 pub fn is_correct_with(d: &TrDict, word: &str) -> bool {
+    check(d, word, &crate::Options::default())
+}
+
+/// [`is_correct_with_options`] against a given dictionary.
+fn check(d: &TrDict, word: &str, opts: &crate::Options) -> bool {
     if d.is_empty() {
         return true; // No Turkish dictionary installed: no spelling marks
     }
     let w = word.trim_matches(|c: char| !c.is_alphanumeric() && c != '\'' && c != '’');
     let w = w.trim_matches(['\'', '’']);
     let n = w.chars().count();
-    if n <= 1 || w.chars().any(|c| c.is_ascii_digit()) || !w.chars().any(char::is_alphabetic) {
+    if n <= 1 || (opts.ignore_numbers && w.chars().any(|c| c.is_ascii_digit())) || !w.chars().any(char::is_alphabetic) {
         return true;
     }
     // Check user dictionary first
@@ -120,7 +97,7 @@ pub fn is_correct_with(d: &TrDict, word: &str) -> bool {
     }
 
     // Compound words separated by hyphens (e.g., `afyon-karahisar`)
-    if w.contains('-') && w.split('-').all(|part| part.is_empty() || is_correct_with(d, part)) {
+    if w.contains('-') && w.split('-').all(|part| part.is_empty() || check(d, part, opts)) {
         return true;
     }
 
@@ -146,11 +123,8 @@ mod tests {
     }
 
     #[test]
-    fn installed_dictionary_checks_words_if_present() {
-        // Machines without a Turkish Hunspell dictionary (CI, most desktops) have nothing to check.
-        if !has_dictionary() {
-            return;
-        }
+    fn installed_dictionary_checks_words() {
+        test_dict::install();
         assert!(is_correct("kitap"));
         assert!(is_correct("kitaplar"));
         assert!(is_correct("evde"));
@@ -164,5 +138,20 @@ mod tests {
         assert!(!is_correct("benimbilmedigimkelime"));
         crate::add_word("benimbilmedigimkelime");
         assert!(is_correct("benimbilmedigimkelime"));
+    }
+
+    /// With Ignore words that contain numbers off, Turkish checks words with digits against the
+    /// dictionary instead of accepting them, hyphen parts included.
+    #[test]
+    fn proofing_options_reach_the_turkish_check() {
+        test_dict::install();
+        let lang = crate::ProofLang::Tr;
+        let defaults = crate::Options::default();
+        let check_digits = crate::Options { ignore_numbers: false, ..defaults };
+        assert!(crate::is_correct_in_with("kitapp2", lang, &defaults));
+        assert!(!crate::is_correct_in_with("kitapp2", lang, &check_digits));
+        assert!(!crate::is_correct_in_with("ev-kitapp2", lang, &check_digits));
+        assert!(crate::is_correct_in_with("2026", lang, &check_digits), "numbers alone stay correct");
+        assert!(is_correct("kitapp2"), "direct checks keep the defaults");
     }
 }

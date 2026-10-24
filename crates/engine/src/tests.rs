@@ -7056,14 +7056,22 @@ fn dictionaries_folder_option_is_saved_searched_and_reported() {
     assert_eq!(r["dictionariesFolder"], json!(dir.to_string_lossy()));
     let dicts = r["dictionaries"].as_array().unwrap();
     let file = |lang: &str| dicts.iter().find(|d| d["language"] == lang).map(|d| d["file"].clone());
-    assert_eq!(file("pl"), Some(json!(dir.join("pl_PL.dic").to_string_lossy())));
-    assert_eq!(file("pt"), Some(json!(dir.join("pt_BR.dic").to_string_lossy())));
-    assert_eq!(file("id"), Some(json!(dir.join("id_ID.dic").to_string_lossy())));
+    // A language reports the folder's file, or none while a dictionary another test gave with
+    // install_dictionary() is in use (those tests run concurrently); the folder is searched first
+    // either way.
+    let reported = |got: Option<&serde_json::Value>, name: &str| {
+        let want = dir.join(format!("{name}.dic"));
+        assert!(got.is_some_and(|f| f.is_null() || *f == json!(want.to_string_lossy())), "{name}: {dicts:?}");
+        assert_eq!(wordcraft_proof::hunspell::find(&[name]).map(|(_, dic)| dic), Some(want));
+    };
+    reported(file("pl").as_ref(), "pl_PL");
+    reported(file("pt").as_ref(), "pt_BR");
+    reported(file("id").as_ref(), "id_ID");
     // Each Spanish variety reports its own file (Spain, Mexico, Latin America, Uruguay, in order).
     let spanish: Vec<serde_json::Value> = dicts.iter().filter(|d| d["language"] == "es").map(|d| d["file"].clone()).collect();
     assert_eq!(spanish.len(), 4);
-    assert_eq!(spanish.first(), Some(&json!(dir.join("es_ES.dic").to_string_lossy())));
-    assert_eq!(spanish.last(), Some(&json!(dir.join("es_UY.dic").to_string_lossy())));
+    reported(spanish.first(), "es_ES");
+    reported(spanish.last(), "es_UY");
     // Polish text is checked against the folder's dictionary.
     run(&mut s, "document.setText", json!({"text": "rzeka płynie żeka"}));
     run(&mut s, "select.all", json!({}));
