@@ -1,7 +1,9 @@
 //! Caret movement and selection.
 
-use serde_json::Value;
-use wordcraft_doc::{Pos, StoryRef};
+use serde_json::{Value, json};
+use wordcraft_doc::math_edit::MathPos;
+use wordcraft_doc::para::OBJ;
+use wordcraft_doc::{InlineObject, Pos, StoryRef};
 
 use super::{parse_pos, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -117,7 +119,31 @@ fn lr(s: &mut Session, v: &Value, is_left: bool) -> CmdResult {
     if bidi_para(s) {
         return visual_lr(s, v, is_left);
     }
+    if !extend(v)
+        && !s.math_left
+        && let Some(r) = into_equation(s, is_left)
+    {
+        return r;
+    }
     mv(s, v, if is_left { left } else { right })
+}
+
+/// Left/Right onto an equation opens it, at its end from the right and at its start from the
+/// left, as in Word (#4138). Leaving it puts the caret on the far side, so the same arrow then
+/// moves on instead of going back in. A caret.left/right that itself left an equation (sent
+/// while editing one) moves on too.
+fn into_equation(s: &mut Session, is_left: bool) -> Option<CmdResult> {
+    let f = s.sel.focus.clone();
+    let off = if is_left { f.off.checked_sub(OBJ.len_utf8())? } else { f.off };
+    if !matches!(s.doc.para_at(&f)?.object_at(off), Some(InlineObject::Equation { .. })) {
+        return None;
+    }
+    s.sel = Selection::caret(Pos { off, ..f });
+    s.goal_x = None;
+    s.pending = None;
+    // `equation.edit` without a position opens at the end.
+    let at = if is_left { json!({}) } else { json!({"pos": MathPos::default()}) };
+    Some(super::equation::edit(s, &at))
 }
 
 /// Left/Right in bidirectional text: one caret position to the left or right on the screen.

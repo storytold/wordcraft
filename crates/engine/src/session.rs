@@ -485,6 +485,9 @@ pub struct Session {
     pub editing_lang: Option<String>,
     /// Editing inside an equation: which one and the caret in it.
     pub math: Option<MathEdit>,
+    /// The running command left the equation being edited before it ran (see [`Session::run`]),
+    /// so Left/Right don't open the equation the caret now sits next to (#4138).
+    pub(crate) math_left: bool,
     /// Equations are typed in LaTeX rather than the linear format.
     pub math_latex: bool,
     /// Text typed into equations is normal (non-math) text.
@@ -727,6 +730,7 @@ impl Session {
             merge: Default::default(),
             ui_requests: Vec::new(),
             math: None,
+            math_left: false,
             math_latex: false,
             math_normal_text: false,
             also_selected: Vec::new(),
@@ -1366,6 +1370,7 @@ impl Session {
             editing_lang: _,
             // Equation editing mode, like `view`: not part of the document or its history.
             math: _,
+            math_left: _,
             math_latex: _,
             math_normal_text: _,
             // The save password, like the file path: not an edit to the document.
@@ -1496,12 +1501,14 @@ impl Session {
             self.last_command = Some((id.to_string(), kept()));
         }
         // Typing, caret movement and selection outside the equation commands leave the equation.
+        self.math_left = false;
         if self.math.is_some()
             && (id.starts_with("text.") || id.starts_with("caret.") || id.starts_with("select.") || id.starts_with("edit.paste"))
             && let Some(m) = self.math.take()
         {
             let off = m.at.off + wordcraft_doc::para::OBJ.len_utf8();
             self.sel = Selection::caret(Pos { off, ..m.at });
+            self.math_left = true;
         }
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
