@@ -2648,11 +2648,18 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         k += 1;
                     }
                     let d0 = k;
-                    while bytes.get(k).is_some_and(|b| b.is_ascii_digit()) && k - d0 < 10 {
+                    // The run may be any length: consume all of it, and parse only the first
+                    // 15 significant digits (leading zeros skipped first: a zero-padded value
+                    // of 16+ digits must not lose the significant ones). Longer runs still
+                    // saturate to `i64::MAX` and clamp through the `i32` clamp below.
+                    while bytes.get(k).is_some_and(|b| b.is_ascii_digit()) {
                         k += 1;
                     }
                     let param = if k > d0 {
-                        let v = std::str::from_utf8(bytes.get(d0..k).unwrap_or(b"0")).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                        let digits = bytes.get(d0..k).unwrap_or_default();
+                        let sig = digits.get(digits.iter().take_while(|b| **b == b'0').count()..).unwrap_or_default();
+                        let v =
+                            if sig.len() > 15 { i64::MAX } else { std::str::from_utf8(sig).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0) };
                         let v = if neg { -v } else { v };
                         // A date (DTTM) is a 32-bit pattern some writers put unsigned.
                         let v = if matches!(word, "revdttm" | "revdttmdel" | "crdate" | "prdate")
@@ -2931,6 +2938,44 @@ mod tests {
         assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "red" && f.color == Some(Rgb(255, 0, 0)))));
         let FBlock::Para(l) = &f.blocks[2] else { panic!() };
         assert!(matches!(&l.inlines[0], Inline::Text(_, f) if f.link.as_deref() == Some("http://a.b")));
+    }
+
+    #[test]
+    fn long_numeric_parameters_dont_leak_digits_into_text() {
+        // A parameter of 11+ digits used to split into a 10-digit value and
+        // leftover digits imported as literal text (e.g. `99` from \li999999999999).
+        for (rtf, expect) in [
+            (r"{\rtf1\ansi\li999999999999 x}", "x"),
+            (r"{\rtf1\ansi\sb9999999999999999 y}", "y"),
+            (r"{\rtf1\ansi\li-999999999999 z}", "z"),
+            (r"{\rtf1\ansi\li2147483647 w}", "w"),
+            (r"{\rtf1\ansi\li9999999999 v}", "v"),
+        ] {
+            let f = parse(rtf.as_bytes()).unwrap();
+            let all = texts(&f).join("|");
+            assert!(all.contains(expect), "{all}");
+            assert!(!all.contains('9'), "{all}");
+        }
+    }
+
+    #[test]
+    fn bin_counts_of_any_length_consume_the_data() {
+        // A zero-padded binary count (12 digits) used to parse the first 10
+        // digits as 0, so the tail digits and the payload were imported as text.
+        let f = parse(br"{\rtf1\ansi\bin000000000001 X\par Y}").unwrap();
+        let all = texts(&f).join("|");
+        assert!(all.contains("Y"), "{all}");
+        assert!(!all.contains('0') && !all.contains('1') && !all.contains('X'), "{all}");
+    }
+
+    #[test]
+    fn bin_count_padded_past_fifteen_digits() {
+        // With 16 digits the first 15 can all be zeros; parsing only the first
+        // 15 turned the count into 0 and the payload byte leaked as text.
+        let f = parse(br"{\rtf1\ansi\bin0000000000000001 X\par Y}").unwrap();
+        let all = texts(&f).join("|");
+        assert!(all.contains("Y"), "{all}");
+        assert!(!all.contains('X'), "the payload byte leaked as text: {all}");
     }
 
     #[test]
