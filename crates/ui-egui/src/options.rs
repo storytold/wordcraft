@@ -286,6 +286,9 @@ fn display(app: &mut WordApp, ui: &mut Ui) {
     }
     numeral_picker(app, ui);
     ui.add_space(8.0);
+    section(ui, "Status bar");
+    status_count_picker(app, ui);
+    ui.add_space(8.0);
     section(ui, "Printing");
     ui.checkbox(&mut app.ui.print_backgrounds, tl!("Print the page color"));
     ui.checkbox(&mut app.ui.update_fields_before_print, tl!("Update fields before printing"));
@@ -645,6 +648,24 @@ fn theme_picker(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What the status bar's live count shows (#2797): words (as Word's status bar counts), characters
+/// with spaces, or characters without spaces. Right-clicking the count in the status bar offers
+/// the same choices.
+fn status_count_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::StatusCount;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Status bar count:"));
+        egui::ComboBox::from_id_salt("status_count").selected_text(tl!(app.ui.status_count.label())).width(220.0).show_ui(ui, |ui| {
+            for c in StatusCount::ALL {
+                if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                    let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                }
+            }
+        });
+    });
+    note(ui, "You can also right-click the count in the status bar to change it.");
+}
+
 /// Interface size (#475, #822): Auto, which keeps the system's display scale and shows the size it
 /// draws at, or an absolute size, so "100%" means one screen pixel per point.
 fn interface_size_picker(app: &mut WordApp, ui: &mut Ui) {
@@ -840,7 +861,7 @@ mod tests {
     use super::{decimal, length, parse_length, unit};
 
     use crate::theme::Appearance;
-    use crate::{Services, UiState, WordApp};
+    use crate::{Services, StatusCount, UiState, WordApp};
 
     #[test]
     fn unknown_settings_keys_load_in_linear_time() {
@@ -992,6 +1013,7 @@ mod tests {
         .unwrap();
         a.ui.recent_count = 30;
         a.ui.print_backgrounds = true;
+        a.ui.status_count = StatusCount::CharactersNoSpaces;
         let saved = serde_json::to_vec(&a.prefs()).unwrap();
         let mut b = app();
         b.apply_prefs(UiState::from_json(&saved).unwrap());
@@ -999,13 +1021,16 @@ mod tests {
         assert_eq!(b.session.prefs.units, Some(Unit::Centimeters));
         assert_eq!(b.session.initials, "VK");
         assert_eq!((b.ui.recent_count, b.ui.print_backgrounds), (30, true));
+        assert_eq!(b.ui.status_count, StatusCount::CharactersNoSpaces, "#2797: what the status bar counts");
         assert!(wordcraft_engine::proof::user_dictionary().contains(&"zqxoptionsword".to_string()));
 
         let junk = br#"{"theme": "dark", "recentCount": "lots", "printBackgrounds": 7, "optionsPane": ["x"], "dark": true,
+            "statusCount": "paragraphs",
             "editing": {"measurementUnits": "furlongs", "typingReplacesSelection": false, "marks": {"tabs": "yes", "spaces": true}}}"#;
         let ui = UiState::from_json(junk).unwrap();
         assert_eq!(ui.theme, Appearance::Dark);
         assert_eq!((ui.recent_count, ui.print_backgrounds, ui.options_pane.as_str()), (12, false, "general"));
+        assert_eq!(ui.status_count, StatusCount::Words, "#2797: a wrong value reads the default");
         assert_eq!(ui.legacy_dark, Some(true));
         assert_eq!(ui.editing.units, None);
         assert!(!ui.editing.typing_replaces_selection);
@@ -1083,6 +1108,14 @@ mod tests {
         h.get_by_label("Spaces").click();
         h.run_steps(2);
         assert!(h.state().session.prefs.marks.spaces, "Display › Spaces");
+        // #2797: what the status bar's count shows, chosen here as in its right-click menu. The
+        // Display pane's other combo box is Numerals, drawn above this one.
+        h.get_all_by_role(egui::accesskit::Role::ComboBox).last().expect("the status bar count picker").click();
+        h.run_steps(4);
+        h.get_by_label("Characters (with spaces)").click();
+        h.run_steps(2);
+        assert_eq!(h.state().ui.status_count, StatusCount::Characters, "Display › Status bar count");
+        assert_eq!(h.state_mut().run("ui.statusCount", json!({})).unwrap()["statusCount"], "characters", "the command answers the same");
         h.get_by_label("Proofing").click();
         h.run_steps(4);
         assert_eq!(h.state().ui.options_pane, "proofing");

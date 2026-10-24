@@ -5,7 +5,7 @@ use serde_json::json;
 use wordcraft_doc::{PartKind, StoryRef};
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
-use crate::{WordApp, icons};
+use crate::{StatusCount, StatusCounts, WordApp, icons};
 
 /// Why the caret's language isn't spell-checked (dictionary unreadable or missing), if it isn't.
 pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::PathBuf, String)>, missing: Option<&str>) -> Option<String> {
@@ -577,15 +577,29 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
-                let words = app.cached_word_count();
+                // The live count: words (the default, as Word's status bar counts), characters
+                // with spaces, or characters without spaces — whichever the person chose (#2797).
+                let unit = app.ui.status_count;
+                let counts = app.cached_status_counts();
                 // A selected picture/shape/text box isn't a text selection: show the total.
                 let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
-                    crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
+                    status_count_text(unit, counts.in_unit(unit), None)
                 } else {
-                    let sw = wordcraft_doc::count_words(&app.session.selected_text());
-                    crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
+                    let selected = crate::count_in_unit(&app.session.selected_text(), unit);
+                    status_count_text(unit, counts.in_unit(unit), Some(selected))
                 };
-                if st(ui, &wtxt).clicked() {
+                let counted = st(ui, &wtxt);
+                // Right-click, as Word's status bar offers: choose what the count shows (#2797).
+                counted.context_menu(|ui| {
+                    ui.set_min_width(180.0);
+                    for c in crate::StatusCount::ALL {
+                        if ui.selectable_label(app.ui.status_count == c, tl!(c.label())).clicked() {
+                            let _ = app.run("ui.statusCount", json!({"value": c.code()}));
+                            ui.close();
+                        }
+                    }
+                });
+                if counted.clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
                 if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
@@ -743,14 +757,43 @@ fn small_icon(ui: &mut Ui, icon: &str, tip: &str) -> bool {
 }
 
 impl WordApp {
-    /// Word count, recomputed only when the document changes.
-    pub fn cached_word_count(&mut self) -> usize {
-        // The count option changes the count without a document change.
+    /// The document's counts, recomputed only when the document (or the count option) changes:
+    /// words as the status bar and the Word Count dialog count them, and characters with and
+    /// without spaces as the dialog does (#2797).
+    pub fn cached_status_counts(&mut self) -> StatusCounts {
+        // The count option changes the counts without a document change.
         let key = self.session.rev().wrapping_mul(2) | u64::from(self.session.prefs.count_notes);
-        if self.word_count.0 != key {
-            self.word_count = (key, self.session.word_count());
+        if self.status_counts.0 != key {
+            let text = self.session.counted_text();
+            self.status_counts = (
+                key,
+                StatusCounts {
+                    words: self.session.word_count(),
+                    chars: wordcraft_doc::count_chars(&text),
+                    chars_no_spaces: wordcraft_doc::count_chars_no_spaces(&text),
+                },
+            );
         }
-        self.word_count.1
+        self.status_counts.1
+    }
+}
+
+/// The status bar's count line (#2797): the whole document's `total`, or "selected of total" when
+/// part of it is selected, worded as the Word Count dialog words the same counts.
+pub(crate) fn status_count_text(unit: StatusCount, total: usize, selected: Option<usize>) -> String {
+    match (unit, selected) {
+        (StatusCount::Words, None) => crate::i18n::fmt(tl!("{words} words"), &[("words", &total.to_string())]),
+        (StatusCount::Words, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &n.to_string()), ("words", &total.to_string())])
+        }
+        (StatusCount::Characters, None) => crate::i18n::fmt(tl!("{chars} characters"), &[("chars", &total.to_string())]),
+        (StatusCount::Characters, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
+        (StatusCount::CharactersNoSpaces, None) => crate::i18n::fmt(tl!("{chars} characters (no spaces)"), &[("chars", &total.to_string())]),
+        (StatusCount::CharactersNoSpaces, Some(n)) => {
+            crate::i18n::fmt(tl!("{selected} of {chars} characters (no spaces)"), &[("selected", &n.to_string()), ("chars", &total.to_string())])
+        }
     }
 }
 
@@ -848,6 +891,114 @@ mod tests {
         for (zoom, xs) in &seen {
             assert_eq!(xs, first, "status bar controls moved at {zoom}% zoom");
         }
+    }
+
+    /// #2797: the count line's wording per unit — words (the default), characters with spaces,
+    /// characters without spaces — whole document or "selected of total".
+    #[test]
+    fn the_count_line_words_each_unit() {
+        for (unit, total, selected, expected) in [
+            (StatusCount::Words, 12, None, "12 words"),
+            (StatusCount::Words, 12, Some(3), "3 of 12 words"),
+            (StatusCount::Characters, 23, None, "23 characters"),
+            (StatusCount::Characters, 23, Some(6), "6 of 23 characters"),
+            (StatusCount::CharactersNoSpaces, 21, None, "21 characters (no spaces)"),
+            (StatusCount::CharactersNoSpaces, 21, Some(6), "6 of 21 characters (no spaces)"),
+        ] {
+            assert_eq!(status_count_text(unit, total, selected), expected, "{unit:?} with {selected:?} selected");
+        }
+    }
+
+    /// #2797: the status bar's totals are the Word Count dialog's numbers (words, characters with
+    /// spaces, characters without spaces), and its selection line counts the selection the same way.
+    #[test]
+    fn the_status_bar_totals_are_the_word_count_dialogs_numbers() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "Hello world.\nSecond line"})).unwrap();
+        // Straight from the engine: `a.run` would only open the Word Count dialog (#240).
+        let stats = a.session.run("review.wordCount", &json!({})).unwrap();
+        let counts = a.cached_status_counts();
+        assert_eq!(counts.words, stats["words"].as_u64().unwrap_or_default() as usize, "words, as the dialog counts them");
+        assert_eq!(counts.chars, stats["charactersWithSpaces"].as_u64().unwrap_or_default() as usize, "characters with spaces");
+        assert_eq!(counts.chars_no_spaces, stats["characters"].as_u64().unwrap_or_default() as usize, "characters without spaces");
+        // "world." selected: its own count of the chosen unit over the document's total.
+        a.run("select.text", json!({"text": "world."})).unwrap();
+        let line = |unit: StatusCount| {
+            let selected = crate::count_in_unit(&a.session.selected_text(), unit);
+            status_count_text(unit, counts.in_unit(unit), Some(selected))
+        };
+        assert_eq!(line(StatusCount::Words), "1 of 4 words");
+        assert_eq!(line(StatusCount::Characters), "6 of 23 characters");
+        assert_eq!(line(StatusCount::CharactersNoSpaces), "6 of 21 characters (no spaces)");
+    }
+
+    /// #2797: the status bar draws the unit the person chose, and right-clicking the count offers
+    /// the three units, the choice taking effect at once and kept between runs.
+    #[test]
+    fn the_status_bar_count_is_chosen_from_its_context_menu() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "Hello world.\nSecond line"})).unwrap();
+        let ctx = ctx();
+        ctx.enable_accesskit();
+        let mut n = 0;
+        // What the status bar drew last frame: each widget's label and where it sits.
+        let drawn = |a: &mut WordApp, n: &mut u32, events: Vec<egui::Event>| -> Vec<(String, egui::Rect)> {
+            *n += 1;
+            let input = egui::RawInput {
+                time: Some(f64::from(*n) / 60.0),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(1200.0, 800.0))),
+                events,
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| status_bar(a, ui));
+            out.textures_delta.clear();
+            let update = out.platform_output.accesskit_update.take().unwrap();
+            update
+                .nodes
+                .into_iter()
+                .filter_map(|(_, node)| {
+                    let b = node.bounds()?;
+                    Some((node.label()?.to_string(), egui::Rect::from_min_max(pos2(b.x0 as f32, b.y0 as f32), pos2(b.x1 as f32, b.y1 as f32))))
+                })
+                .collect()
+        };
+        let at = |seen: &[(String, egui::Rect)], label: &str| {
+            seen.iter().find(|(l, _)| l == label).unwrap_or_else(|| panic!("{label} is drawn")).1.center()
+        };
+        let button = |at: egui::Pos2, button: egui::PointerButton, pressed: bool| egui::Event::PointerButton {
+            pos: at,
+            button,
+            pressed,
+            modifiers: Default::default(),
+        };
+        // Words are counted: the default unit.
+        let mut seen = drawn(&mut a, &mut n, vec![]);
+        assert!(seen.iter().any(|(l, _)| l == "4 words"), "{seen:?}");
+        // Right-click the count: the menu lists the three units.
+        let count = at(&seen, "4 words");
+        drawn(&mut a, &mut n, vec![egui::Event::PointerMoved(count), button(count, egui::PointerButton::Secondary, true)]);
+        drawn(&mut a, &mut n, vec![button(count, egui::PointerButton::Secondary, false)]);
+        seen = drawn(&mut a, &mut n, vec![]);
+        for label in ["Words", "Characters (with spaces)", "Characters (no spaces)"] {
+            assert!(seen.iter().any(|(l, _)| l == label), "the menu lists {label}: {seen:?}");
+        }
+        // Pick characters with spaces: the count changes at once, with no document change.
+        let pick = at(&seen, "Characters (with spaces)");
+        drawn(&mut a, &mut n, vec![egui::Event::PointerMoved(pick), button(pick, egui::PointerButton::Primary, true)]);
+        drawn(&mut a, &mut n, vec![button(pick, egui::PointerButton::Primary, false)]);
+        assert_eq!(a.ui.status_count, StatusCount::Characters, "the menu's choice is taken");
+        assert_eq!(a.run("ui.statusCount", json!({})).unwrap()["statusCount"], "characters", "and answered to scripts");
+        seen = drawn(&mut a, &mut n, vec![]);
+        assert!(seen.iter().any(|(l, _)| l == "23 characters"), "{seen:?}");
+        // With a selection: "selected of total".
+        a.run("select.text", json!({"text": "world."})).unwrap();
+        seen = drawn(&mut a, &mut n, vec![]);
+        assert!(seen.iter().any(|(l, _)| l == "6 of 23 characters"), "{seen:?}");
+        // The choice comes back after a restart.
+        let mut b = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let saved = serde_json::to_vec(&a.prefs()).unwrap();
+        b.apply_prefs(crate::UiState::from_json(&saved).unwrap());
+        assert_eq!(b.ui.status_count, StatusCount::Characters, "kept between runs");
     }
 
     /// #2402: a long message (the path of a file that isn't there) is shortened so that it stops

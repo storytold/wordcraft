@@ -16,6 +16,25 @@ fn word_count() {
     assert_eq!(count_words(" -- "), 0);
 }
 
+/// #2797: the status bar's character counts, worded like the Word Count dialog's: characters
+/// with spaces leave the paragraph breaks out, characters without spaces leave every
+/// whitespace character out.
+#[test]
+fn character_counts() {
+    assert_eq!(count_chars(""), 0);
+    assert_eq!(count_chars("Hello"), 5);
+    // Paragraph breaks join the paragraphs but aren't characters.
+    assert_eq!(count_chars("Hello\nworld\r\n"), 10);
+    assert_eq!(count_chars("a\tb"), 3, "a tab is a character");
+    // Every kind of whitespace goes, spaces, tabs and (non-ASCII) spaces between words.
+    assert_eq!(count_chars_no_spaces("Hello world"), 10);
+    assert_eq!(count_chars_no_spaces("a\tb c\u{a0}d"), 4, "including a non-breaking space");
+    assert_eq!(count_chars_no_spaces(" \n\r\t "), 0);
+    // Accented letters and emoji count as one character each, as they are.
+    assert_eq!(count_chars("café 🚀"), 6);
+    assert_eq!(count_chars_no_spaces("café 🚀"), 5);
+}
+
 #[test]
 fn word_count_includes_numbered_list_labels_but_not_bullets() {
     let mut d = Document::new();

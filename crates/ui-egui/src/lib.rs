@@ -231,6 +231,90 @@ fn paste_target(canvas_focused: bool, backstage: bool, dialog: bool) -> bool {
     canvas_focused && !backstage && !dialog
 }
 
+/// What the status bar's live count shows (#2797): words (the default, as Word's status bar
+/// counts), characters with spaces, or characters without spaces — the same three the Word Count
+/// dialog reports, worded the same way. Right-click the count in the status bar, or File ›
+/// Options › Display, to choose; kept between runs in `ui.json`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum StatusCount {
+    #[default]
+    Words,
+    Characters,
+    CharactersNoSpaces,
+}
+
+impl StatusCount {
+    /// In menu order.
+    pub const ALL: [StatusCount; 3] = [StatusCount::Words, StatusCount::Characters, StatusCount::CharactersNoSpaces];
+
+    /// The value used in `ui.json` and by the `ui.statusCount` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            StatusCount::Words => "words",
+            StatusCount::Characters => "characters",
+            StatusCount::CharactersNoSpaces => "charactersNoSpaces",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<StatusCount> {
+        StatusCount::ALL.into_iter().find(|c| c.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label (translated with `tl!` where shown): the Word Count dialog's own words
+    /// for these counts.
+    pub fn label(self) -> &'static str {
+        match self {
+            StatusCount::Words => "Words",
+            StatusCount::Characters => "Characters (with spaces)",
+            StatusCount::CharactersNoSpaces => "Characters (no spaces)",
+        }
+    }
+}
+
+/// An unknown saved value reads as the default rather than discarding the whole `ui.json`.
+impl From<String> for StatusCount {
+    fn from(s: String) -> Self {
+        StatusCount::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<StatusCount> for String {
+    fn from(c: StatusCount) -> Self {
+        c.code().to_string()
+    }
+}
+
+/// Whole-document counts the status bar shows (#2797), computed together whenever the document
+/// changes: words ([`wordcraft_engine::Session::word_count`]), characters and characters without
+/// spaces (the Word Count dialog's [`wordcraft_doc::count_chars`] and [`wordcraft_doc::count_chars_no_spaces`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatusCounts {
+    pub words: usize,
+    pub chars: usize,
+    pub chars_no_spaces: usize,
+}
+
+impl StatusCounts {
+    /// The total in the unit the status bar is showing.
+    pub fn in_unit(self, unit: StatusCount) -> usize {
+        match unit {
+            StatusCount::Words => self.words,
+            StatusCount::Characters => self.chars,
+            StatusCount::CharactersNoSpaces => self.chars_no_spaces,
+        }
+    }
+}
+
+/// `s` (a selection, say) counted in the unit the status bar is showing.
+pub fn count_in_unit(s: &str, unit: StatusCount) -> usize {
+    match unit {
+        StatusCount::Words => wordcraft_doc::count_words(s),
+        StatusCount::Characters => wordcraft_doc::count_chars(s),
+        StatusCount::CharactersNoSpaces => wordcraft_doc::count_chars_no_spaces(s),
+    }
+}
+
 /// UI state that persists between runs (and that agents can read and set).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -359,6 +443,10 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// What the status bar's live count shows (#2797): words (the default), characters with
+    /// spaces, or characters without spaces. Right-click the count in the status bar, or File ›
+    /// Options › Display. Junk saved values read as words.
+    pub status_count: StatusCount,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -426,6 +514,7 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            status_count: StatusCount::default(),
         }
     }
 }
@@ -616,7 +705,8 @@ pub struct WordApp {
     escape_free: bool,
     pub quit_requested: bool,
     pub autosave: bool,
-    pub word_count: (u64, usize),
+    /// The document's [`StatusCounts`] and the key they were computed for; see [`WordApp::cached_status_counts`].
+    pub status_counts: (u64, StatusCounts),
     last_autosave: f64,
     /// The tab shown before the Equation tab came up (restored when editing ends).
     pub(crate) equation_prev_tab: Option<String>,
@@ -738,7 +828,7 @@ impl WordApp {
             escape_free: false,
             quit_requested: false,
             autosave: true,
-            word_count: (0, 0),
+            status_counts: (0, StatusCounts::default()),
             last_autosave: 0.0,
             equation_prev_tab: None,
             smart_art_item: None,
@@ -1696,6 +1786,17 @@ impl WordApp {
                 }
                 self.read_system_animations();
                 json!({"animations": self.ui.animations.code(), "enabled": self.animations_on(), "system": self.system_animations})
+            }
+            "ui.statusCount" => {
+                // `words` (the default), `characters` or `charactersNoSpaces`: what the status
+                // bar's live count shows; no value reads it (#2797).
+                if let Some(v) = s("value") {
+                    match StatusCount::from_code(v) {
+                        Some(c) => self.ui.status_count = c,
+                        None => return Some(Err(format!("unknown status count {v:?}; use words, characters or charactersNoSpaces"))),
+                    }
+                }
+                json!({"statusCount": self.ui.status_count.code()})
             }
             "ui.language" => {
                 // `auto` (follow the system) or a language code; anything else is an error.
@@ -2870,6 +2971,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.statusCount"
     ) || id.starts_with("help.")
 }
 
@@ -3543,7 +3645,7 @@ mod tests {
         for id in ["format.bold", "text.insert", "file.save", "file.saveAs", "file.print", "edit.paste", "insert.table", "ui.print"] {
             assert!(!widgets::enabled(a, id), "{id} is off with no document");
         }
-        for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme"] {
+        for id in ["file.new", "file.open", "ui.backstage", "ui.tab", "ui.discord", "file.options", "ui.theme", "ui.statusCount"] {
             assert!(widgets::enabled(a, id), "{id} works with no document");
         }
         assert!(!chrome::qat_enabled(a, "file.save"));
@@ -7836,6 +7938,29 @@ mod tests {
         assert_eq!(a.run("ui.theme", json!({"value": "dark"})).unwrap()["theme"], "dark");
         assert_eq!(a.run("ui.dark", json!({})).unwrap()["theme"], "light", "ui.dark toggles the manual choice");
         assert_eq!(a.run("ui.theme", json!({})).unwrap()["theme"], "light");
+    }
+
+    /// #2797: `ui.statusCount` reads and sets what the status bar's live count shows; a value it
+    /// doesn't know is refused, and the choice is written to `ui.json` and read back.
+    #[test]
+    fn the_status_bar_count_is_a_ui_command() {
+        let mut a = app();
+        assert_eq!(a.run("ui.statusCount", json!({})).unwrap(), json!({"statusCount": "words"}), "words, the default");
+        assert!(a.run("ui.statusCount", json!({"value": "paragraphs"})).is_err(), "junk is refused");
+        // A value that isn't a string reads the setting, like `ui.theme`'s.
+        assert_eq!(a.run("ui.statusCount", json!({"value": 7})).unwrap(), json!({"statusCount": "words"}));
+        assert_eq!(a.run("ui.statusCount", json!({"value": "characters"})).unwrap()["statusCount"], "characters");
+        assert_eq!(a.ui.status_count, StatusCount::Characters);
+        // Like the theme setting, the code is read without regard to case or surrounding space.
+        assert_eq!(a.run("ui.statusCount", json!({"value": " CharactersNoSpaces "})).unwrap()["statusCount"], "charactersNoSpaces");
+        assert_eq!(a.ui.status_count, StatusCount::CharactersNoSpaces);
+        let saved = serde_json::to_vec(&a.prefs()).unwrap();
+        assert_eq!(UiState::from_json(&saved).unwrap().status_count, StatusCount::CharactersNoSpaces, "kept between runs");
+        assert_eq!(UiState::from_json(br#"{"statusCount": "words"}"#).unwrap().status_count, StatusCount::Words);
+        // A `ui.json` with a wrong value in this one setting keeps the rest and reads the default.
+        assert_eq!(UiState::from_json(br#"{"statusCount": "paragraphs"}"#).unwrap().status_count, StatusCount::Words);
+        assert_eq!(UiState::from_json(br#"{"statusCount": 7}"#).unwrap().status_count, StatusCount::Words);
+        assert_eq!(UiState::from_json(br#"{"statusCount": ["characters"]}"#).unwrap().status_count, StatusCount::Words);
     }
 
     /// One app frame with the OS appearance egui reports; returns the window commands it sent.
