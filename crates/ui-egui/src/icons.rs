@@ -438,6 +438,24 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.rect(2.5, 5.5, 8.0, 9.0, c);
             pen.rect(11.0, 2.5, 16.5, 6.0, c);
         }
+        "axis" => {
+            // L-shaped axes with ticks, the way Word draws the Format Axis button.
+            pen.line(&[(3.0, 2.5), (3.0, 17.5), (17.5, 17.5)]);
+            for y in [5.0, 9.0, 13.0] {
+                pen.line(&[(1.5, y), (3.0, y)]);
+            }
+            for x in [7.0, 11.0, 15.0] {
+                pen.line(&[(x, 17.5), (x, 19.0)]);
+            }
+            pen.frect(4.0, 6.0, 6.0, 8.0, a);
+        }
+        "series" => {
+            // A line series with point markers.
+            pen.line_c(&[(2.5, 14.0), (7.0, 8.0), (11.5, 11.0), (17.0, 4.5)], a);
+            for (x, y) in [(2.5, 14.0), (7.0, 8.0), (11.5, 11.0), (17.0, 4.5)] {
+                pen.circle(x, y, 2.0, c);
+            }
+        }
         "screenshot" => {
             pen.line(&[(3.0, 7.0), (3.0, 3.0), (7.0, 3.0)]);
             pen.line(&[(13.0, 3.0), (17.0, 3.0), (17.0, 7.0)]);
