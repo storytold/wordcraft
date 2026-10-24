@@ -129,7 +129,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
 pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
-    let Some(root) = pkg.xml(&main)? else {
+    let Some(root) = pkg.xml_strict(&main)? else {
         return Err(DocxError::MissingPart(main));
     };
     if root.name != "w:document" {

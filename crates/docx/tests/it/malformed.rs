@@ -68,6 +68,25 @@ fn missing_or_wrong_main_part() {
     assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Body), "ok");
 }
 
+fn body_zip(body: &str) -> Vec<u8> {
+    doc_zip(format!("<w:document {W_NS}><w:body>{body}</w:body></w:document>").as_bytes())
+}
+
+#[test]
+fn a_malformed_main_part_is_an_error_not_a_truncated_document() {
+    let cases = [
+        ("a less-than sign in a run", "<w:p><w:r><w:t>before a <- b after</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>"),
+        ("a paragraph left open", "<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>second</w:t></w:r><w:p><w:r><w:t>third</w:t></w:r></w:p>"),
+        ("a mismatched end tag", "<w:p><w:r><w:t>one</w:t></w:p></w:r><w:p><w:r><w:t>two</w:t></w:r></w:p>"),
+    ];
+    for (what, body) in cases {
+        assert!(matches!(read(&body_zip(body)), Err(DocxError::Xml(_))), "{what}");
+    }
+    let whole = "<w:p><w:r><w:t>a &lt;- b</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>";
+    let d = read(&body_zip(whole)).unwrap();
+    assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Body), "a <- b\nlast", "well-formed text still reads whole");
+}
+
 #[test]
 fn deep_nesting_is_rejected() {
     let mut x = format!("<w:document {W_NS}><w:body>");

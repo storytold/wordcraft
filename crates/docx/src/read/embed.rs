@@ -395,7 +395,7 @@ mod tests {
         // A hyperlink whose relationship id is written without the prefix: the reader resolves
         // it (the alias `El::attr` accepts), so the part it names is not carried over twice.
         let named = package(
-            r#"<w:p><w:r><w:hyperlink id="rIdDoc1"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>"#,
+            r#"<w:p><w:hyperlink id="rIdDoc1"><w:r><w:t>link</w:t></w:r></w:hyperlink></w:p>"#,
             &[("rIdDoc1", "keep.bin")],
             &[("word/keep.bin", b"kept")],
         );
