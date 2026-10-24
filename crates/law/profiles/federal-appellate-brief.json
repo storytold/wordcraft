@@ -1,0 +1,500 @@
+{
+  "schema": 1,
+  "id": "federal-appellate-brief",
+  "name": "Federal appellate brief",
+  "jurisdiction": "Federal (FRAP)",
+  "verified": true,
+  "citationPack": "federal",
+  "docs": {
+    "brief": {
+      "label": "Principal brief",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 14
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Caption",
+          "basedOn": "Normal",
+          "next": "Body",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Block Quote",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            },
+            "indentLeft": 72,
+            "indentRight": 72
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Cover",
+          "style": "Heading",
+          "fields": [
+            "court",
+            "caseNumber",
+            "partyNames",
+            "partyRoles",
+            "caseTitle",
+            "attorneyName",
+            "attorneyAddress",
+            "telephone",
+            "email"
+          ]
+        },
+        {
+          "id": "tableOfContents",
+          "name": "Table of Contents",
+          "style": "Heading"
+        },
+        {
+          "id": "tableOfAuthorities",
+          "name": "Table of Authorities",
+          "style": "Heading"
+        },
+        {
+          "id": "jurisdictionalStatement",
+          "name": "Jurisdictional Statement",
+          "style": "Heading"
+        },
+        {
+          "id": "statementOfIssues",
+          "name": "Statement of Issues",
+          "style": "Heading"
+        },
+        {
+          "id": "statementOfFacts",
+          "name": "Statement of the Case / Facts",
+          "style": "Heading"
+        },
+        {
+          "id": "summaryOfArgument",
+          "name": "Summary of Argument",
+          "style": "Heading"
+        },
+        {
+          "id": "argument",
+          "name": "Argument",
+          "style": "Heading"
+        },
+        {
+          "id": "conclusion",
+          "name": "Conclusion",
+          "style": "Heading"
+        },
+        {
+          "id": "certificateOfCompliance",
+          "name": "Certificate of Compliance",
+          "style": "Certificate"
+        },
+        {
+          "id": "certificateOfService",
+          "name": "Certificate of Service",
+          "style": "Certificate"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "wordLimit",
+          "limit": 13000,
+          "excludeSections": [
+            "cover",
+            "tableOfContents",
+            "tableOfAuthorities",
+            "certificateOfCompliance",
+            "certificateOfService"
+          ],
+          "source": "FRAP 32(a)(7)(B)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minFontSize",
+          "pt": 14,
+          "source": "FRAP 32(a)(4)(A)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "FRAP 32(a)(4)(B)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 2,
+          "exceptStyles": [
+            "Caption",
+            "Heading",
+            "Block Quote",
+            "Signature",
+            "Certificate"
+          ],
+          "source": "FRAP 32(a)(4)(A)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "tableOfContents",
+            "tableOfAuthorities",
+            "jurisdictionalStatement",
+            "statementOfIssues",
+            "statementOfFacts",
+            "summaryOfArgument",
+            "argument",
+            "conclusion",
+            "certificateOfCompliance",
+            "certificateOfService"
+          ],
+          "source": "FRAP 32(a)(1)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "FRAP 32(a)(2)",
+          "effective": "2024-12-01"
+        }
+      ],
+      "source": "FRAP 32(a)",
+      "effective": "2024-12-01"
+    },
+    "reply": {
+      "label": "Reply brief",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal"
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 14
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        },
+        {
+          "name": "Body",
+          "basedOn": "Normal",
+          "next": "Body"
+        },
+        {
+          "name": "Heading",
+          "basedOn": "Normal",
+          "next": "Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        },
+        {
+          "name": "Signature",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        },
+        {
+          "name": "Certificate",
+          "basedOn": "Normal",
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          },
+          "next": "Body"
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Cover",
+          "style": "Heading"
+        },
+        {
+          "id": "argument",
+          "name": "Argument",
+          "style": "Heading"
+        },
+        {
+          "id": "conclusion",
+          "name": "Conclusion",
+          "style": "Heading"
+        },
+        {
+          "id": "certificateOfCompliance",
+          "name": "Certificate of Compliance",
+          "style": "Certificate"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "wordLimit",
+          "limit": 6500,
+          "excludeSections": [
+            "cover",
+            "certificateOfCompliance"
+          ],
+          "source": "FRAP 32(a)(7)(B)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minFontSize",
+          "pt": 14,
+          "source": "FRAP 32(a)(4)(A)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "FRAP 32(a)(4)(B)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minLineSpacing",
+          "spacing": 2,
+          "exceptStyles": [
+            "Heading",
+            "Signature",
+            "Certificate"
+          ],
+          "source": "FRAP 32(a)(4)(A)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "argument",
+            "conclusion",
+            "certificateOfCompliance"
+          ],
+          "source": "FRAP 32(a)(1)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "FRAP 32(a)(2)",
+          "effective": "2024-12-01"
+        }
+      ],
+      "source": "FRAP 32(a)",
+      "effective": "2024-12-01"
+    },
+    "addendum": {
+      "label": "Addendum",
+      "page": {
+        "size": "Letter",
+        "top": 72,
+        "bottom": 72,
+        "left": 72,
+        "right": 72
+      },
+      "lineNumbers": {
+        "enabled": false
+      },
+      "pageNumbers": {
+        "position": "bottom",
+        "align": "center",
+        "xOfY": false,
+        "format": "decimal",
+        "prefix": "Add. ",
+        "start": 1
+      },
+      "styles": [
+        {
+          "name": "Normal",
+          "chr": {
+            "font": "Times New Roman",
+            "size": 14
+          },
+          "para": {
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 2
+            }
+          }
+        },
+        {
+          "name": "Addendum Body",
+          "basedOn": "Normal",
+          "next": "Addendum Body"
+        },
+        {
+          "name": "Addendum Heading",
+          "basedOn": "Normal",
+          "next": "Addendum Body",
+          "chr": {
+            "bold": true
+          },
+          "para": {
+            "keepNext": true,
+            "align": "center",
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1
+            }
+          }
+        }
+      ],
+      "sections": [
+        {
+          "id": "cover",
+          "name": "Addendum cover",
+          "style": "Addendum Heading"
+        },
+        {
+          "id": "contents",
+          "name": "Contents of the addendum",
+          "style": "Addendum Heading"
+        },
+        {
+          "id": "materials",
+          "name": "Supplemental materials",
+          "style": "Addendum Heading"
+        }
+      ],
+      "checks": [
+        {
+          "kind": "minFontSize",
+          "pt": 14,
+          "source": "FRAP 32(a)(4)(A)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "minMargins",
+          "pt": 72,
+          "source": "FRAP 32(a)(4)(B)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "requiredSections",
+          "ids": [
+            "cover",
+            "materials"
+          ],
+          "source": "FRAP 32(a)(1)",
+          "effective": "2024-12-01"
+        },
+        {
+          "kind": "textSearchablePdf",
+          "source": "FRAP 32(a)(2)",
+          "effective": "2024-12-01"
+        }
+      ],
+      "source": "FRAP 32(a)",
+      "effective": "2024-12-01"
+    }
+  }
+}

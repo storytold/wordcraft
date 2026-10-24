@@ -177,11 +177,15 @@ impl Session {
 pub(crate) fn print_pdf_to_file(s: &mut Session, v: &Value) -> Result<Value, CmdError> {
     let path = p::req_str(v, "path")?;
     let path = if path.to_ascii_lowercase().ends_with(".pdf") { path.to_string() } else { format!("{path}.pdf") };
+    // Printing to PDF is an export too: the applied profile's checks run before anything is
+    // written (PDF verification included, since the output is a PDF).
+    let opts = crate::cmd::file::export_options(s, v);
+    let findings = s.run_export_checks(&opts, "pdf");
     let (bytes, plan) = s.print_pdf(v)?;
     // Through `io`, so an agent confined to an automation write root (#769) can't print elsewhere.
     #[cfg(not(target_arch = "wasm32"))]
     crate::io::write_file(&path, &bytes).map_err(CmdError::Failed)?;
-    Ok(json!({"path": path, "pages": plan.pages.len(), "chosen": plan.chosen, "copies": plan.copies, "bytes": bytes.len()}))
+    Ok(json!({"path": path, "pages": plan.pages.len(), "chosen": plan.chosen, "copies": plan.copies, "bytes": bytes.len(), "findings": findings}))
 }
 
 #[cfg(test)]

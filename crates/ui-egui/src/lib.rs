@@ -22,6 +22,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod addins;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -646,6 +647,13 @@ pub struct WordApp {
     awaiting_save: Option<AwaitingSave>,
     /// The file dialog the host is showing, and what its answer is for ([`file_dialogs`]).
     file_dialog: Option<file_dialogs::PendingDialog>,
+    /// The add-ins the host gave the app ([`addins`]), in File › Options › Add-ins order.
+    addins: Vec<Box<dyn addins::AddIn>>,
+    /// Add-ins taken out of `addins` while one of their calls runs ([`WordApp::with_addin`]).
+    addins_out: Vec<&'static str>,
+    /// Files picked for an add-in while it was out (a host that answers at once): (add-in, tag,
+    /// path), handed to it once it is back.
+    addin_picks: Vec<(&'static str, String, Option<String>)>,
     /// The built-in file browser, when it is open, and the folder it showed last (#576).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) file_browser: file_browser::State,
@@ -757,6 +765,9 @@ impl WordApp {
             font_generation: wordcraft_fonts::FontDb::global().generation(),
             dialog_pick: None,
             file_dialog: None,
+            addins: Vec::new(),
+            addins_out: Vec::new(),
+            addin_picks: Vec::new(),
             #[cfg(not(target_arch = "wasm32"))]
             file_browser: file_browser::State::default(),
             info_editing: None,
@@ -854,12 +865,15 @@ impl WordApp {
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.proofing = self.ui.check_spelling;
-        // Keys for commands this version doesn't have are dropped.
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
+        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
+        // The add-ins the saved setting turns on bring their commands (and ribbon tabs) first, so
+        // the keys and toolbar entries saved for those commands are kept.
+        self.sync_addins();
+        // Keys for commands this version doesn't have are dropped.
         let reg = self.session.registry.clone();
         self.session.keymap.retain_known(&reg);
         // So are ribbon and toolbar commands.
-        self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
     }
@@ -895,7 +909,9 @@ impl WordApp {
         // close, New or Open counts it as a change (#1348). A draft the document refuses is not
         // part of it: saving and exporting go on without it (the refusal stays on the status
         // line), and replacing the document asks Save / Don't Save / Cancel about it.
-        let refused = if flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
+        // A module's command that opens a new document in place of this one counts it too.
+        let replaces = self.session.registry.get(id).is_some_and(|c| c.replaces_document);
+        let refused = if replaces || flushes_comment_drafts(id, &params) { panes::flush_comment_drafts(self).err() } else { None };
         if id == "file.recover" && params.as_object().is_none_or(|p| p.is_empty()) {
             self.ui.backstage = true;
             self.ui.backstage_page = "recover".into();
@@ -907,7 +923,11 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && discards_document(id, &params) {
+        if let Some(what) = self.addin_input_dialog(id, &params) {
+            return Ok(json!({"pending": what}));
+        }
+        // A module's command that opens a new document in place of this one asks too.
+        if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && (replaces || discards_document(id, &params)) {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -970,8 +990,23 @@ impl WordApp {
     }
 
     /// Run a command for a script or an agent (control channel, MCP bridge): never asks first.
-    /// UI-level commands (`ui.*`) are handled here, the rest by the engine.
+    /// UI-level commands (`ui.*`) are handled here, the rest by the engine. Turning an add-in on
+    /// or off (`file.options {"modules": …}`) applies it here, for scripts and the interface
+    /// alike: one being turned off first saves what its options page has pending.
     pub fn execute(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        if id == "file.options" && params.get("modules").is_some() {
+            self.guard_addin_off(id, &params)?;
+            let r = self.execute_inner(id, params);
+            if r.is_ok() {
+                self.sync_addins();
+            }
+            return r;
+        }
+        self.execute_inner(id, params)
+    }
+
+    /// [`WordApp::execute`] apart from turning add-ins on or off.
+    fn execute_inner(&mut self, id: &str, params: Value) -> Result<Value, String> {
         // A pending Change Picture only survives until the next action (#147).
         if !matches!(id, "ui.changePicture" | "picture.change" | "insert.picture") {
             self.change_picture_target = None;
@@ -1357,6 +1392,11 @@ impl WordApp {
             self.status(tl!("Wait for the print job to finish submitting before closing."));
             return false;
         }
+        // An add-in's options page saves what it has pending first; when it can't, the window
+        // stays open and the page shows why.
+        if !self.leave_addin_page() {
+            return false;
+        }
         if self.quit_requested {
             return true;
         }
@@ -1479,6 +1519,12 @@ impl WordApp {
         if req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme") {
             self.ui.theme = if self.ui_is_dark() { theme::Appearance::Light } else { theme::Appearance::Dark };
         }
+        // An add-in's own window: the add-in opens it (`{"addin": id, "open": what}`).
+        if let Some(id) = req.get("addin").and_then(Value::as_str) {
+            let what = req.get("open").and_then(Value::as_str).unwrap_or("");
+            self.with_addin(id, |a, _| a.open(what));
+            return;
+        }
         if let Some(what) = req.get("open").and_then(Value::as_str) {
             match what {
                 "openFile" => self.open_dialog(),
@@ -1497,7 +1543,9 @@ impl WordApp {
                 "options" => {
                     self.ui.backstage = true;
                     self.ui.backstage_page = "options".into();
-                    if let Some(pane) = req.get("pane").and_then(Value::as_str) {
+                    if let Some(pane) = req.get("pane").and_then(Value::as_str)
+                        && (pane == self.ui.options_pane || self.leave_addin_page())
+                    {
                         self.ui.options_pane = pane.into();
                     }
                 }
@@ -1547,19 +1595,31 @@ impl WordApp {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {
                     self.ui.backstage = true;
-                } else {
+                } else if !self.ui.backstage || self.leave_addin_page() {
+                    // Leaving File from an add-in's options page lets it save first; when it
+                    // can't, File stays open.
                     self.ui.tab = tab;
                     self.ui.backstage = false;
                 }
                 json!({"tab": self.ui.tab})
             }
             "ui.backstage" => {
-                self.ui.backstage = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
-                if let Some(pg) = s("page") {
-                    self.ui.backstage_page = pg.into();
-                }
-                if let Some(pane) = s("pane") {
-                    self.ui.options_pane = pane.into();
+                let want = p.get("value").and_then(Value::as_bool).unwrap_or(!self.ui.backstage);
+                let page = s("page").map(str::to_string);
+                let pane = s("pane").map(str::to_string);
+                // Leaving an add-in's options page (closing File, another page or pane) lets it
+                // save first; when it can't, it stays.
+                let leaving = !want
+                    || page.as_deref().is_some_and(|p| p != self.ui.backstage_page)
+                    || pane.as_deref().is_some_and(|p| p != self.ui.options_pane);
+                if !leaving || self.leave_addin_page() {
+                    self.ui.backstage = want;
+                    if let Some(pg) = page {
+                        self.ui.backstage_page = pg;
+                    }
+                    if let Some(pane) = pane {
+                        self.ui.options_pane = pane;
+                    }
                 }
                 json!({"backstage": self.ui.backstage})
             }
@@ -2463,6 +2523,7 @@ impl WordApp {
         }
         content_controls::popup(self, &ctx);
         dialogs::show(self, &ctx);
+        self.addin_dialogs(&ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, &ctx);
         colors::show(self, &ctx);
@@ -2952,6 +3013,28 @@ mod tests {
 
     fn mod_key(key: egui::Key) -> egui::Event {
         egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
+    }
+
+    /// A module's command that opens a new document in place of this one asks to save unsaved
+    /// changes first, like File › New; a clean document goes straight through.
+    #[test]
+    fn a_command_that_replaces_the_document_asks_to_save_first() {
+        fn replace(s: &mut Session, _: &Value) -> wordcraft_engine::CmdResult {
+            s.set_document(wordcraft_doc::Document::new());
+            Ok(json!({}))
+        }
+        let spec = || wordcraft_engine::CommandSpec::new("test.replace", "Replace", "Test", replace).replaces_document();
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.session.install_commands(vec![spec()]);
+        app.run("text.insert", json!({"text": "unsaved"})).unwrap();
+        let r = app.run("test.replace", json!({})).unwrap();
+        assert_eq!(r, json!({"pending": "saveChanges"}));
+        assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "nothing is lost yet");
+        app.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "cancel keeps the work");
+        app.session.dirty = false;
+        app.run("test.replace", json!({})).unwrap();
+        assert!(!app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "a saved document is replaced at once");
     }
 
     /// Issue #14: Mod+- (optional hyphen) also zoomed the whole window out, so it read as "zoom out".
@@ -7982,6 +8065,7 @@ mod tests {
                         shortcut: s.shortcut,
                         params: s.params,
                         mutates: s.mutates,
+                        replaces_document: s.replaces_document,
                         enabled: unavailable,
                         run: s.run,
                     }

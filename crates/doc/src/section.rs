@@ -725,6 +725,10 @@ pub struct SectionProps {
     /// format), so saving writes it back rather than dropping it.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub page_num_set: bool,
+    /// Literal text before the formatted page number (`A` → A1, A2…). Set by `insert.pageNumber`
+    /// and used by the table of contents and layout.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_num_prefix: Option<String>,
     pub line_numbers: Option<LineNumbering>,
     pub valign: PageVAlign,
     /// Form protection of the section (`w:formProt`, ECMA-376 §17.6.6): `Some` when the file
@@ -775,6 +779,7 @@ impl Default for SectionProps {
             page_num_start: None,
             page_num_format: NumFormat::Decimal,
             page_num_set: false,
+            page_num_prefix: None,
             line_numbers: None,
             valign: PageVAlign::Top,
             form_prot: None,
@@ -794,6 +799,12 @@ fn is_horizontal(d: &crate::props::TextDirection) -> bool {
     !d.is_turned()
 }
 
+/// Prefix of the `w:docVars` name that carries a section's [`SectionProps::page_num_prefix`] across
+/// a `.docx` round trip: `wordcraft.section.pgNumPrefix.N` holds section `N`'s prefix. `w:sectPr`
+/// has no extension slot, so WordCraft keeps the prefix in Word's document variables (`w:docVars`)
+/// instead. This is a general serialization hook; it holds no legal logic.
+pub const PAGE_NUM_PREFIX_DOCVAR: &str = "wordcraft.section.pgNumPrefix.";
+
 impl SectionProps {
     /// Join the section before this one into it, as when the break between them is deleted:
     /// this section's setup stays, as in Word, and the headers and footers it leaves out (linked
@@ -811,6 +822,14 @@ impl SectionProps {
     }
     pub fn text_height(&self) -> f32 {
         (self.page_h - self.margin_top - self.margin_bottom).max(18.0)
+    }
+    /// Page number as shown in headers, footers and tables of contents (prefix + formatted number).
+    pub fn format_page_number(&self, page: u32) -> String {
+        let body = self.page_num_format.format(page);
+        match self.page_num_prefix.as_deref() {
+            Some(p) if !p.is_empty() => format!("{p}{body}"),
+            _ => body,
+        }
     }
     /// Swap to landscape/portrait (keeps margins relative to the paper as Word does: rotates them).
     pub fn set_landscape(&mut self, on: bool) {

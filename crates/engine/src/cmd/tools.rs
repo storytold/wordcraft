@@ -643,12 +643,16 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"header"?: pt, "footer"?: pt}"#),
         CommandSpec::new("table.cellMargins", "Cell Margins", "Table Layout › Alignment", |s, v| {
-            let Some((tp, _, _)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
+            let Some((tp, row, col)) = s.sel.focus.path.cell() else { return Err(CmdError::Disabled("not in a table".into())) };
             let story = s.sel.focus.story;
+            let cell_only = p::bool(v, "cell").unwrap_or(false);
             let current = {
                 let table = s.doc.table(story, &tp).ok_or_else(|| CmdError::Failed("no table".into()))?;
                 let style = table.props.style.as_deref().and_then(|id| s.doc.styles.table_style(id));
-                table.props.cell_margins.or(style.and_then(|st| st.parts.cell_margins)).unwrap_or([0.0, 5.4, 0.0, 5.4])
+                let whole = table.props.cell_margins.or(style.and_then(|st| st.parts.cell_margins)).unwrap_or([0.0, 5.4, 0.0, 5.4]);
+                // The caret cell's own margins, where it has them, for Cell Options.
+                let own = if cell_only { table.rows.get(row).and_then(|r| r.cells.get(col)).and_then(|c| c.props.margins) } else { None };
+                own.unwrap_or(whole)
             };
             let m = [
                 p::f32(v, "top").unwrap_or(current[0]),
@@ -657,13 +661,20 @@ pub fn specs() -> Vec<CommandSpec> {
                 p::f32(v, "right").unwrap_or(current[3]),
             ]
             .map(|x| x.clamp(0.0, 144.0));
-            s.doc.table_mut(story, &tp)?.props.cell_margins = Some(m);
+            let t = s.doc.table_mut(story, &tp)?;
+            if cell_only {
+                // The caret cell's own margins (Cell Options), over the table's.
+                let cell = t.rows.get_mut(row).and_then(|r| r.cells.get_mut(col)).ok_or_else(|| CmdError::Disabled("not in a table".into()))?;
+                cell.props.margins = Some(m);
+            } else {
+                t.props.cell_margins = Some(m);
+            }
             for path in s.doc.para_paths(story).into_iter().filter(|p| p.0.starts_with(&tp.0) && p.0.len() > tp.0.len()) {
                 s.doc.para_mut(story, &path)?.touch();
             }
             sel_result(s)
         })
-        .params(r#"{"top"?, "left"?, "bottom"?, "right"? (pt)}"#),
+        .params(r#"{"top"?, "left"?, "bottom"?, "right"? (pt), "cell"?: bool (true: the caret cell only, not the whole table)}"#),
         CommandSpec::new("table.borderPainter", "Border Painter", "Table Design › Borders", |s, v| {
             s.run(
                 "table.borders",
@@ -1987,13 +1998,17 @@ fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
     let mut asked = false;
     if let Some(x) = v.get("layout") {
         asked = true;
-        *l = crate::RibbonLayout::from_value(x);
+        // A loaded layout replaces the user's; the add-ins' own tabs stay.
+        l.replace_layout(crate::RibbonLayout::from_value(x));
         l.retain_known(&reg);
     }
     if let Some(r) = v.get("reset") {
         asked = true;
         match (r.as_bool(), r.as_str()) {
-            (Some(true), _) => *l = crate::RibbonLayout::default(),
+            (Some(true), _) => {
+                l.reset_ribbon();
+                l.reset_qat();
+            }
             (_, Some("ribbon")) => l.reset_ribbon(),
             (_, Some("qat")) => l.reset_qat(),
             _ => return Err(e("`reset` is true, \"ribbon\" or \"qat\"".into())),
@@ -2056,6 +2071,22 @@ fn customize_ribbon(s: &mut Session, v: &Value) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cell_margins_for_the_table_or_one_cell() {
+        let mut s = Session::new(Document::new());
+        s.run("insert.table", &json!({"rows": 1, "cols": 2})).unwrap();
+        s.run("table.cellMargins", &json!({"top": 8, "left": 0, "bottom": 8, "right": 20, "cell": true})).unwrap();
+        let t = s.doc.body[0].as_table().unwrap();
+        assert_eq!(t.rows[0].cells[0].props.margins, Some([8.0, 0.0, 8.0, 20.0]));
+        assert_eq!(t.rows[0].cells[1].props.margins, None, "only the caret cell");
+        assert_eq!(t.props.cell_margins, None);
+        s.run("table.cellMargins", &json!({"top": 4})).unwrap();
+        assert_eq!(s.doc.body[0].as_table().unwrap().props.cell_margins, Some([4.0, 5.4, 0.0, 5.4]));
+        // Outside a table there is nothing to set.
+        let mut s = Session::new(Document::new());
+        assert!(s.run("table.cellMargins", &json!({"cell": true})).is_err());
+    }
 
     #[test]
     fn compare_marks_changes() {

@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (`proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-13 · **Change:** minor (LawCraft: the `law` module and the two engine hooks it needs; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today (origin/main `40c5d51`). The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -8,7 +8,7 @@ committed, current summary. Rules for working in the code are in [`AGENTS.md`](.
 
 ## Layers
 
-~85,600 lines of Rust, 15 crates, 3 apps and `xtask`. Layering is enforced by `cargo xtask layers`:
+~89,000 lines of Rust, 18 crates, 3 apps and `xtask`. Layering is enforced by `cargo xtask layers`:
 a crate may only depend on crates in lower layers, and nothing below L6 depends on egui, eframe,
 winit or rfd.
 
@@ -28,6 +28,8 @@ winit or rfd.
 | L4 | `zotero` | 1.7k | Zotero's word-processor integration protocol answered against a `Session` |
 | L4 | `control-key` | 0.1k | Per-window control-port key files shared by the app and the MCP bridge |
 | L5 | `mcp` | 1.0k | MCP server: every command as a tool; headless or bridged to the running app |
+| L5 | `law` | 2.1k | LawCraft: court profiles as JSON data (`law.profiles.*`) and the checks engine (`law.checks.run`), applied through the engine's own style and layout commands ([`law.md`](law.md)) |
+| L6 | `law-ui` | 1.5k | LawCraft's interface: its File › Options page (profiles, firm details) and the New Pleading window |
 | L6 | `ui-egui` | 13.1k | Word-style front end: ribbon, keytips, mini-toolbar, Backstage, canvas, rulers, panes, dialogs, Equation tab, i18n catalogs, themes, control channel, headless `ui_shot` example |
 | apps | `wordcraft` | 1.6k | Desktop app (eframe + wgpu; logging, window geometry, file associations) |
 | apps | `wordcraft-cli` | 0.4k | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp`, `zotero` |
@@ -48,6 +50,15 @@ winit or rfd.
    an egui/wgpu canvas; PDF export walks the same display list through `pdf`.
 5. **Save:** `engine::io` picks a writer by extension.
 
+## Optional modules
+
+WordCraft's core ships no third-party integration of its own: an optional module is a crate in a
+layer above `engine` that brings its own commands, installs them in the session with
+`Session::install_commands` when the user has turned it on (`Prefs::modules`, `law` is
+LawCraft's), and reaches the same registry the ribbon, the command palette, shortcuts, the CLI, the
+control channel and the MCP server all dispatch by. A module's command id never shadows a core
+one. See [`law.md`](law.md).
+
 ## Testing and gates
 
 - 821 `#[test]` functions and 10 property-test blocks: model, layout, DOCX round-trip and hostile
@@ -64,5 +75,7 @@ winit or rfd.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-13 | minor | The `law` module's checks engine: `law.checks.run`, findings through the engine's lint storage and pre-export check hook, and a text/PDF searchability verdict used by court checks |
+| 2026-10-13 | minor | The `law` module (LawCraft court profiles) and the engine hooks it needs: `Session::install_commands`, `Prefs::modules`, `styles.create {apply}` |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |
