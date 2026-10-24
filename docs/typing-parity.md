@@ -161,6 +161,19 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
   `capsLock`, `capCells` on `tools.autocorrect`; on by default)
   (`capitalisation_fixes_undo_and_turn_off`).
 - `1/2 1/4 3/4` → `½ ¼ ¾`; `1st 22nd 13th` get superscript suffixes (`ordinals_become_superscript`).
+- With `*Bold* and _italic_ as real formatting` on (`tools.autocorrect {"boldItalic": true}`;
+  off by default), `*word*` becomes bold `word` and `_word_` italic `word`, without the marks,
+  when the word is finished ¹. The rest of this item is WordCraft's own rule: the marks may
+  enclose several words; WordCraft converts a span only when the opening mark starts a word and
+  the text inside holds a letter or digit and does not start or end with a space, so `2*3*`,
+  `file_name_` and `*?!*` stay as typed, and so do marks around a picture, field or content
+  control. AutoCorrect then goes on with the word without its marks, so `*teh* ` becomes bold
+  `The `. Undo right after brings the marks
+  back (after Enter, the Enter stays). With Track Changes on, WordCraft converts only marks the
+  current author typed as tracked insertions, and it converts nothing while formatting is
+  limited to the document's styles (`bold_and_italic_marks_become_formatting`,
+  `bold_and_italic_marks_stay_as_typed_unless_they_enclose_words`,
+  `autocorrect_goes_on_after_bold_and_italic_marks`).
 - `word -- word` → en dash, `word - word` → en dash, `word--word` → em dash (`dashes`).
 - Web addresses become links; following text isn't linked (`web_addresses_become_links`).
 - A hyperlink covers only its own text: typing at either end of it, or after Enter at its end,
