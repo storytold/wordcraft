@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("references.caption", "Insert Caption", "References › Captions", caption)
-            .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above|left|right", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–", "textSeparator"?: string (between the number and the text; default ":"), "numberWrap"?: "none|paren|bracket", "align"?: "left|center|right|justify", "style"?: paragraph style, "pattern"?: "{label} {chapter}{number} – {text}"}"#),
+            .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above|left|right", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–", "textSeparator"?: string (between the number and the text; default ":"), "numberWrap"?: "none|paren|bracket", "align"?: "left|center|right|justify", "style"?: paragraph style, "pattern"?: "{label} {chapter}{number} – {text} (when set, excludeLabel is ignored)"}"#),
         // F9: update fields; the selected ones that showed their code show their result again.
         CommandSpec::new("references.updateFields", "Update Field", "References", |s, v| {
             update_fields_in(s, v.get("all").and_then(Value::as_bool).unwrap_or(false))?;
@@ -884,9 +884,26 @@ fn without_empty_title(mut pieces: Vec<CaptionPiece>) -> Vec<CaptionPiece> {
 }
 
 /// Write `pieces` onto `para`. `chapter` is the heading level; `seq` is the `SEQ` instruction.
-fn write_caption(para: &mut Paragraph, pieces: &[CaptionPiece], label: &str, text: &str, chapter: Option<u64>, sep: &str, seq: &str, wrap: (&str, &str), mut at: usize) -> Result<usize, CmdError> {
+fn write_caption(
+    para: &mut Paragraph,
+    pieces: &[CaptionPiece],
+    label: &str,
+    text: &str,
+    chapter: Option<u64>,
+    sep: &str,
+    seq: &str,
+    wrap: (&str, &str),
+    mut at: usize,
+) -> Result<usize, CmdError> {
     let plain = CharProps::default();
-    let field = |instr: &str| InlineObject::Field { instr: instr.to_string(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.to_string(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
     let put = |para: &mut Paragraph, at: &mut usize, t: &str| -> Result<(), CmdError> {
         *at += para.insert_text(*at, t, &plain)?;
         Ok(())
@@ -996,7 +1013,13 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
         return sel_result(s);
     }
     let style = p::str(v, "style").unwrap_or("Caption");
-    let style = s.doc.styles.find(style).filter(|st| st.kind == wordcraft_doc::StyleKind::Paragraph).map(|st| st.id.clone()).unwrap_or_else(|| "Caption".into());
+    let style = s
+        .doc
+        .styles
+        .find(style)
+        .filter(|st| st.kind == wordcraft_doc::StyleKind::Paragraph)
+        .map(|st| st.id.clone())
+        .unwrap_or_else(|| "Caption".into());
     let mut para = Paragraph::new().styled(&style);
     // A caption is not a body paragraph: no first-line indent, and no hyphenation in the title.
     para.props.indent_first = Some(0.0);
@@ -1507,7 +1530,8 @@ mod tests {
         assert!(!fig.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if instr.starts_with("STYLEREF"))));
 
         s.run("select.text", &json!({"text": "E = mc2"})).unwrap();
-        s.run("references.caption", &json!({"label": "Equation", "position": "right", "pattern": "({chapter}{number})", "numberWrap": "none"})).unwrap();
+        s.run("references.caption", &json!({"label": "Equation", "position": "right", "pattern": "({chapter}{number})", "numberWrap": "none"}))
+            .unwrap();
         let formula = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().starts_with("E = mc2")).unwrap();
         assert_eq!(formula.plain_text(), "E = mc2\t(1)");
         assert!(formula.props.style.as_deref() != Some("Caption"), "the formula keeps its own paragraph");

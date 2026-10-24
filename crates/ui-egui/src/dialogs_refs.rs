@@ -500,27 +500,15 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
             ui.end_row();
         }
         ui.label(tl!("Title separator:"));
-        let seps: Vec<(String, String)> = [
-            (":", ":"),
-            ("–", "–"),
-            ("—", "—"),
-            (".", "."),
-            ("-", "-"),
-            ("", "(space)"),
-        ]
-        .into_iter()
-        .map(|(v, l)| (v.to_string(), l.to_string()))
-        .collect();
+        let seps: Vec<(String, String)> = [(":", ":"), ("–", "–"), ("—", "—"), (".", "."), ("-", "-"), ("", "(space)")]
+            .into_iter()
+            .map(|(v, l)| (v.to_string(), l.to_string()))
+            .collect();
         let seps: Vec<(String, &str)> = seps.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
         choice(ui, "cap_text_sep", &mut f.text_separator, &seps);
         ui.end_row();
         ui.label(tl!("Number:"));
-        choice(
-            ui,
-            "cap_wrap",
-            &mut f.number_wrap,
-            &[("none".into(), "1"), ("paren".into(), "(1)"), ("bracket".into(), "[1]")],
-        );
+        choice(ui, "cap_wrap", &mut f.number_wrap, &[("none".into(), "1"), ("paren".into(), "(1)"), ("bracket".into(), "[1]")]);
         ui.end_row();
     });
     ui.label(tl!("Presets:"));

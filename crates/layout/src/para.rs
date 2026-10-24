@@ -2599,16 +2599,17 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         // The number after a right positional tab stays at the margin. The equation is centred
         // in the line afterwards, instead of the usual shift (which would move the number).
         let numbered = display.is_some()
-            && last_tab.is_some_and(|t| pl.ptabs.iter().any(|(i, a, ..)| *i == t && *a == PTabAlign::Right) && display_at.is_some_and(|(eq, _)| eq < t));
+            && last_tab
+                .is_some_and(|t| pl.ptabs.iter().any(|(i, a, ..)| *i == t && *a == PTabAlign::Right) && display_at.is_some_and(|(eq, _)| eq < t));
         let prefix = display_at.is_some_and(|(eq, _)| caption_span(pl, c0, eq));
         let shift = if numbered || prefix {
             0.0
         } else {
             match (display, rp.align) {
-            (Some(MathJc::Left), _) => 0.0,
-            (Some(MathJc::Right), _) => slack,
-            (Some(_), _) => slack / 2.0,
-            (None, Align::Center) => slack / 2.0,
+                (Some(MathJc::Left), _) => 0.0,
+                (Some(MathJc::Right), _) => slack,
+                (Some(_), _) => slack / 2.0,
+                (None, Align::Center) => slack / 2.0,
                 (None, Align::Right) => slack,
                 _ => 0.0,
             }
@@ -2622,11 +2623,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                         left_lim = left_lim.max(*x + c.adv);
                     }
                 }
-                let right_lim = if numbered {
-                    last_tab.and_then(|tab| xs.get(tab + 1 - c0).copied()).unwrap_or(right_edge) - 8.0
-                } else {
-                    right_edge
-                };
+                let right_lim =
+                    if numbered { last_tab.and_then(|tab| xs.get(tab + 1 - c0).copied()).unwrap_or(right_edge) - 8.0 } else { right_edge };
                 let ideal = line_start_x + ((right_edge - line_start_x) - eq_w) / 2.0;
                 let gap = if left_lim > line_start_x + 0.5 { 8.0 } else { 0.0 };
                 let place = ideal.max(left_lim + gap).min((right_lim - eq_w).max(line_start_x));

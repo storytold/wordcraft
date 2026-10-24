@@ -847,8 +847,6 @@ fn figures_label(instr: &str) -> Option<String> {
     Some(f.arg('c').or_else(|| f.arg('a')).map_or_else(|| "Figure".to_string(), seq_ident))
 }
 
-/// Whether `p` is a caption numbered by SEQ identifier `ident` (any case, as Word matches it). A
-/// caption typed by hand, without a SEQ field, goes by its label.
 /// Paragraph styles Insert Caption can apply. A number parked on the formula's own line is not
 /// one of these; it is recognised by the right-margin positional tab in front of its `SEQ` field.
 fn is_caption_style(id: Option<&str>) -> bool {
@@ -863,6 +861,8 @@ fn equation_number_line(p: &Paragraph) -> bool {
     p.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { align: PTabAlign::Right, .. })) && has_seq(p)
 }
 
+/// Whether `p` is a caption numbered by SEQ identifier `ident` (any case, as Word matches it). A
+/// caption typed by hand, without a SEQ field, goes by its label.
 fn captioned_as(p: &Paragraph, ident: &str) -> bool {
     let seq = p.objects.iter().find_map(|o| match o {
         InlineObject::Field { instr, .. } => Some(FieldCode::parse(instr)).filter(|f| f.name == "SEQ"),
@@ -872,7 +872,9 @@ fn captioned_as(p: &Paragraph, ident: &str) -> bool {
         // Insert Caption stores whatever paragraph style was chosen, so the SEQ identifier is
         // what makes the paragraph a figure, table or equation.
         Some(f) => f.args.first().is_some_and(|id| id.eq_ignore_ascii_case(ident)),
-        None => is_caption_style(p.props.style.as_deref()) && caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident)),
+        None => {
+            is_caption_style(p.props.style.as_deref()) && caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident))
+        }
     }
 }
 
@@ -1185,11 +1187,7 @@ fn caption_label(p: &Paragraph, text: &str) -> Option<String> {
                 let trimmed = raw.trim();
                 // `{label}: {number}` puts one colon between the label and the SEQ field. Drop
                 // that colon only when what remains is this field's identifier. `Fig.` stays.
-                let t = trimmed
-                    .strip_suffix(':')
-                    .map(str::trim_end)
-                    .filter(|label| seq_ident(label).eq_ignore_ascii_case(seq_id))
-                    .unwrap_or(trimmed);
+                let t = trimmed.strip_suffix(':').map(str::trim_end).filter(|label| seq_ident(label).eq_ignore_ascii_case(seq_id)).unwrap_or(trimmed);
                 t.chars().any(char::is_alphanumeric).then(|| t.to_string())
             };
             let first = fields.first().map_or(0, |(o, _)| *o);
@@ -1275,9 +1273,6 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
     targets
 }
 
-/// The hidden `_Ref` bookmark around the target paragraph at `pos` (its label and number only
-/// when `number_only`), reusing one already there. Returns its name and `at` moved past the
-/// bookmark marks inserted before it.
 /// The label and number of a caption, without its title. A colon or a spaced dash introduces the title.
 fn caption_number_text(text: &str) -> String {
     if let Some(i) = text.find(':') {
@@ -1295,9 +1290,10 @@ fn caption_number_text(text: &str) -> String {
 /// before the title's colon or dash when the caption was typed by hand. A period after the
 /// number introduces the title (`Figure 1. Title`), so it is not part of the number.
 fn caption_number_end(para: &Paragraph) -> usize {
-    let seq = para.object_offsets().into_iter().find(|o| {
-        matches!(para.object_at(*o), Some(InlineObject::Field { instr, .. }) if FieldCode::parse(instr).name == "SEQ")
-    });
+    let seq = para
+        .object_offsets()
+        .into_iter()
+        .find(|o| matches!(para.object_at(*o), Some(InlineObject::Field { instr, .. }) if FieldCode::parse(instr).name == "SEQ"));
     let Some(o) = seq else {
         let mut cut = para.len();
         if let Some(i) = para.text.find([':', '\u{2013}', '\u{2014}']) {
@@ -1309,8 +1305,7 @@ fn caption_number_end(para: &Paragraph) -> usize {
         return cut;
     };
     let mut end = o + wordcraft_doc::para::OBJ.len_utf8();
-    while end < para.text.len() {
-        let c = para.text[end..].chars().next().unwrap();
+    while let Some(c) = para.text.get(end..).and_then(|r| r.chars().next()) {
         let n = c.len_utf8();
         if matches!(c, ')' | ']') {
             end += n;
@@ -1405,6 +1400,9 @@ fn caption_number_result(para: &Paragraph) -> String {
     plain_slice(para, start, caption_number_end(para))
 }
 
+/// The hidden `_Ref` bookmark around the target paragraph at `pos` (its label and number only
+/// when `number_only`), reusing one already there. Returns its name and `at` moved past the
+/// bookmark marks inserted before it.
 fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> Result<(String, Pos), CmdError> {
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
     let para = s.doc.para(pos.story, &pos.path).ok_or_else(|| CmdError::Params("cross-reference target is gone".into()))?;
@@ -1414,9 +1412,10 @@ fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> R
         && name.starts_with("_Ref")
     {
         // The end mark and `caption_number_end` are both measured with the start mark in place.
-        let same = para.object_offsets().into_iter().any(|o| {
-            matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name) && o == end
-        });
+        let same = para
+            .object_offsets()
+            .into_iter()
+            .any(|o| matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name) && o == end);
         if same {
             return Ok((name.clone(), at));
         }
@@ -1686,11 +1685,8 @@ mod tests {
     fn formula_text_does_not_hide_the_label_after_the_number() {
         let mut s = Session::new(wordcraft_doc::Document::from_text("Equation x\nSee "));
         s.run("select.text", &json!({"text": "Equation x"})).unwrap();
-        s.run(
-            "references.caption",
-            &json!({"label": "Equation", "text": "rows", "position": "right", "pattern": "{number} {label}: {text}"}),
-        )
-        .unwrap();
+        s.run("references.caption", &json!({"label": "Equation", "text": "rows", "position": "right", "pattern": "{number} {label}: {text}"}))
+            .unwrap();
         let targets = s.run("insert.crossReference", &json!({"to": "equation"})).unwrap();
         let target = targets.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
         s.run("caret.docEnd", &json!({})).unwrap();
