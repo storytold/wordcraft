@@ -489,6 +489,25 @@ fn enter_finishes_a_word_for_autocorrect() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Hello\nThe end\n");
 }
 
+/// A word after a no-break space or an ideographic space is corrected as after a plain space:
+/// replacements, sentence capitals, ordinals and links.
+#[test]
+fn autocorrect_finds_the_word_after_a_wide_space() {
+    let s = typed("a\u{a0}teh x\u{3000}teh ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "a\u{a0}the x\u{3000}the ");
+    let s = typed("end.\u{a0}hello end.\u{3000}world ");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "End.\u{a0}Hello end.\u{3000}World ");
+    let s = typed("the\u{a0}1st and\u{3000}22nd ");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let sup = |t: &str| p.props_of_char(p.text.find(t).unwrap() + t.len() - 2).vert_align == Some(VertAlign::Superscript);
+    assert!(sup("1st") && sup("22nd"));
+    let s = typed("see\u{a0}https://example.org/log, and\u{3000}https://example.net/day, then ");
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    let link = |t: &str| p.props_of_char(p.text.find(t).unwrap()).link.clone();
+    assert_eq!(link("https://example.org").as_deref(), Some("https://example.org/log"));
+    assert_eq!(link("https://example.net").as_deref(), Some("https://example.net/day"));
+}
+
 #[test]
 fn ordinals_become_superscript() {
     let s = typed("the 1st and 22nd and 13th but not 1th ");

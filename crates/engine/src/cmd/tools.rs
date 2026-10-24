@@ -871,7 +871,9 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     }
     let trigger = if on_enter { 0 } else { last.len_utf8() };
     let Some(body) = before.get(..before.len() - trigger) else { return Ok(()) };
-    let start = body.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    // The word starts after the last white-space character, whatever its width (a no-break
+    // space is two bytes and an ideographic space is three).
+    let start = body.char_indices().rev().find(|(_, c)| c.is_whitespace()).map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
     let Some(mut word) = body.get(start..).map(str::to_string) else { return Ok(()) };
     if word.is_empty() {
         return Ok(());
