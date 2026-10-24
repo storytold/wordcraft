@@ -9453,6 +9453,83 @@ fn drop_cap_options_set_position_lines_distance_and_font() {
     run(&mut s, "text.insert", json!({"text": "Cell"}));
     assert!(s.sel.focus.path.cell().is_some());
     assert!(s.run("insert.dropCap", &json!({})).is_err(), "off in a table cell");
+
+    // A selection is as good as its worst paragraph: an empty one or one starting with a space
+    // refuses a drop cap for all (the button greys out); None works while there is one to take away.
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": "First"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Third"}));
+    assert_eq!(s.doc.body.len(), 3);
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("insert.dropCap", &json!({"position": "dropped"})).is_err(), "an empty paragraph in the selection");
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.drop_cap.is_none()), "nothing changed");
+    assert!(s.why_disabled("insert.dropCap").is_some(), "greyed out: nothing can take a drop cap or lose one");
+    run(&mut s, "select.range", json!({"anchor": {"block": 2, "off": 0}, "focus": {"block": 2, "off": 0}}));
+    run(&mut s, "insert.dropCap", json!({"position": "dropped"}));
+    // From the drop cap up into the empty paragraph (the caret there): None takes it away, the
+    // other positions are refused, as the enabled check says.
+    run(&mut s, "select.range", json!({"anchor": {"block": 2, "off": 5}, "focus": {"block": 1, "off": 0}}));
+    assert_eq!(s.why_disabled("insert.dropCap"), None, "a drop cap to take away");
+    assert!(s.run("insert.dropCap", &json!({"position": "margin"})).is_err(), "the empty paragraph can't take one");
+    assert!(s.run("insert.dropCap", &json!({"position": "none"})).is_ok(), "None takes it away");
+    assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.drop_cap.is_none()), "taken away");
+    let mut s = self::s();
+    run(&mut s, "text.insert", json!({"text": " first"}));
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "text.insert", json!({"text": "Second"}));
+    run(&mut s, "select.all", json!({}));
+    assert!(s.run("insert.dropCap", &json!({})).is_err(), "a paragraph starting with a space in the selection");
+}
+
+/// #2601: `keep` moves a whole selection to Dropped / In margin without flattening it: each
+/// paragraph keeps its own lines, distance and font, one without a drop cap gets the defaults,
+/// and it is one undo step. Without `keep` the options not given are reset, as before.
+#[test]
+fn drop_cap_keep_leaves_each_paragraphs_options() {
+    let caps = |s: &Session| {
+        s.doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .map(|p| (p.props.drop_cap, p.props.drop_cap_margin, p.props.drop_cap_distance, p.props.drop_cap_font.clone()))
+            .collect::<Vec<_>>()
+    };
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "First"}));
+    for text in ["Second", "Third"] {
+        run(&mut s, "text.newParagraph", json!({}));
+        run(&mut s, "text.insert", json!({"text": text}));
+    }
+    run(&mut s, "select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 0, "off": 0}}));
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"}));
+    run(&mut s, "select.range", json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 0}}));
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "lines": 2, "distance": 3.0}));
+    let before = caps(&s);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "insert.dropCap", json!({"position": "margin", "keep": true}));
+    assert_eq!(
+        caps(&s),
+        vec![
+            (Some(5), Some(true), Some(7.0), Some("Liberation Mono".to_string())),
+            (Some(2), Some(true), Some(3.0), None),
+            (Some(3), Some(true), None, None),
+        ],
+        "each keeps its own options; the one without gets the defaults"
+    );
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(caps(&s), before, "one undo step");
+
+    // Options given explicitly win over the kept ones; a junk `keep` is false.
+    run(&mut s, "insert.dropCap", json!({"position": "dropped", "keep": true, "lines": 4}));
+    assert_eq!(caps(&s).iter().map(|c| c.0).collect::<Vec<_>>(), vec![Some(4); 3]);
+    assert_eq!(caps(&s).first().map(|c| (c.2, c.3.clone())), Some((Some(7.0), Some("Liberation Mono".to_string()))), "distance and font still kept");
+    run(&mut s, "insert.dropCap", json!({"position": "margin", "keep": "yes"}));
+    assert_eq!(caps(&s), vec![(Some(3), Some(true), None, None); 3], "junk keep: reset what isn't given");
+    // None ignores keep.
+    run(&mut s, "insert.dropCap", json!({"position": "none", "keep": true}));
+    assert_eq!(caps(&s), vec![(None, None, None, None); 3]);
 }
 
 #[test]

@@ -3947,3 +3947,17 @@ fn vml_textbox_style_anchor_and_fit() {
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
 }
+
+/// #2601: a drop-cap frame of two letters in two fonts. The first letter's font is the cap's; only
+/// the runs in that font get the text's font back, the other letter keeps its own.
+#[test]
+fn drop_cap_frame_keeps_other_fonts() {
+    let body = r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Liberation Mono" w:hAnsi="Liberation Mono"/></w:rPr><w:t>A</w:t></w:r><w:r><w:rPr><w:rFonts w:ascii="Liberation Sans" w:hAnsi="Liberation Sans"/></w:rPr><w:t>b</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:rFonts w:ascii="Liberation Serif" w:hAnsi="Liberation Serif"/></w:rPr><w:t>c tale</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 1, "the frame merges into its paragraph");
+    assert_eq!(p[0].props.drop_cap_font.as_deref(), Some("Liberation Mono"));
+    assert_eq!(p[0].props_of_char(0).font.as_deref(), Some("Liberation Serif"), "the cap letter gets the text's font");
+    assert_eq!(p[0].props_of_char(1).font.as_deref(), Some("Liberation Sans"), "the other letter keeps its own");
+}

@@ -274,7 +274,7 @@ impl Reader<'_> {
                         let cap_font = first.runs.first().and_then(|r| r.props.font.clone());
                         let text_font = p.runs.first().and_then(|r| r.props.font.clone());
                         if cap_font.is_some() && cap_font != text_font {
-                            for r in &mut first.runs {
+                            for r in first.runs.iter_mut().filter(|r| r.props.font == cap_font) {
                                 r.props.font = text_font.clone();
                             }
                             props.drop_cap_font = cap_font;

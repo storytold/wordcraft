@@ -1483,12 +1483,18 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// What a Drop Cap menu choice sends: the position, and `keep` so each selected paragraph that has
+/// a drop cap keeps its own lines, distance and font (None takes it all away).
+fn drop_cap_payload(position: &str) -> serde_json::Value {
+    if position == "none" { json!({"position": position}) } else { json!({"position": position, "keep": true}) }
+}
+
 /// Insert › Drop Cap's menu (#2601): None, Dropped and In margin (the current one checked),
 /// then the Drop Cap dialog.
 fn drop_cap_items(ui: &mut Ui, app: &mut WordApp) {
-    let current = wordcraft_engine::cmd::insert::drop_cap_state(&app.session).position;
+    let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
     for (label, v) in [("None", "none"), ("Dropped", "dropped"), ("In margin", "margin")] {
-        mi_check(ui, app, label, current == v, "insert.dropCap", json!({"position": v}));
+        mi_check(ui, app, label, state.position == v, "insert.dropCap", drop_cap_payload(v));
     }
     ui.separator();
     mi(ui, app, "Drop Cap Options…", "ui.dialog", json!({"name": "dropCap"}));
@@ -3127,6 +3133,20 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
 mod tests {
     use super::*;
     use wordcraft_engine::Session;
+
+    /// #2601: Dropped / In margin send just the position and `keep`, so every selected paragraph keeps
+    /// its own lines, distance and font; None sends only the position.
+    #[test]
+    fn drop_cap_menu_keeps_the_options() {
+        assert_eq!(drop_cap_payload("dropped"), json!({"position": "dropped", "keep": true}));
+        assert_eq!(drop_cap_payload("margin"), json!({"position": "margin", "keep": true}));
+        assert_eq!(drop_cap_payload("none"), json!({"position": "none"}), "None takes it all away");
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Once")), crate::Services::default());
+        app.run("insert.dropCap", json!({"position": "dropped", "lines": 5, "distance": 7.0, "font": "Liberation Mono"})).unwrap();
+        app.run("insert.dropCap", drop_cap_payload("margin")).unwrap();
+        let state = wordcraft_engine::cmd::insert::drop_cap_state(&app.session);
+        assert_eq!((state.position, state.lines, state.distance, state.font.as_deref()), ("margin", 5, 7.0, Some("Liberation Mono")));
+    }
 
     /// Two clicks arm and disarm the painter; the double-click handling then leaves it sticky (#2785).
     #[test]
