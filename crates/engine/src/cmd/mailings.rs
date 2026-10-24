@@ -513,6 +513,7 @@ fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
         &props,
     )?;

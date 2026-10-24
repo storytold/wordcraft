@@ -1016,6 +1016,7 @@ fn legacy_form_fields_are_drawn() {
         dirty: false,
         code: false,
         form: form.into(),
+        code_xml: String::new(),
     };
     let check_box = |state: &str| format!(r#"<w:ffData><w:name w:val="Box"/><w:checkBox><w:sizeAuto/>{state}</w:checkBox></w:ffData>"#);
     let draws_of = |o: InlineObject| {
@@ -1059,8 +1060,7 @@ fn legacy_form_fields_are_drawn() {
         locked: false,
         dirty: false,
         code: false,
-        form: r#"<w:ffData><w:name w:val="List"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Alpha"/><w:listEntry w:val="Beta"/></w:ddList></w:ffData>"#.into(),
-    };
+        form: r#"<w:ffData><w:name w:val="List"/><w:ddList><w:result w:val="1"/><w:listEntry w:val="Alpha"/><w:listEntry w:val="Beta"/></w:ddList></w:ffData>"#.into(), code_xml: String::new() };
     let (items, _) = draws_of(dd);
     let text: String = items.iter().filter_map(|i| if let display::Draw::Glyphs { text, .. } = i { Some(text.as_str()) } else { None }).collect();
     assert!(text.contains("Beta") && !text.contains("Alpha"), "{text}");
@@ -2124,7 +2124,15 @@ fn headers_and_page_fields() {
     let mut hp = wordcraft_doc::Paragraph::new();
     hp.insert_object(
         0,
-        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &Default::default(),
     )
     .unwrap();
@@ -6827,7 +6835,15 @@ fn enclosed_characters_draw_a_shape_around_the_text() {
         let e = Enclosure { shape, style, text: "A".into() };
         d.insert_object(
             &Pos::body(0, 2),
-            InlineObject::Field { instr: e.instr(), result: "A".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: e.instr(),
+                result: "A".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &Default::default(),
         )
         .unwrap();
@@ -6863,7 +6879,15 @@ fn enclosed_characters_draw_a_shape_around_the_text() {
     let mut d = Document::from_text("x");
     d.insert_object(
         &Pos::body(0, 1),
-        InlineObject::Field { instr: "eq \\o(=,/)".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "eq \\o(=,/)".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &Default::default(),
     )
     .unwrap();
@@ -7405,6 +7429,7 @@ fn shared_section_page_totals() {
             dirty: true,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         };
         let mut footer = Paragraph::new();
         for instr in ["PAGE", "SECTIONPAGES"] {
@@ -7456,8 +7481,15 @@ fn shared_section_page_totals() {
 #[test]
 fn body_page_totals_count_every_page() {
     let mut d = Document::from_text("Body-1\nBody-2\nBody-3");
-    let field =
-        |instr: &str| InlineObject::Field { instr: instr.into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.into(),
+        result: "9".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        code_xml: String::new(),
+    };
     for i in 0..3 {
         let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
         p.props.page_break_before = Some(i > 0);
@@ -7549,8 +7581,15 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
 /// the body lay out a second time; one in the body still does.
 #[test]
 fn footer_page_total_needs_one_body_pass() {
-    let field =
-        || InlineObject::Field { instr: "NUMPAGES".into(), result: "9".into(), locked: false, dirty: false, code: false, form: String::new() };
+    let field = || InlineObject::Field {
+        instr: "NUMPAGES".into(),
+        result: "9".into(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        code_xml: String::new(),
+    };
     let mut d = Document::from_text("Body-1\nBody-2\nBody-3");
     for i in 1..3 {
         d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
@@ -8583,7 +8622,15 @@ fn page_field_doc(before: usize, pieces: &[&str]) -> Document {
         let n = p.len();
         p.insert_object(
             n,
-            InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: "PAGE".into(),
+                result: String::new(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &Default::default(),
         )
         .unwrap();
@@ -8700,7 +8747,15 @@ fn footnote_page_field_from_a_split_paragraph_shows_its_page() {
     let n = note.len();
     note.insert_object(
         n,
-        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &Default::default(),
     )
     .unwrap();
@@ -8800,7 +8855,15 @@ fn relaid_paragraphs_keep_their_equation_numbers() {
     let n = p2.len();
     p2.insert_object(
         n,
-        InlineObject::Field { instr: "PAGE".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &Default::default(),
     )
     .unwrap();
@@ -10966,7 +11029,15 @@ fn layout_cache_invalidates_on_changed_filename() {
     let mut p = Paragraph::new();
     p.insert_object(
         0,
-        InlineObject::Field { instr: "FILENAME".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: "FILENAME".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &Default::default(),
     )
     .unwrap();
@@ -10998,7 +11069,15 @@ fn layout_cache_invalidates_on_changed_filepath() {
     let mut p = Paragraph::new();
     p.insert_object(
         0,
-        InlineObject::Field { instr: r"FILENAME \p".into(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
+        InlineObject::Field {
+            instr: r"FILENAME \p".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new(),
+        },
         &Default::default(),
     )
     .unwrap();

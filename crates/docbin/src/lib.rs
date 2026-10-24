@@ -578,7 +578,15 @@ fn finish_field(pb: &mut ParaBuild, f: FieldBuild) {
         return;
     }
     pb.push('\u{FFFC}', CharProps::default());
-    pb.objects.push(InlineObject::Field { instr, result: result_text, locked: false, dirty: false, code: false, form: String::new() });
+    pb.objects.push(InlineObject::Field {
+        instr,
+        result: result_text,
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+        code_xml: String::new(),
+    });
 }
 
 /// `HYPERLINK "url"` / `HYPERLINK url \l "bookmark"` → the model link target

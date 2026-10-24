@@ -251,7 +251,7 @@ impl Writer<'_> {
             && let Some((instr, locked, dirty, props)) = self.toc_field.take()
         {
             self.rev_open(w, &props);
-            self.field_start(w, &instr, locked, dirty, "", &props);
+            self.field_start(w, &instr, locked, dirty, "", "", &props);
             self.rev_close(w, &props);
         }
         let toc_end = std::mem::take(&mut self.toc_end_here);
@@ -534,10 +534,12 @@ impl Writer<'_> {
                     None => super::math::write_equation(w, linear, *display, math, color),
                 }
             }
-            InlineObject::Field { instr, result, locked, dirty, form, .. } => self.field(w, instr, result, *locked, *dirty, form, props),
+            InlineObject::Field { instr, result, locked, dirty, form, code_xml, .. } => {
+                self.field(w, instr, result, *locked, *dirty, form, code_xml, props)
+            }
             InlineObject::FieldStart { instr, locked, dirty } => {
                 self.rev_open(w, props);
-                self.field_start(w, instr, *locked, *dirty, "", props);
+                self.field_start(w, instr, *locked, *dirty, "", "", props);
                 self.rev_close(w, props);
             }
             InlineObject::FieldEnd => {
@@ -864,7 +866,8 @@ impl Writer<'_> {
         }
     }
 
-    fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, dirty: bool, form: &str, props: &CharProps) {
+    #[allow(clippy::too_many_arguments)]
+    fn field(&mut self, w: &mut W, instr: &str, result: &str, locked: bool, dirty: bool, form: &str, code_xml: &str, props: &CharProps) {
         if self.toc_hold_end && is_toc(instr) {
             // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).
             self.toc_hold_end = false;
@@ -885,7 +888,7 @@ impl Writer<'_> {
             w.close("w:r");
         };
         self.rev_open(w, props);
-        self.field_start(w, instr, locked, dirty, form, props);
+        self.field_start(w, instr, locked, dirty, form, code_xml, props);
         if !result.is_empty() {
             run(w, &|w| {
                 let mut buf = String::new();
@@ -904,6 +907,10 @@ impl Writer<'_> {
                         '\n' | '\r' => {
                             flush(w, &mut buf);
                             w.empty("w:br", &[]);
+                        }
+                        '\u{000C}' | '\u{000E}' => {
+                            flush(w, &mut buf);
+                            w.empty("w:br", &[("w:type", if c == '\u{000C}' { "page" } else { "column" })]);
                         }
                         c if (c as u32) < 0x20 || c == wordcraft_doc::para::OBJ => {}
                         c => buf.push(c),
@@ -965,7 +972,10 @@ impl Writer<'_> {
     /// A field's begin, instruction and separate runs.
     /// A field's begin, code and separator; `form` is a legacy form field's `w:ffData`, which
     /// belongs inside the begin.
-    fn field_start(&self, w: &mut W, instr: &str, locked: bool, dirty: bool, form: &str, props: &CharProps) {
+    /// `code_xml` is a code holding nested fields as runs ([`InlineObject::Field`]), written in
+    /// place of `instr` when it is well-formed.
+    #[allow(clippy::too_many_arguments)]
+    fn field_start(&self, w: &mut W, instr: &str, locked: bool, dirty: bool, form: &str, code_xml: &str, props: &CharProps) {
         let del = self.is_del(props);
         let run = |w: &mut W, f: &dyn Fn(&mut W)| {
             w.open("w:r", &[]);
@@ -989,8 +999,13 @@ impl Writer<'_> {
                 w.close("w:fldChar");
             }
         });
-        let instr_text = format!(" {} ", instr.trim());
-        run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
+        match nested_code(code_xml, del) {
+            Some(code) => w.raw(&code),
+            None => {
+                let instr_text = format!(" {} ", instr.trim());
+                run(w, &|w| w.leaf(if del { "w:delInstrText" } else { "w:instrText" }, &[("xml:space", "preserve")], &instr_text));
+            }
+        }
         run(w, &|w| w.empty("w:fldChar", &[("w:fldCharType", "separate")]));
     }
 
@@ -1852,6 +1867,84 @@ fn comment_reference_style(doc: &wordcraft_doc::Document) -> &str {
         .iter()
         .find(|s| s.kind == wordcraft_doc::styles::StyleKind::Character && s.name.eq_ignore_ascii_case("annotation reference"))
         .map_or("CommentReference", |s| s.id.as_str())
+}
+
+/// A field code holding nested fields ([`InlineObject::Field`]'s `code_xml`), checked and
+/// re-serialised from its parsed runs. Only what a field code's runs hold is allowed (run
+/// properties, code and result text, tabs, breaks, hyphens and `w:fldChar`s), and the nested
+/// fields must be complete (begin, optional separate, end); anything else gives `None`, and the
+/// field is written with its flat `instr`. In a tracked deletion its text becomes deleted text
+/// (ECMA-376 §17.13.5.13–14).
+fn nested_code(code_xml: &str, del: bool) -> Option<String> {
+    use crate::xml::{El, Node};
+    /// Elements that may never appear inside a run's properties or a form field's definition.
+    fn clean(e: &El, depth: usize) -> bool {
+        depth <= crate::xml::MAX_DEPTH
+            && !e.attrs.iter().any(|(k, _)| k.starts_with("r:"))
+            && e.kids.iter().all(|k| match k {
+                Node::El(c) => {
+                    !matches!(
+                        c.name.as_str(),
+                        "w:p"
+                            | "w:r"
+                            | "w:tbl"
+                            | "w:sdt"
+                            | "w:drawing"
+                            | "w:pict"
+                            | "w:object"
+                            | "w:fldChar"
+                            | "w:instrText"
+                            | "w:t"
+                            | "w:delText"
+                            | "w:delInstrText"
+                    ) && clean(c, depth + 1)
+                }
+                Node::Text(_) => true,
+            })
+    }
+    fn text_only(e: &El) -> bool {
+        e.kids.iter().all(|k| matches!(k, Node::Text(_)))
+    }
+    if code_xml.is_empty() {
+        return None;
+    }
+    let wrapped = format!(r#"<w:code xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">{code_xml}</w:code>"#);
+    let mut root = crate::xml::parse(wrapped.as_bytes()).ok()?;
+    // Open nested fields: whether each has reached its separate.
+    let mut open: Vec<bool> = Vec::new();
+    let mut out = String::new();
+    for k in &mut root.kids {
+        let Node::El(r) = k else { return None };
+        if r.name != "w:r" || r.attrs.iter().any(|(k, _)| k.starts_with("r:")) {
+            return None;
+        }
+        for c in &mut r.kids {
+            let Node::El(c) = c else { return None };
+            match c.name.as_str() {
+                "w:rPr" if clean(c, 0) => {}
+                "w:t" | "w:delText" | "w:instrText" | "w:delInstrText" if text_only(c) => {
+                    if del {
+                        c.name = if c.name.ends_with("nstrText") { "w:delInstrText" } else { "w:delText" }.into();
+                    }
+                }
+                "w:tab" | "w:br" | "w:cr" | "w:noBreakHyphen" | "w:softHyphen" if c.kids.is_empty() => {}
+                "w:fldChar" if clean(c, 0) => match c.attr("w:fldCharType") {
+                    Some("begin") => open.push(false),
+                    Some("separate") => match open.last_mut() {
+                        Some(sep) if !*sep => *sep = true,
+                        _ => return None,
+                    },
+                    Some("end") => {
+                        open.pop()?;
+                    }
+                    _ => return None,
+                },
+                _ => return None,
+            }
+        }
+        out.push_str(&r.to_xml());
+    }
+    (open.is_empty() && !out.is_empty()).then_some(out)
 }
 
 /// Is kept ink `src` in a form the drawing-level writer writes: its `a:graphic`, a direct run-level

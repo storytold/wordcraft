@@ -5741,6 +5741,7 @@ mod tests {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         };
         assert_eq!(field_link(&field(r"REF _Ref000000001 \h")).as_deref(), Some("#_Ref000000001"));
         assert_eq!(field_link(&field(r"PAGEREF Spot \h")).as_deref(), Some("#Spot"));

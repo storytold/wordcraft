@@ -6,7 +6,7 @@ mod glossary;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
 mod math;
-mod props;
+pub(crate) mod props;
 mod sdt;
 mod story;
 pub(crate) use story::written_toc_span;

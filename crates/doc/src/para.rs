@@ -533,6 +533,12 @@ pub enum InlineObject {
         /// source's `w:ffData`, raw OOXML kept for round trip. Empty for other fields.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         form: String,
+        /// When the code holds other fields (`{ IF { REF a } = 0 … }`, ECMA-376 §17.16): the code
+        /// as WordprocessingML runs, nested fields complete, written in place of `instr` between
+        /// the field's begin and separate. `instr` then holds the code with each nested field's
+        /// cached result in its place. Such fields aren't evaluated. Empty for other fields.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        code_xml: String,
     },
     /// The start of a field whose result is ordinary content — formatted, possibly spanning
     /// paragraphs — up to the matching [`InlineObject::FieldEnd`]. Imported TOCs and citation
@@ -1469,7 +1475,15 @@ mod tests {
         let mut p = Paragraph::with_text("añb€c", CharProps::default());
         p.insert_object(
             3,
-            InlineObject::Field { instr: "PAGE".into(), result: "7".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: "PAGE".into(),
+                result: "7".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps::default(),
         )
         .unwrap();
@@ -1543,7 +1557,15 @@ mod tests {
         let mut p = Paragraph::with_text("ab", CharProps::default());
         p.insert_object(
             1,
-            InlineObject::Field { instr: "PAGE".into(), result: "1".into(), locked: false, dirty: false, code: false, form: String::new() },
+            InlineObject::Field {
+                instr: "PAGE".into(),
+                result: "1".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+                code_xml: String::new(),
+            },
             &CharProps::default(),
         )
         .unwrap();

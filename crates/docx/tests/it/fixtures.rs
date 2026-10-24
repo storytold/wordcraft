@@ -144,7 +144,8 @@ fn single_entry_toc_keeps_formatted_result_and_nested_page_field() {
             locked: true,
             dirty: false,
             code: false,
-            form: String::new()
+            form: String::new(),
+            code_xml: String::new(),
         }]
     );
     assert_eq!(p[1].plain_text(), "Intro\t1");
@@ -158,7 +159,8 @@ fn single_entry_toc_keeps_formatted_result_and_nested_page_field() {
             locked: false,
             dirty: false,
             code: false,
-            form: String::new()
+            form: String::new(),
+            code_xml: String::new(),
         }]
     );
 }
@@ -187,7 +189,8 @@ fn toc_complex_field_spanning_paragraphs() {
             locked: false,
             dirty: false,
             code: false,
-            form: String::new()
+            form: String::new(),
+            code_xml: String::new(),
         }
     );
     assert_eq!(p[0].props_of_char(3).link.as_deref(), Some("#_Toc1"));
@@ -199,7 +202,15 @@ fn toc_complex_field_spanning_paragraphs() {
     assert_eq!(p[4].plain_text(), "Page 7");
     assert_eq!(
         p[4].objects[0],
-        InlineObject::Field { instr: "PAGE".into(), result: "7".into(), locked: false, dirty: false, code: false, form: String::new() }
+        InlineObject::Field {
+            instr: "PAGE".into(),
+            result: "7".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+            code_xml: String::new()
+        }
     );
     // And it writes back out and reads the same.
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
@@ -830,7 +841,8 @@ fn unbalanced_fields_and_markers() {
             locked: false,
             dirty: false,
             code: false,
-            form: String::new()
+            form: String::new(),
+            code_xml: String::new(),
         }]
     );
     assert_eq!(p[2].objects, vec![InlineObject::BookmarkStart { name: "between".into() }, InlineObject::BookmarkEnd { name: "between".into() }]);

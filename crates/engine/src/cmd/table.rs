@@ -987,6 +987,7 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
             dirty: false,
             code: false,
             form: String::new(),
+            code_xml: String::new(),
         },
         &props,
     )?;
