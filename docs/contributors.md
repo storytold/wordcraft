@@ -1,9 +1,10 @@
 # Contributors in the About window
 
 **About ▸ Contributors** credits everyone who contributed to WordCraft, and **About ▸ Models** credits
-the AI models named in `Co-Authored-By` trailers. This follows the shared craftrules standard
-[`standards/contributors.md`](https://github.com/storytold/craftrules/blob/main/standards/contributors.md);
-this page is the local copy of the decision.
+the AI models named in `Co-Authored-By` trailers. This page is the public copy of the decision.
+Its shared source, `craftrules/standards/contributors.md`, is in the internal
+`storytold/craftrules` repository and may be unavailable to external contributors. The manual
+steps below do not require that repository or its scripts.
 
 ## Decision
 
@@ -27,7 +28,10 @@ this page is the local copy of the decision.
 
 ## Credit yourself
 
-Add your entry to `contributors/people.toml` in a PR you commit yourself (every field optional):
+Everyone is credited by GitHub username automatically; no entry is needed unless you choose
+additional names. To do so, add your own entry to
+[`contributors/people.toml`](../contributors/people.toml) in a PR you commit yourself
+(every field optional):
 
 ```toml
 [people.your-github-username]
@@ -36,7 +40,8 @@ display_name = "Nickname"
 sync_github_name = true   # use the name on your public GitHub profile as display name
 ```
 
-or, with craftrules checked out next to `craft-apps/`:
+The template above is sufficient. Maintainers with access to `craftrules`, checked out next
+to `craft-apps/`, can use its optional helper for their own entry instead:
 
 ```sh
 python3 ../../craftrules/scripts/contributors.py --add-me . --real-name "Your Name" --sync-github-name
@@ -46,6 +51,9 @@ Names show after the next refresh: the script checks that each entry was committ
 user (or by a maintainer with a `consent_source`). Delete your entry to remove your names.
 
 ## Refreshing (maintainers)
+
+Maintainers with access to the internal `craftrules` checkout regenerate the stats and verify
+name entries. This is not a step external contributors need to run when preparing a PR.
 
 ```sh
 python3 ../../craftrules/scripts/contributors.py .           # regenerate + verify; needs git, Python 3.11+, gh
