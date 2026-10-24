@@ -106,6 +106,10 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value"?: "light" | "dark" | "system"; without it, toggles light and dark}"#)
         .pure(),
         CommandSpec::new("view.stylesPane", "Styles Pane", "Home › Styles", |s, v| toggle(s, v, |x| &mut x.styles_pane)).pure(),
+        // Where the Styles pane sits: docked right or left, or floating (#1756). No `dock` reads it.
+        CommandSpec::new("view.stylesPaneDock", "Styles Pane Position", "Home › Styles", styles_pane_dock)
+            .params(r#"{"dock"?: "left" | "right" | "float"}"#)
+            .pure(),
         CommandSpec::new("view.commentsPane", "Comments Pane", "Review › Comments", |s, v| toggle(s, v, |x| &mut x.comments_pane)).pure(),
         CommandSpec::new("view.accessibilityPane", "Accessibility Pane", "Review › Accessibility", |s, v| {
             toggle(s, v, |x| &mut x.accessibility_pane)
@@ -176,6 +180,16 @@ fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
     s.view.read_mode = read;
     s.relayout();
     Ok(json!({"mode": m, "readMode": read}))
+}
+
+fn styles_pane_dock(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(d) = v.get("dock") {
+        let Some(dock) = d.as_str().and_then(crate::StylesPaneDock::parse) else {
+            return Err(CmdError::Params("dock must be left, right or float".into()));
+        };
+        s.view.styles_pane_dock = dock;
+    }
+    Ok(json!({"dock": s.view.styles_pane_dock.name()}))
 }
 
 fn read_column_width(s: &mut Session, v: &Value) -> CmdResult {
