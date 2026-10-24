@@ -70,6 +70,13 @@ pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
 }
 
+/// The craft-fonts faces documents ask for by name: the metric-compatible substitutes for
+/// Calibri and Cambria (Carlito, Caladea), see `build.rs`. Empty without craft-fonts, or with a
+/// checkout that has no `fonts/latin-manifest.txt`.
+pub fn document_substitute_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| matches!(f.family, "Carlito" | "Caladea"))
+}
+
 /// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,
 /// Chinese, and Korean faces ordered for the selected interface language. Mixing the faces within
 /// a line would mix glyph styles, so the first face should cover the interface language. Empty
@@ -415,6 +422,26 @@ mod tests {
         for c in "مرحبا پچژگ۱۲۳".chars().filter(|c| !c.is_whitespace()) {
             let fb = db.fallback_for(c, latin.id()).unwrap_or_else(|| panic!("no fallback for {c}"));
             assert_eq!(fb.family, arabic.family, "{c}");
+        }
+    }
+
+    #[test]
+    fn craft_fonts_document_substitutes_load_in_every_style() {
+        if document_substitute_fonts().next().is_none() {
+            eprintln!("skipped: built without craft-fonts' fonts/latin-manifest.txt (CRAFT_FONTS_DIR)");
+            return;
+        }
+        // Calibri and Cambria documents resolve to these by name, so each style must load as itself
+        // without system fonts.
+        let db = FontDb::with_font_dirs(Vec::new());
+        db.set_system_fallback(false);
+        for family in ["Carlito", "Caladea"] {
+            assert!(db.is_loaded(family), "{family}");
+            for (style, bold, italic) in [("Regular", false, false), ("Bold", true, false), ("Italic", false, true), ("Bold Italic", true, true)] {
+                let face = db.face(family, style);
+                assert_eq!(face.family, family);
+                assert_eq!((face.weight >= 600.0, face.italic), (bold, italic), "{family} {style}");
+            }
         }
     }
 
