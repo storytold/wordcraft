@@ -162,6 +162,9 @@ pub struct Para {
     pub kind: Kind,
     pub list: Option<ListInfo>,
     pub align: Option<Align>,
+    /// The paragraph reads right to left (OOXML `w:bidi`, HTML `dir="rtl"`, ODF
+    /// `style:writing-mode="rl-tb"`, RTF `\rtlpar`).
+    pub rtl: bool,
     pub page_break: bool,
     /// Keep the paragraph on the same page as the next one (ODT `fo:keep-with-next`).
     pub keep_next: bool,
@@ -501,6 +504,9 @@ fn para_props(p: &Para, list_num: Option<u32>) -> ParaProps {
         out.numbering = Some(NumRef { num, level: li.level.min(8) });
     }
     out.align = p.align;
+    if p.rtl {
+        out.bidi = Some(true);
+    }
     let sp = p.spacing;
     out.space_before = sp.before;
     out.space_after = sp.after;
@@ -965,6 +971,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         kind,
         list,
         align: p.props.align,
+        rtl: p.props.bidi.unwrap_or(false),
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
@@ -996,6 +1003,7 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         kind,
                         list: None,
                         align: p.props.align,
+                        rtl: out.rtl,
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),

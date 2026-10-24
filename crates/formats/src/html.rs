@@ -505,6 +505,8 @@ struct El {
     kind: ElKind,
     fmt: Fmt,
     align: Option<Align>,
+    /// `dir="rtl"` or CSS `direction:rtl` on this element.
+    rtl: bool,
     preserve: bool,
     page_break: bool,
     page_break_after: bool,
@@ -683,7 +685,15 @@ fn strip_important(v: &str) -> &str {
 }
 
 /// Apply a `style` attribute to formatting / block properties.
-fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut bool, page_break: &mut bool, page_break_after: &mut bool) {
+fn apply_style(
+    css: &str,
+    f: &mut Fmt,
+    align: &mut Option<Align>,
+    rtl: &mut bool,
+    preserve: &mut bool,
+    page_break: &mut bool,
+    page_break_after: &mut bool,
+) {
     for decl in css.split(';').take(64) {
         let Some((k, v)) = decl.split_once(':') else { continue };
         let k = k.trim().to_ascii_lowercase();
@@ -730,6 +740,13 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
             "vertical-align" => {
                 f.sup = lv == "super";
                 f.sub = lv == "sub";
+            }
+            "direction" => {
+                if lv.starts_with("rtl") {
+                    *rtl = true;
+                } else if lv.starts_with("ltr") {
+                    *rtl = false;
+                }
             }
             "text-align" => {
                 *align = match lv.as_str() {
@@ -789,6 +806,7 @@ impl<'r> Builder<'r> {
             let mut list_level: Option<(bool, usize)> = None;
             let mut li_at: Option<usize> = None;
             let mut lists = 0usize;
+            let mut rtl_seen = false;
             for (i, e) in self.stack.iter().enumerate().rev() {
                 match e.kind {
                     ElKind::Cell => {
@@ -821,6 +839,12 @@ impl<'r> Builder<'r> {
                 }
                 if p.align.is_none() && e.align.is_some() && e.kind != ElKind::Inline {
                     p.align = e.align;
+                }
+                // The innermost block's direction already includes what it inherits, so an
+                // explicit `dir="ltr"` inside an RTL block stays LTR.
+                if !rtl_seen && e.kind != ElKind::Inline {
+                    rtl_seen = true;
+                    p.rtl = e.rtl;
                 }
             }
             if let (Some((o, _)), Some(li)) = (list_level, li_at) {
@@ -880,6 +904,7 @@ impl<'r> Builder<'r> {
             && prev.list.is_some()
             && prev.list.map(|l| l.level) == level
         {
+            prev.rtl |= p.rtl;
             prev.push_text("\n", &Fmt::default());
             prev.inlines.extend(p.inlines);
             return;
@@ -1202,6 +1227,14 @@ impl<'r> Builder<'r> {
         }
         let mut fmt = self.fmt();
         let mut align = None;
+        // `dir="rtl"` or CSS `direction:rtl` on this element (inherited by block children).
+        // An explicit `dir="ltr"` (or `direction:ltr`) wins over an RTL ancestor.
+        let inherited = self.stack.iter().any(|e| e.rtl && e.kind != ElKind::Inline);
+        let mut rtl = match attr(attrs, "dir").map(|d| d.trim().to_ascii_lowercase()).as_deref() {
+            Some("rtl") => true,
+            Some("ltr") => false,
+            _ => inherited,
+        };
         let mut preserve = self.preserve();
         let mut page_break = false;
         let mut page_break_after = false;
@@ -1265,7 +1298,7 @@ impl<'r> Builder<'r> {
             align = Some(Align::Center);
         }
         if let Some(st) = attr(attrs, "style") {
-            apply_style(st, &mut fmt, &mut align, &mut preserve, &mut page_break, &mut page_break_after);
+            apply_style(st, &mut fmt, &mut align, &mut rtl, &mut preserve, &mut page_break, &mut page_break_after);
         }
         if kind == ElKind::Pre {
             preserve = true;
@@ -1330,7 +1363,7 @@ impl<'r> Builder<'r> {
             }
             _ => {}
         }
-        self.stack.push(El { name: name.to_string(), kind, fmt, align, preserve, page_break, page_break_after, used: false });
+        self.stack.push(El { name: name.to_string(), kind, fmt, align, rtl, preserve, page_break, page_break_after, used: false });
     }
 
     fn end(&mut self, name: &str) {
@@ -1754,6 +1787,7 @@ fn trim_num(v: f32) -> String {
 }
 
 fn para_attrs(p: &Para) -> String {
+    let dir = if p.rtl { " dir=\"rtl\"" } else { "" };
     let mut css: Vec<&str> = Vec::new();
     if let Some(a) = align_css(p.align) {
         css.push(a);
@@ -1761,7 +1795,8 @@ fn para_attrs(p: &Para) -> String {
     if p.page_break {
         css.push("break-before:page;page-break-before:always");
     }
-    if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) }
+    let style = if css.is_empty() { String::new() } else { format!(" style=\"{}\"", css.join(";")) };
+    format!("{}{}", dir, style)
 }
 
 fn para_html(p: &Para) -> String {
@@ -2130,6 +2165,33 @@ mod tests {
         // `align` on a table places the table; it doesn't align the text in its cells.
         let f = parse("<table align=center><tr><td>x</td></tr></table>");
         assert_eq!(cell_paras(&f)[0][0][0].align, None);
+    }
+
+    #[test]
+    fn rtl_paragraphs_read_and_keep_their_direction() {
+        // #2693: Word writes an RTL paragraph's direction as dir="rtl" (or CSS direction:rtl);
+        // reading it keeps the paragraph's bidi flag, and the export writes dir="rtl" back.
+        for src in [r#"<p dir="rtl">مرها</p>"#, r#"<p style="direction:rtl">مرها</p>"#, r#"<div dir="rtl"><p>مرها</p></div>"#] {
+            let parsed = parse(src);
+            let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+            assert!(p.rtl, "{src}");
+        }
+        let ltr = parse(r#"<p dir="ltr">مرها</p>"#);
+        let Some(FBlock::Para(p)) = ltr.blocks.first() else { panic!("no paragraph") };
+        assert!(!p.rtl, "ltr is not RTL");
+        // An explicit ltr wins over an RTL ancestor.
+        for src in [r#"<div dir="rtl"><p dir="ltr">abc</p></div>"#, r#"<div dir="rtl"><p style="direction:ltr">abc</p></div>"#] {
+            let parsed = parse(src);
+            let Some(FBlock::Para(p)) = parsed.blocks.first() else { panic!("no paragraph") };
+            assert!(!p.rtl, "{src}");
+        }
+        // The document keeps it as `w:bidi`, and the export writes dir="rtl" back.
+        let doc = model::to_doc(&parse(r#"<p dir="rtl">مرها</p>"#));
+        assert!(doc.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
+        let out = export_fragment(&doc);
+        assert!(out.contains("dir=\"rtl\""), "{out}");
+        let back = model::to_doc(&parse(out.as_str()));
+        assert!(back.body.iter().any(|b| if let wordcraft_doc::Block::Para(p) = &**b { p.props.bidi.unwrap_or(false) } else { false }));
     }
 
     #[test]
