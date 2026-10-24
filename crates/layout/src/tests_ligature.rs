@@ -44,6 +44,7 @@ fn has_fi_ligature(l: &DocLayout) -> bool {
 
 #[test]
 fn caret_between_the_letters_of_a_ligature_is_inside_it() {
+    crate::test_fonts();
     let l = lay(&doc("fi"));
     assert!(has_fi_ligature(&l), "the default font should draw fi as a ligature");
     let (a, b, c) = (caret_x(&l, 0), caret_x(&l, 1), caret_x(&l, 2));
@@ -62,6 +63,7 @@ fn fi_width_with_spacing(sp: Option<f32>) -> (DocLayout, f32) {
 
 #[test]
 fn character_spacing_inside_a_ligature_is_kept() {
+    crate::test_fonts();
     let (l0, plain) = fi_width_with_spacing(None);
     assert!(has_fi_ligature(&l0), "the default font should draw fi as a ligature");
     for sp in [3.0_f32, -0.5] {
@@ -75,6 +77,7 @@ fn character_spacing_inside_a_ligature_is_kept() {
 
 #[test]
 fn clicks_inside_a_ligature_land_between_its_letters() {
+    crate::test_fonts();
     let l = lay(&doc("fi"));
     let (a, b, c) = (caret_x(&l, 0), caret_x(&l, 1), caret_x(&l, 2));
     let cr = l.caret(&Pos::body(0, 1)).unwrap();
@@ -88,6 +91,7 @@ fn clicks_inside_a_ligature_land_between_its_letters() {
 
 #[test]
 fn every_letter_of_a_three_letter_ligature_has_its_own_caret() {
+    crate::test_fonts();
     let l = lay(&doc("ffi"));
     assert!(has_fi_ligature(&l), "the default font should draw ffi as a ligature");
     let xs: Vec<f32> = (0..=3).map(|o| caret_x(&l, o)).collect();
@@ -96,6 +100,7 @@ fn every_letter_of_a_three_letter_ligature_has_its_own_caret() {
 
 #[test]
 fn a_combining_mark_stays_in_its_letters_cluster() {
+    crate::test_fonts();
     let l = lay(&doc("fi\u{301}"));
     let pl = para_layout(&l);
     let offs = pl.line_offsets(0);
@@ -104,6 +109,7 @@ fn a_combining_mark_stays_in_its_letters_cluster() {
 
 #[test]
 fn selection_edges_inside_a_ligature_use_the_same_positions() {
+    crate::test_fonts();
     let d = doc("fi");
     let l = lay(&d);
     let rects = l.selection_rects(&d, &Pos::body(0, 0), &Pos::body(0, 1), 0);
@@ -134,6 +140,7 @@ fn lam_alef_ligature() -> Option<DocLayout> {
 
 #[test]
 fn a_right_to_left_ligature_splits_mirrored() {
+    crate::test_fonts();
     let Some(l) = lam_alef_ligature() else {
         eprintln!("skipped: no lam-alef ligature font");
         return;
@@ -146,6 +153,7 @@ fn a_right_to_left_ligature_splits_mirrored() {
 
 #[test]
 fn a_right_to_left_ligature_is_drawn_from_its_left_edge() {
+    crate::test_fonts();
     // The glyph stays on lam, the rightmost letter; it must still start at alef's left edge.
     let Some(l) = lam_alef_ligature() else {
         eprintln!("skipped: no lam-alef ligature font");
@@ -162,6 +170,7 @@ fn a_right_to_left_ligature_is_drawn_from_its_left_edge() {
 
 #[test]
 fn an_emoji_zwj_sequence_stays_one_cluster() {
+    crate::test_fonts();
     // 👩‍💻: woman, zero-width joiner, laptop — one grapheme, one caret stop on each side.
     let t = "a\u{1F469}\u{200D}\u{1F4BB}b";
     let l = lay(&Document::from_text(t));
@@ -173,6 +182,7 @@ fn an_emoji_zwj_sequence_stays_one_cluster() {
 
 #[test]
 fn an_indic_conjunct_stays_one_cluster() {
+    crate::test_fonts();
     // क्ष: ka, virama, ssa — one conjunct; the caret never stops inside it.
     let l = lay(&Document::from_text("\u{915}\u{94D}\u{937}"));
     let offs = para_layout(&l).line_offsets(0);
@@ -181,6 +191,7 @@ fn an_indic_conjunct_stays_one_cluster() {
 
 #[test]
 fn a_long_word_never_wraps_inside_a_ligature() {
+    crate::test_fonts();
     // A narrow page forces an emergency break in the unbroken word; whatever the offset, a line
     // never ends between a ligature's glyph and its glyphless letters.
     let mut seen_ligature = false;
@@ -203,6 +214,7 @@ fn a_long_word_never_wraps_inside_a_ligature() {
 
 #[test]
 fn a_hyphenation_point_never_splits_a_ligature() {
+    crate::test_fonts();
     // Soft hyphens sit between the letters of "ffi"; a line never ends between a ligature's glyph
     // and its glyphless letters, whether or not the soft hyphen leaves the ligature intact.
     for k in 0..24 {

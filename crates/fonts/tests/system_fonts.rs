@@ -21,3 +21,11 @@ fn a_fresh_session_finds_installed_fonts_by_name() {
     assert_eq!(&FontDb::global().face(family, "Regular").family, family);
     assert!(FontDb::global().families().contains(family));
 }
+
+#[cfg(feature = "test-support")]
+#[test]
+fn test_initialization_cannot_replace_an_application_database() {
+    let db = FontDb::global();
+    assert!(!FontDb::init_test_fonts());
+    assert!(std::ptr::eq(db, FontDb::global()));
+}
