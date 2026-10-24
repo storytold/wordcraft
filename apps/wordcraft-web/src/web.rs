@@ -12,6 +12,7 @@ use wordcraft_ui_egui::{Inbox, Services, WordApp};
 const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
+mod bridge;
 mod font_store;
 const CANVAS_ID: &str = "wordcraft_canvas";
 const LOADING_ID: &str = "wordcraft_loading";
@@ -21,15 +22,24 @@ pub fn start() {
     wasm_bindgen_futures::spawn_local(async {
         let Some(document) = web_sys::window().and_then(|w| w.document()) else {
             log::error!("no document");
+            if bridge::in_host() {
+                bridge::post_failed("WordCraft could not start: no document.");
+            }
             return;
         };
         let Some(canvas) = document.get_element_by_id(CANVAS_ID).and_then(|e| e.dyn_into::<web_sys::HtmlCanvasElement>().ok()) else {
             log::error!("missing <canvas id=\"{CANVAS_ID}\">");
+            if bridge::in_host() {
+                bridge::post_failed(&format!("WordCraft could not start: missing <canvas id=\"{CANVAS_ID}\">."));
+            }
             return;
         };
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
-        if let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
+        // In an OMD host frame the parent page guards unsaved changes itself (native modal);
+        // the browser's "leave site?" popup stays for the standalone page only.
+        let in_host = bridge::in_host();
+        if !in_host && let Err(e) = guard_unload(dirty.clone(), saves.clone()) {
             log::error!("no unsaved-changes guard: {e}");
         }
         let mut options = eframe::WebOptions::default();
@@ -61,6 +71,7 @@ pub fn start() {
                     let mut session = Session::new(doc);
                     session.system_region = region;
                     let messages = Rc::new(RefCell::new(Vec::new()));
+                    let commands = bridge::CommandQueue::default();
                     let mut app = WordApp::new(session, services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone()));
                     // Pasted pictures wait apart from dropped files: the app inserts one only when the page is the edit target (#1349).
                     app.services.pasted = Some(pasted);
@@ -79,14 +90,39 @@ pub fn start() {
                     if !sample {
                         app.start_screen();
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    // Inside an OMD host frame: open/save/dirty/commands through postMessage.
+                    // A usable origin with no listener must fail startup: the host would get
+                    // `ready` and then nothing — no open, no save-ack, no cmd handling. An
+                    // opaque origin (sandboxed frame) refuses to install and stays degraded
+                    // standalone, as before.
+                    if bridge::embedded()
+                        && let Err(e) = bridge::install(inbox.clone(), cc.egui_ctx.clone(), saves.clone(), commands.clone())
+                    {
+                        if bridge::in_host() {
+                            return Err(format!("no host bridge: {e}").into());
+                        }
+                        log::error!("no host bridge: {e}");
+                    }
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, commands }))
                 }),
             )
             .await;
+        let started = result.is_ok();
+        let reason = result.as_ref().err().map(|e| format!("{e:?}"));
         if let Some(el) = document.get_element_by_id(LOADING_ID) {
             match result {
                 Ok(()) => el.remove(),
                 Err(e) => el.set_inner_html(&format!("<p>WordCraft failed to start: {e:?}</p><p>A browser with WebGPU or WebGL2 is required.</p>")),
+            }
+        }
+        if bridge::in_host() {
+            if started {
+                bridge::post_ready();
+            } else {
+                // The real startup failure (WebGPU/WebGL2 or the host bridge), so a broken
+                // bridge isn't reported to the host as a missing WebGPU.
+                let reason = reason.unwrap_or_else(|| "a browser with WebGPU or WebGL2 is required".into());
+                bridge::post_failed(&format!("WordCraft could not start: {reason}"));
             }
         }
     });
@@ -97,12 +133,14 @@ fn query() -> String {
 }
 
 /// Wraps the app to read dropped files asynchronously (browsers can't read them synchronously)
-/// and feed them through the inbox.
+/// and feed them through the inbox. Also drains `{type:"wordcraft:cmd"}` from the host bridge (commands run
+/// before the frame's logic) and posts status lines to the host.
 struct WebShell {
     app: WordApp,
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    commands: bridge::CommandQueue,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -116,6 +154,12 @@ fn stored_prefs() -> Option<String> {
 
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // File › Close (ribbon/QAT/Ctrl+W) and the Save-changes flow end in `quit_requested`:
+        // the desktop app closes its window, here the host closes its viewer.
+        if self.app.quit_requested {
+            self.app.quit_requested = false;
+            bridge::post_doc_closed();
+        }
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
         for f in dropped {
             let inbox = self.inbox.clone();
@@ -131,8 +175,24 @@ impl eframe::App for WebShell {
                 }
             });
         }
+        let cmds = std::mem::take(&mut *self.commands.borrow_mut());
+        for (id, params, request_id) in cmds {
+            match self.app.execute(&id, params.clone()) {
+                Ok(value) => {
+                    log::info!("bridge: command {id} ok");
+                    bridge::post_response(&id, request_id.as_deref(), true, &value);
+                }
+                Err(e) => {
+                    log::error!("bridge: command {id} failed: {e}");
+                    bridge::post_response(&id, request_id.as_deref(), false, &serde_json::json!({ "error": e, "id": id }));
+                }
+            }
+        }
         let msgs = std::mem::take(&mut *self.messages.borrow_mut());
         for msg in msgs {
+            if bridge::in_host() {
+                bridge::post_status(&msg);
+            }
             self.app.status(msg);
         }
         self.app.logic(ctx);
@@ -211,6 +271,8 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
     let save_ctx = ctx.clone();
     let font_ctx = ctx.clone();
     let font_messages = messages.clone();
+    let host_saves = saves.clone();
+    let host_dirty = Cell::new(false);
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
@@ -246,10 +308,29 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
         // Exports ask for a name; the browser decides where the download goes.
         pick_save: Some(Box::new(|name: &str| Some(name.to_string()))),
         async_saves: Some(saves.clone()),
-        download: Some(Box::new(move |path: &str, bytes: &[u8]| download(&saves, &save_ctx, path, bytes))),
+        download: Some(Box::new(move |path: &str, bytes: &[u8]| {
+            // Inside an OMD host frame the host writes the bytes back to the document's original
+            // path and answers `save-ack`; standalone keeps the browser's save picker/download.
+            if bridge::in_host() { bridge::send_save(&saves, path, bytes) } else { download(&saves, &save_ctx, path, bytes) }
+        })),
         print: Some(Box::new(print_pdf)),
         inbox: Some(inbox),
-        on_dirty: Some(Box::new(move |d| dirty.set(d))),
+        on_dirty: Some(Box::new(move |d| {
+            dirty.set(d);
+            if !bridge::in_host() {
+                return;
+            }
+            // The host hears transitions only, and hears "saved" (false) only once no save is
+            // in flight — a save the host hasn't acked yet never looks written. A failed or
+            // cancelled save sets `session.dirty` again in `settle_async_saves` before the
+            // frame reports, so the host keeps seeing the document dirty (review #2919:
+            // clear the flag on `save-ack {ok:true}` only).
+            let hears = d || host_saves.pending() > 0;
+            if hears != host_dirty.get() {
+                host_dirty.set(hears);
+                bridge::post_dirty(hears);
+            }
+        })),
         animations_enabled: Some(animations_enabled()),
         store_font: Some(Box::new(font_store::store)),
         forget_font: Some(Box::new(font_store::forget)),
