@@ -1661,17 +1661,23 @@ pub(crate) fn ok_cancel_responses(ui: &mut Ui, draw_ok: impl FnOnce(&mut Ui) -> 
 }
 
 pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
+    buttons_when(ui, ok, true)
+}
+
+/// [`buttons`] with the default button greyed out, and Enter doing nothing, while `enabled` is
+/// false: a dialog whose OK needs input says so instead of swallowing the click.
+pub(crate) fn buttons_when(ui: &mut Ui, ok: &str, enabled: bool) -> (bool, bool) {
     let mut r = (false, false);
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             // Enter and Escape belong to the Colors dialog while it is open above this one.
             let keys = !crate::colors::is_open(ui.ctx());
-            let (okb, cancelb) = ok_cancel_responses(ui, |ui| ui.add(crate::widgets::primary_button(ui, ok)), tl!("Cancel"));
+            let (okb, cancelb) = ok_cancel_responses(ui, |ui| ui.add_enabled(enabled, crate::widgets::primary_button(ui, ok)), tl!("Cancel"));
             if cancelb.clicked() || (keys && cancel_key_pressed(ui)) {
                 r.1 = true;
             }
-            if okb.clicked() || (keys && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
+            if okb.clicked() || (keys && enabled && ui.input(|i| i.key_pressed(egui::Key::Enter))) {
                 r.0 = true;
             }
         });
@@ -2137,7 +2143,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if replace_mode {
                     if ui.button(tl!("Replace All")).clicked() {
                         match app.run("edit.replaceAll", opts.clone()) {
-                            Ok(r) => *message = format!("All done. We made {} replacements.", r["replaced"]),
+                            Ok(r) => {
+                                let count = r["replaced"].to_string();
+                                *message = crate::i18n::fmt(tl!("All done. We made {count} replacements."), &[("count", &count)]);
+                            }
                             Err(e) => *message = e,
                         }
                     }
@@ -2148,7 +2157,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 if ui.button(tl!("Find Next")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
                     // One step per click: `edit.find` would select a match itself, and the step after it skip one.
                     match app.run("edit.findNext", opts.clone()) {
-                        Ok(r) => *message = format!("Match {} of {}", r["index"].as_u64().unwrap_or(0) + 1, r["count"]),
+                        Ok(r) => {
+                            let index = (r["index"].as_u64().unwrap_or(0) + 1).to_string();
+                            let count = r["count"].to_string();
+                            *message = crate::i18n::fmt(tl!("Match {index} of {count}"), &[("index", &index), ("count", &count)]);
+                        }
                         Err(e) => *message = e,
                     }
                 }
@@ -2444,8 +2457,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             {
                 *stats = v;
             }
-            let (ok, cancel) = buttons(ui, tl!("Close"));
-            ok || cancel
+            close_button(ui)
         }
         Dialog::Zoom { percent } => {
             ui.horizontal(|ui| {
@@ -2737,8 +2749,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     );
                 }
             }
-            let (ok, cancel) = buttons(ui, tl!("Close"));
-            ok || cancel
+            close_button(ui)
         }
         Dialog::DiscardRecovery { name, .. } => {
             ui.label(crate::i18n::fmt(tl!("Discard the recovery copy of {name}?"), &[("name", name)]));
@@ -2831,8 +2842,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(tl!("Field:"));
                 ui.text_edit_singleline(field);
             });
-            let (ok, cancel) = buttons(ui, tl!("Insert"));
-            if ok && !field.trim().is_empty() {
+            let (ok, cancel) = buttons_when(ui, tl!("Insert"), !field.trim().is_empty());
+            if ok {
                 let _ = app.run("mailings.insertField", json!({"field": field.trim()}));
                 return true;
             }
@@ -2933,8 +2944,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if !message.is_empty() {
                 ui.label(egui::RichText::new(message.as_str()).small().weak());
             }
-            let (ok, cancel) = buttons(ui, tl!("OK"));
-            if ok && !code.trim().is_empty() {
+            let (ok, cancel) = buttons_when(ui, tl!("OK"), !code.trim().is_empty());
+            if ok {
                 let r = if *edit {
                     app.run("fields.setCode", json!({"code": code.trim()}))
                 } else {
@@ -2995,8 +3006,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if !message.is_empty() {
                 ui.label(egui::RichText::new(message.as_str()).small().weak());
             }
-            let (ok, cancel) = buttons(ui, tl!("Find"));
-            if ok && !text.trim().is_empty() {
+            let (ok, cancel) = buttons_when(ui, tl!("Find"), !text.trim().is_empty());
+            if ok {
                 match app.run("mailings.findRecipient", json!({"text": text.trim()})) {
                     Ok(_) => return true,
                     Err(e) => *message = e,
@@ -3101,8 +3112,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     }
                 });
             }
-            let (ok, cancel) = buttons(ui, tl!("Close"));
-            ok || cancel
+            close_button(ui)
         }
         Dialog::CheckErrors { unknown, records } => {
             if unknown.is_empty() {
@@ -3117,8 +3127,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ui.add_space(4.0);
             ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Recipients: {count}"), &[("count", &records.to_string())])).weak());
-            let (ok, cancel) = buttons(ui, tl!("Close"));
-            ok || cancel
+            close_button(ui)
         }
     }
 }
@@ -5330,5 +5339,66 @@ mod tests {
         assert_eq!(levels(h.state()), Some([0, 1, 2, 3, 4, 4].to_vec()), "the same row takes the next Tab");
         tab(&mut h, true);
         assert_eq!(levels(h.state()), Some([0, 1, 2, 2, 3, 3].to_vec()), "Shift+Tab promotes them back");
+    }
+
+    /// The Word Count dialog is read-only: Close is the whole footer, not Close beside a Cancel
+    /// that does the same thing.
+    #[test]
+    fn the_word_count_dialog_offers_no_cancel() {
+        use egui_kittest::kittest::Queryable;
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = app_with("One two three");
+        app.dialog = Dialog::open("wordCount", &mut app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        use egui_kittest::kittest::By;
+        let by = |label: &'static str| By::new().role(egui::accesskit::Role::Button).label(label);
+        // The window controls carry a Close too, so count them.
+        assert!(h.query_all(by("Close")).count() >= 2, "Close closes it");
+        assert!(h.query(by("Cancel")).is_none(), "no pointless Cancel beside it");
+        assert!(h.query(by("OK")).is_none(), "and no second kind of close");
+    }
+
+    /// A dialog that needs a value greys out its default button rather than swallowing the click:
+    /// Insert Merge Field's Insert stays disabled until a field is typed.
+    #[test]
+    fn a_dialog_that_needs_a_value_greys_out_its_default_button() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut app = app_with("Dear «Name»");
+        app.dialog = Some(Dialog::InsertMergeField { fields: vec!["Name".into()], field: String::new() });
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        // The ribbon's Insert tab carries the same label, so count the greyed-out ones.
+        let greyed = |h: &egui_kittest::Harness<'_, WordApp>| {
+            use egui_kittest::kittest::By;
+            h.query_all(By::new().role(egui::accesskit::Role::Button).label("Insert")).filter(|n| n.accesskit_node().is_disabled()).count()
+        };
+        assert_eq!(greyed(&h), 1, "Insert is greyed out with an empty field");
+        if let Some(Dialog::InsertMergeField { field, .. }) = &mut h.state_mut().dialog {
+            field.push_str("Name");
+        }
+        for _ in 0..4 {
+            h.step();
+        }
+        assert_eq!(greyed(&h), 0, "typing a field enables Insert");
     }
 }

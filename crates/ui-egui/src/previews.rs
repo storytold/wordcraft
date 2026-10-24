@@ -630,7 +630,8 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
             ui.painter().image(h.id(), ir, uv, preview_tint(&t, false));
         }
-        if resp.on_hover_text(format!("Style set: {name}")).clicked() {
+        let tip = crate::i18n::fmt(tl!("Style set: {name}"), &[("name", name)]);
+        if resp.on_hover_text(tip).clicked() {
             let _ = app.run("design.styleSet", json!({"name": name}));
         }
     }

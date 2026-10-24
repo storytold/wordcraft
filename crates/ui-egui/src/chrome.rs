@@ -2,7 +2,7 @@
 
 use egui::{Align2, Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde_json::json;
-use wordcraft_doc::{PartKind, StoryRef};
+use wordcraft_doc::StoryRef;
 
 use crate::theme::{Tokens, TypeRung, fit_text, medium, paint_text, regular, semibold, text_width};
 use crate::{WordApp, icons};
@@ -350,7 +350,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Account")));
                     let initials: String = app.session.user_initials().chars().take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
-                    if resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author)).clicked() {
+                    let hint = crate::i18n::fmt(tl!("{author} — set your name in File › Options"), &[("author", &app.session.author)]);
+                    if resp.on_hover_text(hint).clicked() {
                         let _ = app.run("ui.backstage", json!({"value": true, "page": "options", "pane": "general"}));
                     }
                     ui.add_space(8.0);
@@ -405,10 +406,13 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
-                let response = ui.interact(rect, ui.id().with("document_name"), Sense::click()).on_hover_text(tl!("Rename Document"));
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &title));
-                if response.clicked() {
-                    let _ = app.run("file.rename", json!({}));
+                // No document (#1129): the app's name is not a document to rename.
+                if app.has_document() {
+                    let response = ui.interact(rect, ui.id().with("document_name"), Sense::click()).on_hover_text(tl!("Rename Document"));
+                    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &title));
+                    if response.clicked() {
+                        let _ = app.run("file.rename", json!({}));
+                    }
                 }
 
                 paint_text(
@@ -536,6 +540,33 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// The status bar's word count: the whole document's, or the selection's share while text is
+/// selected. A one-word document says `1 word`, not `1 words`.
+fn word_count_text(app: &mut WordApp) -> String {
+    let words = app.cached_word_count();
+    let total = |n: usize| if n == 1 { tl!("{words} word") } else { tl!("{words} words") };
+    // A selected picture/shape/text box isn't a text selection: show the total.
+    if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() || words == 1 {
+        crate::i18n::fmt(total(words), &[("words", &words.to_string())])
+    } else {
+        let sw = wordcraft_doc::count_words(&app.session.selected_text());
+        crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
+    }
+}
+
+/// The status bar's note on the story being edited, or `None` in the body (and in a text box,
+/// which the box itself shows). A footnote or an endnote is not the header or footer.
+fn editing_story(app: &WordApp) -> Option<&'static str> {
+    if app.session.sel.focus.story == StoryRef::Body || crate::canvas::in_text_box(app) {
+        return None;
+    }
+    Some(match crate::canvas::part_kind(app, app.session.sel.focus.story) {
+        Some(wordcraft_doc::PartKind::Footnote) => tl!("Editing footnote"),
+        Some(wordcraft_doc::PartKind::Endnote) => tl!("Editing endnote"),
+        _ => tl!("Editing header/footer"),
+    })
+}
+
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")
@@ -562,39 +593,35 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 } else {
                     l.caret_on(&app.session.sel.focus, app.session.page_hint).map(|c| c.page + 1).unwrap_or(1)
                 };
-                let st = |ui: &mut Ui, s: &str| {
+                // `clickable` labels are buttons (a hand cursor, the press ripple); the rest are
+                // text that only reports itself to assistive technology.
+                let st = |ui: &mut Ui, s: &str, clickable: bool| {
                     let font = TypeRung::Caption.regular();
                     let track = TypeRung::Caption.tracking();
                     let w = text_width(ui.painter(), s, &font, track, t.text_dim);
-                    let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                    let sense = if clickable { Sense::click() } else { Sense::hover() };
+                    let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), sense);
                     paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, s));
+                    let kind = if clickable { egui::WidgetType::Button } else { egui::WidgetType::Label };
+                    resp.widget_info(|| egui::WidgetInfo::labeled(kind, true, s));
                     resp
                 };
-                if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
-                    .on_hover_text(tl!("Go To (⌘⌥G)"))
-                    .clicked()
+                if st(
+                    ui,
+                    &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]),
+                    true,
+                )
+                .on_hover_text(tl!("Go To (⌘⌥G)"))
+                .clicked()
                 {
                     let _ = app.run("ui.dialog", json!({"name": "goto"}));
                 }
-                let words = app.cached_word_count();
-                // A selected picture/shape/text box isn't a text selection: show the total.
-                let wtxt = if app.session.sel.is_collapsed() || crate::objects::selected(app).is_some() {
-                    crate::i18n::fmt(tl!("{words} words"), &[("words", &words.to_string())])
-                } else {
-                    let sw = wordcraft_doc::count_words(&app.session.selected_text());
-                    crate::i18n::fmt(tl!("{selected} of {words} words"), &[("selected", &sw.to_string()), ("words", &words.to_string())])
-                };
-                if st(ui, &wtxt).clicked() {
+                let wtxt = word_count_text(app);
+                if st(ui, &wtxt, true).clicked() {
                     let _ = app.run("ui.dialog", json!({"name": "wordCount"}));
                 }
-                if app.session.sel.focus.story != StoryRef::Body && !crate::canvas::in_text_box(app) {
-                    let label = match crate::canvas::part_kind(app, app.session.sel.focus.story) {
-                        Some(PartKind::Footnote) => tl!("Editing footnote"),
-                        Some(PartKind::Endnote) => tl!("Editing endnote"),
-                        _ => tl!("Editing header/footer"),
-                    };
-                    st(ui, label);
+                if let Some(label) = editing_story(app) {
+                    st(ui, label, false);
                 }
                 // The language at the caret; a click sets the proofing language (Review › Language).
                 let lang = crate::ribbon::caret_language(app);
@@ -608,15 +635,15 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     lang.clone()
                 };
                 let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
-                let resp = st(ui, &shown).on_hover_text(tip);
+                let resp = st(ui, &shown, true).on_hover_text(tip);
                 egui::Popup::menu(&resp).show(|ui| {
                     ui.set_min_width(200.0);
                     crate::ribbon::language_menu(ui, app);
                 });
                 if app.session.doc.settings.track_changes {
-                    st(ui, tl!("Track Changes: On"));
+                    st(ui, tl!("Track Changes: On"), false);
                 }
-                if app.session.prefs.overtype && st(ui, tl!("Overtype")).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
+                if app.session.prefs.overtype && st(ui, tl!("Overtype"), true).on_hover_text(tl!("Click to switch back to inserting")).clicked() {
                     let _ = app.run("text.overtype", json!({"value": false}));
                 }
                 // The message is drawn where the row is now; the controls on the right are laid
@@ -636,7 +663,9 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     // A fixed width for three digits plus a small reserve, so the controls to the
                     // left don't shift as the percentage gains or loses digits (#1975).
                     let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
-                    let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
+                    // Read Mode's percentage only reports the size: it opens no dialog there.
+                    let sense = if reading { Sense::hover() } else { Sense::click() };
+                    let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), sense);
                     paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
                     if zresp.clicked() && !reading {
                         let _ = app.run("ui.dialog", json!({ "name": "zoom" }));
@@ -895,7 +924,12 @@ mod tests {
             out.textures_delta.clear();
             let update = out.platform_output.accesskit_update.take().unwrap();
             for prefix in ["Editing footnote", "Editing endnote", "Editing header/footer"] {
-                if update.nodes.iter().any(|(_, node)| node.label().is_some_and(|l| l == prefix)) {
+                // egui puts a Label widget's text in `value`, everything else in `label`.
+                let found = update.nodes.iter().any(|(_, node)| {
+                    let text = node.label().or_else(|| node.value());
+                    text == Some(prefix)
+                });
+                if found {
                     return prefix.to_string();
                 }
             }
@@ -1069,5 +1103,69 @@ mod tests {
         h.run_steps(2);
         assert!(h.state().autosaves(), "and clicking it again turns it back on");
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// A one-word document reads "1 word", not "1 words" — and a selection still reads
+    /// "<selected> of <total> words" once there is more than one.
+    #[test]
+    fn a_one_word_document_is_counted_in_the_singular() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+        assert_eq!(word_count_text(&mut a), "1 word");
+        a.run("select.all", json!({})).unwrap();
+        assert_eq!(word_count_text(&mut a), "1 word", "selecting the only word keeps the singular");
+
+        let mut b = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("One two three")), crate::Services::default());
+        assert_eq!(word_count_text(&mut b), "3 words");
+        b.run("select.all", json!({})).unwrap();
+        assert_eq!(word_count_text(&mut b), "3 of 3 words");
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+    }
+
+    /// Editing a footnote or an endnote is not editing the header or footer: the status bar names
+    /// the story actually open (it used to say "Editing header/footer" for every part).
+    #[test]
+    fn the_status_bar_names_the_story_being_edited() {
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let doc = wordcraft_doc::Document::from_text("Body");
+        let mut a = WordApp::new(wordcraft_engine::Session::new(doc), crate::Services::default());
+        assert_eq!(editing_story(&a), None, "the body needs no note");
+        for (id, kind, expected) in [
+            (1u32, wordcraft_doc::PartKind::Header, "Editing header/footer"),
+            (2, wordcraft_doc::PartKind::Footer, "Editing header/footer"),
+            (3, wordcraft_doc::PartKind::Footnote, "Editing footnote"),
+            (4, wordcraft_doc::PartKind::Endnote, "Editing endnote"),
+        ] {
+            a.session.doc.parts.insert(id, wordcraft_doc::Part { kind, blocks: Vec::new(), body: Default::default() });
+            a.session.sel.focus.story = wordcraft_doc::StoryRef::Part(id);
+            assert_eq!(editing_story(&a), Some(expected), "{kind:?}");
+        }
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+    }
+
+    /// Status-bar text with nothing behind it is a label, so assistive technology doesn't offer a
+    /// note like "Editing footnote" as something to press (a click used to do nothing).
+    #[test]
+    fn the_status_bar_notes_are_labels_not_buttons() {
+        use egui_kittest::kittest::{By, Queryable};
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Body")), crate::Services::default());
+        a.session.doc.parts.insert(3, wordcraft_doc::Part { kind: wordcraft_doc::PartKind::Footnote, blocks: Vec::new(), body: Default::default() });
+        a.session.sel.focus.story = wordcraft_doc::StoryRef::Part(3);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        let by = |role| By::new().role(role).label("Editing footnote");
+        assert_eq!(h.query_all(by(egui::accesskit::Role::Label)).count(), 1, "the note is plain text");
+        assert_eq!(h.query_all(by(egui::accesskit::Role::Button)).count(), 0, "and not something to press");
+        crate::i18n::set_current(crate::i18n::Lang::EN);
     }
 }
