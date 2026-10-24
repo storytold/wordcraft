@@ -4141,8 +4141,8 @@ fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
     }
     let _ = std::fs::remove_dir_all(&dir);
     let [pipe, device] = got.expect("opening a named pipe blocked");
-    assert!(pipe.unwrap_err().contains("not a file"));
-    assert!(device.unwrap_err().contains("not a file"));
+    assert!(pipe.unwrap_err().contains("not a regular file"));
+    assert!(device.unwrap_err().contains("not a regular file"));
 }
 
 #[cfg(unix)]
