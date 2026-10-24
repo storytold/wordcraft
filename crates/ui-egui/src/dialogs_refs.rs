@@ -662,38 +662,41 @@ impl MarkForm {
 }
 
 fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next {
-    heading(ui, "Index");
-    egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Main entry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0));
-        ui.end_row();
-        ui.label(tl!("Subentry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0));
-        ui.end_row();
-    });
-    heading(ui, "Options");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
-        ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0));
-    });
-    ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| {
-            ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"));
+    crate::widgets::section(ui, tl!("Index"), |ui| {
+        egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.label(tl!("Main entry:"));
+            ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0));
+            ui.end_row();
+            ui.label(tl!("Subentry:"));
+            ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0));
+            ui.end_row();
         });
-        ui.add_enabled_ui(f.option == "range", |ui| {
-            let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
-            egui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
-                for (v, l) in &opts {
-                    ui.selectable_value(&mut f.bookmark, v.clone(), *l);
-                }
+    });
+    crate::widgets::section(ui, tl!("Options"), |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
+            ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0));
+        });
+        ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
+        ui.horizontal(|ui| {
+            ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| {
+                ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"));
+            });
+            ui.add_enabled_ui(f.option == "range", |ui| {
+                let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
+                egui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
+                    for (v, l) in &opts {
+                        ui.selectable_value(&mut f.bookmark, v.clone(), *l);
+                    }
+                });
             });
         });
     });
-    heading(ui, "Page number style");
-    ui.horizontal(|ui| {
-        ui.checkbox(&mut f.bold, tl!("Bold"));
-        ui.checkbox(&mut f.italic, tl!("Italic"));
+    crate::widgets::section(ui, tl!("Page number style"), |ui| {
+        ui.horizontal(|ui| {
+            ui.checkbox(&mut f.bold, tl!("Bold"));
+            ui.checkbox(&mut f.italic, tl!("Italic"));
+        });
     });
     if !f.message.is_empty() {
         ui.label(egui::RichText::new(&f.message).small());

@@ -1501,7 +1501,21 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
     let shown = place_dialog(ctx, id, window).show(ctx, |ui| {
         ui.set_min_width(340.0);
-        close = body(app, ui, &mut d);
+        // Scrolls only when the last frame's body was taller than the screen.
+        let room = (ui.ctx().content_rect().height() - 110.0).max(160.0);
+        let key = id.with("body_height");
+        let tall = ui.ctx().data(|data| data.get_temp::<f32>(key)).is_some_and(|h| h > room);
+        let mut content = |ui: &mut egui::Ui| {
+            let top = ui.cursor().min.y;
+            close = body(app, ui, &mut d);
+            let height = ui.min_rect().max.y - top;
+            ui.ctx().data_mut(|data| data.insert_temp(key, height));
+        };
+        if tall {
+            egui::ScrollArea::vertical().max_height(room).auto_shrink([true, true]).show(ui, content);
+        } else {
+            content(ui);
+        }
     });
     if let Some(shown) = &shown {
         if let Dialog::SaveChanges { name, message, .. } = &d {
@@ -1838,88 +1852,90 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if *strike {
                 fmt.strikethrough = egui::Stroke::new(1.0, preview_color);
             }
-            egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-                // Word's two font boxes when East Asian text is in use: the Latin text font and
-                // the Asian text font, each with its own list (type to find a font).
-                let prev = app.previews.font_preview_fn();
-                if *asian {
-                    ui.label(tl!("Asian text font:"));
-                    let fams = app.previews.east_asian_families();
-                    if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_asian", 220.0, font_ea, &fams, Some(&*prev)) {
+            crate::widgets::section(ui, "", |ui| {
+                egui::Grid::new("fontdlg").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+                    // Word's two font boxes when East Asian text is in use: the Latin text font and
+                    // the Asian text font, each with its own list (type to find a font).
+                    let prev = app.previews.font_preview_fn();
+                    if *asian {
+                        ui.label(tl!("Asian text font:"));
+                        let fams = app.previews.east_asian_families();
+                        if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_asian", 220.0, font_ea, &fams, Some(&*prev)) {
+                            if f == crate::widgets::ADD_FONT {
+                                let _ = app.run("font.add", json!({}));
+                            } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
+                                let _ = app.run("font.loadSystem", json!({}));
+                            } else {
+                                *font_ea = f;
+                            }
+                        }
+                        ui.end_row();
+                    }
+                    ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") });
+                    let fams = app.previews.families();
+                    if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_font", 220.0, font, &fams, Some(&*prev)) {
                         if f == crate::widgets::ADD_FONT {
                             let _ = app.run("font.add", json!({}));
                         } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
                             let _ = app.run("font.loadSystem", json!({}));
                         } else {
-                            *font_ea = f;
+                            *font = f;
                         }
                     }
                     ui.end_row();
-                }
-                ui.label(if *asian { tl!("Latin text font:") } else { tl!("Font:") });
-                let fams = app.previews.families();
-                if let Some(f) = crate::widgets::font_combo(ui, "fontdlg_font", 220.0, font, &fams, Some(&*prev)) {
-                    if f == crate::widgets::ADD_FONT {
-                        let _ = app.run("font.add", json!({}));
-                    } else if f == crate::widgets::LOAD_SYSTEM_FONTS {
-                        let _ = app.run("font.loadSystem", json!({}));
-                    } else {
-                        *font = f;
-                    }
-                }
-                ui.end_row();
-                ui.label(tl!("Size:"));
-                ui.text_edit_singleline(size);
-                ui.end_row();
-                ui.label(tl!("Font color:"));
-                let theme = app.session.doc.settings.theme_colors.clone();
-                color_field(ui, &theme, color, "Automatic", "auto");
-                ui.end_row();
-                ui.label(tl!("Spacing (pt):"));
-                ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
-                ui.end_row();
-                let label = tl!("Kerning for fonts:");
-                match kern {
-                    Some(on) => {
-                        ui.checkbox(on, label);
-                    }
-                    None => {
-                        if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
-                            *kern = Some(true);
+                    ui.label(tl!("Size:"));
+                    ui.text_edit_singleline(size);
+                    ui.end_row();
+                    ui.label(tl!("Font color:"));
+                    let theme = app.session.doc.settings.theme_colors.clone();
+                    color_field(ui, &theme, color, "Automatic", "auto");
+                    ui.end_row();
+                    ui.label(tl!("Spacing (pt):"));
+                    ui.add(egui::DragValue::new(spacing).speed(0.1).range(-20.0..=20.0));
+                    ui.end_row();
+                    let label = tl!("Kerning for fonts:");
+                    match kern {
+                        Some(on) => {
+                            ui.checkbox(on, label);
+                        }
+                        None => {
+                            if ui.add(egui::Checkbox::new(&mut false, label).indeterminate(true)).clicked() {
+                                *kern = Some(true);
+                            }
                         }
                     }
-                }
-                ui.horizontal(|ui| {
-                    ui.add_enabled(*kern == Some(true), egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1));
-                    ui.label(tl!("Points and above"));
+                    ui.horizontal(|ui| {
+                        ui.add_enabled(*kern == Some(true), egui::DragValue::new(kern_at).speed(0.5).range(1.0..=1638.0).max_decimals(1));
+                        ui.label(tl!("Points and above"));
+                    });
+                    ui.end_row();
                 });
-                ui.end_row();
             });
-            ui.separator();
-            ui.label(egui::RichText::new(tl!("Effects")).font(semibold(12.5)));
-            egui::Grid::new("fx").num_columns(2).show(ui, |ui| {
-                ui.checkbox(bold, tl!("Bold"));
-                ui.checkbox(italic, tl!("Italic"));
-                ui.end_row();
-                ui.checkbox(underline, tl!("Underline"));
-                ui.checkbox(strike, tl!("Strikethrough"));
-                ui.end_row();
-                ui.checkbox(sup, tl!("Superscript"));
-                ui.checkbox(sub, tl!("Subscript"));
-                ui.end_row();
-                ui.checkbox(small_caps, tl!("Small caps"));
-                ui.checkbox(caps, tl!("All caps"));
-                ui.end_row();
-                ui.checkbox(hidden, tl!("Hidden"));
-                ui.end_row();
+            crate::widgets::section(ui, tl!("Effects"), |ui| {
+                egui::Grid::new("fx").num_columns(2).show(ui, |ui| {
+                    ui.checkbox(bold, tl!("Bold"));
+                    ui.checkbox(italic, tl!("Italic"));
+                    ui.end_row();
+                    ui.checkbox(underline, tl!("Underline"));
+                    ui.checkbox(strike, tl!("Strikethrough"));
+                    ui.end_row();
+                    ui.checkbox(sup, tl!("Superscript"));
+                    ui.checkbox(sub, tl!("Subscript"));
+                    ui.end_row();
+                    ui.checkbox(small_caps, tl!("Small caps"));
+                    ui.checkbox(caps, tl!("All caps"));
+                    ui.end_row();
+                    ui.checkbox(hidden, tl!("Hidden"));
+                    ui.end_row();
+                });
             });
             // Live preview of the chosen font/size/colour/effects.
-            ui.separator();
-            ui.label(egui::RichText::new(tl!("Preview")).small().weak());
-            let sample = if *caps { tl!("AaBbYyZz").to_uppercase() } else { tl!("AaBbYyZz").to_string() };
-            let mut job = egui::text::LayoutJob::single_section(sample, fmt);
-            job.wrap.max_width = ui.available_width().min(400.0);
-            ui.label(job);
+            crate::widgets::section(ui, tl!("Preview"), |ui| {
+                let sample = if *caps { tl!("AaBbYyZz").to_uppercase() } else { tl!("AaBbYyZz").to_string() };
+                let mut job = egui::text::LayoutJob::single_section(sample, fmt);
+                job.wrap.max_width = ui.available_width().min(400.0);
+                ui.label(job);
+            });
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 apply_font(app, d);
@@ -1952,84 +1968,91 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.add_space(6.0);
             match *tab {
                 0 => {
-                    ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
-                    ui.horizontal(|ui| {
-                        ui.label(tl!("Direction:"));
-                        // Neither while the selected paragraphs differ.
-                        let blank = mixed.contains("bidi");
-                        for (value, text) in [(true, tl!("Right-to-left")), (false, tl!("Left-to-right"))] {
-                            if ui.radio(!blank && *rtl == value, text).clicked() {
-                                *rtl = value;
-                                mixed.remove("bidi");
-                            }
-                        }
-                    });
-                    const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
-                    ui.horizontal(|ui| {
-                        ui.label(tl!("Alignment:"));
-                        let shown = if mixed.contains("align") {
-                            ""
-                        } else {
-                            ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l))
-                        };
-                        egui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
-                            for (v, l) in ALIGNS {
-                                if ui.selectable_value(align, v.to_string(), tl!(l)).clicked() {
-                                    mixed.remove("align");
+                    crate::widgets::section(ui, tl!("General"), |ui| {
+                        ui.horizontal(|ui| {
+                            ui.label(tl!("Direction:"));
+                            // Neither while the selected paragraphs differ.
+                            let blank = mixed.contains("bidi");
+                            for (value, text) in [(true, tl!("Right-to-left")), (false, tl!("Left-to-right"))] {
+                                if ui.radio(!blank && *rtl == value, text).clicked() {
+                                    *rtl = value;
+                                    mixed.remove("bidi");
                                 }
                             }
                         });
+                        const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+                        ui.horizontal(|ui| {
+                            ui.label(tl!("Alignment:"));
+                            let shown = if mixed.contains("align") {
+                                ""
+                            } else {
+                                ALIGNS.iter().find(|(v, _)| v == align).map_or(align.as_str(), |(_, l)| tl!(l))
+                            };
+                            egui::ComboBox::from_id_salt("para_align").selected_text(shown).show_ui(ui, |ui| {
+                                for (v, l) in ALIGNS {
+                                    if ui.selectable_value(align, v.to_string(), tl!(l)).clicked() {
+                                        mixed.remove("align");
+                                    }
+                                }
+                            });
+                        });
                     });
-                    ui.label(egui::RichText::new(tl!("Indentation")).font(semibold(12.5)));
-                    // Mirrored indents are the inside and outside ones (they swap on even pages).
-                    let (l_label, r_label) = if opts[0] { ("Inside:", "Outside:") } else { ("Left:", "Right:") };
-                    egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
-                        ui.label(tl!(l_label));
-                        para_number(ui, left, ParaNumber::Length, "left", mixed);
-                        ui.label(tl!(r_label));
-                        para_number(ui, right, ParaNumber::Length, "right", mixed);
-                        ui.end_row();
-                        ui.label(tl!("First line:"));
-                        para_number(ui, first, ParaNumber::Length, "indentFirst", mixed);
-                        ui.end_row();
+                    crate::widgets::section(ui, tl!("Indentation"), |ui| {
+                        // Mirrored indents are the inside and outside ones (they swap on even pages).
+                        let (l_label, r_label) = if opts[0] { ("Inside:", "Outside:") } else { ("Left:", "Right:") };
+                        egui::Grid::new("ind").num_columns(4).show(ui, |ui| {
+                            ui.label(tl!(l_label));
+                            para_number(ui, left, ParaNumber::Length, "left", mixed);
+                            ui.label(tl!(r_label));
+                            para_number(ui, right, ParaNumber::Length, "right", mixed);
+                            ui.end_row();
+                            ui.label(tl!("First line:"));
+                            para_number(ui, first, ParaNumber::Length, "indentFirst", mixed);
+                            ui.end_row();
+                        });
+                        para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
                     });
-                    para_check(ui, &mut opts[0], tl!("Mirror indents"), "mirrorIndents", mixed);
-                    ui.label(egui::RichText::new(tl!("Spacing")).font(semibold(12.5)));
-                    egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
-                        ui.label(tl!("Before:"));
-                        para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed);
-                        ui.label(tl!("Line spacing:"));
-                        para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed);
-                        ui.end_row();
-                        ui.label(tl!("After:"));
-                        para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed);
-                        ui.end_row();
+                    crate::widgets::section(ui, tl!("Spacing"), |ui| {
+                        egui::Grid::new("sp").num_columns(4).show(ui, |ui| {
+                            ui.label(tl!("Before:"));
+                            para_number(ui, before, ParaNumber::Points, "spaceBefore", mixed);
+                            ui.label(tl!("Line spacing:"));
+                            para_number(ui, line, ParaNumber::Lines, "lineSpacing", mixed);
+                            ui.end_row();
+                            ui.label(tl!("After:"));
+                            para_number(ui, after, ParaNumber::Points, "spaceAfter", mixed);
+                            ui.end_row();
+                        });
+                        para_check(ui, &mut opts[1], tl!("Don't add space between paragraphs of the same style"), "contextualSpacing", mixed);
                     });
-                    para_check(ui, &mut opts[1], tl!("Don't add space between paragraphs of the same style"), "contextualSpacing", mixed);
                 }
                 1 => {
-                    ui.label(egui::RichText::new(tl!("Line and Page Breaks")).font(semibold(12.5)));
-                    para_check(ui, widow, tl!("Widow/Orphan control"), "widowControl", mixed);
-                    para_check(ui, keep_next, tl!("Keep with next"), "keepNext", mixed);
-                    para_check(ui, keep_lines, tl!("Keep lines together"), "keepLines", mixed);
-                    para_check(ui, page_break, tl!("Page break before"), "pageBreakBefore", mixed);
-                    ui.label(egui::RichText::new(tl!("Formatting exceptions")).font(semibold(12.5)));
-                    para_check(ui, &mut opts[2], tl!("Suppress line numbers"), "suppressLineNumbers", mixed);
-                    para_check(ui, &mut opts[3], tl!("Don't hyphenate"), "suppressHyphens", mixed);
+                    crate::widgets::section(ui, tl!("Line and Page Breaks"), |ui| {
+                        para_check(ui, widow, tl!("Widow/Orphan control"), "widowControl", mixed);
+                        para_check(ui, keep_next, tl!("Keep with next"), "keepNext", mixed);
+                        para_check(ui, keep_lines, tl!("Keep lines together"), "keepLines", mixed);
+                        para_check(ui, page_break, tl!("Page break before"), "pageBreakBefore", mixed);
+                    });
+                    crate::widgets::section(ui, tl!("Formatting exceptions"), |ui| {
+                        para_check(ui, &mut opts[2], tl!("Suppress line numbers"), "suppressLineNumbers", mixed);
+                        para_check(ui, &mut opts[3], tl!("Don't hyphenate"), "suppressHyphens", mixed);
+                    });
                 }
                 _ => {
                     let [kinsoku, word_wrap, overflow, top_line, de, dn] = asian;
-                    ui.label(egui::RichText::new(tl!("Line breaking")).font(semibold(12.5)));
-                    para_check(ui, kinsoku, tl!("Apply Asian line-breaking rules (kinsoku)"), "kinsoku", mixed);
-                    // The model's flag is "wrap whole words"; the box offers the opposite.
-                    let mut mid_word = !*word_wrap;
-                    para_check(ui, &mut mid_word, tl!("Allow Latin text to wrap in the middle of a word"), "wordWrap", mixed);
-                    *word_wrap = !mid_word;
-                    para_check(ui, overflow, tl!("Allow hanging punctuation"), "overflowPunct", mixed);
-                    ui.label(egui::RichText::new(tl!("Character Spacing")).font(semibold(12.5)));
-                    para_check(ui, top_line, tl!("Compress punctuation at the start of a line"), "topLinePunct", mixed);
-                    para_check(ui, de, tl!("Add space between Asian and Latin text"), "autoSpaceDE", mixed);
-                    para_check(ui, dn, tl!("Add space between Asian text and numbers"), "autoSpaceDN", mixed);
+                    crate::widgets::section(ui, tl!("Line breaking"), |ui| {
+                        para_check(ui, kinsoku, tl!("Apply Asian line-breaking rules (kinsoku)"), "kinsoku", mixed);
+                        // The model's flag is "wrap whole words"; the box offers the opposite.
+                        let mut mid_word = !*word_wrap;
+                        para_check(ui, &mut mid_word, tl!("Allow Latin text to wrap in the middle of a word"), "wordWrap", mixed);
+                        *word_wrap = !mid_word;
+                        para_check(ui, overflow, tl!("Allow hanging punctuation"), "overflowPunct", mixed);
+                    });
+                    crate::widgets::section(ui, tl!("Character Spacing"), |ui| {
+                        para_check(ui, top_line, tl!("Compress punctuation at the start of a line"), "topLinePunct", mixed);
+                        para_check(ui, de, tl!("Add space between Asian and Latin text"), "autoSpaceDE", mixed);
+                        para_check(ui, dn, tl!("Add space between Asian text and numbers"), "autoSpaceDN", mixed);
+                    });
                 }
             }
             ui.add_space(6.0);
@@ -2246,56 +2269,70 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             odd_even,
             first_page,
         } => {
-            ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
-            egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
-                ui.label(tl!("Top:"));
-                ui.add(egui::DragValue::new(top).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2));
-                ui.label(tl!("Bottom:"));
-                ui.add(
-                    egui::DragValue::new(bottom).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2),
-                );
-                ui.end_row();
-                ui.label(if *mirror { tl!("Inside:") } else { tl!("Left:") });
-                ui.add(egui::DragValue::new(left).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2));
-                ui.label(if *mirror { tl!("Outside:") } else { tl!("Right:") });
-                ui.add(egui::DragValue::new(right).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2));
-                ui.end_row();
+            crate::widgets::section(ui, tl!("Margins"), |ui| {
+                egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
+                    ui.label(tl!("Top:"));
+                    ui.add(
+                        egui::DragValue::new(top).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2),
+                    );
+                    ui.label(tl!("Bottom:"));
+                    ui.add(
+                        egui::DragValue::new(bottom)
+                            .speed(3.6 / crate::options::unit().pt_per_unit())
+                            .measure(crate::options::unit())
+                            .max_decimals(2),
+                    );
+                    ui.end_row();
+                    ui.label(if *mirror { tl!("Inside:") } else { tl!("Left:") });
+                    ui.add(
+                        egui::DragValue::new(left).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2),
+                    );
+                    ui.label(if *mirror { tl!("Outside:") } else { tl!("Right:") });
+                    ui.add(
+                        egui::DragValue::new(right).speed(3.6 / crate::options::unit().pt_per_unit()).measure(crate::options::unit()).max_decimals(2),
+                    );
+                    ui.end_row();
+                });
             });
-            ui.label(egui::RichText::new(tl!("Orientation")).font(semibold(12.5)));
-            ui.horizontal(|ui| {
-                ui.radio_value(landscape, false, tl!("Portrait"));
-                ui.radio_value(landscape, true, tl!("Landscape"));
+            crate::widgets::section(ui, tl!("Orientation"), |ui| {
+                ui.horizontal(|ui| {
+                    ui.radio_value(landscape, false, tl!("Portrait"));
+                    ui.radio_value(landscape, true, tl!("Landscape"));
+                });
             });
-            ui.label(egui::RichText::new(tl!("Pages")).font(semibold(12.5)));
-            ui.checkbox(mirror, tl!("Mirror margins"));
-            page_paper_group(ui, paper, landscape, paper_custom);
-            ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
-            ui.horizontal_wrapped(|ui| {
-                ui.radio_value(&mut grid.0, 0, tl!("No grid"));
-                ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
-                ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
-                ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
+            crate::widgets::section(ui, tl!("Pages"), |ui| {
+                ui.checkbox(mirror, tl!("Mirror margins"));
+                page_paper_group(ui, paper, landscape, paper_custom);
             });
-            egui::Grid::new("ps_grid").num_columns(4).show(ui, |ui| {
-                ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:")));
-                ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000));
-                ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:")));
-                ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000));
-                ui.end_row();
+            crate::widgets::section(ui, tl!("Document Grid"), |ui| {
+                ui.horizontal_wrapped(|ui| {
+                    ui.radio_value(&mut grid.0, 0, tl!("No grid"));
+                    ui.radio_value(&mut grid.0, 1, tl!("Lines only"));
+                    ui.radio_value(&mut grid.0, 2, tl!("Lines and characters"));
+                    ui.radio_value(&mut grid.0, 3, tl!("Text snaps to characters"));
+                });
+                egui::Grid::new("ps_grid").num_columns(4).show(ui, |ui| {
+                    ui.add_enabled(grid.0 >= 2, egui::Label::new(tl!("Characters per line:")));
+                    ui.add_enabled(grid.0 >= 2, egui::DragValue::new(&mut grid.2).range(1..=1000));
+                    ui.add_enabled(grid.0 >= 1, egui::Label::new(tl!("Lines per page:")));
+                    ui.add_enabled(grid.0 >= 1, egui::DragValue::new(&mut grid.1).range(1..=1000));
+                    ui.end_row();
+                });
+                ui.horizontal(|ui| {
+                    ui.label(tl!("Section direction:"));
+                    ui.radio_value(rtl, false, tl!("Left-to-right"));
+                    ui.radio_value(rtl, true, tl!("Right-to-left"));
+                });
+                if !message.is_empty() {
+                    ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
+                }
+                page_valign_combo(ui, valign);
             });
-            ui.horizontal(|ui| {
-                ui.label(tl!("Section direction:"));
-                ui.radio_value(rtl, false, tl!("Left-to-right"));
-                ui.radio_value(rtl, true, tl!("Right-to-left"));
+            crate::widgets::section(ui, tl!("Headers and footers"), |ui| {
+                // Word's Page Setup › Layout: a title page without the page number (#1230).
+                ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
+                ui.checkbox(first_page, tl!("Different First Page"));
             });
-            if !message.is_empty() {
-                ui.label(egui::RichText::new(message.as_str()).small().color(ui.visuals().error_fg_color));
-            }
-            page_valign_combo(ui, valign);
-            // Word's Page Setup › Layout: a title page without the page number (#1230).
-            ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
-            ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
-            ui.checkbox(first_page, tl!("Different First Page"));
             let (mut ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
                 // Everything OK changes is one undo step; a refused command applies nothing.
@@ -3386,66 +3423,66 @@ fn table_properties(ui: &mut Ui, f: &mut TableForm) {
     fn len(v: &mut f32, lo: f32, unit: wordcraft_geom::Unit) -> egui::DragValue<'_> {
         egui::DragValue::new(v).speed(0.01).range(lo..=22.0).measure(unit).max_decimals(2)
     }
-    let heading = |ui: &mut Ui, s: &str| {
-        ui.add_space(4.0);
-        ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
-    };
-    heading(ui, "Table");
-    egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.checkbox(&mut f.width_on, tl!("Preferred width:"));
-        ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit));
-        ui.end_row();
-        ui.label(tl!("Alignment:"));
-        ui.horizontal(|ui| {
-            for (v, l) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
-                ui.radio_value(&mut f.align, v.to_string(), tl!(l));
-            }
+    crate::widgets::section(ui, tl!("Table"), |ui| {
+        egui::Grid::new("tp_table").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.checkbox(&mut f.width_on, tl!("Preferred width:"));
+            ui.add_enabled(f.width_on, len(&mut f.width, 0.1, unit));
+            ui.end_row();
+            ui.label(tl!("Alignment:"));
+            ui.horizontal(|ui| {
+                for (v, l) in [("left", "Left"), ("center", "Center"), ("right", "Right")] {
+                    ui.radio_value(&mut f.align, v.to_string(), tl!(l));
+                }
+            });
+            ui.end_row();
+            ui.label(tl!("Indent from left:"));
+            ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2));
+            ui.end_row();
+            ui.label(tl!("Table direction:"));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut f.rtl, false, tl!("Left-to-right"));
+                ui.radio_value(&mut f.rtl, true, tl!("Right-to-left"));
+            });
+            ui.end_row();
         });
-        ui.end_row();
-        ui.label(tl!("Indent from left:"));
-        ui.add_enabled(f.align == "left", egui::DragValue::new(&mut f.indent).speed(0.01).range(-11.0..=22.0).measure(unit).max_decimals(2));
-        ui.end_row();
-        ui.label(tl!("Table direction:"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut f.rtl, false, tl!("Left-to-right"));
-            ui.radio_value(&mut f.rtl, true, tl!("Right-to-left"));
-        });
-        ui.end_row();
     });
-    heading(ui, "Row");
-    egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));
-        ui.horizontal(|ui| {
-            ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
-            ui.add_enabled_ui(f.row_height_on, |ui| {
-                egui::ComboBox::from_id_salt("tp_rule").selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" })).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut f.row_exact, false, tl!("At least"));
-                    ui.selectable_value(&mut f.row_exact, true, tl!("Exactly"));
+    crate::widgets::section(ui, tl!("Row"), |ui| {
+        egui::Grid::new("tp_row").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.checkbox(&mut f.row_height_on, tl!("Specify height:"));
+            ui.horizontal(|ui| {
+                ui.add_enabled(f.row_height_on, len(&mut f.row_height, 0.02, unit));
+                ui.add_enabled_ui(f.row_height_on, |ui| {
+                    egui::ComboBox::from_id_salt("tp_rule").selected_text(tl!(if f.row_exact { "Exactly" } else { "At least" })).show_ui(ui, |ui| {
+                        ui.selectable_value(&mut f.row_exact, false, tl!("At least"));
+                        ui.selectable_value(&mut f.row_exact, true, tl!("Exactly"));
+                    });
                 });
             });
+            ui.end_row();
         });
-        ui.end_row();
+        ui.checkbox(&mut f.allow_break, tl!("Allow row to break across pages"));
+        ui.checkbox(&mut f.header_row, tl!("Repeat as header row on each page"));
     });
-    ui.checkbox(&mut f.allow_break, tl!("Allow row to break across pages"));
-    ui.checkbox(&mut f.header_row, tl!("Repeat as header row on each page"));
-    heading(ui, "Column");
-    egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Preferred width:"));
-        ui.add(len(&mut f.column_width, 0.1, unit));
-        ui.end_row();
-    });
-    heading(ui, "Cell");
-    egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:"));
-        ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit));
-        ui.end_row();
-        ui.label(tl!("Vertical alignment:"));
-        ui.horizontal(|ui| {
-            for (v, l) in [("top", "Top"), ("center", "Center"), ("bottom", "Bottom")] {
-                ui.radio_value(&mut f.valign, v.to_string(), tl!(l));
-            }
+    crate::widgets::section(ui, tl!("Column"), |ui| {
+        egui::Grid::new("tp_col").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.label(tl!("Preferred width:"));
+            ui.add(len(&mut f.column_width, 0.1, unit));
+            ui.end_row();
         });
-        ui.end_row();
+    });
+    crate::widgets::section(ui, tl!("Cell"), |ui| {
+        egui::Grid::new("tp_cell").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            ui.checkbox(&mut f.cell_width_on, tl!("Preferred width:"));
+            ui.add_enabled(f.cell_width_on, len(&mut f.cell_width, 0.1, unit));
+            ui.end_row();
+            ui.label(tl!("Vertical alignment:"));
+            ui.horizontal(|ui| {
+                for (v, l) in [("top", "Top"), ("center", "Center"), ("bottom", "Bottom")] {
+                    ui.radio_value(&mut f.valign, v.to_string(), tl!(l));
+                }
+            });
+            ui.end_row();
+        });
     });
 }
 
@@ -4734,6 +4771,27 @@ mod tests {
         });
         let p = props(&app);
         assert_eq!((p.bidi, p.align, p.indent_left, p.indent_right), (Some(false), Some(Align::Right), Some(0.0), Some(72.0)));
+    }
+
+    /// A tall dialog on a short screen stays inside it and scrolls.
+    #[test]
+    fn a_tall_dialog_fits_a_short_screen() {
+        let mut app = app_with("Some text");
+        app.dialog = Dialog::open("pageSetup", &mut app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(900.0, 360.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        let id = egui::Id::new(("dialog", "Page Setup"));
+        let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+        assert!(rect.height() <= 360.5, "the dialog is {}pt tall on a 360pt screen", rect.height());
     }
 
     /// Switching the Paragraph dialog's tabs re-centred it, so the tab strip jumped up and down

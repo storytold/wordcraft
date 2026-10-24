@@ -672,15 +672,16 @@ fn labels_ui(app: &mut WordApp, ui: &mut Ui, f: &mut LabelsForm) -> bool {
         });
     });
     let (rows, cols) = LABEL_PRODUCTS.get(f.product).map_or((1, 1), |p| (p.rows, p.cols));
-    heading(ui, "Print");
-    ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.single, true, tl!("Single label"));
-        ui.add_enabled_ui(f.single, |ui| {
-            ui.label(tl!("Row:"));
-            ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
-            ui.label(tl!("Column:"));
-            ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+    crate::widgets::section(ui, tl!("Print"), |ui| {
+        ui.radio_value(&mut f.single, false, tl!("Full page of the same label"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.single, true, tl!("Single label"));
+            ui.add_enabled_ui(f.single, |ui| {
+                ui.label(tl!("Row:"));
+                ui.add(egui::DragValue::new(&mut f.row).range(1..=rows));
+                ui.label(tl!("Column:"));
+                ui.add(egui::DragValue::new(&mut f.col).range(1..=cols));
+            });
         });
     });
     f.row = f.row.clamp(1, rows.max(1));
@@ -811,23 +812,25 @@ impl SortForm {
 }
 
 fn sort_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SortForm) -> bool {
-    heading(ui, "Sort by");
-    ui.horizontal(|ui| {
-        egui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
-            for i in 0..f.headers.len() {
-                let label = f.column_label(i);
-                ui.selectable_value(&mut f.column, i, label);
-            }
-        });
-        ui.vertical(|ui| {
-            ui.radio_value(&mut f.descending, false, tl!("Ascending"));
-            ui.radio_value(&mut f.descending, true, tl!("Descending"));
+    crate::widgets::section(ui, tl!("Sort by"), |ui| {
+        ui.horizontal(|ui| {
+            egui::ComboBox::from_id_salt("sort_column").selected_text(f.column_label(f.column)).width(180.0).show_ui(ui, |ui| {
+                for i in 0..f.headers.len() {
+                    let label = f.column_label(i);
+                    ui.selectable_value(&mut f.column, i, label);
+                }
+            });
+            ui.vertical(|ui| {
+                ui.radio_value(&mut f.descending, false, tl!("Ascending"));
+                ui.radio_value(&mut f.descending, true, tl!("Descending"));
+            });
         });
     });
-    heading(ui, "My list has");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.header, true, tl!("Header row"));
-        ui.radio_value(&mut f.header, false, tl!("No header row"));
+    crate::widgets::section(ui, tl!("My list has"), |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.header, true, tl!("Header row"));
+            ui.radio_value(&mut f.header, false, tl!("No header row"));
+        });
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {
@@ -1071,36 +1074,39 @@ impl TextToTableForm {
 
 fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> bool {
     let before = (f.separator.clone(), f.other_char.clone(), f.columns);
-    heading(ui, "Table size");
-    egui::Grid::new("text_to_table").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Number of columns:"));
-        ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
-        ui.end_row();
-        ui.label(tl!("Number of rows:"));
-        ui.label(f.rows.to_string());
-        ui.end_row();
-    });
-    heading(ui, "AutoFit behavior");
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
-        ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
-    });
-    ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
-    ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
-    heading(ui, "Separate text at");
-    egui::Grid::new("text_to_table_sep").num_columns(2).show(ui, |ui| {
-        ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs"));
-        ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
-        ui.end_row();
-        ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
-        ui.horizontal(|ui| {
-            ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
-            let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
-            if r.changed() {
-                f.separator = "other".into();
-            }
+    crate::widgets::section(ui, tl!("Table size"), |ui| {
+        egui::Grid::new("text_to_table").num_columns(2).show(ui, |ui| {
+            ui.label(tl!("Number of columns:"));
+            ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
+            ui.end_row();
+            ui.label(tl!("Number of rows:"));
+            ui.label(f.rows.to_string());
+            ui.end_row();
         });
-        ui.end_row();
+    });
+    crate::widgets::section(ui, tl!("AutoFit behavior"), |ui| {
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.autofit, "initial".to_string(), tl!("Initial column width:"));
+            ui.add_enabled(f.autofit == "initial", egui::TextEdit::singleline(&mut f.width).desired_width(72.0));
+        });
+        ui.radio_value(&mut f.autofit, "contents".to_string(), tl!("AutoFit to contents"));
+        ui.radio_value(&mut f.autofit, "window".to_string(), tl!("AutoFit to window"));
+    });
+    crate::widgets::section(ui, tl!("Separate text at"), |ui| {
+        egui::Grid::new("text_to_table_sep").num_columns(2).show(ui, |ui| {
+            ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraphs"));
+            ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
+            ui.end_row();
+            ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
+            ui.horizontal(|ui| {
+                ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+                let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+                if r.changed() {
+                    f.separator = "other".into();
+                }
+            });
+            ui.end_row();
+        });
     });
     if (f.separator.as_str(), f.other_char.as_str()) != (before.0.as_str(), before.1.as_str()) {
         f.guess_columns();
@@ -1281,44 +1287,47 @@ fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool {
         let changed = ui.add(field.update_while_editing(false)).labelled_by(name.id).changed();
         (changed && v != was).then_some(v)
     };
-    heading(ui, "Size");
-    egui::Grid::new("size_lengths").num_columns(4).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        if let Some(h) = length(ui, "Height:", f.height) {
-            f.set_height(h);
-        }
-        if let Some(w) = length(ui, "Width:", f.width) {
-            f.set_width(w);
-        }
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Size"), |ui| {
+        egui::Grid::new("size_lengths").num_columns(4).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            if let Some(h) = length(ui, "Height:", f.height) {
+                f.set_height(h);
+            }
+            if let Some(w) = length(ui, "Width:", f.width) {
+                f.set_width(w);
+            }
+            ui.end_row();
+        });
     });
-    heading(ui, "Scale");
-    let (sw, sh) = f.scale();
-    egui::Grid::new("size_scale").num_columns(4).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        if let Some(p) = percent(ui, "Height:", sh) {
-            f.set_scale_height(p);
-        }
-        if let Some(p) = percent(ui, "Width:", sw) {
-            f.set_scale_width(p);
-        }
-        ui.end_row();
+    crate::widgets::section(ui, tl!("Scale"), |ui| {
+        let (sw, sh) = f.scale();
+        egui::Grid::new("size_scale").num_columns(4).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
+            if let Some(p) = percent(ui, "Height:", sh) {
+                f.set_scale_height(p);
+            }
+            if let Some(p) = percent(ui, "Width:", sw) {
+                f.set_scale_width(p);
+            }
+            ui.end_row();
+        });
+        ui.checkbox(&mut f.lock, tl!("Lock aspect ratio"));
+        ui.add_enabled(f.original.is_some(), egui::Checkbox::new(&mut f.relative, tl!("Relative to original picture size")));
     });
-    ui.checkbox(&mut f.lock, tl!("Lock aspect ratio"));
-    ui.add_enabled(f.original.is_some(), egui::Checkbox::new(&mut f.relative, tl!("Relative to original picture size")));
     if let Some((w, h)) = f.uncropped {
-        heading(ui, "Original size");
-        ui.horizontal(|ui| {
-            ui.label(format!("{} {}", tl!("Height:"), crate::options::length(h)));
-            ui.add_space(12.0);
-            ui.label(format!("{} {}", tl!("Width:"), crate::options::length(w)));
-            if let Some((pw, ph)) = f.pixels {
+        crate::widgets::section(ui, tl!("Original size"), |ui| {
+            ui.horizontal(|ui| {
+                ui.label(format!("{} {}", tl!("Height:"), crate::options::length(h)));
                 ui.add_space(12.0);
-                let (pw, ph) = (pw.to_string(), ph.to_string());
-                ui.weak(crate::i18n::fmt(tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)]));
-            }
-            ui.add_space(12.0);
-            if ui.button(tl!("Reset")).clicked() {
-                f.reset();
-            }
+                ui.label(format!("{} {}", tl!("Width:"), crate::options::length(w)));
+                if let Some((pw, ph)) = f.pixels {
+                    ui.add_space(12.0);
+                    let (pw, ph) = (pw.to_string(), ph.to_string());
+                    ui.weak(crate::i18n::fmt(tl!("{width} × {height} pixels"), &[("width", &pw), ("height", &ph)]));
+                }
+                ui.add_space(12.0);
+                if ui.button(tl!("Reset")).clicked() {
+                    f.reset();
+                }
+            });
         });
     }
     let (ok, cancel) = buttons(ui, "OK", true);
@@ -1384,11 +1393,12 @@ fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumbersForm) -> b
             ui.selectable_value(&mut f.format, v.to_string(), l);
         }
     });
-    heading(ui, "Page numbering");
-    ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
-    ui.horizontal(|ui| {
-        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
-        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+    crate::widgets::section(ui, tl!("Page numbering"), |ui| {
+        ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
+        ui.horizontal(|ui| {
+            ui.radio_value(&mut f.cont, false, tl!("Start at:"));
+            ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+        });
     });
     let (ok, cancel) = buttons(ui, "OK", true);
     if ok {
