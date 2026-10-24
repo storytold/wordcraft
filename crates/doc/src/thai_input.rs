@@ -450,8 +450,8 @@ mod tests {
     #[test]
     fn nikhahit_sara_aa_combines_to_sara_am() {
         let nikhahit = '\u{0E4D}'; // ◌ํ
-        let sara_aa  = '\u{0E32}'; // า
-        let sara_am  = '\u{0E33}'; // ำ
+        let sara_aa = '\u{0E32}'; // า
+        let sara_am = '\u{0E33}'; // ำ
 
         // NIKHAHIT is classified as Diacritic so the TCB picks it up.
         assert_eq!(cls(nikhahit), ThaiCharClass::Diacritic);
@@ -463,12 +463,7 @@ mod tests {
         // "กํ" = ก(0,3) + ํ(3,3); caret at 6.
         let s = "กํ";
         match action(s, sara_aa) {
-            ThaiInputAction::Replace {
-                slot_offset: 3,
-                slot_bytes: 3,
-                cons_swap: None,
-                replacement: Some(r),
-            } if r == sara_am => {}
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) } if r == sara_am => {}
             other => panic!("expected Replace(NIKHAHIT→SARA_AM), got {other:?}"),
         }
 

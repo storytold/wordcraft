@@ -100,15 +100,9 @@ fn typing_options(s: &mut Session, text: &str) {
 /// Return the Thai input action for `ch` at the current caret position, or `None` if the
 /// character is non-Thai and needs no special handling (plain consonants, ASCII, etc.).
 fn thai_tcb_action(s: &Session, ch: char) -> Option<wordcraft_doc::thai_input::ThaiInputAction> {
-    use wordcraft_doc::thai_input::{
-        ThaiCharClass, thai_char_class, current_tcb, thai_input_action,
-    };
+    use wordcraft_doc::thai_input::{ThaiCharClass, current_tcb, thai_char_class, thai_input_action};
     match thai_char_class(ch) {
-        ThaiCharClass::UpperVowel
-        | ThaiCharClass::LowerVowel
-        | ThaiCharClass::Tone
-        | ThaiCharClass::Diacritic
-        | ThaiCharClass::LeadingVowel => {}
+        ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel | ThaiCharClass::Tone | ThaiCharClass::Diacritic | ThaiCharClass::LeadingVowel => {}
         // SARA_AA (า U+0E32) can combine with a preceding NIKHAHIT into SARA_AM.
         ThaiCharClass::Other if ch == '\u{0E32}' => {}
         _ => return None,
@@ -117,9 +111,7 @@ fn thai_tcb_action(s: &Session, ch: char) -> Option<wordcraft_doc::thai_input::T
     let para = s.doc.para_at(focus)?;
     let tcb = current_tcb(&para.text, focus.off);
     // Character immediately before the caret (may be outside the TCB, e.g. a leading vowel).
-    let prev_char = para.text.get(..focus.off)
-        .and_then(|s| s.char_indices().next_back())
-        .map(|(o, c)| (o, c));
+    let prev_char = para.text.get(..focus.off).and_then(|s| s.char_indices().next_back()).map(|(o, c)| (o, c));
     let action = thai_input_action(&tcb, ch, prev_char);
     // Return None for Accept on plain consonants / other pass-through so the caller just
     // falls through to the normal insert path — only return Some when action matters.
@@ -152,12 +144,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
                     wordcraft_doc::thai_input::ThaiInputAction::Reject => {
                         return sel_result(s);
                     }
-                    wordcraft_doc::thai_input::ThaiInputAction::Replace {
-                        slot_offset,
-                        slot_bytes,
-                        cons_swap,
-                        replacement,
-                    } => {
+                    wordcraft_doc::thai_input::ThaiInputAction::Replace { slot_offset, slot_bytes, cons_swap, replacement } => {
                         // Remember the original caret so we can restore it afterwards.
                         // All Thai chars are 3 UTF-8 bytes, so the formula:
                         //   new_caret = original_off - slot_bytes + new_char_bytes
@@ -168,12 +155,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
                         // 1. Optional same-size consonant form swap.
                         //    Must happen first: slot_offset was computed before this change,
                         //    but since it's same-size the slot byte offset is still valid.
-                        if let Some(wordcraft_doc::thai_input::ConsSwap {
-                            offset: co,
-                            old_bytes: cb,
-                            new_char: nc,
-                        }) = cons_swap
-                        {
+                        if let Some(wordcraft_doc::thai_input::ConsSwap { offset: co, old_bytes: cb, new_char: nc }) = cons_swap {
                             let a = Pos { off: co, ..s.sel.focus.clone() };
                             let b = Pos { off: co + cb, ..s.sel.focus.clone() };
                             s.sel = crate::Selection { anchor: a, focus: b };
@@ -201,9 +183,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
                         let insert_len = insert_text.len();
                         type_text(s, insert_text)?;
                         // 4. Restore caret to the original position (adjusted for size delta).
-                        let new_off = original_off
-                            .saturating_sub(slot_bytes)
-                            .saturating_add(insert_len);
+                        let new_off = original_off.saturating_sub(slot_bytes).saturating_add(insert_len);
                         let pos = Pos { off: new_off, ..s.sel.focus.clone() };
                         s.sel = crate::Selection { anchor: pos.clone(), focus: pos };
                         return sel_result(s);

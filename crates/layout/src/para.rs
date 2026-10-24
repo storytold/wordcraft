@@ -106,9 +106,7 @@ fn thai_short_tail(text: &str, face: &wordcraft_fonts::FaceRef) -> Option<String
     let has_f700 = face.covers('\u{F700}');
     let has_f70f = face.covers('\u{F70F}');
     // Fast path: skip if neither consonant is present or the face has neither PUA glyph.
-    if (!has_f700 && !has_f70f)
-        || (!text.contains('\u{0E10}') && !text.contains('\u{0E0D}'))
-    {
+    if (!has_f700 && !has_f70f) || (!text.contains('\u{0E10}') && !text.contains('\u{0E0D}')) {
         return None;
     }
     let mut out = String::with_capacity(text.len());
@@ -1067,8 +1065,7 @@ impl<'a> Builder<'a> {
                     if matches!(u32::from(dc), 0x0E00..=0x0E7F) {
                         !wordcraft_fonts::has_thai_short_tail_support(prim.get())
                     } else {
-                        wordcraft_fonts::fallback_rank(dc, &prim.get().family)
-                            > wordcraft_fonts::script_fallbacks(dc).len()
+                        wordcraft_fonts::fallback_rank(dc, &prim.get().family) > wordcraft_fonts::script_fallbacks(dc).len()
                     }
                 } =>
                 {

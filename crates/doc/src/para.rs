@@ -824,24 +824,24 @@ mod tests {
         let mixed = Paragraph::with_text("ไทยtestลาวtestไม่รวมKhmer", CharProps::default());
         assert_eq!(mixed.text.len(), 49);
         // Ctrl+Right (word_end)
-        assert_eq!(mixed.word_end(0),  9,  "ไทย→");
-        assert_eq!(mixed.word_end(9),  13, "first test→");
+        assert_eq!(mixed.word_end(0), 9, "ไทย→");
+        assert_eq!(mixed.word_end(9), 13, "first test→");
         assert_eq!(mixed.word_end(13), 22, "ลาว→");
         assert_eq!(mixed.word_end(22), 26, "second test→");
         assert_eq!(mixed.word_end(26), 35, "ไม่→ (ICU4X intra-run boundary)");
         assert_eq!(mixed.word_end(35), 44, "รวม→");
         assert_eq!(mixed.word_end(44), 49, "Khmer→end");
         // Ctrl+Left (word_start)
-        assert_eq!(mixed.word_start(9),  0,  "←ไทย");
-        assert_eq!(mixed.word_start(13), 9,  "←first test");
+        assert_eq!(mixed.word_start(9), 0, "←ไทย");
+        assert_eq!(mixed.word_start(13), 9, "←first test");
         assert_eq!(mixed.word_start(22), 13, "←ลาว");
         assert_eq!(mixed.word_start(26), 22, "←second test");
         assert_eq!(mixed.word_start(35), 26, "←ไม่");
         assert_eq!(mixed.word_start(44), 35, "←รวม");
         assert_eq!(mixed.word_start(49), 44, "←Khmer");
         // Double-click (word_at)
-        assert_eq!(mixed.word_at(3),  (0,  9),  "inside ไทย");
-        assert_eq!(mixed.word_at(9),  (9,  13), "on 't' after ไทย → Latin");
+        assert_eq!(mixed.word_at(3), (0, 9), "inside ไทย");
+        assert_eq!(mixed.word_at(9), (9, 13), "on 't' after ไทย → Latin");
         assert_eq!(mixed.word_at(13), (13, 22), "on 'ล'");
         assert_eq!(mixed.word_at(16), (13, 22), "inside ลาว");
         assert_eq!(mixed.word_at(26), (26, 35), "on 'ไ' of ไม่");

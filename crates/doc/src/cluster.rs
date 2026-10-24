@@ -196,20 +196,12 @@ fn is_thai_combining(c: char) -> bool {
 
 fn word_segmenter() -> &'static icu_segmenter::WordSegmenterBorrowed<'static> {
     static S: OnceLock<icu_segmenter::WordSegmenterBorrowed<'static>> = OnceLock::new();
-    S.get_or_init(|| {
-        icu_segmenter::WordSegmenter::new_auto(
-            icu_segmenter::options::WordBreakInvariantOptions::default(),
-        )
-    })
+    S.get_or_init(|| icu_segmenter::WordSegmenter::new_auto(icu_segmenter::options::WordBreakInvariantOptions::default()))
 }
 
 fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
     static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
-    S.get_or_init(|| {
-        icu_segmenter::LineSegmenter::new_dictionary(
-            icu_segmenter::options::LineBreakOptions::default(),
-        )
-    })
+    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
 }
 
 /// The byte range of the contiguous Thai/Lao script run that contains `off`, plus the
@@ -288,7 +280,9 @@ pub fn thai_word_at(text: &str, off: usize) -> (usize, usize) {
     let rel = off.saturating_sub(rs);
     let bounds: Vec<usize> = word_segmenter().segment_str(run).collect();
     // An exact boundary hit (other than the very start of the run) selects the word to the left.
-    if rel > 0 && let Ok(i) = bounds.binary_search(&rel) {
+    if rel > 0
+        && let Ok(i) = bounds.binary_search(&rel)
+    {
         let a = if i > 0 { bounds[i - 1] } else { 0 };
         return (rs + a, rs + rel);
     }
