@@ -36,6 +36,10 @@ js-sys = "0.3"
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = { workspace = true }
 
+[target.'cfg(unix)'.dependencies]
+# O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
+libc = { workspace = true }
+
 [dev-dependencies]
 encoding_rs = { workspace = true }
 zip = { workspace = true }

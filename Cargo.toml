@@ -73,6 +73,9 @@ hmac = "0.13"
 base64 = "0.22"
 getrandom = "0.3"
 zeroize = "1"
+# Unix open flags (O_NONBLOCK for the engine's checked file reads, #3666); already in the lock as a
+# dependency of other crates.
+libc = "0.2"
 
 # ui
 egui = "0.36"

@@ -4137,7 +4137,7 @@ fn opening_a_named_pipe_or_device_is_refused_without_blocking() {
     let got = rx.recv_timeout(std::time::Duration::from_secs(10));
     if got.is_err() {
         // Unblock the stuck reader so the thread ends, then fail.
-        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
     }
     let _ = std::fs::remove_dir_all(&dir);
     let [pipe, device] = got.expect("opening a named pipe blocked");
@@ -4166,7 +4166,7 @@ fn html_picture_that_is_a_named_pipe_is_skipped_without_blocking() {
     let got = rx.recv_timeout(std::time::Duration::from_secs(10));
     if got.is_err() {
         // Unblock the stuck reader so the thread ends, then fail.
-        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
     }
     let _ = std::fs::remove_dir_all(&dir);
     let doc = got.expect("opening the HTML file blocked on a named pipe").unwrap();
@@ -4196,13 +4196,99 @@ fn insert_picture_from_a_named_pipe_is_refused_without_blocking() {
     let got = rx.recv_timeout(std::time::Duration::from_secs(10));
     if got.is_err() {
         // Unblock the stuck reader so the thread ends, then fail.
-        let _ = std::fs::OpenOptions::new().write(true).open(&fifo);
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
     }
     let _ = std::fs::remove_dir_all(&dir);
     assert!(got.expect("reading a picture path blocked on a named pipe").is_err(), "a pipe is not a file to read");
     if std::path::Path::new("/dev/zero").exists() {
         assert!(crate::io::read_file("/dev/zero").is_err(), "a device is not a file to read");
     }
+}
+
+/// #3666: `read_file_capped` (fonts, citation sources, `read_file`) and `read_file_head` (the
+/// Word 2003 check on saving to an `.xml` path) read only a regular file. A named pipe must be
+/// refused, not opened: opening one blocks until a writer appears.
+#[cfg(unix)]
+#[test]
+fn file_head_and_capped_reads_refuse_a_named_pipe_without_blocking() {
+    let dir = scratch_dir("read-helpers-fifo");
+    let fifo = dir.join("pipe.xml");
+    let made = std::process::Command::new("mkfifo").arg(&fifo).status();
+    if !made.is_ok_and(|s| s.success()) {
+        let _ = std::fs::remove_dir_all(&dir);
+        eprintln!("mkfifo unavailable; skipping");
+        return;
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    let path = fifo.to_string_lossy().into_owned();
+    std::thread::spawn(move || {
+        let head = crate::io::read_file_head(&path, 64 * 1024).map(|_| ());
+        let capped = crate::io::read_file_capped(&path, 1 << 20, "font file").map(|_| ());
+        let _ = tx.send([head, capped]);
+    });
+    let got = rx.recv_timeout(std::time::Duration::from_secs(10));
+    if got.is_err() {
+        // Unblock the stuck reader (twice: each helper may be stuck in turn) so the thread ends, then
+        // fail. Non-blocking: with no reader left the open fails at once instead of hanging the test.
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
+        let _ = std::os::unix::fs::OpenOptionsExt::custom_flags(std::fs::OpenOptions::new().write(true), libc::O_NONBLOCK).open(&fifo);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+    let [head, capped] = got.expect("reading a named pipe blocked");
+    assert!(head.unwrap_err().contains("not a file"));
+    assert!(capped.unwrap_err().contains("not a file"));
+}
+
+/// #3666: a folder is not a file to read, whichever helper reads it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_head_and_capped_reads_refuse_a_folder() {
+    let dir = scratch_dir("read-helpers-dir");
+    let path = dir.to_string_lossy().into_owned();
+    let head = crate::io::read_file_head(&path, 64);
+    let capped = crate::io::read_file_capped(&path, 1 << 20, "font file");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(head.unwrap_err().contains("not a file"));
+    assert!(capped.unwrap_err().contains("not a file"));
+}
+
+/// #3666: `read_file_capped` reads a file of up to `max` bytes whole and refuses a larger one;
+/// `read_file_head` returns at most `max` bytes.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn file_capped_read_refuses_content_over_the_cap() {
+    let dir = scratch_dir("read-helpers-cap");
+    let file = dir.join("data.bin");
+    std::fs::write(&file, vec![7u8; 100]).unwrap();
+    let path = file.to_string_lossy().into_owned();
+    let exact = crate::io::read_file_capped(&path, 100, "file");
+    let over = crate::io::read_file_capped(&path, 99, "file");
+    let head = crate::io::read_file_head(&path, 10);
+    let whole = crate::io::read_file_head(&path, 1000);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(exact.unwrap().len(), 100);
+    assert!(over.unwrap_err().contains("larger than"));
+    assert_eq!(head.unwrap(), vec![7u8; 10]);
+    assert_eq!(whole.unwrap().len(), 100);
+}
+
+/// #3666: `read_regular_file_within` (Paste Special's copied picture file) reads a file of up to
+/// `limit` bytes whole and refuses one whose handle reports more, before reading any of it.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn regular_file_read_within_a_limit_refuses_a_larger_file() {
+    let dir = scratch_dir("read-within");
+    let file = dir.join("data.bin");
+    std::fs::write(&file, vec![7u8; 100]).unwrap();
+    let big = dir.join("big.bin");
+    std::fs::File::create(&big).unwrap().set_len(64 << 20).unwrap();
+    let exact = crate::io::read_regular_file_within(&file, 100);
+    let over = crate::io::read_regular_file_within(&file, 99);
+    let large = crate::io::read_regular_file_within(&big, 1 << 20);
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(exact.map(|b| b.len()), Some(100));
+    assert_eq!(over, None);
+    assert_eq!(large, None);
 }
 
 #[cfg(not(target_arch = "wasm32"))]
