@@ -408,6 +408,29 @@ pub fn font_entry_image(name: &str, ppp: f32) -> egui::ColorImage {
     egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.to_straight())
 }
 
+/// The Font dialog's sample: `text` with `props`, then `mark` (a "2" raised or
+/// lowered) when `vert` is set, drawn as the document draws text on `paper`.
+pub fn font_sample(
+    text: &str,
+    props: &CharProps,
+    mark: Option<wordcraft_doc::props::VertAlign>,
+    w: f32,
+    h: f32,
+    ppp: f32,
+    paper: wordcraft_doc::Rgb,
+) -> Option<egui::ColorImage> {
+    let mut p = Paragraph::with_text(text, props.clone());
+    if let Some(v) = mark {
+        let tail = CharProps { vert_align: Some(v), ..props.clone() };
+        p.text.push('2');
+        p.runs.push(wordcraft_doc::Run { len: 1, props: tail });
+    }
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+    snippet_blocks(&Document::new(), vec![Block::Para(p)], w, h, ppp, 2.0, Some(paper), false)
+}
+
 /// Lay out `para` (with `base`'s styles) in a `w`×`h` pt box and rasterise it.
 pub fn snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32, margin: f32) -> Option<egui::ColorImage> {
     snippet_blocks(base, vec![Block::Para(para)], w, h, ppp, margin, None, false)
@@ -1049,5 +1072,16 @@ mod tests {
             }
             assert_eq!(images, 1, "{theme:?}: the entry draws its rendered name");
         }
+    }
+
+    #[test]
+    fn font_sample_shows_small_caps_and_the_script_mark() {
+        let white = wordcraft_doc::Rgb(255, 255, 255);
+        let plain = CharProps { size: Some(20.0), ..Default::default() };
+        let draw = |p: &CharProps, mark| font_sample("AaBbYyZz", p, mark, 200.0, 40.0, 1.0, white).map(|i| i.pixels);
+        let small = CharProps { small_caps: Some(true), ..plain.clone() };
+        assert_ne!(draw(&plain, None), draw(&small, None), "small caps change the sample");
+        let sup = Some(wordcraft_doc::props::VertAlign::Superscript);
+        assert_ne!(draw(&plain, None), draw(&plain, sup), "the mark is drawn");
     }
 }
