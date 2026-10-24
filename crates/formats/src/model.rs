@@ -939,6 +939,9 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
 }
 
 fn media_ext(key: &str, data: &[u8]) -> String {
+    if wordcraft_svg::is_svg(data) {
+        return "svg".into();
+    }
     match image::guess_format(data) {
         Ok(image::ImageFormat::Png) => "png".into(),
         Ok(image::ImageFormat::Jpeg) => "jpeg".into(),
@@ -1497,6 +1500,12 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn svg_bytes_are_svg_whatever_the_media_key_says() {
+        let svg = br#"<svg xmlns="http://www.w3.org/2000/svg" width="4" height="4"/>"#;
+        assert_eq!(media_ext("media/image1.png", svg), "svg");
+    }
 
     #[test]
     fn percent_decode_requires_hex_digits() {

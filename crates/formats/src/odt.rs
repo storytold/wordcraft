@@ -231,9 +231,15 @@ impl Writer {
     }
 
     fn picture(&mut self, img: &model::Img) -> String {
-        let ext = if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() };
+        // An SVG picture is stored as a PNG of it (#1910), which every ODF consumer shows; one
+        // that doesn't read is kept as it is.
+        let png = if img.ext == "svg" { wordcraft_svg::fallback_png(&img.data).ok() } else { None };
+        let (ext, data) = match png {
+            Some(png) => ("png".to_string(), std::sync::Arc::new(png)),
+            None => (if img.ext == "jpeg" { "jpg".to_string() } else { img.ext.clone() }, img.data.clone()),
+        };
         let name = format!("Pictures/image{}.{}", self.pictures.len() + 1, ext);
-        self.pictures.push((name.clone(), img.data.clone(), mime_of(&img.ext).to_string()));
+        self.pictures.push((name.clone(), data, mime_of(&ext).to_string()));
         name
     }
 

@@ -2268,7 +2268,7 @@ impl WordApp {
             {
                 let path = f.path().to_string_lossy().to_string();
                 let lp = path.to_ascii_lowercase();
-                let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
+                let img = crate::paste_picture::is_picture_name(&lp);
                 let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
                 let _ = if img {
                     self.caret_after_placed_picture(placed_picture);
@@ -2572,7 +2572,7 @@ impl WordApp {
         let mut placed_picture = false;
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
-            let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lower.ends_with(e));
+            let img = crate::paste_picture::is_picture_name(&lower);
             // Any recipient file ends the pending picker request, so a later .txt drop opens normally.
             let asked = std::mem::take(&mut self.recipient_list_pending);
             let list = lower.ends_with(".csv") || lower.ends_with(".tsv") || (lower.ends_with(".txt") && asked);
@@ -8312,6 +8312,23 @@ mod tests {
         assert_eq!(object_count(h.state_mut()), 1);
         h.step();
         assert_eq!(object_count(h.state_mut()), 1, "once");
+    }
+
+    /// #1910: a dropped `.svg` file (any case) goes in as one SVG picture through the frame loop.
+    #[test]
+    fn a_dropped_svg_file_inserts_one_svg_picture() {
+        let mut a = app();
+        let q: Inbox = Inbox::default();
+        a.services.inbox = Some(q.clone());
+        let mut h = paste_harness(a);
+        let before = object_count(h.state_mut());
+        let svg = br##"<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"><rect width="10" height="10" fill="#ff0000"/></svg>"##;
+        q.lock().unwrap().push(("Logo.SVG".into(), svg.to_vec()));
+        h.step();
+        assert_eq!(object_count(h.state_mut()), before + 1);
+        let svgs: Vec<&String> = h.state().session.doc.media.iter().filter(|(_, b)| b.as_slice() == svg.as_slice()).map(|(k, _)| k).collect();
+        assert_eq!(svgs.len(), 1);
+        assert!(svgs[0].ends_with(".svg"), "{svgs:?}");
     }
 
     /// A real text field with focus (the Find box) takes the input: the picture is dropped.

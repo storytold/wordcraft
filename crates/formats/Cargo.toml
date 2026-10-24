@@ -11,6 +11,7 @@ workspace = true
 [dependencies]
 wordcraft-doc = { workspace = true }
 wordcraft-geom = { workspace = true }
+wordcraft-svg = { workspace = true }
 image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }

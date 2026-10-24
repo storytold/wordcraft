@@ -241,6 +241,35 @@ pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
     }
 }
 
+/// A picture file's natural size in points and the media extension it is stored under: pixels
+/// at 96 ppi, a metafile's own frame (WMF, EMF: #802), or an SVG's size (#1910).
+pub(crate) fn picture_size(bytes: &[u8]) -> Result<(f32, f32, &'static str), CmdError> {
+    if let Some((pw, ph)) = wordcraft_render::image_size(bytes) {
+        Ok((pw as f32 * 0.75, ph as f32 * 0.75, image_ext(bytes)))
+    } else if let Some(size) = wordcraft_render::metafile_size(bytes) {
+        Ok(size)
+    } else if let Some((w, h)) = wordcraft_svg::natural_size(bytes) {
+        Ok((w, h, "svg"))
+    } else {
+        Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF, SVG)".into()))
+    }
+}
+
+/// Store a picture's bytes as media; an SVG gets its PNG fallback made now and kept with it, so
+/// saves write it without drawing it again (#1910). An SVG the document already has keeps its
+/// fallback.
+pub(crate) fn add_picture_media(s: &mut Session, bytes: Vec<u8>, ext: &str) -> String {
+    let key = s.doc.add_media(bytes, ext);
+    if ext == "svg"
+        && !s.doc.svg_fallbacks.contains_key(&key)
+        && let Some(png) = s.doc.media.get(&key).and_then(|b| wordcraft_svg::fallback_png(b).ok())
+    {
+        let png_key = s.doc.add_media(png, "png");
+        s.doc.svg_fallbacks.insert(key.clone(), png_key);
+    }
+    key
+}
+
 /// Insert an encoded image at the selection as an inline picture, `width` points wide (default:
 /// its natural size at 96 ppi), never wider than the text column. The caret ends after it, so a
 /// script's next typing doesn't replace it (#965); Picture Format commands still act on it. The
@@ -249,16 +278,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
-    // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802).
-    let (natural_w, natural_h, ext) = if let Some((pw, ph)) = wordcraft_render::image_size(&bytes) {
-        let ext = image_ext(&bytes);
-        (pw as f32 * 0.75, ph as f32 * 0.75, ext)
-    } else if let Some(size) = wordcraft_render::metafile_size(&bytes) {
-        size
-    } else {
-        return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
-    };
-    let key = s.doc.add_media(bytes, ext);
+    let (natural_w, natural_h, ext) = picture_size(&bytes)?;
+    let key = add_picture_media(s, bytes, ext);
     // Fitted to the text width.
     let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let (mut w, mut h) = (natural_w, natural_h);

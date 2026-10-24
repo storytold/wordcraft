@@ -997,7 +997,8 @@ impl Writer<'_> {
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, .. } = o else { return };
-        let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+        let svg_fallback = self.svg_fallback(media);
+        let rid = rels.add(rt::IMAGE, &format!("media/{}", svg_fallback.as_deref().unwrap_or(file)), false);
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
@@ -1007,7 +1008,19 @@ impl Writer<'_> {
         w.close("pic:cNvPicPr");
         w.close("pic:nvPicPr");
         w.open("pic:blipFill", &[]);
-        w.empty("a:blip", &[("r:embed", &rid)]);
+        if svg_fallback.is_some() {
+            // The blip is the PNG fallback; the SVG rides in Word's extension ([MS-ODRAWXML]).
+            let svg_rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+            w.open("a:blip", &[("r:embed", &rid)]);
+            w.open("a:extLst", &[]);
+            w.open("a:ext", &[("uri", crate::xml::SVG_BLIP_EXT)]);
+            w.empty("asvg:svgBlip", &[("xmlns:asvg", crate::xml::SVG_BLIP_NS), ("r:embed", &svg_rid)]);
+            w.close("a:ext");
+            w.close("a:extLst");
+            w.close("a:blip");
+        } else {
+            w.empty("a:blip", &[("r:embed", &rid)]);
+        }
         if crop.iter().any(|c| *c > 0.0) {
             let c = |v: f32| n((wordcraft_geom::finite(v).clamp(0.0, 1.0) * 100_000.0).round() as i64);
             w.empty("a:srcRect", &[("l", &c(crop[0])), ("t", &c(crop[1])), ("r", &c(crop[2])), ("b", &c(crop[3]))]);

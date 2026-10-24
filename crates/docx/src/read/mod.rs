@@ -62,6 +62,8 @@ pub(crate) struct Reader<'p> {
     /// Move ranges (`w:moveFromRangeStart` …) seen so far.
     pub moves: MoveCtx,
     media_by_path: HashMap<String, String>,
+    /// Package paths checked as SVG pictures: whether each reads.
+    svg_by_path: HashMap<String, bool>,
     hf_by_path: HashMap<String, u32>,
     /// Header/footer parts being read right now (see [`MAX_HF_DEPTH`]).
     hf_depth: usize,
@@ -145,6 +147,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         revs: HashMap::new(),
         moves: MoveCtx::default(),
         media_by_path: HashMap::new(),
+        svg_by_path: HashMap::new(),
         hf_by_path: HashMap::new(),
         hf_depth: 0,
         footnotes: HashMap::new(),
@@ -718,6 +721,34 @@ impl Reader<'_> {
         self.doc.revisions.push(Revision { kind, author, date, move_name });
         self.revs.insert(key, i);
         i
+    }
+
+    /// [`Self::media_for`] for a relationship that must be a readable SVG picture; None (and
+    /// nothing loaded) otherwise.
+    pub fn svg_media_for(&mut self, rels: &Rels, id: &str) -> Option<String> {
+        let rel = rels.by_id(id)?;
+        if rel.external {
+            return None;
+        }
+        // Checked once per part, even when an ordinary picture loaded it first.
+        let ok = match self.svg_by_path.get(&rel.target) {
+            Some(ok) => *ok,
+            None => {
+                let ok = match wordcraft_svg::parse(self.pkg.get(&rel.target)?) {
+                    Ok(_) => true,
+                    Err(e) => {
+                        log::warn!("SVG picture `{}` can't be read ({e}); its PNG fallback is used", rel.target);
+                        false
+                    }
+                };
+                self.svg_by_path.insert(rel.target.clone(), ok);
+                ok
+            }
+        };
+        if !ok {
+            return None;
+        }
+        self.media_for(rels, id)
     }
 
     /// Media key for an image relationship (loads the bytes once).

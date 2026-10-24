@@ -26,6 +26,7 @@ mod section_page_number_type;
 mod section_text_direction;
 mod section_valign;
 mod settings_merge;
+mod svg_pictures;
 mod text_boxes;
 mod toc_ranges;
 mod vml_shapes;
