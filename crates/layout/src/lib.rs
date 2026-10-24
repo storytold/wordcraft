@@ -1358,11 +1358,11 @@ fn layout_box(
                     Some(f) => {
                         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
                         let (r, area) = box_float_table_rect(frame, width, y, &tl, &f, legacy, &float_tables);
-                        excl.push((area, false, None, WrapText::BothSides));
+                        excl.push((area, false, None, WrapText::BothSides, true));
                         float_tables.push(area);
                         table_areas.push(area);
                         if f.v_rel == Anchor::Page {
-                            page_table_wraps.push((area, false, None, WrapText::BothSides));
+                            page_table_wraps.push((area, false, None, WrapText::BothSides, true));
                         }
                         (r.x, r.y)
                     }
@@ -3097,8 +3097,9 @@ fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<F
 }
 
 /// An area text keeps clear of: its bounds, whether text may only go above and below it, and
-/// (Tight and Through wrapping) the outline text follows inside it, and the sides text may go on.
-type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText);
+/// (Tight and Through wrapping) the outline text follows inside it, the sides text may go on,
+/// and whether it comes from a floating table (inclusive line-bottom contact, #3977).
+type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText, bool);
 
 /// Wrap areas a page starts with (#2048): by page index, the floating objects (block, object
 /// index) placed above the top of their anchor paragraph, with text before it on the page, and
@@ -3111,14 +3112,15 @@ type EarlyFloats = HashMap<usize, Vec<(usize, usize, WrapArea)>>;
 /// out before it ([`settle_early`]).
 const MAX_REWRAP_PASSES: usize = 3;
 
-/// Whether the text kept clear of `seed` is kept clear of `area` too: the same wrap side, `area`
-/// inside `seed`, and no outline on `seed` other than `area`'s own in the same place.
+/// Whether the text kept clear of `seed` is kept clear of `area` too: the same table-contact
+/// rule and wrap side, `area` inside `seed`, and no outline on `seed` other than `area`'s own
+/// in the same place.
 fn covers(seed: &WrapArea, area: &WrapArea) -> bool {
     let (s, r) = (seed.0, area.0);
     let inside = r.x >= s.x - 0.5 && r.y >= s.y - 0.5 && r.right() <= s.right() + 0.5 && r.bottom() <= s.bottom() + 0.5;
     let same_place = (r.x - s.x).abs() < 0.5 && (r.y - s.y).abs() < 0.5 && (r.w - s.w).abs() < 0.5 && (r.h - s.h).abs() < 0.5;
     let outline = seed.2.is_none() || (same_place && seed.2 == area.2);
-    (seed.3 == area.3 || seed.1) && (seed.1 || !area.1) && inside && outline
+    seed.4 == area.4 && (seed.3 == area.3 || seed.1) && (seed.1 || !area.1) && inside && outline
 }
 
 /// In a pass no other follows ([`MAX_REWRAP_PASSES`]), a float at `r` with wrap area `area`
@@ -3169,7 +3171,7 @@ fn merge_early(early: &mut EarlyFloats, found: EarlyFloats) {
             match have.iter_mut().find(|(eb, ek, _)| (*eb, *ek) == (b, k)) {
                 Some((_, _, seed)) if !covers(seed, &area) => {
                     let beside = seed.3 == area.3 && !seed.1 && !area.1;
-                    *seed = (seed.0.union(&area.0), !beside, None, area.3);
+                    *seed = (seed.0.union(&area.0), !beside, None, area.3, area.4);
                 }
                 Some(_) => {}
                 None => have.push((b, k, area)),
@@ -3189,19 +3191,19 @@ fn wrap_area(r: Rect, float: &Float, outline: Option<&[(f32, f32)]>) -> Option<W
     if matches!(float.wrap, Wrap::Tight | Wrap::Through)
         && let Some((area, c)) = outline.and_then(|o| contour::contour_area(r, float, o))
     {
-        return Some((area, false, Some(Arc::new(c)), float.wrap_text));
+        return Some((area, false, Some(Arc::new(c)), float.wrap_text, false));
     }
     let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
     let (side, top, bottom) = (d(float.dist), d(float.dist_top), d(float.dist_bottom));
     // A rotated object keeps text clear of its rotated bounds.
     let r = float.spin().bounds(r);
-    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text))
+    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text, false))
 }
 
 /// Wrap areas relative to a paragraph whose column starts at `x0` and whose top is `y0`.
 fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
     excl.iter()
-        .map(|(r, tb, c, side)| para::Exclusion {
+        .map(|(r, tb, c, side, table)| para::Exclusion {
             top: r.y - y0,
             bottom: r.bottom() - y0,
             left: r.x - x0,
@@ -3209,6 +3211,7 @@ fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
             top_bottom: *tb,
             contour: c.clone(),
             side: *side,
+            table: *table,
         })
         .filter(|e| e.bottom > 0.0)
         .collect()
@@ -4599,7 +4602,7 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pg.float_tables.push(Path::top(block));
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None, WrapText::BothSides));
+        pb.excl.push((area, false, None, WrapText::BothSides, true));
         pb.float_tables.push(area);
         return;
     }
@@ -4915,6 +4918,8 @@ mod tests_numeral;
 mod tests_pages;
 #[cfg(test)]
 mod tests_styleref;
+#[cfg(test)]
+mod tests_table_contact;
 #[cfg(test)]
 mod tests_textbox;
 #[cfg(test)]
