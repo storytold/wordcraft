@@ -968,7 +968,8 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
         page_break: p.props.page_break_before.unwrap_or(false),
         keep_next: p.props.keep_next.unwrap_or(false),
         inlines: Vec::new(),
-        spacing: Spacing::default(),
+        // The indents are the paragraph's shape, carried out to whichever format is written.
+        spacing: Spacing { left: p.props.indent_left, right: p.props.indent_right, first: p.props.indent_first, ..Spacing::default() },
         borders,
         section: None,
         mark_ins: None,
@@ -999,7 +1000,12 @@ fn flow_paras_in(doc: &Document, p: &Paragraph, tracked: bool) -> Vec<Para> {
                         page_break: true,
                         keep_next: p.props.keep_next.unwrap_or(false),
                         inlines: Vec::new(),
-                        spacing: Spacing::default(),
+                        spacing: Spacing {
+                            left: p.props.indent_left,
+                            right: p.props.indent_right,
+                            first: p.props.indent_first,
+                            ..Spacing::default()
+                        },
                         borders,
                         section: None,
                         mark_ins: None,

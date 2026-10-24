@@ -203,6 +203,13 @@ impl Writer {
             Some(Align::Left) => props.push_str(" fo:text-align=\"start\""),
             None => {}
         }
+        // The paragraph's box and first line, the indents the import reads (ODF 1.3 §17.19), so
+        // a round trip through ODT leaves the text where it was.
+        for (attr, v) in [("fo:margin-left", p.spacing.left), ("fo:margin-right", p.spacing.right), ("fo:text-indent", p.spacing.first)] {
+            if let Some(v) = v {
+                props.push_str(&format!(" {attr}=\"{}\"", pt(v)));
+            }
+        }
         // The master page starts the page itself: no page break besides.
         if p.page_break && start.is_none() {
             props.push_str(" fo:break-before=\"page\"");
@@ -1066,6 +1073,9 @@ struct StyleInfo {
     auto: bool,
     fmt: FmtDelta,
     align: Option<Align>,
+    /// `fo:margin-left`, `fo:margin-right` and `fo:text-indent` of the paragraph's box and
+    /// first line (ODF 1.3 §17.19), in points; a negative `first` hangs the first line out.
+    spacing: model::Spacing,
     page_break: bool,
     /// `fo:keep-with-next`: `Some(true)` for "always", `Some(false)` for "auto".
     keep_next: Option<bool>,
@@ -1391,6 +1401,17 @@ impl Styles {
                             Some("auto") => s.keep_next = Some(false),
                             _ => {}
                         }
+                        // The paragraph's box and its first line, in points (ODF 1.3 §17.19): a
+                        // margin pushes the paragraph in, a text indent pushes the first line
+                        // in after it, and a negative text indent hangs the first line out.
+                        // Nothing past the widest page (22in) is a document's own.
+                        for (attr, slot) in [
+                            ("fo:margin-left", &mut s.spacing.left),
+                            ("fo:margin-right", &mut s.spacing.right),
+                            ("fo:text-indent", &mut s.spacing.first),
+                        ] {
+                            *slot = get(&a, attr).and_then(length).filter(|v| v.abs() <= 1584.0);
+                        }
                         if let Some(v) = get(&a, "style:page-number") {
                             s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
                         }
@@ -1508,7 +1529,7 @@ impl Styles {
     /// the style that gives the paragraph its kind and that style's ancestors: their formatting
     /// is the kind's own look (a heading's size and colour), not direct formatting. `Standard`,
     /// the default paragraph style, holds document defaults and is left out too.
-    fn para(&self, name: &str) -> (Kind, Option<Align>, bool, bool, bool, Fmt) {
+    fn para(&self, name: &str) -> (Kind, Option<Align>, model::Spacing, bool, bool, bool, Fmt) {
         let chain = self.chain(name);
         let mut kind = Kind::Normal;
         let mut kind_at = chain.len();
@@ -1537,6 +1558,14 @@ impl Styles {
             kind_at = chain.len();
         }
         let align = chain.iter().find_map(|(_, s)| s.align);
+        // The indents follow the chain like the alignment: they are the paragraph's shape, not
+        // the look of the kind style that gives it its place in the document.
+        let spacing = model::Spacing {
+            left: chain.iter().find_map(|(_, s)| s.spacing.left),
+            right: chain.iter().find_map(|(_, s)| s.spacing.right),
+            first: chain.iter().find_map(|(_, s)| s.spacing.first),
+            ..model::Spacing::default()
+        };
         let pb = chain.iter().take_while(|(_, s)| s.auto).any(|(_, s)| s.page_break);
         let rule = chain.iter().any(|(_, s)| s.border_bottom);
         let mut f = Fmt::default();
@@ -1545,7 +1574,7 @@ impl Styles {
         }
         // Like the text formatting, the kind style's own `fo:keep-with-next` (a heading's) is the kind's look, not direct formatting.
         let keep_next = chain.iter().take(kind_at).find_map(|(_, s)| s.keep_next).unwrap_or(false);
-        (kind, align, pb, rule, keep_next, f)
+        (kind, align, spacing, pb, rule, keep_next, f)
     }
 }
 
@@ -1791,8 +1820,8 @@ impl Body<'_> {
 
     fn start_para(&mut self, style: Option<&str>, heading: Option<u8>) {
         self.end_para();
-        let (mut kind, align, mut pb, rule, keep_next, base) =
-            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, false, false, false, Fmt::default()));
+        let (mut kind, align, spacing, mut pb, rule, keep_next, base) =
+            style.map(|s| self.styles.para(s)).unwrap_or((Kind::Normal, None, model::Spacing::default(), false, false, false, Fmt::default()));
         // The section break starts the new page; no page break besides.
         if let Some(next) = style.and_then(|s| self.page_section(s))
             && self.break_section(next)
@@ -1802,7 +1831,7 @@ impl Body<'_> {
         if let Some(h) = heading {
             kind = Kind::Heading(h.clamp(1, 6));
         }
-        let mut p = Para { kind, align, page_break: pb, keep_next, ..Default::default() };
+        let mut p = Para { kind, align, spacing, page_break: pb, keep_next, ..Default::default() };
         if rule && kind == Kind::Normal {
             p.kind = Kind::Rule;
         }
@@ -3488,6 +3517,57 @@ mod tests {
         assert_eq!(flags(&doc), [Some(true), None, None]);
         let again = import(&export(&doc).unwrap()).unwrap();
         assert_eq!(flags(&again), [Some(true), None, None]);
+    }
+
+    #[test]
+    fn paragraph_indents_survive_import_and_export() {
+        // #2542: `fo:text-indent` and `fo:margin-left`/`fo:margin-right` are a paragraph's
+        // first-line and box indents (ODF 1.3 §17.19). They were read as nothing, so an opened
+        // ODT lined every paragraph up at the margin whatever its own styles said, and a save
+        // dropped the indents of a document that came in with them.
+        let cm = |n: f32| n * 72.0 / 2.54;
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>
+            <style:style style:name="First" style:family="paragraph"><style:paragraph-properties fo:text-indent="3cm"/></style:style>
+            <style:style style:name="Boxed" style:family="paragraph"><style:paragraph-properties fo:margin-left="4.001cm" fo:margin-right="1cm"/></style:style>
+            <style:style style:name="Hanging" style:family="paragraph"><style:paragraph-properties fo:text-indent="-18pt" fo:margin-left="72pt"/></style:style>
+            </office:automatic-styles><office:body><office:text>
+            <text:p text:style-name="First">First line</text:p><text:p text:style-name="Boxed">Boxed</text:p>
+            <text:p text:style-name="Hanging">Hanging</text:p><text:p>Plain</text:p>
+            </office:text></office:body></office:document-content>"#
+        );
+        // (indent_left, indent_right, indent_first) per paragraph, in points.
+        let want: [(Option<f32>, Option<f32>, Option<f32>); 4] =
+            [(None, None, Some(cm(3.0))), (Some(cm(4.001)), Some(cm(1.0)), None), (Some(72.0), None, Some(-18.0)), (None, None, None)];
+        let got = |d: &Document| -> Vec<(Option<f32>, Option<f32>, Option<f32>)> {
+            d.body.iter().filter_map(|b| b.as_para()).map(|p| (p.props.indent_left, p.props.indent_right, p.props.indent_first)).collect()
+        };
+        let doc = import(&package(&content, None)).unwrap();
+        let g = got(&doc);
+        assert_eq!(g.len(), 4, "every paragraph is kept");
+        for (i, w) in want.iter().enumerate() {
+            let have = g[i];
+            for (name, want, have) in [("left", w.0, have.0), ("right", w.1, have.1), ("first", w.2, have.2)] {
+                match (want, have) {
+                    (Some(w), Some(h)) => assert!((w - h).abs() < 0.05, "paragraph {i} indent_{name}: want {w}pt, got {h}pt"),
+                    (None, None) => {}
+                    (w, h) => panic!("paragraph {i} indent_{name}: want {w:?}, got {h:?}"),
+                }
+            }
+        }
+        // The ODT writer rounds points to two decimals, so the way back out is compared as
+        // closely as the file format itself holds.
+        let back = got(&import(&export(&doc).unwrap()).unwrap());
+        assert_eq!(back.len(), g.len(), "every paragraph is kept on the way out");
+        for (i, (back, have)) in back.iter().zip(&g).enumerate() {
+            for (name, back, have) in [("left", back.0, have.0), ("right", back.1, have.1), ("first", back.2, have.2)] {
+                match (back, have) {
+                    (Some(b), Some(h)) => assert!((b - h).abs() < 0.05, "paragraph {i} indent_{name} after a round trip: want {h}pt, got {b}pt"),
+                    (None, None) => {}
+                    (b, h) => panic!("paragraph {i} indent_{name} after a round trip: want {h:?}, got {b:?}"),
+                }
+            }
+        }
     }
 
     // --- Tracked changes (ODF 1.3 Part 3 §5.5) -------------------------------------------------
