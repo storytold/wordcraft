@@ -1878,7 +1878,7 @@ impl Reader {
         self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
-        if self.st.dest == Dest::Skip && !(self.in_info() && matches!(w, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim")) {
+        if self.st.dest == Dest::Skip && !(self.in_info() && matches!(w, "title" | "author" | "subject" | "keywords" | "doccomm" | "comment" | "creatim")) {
             if self.in_creatim {
                 let v = pv.clamp(0, 9999) as u32;
                 let c = self.created.get_or_insert((0, 1, 1, 0, 0));
@@ -1903,7 +1903,7 @@ impl Reader {
             "author" if self.in_info() => Some(Dest::Info(2)),
             "subject" if self.in_info() => Some(Dest::Info(3)),
             "keywords" if self.in_info() => Some(Dest::Info(4)),
-            "doccomm" if self.in_info() => Some(Dest::Info(5)),
+            "doccomm" | "comment" if self.in_info() => Some(Dest::Info(5)),
             "listtable" => Some(Dest::ListTable),
             "revtbl" => Some(Dest::RevTbl),
             "oldcprops" => Some(Dest::OldProps(false)),
@@ -1928,7 +1928,7 @@ impl Reader {
             }
             "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf" | "footnote" | "annotation" | "pntext"
             | "listtext" | "object" | "nonshppict" | "xe" | "tc" | "txe" | "private" | "bkmkend" | "atnid" | "atnauthor" | "comment" | "shpinst"
-            | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
+            | "do" | "operator" | "company" | "manager" | "category" | "hlinkbase" | "revtim" | "revtime" | "printim" | "buptim" | "version" | "nofpages"
             | "nofwords" | "nofchars" | "edmins" | "vern" | "themedata" | "colorschememapping" | "latentstyles" | "datastore" | "xmlnstbl"
             | "rsidtbl" | "generator" | "mmathPr" | "pgdsctbl" | "filetbl" | "listpicture" | "userprops" | "docvar" | "objdata" | "fontemb"
             | "fontfile" | "panose" | "falt" | "mhtmltag" | "htmltag" | "pnseclvl" | "background" | "sp" | "pn" | "pgptbl" => Some(Dest::Skip),
@@ -2163,6 +2163,7 @@ impl Reader {
                 self.st.rev = RevSt::default();
                 self.st.chg_c = FmtRevSt::default();
                 self.st.hidden = false;
+                self.st.cp = None;
             }
             "pard" => {
                 let field = self.st.field;
@@ -2184,11 +2185,12 @@ impl Reader {
             "prdate" => self.st.chg_p.date = pv as u32,
             "b" => self.st.fmt.bold = on,
             "i" => self.st.fmt.italic = on,
-            "ul" | "uld" | "uldash" | "uldashd" | "uldashdd" | "uldb" | "ulth" | "ulw" | "ulwave" | "ulhwave" | "ulldash" | "ulthd" => {
+            "ul" | "uld" | "uldash" | "uldashd" | "uldashdd" | "uldb" | "ulth" | "ulw" | "ulwave" | "ulhwave" | "ulldash" | "ulthd"
+            | "ulhair" | "ulthdash" | "ulthdashd" | "ulthdashdd" | "ulthldash" | "ululdbwave" | "ulwavy" => {
                 self.st.fmt.underline = on
             }
             "ulnone" => self.st.fmt.underline = false,
-            "strike" | "striked" => self.st.fmt.strike = on,
+            "strike" | "striked" | "strikedl" => self.st.fmt.strike = on,
             "super" | "up" => {
                 self.st.fmt.sup = on;
                 self.st.fmt.sub = false;
@@ -4396,5 +4398,34 @@ mod tests {
         assert!(exported.contains("\\clvertalt"));
         assert!(exported.contains("\\clvertalc"));
         assert!(exported.contains("\\clvertalb"));
+    }
+
+    #[test]
+    fn test_rtf_extended_control_words_and_state_reset() {
+        // 1. \comment in \info
+        let rtf_comment = br"{\rtf1\ansi{\info{\title Test}{\comment Important document notes}}Text\par}";
+        let flow = parse(rtf_comment).unwrap();
+        assert_eq!(flow.meta.title, "Test");
+        assert_eq!(flow.meta.description, "Important document notes");
+
+        // 2. \column break
+        let rtf_col = br"{\rtf1\ansi col1\column col2\par}";
+        let flow_col = parse(rtf_col).unwrap();
+        let FBlock::Para(p) = &flow_col.blocks[0] else { panic!("expected para") };
+        assert_eq!(p.inlines[0], Inline::Text("col1\u{000E}col2".into(), Fmt::default()));
+
+        // 3. \strikedl (double strikethrough) and \ulhair / \ulwavy
+        let rtf_strike = br"{\rtf1\ansi {\strikedl strike} and {\ulhair under}\par}";
+        let flow_strike = parse(rtf_strike).unwrap();
+        let FBlock::Para(p) = &flow_strike.blocks[0] else { panic!("expected para") };
+        assert!(matches!(&p.inlines[0], Inline::Text(t, f) if t == "strike" && f.strike));
+        assert!(matches!(&p.inlines[2], Inline::Text(t, f) if t == "under" && f.underline));
+
+        // 4. \plain resets code page
+        let rtf_plain = br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fcharset204 Arial CYR;}}\f1 \'c4\'e0 \plain caf\'e9\par}";
+        let flow_plain = parse(rtf_plain).unwrap();
+        let FBlock::Para(p) = &flow_plain.blocks[0] else { panic!("expected para") };
+        let full_text: String = p.inlines.iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t.as_str()) } else { None }).collect();
+        assert_eq!(full_text, "Да café");
     }
 }
