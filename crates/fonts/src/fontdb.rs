@@ -7,7 +7,7 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use kurbo::BezPath;
 use skrifa::instance::{Location, LocationRef, Size};
-use skrifa::outline::{DrawSettings, Engine, HintingInstance, HintingOptions, OutlinePen, Target};
+use skrifa::outline::{DrawSettings, Engine, GlyphStyles, HintingInstance, HintingOptions, OutlineGlyphFormat, OutlinePen, SmoothMode, Target};
 use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
@@ -39,6 +39,8 @@ static BUNDLED: &[&[u8]] = &[
     include_bytes!("../../../assets/fonts/Inter-SemiBold.ttf"),
     include_bytes!("../../../assets/fonts/JetBrainsMono-Regular.ttf"),
 ];
+
+static GLOBAL: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
 
 #[derive(Clone)]
 enum FontBytes {
@@ -88,6 +90,8 @@ pub struct FontFace {
     bmp: std::sync::OnceLock<Box<[u64]>>,
     // Some legacy CJK fonts assemble their contours with TrueType instructions.
     outline_hinter: std::sync::OnceLock<Option<HintingInstance>>,
+    /// The autohinter's analysis of the font for screen hinting, made once for every size.
+    glyph_styles: std::sync::OnceLock<GlyphStyles>,
 }
 
 /// A cheap `Copy` handle to a face. Faces are never unloaded, so the handle lives for the rest of
@@ -206,6 +210,43 @@ impl FontFace {
         }
         pen.0
     }
+    /// Glyph `gid`'s outline hinted for screen text at `ppem` device pixels per em, in device
+    /// pixels, y-down (flipped), or `None` when the face can't be hinted. The hinting is light,
+    /// as FreeType's `hintslight`: horizontal edges (baseline, x-height, cap height) move onto
+    /// whole pixels, nothing moves sideways, so advances and layout stay as they are.
+    fn hinted_glyph_outline(&self, gid: u32, hinter: &HintingInstance) -> Option<BezPath> {
+        let f = self.skrifa()?;
+        let g = f.outline_glyphs().get(GlyphId::new(gid))?;
+        let mut pen = FlipPen(BezPath::new());
+        g.draw(DrawSettings::hinted(hinter, false), &mut pen).map_err(|e| log::warn!("Cannot hint glyph {gid} in {}: {e}", self.family)).ok()?;
+        Some(pen.0)
+    }
+
+    /// A light hinting instance for `ppem` device pixels per em, with the engine FreeType's light
+    /// hinting picks: the autohinter for TrueType outlines (their own instructions are ignored;
+    /// measured against Firefox on Linux, the autohinter matches its rows of pixels and the
+    /// TrueType instructions don't), the font's own hints for PostScript (CFF) outlines, and for
+    /// fonts whose glyphs need their instructions to be assembled at all their instructions with
+    /// the monochrome target, as skrifa requires for them.
+    fn screen_hinter(&self, ppem: f32) -> Option<HintingInstance> {
+        let f = self.skrifa()?;
+        let outlines = f.outline_glyphs();
+        let light = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
+        let (engine, target) = if outlines.require_interpreter() {
+            // FreeType's "tricky" fonts (old CJK fonts that assemble glyphs with their
+            // instructions): skrifa asks for the interpreter with the monochrome target, under
+            // which the instructions may move points sideways, or glyphs come apart.
+            (Engine::Interpreter, Target::Mono)
+        } else if outlines.format() == Some(OutlineGlyphFormat::Glyf) {
+            (Engine::Auto(Some(self.glyph_styles.get_or_init(|| GlyphStyles::new(&outlines)).clone())), light)
+        } else {
+            (Engine::Interpreter, light)
+        };
+        HintingInstance::new(&outlines, Size::new(ppem), self.location(), HintingOptions { engine, target })
+            .map_err(|e| log::warn!("Cannot hint {} at {ppem} px: {e}", self.family))
+            .ok()
+    }
+
     /// Is `family` this face's typographic, legacy, full or PostScript name?
     pub fn named(&self, family: &str) -> bool {
         self.family.eq_ignore_ascii_case(family)
@@ -332,6 +373,10 @@ struct CatalogEntry {
 pub struct FontDb {
     faces: RwLock<Vec<Arc<FontFace>>>,
     outlines: Mutex<HashMap<(u32, u32), Arc<BezPath>>>,
+    /// Screen-hinted outlines per (face, glyph, ppem bits); `None` where the face can't be hinted.
+    hinted: Mutex<HashMap<(u32, u32, u32), Option<Arc<BezPath>>>>,
+    /// Light hinting instances per (face, ppem bits); `None` where the face can't be hinted.
+    hinters: Mutex<HashMap<(u32, u32), Option<Arc<HintingInstance>>>>,
     /// Fallback faces found per (character, excluded face), valid while the face count is the
     /// one stored (faces are only ever added). Layout asks once per uncovered character, and the
     /// search sorts every loaded face, so without this text in a script the requested font lacks
@@ -615,6 +660,11 @@ const FALLBACK_CACHE_MAX: usize = 20_000;
 
 static NEXT_ID: AtomicU32 = AtomicU32::new(1);
 const OUTLINE_CACHE_MAX: usize = 50_000;
+/// Hinting instances kept (one per face and text size on screen).
+const HINTER_CACHE_MAX: usize = 256;
+/// Sizes hinted, in device pixels per em: below, text is too small to read anyway; above, the
+/// half-pixel hinting moves is invisible (and each size would cost a cache entry).
+const HINT_PPEM: std::ops::RangeInclusive<f32> = 4.0..=96.0;
 
 fn name(font: &skrifa::FontRef<'_>, ids: &[StringId]) -> Option<String> {
     ids.iter().find_map(|id| font.localized_strings(*id).english_or_first().map(|s| s.to_string()).filter(|s| !s.is_empty()))
@@ -924,6 +974,7 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         index,
         bmp: std::sync::OnceLock::new(),
         outline_hinter: std::sync::OnceLock::new(),
+        glyph_styles: std::sync::OnceLock::new(),
     })
 }
 
@@ -982,10 +1033,14 @@ impl FontDb {
     /// Arabic, so Arabic and Persian text draws without system fonts (#1652) (all empty without
     /// `CRAFT_FONTS_DIR`), whose system font scan reads `font_dirs`.
     pub fn with_font_dirs(font_dirs: Vec<std::path::PathBuf>) -> Self {
-        let mut faces = Vec::new();
         let others = crate::CRAFT_FONTS.iter().filter(|f| !f.scripts.contains(&"Jpan"));
         let craft = crate::japanese_document_fonts().into_iter().chain(others).map(|f| f.bytes);
-        for data in BUNDLED.iter().copied().chain(craft) {
+        Self::with_static_fonts(font_dirs, BUNDLED.iter().copied().chain(craft))
+    }
+
+    fn with_static_fonts(font_dirs: Vec<std::path::PathBuf>, fonts: impl Iterator<Item = &'static [u8]>) -> Self {
+        let mut faces = Vec::new();
+        for data in fonts {
             for f in enumerate_faces(data) {
                 if let Some(mut face) = make_face(FontBytes::Static(data), f.index, f.family, f.style, f.legacy, f.coords) {
                     face.local_names = f.local;
@@ -996,6 +1051,8 @@ impl FontDb {
         Self {
             faces: RwLock::new(faces),
             outlines: Mutex::new(HashMap::new()),
+            hinted: Mutex::new(HashMap::new()),
+            hinters: Mutex::new(HashMap::new()),
             fallbacks: RwLock::new(FallbackCache::default()),
             run_fallbacks: RwLock::new(RunFallbackCache::default()),
             #[cfg(not(target_arch = "wasm32"))]
@@ -1036,8 +1093,26 @@ impl FontDb {
     /// first time a lookup by family name needs them (or ahead of time by
     /// [`FontDb::scan_in_background`]).
     pub fn global() -> &'static FontDb {
-        static DB: std::sync::OnceLock<FontDb> = std::sync::OnceLock::new();
-        DB.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+        GLOBAL.get_or_init(|| FontDb::with_font_dirs(system_font_dirs()))
+    }
+
+    /// Initialize a test process with only the repository's pinned bundled fonts: no optional
+    /// craft-fonts, user fonts or system font directories. Call before any global font lookup.
+    /// Returns false if a normal global database was already initialized; never replaces it.
+    /// Repeated/concurrent calls are safe. Merely enabling `test-support` changes nothing.
+    #[cfg(feature = "test-support")]
+    pub fn init_test_fonts() -> bool {
+        static INIT: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *INIT.get_or_init(|| {
+            let mut installed = false;
+            GLOBAL.get_or_init(|| {
+                installed = true;
+                let db = Self::with_static_fonts(Vec::new(), BUNDLED.iter().copied());
+                db.set_system_fallback(false);
+                db
+            });
+            installed
+        })
     }
 
     fn read_faces(&self) -> std::sync::RwLockReadGuard<'_, Vec<Arc<FontFace>>> {
@@ -1892,6 +1967,43 @@ impl FontDb {
         cache.insert(key, p.clone());
         p
     }
+
+    /// Glyph outline hinted for the screen at `ppem` device pixels per em ([`HINT_PPEM`]), in
+    /// device pixels, y-down, for drawing at a baseline on a whole pixel; cached per (face, glyph,
+    /// size). `None` for sizes out of range and faces that can't be hinted: draw [`Self::outline`].
+    pub fn hinted_outline(&self, face: &FontFace, gid: u32, ppem: f32) -> Option<Arc<BezPath>> {
+        if !HINT_PPEM.contains(&ppem) {
+            return None;
+        }
+        let key = (face.id, gid, ppem.to_bits());
+        if let Some(p) = self.hinted.lock().unwrap_or_else(|e| e.into_inner()).get(&key) {
+            return p.clone();
+        }
+        let hinter = {
+            let hkey = (face.id, ppem.to_bits());
+            let known = self.hinters.lock().unwrap_or_else(|e| e.into_inner()).get(&hkey).cloned();
+            match known {
+                Some(h) => h,
+                None => {
+                    // Built outside the lock: running a font's hinting programs takes a while.
+                    let h = face.screen_hinter(ppem).map(Arc::new);
+                    let mut cache = self.hinters.lock().unwrap_or_else(|e| e.into_inner());
+                    if cache.len() >= HINTER_CACHE_MAX {
+                        cache.clear();
+                    }
+                    cache.insert(hkey, h.clone());
+                    h
+                }
+            }
+        };
+        let p = hinter.and_then(|h| face.hinted_glyph_outline(gid, &h)).map(Arc::new);
+        let mut cache = self.hinted.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= OUTLINE_CACHE_MAX {
+            cache.clear();
+        }
+        cache.insert(key, p.clone());
+        p
+    }
 }
 
 struct FlipPen(BezPath);
@@ -1981,6 +2093,67 @@ mod tests {
     }
 
     /// The issue's run (#1549): Thai letters and digits, Latin letters, digits and the baht sign.
+    #[test]
+    fn screen_hinting_puts_horizontal_edges_on_whole_pixels_and_moves_nothing_sideways() {
+        let db = FontDb::global();
+        let face = db.face(FALLBACK_FAMILY, "Regular");
+        let x = face.glyph_for('x');
+        // 11 pt at 100 % zoom on a 145 % desktop: a fractional size, as on most screens.
+        let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+        let hinted = db.hinted_outline(&face, x, ppem).expect("Source Sans 3 can be hinted");
+        let plain = db.outline(&face, x);
+        let k = f64::from(ppem) / face.upem;
+        let (h, u) = (kurbo::Shape::bounding_box(&*hinted), kurbo::Shape::bounding_box(&*plain));
+        // The x-height (the top, y-down) and the baseline sit on the pixel grid…
+        assert!((h.y0 - h.y0.round()).abs() < 0.02, "x-height at {}", h.y0);
+        assert!((h.y1 - h.y1.round()).abs() < 0.02, "baseline at {}", h.y1);
+        assert!((u.y0 * k - (u.y0 * k).round()).abs() > 0.02, "the unhinted x-height is off the grid: {}", u.y0 * k);
+        // …and the sides stay where the font puts them, so advances and line breaks don't change.
+        assert!((h.x0 - u.x0 * k).abs() < 0.01 && (h.x1 - u.x1 * k).abs() < 0.01, "{h:?} vs {:?}", u.scale_from_origin(k));
+        // Cached per size.
+        assert!(Arc::ptr_eq(&hinted, &db.hinted_outline(&face, x, ppem).expect("cached")));
+    }
+
+    #[test]
+    fn screen_hinting_uses_the_autohinter_even_for_fonts_with_their_own_instructions() {
+        // FreeType's light hinting (`hintslight`, Firefox on Linux) runs its autohinter on
+        // TrueType outlines and ignores their instructions: measured against Firefox, the
+        // instructions drew Arial's rows elsewhere and heavier.
+        let db = FontDb::global();
+        let face = db.face(FALLBACK_FAMILY, "Regular");
+        let font = face.skrifa().unwrap();
+        let outlines = font.outline_glyphs();
+        assert!(outlines.prefer_interpreter(), "Source Sans 3 carries TrueType instructions (ttfautohint)");
+        let ppem = 11.0 * 96.0 / 72.0 * 1.45;
+        let target = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
+        let drawn = |engine: Engine, gid: u32| {
+            let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine, target }).unwrap();
+            let mut pen = FlipPen(BezPath::new());
+            outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
+            pen.0
+        };
+        let mut differs = false;
+        for c in "Every Thursday".chars().filter(|c| !c.is_whitespace()) {
+            let gid = face.glyph_for(c);
+            let ours = db.hinted_outline(&face, gid, ppem).unwrap();
+            assert_eq!(*ours, drawn(Engine::Auto(None), gid), "{c}: the autohinter's outline");
+            differs |= *ours != drawn(Engine::Interpreter, gid);
+        }
+        assert!(differs, "the font's own instructions would draw it differently");
+    }
+
+    #[test]
+    fn screen_hinting_refuses_hostile_sizes() {
+        let db = FontDb::global();
+        let face = db.face(FALLBACK_FAMILY, "Regular");
+        let x = face.glyph_for('x');
+        for ppem in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -12.0, 0.0, 1.0, 3.99, 96.01, 1e9] {
+            assert!(db.hinted_outline(&face, x, ppem).is_none(), "{ppem}");
+        }
+        // A glyph id past the font's glyphs has no outline to hint.
+        assert!(db.hinted_outline(&face, u32::MAX, 20.0).is_none_or(|o| o.elements().is_empty()));
+    }
+
     const THAI_RUN: &str = "[D] น้ำ ค่ำ ปั้น ฝั่ง ปู่ ๑๒๓๔๕๖๗๘๙๐ ฿1,250.50";
 
     #[test]

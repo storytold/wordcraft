@@ -41,6 +41,7 @@ fn quarter(d: &Document) -> f32 {
 
 #[test]
 fn digits_and_latin_beside_asian_text_get_a_quarter_of_the_font_size() {
+    crate::test_fonts();
     let mut d = Document::from_text("法院94年A字");
     let q = quarter(&d);
     assert!(q > 0.0);
@@ -56,6 +57,7 @@ fn digits_and_latin_beside_asian_text_get_a_quarter_of_the_font_size() {
 
 #[test]
 fn the_space_crosses_runs_and_takes_the_asian_size() {
+    crate::test_fonts();
     let mut d = Document::from_text("漢A漢");
     let size = |s: f32| move |c: &mut CharProps| c.size = Some(s);
     let p = para0(&mut d);
@@ -67,6 +69,7 @@ fn the_space_crosses_runs_and_takes_the_asian_size() {
 
 #[test]
 fn spaces_punctuation_hangul_and_latin_alone_get_nothing() {
+    crate::test_fonts();
     for text in ["例 a", "5 例", "5、", "、8", "abc 123", "漢한", "한A", "漢%", "（A）"] {
         let d = Document::from_text(text);
         assert!(gaps(&d).iter().all(|g| *g == 0.0), "{text}: {:?}", gaps(&d));
@@ -75,6 +78,7 @@ fn spaces_punctuation_hangul_and_latin_alone_get_nothing() {
 
 #[test]
 fn a_field_result_is_classed_by_the_text_it_shows() {
+    crate::test_fonts();
     let mut d = Document::from_text("漢漢");
     let field =
         InlineObject::Field { instr: "MERGEFIELD n".into(), result: "12".into(), locked: false, dirty: false, code: false, form: String::new() };
@@ -90,6 +94,7 @@ fn a_field_result_is_classed_by_the_text_it_shows() {
 
 #[test]
 fn a_character_grid_the_paragraph_snaps_to_turns_it_off() {
+    crate::test_fonts();
     let with = |kind: DocGridType, snap: bool| {
         let mut d = Document::from_text("法院94年");
         d.last_section.doc_grid = Some(DocGrid { kind, line_pitch: 18.0, char_space: 0 });
@@ -107,6 +112,7 @@ fn a_character_grid_the_paragraph_snaps_to_turns_it_off() {
 
 #[test]
 fn the_space_takes_no_room_at_the_end_of_a_justified_line() {
+    crate::test_fonts();
     let text = "abcdef 1漢漢漢";
     let mut d = Document::from_text(text);
     let pl = first_para(&lay(&d));
