@@ -2292,6 +2292,77 @@ fn typing_over_backward_selection_keeps_its_font() {
     }
 }
 
+/// `One`, a picture (floating with Square wrapping when `floating`), `Two`; the picture selected,
+/// right to left when floating.
+fn picture_between_paragraphs(floating: bool) -> Session {
+    let mut s = s();
+    typ(&mut s, "One\n");
+    run(&mut s, "insert.picture", json!({"data": crate::cmd::insert::base64_encode(&crate::tests::tiny_png()), "width": 50}));
+    typ(&mut s, "\nTwo");
+    let pic = Pos::body(1, 0);
+    let end = Pos { off: pic.off + wordcraft_doc::para::OBJ.len_utf8(), ..pic.clone() };
+    run(&mut s, "select.range", json!({"anchor": pic, "focus": end}));
+    if floating {
+        run(&mut s, "arrange.wrap", json!({"wrap": "square"}));
+        s.sel = crate::Selection { anchor: s.sel.focus.clone(), focus: s.sel.anchor.clone() };
+    }
+    assert!(crate::cmd::objects::object_selection(&s).is_some_and(|(_, o)| o.is_floating() == floating));
+    s
+}
+
+#[test]
+fn enter_on_a_selected_picture_does_nothing() {
+    // Word for Mac: with a picture selected, inline or floating, Enter (any number of times)
+    // leaves it alone (#4126).
+    for floating in [false, true] {
+        let mut s = picture_between_paragraphs(floating);
+        let (doc, sel) = (s.doc.clone(), s.sel.clone());
+        typ(&mut s, "\n\n\n");
+        assert_eq!(s.doc, doc, "the picture and the paragraphs stay as they were (floating: {floating})");
+        assert_eq!(s.sel, sel, "the picture stays selected (floating: {floating})");
+    }
+}
+
+#[test]
+fn a_break_on_a_selected_picture_goes_in_front_of_it() {
+    // Word for Mac: Shift+Enter or a page break on a selected picture puts the break in front of
+    // it (an inline picture moves down a line or to the next page; a floating one's anchor does)
+    // and keeps it selected (#4126). A column break is treated the same way.
+    use wordcraft_doc::para::{COLUMN_BREAK, OBJ, PAGE_BREAK};
+    for (id, c) in [("text.lineBreak", '\n'), ("text.pageBreak", PAGE_BREAK), ("text.columnBreak", COLUMN_BREAK)] {
+        for floating in [false, true] {
+            let mut s = picture_between_paragraphs(floating);
+            let (doc, sel) = (s.doc.clone(), s.sel.clone());
+            let (at, before) = crate::cmd::objects::object_selection(&s).map(|(p, o)| (p, o.clone())).unwrap();
+            run(&mut s, id, json!({}));
+            run(&mut s, id, json!({}));
+            let text: Vec<_> = paras(&s).into_iter().map(|p| p.0).collect();
+            assert_eq!(text, ["One".to_string(), format!("{c}{c}{OBJ}"), "Two".to_string()], "{id}, floating: {floating}");
+            let (pos, o) = crate::cmd::objects::object_selection(&s).expect("the picture stays selected");
+            assert_eq!((pos.off, o), (at.off + 2 * c.len_utf8(), &before), "{id}, floating: {floating}");
+            run(&mut s, "edit.undo", json!({}));
+            run(&mut s, "edit.undo", json!({}));
+            assert_eq!((&s.doc, &s.sel), (&doc, &sel), "{id}, floating: {floating}");
+        }
+    }
+}
+
+#[test]
+fn a_break_on_a_picture_in_a_picture_control_keeps_the_picture_selected() {
+    // The break goes in front of the control, and the picture (not the control's start) stays
+    // selected (#4126).
+    let mut s = picture_between_paragraphs(false);
+    run(&mut s, "developer.picture", json!({}));
+    let obj = wordcraft_doc::para::OBJ.len_utf8();
+    let pic = Pos::body(1, obj);
+    run(&mut s, "select.range", json!({"anchor": pic, "focus": Pos { off: obj * 2, ..pic.clone() }}));
+    let before = crate::cmd::objects::object_selection(&s).map(|(_, o)| o.clone()).expect("the picture is selected");
+    run(&mut s, "text.lineBreak", json!({}));
+    assert!(paras(&s)[1].0.starts_with('\n'), "{:?}", paras(&s)[1].0);
+    let (_, o) = crate::cmd::objects::object_selection(&s).expect("the picture stays selected");
+    assert_eq!(o, &before);
+}
+
 #[test]
 fn right_arrow_moves_through_a_ligature_one_letter_at_a_time() {
     // A font that draws "ffi" as one glyph (bundled, so the test doesn't depend on the installed

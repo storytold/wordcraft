@@ -4137,7 +4137,7 @@ fn scratch_dir(name: &str) -> std::path::PathBuf {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-fn tiny_png() -> Vec<u8> {
+pub(crate) fn tiny_png() -> Vec<u8> {
     let mut png = Vec::new();
     image::RgbaImage::from_pixel(2, 2, image::Rgba([200, 30, 30, 255]))
         .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)

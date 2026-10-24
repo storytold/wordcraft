@@ -12,9 +12,9 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("text.insert", "Type Text", "Editing", insert).params(r#"{"text": string}"#),
         CommandSpec::new("text.newParagraph", "New Paragraph", "Editing", new_paragraph).key("Enter"),
-        CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| ins_char(s, '\n')).key("Shift+Enter"),
-        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| ins_char(s, PAGE_BREAK)).key("Mod+Enter"),
-        CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| ins_char(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
+        CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| insert_break(s, '\n')).key("Shift+Enter"),
+        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| insert_break(s, PAGE_BREAK)).key("Mod+Enter"),
+        CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| insert_break(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
         CommandSpec::new("text.tab", "Tab", "Editing", tab).key("Tab"),
         CommandSpec::new("text.backTab", "Shift+Tab", "Editing", back_tab).key("Shift+Tab"),
         // A tab character even in a table cell, where Tab moves to the next cell (#3137); ⌥Tab on macOS.
@@ -519,6 +519,20 @@ fn ins_char(s: &mut Session, c: char) -> CmdResult {
     sel_result(s)
 }
 
+/// A line, page or column break. On a selected picture or shape, Word puts the break in front of
+/// it and keeps it selected, rather than replacing it (#4126).
+fn insert_break(s: &mut Session, c: char) -> CmdResult {
+    let Some(at) = super::objects::object_selection(s).map(|(p, _)| p) else { return ins_char(s, c) };
+    s.sel = Selection::caret(at.clone());
+    ins_char(s, c)?;
+    // The break goes in front of the object, or of the content control around it.
+    let at = Pos { off: at.off + c.len_utf8(), ..at };
+    if s.doc.para_at(&at).and_then(|p| p.object_at(at.off)).is_some_and(|o| o.is_drawing()) {
+        super::objects::select_object(s, &at);
+    }
+    sel_result(s)
+}
+
 /// Exact sample-text formulas; bounded counts keep typed input from allocating without limit.
 fn sample_text(s: &Session) -> Option<String> {
     let at = &s.sel.focus;
@@ -572,8 +586,9 @@ fn sample_text(s: &Session) -> Option<String> {
 }
 
 fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
-    // Enter in a one-line plain text control (or a check box or list) does nothing, as in Word.
-    if super::controls::refuses_paragraph(s) {
+    // Enter in a one-line plain text control (or a check box or list), or on a selected picture or
+    // shape, does nothing, as in Word (#4126).
+    if super::controls::refuses_paragraph(s) || super::objects::object_selection(s).is_some() {
         return sel_result(s);
     }
     super::controls::prepare_edit(s)?;
