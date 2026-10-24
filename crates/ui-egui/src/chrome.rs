@@ -650,11 +650,47 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     }
                     // Reading zoom changes only reading presentation, never the normal view zoom.
                     let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
-                    let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
                     ui.spacing_mut().slider_width = 110.0;
-                    if ui.add(slider).changed() {
-                        let command = if reading { "view.readTextSize" } else { "view.zoom" };
-                        let _ = app.run(command, json!({"value": (v * 100.0).round()}));
+                    if reading {
+                        let slider = egui::Slider::new(&mut v, 0.75..=1.5).show_value(false);
+                        if ui.add(slider).changed() {
+                            let _ = app.run("view.readTextSize", json!({"value": (v * 100.0).round()}));
+                        }
+                    } else {
+                        // Word's zoom slider: 10-100% fills the left half of the track and 100-500%
+                        // the right, so 100% sits in the middle where people work, and a drag lands
+                        // on whole percents.
+                        let z = (v * 100.0).round();
+                        let mut frac = zoom_slider_frac(z);
+                        let slider = egui::Slider::new(&mut frac, 0.0..=1.0).show_value(false);
+                        let resp = ui.add(slider);
+                        if resp.changed() {
+                            let _ = app.run("view.zoom", json!({"value": zoom_slider_percent(frac)}));
+                        }
+                        // The wheel over the slider zooms 10% a notch, like Word. The canvas only
+                        // scrolls when the pointer is over it, so nothing scrolls the page from
+                        // here. (Touchpads report points, not whole notches, and keep scrolling.)
+                        if resp.hovered() {
+                            let notches = ui.input(|i| {
+                                i.events
+                                    .iter()
+                                    .filter_map(|e| match e {
+                                        egui::Event::MouseWheel {
+                                            unit: egui::MouseWheelUnit::Line,
+                                            delta,
+                                            ..
+                                        } if delta.x == 0.0 && delta.y != 0.0 && delta.y.fract() == 0.0 => Some(delta.y),
+                                        _ => None,
+                                    })
+                                    .sum::<f32>()
+                            });
+                            if notches != 0.0 {
+                                let _ = app.run(
+                                    "view.zoom",
+                                    json!({"value": (z + 10.0 * notches.signum()).clamp(10.0, 500.0)}),
+                                );
+                            }
+                        }
                     }
                     if small_icon(ui, "minus", tl!("Zoom Out")) {
                         if reading {
@@ -752,6 +788,20 @@ impl WordApp {
         }
         self.word_count.1
     }
+}
+
+/// Word's status-bar zoom slider: 10-100% fills the left half of the track and 100-500% the
+/// right, so 100% sits in the middle where people work. Maps a zoom percentage to the slider's
+/// 0..=1 fraction.
+fn zoom_slider_frac(percent: f32) -> f32 {
+    let z = percent.clamp(10.0, 500.0);
+    if z <= 100.0 { 0.5 * (z / 10.0).log10() } else { 0.5 + 0.5 * (z / 100.0).log(5.0) }
+}
+
+/// The inverse of [`zoom_slider_frac`], snapped to whole percents like Word's slider.
+fn zoom_slider_percent(frac: f32) -> f32 {
+    let f = frac.clamp(0.0, 1.0);
+    if f <= 0.5 { (10.0 * 10.0f32.powf(2.0 * f)).round() } else { (100.0 * 5.0f32.powf(2.0 * f - 1.0)).round() }
 }
 
 #[cfg(test)]
@@ -1069,5 +1119,48 @@ mod tests {
         h.run_steps(2);
         assert!(h.state().autosaves(), "and clicking it again turns it back on");
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod zoom_slider_tests {
+    use super::*;
+
+    #[test]
+    fn hundred_percent_sits_in_the_middle_of_the_track() {
+        assert_eq!(zoom_slider_frac(100.0), 0.5);
+        assert_eq!(zoom_slider_frac(10.0), 0.0);
+        assert_eq!(zoom_slider_frac(500.0), 1.0);
+        assert_eq!(zoom_slider_percent(0.5), 100.0);
+        assert_eq!(zoom_slider_percent(0.0), 10.0);
+        assert_eq!(zoom_slider_percent(1.0), 500.0);
+    }
+
+    #[test]
+    fn each_half_of_the_track_is_logarithmic() {
+        // The left half runs 10-100%: a quarter of the track is 10*sqrt(10).
+        assert!((zoom_slider_frac(10.0 * 10.0f32.sqrt()) - 0.25).abs() < 1e-4);
+        // The right half runs 100-500%: three quarters of the track is 100*sqrt(5).
+        assert!((zoom_slider_frac(100.0 * 5.0f32.sqrt()) - 0.75).abs() < 1e-4);
+        assert_eq!(zoom_slider_percent(0.25), 32.0);
+        assert_eq!(zoom_slider_percent(0.75), 224.0);
+    }
+
+    #[test]
+    fn drags_land_on_whole_percents_and_round_trip() {
+        for frac in [0.0f32, 0.1, 0.37, 0.5, 0.62, 0.9, 1.0] {
+            let z = zoom_slider_percent(frac);
+            assert_eq!(z, z.round(), "frac {frac} lands on a whole percent: {z}");
+            assert!((10.0..=500.0).contains(&z), "frac {frac} stays in range: {z}");
+            assert!((zoom_slider_frac(z) - frac).abs() < 0.01, "round trip {frac} -> {z}");
+        }
+    }
+
+    #[test]
+    fn values_outside_the_track_clamp() {
+        assert_eq!(zoom_slider_frac(0.0), 0.0);
+        assert_eq!(zoom_slider_frac(1000.0), 1.0);
+        assert_eq!(zoom_slider_percent(-1.0), 10.0);
+        assert_eq!(zoom_slider_percent(2.0), 500.0);
     }
 }
