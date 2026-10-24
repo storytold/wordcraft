@@ -138,6 +138,54 @@ pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
 /// Width of the » button that holds the tabs the strip has no room for.
 const MORE_TABS_W: f32 = 24.0;
 
+/// How long a contextual tab takes to settle into place after it appears, seconds.
+const TAB_ENTRY_SECS: f64 = 0.35;
+/// How far, in points, a new contextual tab starts to the left of its place.
+const TAB_ENTRY_SLIDE: f32 = 18.0;
+
+/// Fast at first, then slowing to rest: 0 → 1.
+fn ease_out_cubic(p: f32) -> f32 {
+    1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3)
+}
+
+/// Notes the contextual tabs shown this frame (each with its place in the strip), starts the
+/// entry of those that were not shown the frame before, and returns the tabs that just left,
+/// each with its old place and the time it left, while they still fade away (none with
+/// animations off). The first frame starts nothing: tabs already there do not slide.
+fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)], now: f64, animate: bool) -> Vec<(String, usize, f64)> {
+    let (shown_id, leaving_id) = (egui::Id::new("contextual_tabs_shown"), egui::Id::new("contextual_tabs_leaving"));
+    let prev: Option<Vec<(String, usize)>> = ctx.data(|d| d.get_temp(shown_id));
+    let mut leaving: Vec<(String, usize, f64)> = ctx.data(|d| d.get_temp(leaving_id)).unwrap_or_default();
+    leaving.retain(|(n, _, start)| animate && now - start < TAB_ENTRY_SECS && !shown.iter().any(|(s, _)| s == n));
+    if let Some(prev) = prev {
+        for (tab, _) in shown.iter().filter(|(t, _)| !prev.iter().any(|(p, _)| p == t)) {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new(("contextual_tab_entry", *tab)), now));
+        }
+        for (tab, at) in prev.iter().filter(|(p, _)| animate && !shown.iter().any(|(s, _)| s == p)) {
+            if !leaving.iter().any(|(n, _, _)| n == tab) {
+                leaving.push((tab.clone(), *at, now));
+            }
+        }
+    }
+    ctx.data_mut(|d| {
+        d.insert_temp(shown_id, shown.iter().map(|(t, at)| (t.to_string(), *at)).collect::<Vec<_>>());
+        d.insert_temp(leaving_id, leaving.clone());
+    });
+    leaving
+}
+
+/// How far a contextual tab's entry has come: 0 as it appears, 1 once settled (always 1 with
+/// animations off). Asks for repaints while it moves.
+fn tab_entry(ctx: &egui::Context, tab: &str, now: f64, animate: bool) -> f32 {
+    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::new(("contextual_tab_entry", tab))));
+    let Some(start) = start.filter(|_| animate) else { return 1.0 };
+    let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
+    if p < 1.0 {
+        ctx.request_repaint();
+    }
+    ease_out_cubic(p)
+}
+
 /// Which tabs fit on a strip `avail` points wide (#897), from each tab's width and whether it must
 /// stay. The others give way from the end, leaving `more` points for the » menu that holds them
 /// (pure, tested).
@@ -295,6 +343,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.ui.tab = next.to_string();
         }
     }
+    let (now, animate) = (ui.input(|i| i.time), app.animations_on());
+    let leaving: Vec<(String, usize, f64)>;
+    {
+        let user_names: Vec<&str> = user_tabs.iter().filter(|e| e.custom).map(|e| e.name.as_str()).collect();
+        let contextual: Vec<(&str, usize)> = tabs
+            .iter()
+            .enumerate()
+            .map(|(i, (n, _))| (n.as_str(), i))
+            .filter(|(n, _)| wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(n) && !user_names.contains(n))
+            .collect();
+        leaving = note_contextual_tabs(ui.ctx(), &contextual, now, animate);
+    }
+    // A tab that just left stays in its place while it slides and fades away.
+    let ghosts: Vec<(String, usize, f64)> = leaving.iter().filter(|(n, ..)| !tabs.iter().any(|(t, _)| t == n)).cloned().collect();
+    for (name, at, _) in &ghosts {
+        tabs.insert((*at).min(tabs.len()), (name.clone(), false));
+    }
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
@@ -393,8 +458,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let shown = if custom { tab } else { tl!(tab) };
                             let w = plan.widths.get(i).copied().unwrap_or(0.0) - 2.0;
                             let cut = specs.get(i).is_some_and(|sp| sp.text_w + plan.pad > w + 0.5);
-                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
-                            if app.ui.keytips == crate::keytips::Phase::Tabs {
+                            let ghost = ghosts.iter().find(|(n, ..)| n == tab);
+                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), if ghost.is_some() { Sense::hover() } else { Sense::click() });
+                            if app.ui.keytips == crate::keytips::Phase::Tabs && ghost.is_none() {
                                 crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
                             } else if app.ui.keytips == crate::keytips::Phase::Legacy {
                                 // Every tab: they only place the legacy keys' hint (#1697).
@@ -402,10 +468,22 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             let active = app.ui.tab == tab && !app.ui.backstage;
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, shown));
-                            if resp.hovered() && !active {
+                            if resp.hovered() && !active && ghost.is_none() {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
-                            let color = if contextual || active { t.accent_text } else { t.text };
+                            // A contextual tab glides in from the left, fast at first and then slowing:
+                            // the eye is drawn to the motion. One that just left glides back out the same
+                            // way, fading, and cannot be clicked.
+                            let entry = match ghost {
+                                Some((_, _, left)) => {
+                                    ui.ctx().request_repaint();
+                                    1.0 - ease_out_cubic(((now - left) / TAB_ENTRY_SECS) as f32)
+                                }
+                                None if contextual => tab_entry(ui.ctx(), tab, now, animate),
+                                None => 1.0,
+                            };
+                            let shift = vec2(-(1.0 - entry) * TAB_ENTRY_SLIDE, 0.0);
+                            let color = if contextual || active { t.accent_text } else { t.text }.gamma_multiply(entry);
                             if cut {
                                 let mut job = egui::text::LayoutJob::single_section(
                                     shown.to_string(),
@@ -418,10 +496,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     overflow_character: Some('…'),
                                 };
                                 let galley = ui.painter().layout_job(job);
-                                ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
+                                ui.painter().galley(r.center() + shift - galley.size() / 2.0, galley, color);
                             } else {
                                 ui.painter().text(
-                                    r.center(),
+                                    r.center() + shift,
                                     Align2::CENTER_CENTER,
                                     shown,
                                     if active { semibold(12.5) } else { medium(12.5) },
@@ -430,8 +508,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             let resp = if cut { resp.on_hover_text(shown) } else { resp };
                             if active {
-                                let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                ui.painter().rect_filled(u, 2.0, t.accent);
+                                let u = Rect::from_center_size(pos2(r.center().x + shift.x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
+                                ui.painter().rect_filled(u, 2.0, t.accent.gamma_multiply(entry));
                             }
                             if resp.clicked() {
                                 let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -439,13 +517,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             if resp.double_clicked() && tab != "File" {
                                 let _ = app.run("ui.collapseRibbon", json!({}));
                             }
-                            resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+                            if ghost.is_none() {
+                                resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+                            }
                         }
                         let left_out: Vec<(&str, &str)> = tabs
                             .iter()
                             .zip(&labels)
                             .zip(&plan.fits)
-                            .filter(|(_, fits)| !**fits)
+                            .filter(|(((tab, _), _), fits)| !**fits && !ghosts.iter().any(|(n, ..)| n == tab))
                             .map(|(((tab, _), shown), _)| (tab.as_str(), *shown))
                             .collect();
                         if !left_out.is_empty() {
@@ -3622,6 +3702,43 @@ mod tests {
         assert!(h.state().ui.backstage, "File › Options opened");
         assert_eq!(h.state().ui.options_pane, "language");
         assert_eq!(language_name(Some("de-DE")), "German (Germany)");
+    }
+
+    /// A contextual tab that appears eases in (quick, then slowing); tabs shown from the first frame, or
+    /// still shown later, do not move; with animations off it is in place at once.
+    #[test]
+    fn a_new_contextual_tab_eases_in() {
+        let ctx = egui::Context::default();
+        note_contextual_tabs(&ctx, &[("Table Design", 1)], 1.0, true);
+        assert_eq!(tab_entry(&ctx, "Table Design", 1.0, true), 1.0, "tabs already there do not slide");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 2.0, true);
+        let at = |secs: f64| tab_entry(&ctx, "Picture Format", 2.0 + secs, true);
+        assert_eq!(at(0.0), 0.0);
+        let (a, b, c) = (at(0.1), at(0.2), at(TAB_ENTRY_SECS));
+        assert!(0.0 < a && a < b && b < c && c == 1.0, "{a} {b} {c}");
+        assert!(a > 0.1 / TAB_ENTRY_SECS as f32, "faster than linear at the start: {a}");
+        assert!(c - b < b - a, "slower at the end: {a} {b} {c}");
+        assert_eq!(tab_entry(&ctx, "Picture Format", 2.0, false), 1.0, "animations off");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 3.0, true);
+        assert_eq!(tab_entry(&ctx, "Picture Format", 3.0, true), 1.0, "staying shown does not restart it");
+    }
+
+    /// A contextual tab that goes away stays, in its old place, for the length of its exit, and not
+    /// at all with animations off; one that comes back is no longer leaving.
+    #[test]
+    fn a_contextual_tab_that_goes_away_leaves_gently() {
+        let ctx = egui::Context::default();
+        let both = [("Table Design", 1), ("Picture Format", 2)];
+        assert!(note_contextual_tabs(&ctx, &both, 1.0, true).is_empty());
+        let leaving = note_contextual_tabs(&ctx, &both[..1], 2.0, true);
+        assert_eq!(leaving, vec![("Picture Format".to_string(), 2, 2.0)]);
+        assert_eq!(note_contextual_tabs(&ctx, &both[..1], 2.2, true).len(), 1, "still leaving");
+        assert!(note_contextual_tabs(&ctx, &both[..1], 2.0 + TAB_ENTRY_SECS + 0.01, true).is_empty(), "gone");
+        assert!(note_contextual_tabs(&ctx, &both, 4.0, true).is_empty());
+        assert!(note_contextual_tabs(&ctx, &both[..1], 5.0, false).is_empty(), "animations off");
+        note_contextual_tabs(&ctx, &both, 6.0, true);
+        note_contextual_tabs(&ctx, &both[..1], 7.0, true);
+        assert!(note_contextual_tabs(&ctx, &both, 7.1, true).is_empty(), "back again");
     }
 
     /// #1281: every short-list entry (the four Englishes, Indonesian…) is picked in the menu:
