@@ -104,7 +104,8 @@ files it was given rather than guarding against other software on the computer.
 | Tool | What it does |
 |---|---|
 | `list_commands` | every command (filter with `query`) — over 270 of them |
-| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` |
+| `execute` | run one command: `{command: "insert.table", params: {rows: 3, cols: 4}}` (an empty table; for a filled one use `insert_table`) |
+| `insert_table` | insert a filled table in one call: `{values: [["Month", "Cases"], ["January", 12]], header: true, style?}` (same as `insert.spreadsheet`) |
 | `batch` | run several commands in order |
 | `new_document` | blank, sample, letter, resume, report |
 | `open_document` / `save_document` | docx, doc (open only), odt, rtf, html, md, tex, txt, json; save also pdf, png |
