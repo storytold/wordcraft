@@ -318,6 +318,9 @@ pub struct UiState {
     /// View › Switch Modes: show pages dark (white text on black), kept between runs. Only the
     /// pages: the interface follows [`UiState::theme`] (#312).
     pub dark_page: bool,
+    /// File › Options › General › Never change the document page color (#1722). `None` is a
+    /// `ui.json` from before the setting: [`WordApp::apply_prefs`] reads it from `dark_page`.
+    pub never_change_page: Option<bool>,
     /// File › Options › Proofing › Check spelling as you type, kept between runs (#1792).
     pub check_spelling: bool,
     /// File › Options › Advanced › Animation: the caret glides to its new place and its blink
@@ -410,6 +413,7 @@ impl Default for UiState {
             alt_key_down: false,
             alt_modifier_seen: false,
             dark_page: false,
+            never_change_page: None,
             check_spelling: true,
             caret_animation: true,
             keyboard: wordcraft_engine::KeyMap::default(),
@@ -587,6 +591,11 @@ pub struct WordApp {
     fonts_frames: u32,
     /// The effective interface theme last installed in egui ([`theme::apply`]).
     applied_theme: Option<theme::Appearance>,
+    /// The installed interface palette is dark, seen at the start of the frame; see
+    /// [`WordApp::page_is_dark`].
+    theme_dark: bool,
+    /// `theme_dark` has been read at least once, so a change in it is a real theme change.
+    theme_seen: bool,
     /// The display scale (native pixels per point) seen in the last frame, 1.0 before the first;
     /// `ui.interfaceSize` reports the size Auto draws at with it.
     native_scale: f32,
@@ -683,6 +692,37 @@ impl SaveChoice {
 }
 
 impl WordApp {
+    /// Whether pages are drawn dark (#1722). The page follows the interface theme unless
+    /// File › Options › Never change the document page color is on; View › Switch Modes flips
+    /// whichever it would have been. Every drawing site asks here; saving, printing and PDF
+    /// never do.
+    pub fn page_is_dark(&self) -> bool {
+        let themed = self.theme_dark && !self.ui.never_change_page.unwrap_or(false);
+        themed != self.session.view.dark_mode
+    }
+
+    /// Set File › Options › Never change the document page color. The Switch Modes flip is
+    /// dropped with it, so the page is what the ticked or unticked label promises (a migrated
+    /// "Dark page" would otherwise turn over the theme's page once unticked).
+    pub fn set_never_change_page(&mut self, never: bool) {
+        let changed = self.ui.never_change_page.unwrap_or(false) != never;
+        self.ui.never_change_page = Some(never);
+        if changed {
+            self.session.view.dark_mode = false;
+        }
+    }
+
+    /// Record the installed palette. A change of theme drops the Switch Modes flip (#1722), which
+    /// is made against one theme and would give the opposite page in the other; with Never change
+    /// on the page doesn't follow the theme, so the flip stays.
+    fn note_theme(&mut self, dark: bool) {
+        if self.theme_seen && dark != self.theme_dark && !self.ui.never_change_page.unwrap_or(false) {
+            self.session.view.dark_mode = false;
+        }
+        self.theme_dark = dark;
+        self.theme_seen = true;
+    }
+
     pub fn new(session: Session, services: Services) -> Self {
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
@@ -723,6 +763,8 @@ impl WordApp {
             find_fonts_for: None,
             fonts_frames: 0,
             applied_theme: None,
+            theme_dark: false,
+            theme_seen: false,
             native_scale: 1.0,
             legacy_interface_size: None,
             // Inert until the app binary calls `watch_desktop_theme`.
@@ -803,7 +845,10 @@ impl WordApp {
         ui.editing = self.session.prefs.clone();
         ui.read_aloud_rate = self.session.read_aloud.rate();
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
-        ui.dark_page = self.session.view.dark_mode;
+        // The flip is saved only where it outlives a theme change (Never change); otherwise a
+        // restart under another theme would bring back a flip made under the old one.
+        ui.dark_page = self.session.view.dark_mode && self.ui.never_change_page.unwrap_or(false);
+        ui.never_change_page = Some(self.ui.never_change_page.unwrap_or(false));
         ui.nav_pane = self.session.view.nav_pane;
         ui.check_spelling = self.session.view.proofing;
         ui.keyboard = self.session.keymap.clone();
@@ -851,7 +896,12 @@ impl WordApp {
         }
         self.session.read_aloud.set_rate(self.ui.read_aloud_rate);
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
-        self.session.view.dark_mode = self.ui.dark_page;
+        // A `ui.json` from before #1722 had "Dark page": that page stays dark in every theme, so
+        // it becomes Never change plus the explicit switch. An unticked one follows the theme.
+        if self.ui.never_change_page.is_none() {
+            self.ui.never_change_page = Some(self.ui.dark_page);
+        }
+        self.session.view.dark_mode = self.ui.dark_page && self.ui.never_change_page.unwrap_or(false);
         self.session.view.nav_pane = self.ui.nav_pane;
         self.session.view.proofing = self.ui.check_spelling;
         // Keys for commands this version doesn't have are dropped.
@@ -1658,6 +1708,16 @@ impl WordApp {
                 }
                 json!({"theme": self.ui.theme.code(), "dark": self.ui_is_dark()})
             }
+            "ui.neverChangePage" => {
+                // File › Options › General › Never change the document page color; no value reads it.
+                if let Some(v) = p.get("value") {
+                    match v.as_bool() {
+                        Some(never) => self.set_never_change_page(never),
+                        None => return Some(Err("value must be true or false".into())),
+                    }
+                }
+                json!({"neverChangePage": self.ui.never_change_page.unwrap_or(false), "dark": self.page_is_dark()})
+            }
             "ui.interfaceSize" => {
                 // `auto` (the display scale the system reports) or an absolute size in percent,
                 // 50–300 (clamped); no value reads it. `percent` in the result is the size the
@@ -2183,7 +2243,7 @@ impl WordApp {
         // Both palettes are installed and egui picks one: with `System` it follows an OS appearance
         // change live (winit reports it and repaints, #311). Where winit is silent (Linux) the
         // desktop portal's answer fills in instead. The interface follows the Interface theme
-        // setting alone; Dark page only changes how pages are drawn (#312).
+        // setting alone; Dark page only changes how pages are drawn (#312, #1722).
         let effective = match self.ui.theme {
             theme::Appearance::System if ctx.system_theme().is_none() => match self.desktop_dark {
                 Some(true) => theme::Appearance::Dark,
@@ -2196,6 +2256,8 @@ impl WordApp {
             theme::apply(ctx, effective);
             self.applied_theme = Some(effective);
         }
+        // `System` follows the OS inside egui, so the palette actually showing is read back.
+        self.note_theme(theme::Tokens::get(ctx).dark);
         // Interface size (#475, #822): egui's zoom factor multiplies the display scale the system
         // reports (native pixels per point). Auto keeps that scale; a chosen size divides it back
         // out, so "100%" is one screen pixel per point even where the system's scale is a guess.
@@ -2858,6 +2920,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.keytips"
             | "ui.dark"
             | "ui.theme"
+            | "ui.neverChangePage"
             | "ui.interfaceSize"
             | "ui.animations"
             | "ui.language"
@@ -7585,6 +7648,8 @@ mod tests {
     #[test]
     fn dark_page_survives_restart() {
         let mut first = app();
+        // The flip outlives a restart only where it outlives a theme change: with Never change.
+        first.ui.never_change_page = Some(true);
         assert!(!first.session.view.dark_mode);
         first.run("view.darkMode", json!({"value": true})).unwrap();
         let saved = serde_json::to_vec(&first.prefs()).unwrap();
@@ -7592,6 +7657,180 @@ mod tests {
         let mut second = app();
         second.apply_prefs(serde_json::from_slice(&saved).unwrap());
         assert!(second.session.view.dark_mode);
+    }
+
+    /// #1722: the page follows the interface theme; Never change the document page color pins it.
+    #[test]
+    fn page_follows_the_theme_unless_never_change() {
+        use egui::Theme::{Dark, Light};
+        for (setting, os, never, flip, dark) in [
+            ("dark", Some(Light), false, false, true),
+            ("light", Some(Dark), false, false, false),
+            ("system", Some(Dark), false, false, true),
+            ("system", Some(Light), false, false, false),
+            ("dark", Some(Dark), true, false, false),
+            ("light", Some(Light), true, false, false),
+            // Switch Modes flips what the page would be, and darkens a never-changed page.
+            ("light", Some(Light), false, true, true),
+            ("dark", Some(Dark), false, true, false),
+            ("dark", Some(Dark), true, true, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut a = app();
+            a.ui.never_change_page = Some(never);
+            a.run("ui.theme", json!({"value": setting})).unwrap();
+            a.run("view.darkMode", json!({"value": flip})).unwrap();
+            theme_frame(&ctx, &mut a, os);
+            assert_eq!(a.page_is_dark(), dark, "{setting} with the OS at {os:?}, never {never}, flip {flip}");
+        }
+    }
+
+    /// #1722: a theme change shows on the page on the next frame, and the view fingerprint moves.
+    #[test]
+    fn never_change_page_command_sets_and_reads_the_preference() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        let read = a.run("ui.neverChangePage", json!({})).unwrap();
+        assert_eq!(read["neverChangePage"], false);
+        a.run("ui.theme", json!({"value": "dark"})).unwrap();
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Dark));
+        assert!(a.page_is_dark());
+        let set = a.run("ui.neverChangePage", json!({"value": true})).unwrap();
+        assert_eq!((set["neverChangePage"].as_bool(), set["dark"].as_bool()), (Some(true), Some(false)));
+        assert!(!a.page_is_dark());
+        assert!(a.run("ui.neverChangePage", json!({"value": "yes"})).is_err());
+        // Writing the value it already has leaves a Switch Modes flip alone.
+        a.run("view.darkMode", json!({"value": true})).unwrap();
+        a.run("ui.neverChangePage", json!({"value": true})).unwrap();
+        assert!(a.page_is_dark(), "a repeated write keeps the flip");
+        a.run("view.darkMode", json!({"value": false})).unwrap();
+        a.run("ui.neverChangePage", json!({"value": false})).unwrap();
+        assert!(a.page_is_dark());
+    }
+
+    #[test]
+    fn explicit_unticked_never_change_ignores_a_stray_dark_page() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.apply_prefs(serde_json::from_str(r#"{"darkPage": true, "neverChangePage": false, "theme": "light"}"#).unwrap());
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
+        assert!(!a.page_is_dark(), "the theme decides when Never change is explicitly off");
+    }
+
+    #[test]
+    fn theme_change_updates_the_page_on_the_next_frame() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
+        assert!(!a.page_is_dark());
+        let before = canvas::view_key(&a, false, None);
+        a.run("ui.theme", json!({"value": "dark"})).unwrap();
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
+        assert!(a.page_is_dark());
+        assert_ne!(canvas::view_key(&a, false, None), before);
+        a.run("ui.theme", json!({"value": "light"})).unwrap();
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
+        assert!(!a.page_is_dark());
+    }
+
+    /// #1722: the old "Dark page" preference keeps its dark page, in any theme; an unticked one
+    /// follows the theme.
+    #[test]
+    fn old_dark_page_preference_migrates() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.apply_prefs(serde_json::from_str(r#"{"darkPage": true, "theme": "light"}"#).unwrap());
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Light));
+        assert!(a.page_is_dark());
+        a.run("ui.theme", json!({"value": "dark"})).unwrap();
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Dark));
+        assert!(a.page_is_dark(), "still dark in the dark theme");
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""neverChangePage":true"#), "{saved}");
+
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(r#"{"darkPage": false, "theme": "dark"}"#).unwrap());
+        theme_frame(&ctx, &mut b, Some(egui::Theme::Dark));
+        assert!(b.page_is_dark(), "unticked: follows the dark theme");
+        b.run("ui.theme", json!({"value": "light"})).unwrap();
+        theme_frame(&ctx, &mut b, Some(egui::Theme::Dark));
+        assert!(!b.page_is_dark());
+
+        // Unticking Never change gives what the label says: the page follows the theme, and the
+        // migrated switch doesn't turn it over.
+        a.ui.never_change_page = Some(false);
+        a.session.view.dark_mode = false;
+        assert!(a.page_is_dark(), "dark theme, Never change off: dark page");
+
+        // The new setting round-trips and wins over the old key.
+        let mut c = app();
+        c.apply_prefs(serde_json::from_str(r#"{"darkPage": false, "neverChangePage": true}"#).unwrap());
+        assert_eq!(c.prefs().never_change_page, Some(true));
+    }
+
+    /// #1722: a dark page on screen leaves the document's own page colour alone, and the render
+    /// options that printing and export use stay light.
+    #[test]
+    fn the_theme_never_changes_the_document_page_color() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "dark"})).unwrap();
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Dark));
+        assert!(a.page_is_dark());
+        assert_eq!(a.session.doc.settings.page_color, None);
+        assert!(canvas::page_render_options(&a, false).dark, "the screen draws dark");
+        assert!(!wordcraft_render::RenderOptions::default().dark, "export and print render light");
+    }
+
+    /// #1722: the Switch Modes flip belongs to the theme it was made in; a change of theme (by
+    /// choice or by the system) drops it, unless Never change is on.
+    #[test]
+    fn the_switch_modes_flip_does_not_outlive_a_theme_change() {
+        use egui::Theme::{Dark, Light};
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.run("ui.theme", json!({"value": "system"})).unwrap();
+        theme_frame(&ctx, &mut a, Some(Dark));
+        a.run("view.darkMode", json!({"value": true})).unwrap();
+        assert!(!a.page_is_dark(), "dark theme + flip: white page");
+        theme_frame(&ctx, &mut a, Some(Light));
+        assert!(!a.page_is_dark(), "the system went light: a light page, not a flipped dark one");
+        theme_frame(&ctx, &mut a, Some(Dark));
+        assert!(a.page_is_dark(), "and back to dark: the theme's own page");
+
+        // Not saved either, so a restart under another theme starts clean.
+        a.run("view.darkMode", json!({"value": true})).unwrap();
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&serde_json::to_string(&a.prefs()).unwrap()).unwrap());
+        theme_frame(&ctx, &mut b, Some(Light));
+        assert!(!b.page_is_dark());
+
+        // With Never change the flip is the page's only switch and stays.
+        let mut c = app();
+        c.ui.never_change_page = Some(true);
+        c.run("ui.theme", json!({"value": "system"})).unwrap();
+        theme_frame(&ctx, &mut c, Some(Light));
+        c.run("view.darkMode", json!({"value": true})).unwrap();
+        theme_frame(&ctx, &mut c, Some(Dark));
+        assert!(c.page_is_dark());
+    }
+
+    /// #1722: ticking or unticking Never change drops the migrated switch.
+    #[test]
+    fn toggling_never_change_clears_the_switch() {
+        let ctx = egui::Context::default();
+        let mut a = app();
+        a.apply_prefs(serde_json::from_str(r#"{"darkPage": true, "theme": "dark"}"#).unwrap());
+        theme_frame(&ctx, &mut a, Some(egui::Theme::Dark));
+        assert!(a.page_is_dark());
+        a.set_never_change_page(false);
+        assert!(a.page_is_dark(), "unticked in the dark theme: the dark page the theme gives");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(r#"{"darkPage": false, "theme": "dark"}"#).unwrap());
+        theme_frame(&ctx, &mut b, Some(egui::Theme::Dark));
+        b.run("view.darkMode", json!({"value": true})).unwrap();
+        b.set_never_change_page(true);
+        assert!(!b.page_is_dark(), "ticked: the document's own light page, no stale flip");
     }
 
     /// #2526: the Navigation pane stays as the person left it at the next launch, and a

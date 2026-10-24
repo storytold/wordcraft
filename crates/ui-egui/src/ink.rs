@@ -232,7 +232,7 @@ pub fn paint(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLayou
     let s = page_scale(rects, layout, scale, d.page).unwrap_or(scale);
     let set = app.session.view.draw.settings(d.tool);
     let alpha = (d.tool.alpha() * 255.0).round() as u8;
-    let color = screen_ink(app.session.view.dark_mode, set.color, alpha);
+    let color = screen_ink(app.page_is_dark(), set.color, alpha);
     let pts: Vec<Pos2> = d.pts.iter().map(|p| map(*p)).collect();
     let width = (set.width * s).max(1.0);
     if let [only] = pts.as_slice() {
@@ -340,7 +340,7 @@ fn paint_replay(app: &WordApp, painter: &Painter, rects: &[Rect], layout: &DocLa
         let frac = if k.dur > 0.0 { ((r.t - k.start) / k.dur).clamp(0.0, 1.0) } else { 1.0 };
         let total: f32 = k.paths.iter().map(|p| path_len(p)).sum();
         let [cr, cg, cb, ca] = k.color.to_srgba_unmultiplied();
-        let color = screen_ink(app.session.view.dark_mode, wordcraft_doc::Rgb(cr, cg, cb), ca);
+        let color = screen_ink(app.page_is_dark(), wordcraft_doc::Rgb(cr, cg, cb), ca);
         let mut left = total * frac;
         let width = (k.width * s).max(1.0);
         for path in &k.paths {
