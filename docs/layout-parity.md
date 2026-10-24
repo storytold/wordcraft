@@ -274,6 +274,8 @@ Installed static fonts also resolve by their OpenType PostScript name (name ID 6
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
 | 2026-10-16 | trivial | `w:autoSpaceDE` and `w:autoSpaceDN` are laid out: a quarter em between Asian text and Latin text or digits (#2358) |
 | 2026-10-16 | trivial | AutoFit donors lose equal widths, bounded by content minima |
+| 2026-10-16 | trivial | Picture-only automatic line spacing adds the font's extra leading below the picture. Synthetic single, 1.15 and double-spacing regression checked against a Word Mac export; grid, label and mixed-text metrics unchanged. |
+| 2026-10-19 | trivial | Picture-only leading excludes legacy checkboxes and text boxes; mixed-object lines retain text descent. Synthetic regressions. |
 | 2026-10-16 | trivial | Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height. |
 | 2026-10-15 | trivial | Absent or zero DrawingML effect extents remain zero on rotated pictures; contracted axes no longer reserve invented effects room. Synthetic quarter-turn import regression (`zero_effects_stay_zero_rotated`). |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
