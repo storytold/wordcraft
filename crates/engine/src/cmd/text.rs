@@ -1,7 +1,7 @@
 //! Typing and deleting.
 
 use serde_json::Value;
-use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_HYPHEN};
+use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_HYPHEN};
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
 
@@ -679,6 +679,24 @@ fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
     super::para::outdent(s, &Value::Null)
 }
 
+/// `off` moved past the comment markers beside it, forwards or backwards. The markers are
+/// invisible, so Delete and Backspace step over them, as in Word: a key that seemed to do nothing
+/// took one end of a comment's range away, and an empty range's markers sit side by side.
+fn past_comment_markers(para: &wordcraft_doc::Paragraph, mut off: usize, forward: bool) -> usize {
+    let w = OBJ.len_utf8();
+    let marker = |at: usize| matches!(para.object_at(at), Some(InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }));
+    if forward {
+        while off < para.len() && marker(off) {
+            off += w;
+        }
+    } else {
+        while off >= w && marker(off - w) {
+            off -= w;
+        }
+    }
+    off
+}
+
 fn backspace(s: &mut Session, v: &Value) -> CmdResult {
     let r = backspace_inner(s, v)?;
     super::controls::restore_placeholder(s)?;
@@ -694,6 +712,7 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     let f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    let f = Pos { off: past_comment_markers(para, f.off, false), ..f };
     if f.off > 0 {
         let a = Pos { off: para.backspace_from(f.off), ..f.clone() };
         if let Some(c) = s.autocap.as_mut() {
@@ -784,6 +803,7 @@ fn delete_inner(s: &mut Session, _: &Value) -> CmdResult {
     }
     let f = s.sel.focus.clone();
     let Some(para) = s.doc.para_at(&f) else { return sel_result(s) };
+    let f = Pos { off: past_comment_markers(para, f.off, true), ..f };
     if f.off < para.len() {
         let b = Pos { off: para.next_boundary(f.off), ..f.clone() };
         s.sel = Selection { anchor: f, focus: b };

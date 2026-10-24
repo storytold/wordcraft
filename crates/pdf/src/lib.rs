@@ -1009,7 +1009,14 @@ impl Exporter<'_> {
             let clipped = page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. }));
             items.extend(clipped.cloned());
         }
-        let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
+        // A comment range begun in an earlier paragraph shades this one too.
+        let comment_carry = match it {
+            Placed::Lines { story, path, .. } => page.comment_carry.iter().filter(|(s, q, _)| s == story && q == path).cloned().collect(),
+            Placed::Clip { .. } => page.comment_carry.clone(),
+            _ => Vec::new(),
+        };
+        let one =
+            Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, comment_carry, ..Default::default() };
         page_display(self.doc, &one, dopts)
     }
 

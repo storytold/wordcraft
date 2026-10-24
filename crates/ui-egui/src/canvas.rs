@@ -783,6 +783,8 @@ fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
 fn page_content_key(page: &Page) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     (page.w.to_bits(), page.h.to_bits()).hash(&mut h);
+    // A comment range from an earlier page shades this one: its paragraphs can be unchanged.
+    page.comment_carry.hash(&mut h);
     for list in [&page.items, &page.header, &page.footer] {
         list.len().hash(&mut h);
         for it in list.iter() {
@@ -6972,5 +6974,25 @@ mod tests {
         let hidden = view_key(&app, false, Some(&object));
         assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
         assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    }
+
+    /// A comment from the first page to the last shades the pages between, whose paragraphs it
+    /// didn't touch: their fingerprint changes with it, so their cached pictures are drawn again.
+    #[test]
+    fn a_comment_across_pages_changes_the_pages_between() {
+        use wordcraft_doc::para::InlineObject;
+        use wordcraft_doc::props::CharProps;
+        use wordcraft_doc::{Comment, Document, Paragraph, PartKind, Pos, para_block};
+        let mut d = Document::from_text(&["Alpha paragraph one."; 150].join("\n"));
+        let mut cache = wordcraft_layout::LayoutCache::new();
+        let opts = wordcraft_layout::LayoutOptions::default();
+        let plain = wordcraft_layout::layout(&d, &mut cache, &opts);
+        assert!(plain.pages.len() >= 3, "{} pages", plain.pages.len());
+        let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("A note.", CharProps::default()))]);
+        d.comments.insert(0, Comment { author: "Reviewer".into(), part, ..Default::default() });
+        d.insert_object(&Pos::body(149, 5), InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
+        d.insert_object(&Pos::body(0, 0), InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+        let commented = wordcraft_layout::layout(&d, &mut cache, &opts);
+        assert_ne!(page_content_key(&plain.pages[1]), page_content_key(&commented.pages[1]));
     }
 }

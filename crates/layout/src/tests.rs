@@ -6723,6 +6723,119 @@ fn comment_balloons_survive_hostile_comments() {
     }
 }
 
+/// Adds a comment on the body text from `from` to `to`, which may be in different paragraphs,
+/// and returns its id.
+fn comment_over(d: &mut Document, from: (usize, usize), to: (usize, usize)) -> u32 {
+    let part = d.add_part(wordcraft_doc::PartKind::Comment, vec![wordcraft_doc::para_block(Paragraph::with_text("A note.", CharProps::default()))]);
+    let id = d.comments.keys().next_back().map_or(0, |k| k + 1);
+    d.comments.insert(id, wordcraft_doc::Comment { author: "Reviewer".into(), part, ..Default::default() });
+    let p = CharProps::default();
+    d.insert_object(&Pos::body(to.0, to.1), InlineObject::CommentEnd { id }, &p).unwrap();
+    d.insert_object(&Pos::body(from.0, from.1), InlineObject::CommentStart { id }, &p).unwrap();
+    id
+}
+
+/// The shades page `pi` draws over commented text (markup on, the default).
+fn comment_shades(d: &Document, l: &DocLayout, pi: usize) -> Vec<Rect> {
+    display::page_display(d, &l.pages[pi], &display::DisplayOptions::default())
+        .into_iter()
+        .filter_map(|x| match x {
+            display::Draw::Fill { rect, color: wordcraft_doc::props::Rgb(0xEF, 0xE3, 0xF7), .. } => Some(rect),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The shade on the line that holds `pos`, if there is one.
+fn shade_at(d: &Document, l: &DocLayout, pos: &Pos) -> Option<Rect> {
+    let c = l.caret(pos)?;
+    let mid = c.top + c.height / 2.0;
+    comment_shades(d, l, c.page).into_iter().find(|r| r.y <= mid && mid <= r.bottom())
+}
+
+/// A comment over several paragraphs shades all of its text: the paragraphs between its first
+/// and last were left plain, so only the first one (and the last) looked commented.
+#[test]
+fn comment_shade_covers_every_paragraph_of_its_range() {
+    let mut d = Document::from_text("Alpha paragraph one.\n\nBeta paragraph two.\n\nGamma paragraph three.\nAfter the comment.");
+    comment_over(&mut d, (0, 6), (4, 5));
+    let l = lay(&d);
+    let first = shade_at(&d, &l, &Pos::body(0, 0)).expect("the first paragraph is shaded");
+    let start = l.caret(&Pos::body(0, 9)).unwrap();
+    assert!((first.x - start.x).abs() < 0.5, "from the comment's start: {first:?} vs {start:?}");
+    let middle = shade_at(&d, &l, &Pos::body(2, 0)).expect("the middle paragraph is shaded");
+    let (from, to) = (l.caret(&Pos::body(2, 0)).unwrap(), l.caret(&Pos::body(2, "Beta paragraph two.".len())).unwrap());
+    assert!((middle.x - from.x).abs() < 0.5 && (middle.right() - to.x).abs() < 0.5, "all of it: {middle:?}");
+    let last = shade_at(&d, &l, &Pos::body(4, 0)).expect("the last paragraph is shaded");
+    let end = l.caret(&Pos::body(4, 5)).unwrap();
+    assert!((last.right() - end.x).abs() < 0.5, "up to the comment's end: {last:?} vs {end:?}");
+    assert!(shade_at(&d, &l, &Pos::body(5, 0)).is_none(), "nothing after the comment");
+    // Without markup nothing is shaded.
+    let plain = display::DisplayOptions { markup: false, ..Default::default() };
+    let draws = display::page_display(&d, &l.pages[0], &plain);
+    assert!(!draws.iter().any(|x| matches!(x, display::Draw::Fill { color: wordcraft_doc::props::Rgb(0xEF, 0xE3, 0xF7), .. })));
+}
+
+/// A comment from the first page to the third shades the page between, whose paragraphs the
+/// comment didn't touch: the page says so ([`Page::comment_carry`]), and so its cached picture
+/// is drawn again.
+#[test]
+fn comment_shade_runs_across_pages() {
+    let text = ["Alpha paragraph one."; 150].join("\n");
+    let mut d = Document::from_text(&text);
+    comment_over(&mut d, (0, 0), (149, 5));
+    let l = lay(&d);
+    assert!(l.pages.len() >= 3, "{} pages", l.pages.len());
+    for pi in 0..l.pages.len() {
+        assert!(!comment_shades(&d, &l, pi).is_empty(), "page {pi} is shaded");
+    }
+    let between = &l.pages[1].comment_carry;
+    assert!(!between.is_empty() && between.iter().all(|(s, _, c)| *s == StoryRef::Body && c.through && c.ending.is_empty()), "{between:?}");
+    assert!(l.pages[0].comment_carry.iter().all(|(_, path, _)| *path != Path::top(0)), "the first paragraph starts outside it");
+    let last = l.pages.last().unwrap();
+    assert!(last.comment_carry.iter().any(|(_, path, c)| *path == Path::top(149) && !c.through && c.ending.len() == 1));
+    // A document without comments carries nothing.
+    let plain = lay(&Document::from_text(&text));
+    assert!(plain.pages.iter().all(|p| p.comment_carry.is_empty()));
+}
+
+/// Broken ranges stay where they are: a start whose end is gone shades the rest of its own
+/// paragraph only (not the rest of the document), and an end with no start, or markers of a
+/// comment the document doesn't have, shade nothing (an end used to shade from the start of
+/// its paragraph).
+#[test]
+fn broken_comment_ranges_shade_no_further() {
+    let mut d = Document::from_text("Alpha paragraph one.\nBeta paragraph two.\nGamma paragraph three.");
+    let lost_end = comment_over(&mut d, (0, 6), (1, 0));
+    let lost_start = comment_over(&mut d, (0, 0), (2, 5));
+    // Take out the first comment's end and the second one's start.
+    for (path, id, start) in [(1, lost_end, false), (0, lost_start, true)] {
+        let p = d.para(StoryRef::Body, &Path::top(path)).unwrap();
+        let off = p
+            .object_offsets()
+            .into_iter()
+            .find(|o| match p.object_at(*o) {
+                Some(InlineObject::CommentStart { id: i }) => start && *i == id,
+                Some(InlineObject::CommentEnd { id: i }) => !start && *i == id,
+                _ => false,
+            })
+            .unwrap();
+        d.delete_range(&Pos::body(path, off), &Pos::body(path, off + 3)).unwrap();
+    }
+    let l = lay(&d);
+    let first = shade_at(&d, &l, &Pos::body(0, 0)).expect("the rest of the first paragraph");
+    let start = l.caret(&Pos::body(0, 6)).unwrap();
+    assert!((first.x - start.x).abs() < 0.5, "{first:?} vs {start:?}");
+    assert!(shade_at(&d, &l, &Pos::body(1, 0)).is_none(), "a lost end doesn't shade the next paragraph");
+    assert!(shade_at(&d, &l, &Pos::body(2, 0)).is_none(), "an end with no start shades nothing");
+    // Markers of a comment the document doesn't have.
+    let mut d = Document::from_text("Alpha paragraph one.\nBeta paragraph two.");
+    let id = comment_over(&mut d, (0, 0), (1, 4));
+    d.comments.remove(&id);
+    let l = lay(&d);
+    assert!(comment_shades(&d, &l, 0).is_empty());
+}
+
 /// The first paragraph's lines on page one: (top, bottom, left, right), relative to its column.
 fn line_spans(l: &DocLayout) -> Vec<(f32, f32, f32, f32)> {
     let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { return Vec::new() };

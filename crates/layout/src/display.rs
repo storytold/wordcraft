@@ -1,10 +1,12 @@
 //! Page → draw items, shared by the raster renderer, the PDF exporter and thumbnails.
 
+use std::collections::{HashMap, HashSet};
+
 use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, PathSeg, TextAlign};
 use wordcraft_doc::para::{InlineObject, ShapeKind};
 use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, Underline};
 use wordcraft_doc::section::SectionStart;
-use wordcraft_doc::{Block, Document, Path, StoryRef};
+use wordcraft_doc::{Block, Document, Paragraph, Path, StoryRef};
 use wordcraft_fonts::{BezPath, FaceRef};
 use wordcraft_geom::{Rect, Spin};
 
@@ -529,8 +531,8 @@ fn stroke_of(u: Underline) -> Stroke {
 pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<Draw> {
     let mut out = Vec::new();
     let (ha, ba) = dimming(opts);
-    stories_display(doc, &[&page.header, &page.footer], opts, ha, &mut out);
-    stories_display(doc, &[&page.items], opts, ba, &mut out);
+    stories_display(doc, &[&page.header, &page.footer], &page.comment_carry, opts, ha, &mut out);
+    stories_display(doc, &[&page.items], &page.comment_carry, opts, ba, &mut out);
     body_change_bars(doc, page, opts, ba, &mut out);
     out
 }
@@ -541,8 +543,8 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
 pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32, Vec<Draw>); 2] {
     let (ha, ba) = dimming(opts);
     let (mut hf, mut body) = (Vec::new(), Vec::new());
-    stories_display(doc, &[&page.header, &page.footer], opts, 1.0, &mut hf);
-    stories_display(doc, &[&page.items], opts, 1.0, &mut body);
+    stories_display(doc, &[&page.header, &page.footer], &page.comment_carry, opts, 1.0, &mut hf);
+    stories_display(doc, &[&page.items], &page.comment_carry, opts, 1.0, &mut body);
     body_change_bars(doc, page, opts, 1.0, &mut body);
     [(ha, hf), (ba, body)]
 }
@@ -560,7 +562,14 @@ fn body_change_bars(doc: &Document, page: &Page, opts: &DisplayOptions, alpha: f
 }
 
 /// Draw items for the placed items of `stories`, faded by `a`.
-fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptions, a: f32, out: &mut Vec<Draw>) {
+fn stories_display(
+    doc: &Document,
+    stories: &[&Vec<Placed>],
+    carry: &[(StoryRef, Path, CommentCarry)],
+    opts: &DisplayOptions,
+    a: f32,
+    out: &mut Vec<Draw>,
+) {
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
@@ -575,7 +584,7 @@ fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptio
                 && let Some(rect) = cell_clip(&clips, *story, &path.0)
             {
                 let mut inner = Vec::new();
-                item(doc, it, opts, a, &mut inner);
+                item(doc, it, carry, opts, a, &mut inner);
                 out.push(Draw::Clip { rect, items: inner });
                 continue;
             }
@@ -589,10 +598,10 @@ fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptio
                     if let Some((_, rect, warp)) = warps.iter().find(|(w, ..)| w == id) {
                         let lines: Vec<&Placed> =
                             items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if s == id)).collect();
-                        warped_text(doc, &lines, *rect, warp, opts, a, out);
+                        warped_text(doc, &lines, *rect, warp, carry, opts, a, out);
                     }
                 }
-                _ => item(doc, it, opts, a, out),
+                _ => item(doc, it, carry, opts, a, out),
             }
         }
     }
@@ -608,11 +617,146 @@ pub fn object_display(doc: &Document, page: &Page, o: &InlineObject, rect: Rect,
     for items in [&page.items, &page.header, &page.footer] {
         let lines: Vec<&Placed> = items.iter().filter(|i| matches!(i, Placed::Lines { story: StoryRef::Part(s), .. } if *s == id)).collect();
         match warped_boxes(doc, items).into_iter().find(|(w, ..)| *w == id) {
-            Some((_, rect, warp)) if !lines.is_empty() => warped_text(doc, &lines, rect, &warp, opts, 1.0, &mut out),
-            _ => lines.into_iter().for_each(|it| item(doc, it, opts, 1.0, &mut out)),
+            Some((_, rect, warp)) if !lines.is_empty() => warped_text(doc, &lines, rect, &warp, &page.comment_carry, opts, 1.0, &mut out),
+            _ => lines.into_iter().for_each(|it| item(doc, it, &page.comment_carry, opts, 1.0, &mut out)),
         }
     }
     out
+}
+
+/// How a paragraph starts inside comment ranges that began in an earlier paragraph of its story
+/// (see [`comment_carry`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub struct CommentCarry {
+    /// A range began before the paragraph and ends after it: all of the paragraph is commented.
+    pub through: bool,
+    /// The comments whose range began before the paragraph and ends in it.
+    pub ending: Vec<u32>,
+}
+
+/// The paragraphs that start inside a comment range begun in an earlier paragraph, by story and
+/// path, so the shade over commented text runs across paragraphs and pages (it stopped at the
+/// end of the paragraph the comment starts in). Only ranges of comments the document has count,
+/// and only when the end follows the start in the same story: a start whose end was lost shades
+/// the rest of its own paragraph, as before, never the rest of the document. One pass over the
+/// paragraphs' objects, once per layout and only when the document has comments.
+pub fn comment_carry(doc: &Document) -> HashMap<(StoryRef, Path), CommentCarry> {
+    let mut out = HashMap::new();
+    if doc.comments.is_empty() {
+        return out;
+    }
+    let stories = std::iter::once(StoryRef::Body).chain(doc.parts.keys().map(|k| StoryRef::Part(*k)));
+    for story in stories {
+        let paths = doc.para_paths(story);
+        // Ranges that end in a later paragraph than they start in: (start, end paragraph, id).
+        let mut open: HashMap<u32, usize> = HashMap::new();
+        let mut spans: Vec<(usize, usize, u32)> = Vec::new();
+        for (k, path) in paths.iter().enumerate() {
+            let Some(p) = doc.para(story, path) else { continue };
+            for o in &p.objects {
+                match o {
+                    InlineObject::CommentStart { id } if doc.comments.contains_key(id) => {
+                        open.entry(*id).or_insert(k);
+                    }
+                    InlineObject::CommentEnd { id } => {
+                        if let Some(start) = open.remove(id)
+                            && start < k
+                        {
+                            spans.push((start, k, *id));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        if spans.is_empty() {
+            continue;
+        }
+        // The paragraphs strictly inside a span: a running count of the spans open over each.
+        let mut delta = vec![0i64; paths.len() + 1];
+        let mut ending: HashMap<usize, Vec<u32>> = HashMap::new();
+        for (a, b, id) in spans {
+            if let Some(d) = delta.get_mut(a + 1) {
+                *d += 1;
+            }
+            if let Some(d) = delta.get_mut(b) {
+                *d -= 1;
+            }
+            ending.entry(b).or_default().push(id);
+        }
+        let mut inside = 0i64;
+        for (k, path) in paths.into_iter().enumerate() {
+            inside += delta.get(k).copied().unwrap_or(0);
+            let ending = ending.remove(&k).unwrap_or_default();
+            if inside > 0 || !ending.is_empty() {
+                out.insert((story, path), CommentCarry { through: inside > 0, ending });
+            }
+        }
+    }
+    out
+}
+
+/// The entries of `carry` for the paragraphs `page` shows (body, header, footer, and the text in
+/// a drawing canvas), sorted by story and path, for [`crate::Page::comment_carry`].
+pub(crate) fn page_carry(carry: &HashMap<(StoryRef, Path), CommentCarry>, page: &Page) -> Vec<(StoryRef, Path, CommentCarry)> {
+    fn collect(items: &[Placed], carry: &HashMap<(StoryRef, Path), CommentCarry>, depth: usize, out: &mut Vec<(StoryRef, Path, CommentCarry)>) {
+        for it in items {
+            match it {
+                Placed::Lines { story, path, .. } => {
+                    if let Some(c) = carry.get(&(*story, path.clone())) {
+                        out.push((*story, path.clone(), c.clone()));
+                    }
+                }
+                Placed::Clip { items, .. } if depth < 16 => collect(items, carry, depth + 1, out),
+                _ => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    for items in [&page.items, &page.header, &page.footer] {
+        collect(items, carry, 0, &mut out);
+    }
+    out.sort_by(|x, y| (x.0, &x.1).cmp(&(y.0, &y.1)));
+    out.dedup_by(|x, y| x.0 == y.0 && x.1 == y.1);
+    out
+}
+
+/// The carry of paragraph `path` of `story` in a page's sorted [`crate::Page::comment_carry`].
+fn carry_of<'a>(carry: &'a [(StoryRef, Path, CommentCarry)], story: StoryRef, path: &Path) -> Option<&'a CommentCarry> {
+    let i = carry.binary_search_by(|(s, q, _)| (*s, q).cmp(&(story, path))).ok()?;
+    carry.get(i).map(|(.., c)| c)
+}
+
+/// The byte ranges of paragraph `p` inside a comment range, given how it starts (`carry`). An end
+/// with no start before it (a comment with no range, or one whose start was lost) shades nothing.
+fn commented_ranges(doc: &Document, p: &Paragraph, carry: Option<&CommentCarry>) -> Vec<(usize, usize)> {
+    if doc.comments.is_empty() {
+        return Vec::new();
+    }
+    if carry.is_some_and(|c| c.through) {
+        return vec![(0, p.len())];
+    }
+    let mut open: HashSet<u32> = carry.map(|c| c.ending.iter().copied().collect()).unwrap_or_default();
+    let mut from = 0;
+    let mut ranges = Vec::new();
+    for off in p.object_offsets() {
+        match p.object_at(off) {
+            Some(InlineObject::CommentStart { id }) if doc.comments.contains_key(id) => {
+                if open.is_empty() {
+                    from = off;
+                }
+                open.insert(*id);
+            }
+            Some(InlineObject::CommentEnd { id }) if open.remove(id) && open.is_empty() => {
+                ranges.push((from, off));
+            }
+            _ => {}
+        }
+    }
+    if !open.is_empty() {
+        ranges.push((from, p.len()));
+    }
+    ranges
 }
 
 /// The cells among `items` whose content is cut off at their edge (see [`Placed::Cell`]'s
@@ -659,13 +803,14 @@ fn warped_text(
     lines: &[&Placed],
     rect: Rect,
     warp: &wordcraft_doc::wordart::TextWarp,
+    carry: &[(StoryRef, Path, CommentCarry)],
     opts: &DisplayOptions,
     alpha: f32,
     out: &mut Vec<Draw>,
 ) {
     let mut raw = Vec::new();
     for it in lines {
-        item(doc, it, opts, alpha, &mut raw);
+        item(doc, it, carry, opts, alpha, &mut raw);
     }
     // The letters: runs with effects as they are, plain runs from their glyphs.
     let mut arts: Vec<(BezPath, Box<wordcraft_doc::wordart::TextEffects>, Rgb, f32)> = Vec::new();
@@ -787,13 +932,21 @@ fn char_box(b: &Border, x0: f32, x1: f32, top: f32, bottom: f32, alpha: f32, out
     out.push(rule(r, top, r, bottom, b, alpha));
 }
 
-fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
-    item_in(doc, it, opts, alpha, Spin::default(), out)
+fn item(doc: &Document, it: &Placed, carry: &[(StoryRef, Path, CommentCarry)], opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
+    item_in(doc, it, carry, opts, alpha, Spin::default(), out)
 }
 
 /// [`item`] drawn inside the turn `outer` (a turned Drawing Canvas's members): a shape's
 /// effects follow all the turns it is drawn inside.
-fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
+fn item_in(
+    doc: &Document,
+    it: &Placed,
+    carry: &[(StoryRef, Path, CommentCarry)],
+    opts: &DisplayOptions,
+    alpha: f32,
+    outer: Spin,
+    out: &mut Vec<Draw>,
+) {
     match it {
         Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
@@ -813,14 +966,14 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
         Placed::Clip { rect, spin, items } => {
             let mut inner = Vec::new();
             for it in items {
-                item_in(doc, it, opts, alpha, spin.within(outer), &mut inner);
+                item_in(doc, it, carry, opts, alpha, spin.within(outer), &mut inner);
             }
             spun(*spin, *rect, vec![Draw::Clip { rect: *rect, items: inner }], out)
         }
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
-            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, alpha, *turn == TextDirection::Down, &mut items);
+            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, carry, opts, alpha, *turn == TextDirection::Down, &mut items);
             // Link areas are axis-aligned page rectangles: turned text gets none.
             for d in &mut items {
                 if let Draw::Glyphs { link, .. } = d {
@@ -832,7 +985,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
-        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, alpha, false, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, carry, opts, alpha, false, out),
     }
 }
 
@@ -845,6 +998,7 @@ fn lines(
     l1: usize,
     x: f32,
     y: f32,
+    carry: &[(StoryRef, Path, CommentCarry)],
     opts: &DisplayOptions,
     alpha: f32,
     down: bool,
@@ -861,43 +1015,24 @@ fn lines(
         (TextColor::Auto, Some(rgb)) => rgb,
         _ => text_color(c, background),
     };
+    // Commented text gets a soft shade (comment anchors are object markers). A range can begin
+    // in an earlier paragraph (the page's carry says so).
+    let commented = match para {
+        Some(p) if opts.markup && opts.revisions.comments => commented_ranges(doc, p, carry_of(carry, story, path)),
+        _ => Vec::new(),
+    };
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
         let top = y + (line.top - first.top);
         let base = top + (line.baseline - line.top);
         let bottom = top + line.height;
-        // Commented text gets a soft shade (comment anchors are object markers).
-        if opts.markup
-            && opts.revisions.comments
-            && let Some(p) = para
-        {
-            let mut open: Option<usize> = None;
-            let mut ranges = Vec::new();
-            for off in p.object_offsets() {
-                match p.object_at(off) {
-                    Some(InlineObject::CommentStart { .. }) => open = open.or(Some(off)),
-                    Some(InlineObject::CommentEnd { .. }) => {
-                        ranges.push((open.take().unwrap_or(0), off));
-                    }
-                    _ => {}
-                }
+        for &(a, b) in &commented {
+            if b <= line.start || a >= line.stop {
+                continue;
             }
-            if let Some(o) = open {
-                ranges.push((o, p.len()));
-            }
-            for (a, b) in ranges {
-                if b <= line.start || a >= line.stop {
-                    continue;
-                }
-                for (x0, x1) in pl.x_spans(li, a.max(line.start), b.min(line.stop)) {
-                    if x1 > x0 {
-                        out.push(Draw::Fill {
-                            rect: Rect::new(x + x0, top, x1 - x0, line.height),
-                            color: Rgb(0xEF, 0xE3, 0xF7),
-                            alpha,
-                            text_bg: false,
-                        });
-                    }
+            for (x0, x1) in pl.x_spans(li, a.max(line.start), b.min(line.stop)) {
+                if x1 > x0 {
+                    out.push(Draw::Fill { rect: Rect::new(x + x0, top, x1 - x0, line.height), color: Rgb(0xEF, 0xE3, 0xF7), alpha, text_bg: false });
                 }
             }
         }
