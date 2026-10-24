@@ -1022,6 +1022,34 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
     assert!(whole > 0.0 && (cropped / whole - 1.0 / 0.03).abs() < 0.5, "emf: {whole} → {cropped}");
 }
 
+/// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
+/// components unsubsampled, with no pixel data that size.
+fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
+    let mut jpeg = Vec::new();
+    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 1] = 0xC2;
+    jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+    jpeg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+    for c in 0..3 {
+        jpeg[sof + 11 + 3 * c] = 0x11;
+    }
+    let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+    let n = usize::from(jpeg[sos + 4]);
+    jpeg[sos + 6 + 2 * n] = 0;
+    jpeg
+}
+
+/// #3644: a progressive JPEG's coefficients count toward the budget, beside its output.
+#[test]
+fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
+    assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
+    assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900))).is_none());
+    let mut baseline = Vec::new();
+    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    assert!(load_image(&Arc::new(baseline)).is_some(), "other JPEGs still embed");
+}
+
 /// #1502: an inline picture's Figure carries its own alt text, not the "picture" fallback.
 #[test]
 fn inline_picture_figure_keeps_its_alt_text() {

@@ -14,7 +14,7 @@ craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
 # `craft-i18n.rev`). Its own rev: lazy per-locale parsing (storytold/craft-libs#247).
 craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "f7cc8a7df15e824b02cf73859567a6242d3a7de4" }
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 unicode-bidi = { workspace = true }
 wordcraft-fonts = { workspace = true }

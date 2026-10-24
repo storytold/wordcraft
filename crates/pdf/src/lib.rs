@@ -1889,6 +1889,10 @@ fn path_from(b: &kurbo::BezPath) -> Option<Path> {
 /// Decode a picture for embedding (validated with the `image` crate first, so a broken file
 /// can't fail the whole export).
 fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
+    // The shared probe also charges what the decoder holds beside its output (#3644).
+    if !wordcraft_geom::picture::probe(data).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
+        return None;
+    }
     load_image_within(data, wordcraft_geom::MAX_DECODED_BYTES)
 }
 

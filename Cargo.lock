@@ -5307,6 +5307,7 @@ dependencies = [
 name = "wordcraft-geom"
 version = "0.10.0"
 dependencies = [
+ "image",
  "serde",
 ]
 
