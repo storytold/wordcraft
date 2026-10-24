@@ -938,7 +938,8 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
     (kind, list)
 }
 
-fn media_ext(key: &str, data: &[u8]) -> String {
+/// A picture's file extension as the writers see it: from its bytes, else from its media key.
+pub fn media_ext(key: &str, data: &[u8]) -> String {
     match image::guess_format(data) {
         Ok(image::ImageFormat::Png) => "png".into(),
         Ok(image::ImageFormat::Jpeg) => "jpeg".into(),

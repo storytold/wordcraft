@@ -89,9 +89,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}; saving to .rtf or .odt saves as usual and its result's "losses" lists what that format couldn't keep (trackedChanges, comments, notes, headersFooters, contentControls, equations (written as plain text), charts, pictures (RTF only), shapes, embeddedObjects, fields, hiddenText, sections, phoneticGuides, macros, other; [] = nothing)"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}; "losses" in the result as file.save"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -317,6 +317,9 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
             return Err(CmdError::Params(format!("`format` is \"{FORMAT_WORD_2003}\" or \"{FORMAT_FLAT_OPC}\", and only for an .xml file")));
         }
     }
+    // RTF and ODT become the document's file like a Word document, but can't hold everything:
+    // say what this save leaves out (the app asks the user first; scripts get the list, #1316).
+    let losses = matches!(ext.as_str(), "rtf" | "odt").then(|| crate::losses::format_losses(&s.doc, &path.to_string_lossy()));
     // Undone below if the write fails: a failed save (no permission, disk full, a bad path)
     // must not leave the document's own save stamps — zoom, modified/created, author, revision —
     // changed, or a later save would persist them for a write that never actually happened.
@@ -339,7 +342,11 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.dirty = false;
         s.relayout();
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
+    let mut r = json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted});
+    if let (Some(losses), Some(o)) = (losses, r.as_object_mut()) {
+        o.insert("losses".into(), json!(losses.iter().map(|l| l.id()).collect::<Vec<_>>()));
+    }
+    Ok(r)
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?
