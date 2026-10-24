@@ -173,6 +173,12 @@ impl BoxBudget {
     pub fn total(&self) -> usize {
         self.total
     }
+
+    /// A fresh budget that counts on from `total` boxes already expanded (an incremental layout
+    /// resuming part way through a document).
+    pub fn counted(total: usize) -> Self {
+        BoxBudget { total, ..Default::default() }
+    }
 }
 
 pub fn para_block(p: Paragraph) -> Arc<Block> {

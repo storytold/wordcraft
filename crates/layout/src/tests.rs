@@ -1125,6 +1125,46 @@ fn an_empty_section_mark_stays_on_a_full_page() {
 }
 
 #[test]
+fn an_incremental_pass_sees_the_next_section_start_a_page() {
+    use wordcraft_doc::section::SectionProps;
+    // #554: a full page, then an empty mark ending section 1, then section 2. Turning section 2
+    // from continuous to next-page keeps the mark on page 1; a pass resuming inside section 1
+    // must see that too, not the flag its checkpoint saved.
+    let lines: Vec<String> = (1..=200).map(|i| format!("Line {i}")).collect();
+    let one_page = lay(&Document::from_text(&lines.join("\n"))).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
+    let mut d = Document::from_text(&format!("{}\n\nNext", lines[..one_page].join("\n")));
+    d.para_mut(StoryRef::Body, &Path::top(one_page)).unwrap().section = Some(Box::new(SectionProps::default()));
+    d.last_section.start = SectionStart::Continuous;
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions::default();
+    let _ = layout(&d, &mut cache, &opts);
+    d.last_section.start = SectionStart::NextPage;
+    let inc = layout(&d, &mut cache, &opts);
+    let full = lay(&d);
+    let firsts = |l: &DocLayout| l.pages.iter().map(|p| p.first_block).collect::<Vec<_>>();
+    assert_eq!(firsts(&inc), firsts(&full), "incremental pages start at other blocks than a full layout's");
+}
+
+#[test]
+fn the_paragraph_cache_stays_bounded_over_many_incremental_passes() {
+    // #554: typing on a late page lays out only near the edit, so the pass can't tell which cached
+    // layouts are stale; every keystroke adds one. The cache must still be cleaned now and then.
+    let mut d = Document::from_text(&(1..=300).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n"));
+    let mut cache = LayoutCache::new();
+    let opts = LayoutOptions::default();
+    let _ = layout(&d, &mut cache, &opts);
+    let (mut most, mut incremental) = (0, 0);
+    for rev in 0..10_000u64 {
+        d.para_mut(StoryRef::Body, &Path::top(280)).unwrap().rev = 1_000_000 + rev;
+        let l = layout(&d, &mut cache, &opts);
+        incremental += usize::from(l.blocks_placed < d.body.len());
+        most = most.max(cache.len());
+    }
+    assert!(incremental > 9_000, "only {incremental} passes were incremental");
+    assert!(most <= 9 * 1024, "the cache grew to {most} paragraph layouts");
+}
+
+#[test]
 fn a_bookmark_after_a_page_break_takes_no_line() {
     // "Before", a page break, then a bookmark start (Word writes the next heading's TOC bookmark
     // there): the bookmark takes no room, so "After" starts at the top of page 2, as in Word.
@@ -7030,6 +7070,35 @@ fn document_note_separators_and_continuation_notice() {
     assert!(nb <= 720.01, "notice inside the page: {nb}");
     // The separators and notice aren't text anyone clicks into.
     assert_ne!(l.story_at(0, 80.0, ny + 2.0), Some(DECOR_STORY));
+}
+
+#[test]
+fn changed_note_separators_invalidate_the_incremental_pass() {
+    // #554: the separators shape the note area on every page, so a pass resuming from a checkpoint
+    // must not reuse pagination made with other ones.
+    let notice = |text: &str| {
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props.space_after = Some(0.0);
+        Some(vec![wordcraft_doc::para_block(p)])
+    };
+    for endnotes in [false, true] {
+        let mut d = Document::from_text(&(1..=200).map(|i| format!("Line {i}")).collect::<Vec<_>>().join("\n"));
+        footnote(&mut d, &Pos::body(2, 2), "A footnote.");
+        let (mut cache, opts) = (LayoutCache::new(), LayoutOptions::default());
+        let _ = layout(&d, &mut cache, &opts);
+        let seps =
+            wordcraft_doc::NoteSeparators { continuation_notice: notice("(continued)"), separator: notice("a\n\n\n\nb"), ..Default::default() };
+        if endnotes {
+            d.endnote_separators = seps;
+        } else {
+            d.footnote_separators = seps;
+        }
+        d.para_mut(StoryRef::Body, &Path::top(150)).unwrap().rev = 1_000_000;
+        let inc = layout(&d, &mut cache, &opts);
+        let full = lay(&d);
+        let sig = |l: &DocLayout| l.pages.iter().map(|p| format!("{:?}", p.items)).collect::<Vec<_>>();
+        assert_eq!(sig(&inc), sig(&full), "endnotes={endnotes}: incremental differs from a full layout");
+    }
 }
 
 /// #344 with #332: a Drawing Canvas turns as a whole, like a group: its background and outline,
