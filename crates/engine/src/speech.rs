@@ -12,9 +12,9 @@
 //! stays whenever it already speaks the language (English text on an English system keeps the
 //! voice the user chose), and without a voice for the language the default voice speaks.
 //!
-//! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak`
-//! / `spd-say` (Linux, BSD) or the Windows speech synthesizer (PowerShell) for the current
-//! sentence, and moves on when it finishes. Commands only change the shared state and wake the
+//! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak-ng`
+//! / `espeak` or else Speech Dispatcher's `spd-say` (Linux, BSD) or the Windows speech synthesizer
+//! (PowerShell) for the current sentence, and moves on when it finishes. Commands only change the shared state and wake the
 //! worker, which stops the running sentence when the state changed under it.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -361,6 +361,41 @@ fn mac_default_voice_language() -> &'static str {
         let voice = read(&["read", "com.apple.speech.voice.prefs", "SelectedVoiceName"]);
         let locale = read(&["read", "-g", "AppleLocale"]).or_else(|| std::env::var("LANG").ok());
         mac_default_language(voice.as_deref(), mac_voice_listing(), locale.as_deref())
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+mod ssip;
+
+/// What Read Aloud says when the system has none of the speech programs it knows.
+#[cfg(not(target_arch = "wasm32"))]
+const MISSING_PROGRAM: &str = if cfg!(all(unix, not(target_os = "macos"))) {
+    "Read Aloud needs a speech program: install espeak-ng or Speech Dispatcher from your distribution's packages"
+} else {
+    "Read Aloud couldn't find the system's speech program"
+};
+
+/// Read Aloud's speed (1 = normal) as Speech Dispatcher's rate, -100 to 100 with 0 the voice's
+/// normal speed: the slowest speed is -50 and the fastest 100.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn spd_rate(rate: f32) -> i32 {
+    let rate = if rate.is_finite() { rate.clamp(MIN_RATE, MAX_RATE) } else { 1.0 };
+    let scaled = if rate >= 1.0 { (rate - 1.0) / (MAX_RATE - 1.0) * 100.0 } else { (rate - 1.0) * 100.0 };
+    scaled.round().clamp(-100.0, 100.0) as i32
+}
+
+/// Say one sentence through Speech Dispatcher ([`ssip`]), in the sentence's language whenever it
+/// has one: Speech Dispatcher's default language is its own setting (often the system locale), so
+/// English is named too. `None` when there is no Speech Dispatcher to talk to.
+#[cfg(all(unix, not(target_os = "macos"), not(target_arch = "wasm32")))]
+fn speak_dispatcher(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Option<Spoken> {
+    let stream = ssip::connect()?;
+    let lang = lang.and_then(primary_tag);
+    let req = ssip::Request { text, rate: spd_rate(rate), lang: lang.as_deref(), voice: None };
+    Some(match ssip::converse(&stream, &req, changed) {
+        Ok(ssip::Outcome::Done) => Spoken::Done,
+        Ok(ssip::Outcome::Interrupted) => Spoken::Interrupted,
+        Err(e) => Spoken::Failed(format!("Read Aloud couldn't use Speech Dispatcher: {e}")),
     })
 }
 
@@ -845,6 +880,7 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     }
     let _ = (&wpm, lang);
     let mut child = None;
+    let mut not_found = true;
     let mut last_err = String::from("no speech program on this system");
     for (mut c, voiced) in tries {
         match c.stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::null()).spawn() {
@@ -852,11 +888,20 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
                 child = Some((ch, voiced));
                 break;
             }
-            Err(e) => last_err = e.to_string(),
+            Err(e) => {
+                not_found &= e.kind() == std::io::ErrorKind::NotFound;
+                last_err = e.to_string();
+            }
         }
     }
     let Some((mut child, voiced)) = child else {
-        return (Spoken::Failed(format!("Read Aloud couldn't start the speech program: {last_err}")), false, None);
+        // Speech Dispatcher, which many desktops install without the espeak command.
+        #[cfg(all(unix, not(target_os = "macos")))]
+        if not_found && let Some(spoken) = speak_dispatcher(text, lang, rate, changed) {
+            return (spoken, false, None);
+        }
+        let message = if not_found { MISSING_PROGRAM.to_string() } else { format!("Read Aloud couldn't start the speech program: {last_err}") };
+        return (Spoken::Failed(message), false, None);
     };
     if let Some(mut stdin) = child.stdin.take() {
         let _ = stdin.write_all(text.as_bytes());
@@ -1092,6 +1137,19 @@ mod tests {
         assert_eq!(espeak_args("180", Some("uk")), ["-s", "180", "-v", "uk", "--stdin"]);
         assert_eq!(espeak_args("180", None), ["-s", "180", "--stdin"]);
         assert_eq!(espeak_args("180", Some("--evil")), ["-s", "180", "--stdin"]);
+        assert_eq!(espeak_args("180", Some("hu-HU")), ["-s", "180", "-v", "hu", "--stdin"]);
+    }
+
+    #[test]
+    fn speech_dispatcher_rate_follows_the_speed() {
+        assert_eq!(spd_rate(1.0), 0);
+        assert_eq!(spd_rate(MIN_RATE), -50);
+        assert_eq!(spd_rate(MAX_RATE), 100);
+        assert_eq!(spd_rate(2.0), 50);
+        assert_eq!(spd_rate(10.0), 100);
+        assert_eq!(spd_rate(0.0), -50);
+        assert_eq!(spd_rate(f32::NAN), 0);
+        assert_eq!(spd_rate(1.5), 25);
     }
 
     #[test]
