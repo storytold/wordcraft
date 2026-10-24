@@ -2888,7 +2888,8 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
     let (Some(page), Some(pr)) = (layout.pages.get(pi), rects.get(pi)) else { return };
     let scale = page_screen_scale(*pr, page, scale);
-    let sect = app.session.doc.sections().get(page.section).map(|(_, s)| (*s).clone()).unwrap_or_default();
+    // The page the rulers show and drag: half the sheet under 2 pages per sheet and Book fold (#1836).
+    let sect = ruler_sect(&app.session.doc, page.section);
     // Horizontal.
     let hp = ui.painter_at(h);
     let x0 = pr.min.x;
@@ -2930,7 +2931,7 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     // the indent markers, so a marker sitting on an edge keeps the pointer where they overlap.
     let (le, re) = (x0 + page.body.x * scale, x0 + page.body.right() * scale);
     // An even page of a mirrored layout is the odd page reflected: its left edge is the stored right margin.
-    let mirrored = app.session.doc.settings.mirror_margins && page.number.is_multiple_of(2);
+    let mirrored = app.session.doc.settings.mirrors() && page.number.is_multiple_of(2);
     for (edge, zone) in [
         (MarginEdge::Left, Rect::from_min_max(pos2(le - 10.0, bar.min.y), pos2(le + 3.0, bar.max.y))),
         (MarginEdge::Right, Rect::from_min_max(pos2(re - 3.0, bar.min.y), pos2(re + 10.0, bar.max.y))),
@@ -3199,6 +3200,12 @@ impl MarginEdge {
             MarginEdge::Bottom => "Bottom Margin",
         }
     }
+}
+
+/// The section `i` as the rulers show and drag it: its laid-out page, which is half the sheet
+/// under 2 pages per sheet and Book fold (#1836).
+fn ruler_sect(doc: &wordcraft_doc::Document, i: usize) -> wordcraft_doc::section::SectionProps {
+    doc.laid_out_sections().into_iter().nth(i).map(|(_, s)| s).unwrap_or_default()
 }
 
 /// The least text width (or height) a margin drag leaves: one inch, in points.
@@ -4113,6 +4120,20 @@ mod tests {
         assert!(after.page_w - after.margin_left - after.margin_right - after.gutter >= MIN_TEXT - 0.01);
         assert!(app.session.undo());
         assert_eq!(wordcraft_engine::cmd::page::sect(&app.session).margin_left, sect.margin_left);
+
+        // #1836 review: under Book fold and 2 pages per sheet the ruler measures the half page, so
+        // the right and bottom handles move.
+        for (mode, edge) in [("bookFold", MarginEdge::Right), ("twoPerSheet", MarginEdge::Bottom)] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+            app.run("layout.multiplePages", json!({"mode": mode})).unwrap();
+            let page = app.session.layout().pages[0].clone();
+            let far = if edge == MarginEdge::Right { page.w } else { page.h };
+            let v = dragged_margin(edge, far - 36.0, &ruler_sect(&app.session.doc, page.section));
+            assert_eq!(v, 36.0, "{mode}");
+            let mut params = json!({});
+            params[if edge == MarginEdge::Right { "right" } else { "bottom" }] = json!(v);
+            app.run("layout.margins", params).unwrap();
+        }
     }
 
     /// #2914: on an even page of a mirrored layout the page is the odd page reflected, so dragging

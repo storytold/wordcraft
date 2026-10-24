@@ -672,6 +672,34 @@ pub struct HfRef {
     pub rid: String,
 }
 
+/// Under 2 pages per sheet or Book fold `w:pgSz` holds the half page (Word for Mac 16.113.4,
+/// user-checked); the model keeps the sheet, so section `s` (read from `e`) gets it back. Word's
+/// sizes carry 1-2 twips of rounding (12242 x 7921 for half a Letter sheet), so a sheet within
+/// 3 twips of a named paper size snaps to it.
+pub fn sheet_from_page(s: &mut SectionProps, e: &El, mode: wordcraft_doc::section::MultiplePages) {
+    let Some(pg) = e.child("w:pgSz").filter(|_| mode.halves_page()) else { return };
+    // `w:orient` alone says how the sheet is turned, which also says how it was cut (see
+    // `MultiplePages::page_size`), so any sheet comes back as it was saved.
+    let landscape = pg.attr("w:orient") == Some("landscape");
+    let (w, h) = mode.sheet_size(s.page_w, s.page_h, landscape);
+    let near = |a: f32, b: f32| (a - b).abs() <= 0.15;
+    let (w, h) = wordcraft_geom::PAPER_SIZES
+        .iter()
+        .find_map(|&(_, pw, ph)| {
+            if near(w, pw) && near(h, ph) {
+                Some((pw, ph))
+            } else if near(w, ph) && near(h, pw) {
+                Some((ph, pw))
+            } else {
+                None
+            }
+        })
+        .unwrap_or((w, h));
+    s.page_w = w.min(crate::units::MAX_LEN_PT);
+    s.page_h = h.min(crate::units::MAX_LEN_PT);
+    s.landscape = landscape;
+}
+
 /// `w:sectPr` (header/footer references are returned for the caller to resolve).
 pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
     let mut s = SectionProps::default();

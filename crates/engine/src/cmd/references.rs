@@ -588,7 +588,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     // The text width of the TOC's own section, not the caret's: after Select All the caret sits
     // at the end of the document, possibly in a wider (landscape) section.
     let section = s.doc.section_index_of(start);
-    let width = s.doc.sections().get(section).map_or_else(|| super::page::sect(s).text_width(), |(_, x)| x.text_width());
+    let width = s.doc.laid_out_sections().get(section).map_or_else(|| super::page::laid_out_sect(s).text_width(), |(_, x)| x.text_width());
     let entries = toc_entries(s, &f);
     let links: Vec<Option<String>> = if f.has('h') {
         let mut v = Vec::new();

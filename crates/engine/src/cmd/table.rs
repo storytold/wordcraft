@@ -213,7 +213,7 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
     let mode = p::str(v, "mode").unwrap_or("window");
     let (tp, _, _) = cell(s)?;
     let story = s.sel.focus.story;
-    let tw = super::page::sect(s).text_width();
+    let tw = super::page::laid_out_sect(s).text_width();
     match mode {
         "fixed" => with_table(s, |t| t.props.fixed = true),
         "contents" => {
@@ -1388,7 +1388,7 @@ fn from_text(s: &mut Session, v: &Value) -> CmdResult {
     if cells.len() > wordcraft_doc::table::MAX_ROWS {
         return Err(CmdError::Failed(format!("a table can have at most {} rows", wordcraft_doc::table::MAX_ROWS)));
     }
-    let width = super::page::sect(s).text_width();
+    let width = super::page::laid_out_sect(s).text_width();
     let mut t = Table::new(cells.len().max(1), cols, width);
     if col_width > 0.0 {
         // Every column gets that preferred width, even past the margins (layout fits the table
@@ -1447,7 +1447,7 @@ fn quick_table(s: &mut Session, v: &Value) -> CmdResult {
         ],
     };
     let cols = data.iter().map(Vec::len).max().unwrap_or(1);
-    let width = super::page::sect(s).text_width();
+    let width = super::page::laid_out_sect(s).text_width();
     let mut t = Table::new(data.len(), cols, width);
     t.props.style = Some(if kind == "calendar" { "GridTable1Light" } else { "GridTable4AccentBlue" }.into());
     for (r, row) in data.iter().enumerate() {

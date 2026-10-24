@@ -18,6 +18,7 @@ use std::collections::{BTreeMap, HashMap};
 use wordcraft_doc::ParaProps;
 use wordcraft_doc::numbering::{Level, LevelSuffix};
 use wordcraft_doc::props::VAlign;
+use wordcraft_doc::section::MultiplePages;
 use wordcraft_doc::styles::{Style, StyleKind, TablePart};
 use wordcraft_doc::{Blocks, Document, PartKind};
 
@@ -1013,6 +1014,18 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     if s.mirror_margins {
         w.empty("w:mirrorMargins", &[]);
     }
+    // §17.15.1.47. Word for Mac writes it for 2 pages per sheet on a portrait sheet (user-checked),
+    // not on a landscape one nor for Book fold; with Normal pages it is Page Setup's own choice.
+    // "Portrait" is the sheet's orientation flag, the same rule that cuts it in two
+    // (`MultiplePages::page_size`), so the gutter sits on the cut whatever the sheet's shape.
+    let gutter_at_top = match s.multiple_pages() {
+        MultiplePages::Normal => s.gutter_at_top,
+        MultiplePages::TwoPerSheet => !doc.last_section.landscape,
+        _ => false,
+    };
+    if gutter_at_top {
+        w.empty("w:gutterAtTop", &[]);
+    }
     if let Some(id) = template_rel {
         w.empty("w:attachedTemplate", &[("r:id", id)]);
     }
@@ -1059,12 +1072,26 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     if s.even_odd_headers {
         w.empty("w:evenAndOddHeaders", &[]);
     }
+    // §17.15.1.9, .8, .10: a booklet, its direction (right to left) and its sheets.
+    // Word's "Reverse book fold" is its own choice: it saves the reverse flag instead of the plain
+    // one (Word for Mac 16.114, with a right-to-left input source), and reads back as a book fold.
+    if s.book_fold && s.book_fold_reverse {
+        w.empty("w:bookFoldRevPrinting", &[]);
+    } else if s.book_fold {
+        w.empty("w:bookFoldPrinting", &[]);
+    }
+    if s.book_fold && s.book_fold_sheets > 0 {
+        w.val("w:bookFoldPrintingSheets", &s.book_fold_sheets.min(wordcraft_doc::MAX_BOOKLET_SHEETS).to_string());
+    }
     for (tag, v) in [("w:drawingGridHorizontalSpacing", s.grid_h), ("w:drawingGridVerticalSpacing", s.grid_v)] {
         if v.is_finite() && (v - wordcraft_doc::DEFAULT_GRID).abs() > 0.01 {
             w.val(tag, &crate::units::twips(v.clamp(0.5, 1584.0)));
         }
     }
     w.val("w:characterSpacingControl", "doNotCompress");
+    if s.two_per_sheet {
+        w.empty("w:printTwoOnOne", &[]);
+    }
     for (tag, fmt, pr, used, el) in [
         ("w:footnotePr", s.footnote_format, &s.footnote_pr, footnotes, "w:footnote"),
         ("w:endnotePr", s.endnote_format, &s.endnote_pr, endnotes, "w:endnote"),
