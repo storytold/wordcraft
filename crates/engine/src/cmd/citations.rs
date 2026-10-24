@@ -1179,9 +1179,17 @@ fn caption_label(p: &Paragraph, text: &str) -> Option<String> {
     let label = match seq.and_then(|i| Some((i, fields.get(i)?))) {
         Some((i, (seq_at, instr))) => {
             // The text in `from..to` with the bookmark marks dropped, if it says anything.
+            let seq_id = instr.split_whitespace().nth(1).unwrap_or("");
             let said = |from: usize, to: usize| {
-                let t: String = p.text.get(from..to).unwrap_or_default().chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
-                let t = t.trim();
+                let raw: String = p.text.get(from..to).unwrap_or_default().chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
+                let trimmed = raw.trim();
+                // `{label}: {number}` puts one colon between the label and the SEQ field. Drop
+                // that colon only when what remains is this field's identifier. `Fig.` stays.
+                let t = trimmed
+                    .strip_suffix(':')
+                    .map(str::trim_end)
+                    .filter(|label| seq_ident(label).eq_ignore_ascii_case(seq_id))
+                    .unwrap_or(trimmed);
                 t.chars().any(char::is_alphanumeric).then(|| t.to_string())
             };
             let first = fields.first().map_or(0, |(o, _)| *o);
@@ -1316,6 +1324,25 @@ fn caption_number_end(para: &Paragraph) -> usize {
             }
         }
         break;
+    }
+    // `{number} {label}: {text}` writes the label after the SEQ field. Keep that label and stop
+    // before the title separator, so a number-only reference and its bookmark still name it.
+    if let Some(InlineObject::Field { instr, .. }) = para.object_at(o)
+        && let Some(id) = FieldCode::parse(instr).args.first()
+    {
+        let label = id.replace('_', " ");
+        let rest = &para.text[end..];
+        let trimmed = rest.trim_start();
+        if !label.is_empty()
+            && trimmed.len() >= label.len()
+            && trimmed.is_char_boundary(label.len())
+            && trimmed[..label.len()].eq_ignore_ascii_case(&label)
+        {
+            let after = trimmed[label.len()..].trim_start();
+            if after.is_empty() || after.starts_with([':', '\u{2013}', '\u{2014}']) || after.starts_with("- ") {
+                end += rest.len() - trimmed.len() + label.len();
+            }
+        }
     }
     end
 }
@@ -1576,6 +1603,33 @@ mod tests {
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("See (1)"), "{}", s.doc.plain_text(StoryRef::Body));
         let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
         assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("(1)"));
+    }
+
+    /// `{label}: {number}` keeps the label, without the colon that only separates it from the number.
+    /// `Fig.` keeps its period.
+    #[test]
+    fn a_colon_before_the_number_is_not_part_of_the_label() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Rock\nGem"));
+        s.run("select.text", &json!({"text": "Rock"})).unwrap();
+        s.run("references.caption", &json!({"label": "Plate", "text": "A rock", "pattern": "{label}: {number} {text}"})).unwrap();
+        s.run("select.text", &json!({"text": "Gem"})).unwrap();
+        s.run("references.caption", &json!({"label": "Fig.", "text": "A gem", "pattern": "{label} {number} {text}"})).unwrap();
+        assert_eq!(caption_labels(&s), ["Plate", "Fig."]);
+    }
+
+    /// `{number} {label}: {text}` keeps the label in a number-only reference and in its bookmark.
+    #[test]
+    fn a_label_after_the_number_stays_in_the_reference() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\nSee "));
+        s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+        s.run("references.caption", &json!({"label": "Plate", "text": "The kiln", "pattern": "{number} {label}: {text}"})).unwrap();
+        let target = s.run("insert.crossReference", &json!({"to": "label:Plate"})).unwrap();
+        let target = target.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.crossReference", &json!({"to": "label:Plate", "target": target, "show": "number"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with("See 1 Plate"), "{}", s.doc.plain_text(StoryRef::Body));
+        let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
+        assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("1 Plate"));
     }
 
     /// The entries of every generated list, in order, with their last tab stop's leader.
