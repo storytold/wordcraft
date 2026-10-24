@@ -3056,6 +3056,16 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
             let g = app.session.view.table_gridlines;
             small(ui, app, "gridlines", Some("View Gridlines"), "View Gridlines", "table.viewGridlines", json!({}), g);
             small(ui, app, "properties", Some("Properties"), "Table Properties", "table.properties", json!({}), false);
+            // Right-to-left tables (#529): the first column stands at the right.
+            let rtl = app
+                .session
+                .sel
+                .focus
+                .path
+                .cell()
+                .and_then(|(tp, _, _)| app.session.doc.table(app.session.sel.focus.story, &tp))
+                .is_some_and(|t| t.props.bidi_visual);
+            small(ui, app, "textRtl", Some("Right-to-Left"), "Right-to-Left Table", "table.rtl", json!({}), rtl);
         });
     });
     group(ui, "Draw", None, app, |ui, app| {
