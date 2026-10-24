@@ -41,6 +41,7 @@ fn lines(l: &DocLayout) -> (usize, Vec<f32>) {
 
 #[test]
 fn line_grid_snaps_line_heights_and_fixes_lines_per_page() {
+    crate::test_fonts();
     let text = vec!["Grid line"; 80].join("\n");
     let d = with_grid(&text, DocGridType::Lines, 0);
     let (first, hs) = lines(&lay(&d));
@@ -64,6 +65,7 @@ fn line_grid_snaps_line_heights_and_fixes_lines_per_page() {
 
 #[test]
 fn character_grid_places_east_asian_text_on_the_pitch() {
+    crate::test_fonts();
     let text = "日本語の文書abc";
     // The default font size plus 2.5 pt: a pitch unlike any font's advance.
     let lines = wordcraft_doc::SectionProps { doc_grid: Some(DocGrid { kind: DocGridType::Lines, ..Default::default() }), ..Default::default() };

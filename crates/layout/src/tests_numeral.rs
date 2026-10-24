@@ -37,6 +37,7 @@ fn line_gids(l: &DocLayout, text: &str) -> Vec<Vec<u32>> {
 
 #[test]
 fn parse_accepts_the_four_modes_any_case() {
+    crate::test_fonts();
     assert_eq!(NumeralMode::parse("arabic"), Some(NumeralMode::Arabic));
     assert_eq!(NumeralMode::parse("hindi"), Some(NumeralMode::Hindi));
     assert_eq!(NumeralMode::parse("context"), Some(NumeralMode::Context));
@@ -50,6 +51,7 @@ fn parse_accepts_the_four_modes_any_case() {
 
 #[test]
 fn map_substitutes_digits_both_ways() {
+    crate::test_fonts();
     for d in '0'..='9' {
         let hindi = char::from_u32(0x660 + (d as u32 - '0' as u32)).unwrap();
         assert_eq!(NumeralMode::Hindi.map(d, false), hindi);
@@ -73,6 +75,7 @@ fn map_substitutes_digits_both_ways() {
 
 #[test]
 fn resolve_uses_the_given_system_locale() {
+    crate::test_fonts();
     for m in [NumeralMode::Arabic, NumeralMode::Hindi, NumeralMode::Context] {
         assert_eq!(m.resolve(Some("ar-EG")), m, "only System is resolved");
     }
@@ -87,6 +90,7 @@ fn resolve_uses_the_given_system_locale() {
 
 #[test]
 fn context_mode_on_a_very_long_digit_run_stays_linear() {
+    crate::test_fonts();
     // Every digit used to scan back over all the digits and spaces before it (O(n²)).
     let text = format!("سنة {}", "1 ".repeat(100_000));
     let start = std::time::Instant::now();
@@ -100,6 +104,7 @@ fn context_mode_on_a_very_long_digit_run_stays_linear() {
 
 #[test]
 fn hindi_mode_reshapes_digits_but_keeps_offsets() {
+    crate::test_fonts();
     let text = "Year 2024!";
     let latin = lay_opts(text, false, NumeralMode::Arabic);
     let hindi = lay_opts(text, false, NumeralMode::Hindi);
@@ -121,6 +126,7 @@ fn hindi_mode_reshapes_digits_but_keeps_offsets() {
 
 #[test]
 fn arabic_mode_converts_hindi_digits_back() {
+    crate::test_fonts();
     let text = "عام ٢٠٢٤";
     let hindi = lay_opts(text, true, NumeralMode::Hindi);
     let arabic = lay_opts(text, true, NumeralMode::Arabic);
@@ -139,6 +145,7 @@ fn arabic_mode_converts_hindi_digits_back() {
 
 #[test]
 fn context_mode_follows_run_direction() {
+    crate::test_fonts();
     // Right-to-left paragraph: digits behave like Hindi mode.
     let rtl = "سنة 2024";
     let ctx = line_gids(&lay_opts(rtl, true, NumeralMode::Context), rtl);
@@ -158,6 +165,7 @@ fn context_mode_follows_run_direction() {
 
 #[test]
 fn remap_range_maps_display_bytes_to_original() {
+    crate::test_fonts();
     use crate::para::remap_range;
     // "a5ب": '5' (1 byte) displays as '٥' (2 bytes), so display offsets shift after it.
     let orig = "a5ب";

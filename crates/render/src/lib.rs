@@ -455,6 +455,11 @@ pub struct RenderOptions {
     /// Thicken glyphs slightly the way macOS draws text on screen ("font smoothing"), so pages
     /// look like they do in other Mac apps. For on-screen rasters only: exports stay exact.
     pub text_darkening: bool,
+    /// Hint text for the screen the way FreeType's `hintslight` does on Linux desktops: glyph
+    /// baselines sit on whole pixels and their horizontal edges (x-height, cap height) are moved
+    /// onto the pixel grid, so text looks as crisp as in other apps there. Nothing moves
+    /// sideways, so lines break as without it. For on-screen rasters only: exports stay exact.
+    pub hinting: bool,
     /// Dark page (View › Switch Modes): every colour but pictures has its lightness inverted, so
     /// white paper turns black and black text white while hues stay the same. Screen only.
     pub dark: bool,
@@ -539,6 +544,7 @@ impl Default for RenderOptions {
             paper: Rgb::WHITE,
             mark_color: Rgb(0x2B, 0x57, 0x9A),
             text_darkening: false,
+            hinting: false,
             dark: false,
             dark_paper: DARK_PAPER,
         }
@@ -738,6 +744,13 @@ fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordc
     }
 }
 
+/// Does `view` map page points to device pixels without rotation, skew or mirroring, scaling both
+/// axes alike? Only then do hinted outlines (made on the pixel grid) line up with the screen.
+fn is_upright(view: Affine) -> bool {
+    let [a, b, c, d, e, f] = view.as_coeffs();
+    [a, b, c, d, e, f].iter().all(|v| v.is_finite()) && b == 0.0 && c == 0.0 && a > 0.0 && (a - d).abs() <= a * 1e-6
+}
+
 /// How far, in device pixels, macOS-style font smoothing pushes each side of a glyph outline out
 /// at `ppem` device pixels per em. Values from Pathfinder (MIT/Apache-2.0), which measured them
 /// against macOS: 1.21% of the pixel size horizontally and 1.25 times that vertically, each
@@ -873,13 +886,19 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             let darken_px = if opts.text_darkening && *alpha >= 1.0 { stem_darkening(*size as f64 * px_per_pt) } else { 0.0 };
             let darken = if darken_px > 0.0 && k * px_per_pt > 0.0 { 2.0 * darken_px / (k * px_per_pt) } else { 0.0 };
             let outline_stroke = if *synth_bold { face.upem * 0.03 } else { 0.0 } + darken;
+            let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
             if outline_stroke > 0.0 {
-                let join = if darken > 0.0 { kurbo::Join::Round } else { kurbo::Join::Miter };
                 ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
             }
             // Emoji and other colour glyphs (#1269) are drawn from the font's colour data.
             let colour = face.has_color_glyphs();
             let ppem = *size as f64 * px_per_pt;
+            // Hinted outlines are in device pixels: only for an upright, unmirrored, evenly scaled
+            // view (not rotated text boxes), where the pixel grid lines up with the glyphs.
+            let hint_ppem = (opts.hinting && !colour && is_upright(view)).then_some(ppem as f32);
+            // The outline strokes in device pixels, for the hinted outlines.
+            let stroke_px = outline_stroke * k * px_per_pt;
+            let mut hinted_stroke = false;
             for (gid, x, y) in glyphs {
                 let (gx, gy) = (*x as f64, *y as f64);
                 // Written so a NaN position is skipped too.
@@ -893,6 +912,23 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                     ctx.set_paint(color(opts.ink(*c), *alpha));
                     continue;
                 }
+                if let Some(o) = hint_ppem.and_then(|p| db.hinted_outline(face, *gid, p)) {
+                    if o.elements().is_empty() {
+                        continue;
+                    }
+                    // The baseline on a whole pixel, as the hinting assumes.
+                    let at = view * kurbo::Point::new(gx, gy);
+                    ctx.set_transform(Affine::translate((at.x, at.y.round())) * skew);
+                    ctx.fill_path(&o);
+                    if outline_stroke > 0.0 {
+                        if !hinted_stroke {
+                            ctx.set_stroke(kurbo::Stroke::new(stroke_px).with_join(join));
+                            hinted_stroke = true;
+                        }
+                        ctx.stroke_path(&o);
+                    }
+                    continue;
+                }
                 let o = db.outline(face, *gid);
                 if o.elements().is_empty() {
                     continue;
@@ -900,6 +936,10 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_transform(view * Affine::translate((gx, gy)) * skew * Affine::scale(k));
                 ctx.fill_path(&o);
                 if outline_stroke > 0.0 {
+                    if hinted_stroke {
+                        ctx.set_stroke(kurbo::Stroke::new(outline_stroke).with_join(join));
+                        hinted_stroke = false;
+                    }
                     ctx.stroke_path(&o);
                 }
             }
@@ -1542,6 +1582,62 @@ mod tests {
         assert!(b as f64 > a as f64 * 1.08 && (b as f64) < a as f64 * 1.6, "plain {a}, darkened {b}");
         // Off by default: exports and thumbnails are untouched.
         assert!(!RenderOptions::default().text_darkening);
+    }
+
+    /// Inked pixels that are only partly covered (grey): an edge between two pixel rows.
+    fn grey(img: &Rendered) -> usize {
+        img.pixels.as_chunks::<4>().0.iter().filter(|p| (40..215).contains(&p[0])).count()
+    }
+
+    /// The first and last pixel columns with any ink.
+    fn ink_columns(img: &Rendered) -> (usize, usize) {
+        let w = img.width as usize;
+        let inked: Vec<usize> = img.pixels.as_chunks::<4>().0.iter().enumerate().filter(|(_, p)| p[0] < 250).map(|(i, _)| i % w.max(1)).collect();
+        (inked.iter().copied().min().unwrap_or(0), inked.iter().copied().max().unwrap_or(0))
+    }
+
+    #[test]
+    fn hinting_sharpens_screen_text_without_making_it_bolder_or_moving_it() {
+        let d =
+            Document::from_text("Every Thursday evening the old print shop fills with people who make things. Painters set up by the north windows.");
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        // 100 % zoom on a 145 % desktop: glyph edges land between pixels.
+        let scale = 96.0 / 72.0 * 1.45;
+        let plain = render_page(&d, &l.pages[0], scale, &RenderOptions::default());
+        let hinted = render_page(&d, &l.pages[0], scale, &RenderOptions { hinting: true, ..Default::default() });
+        // Fewer grey pixels: the baseline, x-height and cap height fill whole pixel rows. Only
+        // horizontal edges snap (the vertical stems stay put), so on the fonts the tests resolve
+        // to (system or bundled) the drop is 4 to 5 %: asked for at least 3 %.
+        let (g0, g1) = (grey(&plain), grey(&hinted));
+        assert!((g1 as f64) < g0 as f64 * 0.97, "grey pixels: plain {g0}, hinted {g1}");
+        // The same weight, as FreeType's light hinting draws it: no darker than a few percent.
+        let (a, b) = (ink(&plain), ink(&hinted));
+        assert!(b as f64 > a as f64 * 0.95 && (b as f64) < a as f64 * 1.12, "ink: plain {a}, hinted {b}");
+        // Nothing moves sideways: the text starts and ends in the same pixel columns.
+        let ((l0, r0), (l1, r1)) = (ink_columns(&plain), ink_columns(&hinted));
+        assert!(l0.abs_diff(l1) <= 1 && r0.abs_diff(r1) <= 1, "plain {l0}..{r0}, hinted {l1}..{r1}");
+        // Off by default: exports and thumbnails are untouched.
+        assert!(!RenderOptions::default().hinting);
+    }
+
+    #[test]
+    fn rotated_or_mirrored_views_are_not_hinted() {
+        let d = Document::from_text("Rotated text stays as the font draws it.");
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let hint = RenderOptions { hinting: true, ..Default::default() };
+        for view in [
+            Affine::translate((300.0, -50.0)) * Affine::rotate(0.3) * Affine::scale(1.9),
+            Affine::translate((600.0, 0.0)) * Affine::scale_non_uniform(-1.9, 1.9),
+            Affine::scale_non_uniform(1.9, 2.4),
+        ] {
+            let plain = render_region(&d, &l.pages[0], 600, 300, view, &RenderOptions::default());
+            let hinted = render_region(&d, &l.pages[0], 600, 300, view, &hint);
+            assert!(ink(&plain) > 0, "{view:?}");
+            assert_eq!(plain.pixels, hinted.pixels, "{view:?}");
+        }
+        assert!(is_upright(Affine::translate((3.5, 7.25)) * Affine::scale(1.93)));
+        assert!(!is_upright(Affine::scale(f64::NAN)));
+        assert!(!is_upright(Affine::scale(0.0)));
     }
 
     #[test]
