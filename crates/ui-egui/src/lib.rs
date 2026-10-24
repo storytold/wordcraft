@@ -3376,7 +3376,7 @@ mod tests {
     }
 
     #[test]
-    fn title_and_account_buttons_work() {
+    fn title_button_works() {
         use egui_kittest::kittest::Queryable;
         let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
             |ui, app: &mut WordApp| {
@@ -3424,12 +3424,6 @@ mod tests {
         h.run_steps(2);
         assert!(h.state().dialog.is_none());
         assert_eq!(h.state().title_stem(), long_name.trim());
-        h.get_by_label("Account").click();
-        h.run_steps(2);
-        assert!(h.state().ui.backstage);
-        assert_eq!(h.state().ui.backstage_page, "options");
-        assert_eq!(h.state().ui.options_pane, "general");
-        assert!(h.query_by_label("User name:").is_some());
     }
 
     /// File › Options › Advanced › Editing: alignment guides are a UI command, on by default and
