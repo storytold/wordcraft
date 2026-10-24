@@ -1772,6 +1772,65 @@ fn delete_row_on_a_merge_start_promotes_the_cell_below() {
     assert_eq!(vm(&s, 1), VMerge::Continue);
 }
 
+/// Split Table under a vertically merged cell: the merge ends in the first table and starts
+/// again in the second.
+#[test]
+fn split_table_ends_and_restarts_a_merge_it_cuts() {
+    use wordcraft_doc::props::VMerge::{self, Continue, None as No, Restart};
+    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+    let tables = |s: &Session| -> Vec<Vec<Vec<VMerge>>> {
+        let rows = |t: &wordcraft_doc::Table| t.rows.iter().map(|r| r.cells.iter().map(|c| c.props.vmerge).collect()).collect();
+        s.doc.body.iter().filter_map(|b| b.as_table()).map(rows).collect()
+    };
+    let merged = |last: u32| {
+        let mut s = table_from("A\tB\nC\tD\nE\tF\nG\tH");
+        run(&mut s, "select.range", json!({"anchor": cell(0, 0), "focus": cell(last, 0)}));
+        run(&mut s, "table.merge", json!({}));
+        s
+    };
+    // Rows 0 to 2 merged, split at row 1: the second table's merge covers rows 1 and 2.
+    let mut s = merged(2);
+    let before = tables(&s);
+    run(&mut s, "caret.set", json!({"pos": cell(1, 1)}));
+    run(&mut s, "table.splitTable", json!({}));
+    assert_eq!(tables(&s), [vec![vec![No, No]], vec![vec![Restart, No], vec![Continue, No], vec![No, No]]]);
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(tables(&s), before);
+    // Rows 0 and 1 merged, split at row 1: neither part keeps a merge.
+    let mut s = merged(1);
+    run(&mut s, "caret.set", json!({"pos": cell(1, 1)}));
+    run(&mut s, "table.splitTable", json!({}));
+    assert_eq!(tables(&s), [vec![vec![No, No]], vec![vec![No, No], vec![No, No], vec![No, No]]]);
+}
+
+/// Split Table inside a row content control (a repeating section) around several rows: the
+/// control closes after the first table and opens again before the second.
+#[test]
+fn split_table_keeps_a_row_control_on_both_parts() {
+    let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+    let control = |tag: &str| wordcraft_doc::ContentControl { id: Some(7), tag: tag.into(), ..Default::default() };
+    let mut s = table_from("A\tB\nC\tD\nE\tF\nG\tH");
+    if let Some(b) = s.doc.body.iter_mut().find(|b| b.as_table().is_some())
+        && let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b)
+    {
+        // "outer" goes around every row, and "inner" goes around row 1 alone.
+        t.rows[0].controls.open = vec![control("outer")];
+        t.rows[1].controls.open = vec![control("inner")];
+        t.rows[1].controls.close = 1;
+        t.rows[3].controls.close = 1;
+    }
+    run(&mut s, "caret.set", json!({"pos": cell(2, 0)}));
+    run(&mut s, "table.splitTable", json!({}));
+    let wraps = |t: &wordcraft_doc::Table| -> Vec<(Vec<String>, u32)> {
+        t.rows.iter().map(|r| (r.controls.open.iter().map(|c| c.tag.clone()).collect(), r.controls.close)).collect()
+    };
+    let parts: Vec<&wordcraft_doc::Table> = s.doc.body.iter().filter_map(|b| b.as_table()).collect();
+    assert_eq!(parts.len(), 2);
+    assert_eq!(wraps(parts[0]), [(vec!["outer".to_string()], 0), (vec!["inner".to_string()], 2)], "the first table closes the control");
+    assert_eq!(wraps(parts[1]), [(vec!["outer".to_string()], 0), (vec![], 1)], "the second table opens it again");
+    assert_eq!(parts[1].rows[0].controls.open[0].id, None, "the copy doesn't repeat the control's id");
+}
+
 fn cells(s: &Session) -> Option<((usize, usize), (usize, usize))> {
     s.cell_range().map(|x| (x.rows, x.cols))
 }
