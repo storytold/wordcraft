@@ -167,6 +167,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-17 | macOS launch arguments (`-psn_*`, `-NS*`, `-Apple*`) are no longer opened as files, and a file that fails to open names the file and the real cause on the status bar and in the log (#1103). The reported "corrupt" error could not be reproduced. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
@@ -674,6 +675,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-18 | trivial | Progress log: header-cell picture watermarks drawn behind the text (#1775); readiness estimates unchanged |
 | 2026-10-14 | trivial | Progress log: comment drafts kept and written before saving or closing (#1348) |
 | 2026-10-17 | trivial | Language dialog keeps inherited proofing language and no-proof choices (#2717); readiness estimates unchanged |
+| 2026-10-17 | trivial | Progress log: macOS launch arguments and open failures (#1103) |
 | 2026-10-14 | trivial | Progress log: ASK and SET fields show nothing (#1765) |
 | 2026-10-15 | trivial | Progress log: at-least table rows start the next page whole (#1742) |
 | 2026-10-14 | trivial | Progress log: ODT sections on export (gap 19) |

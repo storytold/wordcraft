@@ -139,6 +139,13 @@ Double-clicking a document, Open With, and making WordCraft the default app (#29
 register WordCraft for these types but never take over a default; File › Options › General has
 **Make WordCraft the default for Word documents…** where the system allows it.
 
+Arguments macOS adds when it launches an app (`-psn_…`, `-NS…`/`-Apple…` options with their
+values) are dropped before the rest are opened as files, and a file that fails to open, whether it
+came from the command line, a macOS open event or a drop on the window, names the file and the
+real cause on the status bar and in the log (#1103). The report of "file is corrupt" after
+choosing "Always open with" could not be reproduced on 0.7.0 in a Mac check; these two
+hardenings are what the code supports.
+
 | Platform | Registered types | Default app | Notes |
 |---|---|---|---|
 | Windows (MSI) | `.docx` `.docm` `.dotx` `.dotm` `.doc` `.dot` `.rtf` `.odt`; `.md` `.txt` under Open With only | Options button opens Settings › Default apps on WordCraft's page | One ProgId per type, `OpenWithProgids`, Capabilities + `RegisteredApplications` (`packaging/windows/wordcraft.wxs`). Not yet tried on a real install |
@@ -252,6 +259,7 @@ Imported text fields use the first nonempty cached result run's formatting on th
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-17 | trivial | macOS launch arguments (`-psn_*`, `-NS*`, `-Apple*`) are no longer opened as files; a file that fails to open (command line, open event, drop) names the file and the cause on the status bar and in the log (#1103) |
 | 2026-10-23 | trivial | A relationship the markup names without the prefix is read as it wrote: an unqualified `id` on an element that carries a relationship names that relationship, and the writer keeps the attribute with the id the new package holds the part under; an ordinary `id` — a VML shape's, a drawing's — names no part (#3411 follow-up) |
 | 2026-10-21 | trivial | The reader takes the relationship ids the markup refers to from the relationship attributes of the main document it has already parsed, so a document with many relationships opens in the time its part takes, and an id that only appears as text is not a reference (#3411) |
 | 2026-10-21 | trivial | HTML export writes ruby (furigana, phonetic guides) as `<ruby>base<rt>reading</rt></ruby>`, in the base text's run formatting, and HTML import reads `<ruby>`/`<rb>`/`<rt>` back into one ruby object: `<rp>` fallback parentheses and the tags are not text, an unclosed element ends at the next block, and malformed ruby keeps its text. HTML states no alignment, size or raise, so the Phonetic Guide's defaults apply (#1681) |

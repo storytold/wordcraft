@@ -1194,7 +1194,7 @@ impl WordApp {
         if !go {
             return Ok(json!({"done": false}));
         }
-        self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
+        self.execute_held_back(&then, params).map(|r| json!({"done": true, "result": r}))
     }
 
     /// User commands can ask for a supported Save As target or an opening password (#55).
@@ -1215,6 +1215,7 @@ impl WordApp {
             };
         }
         let retry = (id == "file.open").then(|| params.clone());
+        let retry_path = retry.clone();
         let r = self.execute(id, params);
         if let (Err(e), Some(params)) = (&r, retry)
             && wordcraft_engine::io::needs_password(e)
@@ -1223,6 +1224,22 @@ impl WordApp {
             let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.to_string());
             self.dialog = Some(dialogs::Dialog::Password { name, params, password: Default::default(), message: String::new() });
             return Ok(json!({"pending": "password"}));
+        }
+        // Whoever asked, a failed open names the file and the cause (#1103).
+        if let (Err(e), Some(params)) = (&r, retry_path) {
+            let path = params.get("path").and_then(Value::as_str).unwrap_or("");
+            self.report_open_failure(path, e);
+        }
+        r
+    }
+
+    /// [`WordApp::execute_user`] for a command a prompt or a finished save held back. A failed
+    /// open also leaves Backstage, whose list isn't where that failure gets shown (#1103); a
+    /// direct open from Recent keeps File open and reports there instead (#2938).
+    pub(crate) fn execute_held_back(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let r = self.execute_user(id, params);
+        if r.is_err() && id == "file.open" {
+            self.ui.backstage = false;
         }
         r
     }
@@ -1314,7 +1331,11 @@ impl WordApp {
             match outcome {
                 // Only when nothing changed since and no later save of it is still unconfirmed.
                 async_saves::SaveOutcome::Saved if !self.session.dirty && self.session.rev() == wait.rev && !self.save_unconfirmed() => {
-                    if let Err(e) = self.execute_user(&wait.then, wait.params) {
+                    // A failed open was already reported by name in `execute_user`.
+                    let is_open = wait.then == "file.open";
+                    if let Err(e) = self.execute_held_back(&wait.then, wait.params)
+                        && !is_open
+                    {
                         self.status(e);
                     }
                 }
@@ -1867,6 +1888,15 @@ impl WordApp {
         }
     }
 
+    /// A file that wouldn't open (#1103): log it, and say on the status bar which file and why,
+    /// whatever handed it over (the command line, a macOS open event, a drop). Returns the message.
+    pub fn report_open_failure(&mut self, path: &str, error: &str) -> String {
+        log::warn!("{path}: {error}");
+        let msg = i18n::fmt(tl!("Couldn't open {path}: {error}"), &[("path", path), ("error", error)]);
+        self.status(msg.clone());
+        msg
+    }
+
     pub fn status(&mut self, s: impl Into<String>) {
         self.status_msg = Some((s.into(), now_ms()));
     }
@@ -2268,7 +2298,7 @@ impl WordApp {
                 let lp = path.to_ascii_lowercase();
                 let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
                 let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
-                let _ = if img {
+                let opened = if img {
                     self.caret_after_placed_picture(placed_picture);
                     let r = self.run("insert.picture", json!({"path": path}));
                     placed_picture = Self::placed_in_text(&r);
@@ -2281,6 +2311,11 @@ impl WordApp {
                 } else {
                     self.run("file.open", json!({"path": path}))
                 };
+                if let Err(e) = opened {
+                    self.report_open_failure(&path, &e);
+                    // Backstage hides the status bar; leave it so the error shows.
+                    self.ui.backstage = false;
+                }
             }
         }
         // The open above may have changed the file name the caption draws.
@@ -3660,6 +3695,27 @@ mod tests {
         b.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
         assert!(b.has_document());
         assert!(body_text(&b).contains("Signed copy"));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #1103: a file that fails to open names the file and the real cause on the status bar.
+    #[test]
+    fn a_file_that_wont_open_says_which_file_and_why() {
+        let dir = scratch("open-failure");
+        let bad = dir.join("broken.docx");
+        std::fs::write(&bad, b"PK\x03\x04 this is not really a zip").unwrap();
+        let mut a = app();
+        let path = bad.to_string_lossy().to_string();
+        let error = a.run("file.open", json!({"path": path})).unwrap_err();
+        assert!(error.contains("zip") || error.contains("Word"), "the engine names the cause: {error}");
+        let msg = a.report_open_failure(&path, &error);
+        assert!(msg.contains(&path) && msg.contains(&error), "{msg}");
+        assert_eq!(a.status_msg.as_ref().map(|(m, _)| m.as_str()), Some(msg.as_str()));
+
+        let missing = dir.join("gone.docx").to_string_lossy().to_string();
+        let error = a.run("file.open", json!({"path": missing})).unwrap_err();
+        let msg = a.report_open_failure(&missing, &error);
+        assert!(msg.contains("gone.docx") && (msg.to_lowercase().contains("no such file") || msg.contains("os error")), "{msg}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -5494,6 +5550,23 @@ mod tests {
         let mut s = Session::new(wordcraft_doc::Document::from_text(text));
         s.run("file.save", &json!({"path": path.to_string_lossy()})).unwrap();
         path
+    }
+
+    /// An open that waits on "Save changes?" and then fails still names the file and the cause (#1103).
+    #[test]
+    fn failed_open_after_save_prompt_names_the_file() {
+        let dir = scratch("open-after-prompt");
+        let bad = dir.join("broken.docx").to_string_lossy().to_string();
+        std::fs::write(&bad, b"PK\x03\x04 not really a zip").unwrap();
+        let mut a = typed();
+        a.run("file.open", json!({"path": bad})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        a.ui.backstage = true;
+        let _ = a.run("ui.saveChanges", json!({"answer": "dontSave"}));
+        let shown = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
+        assert!(shown.contains("broken.docx"), "{shown}");
+        assert!(!a.ui.backstage, "Backstage hides the status bar");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// Surfaces finding 1: Mod+N (and the File › New tiles) replaced unsaved work without asking.
