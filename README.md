@@ -174,7 +174,8 @@ play it back (`tools.recordMacro`, `tools.macros`).
 
 The desktop app writes its log records to standard error and to `logs/wordcraft.log` next to its
 preferences: on Linux `$XDG_CONFIG_HOME/wordcraft/logs/` (by default `~/.config/wordcraft/logs/`),
-on macOS `~/Library/Application Support/WordCraft/logs/`, on Windows `%APPDATA%\WordCraft\logs\`.
+on macOS `~/Library/Application Support/WordCraft/logs/`, on Windows `%APPDATA%\WordCraft\logs\`
+(portable mode: `WordCraftData\logs\` next to the executable, see [Windows](#windows)).
 A start from a desktop menu or the Dock has no terminal, so this file is what to attach to a bug
 report: unreadable parts of a .docx, pictures or fonts a PDF export had to leave out and panics the
 command guard recovered from land there. Each launch moves the previous log to `wordcraft.1.log`
@@ -228,6 +229,12 @@ closer pagination fidelity, a stability sweep and native printing. Details and e
 | x86 (32-bit) | `wordcraft-<ver>-windows-x86.msi` | `wordcraft-<ver>-windows-x86-portable.zip` |
 
 Installers and executables are code-signed.
+
+**Portable mode:** a file named `portable.txt` next to the executable keeps the preferences, logs,
+custom dictionary, added fonts and control keys in a `WordCraftData` folder beside it instead of
+`%APPDATA%\WordCraft`. The portable zip ships with one; delete it to use `%APPDATA%\WordCraft`. The
+MSI ships none. On macOS the file goes next to `WordCraft.app`. The code is
+`crates/control-key/src/lib.rs`.
 
 **If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
 Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
