@@ -536,6 +536,8 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// The status bar under the page: page x of y, the word count, the caret's language and, on the
+/// right, the view buttons, Focus and the zoom slider with its readout.
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")
@@ -634,8 +636,13 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let ztrack = TypeRung::Caption.tracking();
                     let zw = text_width(ui.painter(), &ztxt, &zfont, ztrack, t.text_dim);
                     // A fixed width for three digits plus a small reserve, so the controls to the
-                    // left don't shift as the percentage gains or loses digits (#1975).
-                    let zslot = text_width(ui.painter(), "000%", &zfont, ztrack, t.text_dim) + 4.0;
+                    // left don't shift as the percentage gains or loses digits (#1975). Measured
+                    // from the widest digit, not just "0": in a font without equal-width digits the
+                    // slider moved under a held pointer, read a new zoom and moved back (#2256).
+                    let zslot = (0..10)
+                        .map(|d| text_width(ui.painter(), &format!("{d}{d}{d}%"), &zfont, ztrack, t.text_dim))
+                        .fold(0.0, f32::max)
+                        + 4.0;
                     let (zr, zresp) = ui.allocate_exact_size(vec2(zw.max(zslot) + 1.0, TypeRung::Caption.line_height()), Sense::click());
                     paint_text(ui.painter(), pos2(zr.max.x - 1.0, zr.min.y), Align2::RIGHT_TOP, &ztxt, &zfont, ztrack, t.text_dim);
                     if zresp.clicked() && !reading {
