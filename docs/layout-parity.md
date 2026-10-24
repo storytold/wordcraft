@@ -185,6 +185,10 @@ before/after overlap still needs #108; the uniform first-baseline offset, page
 boundaries, tables, text boxes and notes were not compared with Word in this study.
 No overall parity estimate changes from these probes.
 
+## Equation line spacing
+
+Equations reserve the font's [OpenType MATH leading](https://learn.microsoft.com/en-us/typography/opentype/spec/math) above their ink. Glyphs and rules keep their positions relative to the equation baseline; surrounding text still sets the minimum line height. Native Word for Mac 16.113.2 controls confirm the extra line space around fractions and roots. Mixed structural sizes, nested fraction sizing, tall-operator growth and some script positions remain separate gaps. No overall parity estimate changes.
+
 ## Performance
 
 | Measure | WordCraft | Word | Kind |
@@ -274,6 +278,7 @@ Installed static fonts also resolve by their OpenType PostScript name (name ID 6
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
 | 2026-10-16 | trivial | `w:autoSpaceDE` and `w:autoSpaceDN` are laid out: a quarter em between Asian text and Latin text or digits (#2358) |
 | 2026-10-16 | trivial | AutoFit donors lose equal widths, bounded by content minima |
+| 2026-10-17 | trivial | Reserve the font math leading above equation ink without shifting glyphs or rules. |
 | 2026-10-16 | trivial | Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height. |
 | 2026-10-15 | trivial | Absent or zero DrawingML effect extents remain zero on rotated pictures; contracted axes no longer reserve invented effects room. Synthetic quarter-turn import regression (`zero_effects_stay_zero_rotated`). |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
