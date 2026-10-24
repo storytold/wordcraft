@@ -121,6 +121,11 @@ display_name = "The Legend Of MTS Dev"
 real_name = "Robert Lee"
 sync_github_name = true
 
+[people.maxm11]
+real_name = "Max Murphy"
+display_name = "Max Murphy"
+sync_github_name = true
+
 [people.rbr48]
 real_name = "M S Rana"
 display_name = "Izhaan Intellect"
