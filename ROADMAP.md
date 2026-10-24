@@ -527,6 +527,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-11 | Complex scripts (#604): Myanmar, Khmer and Indic text shaped one script at a time in OpenType fallback fonts (regular weight, not AAT-only fonts), the caret and line breaks never split a syllable, Myanmar wraps between syllables, Backspace removes one sign at a time |
 | 2026-10-11 | Any text file opens (#569): `.m3u`/`.m3u8` playlists and other unknown extensions open as plain text with encoding detection (UTF-8, BOMs, UTF-16, Windows-1252), misnamed Word/RTF files by their signature; binary files give a clear error |
 | 2026-10-11 | Select by dragging whole units (#549): after a double-click the drag grows by words, after a triple-click by paragraphs, after Ctrl/⌘+click by sentences, as in Word |
+| 2026-10-11 | Large documents stay responsive (#554): `cargo xtask bench` builds a 511-page book (200 pictures, 100 tables, 250 footnotes); a keystroke re-lays out only from the edited paragraph (~3 ms at the start, middle or end, was 14 ms), first layout 333 ms |
 | 2026-10-12 | Selection bar (#856): in the left margin beside body text a click selects the line, a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; dragging there selects whole lines and Shift+click extends by lines; the pointer turns to an arrow. Right margin for right-to-left paragraphs not yet |
 | 2026-10-11 | Compare / Combine dialog with comparison settings, Restrict Editing pane (exceptions, SHA-512 password, locked styles; DOCX round trip), AutoCorrect Options dialog saved per user (#412) |
 | 2026-10-11 | DOCX diagrams (#611): lines, connectors and boxes styled by the theme now show (they were invisible); callouts and flowchart boxes drawn as the nearest shape; VML lines, rectangles and ovals |
@@ -864,6 +865,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-11 | trivial | Progress log: complex-script shaping (#604) |
 | 2026-10-11 | trivial | Progress log: unknown text extensions open as text (#569) |
 | 2026-10-11 | trivial | Progress log: drag-select by words/paragraphs/sentences (#549) |
+| 2026-10-11 | trivial | Progress log: large-document performance (#554) |
 | 2026-10-12 | trivial | Progress log: selection bar in the left margin (#856) |
 | 2026-10-11 | trivial | Progress log: content controls (#381) |
 | 2026-10-11 | trivial | Progress log: Insert › Chart (#409); catalog 408/439 (92.9%) |

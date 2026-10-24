@@ -192,6 +192,10 @@ No overall parity estimate changes from these probes.
 | Cold layout, 188-page document | 61 ms | not measured | measured 2026-10-06 (not re-run this pass) |
 | Relayout after an edit | 1.4 ms | not measured | measured 2026-10-06 |
 | Font picker with many installed fonts | fixed freezes (#233) | instant | issue #31, #59 |
+| Large document: 511 pages, 200 pictures, 100 tables, 250 footnotes (`cargo xtask bench --pages 500`) | first layout 333 ms; open .docx 20 ms; save 33 ms; PDF export 1.06 s | not measured | measured 2026-10-11 (#554) |
+| Keystroke in that document, at its start, middle or end (command + re-layout) | 2.8–3.1 ms; re-lays out 1–2 paragraphs and places 7–10 of 2,342 blocks (14 ms before #554: every block placed again) | not measured | measured 2026-10-11 (#554); counters pinned by `engine::tests_perf` |
+| Edits that add or remove body blocks (Enter, Backspace joining paragraphs, a pasted paragraph) in that document | correct, not incremental: every block after the edit is placed again (the pages after it can't be matched to the previous pass's block by block); typing, formatting and edits in notes, headers or text boxes stop where the pages come out as before | not measured | known limit (#1284) |
+| Scrolling that document: render one page / three visible pages | 1.1 ms / 3–5 ms at 1.5× | not measured | measured 2026-10-11 (#554) |
 | Large real-world documents (500+ pages, many pictures) | not measured | | gap |
 | Scrolling a 1,096-page document that is one 5,300-row table (#811) | ~2.4 ms idle, ~4.5 ms median scroll frame (was ~600 ms); opening still lays out for ~4–8 s | not measured | measured 2026-10-12, release, headless (`tests_perf::big_table_scroll_bench`) |
 | A word with no break opportunity in it, laid out beside a floating object (#3412) | 1 MiB: 29.4 s → 0.35 s; 4 MiB: 472 s → 1.4 s | not measured | measured 2026-10-21, on 9b4b948c before the fix and with it (`layout::tests::a_long_unbreakable_word_lays_out_in_linear_time`, `layout::tests::a_megabyte_long_word_lays_out_quickly`) |
@@ -333,6 +337,7 @@ Installed static fonts also resolve by their OpenType PostScript name (name ID 6
 | 2026-10-14 | trivial | Colour emoji row set to 🟡: CBDT verified on Noto Color Emoji; COLR v0/v1 and sbix not yet seen on a real font (#1269) |
 | 2026-10-14 | trivial | Colour emoji and colour-font glyphs (COLR, sbix, CBDT) drawn on screen and in page renders (#1269) |
 | 2026-10-12 | trivial | Document grid: the stale ❌ row removed; the 🟡 row (#391, #401) is the only one |
+| 2026-10-13 | trivial | Incremental pagination (#1284): a paragraph ending in a page break no longer gives the next page's first paragraph its space before after an edit further down; a note or header changed in place is laid out again; long typing sessions evict old paragraph layouts; block-count changes noted as laid out to the end |
 | 2026-10-12 | trivial | Spaces, tabs and ideographic spaces don't count toward a line's height, as in Word (a line of only them takes the paragraph mark's) |
 | 2026-10-12 | trivial | A list label's font raises the first line's ascent but never its descent (Word keeps the text's descent below the baseline) |
 | 2026-10-12 | trivial | Hidden end-of-cell mark (`w:hideMark`): a cell's empty last paragraph takes no room, spacing and all; a row of only such empty cells is just its borders |
@@ -356,6 +361,7 @@ Installed static fonts also resolve by their OpenType PostScript name (name ID 6
 | 2026-10-11 | trivial | Mirror indents (`w:mirrorIndents`): left/right indents swap on even pages; suppress line numbers inherited from styles (#512) |
 | 2026-10-11 | trivial | NUMPAGES/SECTIONPAGES in the body show the real totals (the body is laid out again once the page count is known, at most three extra passes, #451); footnotes referenced in table cells go to the page bottom (#450); PDF links to a bookmark go to the page its start is on, not its paragraph's first page (#455) |
 | 2026-10-11 | minor | Complex scripts: script itemisation, OpenType fallback fonts, syllable clusters, Myanmar syllable breaks (#604) |
+| 2026-10-11 | trivial | Large-document benchmark and incremental pagination: a keystroke in a 511-page document re-lays out only from the edited paragraph (#554) |
 | 2026-10-11 | trivial | Mirrored margins on even pages, tall and linked footers/headers push the body, long endnotes continue, caret in continued notes (#452, #453, #454, #456, #457) |
 | 2026-10-11 | trivial | Hyphenation zone, words in capitals and consecutive-hyphen limit follow the document settings; Manual Hyphenation (#407) |
 | 2026-10-11 | trivial | Document grid: line and character pitch (#391) |

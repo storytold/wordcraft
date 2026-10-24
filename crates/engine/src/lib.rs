@@ -172,6 +172,8 @@ mod tests_bidi;
 #[cfg(test)]
 mod tests_fonts;
 #[cfg(test)]
+mod tests_perf;
+#[cfg(test)]
 mod tests_revision_checks;
 #[cfg(test)]
 mod tests_typing;
