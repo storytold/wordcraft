@@ -304,6 +304,9 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
+    section(ui, "LanguageTool");
+    language_tool(app, ui);
+    ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
     ui.add_space(8.0);
@@ -388,6 +391,105 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
         // English uses its bundled word list; Bulgarian and German have no dictionary yet.
         ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => "",
+    }
+}
+
+/// Options › Proofing › LanguageTool (#575). Off by default: when on, paragraph
+/// text goes to the chosen server. The server and account are drafted and applied together; the
+/// switch and language go through `ui.languageTool`.
+fn language_tool(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_languagetool::{DEFAULT_SERVER, http};
+    // The address and account are edited as a draft and applied together: a half-typed address
+    // must never be used (every keystroke would send text, and the key, to it).
+    let saved = (app.ui.language_tool.server.clone(), app.ui.language_tool.username.clone(), app.ui.language_tool.api_key.clone());
+    let id = egui::Id::new("options_language_tool_draft");
+    let mut draft = ui.data(|d| d.get_temp::<(String, String, String)>(id)).unwrap_or_else(|| saved.clone());
+    let mut on = app.ui.language_tool.enabled;
+    // Switching on waits for Apply, so text only ever goes to the server the box shows; off is always allowed.
+    let r = ui
+        .add_enabled(http::available() && (on || draft == saved), egui::Checkbox::new(&mut on, tl!("Check spelling and grammar with LanguageTool")));
+    if !http::available() {
+        r.on_disabled_hover_text(tl!(http::UNSUPPORTED_REASON));
+    } else if r.changed()
+        && let Err(e) = app.run("ui.languageTool", json!({"enabled": on}))
+    {
+        app.status(e);
+    }
+    ui.label(
+        egui::RichText::new(tl!(
+            "Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer."
+        ))
+        .small()
+        .weak(),
+    );
+    let mut enter = false;
+    ui.horizontal(|ui| {
+        ui.label(tl!("Server:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut draft.0).hint_text(DEFAULT_SERVER).desired_width(300.0));
+        enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    });
+    ui.label(egui::RichText::new(tl!("Use your own LanguageTool server by entering its address, such as http://localhost:8081.")).small().weak());
+    ui.horizontal(|ui| {
+        ui.label(tl!("Username:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut draft.1).desired_width(220.0));
+        enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("API key:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut draft.2).password(true).desired_width(220.0));
+        enter |= r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+    });
+    let changed = draft != saved;
+    if ui.add_enabled(changed, egui::Button::new(tl!("Apply"))).clicked() || (enter && changed) {
+        match app.run("ui.languageTool", json!({"server": draft.0, "username": draft.1, "apiKey": draft.2})) {
+            Ok(_) => {
+                let s = &app.ui.language_tool;
+                draft = (s.server.clone(), s.username.clone(), s.api_key.clone());
+            }
+            Err(e) => app.status(e),
+        }
+    }
+    ui.data_mut(|d| d.insert_temp(id, draft));
+    ui.label(egui::RichText::new(api_key_note(app)).small().weak());
+    let s = &app.ui.language_tool;
+    let current = s.language.clone();
+    let label = |code: &str| match code {
+        "auto" | "" => tl!("Detect automatically").to_string(),
+        "document" => tl!("Each paragraph's proofing language").to_string(),
+        c => c.to_string(),
+    };
+    ui.horizontal(|ui| {
+        ui.label(tl!("Language:"));
+        egui::ComboBox::from_id_salt("languagetool_language").selected_text(label(&current)).width(260.0).show_ui(ui, |ui| {
+            for code in ["auto", "document"] {
+                if ui.selectable_label(current == code, label(code)).clicked() {
+                    let _ = app.run("ui.languageTool", json!({"language": code}));
+                }
+            }
+        });
+    });
+    if let Some(line) = crate::languagetool::status_line(app) {
+        ui.label(egui::RichText::new(line).small());
+    }
+}
+
+/// Where the LanguageTool API key is kept (#764): the system's credential store, or WordCraft's
+/// settings file where there is none or it refused the key.
+pub(crate) fn api_key_note(app: &WordApp) -> String {
+    use crate::LtKeyError;
+    match (&app.services.secrets, &app.lt_key.error) {
+        (None, _) => tl!("This system has no credential store, so the API key is saved in WordCraft's settings file.").to_string(),
+        (Some(_), Some(LtKeyError::Store(e))) => crate::i18n::fmt(
+            tl!("The system's credential store could not keep the API key ({error}), so it is saved in WordCraft's settings file."),
+            &[("error", e)],
+        ),
+        (Some(_), Some(LtKeyError::Lost)) => {
+            tl!("The system's credential store no longer has the API key. Enter it again to keep checking with LanguageTool.").to_string()
+        }
+        (Some(_), Some(LtKeyError::NotRemoved(e))) => {
+            crate::i18n::fmt(tl!("The old API key is still in the system's credential store: it could not be removed ({error})."), &[("error", e)])
+        }
+        (Some(_), None) => tl!("The API key is kept in the system's credential store.").to_string(),
     }
 }
 

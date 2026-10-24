@@ -128,6 +128,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-22 | trivial | Gap 10: group connector rerouting preserves rotated/flipped free and unresolved endpoints under nonuniform scaling, with safe degenerate-dimension and display-size-cap handling; routing around shapes and readiness estimates unchanged |
 | 2026-10-21 | trivial | The ranked gap list held two rows each for #19, #20 and #21; the stale copies are gone, so each gap appears once, and the #20 row carries the measured figure (#3411) |
 | 2026-10-21 | trivial | #20 narrowed: a document with many relationships opens in the time its part takes (#3411) |
+| 2026-10-17 | trivial | The LanguageTool API key moves from `ui.json` to the system's credential store (#764); proofing gap unchanged |
 | 2026-10-22 | minor | Compare's new and revised untitled results clear the previous document's version snapshots; a rejected protected comparison or mailing result preserves the snapshots and file identity. No gap row; estimates unchanged. |
 | 2026-10-21 | trivial | #20 narrowed: a word with no break opportunity in it no longer makes the layout quadratic (#3412) |
 | 2026-10-20 | minor | The Document Inspector's removals are refused while the document tracks changes (they aren't tracked), and a version snapshot belongs to the document it was taken from. No gap row (enforcement fix); estimates unchanged |
