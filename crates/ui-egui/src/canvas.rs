@@ -922,11 +922,172 @@ fn drawing_grid(body: wordcraft_geom::Rect, step: (f32, f32)) -> (Vec<f32>, Vec<
 
 /// The cells Table Layout › View Gridlines outlines on a page: the body's tables and the
 /// header's and footer's (#1628), skipping cells covered by a merge.
+#[cfg(test)]
 fn gridline_cells(page: &Page) -> impl Iterator<Item = wordcraft_geom::Rect> + '_ {
     page.items.iter().chain(&page.header).chain(&page.footer).filter_map(|it| match it {
         Placed::Cell { rect, covered: false, .. } => Some(*rect),
         _ => None,
     })
+}
+
+/// Merge overlapping or touching 1D intervals on an edge line.
+fn union_intervals(mut intervals: Vec<(f32, f32)>) -> Vec<(f32, f32)> {
+    if intervals.is_empty() {
+        return Vec::new();
+    }
+    intervals.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+    let mut merged = Vec::with_capacity(intervals.len());
+    let (mut cur_start, mut cur_end) = intervals[0];
+    for (start, end) in intervals.into_iter().skip(1) {
+        if start <= cur_end + 0.25 {
+            cur_end = cur_end.max(end);
+        } else {
+            merged.push((cur_start, cur_end));
+            cur_start = start;
+            cur_end = end;
+        }
+    }
+    merged.push((cur_start, cur_end));
+    merged
+}
+
+/// Subtract a visible rule interval `[r0, r1]` from disjoint edge intervals `intervals`.
+fn subtract_rule(intervals: Vec<(f32, f32)>, r0: f32, r1: f32) -> Vec<(f32, f32)> {
+    const TOL: f32 = 0.5;
+    let mut out = Vec::with_capacity(intervals.len());
+    for (s0, s1) in intervals {
+        if r1 <= s0 + TOL || r0 >= s1 - TOL {
+            out.push((s0, s1));
+            continue;
+        }
+        if r0 > s0 + TOL {
+            out.push((s0, r0));
+        }
+        if r1 < s1 - TOL {
+            out.push((r1, s1));
+        }
+    }
+    out
+}
+
+/// The line segments Table Layout › View Gridlines draws for a list of placed items (body,
+/// header, or footer): cell boundaries that do not already have a visible border (#3432).
+fn items_gridline_segments(items: &[Placed]) -> Vec<(wordcraft_geom::Point, wordcraft_geom::Point)> {
+    let cells: Vec<wordcraft_geom::Rect> = items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Cell { rect, covered: false, .. } if rect.w > 0.1 && rect.h > 0.1 => Some(*rect),
+            _ => None,
+        })
+        .collect();
+
+    if cells.is_empty() {
+        return Vec::new();
+    }
+
+    let mut h_rules: Vec<(f32, f32, f32)> = Vec::new();
+    let mut v_rules: Vec<(f32, f32, f32)> = Vec::new();
+    for it in items {
+        if let Placed::Rule { x0, y0, x1, y1, border } = it
+            && border.is_visible()
+        {
+            if (y0 - y1).abs() < 0.5 {
+                let y = (y0 + y1) / 2.0;
+                let x_min = x0.min(*x1);
+                let x_max = x0.max(*x1);
+                if x_max - x_min > 0.1 {
+                    h_rules.push((y, x_min, x_max));
+                }
+            } else if (x0 - x1).abs() < 0.5 {
+                let x = (x0 + x1) / 2.0;
+                let y_min = y0.min(*y1);
+                let y_max = y0.max(*y1);
+                if y_max - y_min > 0.1 {
+                    v_rules.push((x, y_min, y_max));
+                }
+            }
+        }
+    }
+
+    let mut segments = Vec::new();
+
+    // 1. Horizontal cell edges (top and bottom of each cell).
+    let mut h_edges: Vec<(f32, f32, f32)> = Vec::with_capacity(cells.len() * 2);
+    for r in &cells {
+        h_edges.push((r.y, r.x, r.right()));
+        h_edges.push((r.bottom(), r.x, r.right()));
+    }
+    h_edges.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+
+    let mut h_clusters: Vec<(f32, Vec<(f32, f32)>)> = Vec::new();
+    for (y, x0, x1) in h_edges {
+        if let Some((cy, intervals)) = h_clusters.last_mut()
+            && (*cy - y).abs() < 0.25
+        {
+            intervals.push((x0, x1));
+            continue;
+        }
+        h_clusters.push((y, vec![(x0, x1)]));
+    }
+
+    for (y, intervals) in h_clusters {
+        let mut merged = union_intervals(intervals);
+        for &(ry, rx0, rx1) in &h_rules {
+            if (ry - y).abs() < 0.5 {
+                merged = subtract_rule(merged, rx0, rx1);
+            }
+        }
+        for (x0, x1) in merged {
+            if x1 - x0 > 0.5 {
+                segments.push((wordcraft_geom::Point::new(x0, y), wordcraft_geom::Point::new(x1, y)));
+            }
+        }
+    }
+
+    // 2. Vertical cell edges (left and right of each cell).
+    let mut v_edges: Vec<(f32, f32, f32)> = Vec::with_capacity(cells.len() * 2);
+    for r in &cells {
+        v_edges.push((r.x, r.y, r.bottom()));
+        v_edges.push((r.right(), r.y, r.bottom()));
+    }
+    v_edges.sort_by(|a, b| a.0.total_cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+
+    let mut v_clusters: Vec<(f32, Vec<(f32, f32)>)> = Vec::new();
+    for (x, y0, y1) in v_edges {
+        if let Some((cx, intervals)) = v_clusters.last_mut()
+            && (*cx - x).abs() < 0.25
+        {
+            intervals.push((y0, y1));
+            continue;
+        }
+        v_clusters.push((x, vec![(y0, y1)]));
+    }
+
+    for (x, intervals) in v_clusters {
+        let mut merged = union_intervals(intervals);
+        for &(rx, ry0, ry1) in &v_rules {
+            if (rx - x).abs() < 0.5 {
+                merged = subtract_rule(merged, ry0, ry1);
+            }
+        }
+        for (y0, y1) in merged {
+            if y1 - y0 > 0.5 {
+                segments.push((wordcraft_geom::Point::new(x, y0), wordcraft_geom::Point::new(x, y1)));
+            }
+        }
+    }
+
+    segments
+}
+
+/// The line segments Table Layout › View Gridlines draws on a page: cell boundaries that do
+/// not already have a visible border, across the body, header, and footer tables (#3432).
+pub fn gridline_segments(page: &Page) -> Vec<(wordcraft_geom::Point, wordcraft_geom::Point)> {
+    let mut segments = Vec::new();
+    segments.extend(items_gridline_segments(&page.items));
+    segments.extend(items_gridline_segments(&page.header));
+    segments.extend(items_gridline_segments(&page.footer));
+    segments
 }
 
 /// The drawing grid's spacing in points at a screen scale: the document's spacing (`w:drawingGrid*Spacing`;
@@ -1460,14 +1621,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     painter.line_segment([pos2(x0, sy), pos2(x1, sy)], stroke);
                 }
             }
-            // Table Layout › View Gridlines: table cell outlines (on screen only).
+            // Table Layout › View Gridlines: cell outlines for edges without visible borders (on screen only, #3432).
             if app.session.view.table_gridlines {
-                for rect in gridline_cells(page) {
-                    let r = Rect::from_min_size(
-                        pos2(visual_sr.min.x + rect.x * page_scale, visual_sr.min.y + rect.y * page_scale),
-                        vec2(rect.w * page_scale, rect.h * page_scale),
+                let stroke = Stroke::new(0.5, t.blue.linear_multiply(0.6));
+                for (a, b) in gridline_segments(page) {
+                    painter.line_segment(
+                        [
+                            pos2(visual_sr.min.x + a.x * page_scale, visual_sr.min.y + a.y * page_scale),
+                            pos2(visual_sr.min.x + b.x * page_scale, visual_sr.min.y + b.y * page_scale),
+                        ],
+                        stroke,
                     );
-                    painter.rect_stroke(r, 0.0, Stroke::new(0.5, t.blue.linear_multiply(0.6)), egui::StrokeKind::Middle);
                 }
             }
         }
@@ -6340,6 +6504,70 @@ mod tests {
         };
         let ys: Vec<f32> = gridline_cells(&page).map(|r| r.y).collect();
         assert_eq!(ys, [100.0, 10.0, 200.0]);
+    }
+
+    #[test]
+    fn gridlines_only_drawn_on_edges_without_visible_borders() {
+        use wordcraft_doc::props::Border;
+        let cell = |x: f32, y: f32, w: f32, h: f32| Placed::Cell {
+            rect: wordcraft_geom::Rect::new(x, y, w, h),
+            covered: false,
+            table: Default::default(),
+            row: 0,
+            cell: 0,
+            story: StoryRef::Body,
+            clip: false,
+        };
+        // Table with 2 cells side by side without borders: (0, 0, 50, 20) and (50, 0, 50, 20).
+        let page_no_borders = Page { items: vec![cell(0.0, 0.0, 50.0, 20.0), cell(50.0, 0.0, 50.0, 20.0)], ..Default::default() };
+        let segs = gridline_segments(&page_no_borders);
+        // Horizontal: top (0..100, y=0), bottom (0..100, y=20)
+        // Vertical: left (x=0, 0..20), middle (x=50, 0..20), right (x=100, 0..20)
+        assert_eq!(segs.len(), 5);
+
+        // Same table, but with top border on the first cell (0..50, y=0).
+        let page_partial_border = Page {
+            items: vec![
+                cell(0.0, 0.0, 50.0, 20.0),
+                cell(50.0, 0.0, 50.0, 20.0),
+                Placed::Rule { x0: 0.0, y0: 0.0, x1: 50.0, y1: 0.0, border: Border::single(0.5) },
+            ],
+            ..Default::default()
+        };
+        let segs_partial = gridline_segments(&page_partial_border);
+        assert_eq!(segs_partial.len(), 5);
+        let top_segs: Vec<_> = segs_partial.iter().filter(|(a, b)| a.y == 0.0 && b.y == 0.0).collect();
+        assert_eq!(top_segs.len(), 1);
+        assert_eq!(top_segs[0].0.x, 50.0);
+        assert_eq!(top_segs[0].1.x, 100.0);
+
+        // Same table with full borders on all edges: no gridlines drawn (#3432).
+        let page_full_borders = Page {
+            items: vec![
+                cell(0.0, 0.0, 50.0, 20.0),
+                cell(50.0, 0.0, 50.0, 20.0),
+                Placed::Rule { x0: 0.0, y0: 0.0, x1: 100.0, y1: 0.0, border: Border::single(0.5) },
+                Placed::Rule { x0: 0.0, y0: 20.0, x1: 100.0, y1: 20.0, border: Border::single(0.5) },
+                Placed::Rule { x0: 0.0, y0: 0.0, x1: 0.0, y1: 20.0, border: Border::single(0.5) },
+                Placed::Rule { x0: 50.0, y0: 0.0, x1: 50.0, y1: 20.0, border: Border::single(0.5) },
+                Placed::Rule { x0: 100.0, y0: 0.0, x1: 100.0, y1: 20.0, border: Border::single(0.5) },
+            ],
+            ..Default::default()
+        };
+        assert!(gridline_segments(&page_full_borders).is_empty());
+    }
+
+    #[test]
+    fn grid_table_4_styled_table_omits_gridlines_over_borders() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        app.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        // Plain table has gridlines.
+        let l = app.session.layout();
+        assert!(!gridline_segments(&l.pages[0]).is_empty());
+        // Grid Table 4 – Blue has visible borders on all cells, so gridlines are omitted (#3432).
+        app.run("table.style", json!({"style": "GridTable4AccentBlue"})).unwrap();
+        let l = app.session.layout();
+        assert!(gridline_segments(&l.pages[0]).is_empty());
     }
 
     #[test]
