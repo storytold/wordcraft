@@ -144,6 +144,8 @@ pub struct CanvasState {
     scroll_max: egui::Vec2,
     /// Explicit page turn to apply on the next frame (reading navigation buttons/keys).
     scroll_request: Option<egui::Vec2>,
+    /// Paste Options after a paste (#820): where the widget sits, in screen pixels.
+    pub(crate) paste_options: Option<Pos2>,
     /// The viewport (the content's visible rect on screen) at the end of last frame; the
     /// drag-select edge auto-scroll decides this frame's scroll from it (#688).
     pub(crate) viewport: Option<egui::Rect>,
@@ -294,6 +296,7 @@ impl Default for CanvasState {
             scroll_offset: egui::Vec2::ZERO,
             scroll_max: egui::Vec2::ZERO,
             scroll_request: None,
+            paste_options: None,
             viewport: None,
             cols: 1,
             balloon: None,
@@ -1897,6 +1900,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     {
         crate::mini_toolbar::show(app, ui.ctx(), sel, out.inner_rect);
     }
+    crate::mini_toolbar::paste_options(app, ui.ctx());
     if app.session.view.read_mode {
         // Fixed navigation chrome, independent of the horizontally moving columns.
         let step = app.session.view.read_width * app.canvas.scale + GAP;
@@ -3644,6 +3648,38 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+    use egui_kittest::kittest::Queryable;
+
+    #[test]
+    fn paste_options_widget_comes_and_goes() {
+        // #820: pasting offers Keep Source / Merge / Text Only until something else runs.
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("hi")), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.state_mut().run("select.all", serde_json::json!({})).unwrap();
+        h.state_mut().run("edit.copy", serde_json::json!({})).unwrap();
+        h.state_mut().run("caret.docEnd", serde_json::json!({})).unwrap();
+        assert!(h.state().canvas.paste_options.is_none());
+        h.state_mut().run("edit.paste", serde_json::json!({})).unwrap();
+        h.step();
+        assert!(h.state().canvas.paste_options.is_some(), "pasting shows the widget");
+        h.get_by_label("Match Destination Formatting").click();
+        h.step();
+        let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert_eq!(text, "hihi", "merge redoes the paste, once: {text}");
+        h.state_mut().run("text.insert", serde_json::json!({"text": "!"})).unwrap();
+        h.step();
+        assert!(h.state().canvas.paste_options.is_none(), "typing dismisses it");
+    }
 
     /// A window-following layout size (#1876, Read Mode): applied at once on entry or when forced,
     /// held while the window is dragged, applied once the size has been still for the settle time.

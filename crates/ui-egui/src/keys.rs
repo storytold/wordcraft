@@ -409,6 +409,9 @@ pub fn canvas_events(app: &mut WordApp, ctx: &egui::Context) {
                 let _ = app.run(id, json!({}));
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                if key == Key::Escape && app.canvas.paste_options.take().is_some() {
+                    continue;
+                }
                 if key == Key::Escape && app.session.painter.is_some() {
                     app.session.painter = None;
                     continue;
