@@ -19,6 +19,7 @@ mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
 mod logging;
+mod new_window;
 mod print;
 mod region;
 #[cfg(target_os = "macos")]
@@ -167,6 +168,7 @@ fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
 }
 
+/// Loads the saved preferences into `app` and remembers them as this window's starting point.
 fn load_prefs(app: &mut WordApp) {
     if !prefs_enabled() {
         return;
@@ -177,6 +179,44 @@ fn load_prefs(app: &mut WordApp) {
     {
         app.apply_prefs(ui);
     }
+    // What this window started from, so saving writes back only what it changed (`merge_prefs`).
+    if let Ok(v) = serde_json::to_value(app.prefs()) {
+        let _ = LOADED_PREFS.set(v);
+    }
+}
+
+/// The preferences as this process loaded them ([`load_prefs`]).
+static LOADED_PREFS: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+
+/// Each window is its own process with its own copy of `ui.json`, so a window saving on close
+/// must not undo what another window saved meanwhile. Starting from what is on `disk` now, this
+/// window writes the fields it changed since it loaded `base` (and its window geometry: the last
+/// window closed places the next one); the Recent list is merged, newest first.
+fn merge_prefs(base: Option<&serde_json::Value>, mine: serde_json::Value, disk: Option<serde_json::Value>) -> serde_json::Value {
+    use serde_json::Value;
+    let (Value::Object(mine), Some(Value::Object(mut out))) = (mine.clone(), disk) else { return mine };
+    for (key, value) in mine {
+        let changed = base.and_then(|b| b.get(&key)) != Some(&value);
+        if key == "recent" {
+            let theirs = out.get(&key).and_then(Value::as_array).cloned().unwrap_or_default();
+            let ours = value.as_array().cloned().unwrap_or_default();
+            let loaded = base.and_then(|b| b.get(&key)).and_then(Value::as_array).cloned().unwrap_or_default();
+            // Files this window opened since loading come first, then the disk's list, less what
+            // this window removed from it (Clear Recent, a file that failed to open).
+            let mut list: Vec<Value> = ours.iter().filter(|v| !loaded.contains(v)).cloned().collect();
+            let removed: Vec<&Value> = loaded.iter().filter(|v| !ours.contains(v)).collect();
+            for v in theirs.into_iter().chain(ours.iter().cloned()) {
+                if !list.contains(&v) && !removed.contains(&&v) {
+                    list.push(v);
+                }
+            }
+            list.truncate(wordcraft_ui_egui::MAX_RECENT);
+            out.insert(key, Value::Array(list));
+        } else if changed || key == "window" || !out.contains_key(&key) {
+            out.insert(key, value);
+        }
+    }
+    Value::Object(out)
 }
 
 /// Fonts the user added (#582) live in `fonts` in the settings folder: load them, and store fonts
@@ -201,6 +241,7 @@ fn saved_window() -> Option<WindowGeometry> {
     UiState::from_json(&bytes)?.window?.sanitized()
 }
 
+/// Saves the preferences, merged with what other windows saved meanwhile ([`merge_prefs`]).
 fn save_prefs(app: &WordApp) {
     if !prefs_enabled() {
         return;
@@ -212,7 +253,15 @@ fn save_prefs(app: &WordApp) {
             log::warn!("preferences: cannot create {}: {e}", dir.display());
             return;
         }
-        match serde_json::to_vec_pretty(&app.prefs()) {
+        let mine = match serde_json::to_value(app.prefs()) {
+            Ok(v) => v,
+            Err(e) => {
+                log::warn!("preferences: cannot serialize: {e}");
+                return;
+            }
+        };
+        let disk = std::fs::read(&p).ok().and_then(|b| serde_json::from_slice(&b).ok());
+        match serde_json::to_vec_pretty(&merge_prefs(LOADED_PREFS.get(), mine, disk)) {
             Ok(bytes) => {
                 if let Err(e) = write_prefs(&p, &bytes) {
                     log::warn!("preferences: cannot save {}: {e}", p.display());
@@ -254,6 +303,7 @@ fn services(file_dialog: file_dialogs::Hook, ctx: &egui::Context) -> Services {
         set_clipboard_html: Some(Box::new(clipboard::set_html)),
         clipboard_rtf: Some(Box::new(clipboard::rtf)),
         clipboard_formats: Some(Box::new(clipboard::formats)),
+        new_window: Some(new_window::hook()),
         ..Default::default()
     }
 }
@@ -271,10 +321,11 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--new TEMPLATE] [--control PORT] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
+  --new TEMPLATE      open a new document from TEMPLATE (default: blank) instead of the Start screen
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
   --version           print the version
@@ -305,6 +356,20 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
     (args, files)
 }
 
+/// The status-bar text for a command-line file that failed to open.
+fn open_failure_message(path: &str, error: &str) -> String {
+    wordcraft_ui_egui::i18n::fmt(wordcraft_ui_egui::tl!("Couldn't open {path}: {error}"), &[("path", path), ("error", error)])
+}
+
+/// A command-line file (or `--new` template) that failed at start-up: logged, and shown in the
+/// status bar, since otherwise the window is just blank.
+fn report_open_failure(app: &mut WordApp, what: &str, error: &str) {
+    log::warn!("{what}: {error}");
+    // Before the first frame sets it: the message is in the interface's language.
+    wordcraft_ui_egui::i18n::set_current(wordcraft_ui_egui::i18n::Lang::from_pref(&app.ui.language));
+    app.status(open_failure_message(what, error));
+}
+
 /// Open a file whose name isn't valid Unicode (#1440). `file.open` takes its path as text, so it
 /// gets the file's bytes under the lossy name, and the document then keeps the real path to save to.
 /// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
@@ -316,10 +381,16 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
         // Not when it waits for a password: that open names the document itself.
         Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
         Ok(_) => {}
-        Err(e) => log::warn!("{name}: {e}"),
+        Err(e) => report_open_failure(app, &name, &e),
     }
 }
 
+/// The template after `--new`: the next argument unless it is a flag; `blank` otherwise.
+fn new_template_arg(args: &mut std::iter::Peekable<impl Iterator<Item = String>>) -> String {
+    args.next_if(|t| !t.starts_with('-')).unwrap_or_else(|| "blank".into())
+}
+
+/// Parses the command line and runs the WordCraft window.
 fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
@@ -327,6 +398,8 @@ fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
+    // `--new <template>`: a new document, not the Start screen (a window File › New opened).
+    let mut new_template: Option<String> = None;
     let (args, other_files) = text_args();
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
@@ -341,6 +414,7 @@ fn main() -> eframe::Result {
                 }
             }
             "--sample" => sample = true,
+            "--new" => new_template = Some(new_template_arg(&mut args)),
             "--version" => {
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
                 return Ok(());
@@ -463,12 +537,17 @@ fn main() -> eframe::Result {
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
             // macOS hands over later open on top of it and close it (`apple_events`).
-            if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
+            if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() && new_template.is_none() {
                 app.start_screen();
+            }
+            if let Some(template) = &new_template
+                && let Err(e) = app.run("file.new", serde_json::json!({"template": template}))
+            {
+                report_open_failure(&mut app, template, &e);
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
-                    log::warn!("{f}: {e}");
+                    report_open_failure(&mut app, &f, &e);
                 }
             }
             for f in other_files {
@@ -513,8 +592,11 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1, "a second file was written");
 
         // A file that can't be read is a warning, as one that fails to open by name is.
+        app.status_msg = None;
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));
         assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
+        let shown = app.status_msg.as_ref().map(|(s, _)| s.clone()).unwrap_or_default();
+        assert!(shown.contains("gon"), "the failure is shown, not just logged: {shown:?}");
         let _ = std::fs::remove_dir_all(dir);
     }
 
@@ -554,8 +636,75 @@ mod tests {
 }
 
 #[cfg(test)]
+mod open_failure_tests {
+    use super::*;
+
+    /// `--new` takes the next argument as its template, unless that is a flag.
+    #[test]
+    fn new_takes_a_template_but_not_a_following_flag() {
+        let mut a = ["letter".to_string(), "x".into()].into_iter().peekable();
+        assert_eq!(new_template_arg(&mut a), "letter");
+        let mut a = ["--sample".to_string()].into_iter().peekable();
+        assert_eq!(new_template_arg(&mut a), "blank");
+        assert_eq!(a.next().as_deref(), Some("--sample"));
+        assert_eq!(new_template_arg(&mut std::iter::empty::<String>().peekable()), "blank");
+    }
+
+    /// A start-up open failure reaches the status bar, in the interface's language.
+    #[test]
+    fn a_startup_open_failure_is_shown_in_the_status_bar() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.ui.language = "en".into();
+        report_open_failure(&mut app, "a.docx", "no such file");
+        assert_eq!(app.status_msg.take().map(|(s, _)| s).as_deref(), Some("Couldn't open a.docx: no such file"));
+        // Before the first frame: still in the interface's language.
+        app.ui.language = "tr".into();
+        report_open_failure(&mut app, "a.docx", "no such file");
+        assert_eq!(app.status_msg.map(|(s, _)| s).as_deref(), Some("a.docx açılamadı: no such file"));
+        wordcraft_ui_egui::i18n::set_current(wordcraft_ui_egui::i18n::Lang::from_pref("en"));
+    }
+
+    /// The failure message names the file and the error.
+    #[test]
+    fn open_failure_message_names_the_file_and_the_error() {
+        assert_eq!(super::open_failure_message("a.docx", "no such file"), "Couldn't open a.docx: no such file");
+    }
+}
+
+#[cfg(test)]
 mod prefs_tests {
-    use super::write_prefs;
+    use super::{merge_prefs, write_prefs};
+    use serde_json::json;
+
+    /// Two windows saving one after the other keep both windows' changes and both Recent files.
+    #[test]
+    fn two_windows_saving_keep_each_others_changes() {
+        let loaded = json!({"recent": ["/old.docx"], "x": 1, "y": 1, "window": {"w": 1}});
+        // B opened a file and changed X, and saved first.
+        let b = json!({"recent": ["/b.docx", "/old.docx"], "x": 2, "y": 1, "window": {"w": 2}});
+        let disk = merge_prefs(Some(&loaded), b, Some(loaded.clone()));
+        // A (loaded the same file) changed Y and closes later.
+        let a = json!({"recent": ["/a.docx", "/old.docx"], "x": 1, "y": 3, "window": {"w": 3}});
+        let saved = merge_prefs(Some(&loaded), a, Some(disk));
+        assert_eq!(saved, json!({"recent": ["/a.docx", "/b.docx", "/old.docx"], "x": 2, "y": 3, "window": {"w": 3}}));
+    }
+
+    /// A Recent entry this window removed stays removed, while another window's new one is kept.
+    #[test]
+    fn a_recent_entry_removed_here_is_not_brought_back_from_disk() {
+        let loaded = json!({"recent": ["/old.docx", "/keep.docx"]});
+        let disk = json!({"recent": ["/b.docx", "/old.docx", "/keep.docx"]});
+        let mine = json!({"recent": ["/keep.docx"]});
+        assert_eq!(merge_prefs(Some(&loaded), mine, Some(disk)), json!({"recent": ["/b.docx", "/keep.docx"]}));
+    }
+
+    /// With no readable settings file, or a malformed one, the window writes its own preferences.
+    #[test]
+    fn without_a_readable_file_the_window_writes_its_own() {
+        let mine = json!({"x": 1});
+        assert_eq!(merge_prefs(None, mine.clone(), None), mine);
+        assert_eq!(merge_prefs(None, mine.clone(), Some(json!("junk"))), mine);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {
