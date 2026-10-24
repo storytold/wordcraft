@@ -561,6 +561,8 @@ pub struct WordApp {
     pub(crate) synthetic: Vec<egui::Event>,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
+    /// macOS: which touchpad scroll gestures began with ⌘ held, so momentum isn't read as a zoom.
+    gesture_lock: scroll::GestureLock,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
     pub(crate) keytip_rects: Vec<(egui::Rect, String)>,
     /// The Navigation pane's search box takes the keyboard on its next frame (Ctrl+F, #712).
@@ -710,6 +712,7 @@ impl WordApp {
             pending_shots: Vec::new(),
             synthetic: Vec::new(),
             control_click: false,
+            gesture_lock: scroll::GestureLock::default(),
             keytip_rects: Vec::new(),
             nav_search_focus: false,
             styled: false,
@@ -2383,6 +2386,7 @@ impl WordApp {
     pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
+            self.gesture_lock.filter(&mut raw.events, raw.time.unwrap_or_default(), &egui::InputOptions::default());
         }
         if self.synthetic.is_empty() {
             return;
@@ -5240,6 +5244,54 @@ mod tests {
         let (req, _reply) = ControlRequest::new("ui.wheel", json!({"x": at.x}));
         let control::Outcome::Done(v) = control::handle(&mut a, &ctx, &req) else { panic!("ui.wheel replies at once") };
         assert_eq!(v["ok"], false, "y is required: {v}");
+    }
+
+    /// macOS momentum events carry the ⌘ held *now*. Through the app's input hook, ⌘ pressed during
+    /// the glide of a plain scroll doesn't zoom, and ⌘ let go during a zoom gesture doesn't stop it.
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn command_during_scroll_momentum_does_not_zoom_the_canvas() {
+        use egui::{Event, Modifiers, MouseWheelUnit, TouchPhase};
+        let wheel = |phase, modifiers| Event::MouseWheel { unit: MouseWheelUnit::Point, delta: egui::vec2(0.0, -20.0), phase, modifiers };
+        // The canvas scale after the given (phase, ⌘ held) events, one per 1/60 s frame, then settling.
+        let scale_after = |gesture: &[(TouchPhase, bool)]| {
+            let ctx = egui::Context::default();
+            let mut a = app();
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0));
+            let mut t = 0.0;
+            let mut frame = |a: &mut WordApp, events: Vec<Event>| {
+                t += 1.0 / 60.0;
+                let mut input = egui::RawInput { time: Some(t), screen_rect: Some(screen), events, ..Default::default() };
+                a.raw_input_hook(&mut input);
+                ctx.run_ui(input, |ui| {
+                    a.logic(ui.ctx());
+                    a.ui(ui);
+                })
+                .drop_without_applying_deltas();
+            };
+            for _ in 0..3 {
+                frame(&mut a, Vec::new());
+            }
+            let at = a.canvas.canvas_rect.unwrap().center();
+            frame(&mut a, vec![Event::PointerMoved(at)]);
+            let before = a.canvas.scale;
+            for &(phase, command) in gesture {
+                frame(&mut a, vec![wheel(phase, if command { Modifiers::COMMAND } else { Modifiers::NONE })]);
+            }
+            for _ in 0..30 {
+                frame(&mut a, Vec::new());
+            }
+            (before, a.canvas.scale)
+        };
+        use TouchPhase::{End, Move, Start};
+        // A plain flick, its lift and momentum; ⌘ goes down in the glide.
+        let (before, after) = scale_after(&[(Start, false), (Move, false), (End, false), (Start, false), (Move, true), (Move, true), (End, true)]);
+        assert_eq!(before, after, "the glide scrolls, it doesn't zoom");
+        // Sanity: a gesture that began with ⌘ zooms, and keeps zooming once ⌘ is let go.
+        let (before, held) = scale_after(&[(Start, true), (Move, true)]);
+        assert!(held != before, "⌘+scroll zooms");
+        let (_, released) = scale_after(&[(Start, true), (Move, true), (Move, false), (Move, false)]);
+        assert!(released != held, "the zoom carries on after ⌘ is released: {held} then {released}");
     }
 
     /// Issue #123: zoomed out, pages sit side by side, and clicks map to the page under the pointer.
