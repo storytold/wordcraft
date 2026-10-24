@@ -169,6 +169,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-17 | Home › Borders uses the table border command for a caret in a cell or selected cells (#2710, on #2204), keeping its Bottom Border default and one undo step; explicit paragraph borders and text-only selections within one cell keep their existing behavior |
+| 2026-10-15 | Table border line styles (#1740): Table Design › Borders has Line Style, Line Weight and Pen Color menus that set a pen. The Borders menu draws it on the selected cells, so a double line can go under the header row only, and on the table when all of it is selected, keeping the cells' own lines on the sides it doesn't cover; Left, Right, Inside Horizontal and Inside Vertical sides added. Border Painter restyles the whole table in one click. For scripts too, `table.borders` now acts on the caret's cell or the selected cells by default; `"applyTo": "table"` gives the old whole-table behaviour. Triple and dot-dash borders draw as themselves on screen and in PDF, shared cell edges follow ECMA-376, and View Gridlines no longer draws over borders |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
@@ -724,6 +726,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
 | 2026-10-15 | trivial | Progress log: caret inside ligatures (#1974) |
+| 2026-10-15 | trivial | Progress log: table border line styles and the Borders pen (#1740) |
 | 2026-10-17 | trivial | Progress log: the ribbon's paste choices in the context menu (#2583) |
 | 2026-10-16 | trivial | Progress log: live rotation preview while dragging (#2277); readiness estimates unchanged |
 | 2026-10-16 | trivial | Progress log: a text frame in the paragraph defaults frames nothing (#2360) |

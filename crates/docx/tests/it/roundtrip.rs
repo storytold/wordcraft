@@ -2697,6 +2697,44 @@ fn page_background_picture_round_trips() {
     assert!(rt(&r).settings.page_picture.is_some());
 }
 
+/// #1740: table border line styles are written as `w:val` (double, triple, dashed, dotted, wave,
+/// dot-dash) with their widths, and read back.
+#[test]
+fn table_border_line_styles_round_trip() {
+    let line = |style: BorderStyle, width: f32| Border { style, width, color: Some(Rgb(0xC0, 0, 0)), space: 0.0 };
+    let mut t = Table::new(3, 3, 400.0);
+    t.props.borders = Some(Borders {
+        top: Some(line(BorderStyle::Double, 1.5)),
+        bottom: Some(line(BorderStyle::Triple, 2.25)),
+        left: Some(line(BorderStyle::Dotted, 0.5)),
+        right: Some(line(BorderStyle::Wave, 0.75)),
+        between: Some(line(BorderStyle::Dashed, 0.5)),
+        inside_v: Some(line(BorderStyle::DotDash, 1.0)),
+    });
+    let mut d = Document::new();
+    d.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0), Block::Table(t)).unwrap();
+    let bytes = wordcraft_docx::write(&d).expect("write");
+    let xml = document_xml(&bytes);
+    for el in [
+        r#"<w:top w:val="double" w:sz="12""#,
+        r#"<w:bottom w:val="triple" w:sz="18""#,
+        r#"<w:left w:val="dotted" w:sz="4""#,
+        r#"<w:right w:val="wave" w:sz="6""#,
+        r#"<w:insideH w:val="dashed" w:sz="4""#,
+        r#"<w:insideV w:val="dotDash" w:sz="8""#,
+    ] {
+        assert!(xml.contains(el), "{el} in {xml}");
+    }
+    let r = wordcraft_docx::read(&bytes).expect("read");
+    let b = r.body.iter().find_map(|b| b.as_table()).unwrap().props.borders.unwrap();
+    assert_eq!(b.top, Some(line(BorderStyle::Double, 1.5)));
+    assert_eq!(b.bottom, Some(line(BorderStyle::Triple, 2.25)));
+    assert_eq!(b.left, Some(line(BorderStyle::Dotted, 0.5)));
+    assert_eq!(b.right, Some(line(BorderStyle::Wave, 0.75)));
+    assert_eq!(b.between, Some(line(BorderStyle::Dashed, 0.5)));
+    assert_eq!(b.inside_v, Some(line(BorderStyle::DotDash, 1.0)));
+}
+
 /// #2601: Drop Cap Options — a dropped cap with its lines, distance from the text and font, and
 /// one in the margin, survive a save: `w:framePr w:dropCap="drop|margin" w:lines w:hSpace` on the
 /// letter's own paragraph, the font on the letter's run (ECMA-376 §17.3.1.11). The text after the

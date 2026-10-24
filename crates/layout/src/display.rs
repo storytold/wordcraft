@@ -133,6 +133,34 @@ impl Stroke {
     }
 }
 
+impl Stroke {
+    /// The parallel lines a line of width `w` is drawn as, each (offset from the centre line,
+    /// line width): a double is two lines 0.6 `w` wide and 1.8 `w` apart, a triple three lines
+    /// of the same width and spacing, so a triple is wider and darker than a double of the same width.
+    pub fn parallel_lines(self, w: f32) -> impl Iterator<Item = (f32, f32)> {
+        let (n, line, pitch) = match self {
+            Stroke::Double => (2u8, w * 0.6, w * 1.8),
+            Stroke::Triple => (3, w * 0.6, w * 1.8),
+            _ => (1, w, 0.0),
+        };
+        let mid = f32::from(n - 1) / 2.0;
+        (0..n).map(move |i| ((f32::from(i) - mid) * pitch, line))
+    }
+
+    /// How high a wave of width `w` swings either side of its centre line.
+    pub fn wave_amplitude(w: f32) -> f32 {
+        (w * 1.2).max(0.8)
+    }
+
+    /// How far the drawn line reaches either side of its centre line.
+    pub fn half_span(self, w: f32) -> f32 {
+        match self {
+            Stroke::Wave => Stroke::wave_amplitude(w) + w * 0.4,
+            _ => self.parallel_lines(w).map(|(off, line)| off.abs() + line / 2.0).fold(0.0, f32::max),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Draw {
     Glyphs {
@@ -762,19 +790,19 @@ fn border_stroke(s: BorderStyle) -> Stroke {
     }
 }
 
+/// The width a border is drawn at.
+fn rule_width(b: &Border) -> f32 {
+    if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) }
+}
+
+/// How far a drawn border reaches either side of its centre line.
+pub(crate) fn border_half_span(b: &Border) -> f32 {
+    border_stroke(b.style).half_span(rule_width(b))
+}
+
 /// A border line from `(x0, y0)` to `(x1, y1)` (paragraph rules and character borders).
 fn rule(x0: f32, y0: f32, x1: f32, y1: f32, b: &Border, alpha: f32) -> Draw {
-    Draw::Line {
-        x0,
-        y0,
-        x1,
-        y1,
-        width: if b.style == BorderStyle::Thick { b.width.max(1.5) } else { b.width.max(0.25) },
-        color: b.color.unwrap_or(Rgb::BLACK),
-        stroke: border_stroke(b.style),
-        alpha,
-        text_bg: None,
-    }
+    Draw::Line { x0, y0, x1, y1, width: rule_width(b), color: b.color.unwrap_or(Rgb::BLACK), stroke: border_stroke(b.style), alpha, text_bg: None }
 }
 
 /// Closed box around one line segment of a character-border group, widened by `space`.

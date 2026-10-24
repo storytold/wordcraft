@@ -824,31 +824,20 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.stroke_path(&p);
             };
             if *stroke == Stroke::Wave {
-                let amp = (w * 1.2).max(0.8);
+                let amp = Stroke::wave_amplitude(*width) as f64;
                 let p = wave_path(x0, y0, x1, y1, amp);
                 ctx.set_stroke(kurbo::Stroke::new(w * 0.8));
                 ctx.stroke_path(&p);
                 return;
             }
-            if *stroke == Stroke::Triple {
-                // Three thin lines, spaced as a double's, across the line's direction (so a
-                // vertical border's lines stand side by side).
+            if matches!(stroke, Stroke::Double | Stroke::Triple) {
                 let (dx, dy) = (x1 - x0, y1 - y0);
                 let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 1.8, dx / len * w * 1.8);
-                ctx.set_stroke(kurbo::Stroke::new(w * 0.6));
-                for k in [-1.0, 0.0, 1.0] {
-                    line(ctx, nx * k, ny * k);
+                let (nx, ny) = (-dy / len, dx / len);
+                for (off, line_w) in stroke.parallel_lines(*width) {
+                    ctx.set_stroke(kurbo::Stroke::new(line_w as f64).with_caps(kurbo::Cap::Butt));
+                    line(ctx, nx * off as f64, ny * off as f64);
                 }
-                return;
-            }
-            if *stroke == Stroke::Double {
-                let (dx, dy) = (x1 - x0, y1 - y0);
-                let len = (dx * dx + dy * dy).sqrt().max(1e-3);
-                let (nx, ny) = (-dy / len * w * 0.9, dx / len * w * 0.9);
-                ctx.set_stroke(kurbo::Stroke::new(w * 0.6).with_caps(kurbo::Cap::Butt));
-                line(ctx, nx, ny);
-                line(ctx, -nx, -ny);
                 return;
             }
             ctx.set_stroke(st);
@@ -1376,6 +1365,79 @@ mod tests {
         assert!(dark > 30, "dark {dark}");
         assert_eq!(img.pixel(5, 5), [255, 255, 255, 255]);
         assert!(!img.to_png().is_empty());
+    }
+
+    /// A one-cell table with only `borders` (no table style), rendered at `scale`.
+    fn bordered_table(borders: wordcraft_doc::props::Borders, scale: f32) -> Rendered {
+        let mut d = Document::from_text("x");
+        let mut t = wordcraft_doc::Table::new(1, 1, 400.0);
+        t.props.style = None;
+        t.props.borders = Some(borders);
+        d.insert_block(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        render_page(&d, &l.pages[0], scale, &RenderOptions::default())
+    }
+
+    /// Runs of dark pixels along a line of pixels: (start, length).
+    fn dark_runs(px: impl Iterator<Item = [u8; 4]>) -> Vec<(usize, usize)> {
+        let mut out: Vec<(usize, usize)> = Vec::new();
+        let mut prev = false;
+        for (i, p) in px.enumerate() {
+            let dark = p[0] < 128;
+            match (dark, prev, out.last_mut()) {
+                (true, true, Some(run)) => run.1 += 1,
+                (true, _, _) => out.push((i, 1)),
+                _ => {}
+            }
+            prev = dark;
+        }
+        out
+    }
+
+    fn top(style: wordcraft_doc::props::BorderStyle, width: f32) -> wordcraft_doc::props::Borders {
+        wordcraft_doc::props::Borders { top: Some(wordcraft_doc::props::Border { style, width, color: None, space: 0.0 }), ..Default::default() }
+    }
+
+    /// #1740: a triple border paints three separate lines; it is darker than a double of the same
+    /// width, and a wider one is darker still.
+    #[test]
+    fn triple_border_paints_three_lines_heavier_than_a_double() {
+        use wordcraft_doc::props::BorderStyle;
+        // Down a column through the table (x = 172 pt, clear of the text) at 4 px per point.
+        let column = |img: &Rendered| dark_runs((0..img.height).map(|y| img.pixel(172 * 4, y)));
+        let runs = column(&bordered_table(top(BorderStyle::Triple, 3.0), 4.0));
+        assert_eq!(runs.len(), 3, "{runs:?}");
+        let ink = |style, w| column(&bordered_table(top(style, w), 4.0)).iter().map(|r| r.1).sum::<usize>();
+        assert!(ink(BorderStyle::Triple, 1.5) > ink(BorderStyle::Double, 1.5), "triple darker than double");
+        assert!(ink(BorderStyle::Triple, 1.0) > ink(BorderStyle::Triple, 0.5), "Line Weight thickens a triple");
+    }
+
+    /// #1740: a vertical double border is two lines side by side (they used to be drawn on top of
+    /// each other, as one line), and a vertical wave is drawn at all.
+    #[test]
+    fn vertical_double_and_wave_borders_are_drawn_across_the_line() {
+        use wordcraft_doc::props::{Border, BorderStyle, Borders};
+        let left = |style, width| Borders { left: Some(Border { style, width, color: None, space: 0.0 }), ..Default::default() };
+        let img = bordered_table(left(BorderStyle::Double, 2.0), 4.0);
+        // Across the page through the cell's middle, left of the text.
+        let ink_rows: Vec<u32> = (0..img.height).filter(|y| (0..90 * 4).any(|x| img.pixel(x, *y)[0] < 128)).collect();
+        let mid = ink_rows.get(ink_rows.len() / 2).copied().expect("the border is drawn");
+        let runs = dark_runs((0..90 * 4).map(|x| img.pixel(x, mid)));
+        assert_eq!(runs.len(), 2, "{runs:?}");
+        let img = bordered_table(left(BorderStyle::Wave, 1.0), 4.0);
+        let xs: std::collections::BTreeSet<u32> =
+            (0..img.height).flat_map(|y| (0..90 * 4).map(move |x| (x, y))).filter(|(x, y)| img.pixel(*x, *y)[0] < 128).map(|(x, _)| x).collect();
+        assert!(xs.len() > 8, "a wave swings across its line: {xs:?}");
+    }
+
+    /// #1740: a dot-dash border alternates long and short dashes.
+    #[test]
+    fn dot_dash_border_has_long_and_short_dashes() {
+        use wordcraft_doc::props::BorderStyle;
+        let img = bordered_table(top(BorderStyle::DotDash, 1.5), 4.0);
+        let row = (0..img.height).find(|y| (80 * 4..400 * 4).filter(|x| img.pixel(*x, *y)[0] < 128).count() > 100).expect("the border is drawn");
+        let runs = dark_runs((80 * 4..400 * 4).map(|x| img.pixel(x, row)));
+        assert!(runs.iter().any(|r| r.1 > 12) && runs.iter().any(|r| r.1 <= 12), "{runs:?}");
     }
 
     /// Table Layout › Text Direction (#226): a turned cell's text is painted running down the

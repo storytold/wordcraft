@@ -6,9 +6,11 @@ use egui::{Rect, Sense, Stroke, Ui, pos2, vec2};
 use serde::Serialize;
 use serde_json::{Value, json};
 use wordcraft_doc::props::{Border, BorderStyle, Borders, Rgb, TabAlign, TabLeader, TabStop};
+use wordcraft_engine::cmd::table::BORDER_WIDTHS as WIDTHS;
 
 use crate::WordApp;
 use crate::dialogs::{buttons, color_menu};
+use crate::dialogs_table_style::LINE_STYLES as STYLES;
 use crate::options::MeasureExt;
 use crate::theme::{Tokens, semibold};
 
@@ -367,19 +369,6 @@ const BOTTOM: usize = 1;
 const LEFT: usize = 2;
 const RIGHT: usize = 3;
 const BETWEEN: usize = 4;
-
-const STYLES: [(BorderStyle, &str); 8] = [
-    (BorderStyle::Single, "Single"),
-    (BorderStyle::Dotted, "Dotted"),
-    (BorderStyle::Dashed, "Dashed"),
-    (BorderStyle::DotDash, "Dot dash"),
-    (BorderStyle::Double, "Double"),
-    (BorderStyle::Triple, "Triple"),
-    (BorderStyle::Thick, "Thick"),
-    (BorderStyle::Wave, "Wave"),
-];
-
-const WIDTHS: [f32; 9] = [0.25, 0.5, 0.75, 1.0, 1.5, 2.25, 3.0, 4.5, 6.0];
 
 impl LineForm {
     fn read(b: Option<&Borders>) -> LineForm {

@@ -3,7 +3,7 @@
 //! moves whole rows or splits them between lines (`split_row`).
 
 use wordcraft_doc::numbering::Counters;
-use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
@@ -55,6 +55,82 @@ const DEFAULT_MARGINS: [f32; 4] = [0.0, 5.4, 0.0, 5.4];
 const TURNED_MAX: f32 = 648.0;
 /// The longest line turned text ever gets (Word's largest page, 22 inches).
 const TURNED_LIMIT: f32 = 1584.0;
+
+/// The cell of `row` whose grid columns take in all of `g .. g + span`.
+fn cell_over(row: &wordcraft_doc::table::Row, g: usize, span: usize) -> Option<&wordcraft_doc::Cell> {
+    let mut at = 0usize;
+    for c in &row.cells {
+        let end = at.saturating_add(c.span());
+        if at <= g && end >= g.saturating_add(span) {
+            return Some(c);
+        }
+        if at > g {
+            return None;
+        }
+        at = end;
+    }
+    None
+}
+
+/// The stretches of a horizontal edge to draw: the cell's `x0 .. x1` run on to `hx0 .. hx1` at
+/// the corners, less `gaps`; a gap reaching a corner takes the run-on too.
+fn drawn_stretches((x0, x1): (f32, f32), (hx0, hx1): (f32, f32), gaps: &[(f32, f32)]) -> Vec<(f32, f32)> {
+    let mut gaps: Vec<(f32, f32)> =
+        gaps.iter().map(|&(a, z)| (if a <= x0 + 0.01 { hx0 } else { a }, if z >= x1 - 0.01 { hx1 } else { z })).filter(|(a, z)| z > a).collect();
+    gaps.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut out = Vec::new();
+    let mut at = hx0;
+    for (a, z) in gaps {
+        if a > at + 0.01 {
+            out.push((at, a.min(hx1)));
+        }
+        at = at.max(z);
+    }
+    if at < hx1 - 0.01 {
+        out.push((at, hx1));
+    }
+    out
+}
+
+/// What two cells' own borders on the edge they share come to, `first` being the upper or left
+/// cell's (ECMA-376 §17.4.66): no line gives way to a line; then the heavier wins (width in
+/// eighths of a point times the style's number), then the style earlier in the list, then the
+/// darker colour, then the first.
+pub(crate) fn shared_edge(first: Option<Border>, second: Option<Border>) -> Option<Border> {
+    let (a, b) = match (first, second) {
+        (Some(a), Some(b)) => (a, b),
+        (a, b) => return a.or(b),
+    };
+    match (a.is_visible(), b.is_visible()) {
+        (false, true) => return Some(b),
+        (_, false) => return Some(a),
+        _ => {}
+    }
+    // The style's place in the spec's list of border styles.
+    let number = |s: BorderStyle| match s {
+        BorderStyle::None => 0.0,
+        BorderStyle::Single => 1.0,
+        BorderStyle::Thick => 2.0,
+        BorderStyle::Double => 3.0,
+        BorderStyle::Dotted => 4.0,
+        BorderStyle::Dashed => 5.0,
+        BorderStyle::DotDash => 6.0,
+        BorderStyle::Triple => 8.0,
+        BorderStyle::Wave => 18.0,
+    };
+    let weight = |x: &Border| (x.width.clamp(0.0, 12.0) * 8.0).round() * number(x.style);
+    // Darker first: R + B + 2G, then B + 2G, then G.
+    let brightness = |x: &Border| {
+        x.color.map_or((0, 0, 0), |c| {
+            let (r, g, b) = (u32::from(c.0), u32::from(c.1), u32::from(c.2));
+            (r + b + 2 * g, b + 2 * g, g)
+        })
+    };
+    let b_wins = weight(&b) > weight(&a)
+        || (weight(&b) == weight(&a)
+            && (number(b.style) < number(a.style) || (number(b.style) == number(a.style) && brightness(&b) < brightness(&a))));
+    Some(if b_wins { b } else { a })
+}
 
 /// A cell whose text is turned, between the two passes of [`layout_table`].
 struct Turned {
@@ -470,11 +546,21 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         margins: [f32; 4],
         g: usize,
         span: usize,
+        /// Stretches (x ranges) of an inherited top or bottom border left undrawn, where a
+        /// neighbour across the edge draws its own line.
+        top_gaps: Vec<(f32, f32)>,
+        bottom_gaps: Vec<(f32, f32)>,
         /// Turned text: `items` are still in the turned frame (placed in the second pass).
         turned: Option<Turned>,
         /// Where the content ends below the cell's top (before vertical alignment).
         end: f32,
     }
+    // The x range of grid columns `a .. b`. Right to left, grid columns run from the right edge.
+    let grid_x = |a: usize, b: usize| {
+        let x0 = colx.get(a).copied().unwrap_or(acc);
+        let x1 = colx.get(b.min(ncols)).copied().unwrap_or(acc);
+        if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) }
+    };
     let mut rows: Vec<Vec<CellBox>> = Vec::with_capacity(nrows);
     let mut heights: Vec<f32> = Vec::with_capacity(nrows);
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
@@ -498,11 +584,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             .fold((0.0f32, 0.0f32), |(top, bottom), m| (top.max(m[0]), bottom.max(m[2])));
         for (ci, cell) in row.cells.iter().enumerate() {
             let span = cell.span();
-            let x0 = colx.get(g).copied().unwrap_or(acc);
-            let x1 = colx.get((g + span).min(ncols)).copied().unwrap_or(acc);
-            // Right to left: grid columns run from the right edge, and the start (left) margin
-            // is on the cell's right.
-            let (x0, x1) = if rtl { ((acc - x1).max(0.0), (acc - x0).max(0.0)) } else { (x0, x1) };
+            let (x0, x1) = grid_x(g, g + span);
             let m = cell.props.resolved_margins(margins_def);
             let margins = if rtl { [row_top, m[3], row_bottom, m[1]] } else { [row_top, m[1], row_bottom, m[3]] };
             let cw = (x1 - x0 - margins[1] - margins[3]).max(4.0);
@@ -525,7 +607,41 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             let tb = tborders;
             let edge =
                 |own: Option<Border>, outer: bool, outer_b: Option<Border>, inner_b: Option<Border>| own.or(if outer { outer_b } else { inner_b });
-            let cb = cell.props.borders.unwrap_or_default();
+            // Where this cell meets a neighbour, a line the neighbour sets itself beats the
+            // table's, and both cells draw the same line. A neighbour's own "no line" stays on its
+            // side: the line this cell inherits still shows (ECMA-376 §17.4.66).
+            let own = cell.props.borders.unwrap_or_default();
+            let side = |c: Option<&wordcraft_doc::Cell>, f: fn(&Borders) -> Option<Border>| {
+                c.and_then(|c| c.props.borders.as_ref()).and_then(f).filter(Border::is_visible)
+            };
+            let (next_up, next_down) = (ri.checked_sub(1).and_then(|i| t.rows.get(i)), t.rows.get(ri + 1));
+            // A cell merged into the one above has no top edge of its own to share.
+            let above = side(next_up.and_then(|r| cell_over(r, g, span)).filter(|_| cell.props.vmerge != VMerge::Continue), |b| b.bottom);
+            let below = side(next_down.and_then(|r| cell_over(r, g, span)), |b| b.top);
+            let before = side(ci.checked_sub(1).and_then(|i| row.cells.get(i)), |b| b.right);
+            let after = side(row.cells.get(ci + 1), |b| b.left);
+            // No one cell across: an inherited line skips the stretches whose cells draw their own.
+            let gaps = |across: Option<&wordcraft_doc::table::Row>, mine: Option<Border>, f: fn(&Borders) -> Option<Border>| -> Vec<(f32, f32)> {
+                let Some(r) = across.filter(|r| mine.is_none() && cell_over(r, g, span).is_none()) else { return Vec::new() };
+                let mut at = 0usize;
+                let mut out = Vec::new();
+                for c in &r.cells {
+                    let end = at.saturating_add(c.span());
+                    if end > g && at < g + span && side(Some(c), f).is_some() {
+                        out.push(grid_x(at.max(g), end.min(g + span)));
+                    }
+                    at = end;
+                }
+                out
+            };
+            let (top_gaps, bottom_gaps) = (gaps(next_up, own.top, |b| b.bottom), gaps(next_down, own.bottom, |b| b.top));
+            let cb = Borders {
+                top: shared_edge(above, own.top),
+                bottom: shared_edge(own.bottom, below),
+                left: shared_edge(before, own.left),
+                right: shared_edge(own.right, after),
+                ..own
+            };
             // A row's table property exceptions (`w:tblPrEx`) override the table's borders for its cells.
             let row_borders = row.props.exceptions.as_ref().and_then(|e| e.borders).unwrap_or_default();
             // A row that skips grid columns (`w:gridBefore`/`w:gridAfter`) has its edge at its own
@@ -644,6 +760,8 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 margins,
                 g,
                 span,
+                top_gaps,
+                bottom_gaps,
                 turned,
                 end,
             });
@@ -777,17 +895,21 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
             }
             let b = c.borders;
             let (x0, x1, y0, y1) = (c.x, c.x + c.w, 0.0, rh);
-            // Horizontal edges run on over half of each visible vertical edge, so the corners
-            // close the way Word draws them instead of leaving a notch at thick borders.
-            let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| e.width / 2.0);
+            // Horizontal edges run on over the drawn half of each visible vertical edge (all its
+            // lines for a double or triple), so the corners close instead of leaving a notch.
+            let half = |o: Option<Border>| o.filter(Border::is_visible).map_or(0.0, |e| crate::display::border_half_span(&e));
             let (hx0, hx1) = (x0 - half(b.left), x1 + half(b.right));
             let top_vis = c.vmerge != VMerge::Continue;
             if top_vis && let Some(e) = b.top.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0, x1: hx1, y1: y0, border: e });
+                for (a, z) in drawn_stretches((x0, x1), (hx0, hx1), &c.top_gaps) {
+                    items.push(Placed::Rule { x0: a, y0, x1: z, y1: y0, border: e });
+                }
             }
             let last_of_merge = c.vmerge == VMerge::None || !cont.get(ri + 1).is_some_and(|v| v.contains(&c.g));
             if last_of_merge && let Some(e) = b.bottom.filter(Border::is_visible) {
-                items.push(Placed::Rule { x0: hx0, y0: y1, x1: hx1, y1, border: e });
+                for (a, z) in drawn_stretches((x0, x1), (hx0, hx1), &c.bottom_gaps) {
+                    items.push(Placed::Rule { x0: a, y0: y1, x1: z, y1, border: e });
+                }
             }
             if let Some(e) = b.left.filter(Border::is_visible) {
                 items.push(Placed::Rule { x0, y0, x1: x0, y1, border: e });
