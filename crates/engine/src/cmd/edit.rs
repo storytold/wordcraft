@@ -399,7 +399,7 @@ fn paste_text(s: &mut Session, v: &Value) -> CmdResult {
     if text.is_empty() {
         return Err(CmdError::Failed("the clipboard is empty".into()));
     }
-    super::paste_text(s, &text.replace("\r\n", "\r").replace('\n', "\r"))?;
+    super::paste::insert_text(s, &text)?;
     sel_result(s)
 }
 

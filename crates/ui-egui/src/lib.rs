@@ -67,6 +67,7 @@ pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
 pub mod panes;
+pub mod paste_options;
 pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
@@ -251,6 +252,8 @@ pub struct UiState {
     pub recent: Vec<String>,
     /// Symbols inserted from the Symbol dialog, most recent first (#321).
     pub recent_symbols: Vec<dialogs_insert::RecentSymbol>,
+    /// Default paste mode: source, merge, or text (File > Options > Advanced).
+    pub default_paste: String,
     /// Colours picked in the Colors dialog (More Colors…), most recent first (#606).
     pub recent_colors: Vec<String>,
     /// Fonts applied from the font box, the mini toolbar or the Font dialog, most recent first:
@@ -385,6 +388,7 @@ impl Default for UiState {
             quick_access_toolbar: true,
             recent: Vec::new(),
             recent_symbols: Vec::new(),
+            default_paste: "source".into(),
             recent_colors: Vec::new(),
             recent_fonts: Vec::new(),
             theme: theme::Appearance::default(),
@@ -528,6 +532,8 @@ pub struct WordApp {
     pub printing: printing::State,
     print_feedback_seen: Option<printing::Feedback>,
     pub canvas: canvas::CanvasState,
+    /// Contextual Paste Options after the latest successful, untouched paste.
+    pub paste_options: Option<paste_options::PostPaste>,
     /// Content control frames, check boxes and lists on the page.
     pub controls: content_controls::ControlUi,
     pub dialog: Option<dialogs::Dialog>,
@@ -695,6 +701,7 @@ impl WordApp {
             printing: Default::default(),
             print_feedback_seen: None,
             canvas: canvas::CanvasState::default(),
+            paste_options: None,
             controls: Default::default(),
             dialog: None,
             colors: None,
@@ -918,6 +925,9 @@ impl WordApp {
             });
             return Ok(json!({"pending": "saveChanges"}));
         }
+        // Only the latest untouched paste offers contextual options. Ordinary commands dismiss
+        // the button; a new paste replaces its anchor after the edit succeeds.
+        self.paste_options = None;
         // The ribbon and context-menu Paste commands send no text: read the system clipboard's, as
         // Ctrl+V's paste event carries it (#584), and its HTML and RTF, which egui's paste event
         // doesn't carry (#687).
@@ -933,8 +943,25 @@ impl WordApp {
         {
             return r;
         }
+        let is_paste = matches!(id, "edit.paste" | "edit.pasteMerge" | "edit.pasteText");
+        // Only text paste follows the saved default; picture paste remains the regular command.
+        let mode = if id == "edit.paste" {
+            paste_options::PasteMode::from_key(&self.ui.default_paste)
+        } else if id == "edit.pasteMerge" {
+            paste_options::PasteMode::Merge
+        } else {
+            paste_options::PasteMode::Text
+        };
+        let effective_id = if is_paste { mode.command() } else { id };
+        let paste_params = is_paste.then(|| params.clone());
+        let undo_before = self.session.undo_steps_so_far();
         let applied = applied_font(id, &params);
-        let r = self.execute_user(id, params);
+        let r = self.execute_user(effective_id, params);
+        if r.is_ok()
+            && let Some(params) = paste_params
+        {
+            self.paste_options = paste_options::PostPaste::capture(self, params, mode, undo_before);
+        }
         // A save error already on the status line is the reason to see; the refusal shows otherwise.
         if let (Some(e), true) = (refused, r.is_ok()) {
             self.status(e);
@@ -1788,6 +1815,17 @@ impl WordApp {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
             }
+            "ui.defaultPaste" => {
+                // File > Options > Advanced: all UI preferences are queryable commands.
+                match p.get("value") {
+                    None => {}
+                    Some(Value::String(v)) if matches!(v.as_str(), "source" | "merge" | "text") => {
+                        self.ui.default_paste = v.clone();
+                    }
+                    Some(_) => return Some(Err("`value` must be source, merge or text".into())),
+                }
+                json!({"defaultPaste": self.ui.default_paste})
+            }
             "ui.caretAnimation" => {
                 // File › Options › Advanced › Animation: `value` true or false turns the caret's
                 // glide and fading blink on or off; no value reads it.
@@ -2460,6 +2498,7 @@ impl WordApp {
             }
         }
         content_controls::popup(self, &ctx);
+        paste_options::show(self, &ctx);
         dialogs::show(self, &ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, &ctx);
@@ -2866,6 +2905,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.fileBrowser"
             | "ui.makeDefaultApp"
             | "ui.discord"
+            | "ui.defaultPaste"
             | "ui.caretAnimation"
             | "ui.startScreen"
     ) || id.starts_with("help.")
