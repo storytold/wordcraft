@@ -600,6 +600,155 @@ fn undo_right_after_a_border_line_brings_the_characters_back() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Above\n---");
 }
 
+/// The first paragraph's (left, first-line) indents as set on the paragraph itself.
+fn indents(s: &Session) -> (Option<f32>, Option<f32>) {
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    (p.props.indent_left, p.props.indent_first)
+}
+
+#[test]
+fn tab_and_backspace_at_a_paragraph_start_set_its_indents() {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    typ(&mut s, "Some text");
+    run(&mut s, "caret.docStart", json!({}));
+    // The first Tab indents the first line, the next one the whole paragraph.
+    typ(&mut s, "\t");
+    assert_eq!(indents(&s), (None, Some(36.0)));
+    typ(&mut s, "\t");
+    assert_eq!(indents(&s), (Some(36.0), Some(36.0)));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Some text");
+    // Backspace takes the first-line indent back, then the left indent, and stops there.
+    typ(&mut s, "\u{8}");
+    assert_eq!(indents(&s), (Some(36.0), Some(0.0)));
+    typ(&mut s, "\u{8}\u{8}");
+    assert_eq!(indents(&s), (Some(0.0), Some(0.0)));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Some text");
+    // Each Tab is one undo step.
+    typ(&mut s, "\t");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(indents(&s), (Some(0.0), Some(0.0)));
+    // A left indent in characters goes back one tab stop too, instead of the paragraphs joining:
+    // six characters of 11 or 12 points are 66 or 72 points, two tab stops.
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    typ(&mut s, "One\nTwo");
+    let second = Pos::body(1, 0);
+    s.doc.para_mut(StoryRef::Body, &second.path).unwrap().props.indent_left_chars = Some(6.0);
+    s.sel = crate::Selection::caret(second.clone());
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "One\nTwo");
+    let p = s.doc.para_at(&second).unwrap();
+    assert_eq!((p.props.indent_left, p.props.indent_left_chars), (Some(36.0), Some(0.0)));
+    // With formatting limited to the document's styles the option is off: Tab types a tab
+    // character at the start of the first line and of a later one, and Backspace at the start
+    // keeps the paragraph's left indent.
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    typ(&mut s, "One");
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "Two");
+    run(&mut s, "review.restrict", json!({"mode": "none", "formatting": true}));
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    run(&mut s, "caret.docStart", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "\tOne\n\tTwo");
+    assert_eq!(indents(&s), (None, None));
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.indent_left = Some(36.0);
+    typ(&mut s, "\u{8}\u{8}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "One\n\tTwo");
+    assert_eq!(indents(&s), (Some(36.0), None));
+    // An empty paragraph takes a tab character.
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    typ(&mut s, "\tText");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "\tText");
+    assert_eq!(indents(&s), (None, None));
+    // At the start of a list item numbered by its style, Tab types a tab character, as with the
+    // option off.
+    let mut s = style_inherited_list(wordcraft_doc::numbering::ListKind::Numbered, false);
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    run(&mut s, "caret.docStart", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "\tAlpha\nBeta");
+    assert_eq!(indents(&s), (None, None));
+    // With the option off (the default), Tab types a tab character.
+    let mut s = self::s();
+    typ(&mut s, "Some text");
+    run(&mut s, "caret.docStart", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "\tSome text");
+    assert_eq!(indents(&s), (None, None));
+}
+
+#[test]
+fn tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph() {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    typ(&mut s, &"Words that run on past the end of one line. ".repeat(6));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.home", json!({}));
+    assert!(s.sel.focus.off > 0, "the caret is on the second line");
+    typ(&mut s, "\t");
+    assert_eq!(indents(&s), (Some(36.0), None));
+    assert!(!s.doc.plain_text(StoryRef::Body).contains('\t'));
+    // After a line break too; inside a line Tab still types a tab character.
+    let mut s = self::s();
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    typ(&mut s, "One");
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "Two");
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(indents(&s), (Some(36.0), None));
+    run(&mut s, "caret.right", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "One\nT\two");
+    // Before a later line of a list item numbered by its style, Tab takes it down a level, as
+    // for a list item numbered directly.
+    let mut s = style_inherited_list(wordcraft_doc::numbering::ListKind::Numbered, false);
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.end", json!({}));
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "More");
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    assert!(!s.doc.plain_text(StoryRef::Body).contains('\t'));
+    let p = s.doc.para_at(&Pos::body(0, 0)).unwrap();
+    assert_eq!(p.props.numbering.map(|n| n.level), Some(1));
+    assert_eq!(indents(&s), (None, None));
+    // A list level past the last one, from a style or set directly, goes to the last level.
+    let mut s = style_inherited_list(wordcraft_doc::numbering::ListKind::Numbered, false);
+    let style = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap();
+    style.para.numbering = style.para.numbering.map(|n| wordcraft_doc::props::NumRef { level: u8::MAX, ..n });
+    run(&mut s, "tools.autocorrect", json!({"tabIndent": true}));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.end", json!({}));
+    run(&mut s, "text.lineBreak", json!({}));
+    typ(&mut s, "More");
+    run(&mut s, "caret.home", json!({}));
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.map(|n| n.level), Some(8));
+    let num = s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.unwrap().num;
+    s.doc.para_mut(StoryRef::Body, &Pos::body(1, 0).path).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: u8::MAX });
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.para_at(&Pos::body(1, 0)).unwrap().props.numbering.map(|n| n.level), Some(8));
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: u8::MAX });
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.down", json!({}));
+    run(&mut s, "caret.home", json!({}));
+    assert_eq!((s.sel.focus.path.clone(), s.sel.focus.off), (Pos::body(0, 0).path, 6), "the caret is before \"More\"");
+    typ(&mut s, "\t");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.map(|n| n.level), Some(8));
+    s.doc.para_mut(StoryRef::Body, &Pos::body(0, 0).path).unwrap().props.numbering = Some(wordcraft_doc::props::NumRef { num, level: u8::MAX });
+    run(&mut s, "outline.demote", json!({}));
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().props.numbering.map(|n| n.level), Some(8));
+}
+
 #[test]
 fn plus_and_hyphen_line_becomes_a_table() {
     let mut s = typed("+--+------+\nA");

@@ -178,6 +178,15 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay
   text ¹ (`plus_and_hyphen_line_becomes_a_table`).
+- Set left- and first-indent with tabs and backspaces (`tools.autocorrect {"tabIndent": true}`,
+  off by default): Tab before the first line of a paragraph with text indents its first line by
+  one default tab stop, and Tab before any other line, after a line break or where the text
+  wraps, indents the whole paragraph. A second Tab before an indented or hanging first line
+  indents the whole paragraph. Backspace at the start takes the first-line indent back, then the
+  paragraph's own left indent one tab stop at a time. An empty paragraph and Tab inside a line
+  still take a tab character. While formatting is limited to the document's styles, Tab and
+  Backspace work as with the option off ¹ (`tab_and_backspace_at_a_paragraph_start_set_its_indents`,
+  `tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph`).
 - Smileys `:)` `:-)` `:(` `:-(` `:|` → ☺ ☹ 😐, also straight after a word (`ok:)` → `ok☺`) ¹
   (`smileys_are_replaced_inside_words_too`).
 

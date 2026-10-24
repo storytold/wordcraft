@@ -353,6 +353,7 @@ impl AutoCorrectForm {
             "bullets": o.bullets,
             "numbering": o.numbering,
             "borderLines": o.border_lines,
+            "tabIndent": o.tab_indent,
             "autoAddFirstLetter": o.auto_add_first_letter,
             "autoAddInitialCaps": o.auto_add_initial_caps,
         })
@@ -401,6 +402,8 @@ fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bo
             ui.checkbox(&mut o.bullets, tl!("Automatic bulleted lists"));
             ui.checkbox(&mut o.numbering, tl!("Automatic numbered lists"));
             ui.checkbox(&mut o.border_lines, tl!("Border lines"));
+            heading(ui, "Automatically as you type");
+            ui.checkbox(&mut o.tab_indent, tl!("Set left- and first-indent with tabs and backspaces"));
         }
         _ => math_tab(ui, f),
     }
