@@ -47,7 +47,8 @@ pub(crate) struct Listing {
 
 /// Whether `path` has one of `exts` (case-insensitive); `*` takes any file.
 pub(crate) fn matches(path: &Path, exts: &[String]) -> bool {
-    exts.iter().any(|e| e == "*") || path.extension().and_then(|e| e.to_str()).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
+    exts.iter().any(|e| e == "*")
+        || path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| exts.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 /// The subfolders and the files with one of `exts` in `dir`, at most `cap` of them, folders first
@@ -151,7 +152,7 @@ impl FileBrowser {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
             }
             FileDialogRequest::Save { name, .. } => {
-                let ext = Path::new(name).extension().and_then(|e| e.to_str()).filter(|e| !e.is_empty());
+                let ext = Path::new(name).extension().and_then(std::ffi::OsStr::to_str).filter(|e| !e.is_empty());
                 let mut f: Vec<(String, Vec<String>)> = ext.map(|e| (format!("*.{e}"), vec![e.to_string()])).into_iter().collect();
                 f.push(("All files".into(), vec!["*".into()]));
                 (name.clone(), f)

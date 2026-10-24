@@ -30,11 +30,11 @@ const NAMES: &[&str] = &["tr_TR", "tr-TR", "tr"];
 /// The Turkish dictionary: the installed Hunspell `tr_TR` (read on first use), one given with
 /// [`install_dictionary`], or an empty one when none is available.
 pub fn dictionary() -> Arc<TrDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
         return d.clone();
     }
     let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     slot.get_or_insert(loaded).clone()
 }
 
@@ -61,13 +61,13 @@ fn load_installed() -> TrDict {
 /// Use this Turkish dictionary from now on.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
     let d = TrDict::from_hunspell(aff, dic)?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
+    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(d));
     Ok(())
 }
 
 /// Reload the dictionary on next check.
 pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
+    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// The `.dic` file of the Hunspell `tr_TR` dictionary found in the dictionaries folder or the

@@ -52,11 +52,11 @@ const NAMES: &[&str] = &["ru_RU", "ru-RU", "ru"];
 /// [`install_dictionary`], or an empty one when none is available (Russian spelling is off then;
 /// see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).dict.as_ref() {
+    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).dict.as_ref() {
         return d.clone();
     }
     let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Another thread (or an install) may have filled it meanwhile: that one wins.
     slot.dict.get_or_insert(loaded).clone()
 }
@@ -77,7 +77,7 @@ fn load_installed() -> AffixDict {
 /// for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
     let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     slot.dict = Some(Arc::new(d));
     slot.in_memory = true;
     Ok(())
@@ -86,7 +86,7 @@ pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
 /// Forget the loaded dictionary, so the next check looks for an installed one again (after
 /// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
 pub fn reload_dictionary() {
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     slot.dict = None;
     slot.in_memory = false;
 }
@@ -96,7 +96,7 @@ pub fn reload_dictionary() {
 /// none. A dictionary given with [`install_dictionary`] has no file and isn't reported, even if a
 /// matching file also happens to exist.
 pub fn installed_path() -> Option<std::path::PathBuf> {
-    if DICT.read().unwrap_or_else(|e| e.into_inner()).in_memory {
+    if DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).in_memory {
         return None;
     }
     crate::hunspell::find(NAMES).map(|(_, dic)| dic)
@@ -109,7 +109,7 @@ pub fn has_dictionary() -> bool {
 
 /// Is `c` a letter of the Cyrillic script (the only one the Russian dictionary covers)?
 pub(crate) fn is_cyrillic(c: char) -> bool {
-    matches!(c, '\u{0400}'..='\u{04FF}' | '\u{0500}'..='\u{052F}')
+    matches!(c, '\u{0400}'..='\u{052F}')
 }
 
 /// Particles joined to a word with a hyphen (`кто-то`, `где-нибудь`, `давай-ка`, `всё-таки`,

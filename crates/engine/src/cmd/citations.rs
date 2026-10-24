@@ -1114,7 +1114,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 out.push((l, false));
             }
         }
-        let list = pages.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+        let list = pages.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out

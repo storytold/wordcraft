@@ -1674,6 +1674,73 @@ fn tables_commands() {
     assert!(s.run("table.merge", &json!({})).is_err());
 }
 
+/// #3931: the page as a command would leave it, laid out without running it on the document:
+/// Insert › Table's grid previews the table it would insert. The document, the caret, the undo
+/// history and Repeat stay as they were.
+#[test]
+fn preview_layout_shows_a_command_without_running_it() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Lanterns"));
+    run(&mut s, "caret.docEnd", json!({}));
+    let (doc, sel, rev) = (s.doc.clone(), s.sel.clone(), s.rev());
+    let cells = |l: &wordcraft_layout::DocLayout| l.index.keys().filter(|(st, p)| *st == StoryRef::Body && p.0.len() == 4).count();
+    let (_, _, preview) = s.preview_layout("insert.table", &json!({"rows": 4, "cols": 3})).expect("a table can be inserted here");
+    assert_eq!(cells(&preview), 12, "four rows of three cells");
+    // At the caret: after "Lanterns", the second block.
+    let tables: std::collections::BTreeSet<u32> =
+        preview.index.keys().filter(|(st, p)| *st == StoryRef::Body && p.0.len() == 4).map(|(_, p)| p.0[0]).collect();
+    assert_eq!(tables, [1].into(), "the table goes where the caret is");
+    assert_eq!(s.doc, doc);
+    assert_eq!((&s.sel, s.rev(), s.dirty), (&sel, rev, false));
+    assert!(!s.can_undo() && s.last_command.is_none());
+    assert_eq!(cells(&s.layout()), 0, "the page itself has no table");
+    assert!(s.preview_layout("no.such", &json!({})).is_none());
+}
+
+/// #3931 review: the preview comes back with the document it was laid out from. The table moves
+/// the paragraphs after the caret down a block, so this document would draw the layout's
+/// paragraphs from the wrong blocks, or from none.
+#[test]
+fn preview_layout_comes_with_the_document_it_lays_out() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Lanterns\nKites"));
+    run(&mut s, "caret.docStart", json!({}));
+    run(&mut s, "caret.end", json!({}));
+    let (doc, _, preview) = s.preview_layout("insert.table", &json!({"rows": 2, "cols": 2})).expect("a table can be inserted here");
+    for (story, path) in preview.index.keys().filter(|(st, _)| *st == StoryRef::Body) {
+        assert!(doc.para(*story, path).is_some(), "{path:?} names a paragraph of the previewed document");
+    }
+    let kites = preview.index.keys().find(|(st, p)| *st == StoryRef::Body && doc.para(*st, p).is_some_and(|p| p.text == "Kites"));
+    assert!(kites.is_some_and(|(_, p)| p.0.len() == 1 && p.0[0] > 1), "Kites is laid out after the table: {kites:?}");
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Lanterns\nKites", "the document itself has no table");
+}
+
+/// #3931 review: the word being typed has no spelling squiggle on the preview either, though
+/// the table moves the copy's caret off it and splits its paragraph.
+#[test]
+fn preview_layout_keeps_the_word_being_typed_unmarked() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("helo"));
+    s.view.proofing = true;
+    run(&mut s, "caret.docEnd", json!({}));
+    run(&mut s, "text.insert", json!({"text": " wrld"}));
+    let marks = |l: &wordcraft_layout::DocLayout, doc: &wordcraft_doc::Document| -> Vec<String> {
+        let text = &doc.para(StoryRef::Body, &wordcraft_doc::Path(vec![0])).unwrap().text;
+        l.pages[0]
+            .items
+            .iter()
+            .filter_map(|i| match i {
+                wordcraft_layout::Placed::Lines { para, path, .. } if path.0 == [0] => {
+                    Some(para.issues.iter().filter(|i| !i.2).map(|i| text[i.0..i.1].to_string()).collect::<Vec<_>>())
+                }
+                _ => None,
+            })
+            .flatten()
+            .collect()
+    };
+    let doc = s.doc.clone();
+    assert_eq!(marks(&s.layout(), &doc), ["helo"], "the page itself: only the finished word is marked");
+    let (copy, _, preview) = s.preview_layout("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+    assert_eq!(marks(&preview, &copy), ["helo"]);
+}
+
 #[test]
 fn delete_row_on_a_merge_start_promotes_the_cell_below() {
     use wordcraft_doc::props::VMerge;
@@ -7734,6 +7801,37 @@ fn outline_collapse_hides_descendants_and_expand_restores() {
     // Clicking a symbol selects the heading with what is under it.
     run(&mut s, "outline.selectSubtree", json!({"block": 0}));
     assert_eq!(s.selected_text(), "One\na\nTwo\nb");
+}
+
+/// #3621: with thousands of collapsed headings, an Enter above them (which shifts every index)
+/// finds them again without scanning the document once per heading, and a caret move doesn't
+/// redo the matching.
+#[test]
+fn outline_many_collapsed_headings_stay_fast_after_edits() {
+    const N: usize = 8000;
+    let text: Vec<String> = (0..N).flat_map(|i| [format!("Heading {i}"), format!("body {i}")]).collect();
+    let mut d = wordcraft_doc::Document::from_text(&text.join("\n"));
+    for i in 0..N {
+        let p = d.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(2 * i)).unwrap();
+        p.props.style = Some("Heading1".into());
+    }
+    let mut s = Session::new(d);
+    run(&mut s, "view.outline", json!({}));
+    run(&mut s, "outline.showLevel1", json!({}));
+    s.sel = crate::Selection::caret(Pos::body(0, 0));
+    run(&mut s, "outline.collapse", json!({}));
+    let collapsed_texts =
+        |s: &Session| -> Vec<String> { s.view.outline.collapsed.iter().map(|(i, _)| s.doc.body[*i].as_para().unwrap().text.clone()).collect() };
+    let before = collapsed_texts(&s);
+    assert_eq!(before.len(), N, "every heading is collapsed");
+    s.sel = crate::Selection::caret(Pos::body(1, 0));
+    for _ in 0..10 {
+        run(&mut s, "text.newParagraph", json!({}));
+    }
+    for _ in 0..20 {
+        run(&mut s, "caret.right", json!({}));
+    }
+    assert_eq!(collapsed_texts(&s), before, "the same headings stay collapsed");
 }
 
 /// #745: layout keeps a picture's size, so pictures read from HTML, Markdown, ODT or RTF at

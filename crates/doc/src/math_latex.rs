@@ -47,7 +47,7 @@ fn tokenize(s: &str) -> Vec<Tok> {
         match c {
             '\\' => {
                 let start = i;
-                while cs.get(i).is_some_and(|c| c.is_ascii_alphabetic()) {
+                while cs.get(i).is_some_and(char::is_ascii_alphabetic) {
                     i += 1;
                 }
                 if i == start {

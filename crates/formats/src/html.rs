@@ -366,9 +366,8 @@ impl Lexer<'_> {
                 self.pos += after_tag;
                 self.skip_past(">");
                 return;
-            } else {
-                self.pos += k + 2;
             }
+            self.pos += k + 2;
         }
     }
 
@@ -408,7 +407,7 @@ impl Lexer<'_> {
             self.skip_past(">");
             return Some(Tok::End(name));
         }
-        if !b.get(1).is_some_and(|c| c.is_ascii_alphabetic()) {
+        if !b.get(1).is_some_and(u8::is_ascii_alphabetic) {
             self.pos += 1;
             return Some(Tok::Text("<".into()));
         }
@@ -419,7 +418,7 @@ impl Lexer<'_> {
         let mut attrs = Vec::new();
         let mut self_close = false;
         loop {
-            while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
                 i += 1;
             }
             match b.get(i) {
@@ -448,13 +447,13 @@ impl Lexer<'_> {
                 i += 1;
                 continue;
             }
-            while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+            while b.get(i).is_some_and(u8::is_ascii_whitespace) {
                 i += 1;
             }
             let mut val = String::new();
             if b.get(i) == Some(&b'=') {
                 i += 1;
-                while b.get(i).is_some_and(|c| c.is_ascii_whitespace()) {
+                while b.get(i).is_some_and(u8::is_ascii_whitespace) {
                     i += 1;
                 }
                 match b.get(i) {

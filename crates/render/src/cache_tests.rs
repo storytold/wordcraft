@@ -1,6 +1,13 @@
 //! Decoded-media cache: hits need the same allocation, and the byte budget bounds what is kept.
 
-use super::*;
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use wordcraft_doc::Document;
+use wordcraft_doc::props::Rgb;
+use wordcraft_layout::display::{Draw, Stroke};
+
+use super::{CACHE_BYTES, MediaCache, RenderOptions, render_items, wave_path};
 
 #[test]
 fn media_cache_only_hits_the_same_allocation() {

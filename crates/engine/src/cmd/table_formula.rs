@@ -228,6 +228,50 @@ enum Tok {
     Cmp(&'static str),
 }
 
+fn parse_num_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Result<Tok, CmdError> {
+    let mut lit = String::new();
+    while let Some(&d) = chars.peek() {
+        if d.is_ascii_digit() || d == '.' {
+            lit.push(d);
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    let x = lit.parse::<f64>().map_err(|_| syntax(format!("`{lit}` isn't a number")))?;
+    Ok(Tok::Num(x))
+}
+
+fn parse_name_token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Tok {
+    let mut name = String::new();
+    while let Some(&d) = chars.peek() {
+        if d.is_ascii_alphanumeric() {
+            name.push(d.to_ascii_uppercase());
+            chars.next();
+        } else {
+            break;
+        }
+    }
+    Tok::Name(name)
+}
+
+fn parse_cmp_token(ch: char, chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Tok {
+    chars.next();
+    let next = chars.peek().copied();
+    let (op, longer) = match (ch, next) {
+        ('<', Some('=')) => ("<=", true),
+        ('<', Some('>')) => ("<>", true),
+        ('>', Some('=')) => (">=", true),
+        ('<', _) => ("<", false),
+        ('>', _) => (">", false),
+        _ => ("=", false),
+    };
+    if longer {
+        chars.next();
+    }
+    Tok::Cmp(op)
+}
+
 fn tokenize(s: &str) -> Result<Vec<Tok>, CmdError> {
     let mut out = Vec::new();
     let mut chars = s.chars().peekable();
@@ -235,46 +279,14 @@ fn tokenize(s: &str) -> Result<Vec<Tok>, CmdError> {
         if ch.is_whitespace() {
             chars.next();
         } else if ch.is_ascii_digit() || ch == '.' {
-            let mut lit = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_digit() || d == '.' {
-                    lit.push(d);
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            let x = lit.parse::<f64>().map_err(|_| syntax(format!("`{lit}` isn't a number")))?;
-            out.push(Tok::Num(x));
+            out.push(parse_num_token(&mut chars)?);
         } else if ch.is_ascii_alphabetic() {
-            let mut name = String::new();
-            while let Some(&d) = chars.peek() {
-                if d.is_ascii_alphanumeric() {
-                    name.push(d.to_ascii_uppercase());
-                    chars.next();
-                } else {
-                    break;
-                }
-            }
-            out.push(Tok::Name(name));
+            out.push(parse_name_token(&mut chars));
         } else if matches!(ch, '+' | '-' | '*' | '/' | '^' | '(' | ')' | ',' | ':') {
             out.push(Tok::Op(ch));
             chars.next();
-        } else if matches!(ch, '<' | '>' | '=') {
-            chars.next();
-            let next = chars.peek().copied();
-            let (op, longer) = match (ch, next) {
-                ('<', Some('=')) => ("<=", true),
-                ('<', Some('>')) => ("<>", true),
-                ('>', Some('=')) => (">=", true),
-                ('<', _) => ("<", false),
-                ('>', _) => (">", false),
-                _ => ("=", false),
-            };
-            if longer {
-                chars.next();
-            }
-            out.push(Tok::Cmp(op));
+        } else if matches!(ch, '<'..='>') {
+            out.push(parse_cmp_token(ch, &mut chars));
         } else {
             return Err(syntax(format!("`{ch}` isn't part of a formula")));
         }
@@ -468,7 +480,7 @@ impl Parser {
 
 /// `B4` → (row 3, column 1): the row counts from 1 and the column from A.
 fn cell_ref(name: &str) -> Option<(usize, usize)> {
-    let letters: String = name.chars().take_while(|c| c.is_ascii_alphabetic()).collect();
+    let letters: String = name.chars().take_while(char::is_ascii_alphabetic).collect();
     let digits = name.get(letters.len()..)?;
     if letters.is_empty() || digits.is_empty() || !digits.chars().all(|c| c.is_ascii_digit()) {
         return None;

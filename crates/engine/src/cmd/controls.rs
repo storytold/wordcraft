@@ -579,27 +579,8 @@ fn info(s: &mut Session, v: &Value) -> CmdResult {
     Ok(describe(s, &r))
 }
 
-fn properties(s: &mut Session, v: &Value) -> CmdResult {
-    let r = target(s, v)?;
-    let mut c = r.control.clone();
-    let mut content: Option<String> = None;
-    if let Some(t) = short(v, "title") {
-        c.title = t;
-    }
-    if let Some(t) = short(v, "tag") {
-        c.tag = t;
-    }
-    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
-    c.lock = ControlLock::from_flags(no_delete, no_edit);
-    if let Some(t) = p::bool(v, "temporary") {
-        c.temporary = t;
-    }
-    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
-        if c.showing_placeholder && t != c.placeholder_shown() {
-            content = Some(t.clone());
-        }
-        c.placeholder_text = t;
-    }
+fn apply_kind_properties(c: &mut ContentControl, v: &Value) -> Option<String> {
+    let mut content = None;
     match &mut c.kind {
         ControlKind::Text { multi_line } => {
             if let Some(m) = p::bool(v, "multiLine") {
@@ -632,6 +613,33 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
             content = Some((if *checked { *checked_char } else { *unchecked_char }).to_string());
         }
         _ => {}
+    }
+    content
+}
+
+fn properties(s: &mut Session, v: &Value) -> CmdResult {
+    let r = target(s, v)?;
+    let mut c = r.control.clone();
+    let mut content: Option<String> = None;
+    if let Some(t) = short(v, "title") {
+        c.title = t;
+    }
+    if let Some(t) = short(v, "tag") {
+        c.tag = t;
+    }
+    let (no_delete, no_edit) = (p::bool(v, "lockDelete").unwrap_or(!c.lock.can_delete()), p::bool(v, "lockEdit").unwrap_or(!c.lock.can_edit()));
+    c.lock = ControlLock::from_flags(no_delete, no_edit);
+    if let Some(t) = p::bool(v, "temporary") {
+        c.temporary = t;
+    }
+    if let Some(t) = short(v, "placeholder").filter(|t| !t.trim().is_empty()) {
+        if c.showing_placeholder && t != c.placeholder_shown() {
+            content = Some(t.clone());
+        }
+        c.placeholder_text = t;
+    }
+    if let Some(kc) = apply_kind_properties(&mut c, v) {
+        content = Some(kc);
     }
     if let Some(text) = content {
         let base = content_base(s, &r);

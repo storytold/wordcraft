@@ -181,7 +181,7 @@ impl<T: Clone> MediaCache<T> {
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 fn images() -> &'static Mutex<MediaCache<Option<Arc<Pixmap>>>> {
@@ -1188,17 +1188,13 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
             p.line_to((r.x1, r.y1));
             p
         }
-        ShapeKind::Arrow => {
-            let h = r.height();
-            poly(&[
-                (r.x0, cy - h * 0.2),
-                (r.x1 - h * 0.5, cy - h * 0.2),
-                (r.x1 - h * 0.5, r.y0),
-                (r.x1, cy),
-                (r.x1 - h * 0.5, r.y1),
-                (r.x1 - h * 0.5, cy + h * 0.2),
-                (r.x0, cy + h * 0.2),
-            ])
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => {
+            let (w, h) = (r.width(), r.height());
+            let pts: Vec<(f64, f64)> = wordcraft_doc::wrap::arrow_outline(kind, w as f32, h as f32)
+                .iter()
+                .map(|&(u, v)| (r.x0 + f64::from(u) * w, r.y0 + f64::from(v) * h))
+                .collect();
+            poly(&pts)
         }
         ShapeKind::Star => {
             let mut pts = Vec::new();
@@ -2192,9 +2188,18 @@ mod tests {
     #[test]
     fn shapes_have_paths() {
         let r = kurbo::Rect::new(0.0, 0.0, 10.0, 10.0);
-        for k in
-            [ShapeKind::Rectangle, ShapeKind::Ellipse, ShapeKind::FlowchartOr, ShapeKind::Star, ShapeKind::Heart, ShapeKind::Arrow, ShapeKind::Line]
-        {
+        for k in [
+            ShapeKind::Rectangle,
+            ShapeKind::Ellipse,
+            ShapeKind::FlowchartOr,
+            ShapeKind::Star,
+            ShapeKind::Heart,
+            ShapeKind::Arrow,
+            ShapeKind::ArrowLeft,
+            ShapeKind::ArrowUp,
+            ShapeKind::ArrowDown,
+            ShapeKind::Line,
+        ] {
             assert!(!shape_path(k, r, None).elements().is_empty());
         }
     }

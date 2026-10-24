@@ -1040,7 +1040,7 @@ fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
 #[test]
 fn style_rfonts_without_ascii_inherits_doc_defaults_font() {
     // Issue #93: Normal names only East Asian / complex-script fonts, so Latin text keeps the
-    // docDefaults font. A run hinted as East Asian still uses its East Asian font.
+    // docDefaults font. A run hinted as East Asian keeps its East Asian font in `font_ea` (#4031).
     let styles = format!(
         r#"<w:styles {W_NS}>
  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>
@@ -1051,9 +1051,28 @@ fn style_rfonts_without_ascii_inherits_doc_defaults_font() {
     let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     assert_eq!(d.styles.get("Normal").unwrap().chr.font, None);
     let ps = paras(&d);
-    let font = |p: &Paragraph| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).font;
-    assert_eq!(font(ps[0]), "Calibri");
-    assert_eq!(font(ps[1]), "SimSun");
+    let rc = |p: &Paragraph| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!(rc(ps[0]).font, "Calibri");
+    assert_eq!((rc(ps[1]).font.as_str(), rc(ps[1]).font_ea.as_deref()), ("Calibri", Some("SimSun")));
+}
+
+#[test]
+fn hinted_east_asian_or_cs_font_does_not_replace_the_latin_font() {
+    // Issue #4031: `w:hint` only picks the font for ambiguous characters, so a run with
+    // `w:eastAsia` + `w:hint="eastAsia"` and no `w:ascii` keeps the style's Latin font for its
+    // Latin text; the East Asian / complex-script fonts stay in their own fields.
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:eastAsiaTheme="majorEastAsia"/><w:b/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="宋体" w:hint="eastAsia"/></w:rPr><w:t>corn straw</w:t></w:r><w:r><w:rPr><w:rFonts w:cs="Arial" w:hint="cs"/></w:rPr><w:t>model fluids</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let p = paras(&d)[0];
+    let ea = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!((ea.font.as_str(), ea.font_ea.as_deref()), ("Times New Roman", Some("宋体")));
+    let cs = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[1].props);
+    assert_eq!((cs.font.as_str(), cs.font_cs.as_str()), ("Times New Roman", "Arial"));
 }
 
 #[test]
@@ -2387,7 +2406,7 @@ fn vml_preset_shapes_are_drawn() {
     assert_eq!(kind(15), Some((ShapeKind::Rectangle, false)));
     assert_eq!(kind(16), Some((ShapeKind::Diamond, false)));
     assert_eq!(kind(17), Some((ShapeKind::Ellipse, false)));
-    assert_eq!(shape(18), Some((ShapeKind::Arrow, 60.0, 20.0, Some(Rgb(0xFF, 0xA5, 0x00)), black, 0.75, true, false)));
+    assert_eq!(shape(18), Some((ShapeKind::ArrowLeft, 60.0, 20.0, Some(Rgb(0xFF, 0xA5, 0x00)), black, 0.75, true, false)));
     assert_eq!(kind(19), Some((ShapeKind::Rectangle, false)));
     assert_eq!(kind(20), Some((ShapeKind::Star, false)));
     assert_eq!(shape(21), None);
@@ -2458,12 +2477,12 @@ fn vml_nearest_preset_shape_survives_saving() {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.as_slice())).unwrap();
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    assert!(xml.contains(r#"prst="rightArrow""#), "{xml}");
+    assert!(xml.contains(r#"prst="leftArrow""#), "{xml}");
     let again = wordcraft_docx::read(&saved).unwrap();
     assert!(
         matches!(
             &paras(&again)[0].objects[..],
-            [InlineObject::Shape { kind: ShapeKind::Arrow, w: 60.0, h: 20.0, fill: Some(Fill::Solid { color: Rgb(0xFF, 0xA5, 0x00), .. }), .. }]
+            [InlineObject::Shape { kind: ShapeKind::ArrowLeft, w: 60.0, h: 20.0, fill: Some(Fill::Solid { color: Rgb(0xFF, 0xA5, 0x00), .. }), .. }]
         ),
         "{:?}",
         paras(&again)[0].objects

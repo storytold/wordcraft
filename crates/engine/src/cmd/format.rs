@@ -601,6 +601,42 @@ fn convert(src: &str, mode: &str, para_start: bool) -> String {
     convert_chars(src, mode, para_start, &turkic).concat()
 }
 
+fn convert_title_char(c: char, i: usize, up: &mut bool, upper: impl Fn(char) -> String, lower: impl Fn(usize, char) -> String) -> String {
+    let n = if *up && c.is_alphabetic() {
+        *up = false;
+        upper(c)
+    } else {
+        lower(i, c)
+    };
+    if c.is_whitespace() {
+        *up = true;
+    }
+    n
+}
+
+fn convert_sentence_char(
+    c: char,
+    i: usize,
+    up: &mut bool,
+    chars: &[char],
+    upper: impl Fn(char) -> String,
+    lower: impl Fn(usize, char) -> String,
+) -> String {
+    let n = if *up && c.is_alphabetic() {
+        *up = false;
+        upper(c)
+    } else {
+        lower(i, c)
+    };
+    let is_decimal = c == '.'
+        && i.checked_sub(1).and_then(|j| chars.get(j)).is_some_and(char::is_ascii_digit)
+        && chars.get(i + 1).is_some_and(char::is_ascii_digit);
+    if matches!(c, '!' | '?') || (c == '.' && !is_decimal) {
+        *up = true;
+    }
+    n
+}
+
 /// The case-converted form of each character of `src`, in order (one entry per char, so a
 /// change of length such as ß → SS or İ → i̇ can be applied run by run). `turkic` is one flag
 /// per char: true when that character's run is Turkish, Azerbaijani or Crimean Tatar.
@@ -634,34 +670,8 @@ fn convert_chars(src: &str, mode: &str, para_start: bool, turkic: &[bool]) -> Ve
                     upper(c)
                 }
             }
-            "title" => {
-                let n = if up && c.is_alphabetic() {
-                    up = false;
-                    upper(c)
-                } else {
-                    lower(i, c)
-                };
-                if c.is_whitespace() {
-                    up = true;
-                }
-                n
-            }
-            _ => {
-                // Sentence case.
-                let n = if up && c.is_alphabetic() {
-                    up = false;
-                    upper(c)
-                } else {
-                    lower(i, c)
-                };
-                let is_decimal = c == '.'
-                    && i.checked_sub(1).and_then(|j| chars.get(j)).is_some_and(|p| p.is_ascii_digit())
-                    && chars.get(i + 1).is_some_and(|n| n.is_ascii_digit());
-                if matches!(c, '!' | '?') || (c == '.' && !is_decimal) {
-                    up = true;
-                }
-                n
-            }
+            "title" => convert_title_char(c, i, &mut up, upper, lower),
+            _ => convert_sentence_char(c, i, &mut up, &chars, upper, lower),
         };
         out.push(new);
     }
@@ -754,28 +764,6 @@ pub fn state(s: &Session) -> Value {
         "lang": same(&|r| json!(r.lang)),
         "noProof": all.iter().all(|r| r.no_proof),
     })
-}
-
-#[cfg(test)]
-mod tests {
-    use super::convert;
-
-    #[test]
-    fn case_conversions() {
-        assert_eq!(convert("hello world. again", "sentence", true), "Hello world. Again");
-        assert_eq!(convert("hello WORLD", "title", true), "Hello World");
-        assert_eq!(convert("Hello", "toggle", true), "hELLO");
-        assert_eq!(convert("straße", "upper", true), "STRASSE");
-        assert_eq!(convert("hello world", "title", false), "Hello World");
-        assert_eq!(convert("ΣΟΦΟΣ ΟΔΟΣ", "lower", true), "σοφος οδος");
-    }
-
-    #[test]
-    fn sentence_case_ignores_decimal_points() {
-        // #3485: A period between two digits is a decimal point, not a sentence boundary.
-        assert_eq!(convert("one 3.14 apples and two 2.5 pears.", "sentence", true), "One 3.14 apples and two 2.5 pears.");
-        assert_eq!(convert("pi is 3.14. next sentence.", "sentence", true), "Pi is 3.14. Next sentence.");
-    }
 }
 
 /// What Enclose Characters works on: the selected text (one full-width or up to two half-width
@@ -883,4 +871,26 @@ fn enclose(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.sel = crate::Selection { anchor: at, focus: end };
     sel_result(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::convert;
+
+    #[test]
+    fn case_conversions() {
+        assert_eq!(convert("hello world. again", "sentence", true), "Hello world. Again");
+        assert_eq!(convert("hello WORLD", "title", true), "Hello World");
+        assert_eq!(convert("Hello", "toggle", true), "hELLO");
+        assert_eq!(convert("straße", "upper", true), "STRASSE");
+        assert_eq!(convert("hello world", "title", false), "Hello World");
+        assert_eq!(convert("ΣΟΦΟΣ ΟΔΟΣ", "lower", true), "σοφος οδος");
+    }
+
+    #[test]
+    fn sentence_case_ignores_decimal_points() {
+        // #3485: A period between two digits is a decimal point, not a sentence boundary.
+        assert_eq!(convert("one 3.14 apples and two 2.5 pears.", "sentence", true), "One 3.14 apples and two 2.5 pears.");
+        assert_eq!(convert("pi is 3.14. next sentence.", "sentence", true), "Pi is 3.14. Next sentence.");
+    }
 }

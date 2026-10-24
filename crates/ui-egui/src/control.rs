@@ -326,9 +326,61 @@ pub fn save_screenshot(image: &egui::ColorImage, path: Option<&str>) -> Value {
     let _ = (&png, path);
     #[cfg(not(target_arch = "wasm32"))]
     {
-        if let Err(e) = std::fs::write(path, &png) {
-            return json!({"ok": false, "error": format!("{path}: {e}")});
+        if !path.to_ascii_lowercase().ends_with(".png") {
+            return json!({"ok": false, "error": format!("{path}: a screenshot path must end in .png")});
+        }
+        if let Err(e) = wordcraft_engine::io::write_file(path, &png) {
+            return json!({"ok": false, "error": e});
         }
     }
     json!({"ok": true, "result": {"path": path, "width": w, "height": h}})
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::save_screenshot;
+
+    struct Cleanup(std::path::PathBuf);
+
+    impl Drop for Cleanup {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn screenshot_path_must_be_png_and_does_not_follow_symlinks() {
+        let dir = std::env::temp_dir().join(format!("wc-shot-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let _cleanup = Cleanup(dir.clone());
+        let img = egui::ColorImage::filled([2, 2], egui::Color32::RED);
+
+        let txt = dir.join("shot.txt");
+        let r = save_screenshot(&img, txt.to_str());
+        assert_eq!(r["ok"], false);
+        assert!(!txt.exists());
+
+        let png = dir.join("shot.png");
+        let r = save_screenshot(&img, png.to_str());
+        assert_eq!(r["ok"], true);
+        assert!(std::fs::read(&png).unwrap().starts_with(b"\x89PNG"));
+
+        #[cfg(unix)]
+        {
+            let victim = dir.join("victim.txt");
+            std::fs::write(&victim, "keep").unwrap();
+            let link = dir.join("link.png");
+            std::os::unix::fs::symlink(&victim, &link).unwrap();
+            let _ = save_screenshot(&img, link.to_str());
+            assert_eq!(std::fs::read_to_string(&victim).unwrap(), "keep");
+        }
+
+        let other = dir.join("other");
+        std::fs::create_dir_all(&other).unwrap();
+        let roots = wordcraft_engine::file_access::AutomationRoots::new(None, Some(&other)).unwrap();
+        let outside = dir.join("outside.png");
+        let r = wordcraft_engine::file_access::confine(roots.as_ref(), || save_screenshot(&img, outside.to_str()));
+        assert_eq!(r["ok"], false);
+        assert!(!outside.exists());
+    }
 }

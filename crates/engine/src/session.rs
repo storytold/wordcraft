@@ -673,6 +673,10 @@ impl Session {
     }
 
     pub fn new(doc: Document) -> Self {
+        Self::with_registry(doc, Arc::new(crate::cmd::registry()))
+    }
+
+    fn with_registry(doc: Document, registry: Arc<Registry>) -> Self {
         let start = doc.start_of(StoryRef::Body);
         let bib_style = doc_bib_style(&doc);
         Session {
@@ -692,7 +696,7 @@ impl Session {
             find: FindState::default(),
             goal_x: None,
             page_hint: 0,
-            registry: Arc::new(crate::cmd::registry()),
+            registry,
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
@@ -876,6 +880,12 @@ impl Session {
 
     /// The current layout (recomputed when the document or view changed).
     pub fn layout(&mut self) -> Arc<DocLayout> {
+        let typing = self.typing_word();
+        self.layout_with(typing)
+    }
+
+    /// [`Session::layout`] with `typing` as the word being typed.
+    fn layout_with(&mut self, typing: Option<wordcraft_layout::TypingWord>) -> Arc<DocLayout> {
         let mode = if self.view.read_mode { ViewMode::Read } else { self.view.mode };
         let width = match mode {
             ViewMode::Read => self.view.read_width,
@@ -889,7 +899,6 @@ impl Session {
         let hide_deleted = !self.view.show_markup;
         let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
-        let typing = self.typing_word();
         if let Some((r, w, h, m, sp, l, pf, o, hd, n, t)) = &self.layout
             && *r == self.rev
             && (*w == width || mode == ViewMode::Print)
@@ -966,6 +975,41 @@ impl Session {
         let (start, end) = typed_range(&self.doc.para_at(&at)?.text, at.off)?;
         Some(TypedWord { at, start, end })
     }
+    /// The page as command `id` would leave it, for a live preview (Insert › Table's grid, #3931):
+    /// the command runs on a copy of the document, with this caret and view, and the copy is laid
+    /// out. The copy comes back with its layout, which is drawn from it: the layout's paragraph
+    /// paths name the copy's paragraphs, not this document's, and so is the copy's selection,
+    /// which is where the caret would be. The document, the selection, the undo history and Repeat
+    /// are untouched. `None` when the command fails or isn't allowed here.
+    pub fn preview_layout(&mut self, id: &str, params: &Value) -> Option<(Document, Selection, Arc<DocLayout>)> {
+        // The word being typed keeps going without a squiggle on the preview: the command moves
+        // the copy's caret off it and may split its paragraph, so it is found again by its place.
+        let typing = self.typing_word();
+        let at = self.sel.focus.clone();
+        let mut copy = Session::with_registry(self.doc.clone(), self.registry.clone());
+        copy.sel = self.sel.clone();
+        copy.column = self.column.clone();
+        copy.widened = self.widened.clone();
+        copy.view = self.view.clone();
+        copy.prefs = self.prefs.clone();
+        copy.path = self.path.clone();
+        copy.file_name = self.file_name.clone();
+        copy.author = self.author.clone();
+        copy.system_region = self.system_region.clone();
+        copy.editing_lang = self.editing_lang.clone();
+        // The copy shares the paragraph layouts, so only what the command changed is laid out.
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        let layout = copy.run(id, params).is_ok().then(|| {
+            let typing = typing.and_then(|t| {
+                let p = copy.doc.para_at(&at)?;
+                (t.end <= p.len()).then_some(wordcraft_layout::TypingWord { rev: p.rev, ..t })
+            });
+            copy.layout_with(typing)
+        });
+        std::mem::swap(&mut copy.cache, &mut self.cache);
+        layout.map(|l| (copy.doc, copy.sel, l))
+    }
+
     /// A layout for output (PDF, images, print): no proofing marks, print view.
     pub fn export_layout(&self) -> Arc<DocLayout> {
         self.export_layout_with(false)
@@ -1406,7 +1450,7 @@ impl Session {
     /// [`crate::cmd::protect::Facts`] for the document as it is now, cached per revision.
     fn protect_facts(&self) -> crate::cmd::protect::Facts {
         let key = (self.document_id, self.rev, self.author.clone());
-        let mut cache = self.protect_facts.lock().unwrap_or_else(|e| e.into_inner());
+        let mut cache = self.protect_facts.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some((k, f)) = cache.as_ref()
             && *k == key
         {
@@ -1515,11 +1559,12 @@ impl Session {
         let default_language_before = self.prefs.default_language.clone();
         let run = spec.run;
         let mutates = spec.mutates;
+        let rev_before = self.rev;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
         let mut result = match result {
             Ok(r) => r,
             Err(p) => {
-                let msg = p.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
+                let msg = p.downcast_ref::<&str>().map(ToString::to_string).or_else(|| p.downcast_ref::<String>().cloned()).unwrap_or_default();
                 Err(CmdError::Failed(format!("{id} panicked: {msg}")))
             }
         };
@@ -1559,7 +1604,7 @@ impl Session {
                     self.note_edit();
                 }
                 // Outline view: collapsed headings follow edits; the caret stays where it shows.
-                crate::cmd::outline::after_command(self, &sel_before);
+                crate::cmd::outline::after_command(self, &sel_before, self.rev != rev_before);
                 // Extra selected objects last until something else is edited or selected; formatting
                 // them keeps them selected, as in Word.
                 if !matches!(id, "select.addObject" | "arrange.ungroup" | "shape.fill" | "shape.effects") && (spec.mutates || self.sel != sel_before)

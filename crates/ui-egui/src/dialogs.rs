@@ -315,6 +315,8 @@ pub enum Dialog {
         offset: f32,
         /// The selection already has a phonetic guide (Remove is offered).
         existing: bool,
+        /// Ask the Ruby text box for the keyboard on the first frame (once, so Tab and clicks still move it).
+        focus: bool,
     },
     NewStyle {
         name: String,
@@ -1208,6 +1210,7 @@ impl Dialog {
                     size: f("size"),
                     offset: f("offset"),
                     existing: v.get("existing").and_then(Value::as_bool).unwrap_or(false),
+                    focus: true,
                 }
             }
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into(), back: false },
@@ -1250,7 +1253,7 @@ impl Dialog {
                         filter: RecipientFilter::from_session(m),
                     }
                 } else {
-                    let fields: Vec<String> = NEW_LIST_FIELDS.iter().map(|f| f.to_string()).collect();
+                    let fields: Vec<String> = NEW_LIST_FIELDS.iter().map(ToString::to_string).collect();
                     let rows = vec![vec![String::new(); fields.len()]];
                     Dialog::RecipientList { fields, rows, message: String::new(), filter: RecipientFilter::default() }
                 }
@@ -1353,7 +1356,7 @@ impl Dialog {
     }
 }
 
-/// Grid picker for Insert › Table (hover to size, click to insert).
+/// Grid picker for Insert › Table (hover to size and preview on the page, click to insert).
 pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
     let t = Tokens::get(ui.ctx());
     let id = egui::Id::new("table_picker_hover");
@@ -1388,9 +1391,16 @@ pub fn table_grid_picker(ui: &mut Ui, app: &mut WordApp) {
         }
     });
     ui.data_mut(|d| d.insert_temp(id, new_hover));
+    if new_hover != hover {
+        // The page may already be drawn this frame (Focus drops the ribbon over it afterwards).
+        ui.ctx().request_repaint();
+    }
     if let Some((r, c)) = clicked {
         let _ = app.run("insert.table", json!({"rows": r, "cols": c}));
         ui.close();
+    } else if new_hover.0 > 0 {
+        // Word's Live Preview: the page shows the hovered table until a square is clicked.
+        app.canvas.table_preview = Some(new_hover);
     }
 }
 
@@ -1935,14 +1945,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             mixed,
             ..
         } => {
-            ui.horizontal(|ui| {
-                for (k, name) in ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].into_iter().enumerate() {
-                    if ui.selectable_label(*tab as usize == k, tl!(name)).clicked() {
-                        *tab = k as u8;
-                    }
-                }
-            });
-            ui.separator();
+            let names = ["Indents and Spacing", "Line and Page Breaks", "Asian Typography"].map(|n| tl!(n).to_string());
+            if let Some(k) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
+                *tab = k as u8;
+            }
+            ui.add_space(6.0);
             match *tab {
                 0 => {
                     ui.label(egui::RichText::new(tl!("General")).font(semibold(12.5)));
@@ -2040,15 +2047,14 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Tabs { form } => crate::dialogs_para::tabs(app, ui, form),
         Dialog::Borders { form } => crate::dialogs_para::borders(app, ui, form),
         Dialog::Find { query, replace, match_case, whole_word, regex, extra, tab, goto_what, goto_target, message, focus } => {
-            ui.horizontal(|ui| {
-                for (t, label) in [(FindTab::Find, "Find"), (FindTab::Replace, "Replace"), (FindTab::GoTo, "Go To")] {
-                    if ui.selectable_label(*tab == t, tl!(label)).clicked() && *tab != t {
-                        *tab = t;
-                        message.clear();
-                    }
-                }
-            });
-            ui.separator();
+            const FIND_TABS: [(FindTab, &str); 3] = [(FindTab::Find, "Find"), (FindTab::Replace, "Replace"), (FindTab::GoTo, "Go To")];
+            let names = FIND_TABS.map(|(_, l)| tl!(l).to_string());
+            let current = FIND_TABS.iter().position(|(t, _)| t == tab).unwrap_or(0);
+            if let Some((t, _)) = crate::widgets::dialog_tabs(ui, &names, current).and_then(|k| FIND_TABS.get(k)) {
+                *tab = *t;
+                message.clear();
+            }
+            ui.add_space(6.0);
             if *tab == FindTab::GoTo {
                 return goto_body(app, ui, goto_what, goto_target, message);
             }
@@ -2491,7 +2497,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             ok || cancel
         }
-        Dialog::Phonetic { base, ruby, align, size, offset, existing } => {
+        Dialog::Phonetic { base, ruby, align, size, offset, existing, focus } => {
             // Base and ruby text are usually Chinese or Japanese: fonts for them load from the next frame.
             app.want_system_cjk = true;
             const ALIGNS: [(&str, &str); 6] = [
@@ -2507,7 +2513,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 ui.label(egui::RichText::new(base.as_str()).strong());
                 ui.end_row();
                 ui.label(tl!("Ruby text:"));
-                ui.text_edit_singleline(ruby);
+                let r = ui.text_edit_singleline(ruby);
+                // Typing goes to the Ruby text box, not the selected text in the document (#3914).
+                if std::mem::take(focus) {
+                    r.request_focus();
+                }
                 ui.end_row();
                 ui.label(tl!("Alignment:"));
                 let shown = ALIGNS.iter().find(|(k, _)| k == align).map_or("Center", |(_, l)| l);
@@ -2699,15 +2709,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
         Dialog::About { tab } => {
             ui.set_width(660.0);
-            ui.horizontal(|ui| {
-                for (i, l) in ["About", "Contributors", "Models"].into_iter().enumerate() {
-                    let i = i as u8;
-                    if ui.selectable_label(*tab == i, tl!(l)).clicked() {
-                        *tab = i;
-                    }
-                }
-            });
-            ui.separator();
+            let names = ["About", "Contributors", "Models"].map(|n| tl!(n).to_string());
+            if let Some(i) = crate::widgets::dialog_tabs(ui, &names, *tab as usize) {
+                *tab = i as u8;
+            }
+            ui.add_space(6.0);
             match *tab {
                 1 => crate::credits::contributors_ui(ui),
                 2 => crate::credits::models_ui(ui),
@@ -4107,6 +4113,44 @@ mod tests {
     use wordcraft_doc::props::Align;
     use wordcraft_engine::Session;
 
+    /// #3931: hovering Insert › Table's grid asks the page for a preview of that table (rows by
+    /// columns) and changes nothing; leaving the grid drops it; a click inserts the table with no
+    /// preview left over for the page to show on top of it.
+    #[test]
+    fn the_table_grid_previews_the_hovered_table_until_the_click() {
+        use egui_kittest::kittest::Queryable;
+        let a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+        let mut h =
+            egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| table_grid_picker(ui, app), a);
+        h.run_steps(2);
+        let spacing = h.ctx.global_style().spacing.clone();
+        let top = h.get_by_label("Insert Table").rect();
+        // Squares are 16 points with 2 between, in grid columns at least `interact_size` wide:
+        // the middle of row 3, column 4.
+        let col = spacing.interact_size.x.max(16.0) + 2.0;
+        let at = egui::pos2(top.left() + 3.0 * col + 8.0, top.bottom() + spacing.item_spacing.y + 2.0 * 18.0 + 8.0);
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        assert_eq!(h.state().canvas.table_preview, Some((3, 4)), "three rows of four columns");
+        assert!(h.query_by_label("4×3 Table").is_some(), "the label reads columns × rows");
+        assert!(h.state().session.doc.body.iter().all(|b| b.as_table().is_none()) && !h.state().session.can_undo());
+        h.event(egui::Event::PointerMoved(egui::pos2(390.0, 390.0)));
+        h.state_mut().canvas.table_preview = None;
+        h.run_steps(2);
+        assert_eq!(h.state().canvas.table_preview, None, "off the grid nothing is previewed");
+        h.event(egui::Event::PointerMoved(at));
+        h.run_steps(2);
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+        h.step();
+        // The page takes the request every frame; here nothing does.
+        h.state_mut().canvas.table_preview = None;
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+        h.step();
+        let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).expect("the click inserts the table");
+        assert_eq!((t.rows.len(), t.cols()), (3, 4));
+        assert_eq!(h.state().canvas.table_preview, None, "the inserted table isn't previewed again");
+    }
+
     /// Go To's page box (#712): a number, +n / -n from the current page (a typographic minus
     /// too), empty for the next page; anything else is refused.
     #[test]
@@ -4309,6 +4353,30 @@ mod tests {
             );
         }
         assert_eq!(serde_json::to_value(&h.state().session.doc).unwrap(), before, "search does not change the document");
+    }
+
+    /// #3914: the Phonetic Guide dialog opens with the keyboard in its Ruby text box, so typing
+    /// fills the box and does not replace the selected text in the document.
+    #[test]
+    fn phonetic_guide_ruby_box_takes_the_keyboard_on_open() {
+        let mut app = app_with("Unchanged document");
+        app.dialog = Some(Dialog::Phonetic {
+            base: "Unchanged".into(),
+            ruby: String::new(),
+            align: "center".into(),
+            size: 12.0,
+            offset: 0.0,
+            existing: false,
+            focus: true,
+        });
+        let mut h = app_harness(app);
+        h.run_steps(4);
+        h.event(egui::Event::Text("ab".into()));
+        h.run_steps(2);
+        match h.state().dialog.as_ref() {
+            Some(Dialog::Phonetic { ruby, .. }) => assert_eq!(ruby, "ab", "the typed text reaches the Ruby text box"),
+            _ => panic!("the Phonetic Guide dialog is still open"),
+        }
     }
 
     /// #2986: a box that keeps the keyboard asks for focus only while it lacks it. `request_focus`

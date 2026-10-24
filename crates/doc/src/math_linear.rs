@@ -339,7 +339,7 @@ impl P {
     /// A prefix structure after its character.
     fn prefix(&mut self, c: char, stops: &[char]) -> MNode {
         match c {
-            '√' | '∛' | '∜' => {
+            '√'..='∜' => {
                 let mut deg = match c {
                     '∛' => vec![text('3')],
                     '∜' => vec![text('4')],
@@ -410,7 +410,7 @@ impl P {
     fn word(&mut self, stops: &[char]) -> Arg {
         let start = self.i;
         let mut end = start;
-        while self.c.get(end).is_some_and(|c| c.is_ascii_alphabetic()) {
+        while self.c.get(end).is_some_and(char::is_ascii_alphabetic) {
             end += 1;
         }
         let word: String = self.c.get(start..end).unwrap_or(&[]).iter().collect();
@@ -628,7 +628,7 @@ impl P {
                 // Word (#1609): the whole run of letters and digits up to a space or operator, so
                 // `V_dd` is V with a subscript `dd`, exactly like `V_(dd)`.
                 let start = self.i;
-                while self.peek().is_some_and(|k| k.is_alphanumeric()) {
+                while self.peek().is_some_and(char::is_alphanumeric) {
                     self.i += 1;
                 }
                 let t: String = self.c.get(start..self.i).unwrap_or(&[]).iter().collect();

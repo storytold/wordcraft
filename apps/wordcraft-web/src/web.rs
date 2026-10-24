@@ -420,7 +420,7 @@ fn trigger_save_file_picker(
     bytes: &[u8],
 ) -> Result<(), String> {
     let js = |e: wasm_bindgen::JsValue| format!("{e:?}");
-    let ext = std::path::Path::new(name).extension().and_then(|e| e.to_str()).unwrap_or("docx").to_ascii_lowercase();
+    let ext = std::path::Path::new(name).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("docx").to_ascii_lowercase();
     let dot_ext = format!(".{ext}");
     let mime = mime_for(name);
 

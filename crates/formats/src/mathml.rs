@@ -88,10 +88,10 @@ fn run(r: &MRun, o: &mut String, eq_arr: bool) {
     let cs: Vec<char> = r.text.chars().collect();
     let mut i = 0;
     while let Some(&c) = cs.get(i) {
-        if c.is_ascii_digit() || (c == '.' && cs.get(i + 1).is_some_and(|d| d.is_ascii_digit())) {
+        if c.is_ascii_digit() || (c == '.' && cs.get(i + 1).is_some_and(char::is_ascii_digit)) {
             let mut num = String::new();
             while let Some(&d) =
-                cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.' || **d == ',' && cs.get(i + 1).is_some_and(|n| n.is_ascii_digit()))
+                cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.' || **d == ',' && cs.get(i + 1).is_some_and(char::is_ascii_digit))
             {
                 num.push(d);
                 i += 1;

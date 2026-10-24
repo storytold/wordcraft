@@ -143,18 +143,20 @@ rm -f "$DMG"
 # Retries an hdiutil verb that attaches a device: on CI runners it fails now and then with
 # "Resource busy". Usage: hdiutil_retry <verb> <args...>; five tries with growing pauses.
 hdiutil_retry() {
+  local verb="$1"
   local attempt
   for attempt in 1 2 3 4 5; do
     if hdiutil "$@"; then
       return 0
     fi
     if [[ "$attempt" = 5 ]]; then
-      echo "error: hdiutil $1 failed 5 times" >&2
+      echo "error: hdiutil $verb failed 5 times" >&2
       return 1
     fi
-    warn "hdiutil $1 failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
+    warn "hdiutil $verb failed (attempt $attempt of 5); retrying in $((attempt * 10))s"
     sleep $((attempt * 10))
   done
+  return 1
 }
 # `hdiutil create -srcfolder` copies the staged files as they are. The previous
 # `makehybrid -hfs` + `convert` gave every file and folder in the image a com.apple.FinderInfo

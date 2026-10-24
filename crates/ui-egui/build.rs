@@ -87,7 +87,7 @@ fn locales(dir: &std::path::Path) -> Result<Vec<(String, Option<std::path::PathB
     let mut out = Vec::new();
     for entry in list.flatten() {
         let path = entry.path();
-        let Some(code) = path.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
+        let Some(code) = path.file_name().and_then(std::ffi::OsStr::to_str).map(str::to_string) else { continue };
         let app = path.join(APP_CATALOG);
         if !app.is_file() {
             continue;

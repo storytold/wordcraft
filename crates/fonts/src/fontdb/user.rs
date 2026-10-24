@@ -368,7 +368,7 @@ impl FontDb {
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.is_file())
-            .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
+            .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
             .collect();
         paths.sort();
         for p in paths {

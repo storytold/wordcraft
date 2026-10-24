@@ -27,7 +27,7 @@ static LOAD_ERRORS: RwLock<Vec<(String, PathBuf, String)>> = RwLock::new(Vec::ne
 /// Remember (or, for `Ok`, forget) why the dictionary `key` found at `dic` failed to load, and
 /// hand the result back unchanged.
 pub fn note_load<T>(key: &str, dic: &Path, result: Result<T, String>) -> Result<T, String> {
-    let mut errors = LOAD_ERRORS.write().unwrap_or_else(|e| e.into_inner());
+    let mut errors = LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     errors.retain(|(k, _, _)| k != key);
     if let Err(e) = &result {
         errors.push((key.to_string(), dic.to_path_buf(), e.clone()));
@@ -37,19 +37,19 @@ pub fn note_load<T>(key: &str, dic: &Path, result: Result<T, String>) -> Result<
 
 /// Forget the load error of the dictionary `key` (none found, or it is about to be searched for again).
 pub fn clear_load_error(key: &str) {
-    LOAD_ERRORS.write().unwrap_or_else(|e| e.into_inner()).retain(|(k, _, _)| k != key);
+    LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|(k, _, _)| k != key);
 }
 
 /// The `.dic` file and the reason of the last failed load of the dictionary `key`, if any.
 pub fn load_error(key: &str) -> Option<(PathBuf, String)> {
-    LOAD_ERRORS.read().unwrap_or_else(|e| e.into_inner()).iter().find(|(k, _, _)| k == key).map(|(_, p, e)| (p.clone(), e.clone()))
+    LOAD_ERRORS.read().unwrap_or_else(std::sync::PoisonError::into_inner).iter().find(|(k, _, _)| k == key).map(|(_, p, e)| (p.clone(), e.clone()))
 }
 
 /// Search `dir` before the system locations (a "dictionaries folder" setting); `None` clears it.
 /// Takes effect for dictionaries not loaded yet.
 pub fn set_dictionary_dir(dir: Option<PathBuf>) {
-    *EXTRA_DIR.write().unwrap_or_else(|e| e.into_inner()) = dir;
-    LOAD_ERRORS.write().unwrap_or_else(|e| e.into_inner()).clear(); // they belong to the old search path
+    *EXTRA_DIR.write().unwrap_or_else(std::sync::PoisonError::into_inner) = dir;
+    LOAD_ERRORS.write().unwrap_or_else(std::sync::PoisonError::into_inner).clear(); // they belong to the old search path
 }
 
 /// The LibreOffice extension directories a Hunspell dictionary name may live in: LibreOffice's
@@ -67,7 +67,7 @@ fn lo_ext_dirs(name: &str) -> Vec<String> {
 /// language is being searched for, adds LibreOffice's extension folders for it (`dict-pt-BR`).
 pub fn search_dirs(lo_exts: Option<&[String]>) -> Vec<PathBuf> {
     let mut dirs: Vec<PathBuf> = Vec::new();
-    if let Some(d) = EXTRA_DIR.read().unwrap_or_else(|e| e.into_inner()).clone() {
+    if let Some(d) = EXTRA_DIR.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
         dirs.push(d);
     }
     if cfg!(target_arch = "wasm32") {

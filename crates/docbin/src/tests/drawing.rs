@@ -70,7 +70,7 @@ fn fbse_png(png: &[u8]) -> Vec<u8> {
 
 /// UTF-16LE, NUL-terminated (a complex string property).
 fn wz(s: &str) -> Vec<u8> {
-    s.encode_utf16().chain([0]).flat_map(|u| u.to_le_bytes()).collect()
+    s.encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect()
 }
 
 /// A `Spa` (26 bytes): spid, bounds in twips, flags, cTxbx.

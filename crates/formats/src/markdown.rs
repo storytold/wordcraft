@@ -268,7 +268,7 @@ fn list_marker(t: &str) -> Option<Marker> {
     let (m, len) = if matches!(first, '-' | '+' | '*') {
         (Marker { ordered: false, ch: first, len: 1, start: 1 }, 1)
     } else {
-        let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
         if !(1..=9).contains(&digits) {
             return None;
         }
@@ -607,7 +607,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             i += 1;
         }
         // Blank lines at the end of an item belong between items.
-        while item.len() > 1 && item.last().is_some_and(|x| x.is_empty()) {
+        while item.len() > 1 && item.last().is_some_and(String::is_empty) {
             item.pop();
         }
         let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start };
@@ -833,7 +833,7 @@ fn unescape(s: &str) -> String {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\'
-            && let Some(n) = chars.peek().copied().filter(|n| n.is_ascii_punctuation())
+            && let Some(n) = chars.peek().copied().filter(char::is_ascii_punctuation)
         {
             out.push(n);
             chars.next();
@@ -852,7 +852,7 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
         let at = from + k;
         let before = lower.get(..at)?.chars().next_back();
         let after = lower.get(at + name.len()..)?.trim_start();
-        if before.is_some_and(|c| c.is_whitespace()) && after.starts_with('=') {
+        if before.is_some_and(char::is_whitespace) && after.starts_with('=') {
             let v = after.get(1..)?.trim_start();
             let q = v.chars().next()?;
             return Some(if q == '"' || q == '\'' {
@@ -1257,7 +1257,7 @@ fn escape_line_start(s: String) -> String {
         || (t.starts_with('-') && t.trim_end_matches([' ', '\t']).chars().all(|c| c == '-'))
         || thematic_break(t)
         || {
-            let d = t.chars().take_while(|c| c.is_ascii_digit()).count();
+            let d = t.chars().take_while(char::is_ascii_digit).count();
             d > 0
                 && t.get(d..).is_some_and(|r| {
                     r.starts_with(". ") || r.starts_with(") ") || r.starts_with(".\t") || r.starts_with(")\t") || r == "." || r == ")"

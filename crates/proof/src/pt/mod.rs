@@ -32,11 +32,11 @@ const NAMES: &[&str] = &["pt_BR", "pt-BR", "pt"];
 /// [`install_dictionary`], or an empty one when none is available (Portuguese spelling is off
 /// then; see [`has_dictionary`]).
 pub fn dictionary() -> Arc<AffixDict> {
-    if let Some(d) = DICT.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(d) = DICT.read().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
         return d.clone();
     }
     let loaded = Arc::new(load_installed());
-    let mut slot = DICT.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner);
     // Another thread (or an install) may have filled it meanwhile: that one wins.
     slot.get_or_insert(loaded).clone()
 }
@@ -57,14 +57,14 @@ fn load_installed() -> AffixDict {
 /// UTF-8), for example one the user picked. On error the current dictionary stays.
 pub fn install_dictionary(aff: &str, dic: &str) -> Result<(), String> {
     let d = AffixDict::from_hunspell(aff, dic, &[])?;
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
+    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Arc::new(d));
     Ok(())
 }
 
 /// Forget the loaded dictionary, so the next check looks for an installed one again (after
 /// [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
 pub fn reload_dictionary() {
-    *DICT.write().unwrap_or_else(|e| e.into_inner()) = None;
+    *DICT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
 }
 
 /// The `.dic` file of the installed Portuguese dictionary, searching the dictionaries folder and

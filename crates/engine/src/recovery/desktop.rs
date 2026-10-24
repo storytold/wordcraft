@@ -181,7 +181,7 @@ impl Store {
         let mut entries = BTreeMap::new();
         let mut unreadable = false;
         for dir in self.directories()? {
-            let Some(id) = dir.file_name().and_then(|s| s.to_str()) else { continue };
+            let Some(id) = dir.file_name().and_then(std::ffi::OsStr::to_str) else { continue };
             let guard = if self.locks.contains_key(id) {
                 None
             } else {

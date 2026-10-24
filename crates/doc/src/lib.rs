@@ -229,7 +229,7 @@ impl Path {
 
 impl std::fmt::Display for Path {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let s: Vec<String> = self.0.iter().map(|i| i.to_string()).collect();
+        let s: Vec<String> = self.0.iter().map(ToString::to_string).collect();
         write!(f, "{}", s.join("/"))
     }
 }
@@ -801,34 +801,36 @@ impl Document {
         d
     }
 
-    /// Every story must hold at least one paragraph, and every cell too.
-    pub fn ensure_nonempty(&mut self) {
-        fn fix(bl: &mut Blocks) {
-            if !bl.iter().any(|b| matches!(**b, Block::Para(_))) || matches!(bl.last().map(|b| &**b), Some(Block::Table(_))) {
-                bl.push(para_block(Paragraph::new()));
-            }
-            for b in bl.iter_mut() {
-                if let Block::Table(t) = &**b {
-                    let needs = t
-                        .rows
-                        .iter()
-                        .any(|r| r.cells.iter().any(|c| c.blocks.is_empty() || matches!(c.blocks.last().map(|b| &**b), Some(Block::Table(_)))));
-                    if needs && let Block::Table(t) = Arc::make_mut(b) {
-                        for r in &mut t.rows {
-                            for c in &mut r.cells {
-                                fix_cell(&mut c.blocks);
-                            }
+    fn fix_cell_blocks(bl: &mut Blocks) {
+        if bl.is_empty() || matches!(bl.last().map(|b| &**b), Some(Block::Table(_))) {
+            bl.push(para_block(Paragraph::new()));
+        }
+    }
+
+    fn fix_story_blocks(bl: &mut Blocks) {
+        if !bl.iter().any(|b| matches!(**b, Block::Para(_))) || matches!(bl.last().map(|b| &**b), Some(Block::Table(_))) {
+            bl.push(para_block(Paragraph::new()));
+        }
+        for b in bl.iter_mut() {
+            if let Block::Table(t) = &**b {
+                let needs = t
+                    .rows
+                    .iter()
+                    .any(|r| r.cells.iter().any(|c| c.blocks.is_empty() || matches!(c.blocks.last().map(|b| &**b), Some(Block::Table(_)))));
+                if needs && let Block::Table(t) = Arc::make_mut(b) {
+                    for r in &mut t.rows {
+                        for c in &mut r.cells {
+                            Self::fix_cell_blocks(&mut c.blocks);
                         }
                     }
                 }
             }
         }
-        fn fix_cell(bl: &mut Blocks) {
-            if bl.is_empty() || matches!(bl.last().map(|b| &**b), Some(Block::Table(_))) {
-                bl.push(para_block(Paragraph::new()));
-            }
-        }
-        fix(&mut self.body);
+    }
+
+    /// Every story must hold at least one paragraph, and every cell too.
+    pub fn ensure_nonempty(&mut self) {
+        Self::fix_story_blocks(&mut self.body);
         for p in self.parts.values_mut() {
             if p.blocks.is_empty() {
                 p.blocks.push(para_block(Paragraph::new()));

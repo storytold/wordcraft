@@ -778,13 +778,13 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
                     o.push('\\');
                     o.push_str(&name);
                     i += 1 + name.len();
-                    if chars.get(i).is_some_and(|n| n.is_ascii_alphabetic()) {
+                    if chars.get(i).is_some_and(char::is_ascii_alphabetic) {
                         o.push(' ');
                     }
                 }
                 continue;
             }
-            '%' | '#' | '&' | '$' => {
+            '#'..='&' => {
                 o.push('\\');
                 o.push(c);
             }
@@ -796,7 +796,7 @@ fn linear_to_latex_at(linear: &str, depth: usize) -> String {
                     o.push('\\');
                     o.push_str(name);
                     // A control word needs a space only before a letter.
-                    if chars.get(i + 1).is_some_and(|n| n.is_ascii_alphabetic()) {
+                    if chars.get(i + 1).is_some_and(char::is_ascii_alphabetic) {
                         o.push(' ');
                     }
                 }

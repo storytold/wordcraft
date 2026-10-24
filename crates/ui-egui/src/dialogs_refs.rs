@@ -265,7 +265,7 @@ pub struct CaptionForm {
 
 impl CaptionForm {
     pub fn read(app: &WordApp) -> CaptionForm {
-        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(|l| l.to_string()).collect();
+        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(ToString::to_string).collect();
         for l in &app.ui.caption_labels {
             if !labels.contains(l) {
                 labels.push(l.clone());
@@ -1131,7 +1131,7 @@ pub struct FiguresForm {
 
 impl FiguresForm {
     pub fn read(app: &WordApp) -> FiguresForm {
-        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(|l| l.to_string()).collect();
+        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(ToString::to_string).collect();
         for l in app.ui.caption_labels.iter().cloned().chain(wordcraft_engine::cmd::citations::caption_labels(&app.session)) {
             if !labels.contains(&l) {
                 labels.push(l);

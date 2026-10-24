@@ -195,8 +195,7 @@ impl AutoCorrectPrefs {
             .filter(|(a, _)| !self.removed.iter().any(|r| r == a) && !self.entries.iter().any(|(e, _)| e == a))
             .filter(|(a, _)| self.fractions || !FRACTIONS.contains(a))
             .find(|(a, _)| {
-                *a == word
-                    || (a.chars().all(|c| c.is_lowercase()) && word.to_lowercase() == *a && word.chars().next().is_some_and(char::is_uppercase))
+                *a == word || (a.chars().all(char::is_lowercase) && word.to_lowercase() == *a && word.chars().next().is_some_and(char::is_uppercase))
             })
             .map(|(a, b)| {
                 if *a != word && b.chars().next().is_some_and(char::is_lowercase) {
@@ -249,7 +248,7 @@ impl AutoCorrectPrefs {
         let mut v: Vec<String> = NOT_SENTENCE_END
             .iter()
             .filter(|a| !self.exceptions_removed.iter().any(|r| r.eq_ignore_ascii_case(a)))
-            .map(|a| a.to_string())
+            .map(ToString::to_string)
             .chain(self.exceptions.iter().map(|a| a.to_lowercase()))
             .collect();
         v.sort();

@@ -2566,7 +2566,7 @@ impl WordApp {
     /// recipient lists (CSV/TSV, spreadsheets, or a text file asked for as one) load as recipients.
     fn drain_inbox(&mut self) {
         let Some(inbox) = self.services.inbox.clone() else { return };
-        let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(|e| e.into_inner()));
+        let files = std::mem::take(&mut *inbox.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let mut placed_picture = false;
         for (name, bytes) in files {
             let lower = name.to_ascii_lowercase();
@@ -2600,7 +2600,7 @@ impl WordApp {
     /// otherwise so the focused field's own paste applies (a text field ignores a picture).
     fn drain_pasted(&mut self) {
         let Some(pasted) = self.services.pasted.clone() else { return };
-        let pictures = std::mem::take(&mut *pasted.lock().unwrap_or_else(|e| e.into_inner()));
+        let pictures = std::mem::take(&mut *pasted.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
         let target = paste_target(self.canvas.focused, self.ui.backstage, self.dialog.is_some() || self.file_dialog_open());
         for (_, bytes) in pictures {
             if !target {

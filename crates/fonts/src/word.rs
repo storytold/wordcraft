@@ -389,7 +389,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     let cacheable = family.len() <= FAMILY_KEY_MAX;
     let key = (if cacheable { family.to_string() } else { String::new() }, bold, italic);
     {
-        let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+        let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if c.0 != generation {
             *c = (generation, HashMap::new());
         }
@@ -409,7 +409,7 @@ pub fn resolve(family: &str, bold: bool, italic: bool) -> Resolved {
     };
     let face = db.face(&fam, style_name(bold, italic));
     let r = Resolved { synth_bold: bold && face.weight < 600.0, synth_italic: italic && !face.italic, substituted, face: FaceRef::of(&face) };
-    let mut c = cache.lock().unwrap_or_else(|e| e.into_inner());
+    let mut c = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if cacheable && c.0 == generation {
         if c.1.len() >= FAMILY_CACHE_MAX {
             c.1.clear();
@@ -431,7 +431,7 @@ fn hhea_line(ascender: i16, descender: i16, line_gap: i16) -> (f64, f64) {
 pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
     static CACHE: OnceLock<Mutex<HashMap<u32, (f64, f64)>>> = OnceLock::new();
     let cache = CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(v) = cache.lock().unwrap_or_else(|e| e.into_inner()).get(&face.id()) {
+    if let Some(v) = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&face.id()) {
         return *v;
     }
     let mut v = (face.ascent.max(1.0), face.descent.abs());
@@ -447,7 +447,7 @@ pub fn line_metrics(face: &crate::FontFace) -> (f64, f64) {
             v = m;
         }
     }
-    cache.lock().unwrap_or_else(|e| e.into_inner()).insert(face.id(), v);
+    cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner).insert(face.id(), v);
     v
 }
 

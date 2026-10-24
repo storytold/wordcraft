@@ -426,6 +426,9 @@ fn shapes_have_paths() {
         ShapeKind::Star,
         ShapeKind::Heart,
         ShapeKind::Arrow,
+        ShapeKind::ArrowLeft,
+        ShapeKind::ArrowUp,
+        ShapeKind::ArrowDown,
         ShapeKind::Line,
         ShapeKind::Diamond,
         ShapeKind::Triangle,
@@ -531,7 +534,7 @@ fn unsubsettable_font(family: &str, gid: u16) -> Vec<u8> {
             i += 1;
         }
     };
-    let wide = |s: &str| s.encode_utf16().flat_map(|u| u.to_be_bytes()).collect::<Vec<u8>>();
+    let wide = |s: &str| s.encode_utf16().flat_map(u16::to_be_bytes).collect::<Vec<u8>>();
     assert_eq!(family.len(), "Source Sans 3".len());
     rename(&mut f, &wide("Source Sans 3"), &wide(family));
     rename(&mut f, b"Source Sans 3", family.as_bytes());
@@ -1208,10 +1211,10 @@ fn cosmetic_metafile_pens_are_thin_but_visible() {
 fn emf_text_records(text: &str) -> Vec<Vec<u8>> {
     let mut font = [82i32.to_le_bytes(), 104u32.to_le_bytes(), 1i32.to_le_bytes(), (-20i32).to_le_bytes()].concat();
     font.extend([0i32, 0, 0, 400, 0, 0].iter().flat_map(|v| v.to_le_bytes()));
-    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(u16::to_le_bytes).collect();
     name.resize(64, 0);
     font.extend(name);
-    let units: Vec<u8> = text.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let units: Vec<u8> = text.encode_utf16().flat_map(u16::to_le_bytes).collect();
     let padded = units.len().div_ceil(4) * 4;
     let mut out = [84u32.to_le_bytes(), ((76 + padded) as u32).to_le_bytes()].concat();
     out.extend([0i32, 0, 100, 100, 1, 0, 0, 5, 40, text.encode_utf16().count() as i32, 76, 0, 0, 0, 0, 0, 0].iter().flat_map(|v| v.to_le_bytes()));

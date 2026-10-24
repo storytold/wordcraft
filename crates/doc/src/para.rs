@@ -311,7 +311,14 @@ pub enum ShapeKind {
     RightTriangle,
     Diamond,
     Line,
+    /// A block arrow pointing right (`rightArrow`; also stands for the double-headed arrows).
     Arrow,
+    /// A block arrow pointing left (`leftArrow`).
+    ArrowLeft,
+    /// A block arrow pointing up (`upArrow`).
+    ArrowUp,
+    /// A block arrow pointing down (`downArrow`).
+    ArrowDown,
     Star,
     Heart,
     /// A text box (rectangle with a text story).

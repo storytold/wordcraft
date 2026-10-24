@@ -7,6 +7,7 @@ mod complex_script_inheritance;
 mod content_control_save_cost;
 mod content_controls;
 mod custom_xml;
+mod default_size;
 mod drawing_payload;
 mod east_asian_lang;
 mod east_asian_layout;

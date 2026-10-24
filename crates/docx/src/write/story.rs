@@ -29,6 +29,43 @@ enum Piece<'a> {
 }
 
 impl Writer<'_> {
+    fn update_toc_before_block(&mut self, i: usize, toc: Option<(usize, usize)>, toc_field_open: bool, w: &mut W) {
+        if let Some((start, end)) = toc {
+            if i == start {
+                w.raw(TOC_SDT_OPEN);
+                self.toc_hold_end = true;
+            }
+            self.toc_begin_here = toc_field_open && i == start + 1;
+            self.toc_end_here = toc_field_open && i == end;
+        }
+    }
+
+    fn update_toc_after_block(&mut self, i: usize, toc: Option<(usize, usize)>, toc_field_open: &mut bool, w: &mut W) {
+        if let Some((start, end)) = toc {
+            if i == start {
+                // `field` holds the heading's TOC field back for the first entry.
+                self.toc_hold_end = false;
+                *toc_field_open = self.toc_field.is_some();
+            }
+            if i == end {
+                w.raw("</w:sdtContent></w:sdt>");
+            }
+        }
+    }
+
+    fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
+        // A header with no paragraph of its own before: the watermark goes in this one.
+        if depth == 0
+            && let Some(run) = self.pending_watermark.take()
+        {
+            w.raw("<w:p>");
+            w.raw(&run);
+            w.raw("</w:p>");
+        } else {
+            w.raw("<w:p/>");
+        }
+    }
+
     /// Write a block list. `top` = body level (sections allowed).
     pub fn blocks(&mut self, w: &mut W, bl: &Blocks, rels: &mut PartRels, top: bool, depth: usize) {
         if depth > MAX_DEPTH {
@@ -43,14 +80,7 @@ impl Writer<'_> {
             for c in plan.opens.get(i).into_iter().flatten() {
                 super::sdt::open(w, c);
             }
-            if let Some((start, end)) = toc {
-                if i == start {
-                    w.raw(TOC_SDT_OPEN);
-                    self.toc_hold_end = true;
-                }
-                self.toc_begin_here = toc_field_open && i == start + 1;
-                self.toc_end_here = toc_field_open && i == end;
-            }
+            self.update_toc_before_block(i, toc, toc_field_open, w);
             match &**b {
                 Block::Para(p) => {
                     self.inline_controls = plan.inline_in(i);
@@ -58,16 +88,7 @@ impl Writer<'_> {
                 }
                 Block::Table(t) => self.table(w, t, rels, depth),
             }
-            if let Some((start, end)) = toc {
-                if i == start {
-                    // `field` holds the heading's TOC field back for the first entry.
-                    self.toc_hold_end = false;
-                    toc_field_open = self.toc_field.is_some();
-                }
-                if i == end {
-                    w.raw("</w:sdtContent></w:sdt>");
-                }
-            }
+            self.update_toc_after_block(i, toc, &mut toc_field_open, w);
             for _ in 0..plan.closes.get(i).copied().unwrap_or(0) {
                 super::sdt::close(w);
             }
@@ -76,16 +97,7 @@ impl Writer<'_> {
             self.move_ranges(w, &[]);
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
-            // A header with no paragraph of its own before: the watermark goes in this one.
-            if depth == 0
-                && let Some(run) = self.pending_watermark.take()
-            {
-                w.raw("<w:p>");
-                w.raw(&run);
-                w.raw("</w:p>");
-            } else {
-                w.raw("<w:p/>");
-            }
+            self.write_trailing_para(w, depth);
         }
     }
 
@@ -158,6 +170,23 @@ impl Writer<'_> {
         self.para_inner(w, p, rels, top, depth, false);
     }
 
+    fn write_mark_rpr(&mut self, w: &mut W, mark: &CharProps, mark_revs: &[(u32, &str)]) {
+        w.open("w:rPr", &[]);
+        for (idx, tag) in mark_revs {
+            let (id, author, date) = self.rev_attrs(*idx);
+            if date.is_empty() {
+                w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
+            } else {
+                w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
+            }
+        }
+        rpr_inner(w, mark);
+        if let Some(ch) = mark.fmt_change.as_deref() {
+            self.rpr_change(w, ch);
+        }
+        w.close("w:rPr");
+    }
+
     fn para_inner(&mut self, w: &mut W, p: &Paragraph, rels: &mut PartRels, top: bool, depth: usize, framed: bool) {
         let para_id = self.take_para_id(p);
         match &para_id {
@@ -185,20 +214,7 @@ impl Writer<'_> {
             });
             ppr_inner(w, &pp, framed, num_change.as_ref());
             if has_mark {
-                w.open("w:rPr", &[]);
-                for (idx, tag) in mark_revs {
-                    let (id, author, date) = self.rev_attrs(idx);
-                    if date.is_empty() {
-                        w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
-                    } else {
-                        w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
-                    }
-                }
-                rpr_inner(w, &p.mark);
-                if let Some(ch) = p.mark.fmt_change.as_deref() {
-                    self.rpr_change(w, ch);
-                }
-                w.close("w:rPr");
+                self.write_mark_rpr(w, &p.mark, &mark_revs);
             }
             if let Some(s) = section {
                 self.sectpr(w, s, rels);
@@ -1053,6 +1069,9 @@ impl Writer<'_> {
             ShapeKind::ElbowConnector => "bentConnector3",
             ShapeKind::CurvedConnector => "curvedConnector3",
             ShapeKind::Arrow => "rightArrow",
+            ShapeKind::ArrowLeft => "leftArrow",
+            ShapeKind::ArrowUp => "upArrow",
+            ShapeKind::ArrowDown => "downArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
         };
