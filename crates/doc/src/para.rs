@@ -1171,6 +1171,20 @@ impl Paragraph {
         self.runs = out;
     }
 
+    /// Make the objects match the U+FFFC markers one to one (files lie): drop surplus objects,
+    /// and remove markers past the last object. Runs must already cover the text.
+    pub fn reconcile_objects(&mut self) {
+        let markers: Vec<usize> = self.text.match_indices(OBJ).map(|(i, _)| i).collect();
+        if self.objects.len() > markers.len() {
+            self.objects.truncate(markers.len());
+            self.touch();
+        }
+        // Last first so earlier offsets stay valid; past `objects.len()` nothing is drained.
+        for &off in markers.iter().skip(self.objects.len()).rev() {
+            let _ = self.delete(off, off + OBJ.len_utf8());
+        }
+    }
+
     /// Delete `a..b` (bytes). Objects inside are removed.
     pub fn delete(&mut self, a: usize, b: usize) -> Result<()> {
         let (a, b) = (a.min(b), a.max(b));
