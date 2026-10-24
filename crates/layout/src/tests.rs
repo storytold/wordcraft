@@ -6625,6 +6625,36 @@ fn footnote_longer_than_pages_ends() {
     assert!(pieces.windows(2).all(|w| w[0].2 == w[1].1 && w[1].0 == w[0].0 + 1), "{pieces:?}");
 }
 
+/// #3820: a paragraph near the page bottom whose second-to-last line references a long note.
+/// Word for Mac keeps that line and the paragraph's last line on the page and continues the note
+/// on the next one (observed in 16.114); WordCraft placed the reference line, stopped, and widow
+/// control then took it to the next page with the last line, leaving a gap above the notes.
+#[test]
+fn a_long_note_referenced_on_a_paragraphs_last_lines_continues_below_them() {
+    use wordcraft_doc::props::LineSpacing;
+    let props = ParaProps { line_spacing: Some(LineSpacing::Exactly(24.0)), space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+    // 24 pt lines: 18 one-line paragraphs, then six lines in one, ending three lines above the
+    // bottom margin, with room below for two lines of the note but not all of it.
+    let mut d = Document::from_text(&"Filler line.\n".repeat(18));
+    let mut last = Paragraph::with_text("L1 text\nL2 text\nL3 text\nL4 text\nL5 text\nL6 text", CharProps::default());
+    last.props = props.clone();
+    let end = d.body.len();
+    d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Para(last)).unwrap();
+    for k in 0..d.body.len() {
+        d.para_mut(StoryRef::Body, &Path::top(k)).unwrap().props = props.clone();
+    }
+    let para = d.body.len() - 1;
+    let l5 = d.para(StoryRef::Body, &Path::top(para)).unwrap().text.find("L5").unwrap();
+    let id = footnote(&mut d, &Pos::body(para, l5), &"A long note that runs on for many lines. ".repeat(60));
+    let l = lay(&d);
+    let page = |pos: &Pos| l.caret(pos).unwrap().page;
+    let l6 = d.para(StoryRef::Body, &Path::top(para)).unwrap().text.find("L6").unwrap();
+    assert_eq!((page(&Pos::body(para, l5)), page(&Pos::body(para, l6))), (0, 0), "the reference line and the last line stay on page 1");
+    let pieces = note_pieces(&l, id);
+    assert_eq!((pieces[0].0, pieces.get(1).map(|p| p.0)), (0, Some(1)), "{pieces:?}");
+    assert!(pieces[0].2 - pieces[0].1 >= 2, "at least two of the note's lines stay with it: {pieces:?}");
+}
+
 /// A comment by `author` saying `text` on body paragraph `para`, bytes `a..b`; its id.
 fn comment_on(d: &mut Document, para: usize, a: usize, b: usize, author: &str, text: &str, parent: Option<u32>) -> u32 {
     let part = d.add_part(wordcraft_doc::PartKind::Comment, vec![wordcraft_doc::para_block(Paragraph::with_text(text, CharProps::default()))]);

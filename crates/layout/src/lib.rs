@@ -1876,10 +1876,11 @@ impl NoteBox {
         cuts
     }
 
-    /// The least of the note that must stay with its reference: its first line (all of it if it
-    /// can't be split).
-    fn first_piece(&self) -> f32 {
-        self.cuts().first().copied().unwrap_or(self.h).min(self.h)
+    /// The least of the note that may stay with its reference when the note continues on the
+    /// next page: its first two lines, or all of it when it has no more. Word for Mac keeps body
+    /// text off the page sooner than leave a note's first line alone there (observed in 16.114).
+    fn min_piece(&self) -> f32 {
+        self.cuts().get(1).copied().unwrap_or(self.h).min(self.h)
     }
 
     /// Split the note at line bottom `cut`: the part above (`cut` tall) and the rest, moved up to
@@ -3878,6 +3879,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let mut mark_with_break = false;
         let mut new_notes: Vec<NoteBox> = Vec::new();
         let notes = para_notes(ctx.doc, p, &pl);
+        // A note referenced from a line placed on this page continues on the next one.
+        let mut splitting = false;
         while l1 < n {
             let Some(l) = pl.lines.get(l1) else { break };
             // Footnotes referenced on this line go to the bottom of this page.
@@ -3915,14 +3918,23 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             };
             let over = bottom + tail > limit + 0.01;
             // Notes too long for the rest of the page continue on the next one: the line still
-            // fits if the notes before its last one, and that one's first line, fit below it.
-            // The notes then take the rest of the page.
+            // fits if the notes before its last one, and that one's first two lines, fit below
+            // it. The notes then take the rest of the page. Once a note is split, the paragraph's
+            // next lines go on the page the same way, as in Word for Mac (observed in 16.114: the
+            // line after the reference stays and the note continues below it), so widow control
+            // doesn't pull the reference line over to the next page with them.
+            let first_piece_fits = |last: &NoteBox, before: f32| {
+                let sep = pb.seps.sep_h(pb.notes.first().is_some_and(|n| n.cont));
+                pb.body_floor().max(bottom) + sep + before + last.min_piece() + pb.seps.notice_h() <= pb.orig_bottom + 0.01
+            };
             let split = bottom > limit + 0.01
-                && line_notes.split_last().is_some_and(|(last, others)| {
-                    let before: f32 = pb.notes.iter().chain(&new_notes).chain(others).map(|n| n.h).sum();
-                    let sep = pb.seps.sep_h(pb.notes.first().is_some_and(|n| n.cont));
-                    pb.body_floor().max(bottom) + sep + before + last.first_piece() + pb.seps.notice_h() <= pb.orig_bottom + 0.01
-                });
+                && match line_notes.split_last() {
+                    Some((last, others)) => first_piece_fits(last, pb.notes.iter().chain(&new_notes).chain(others).map(|n| n.h).sum()),
+                    None if splitting => {
+                        new_notes.split_last().is_some_and(|(last, others)| first_piece_fits(last, pb.notes.iter().chain(others).map(|n| n.h).sum()))
+                    }
+                    None => false,
+                };
             if over && l1 > l0 && !split {
                 break;
             }
@@ -3949,9 +3961,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 }
                 break;
             }
-            if split {
-                break;
-            }
+            splitting |= split;
         }
         // Widow/orphan control (2-line minimum at either end).
         if forced_break.is_none() && l1 < n && pl.rp.widow_control && n >= 2 {
