@@ -648,6 +648,52 @@ impl StyleSheet {
             priority: Some(35),
             ..p_style()
         });
+        // Caption styles for figures, tables and equations. A report can give each kind its own
+        // alignment and type (a figure centred under the picture, a table title on the left above
+        // it, an equation number at the right) without restyling every caption by hand.
+        let caption_para = |align: Align, before: f32, after: f32| ParaProps {
+            align: Some(align),
+            space_before: Some(before),
+            space_after: Some(after),
+            line_spacing: Some(LineSpacing::Multiple(1.0)),
+            indent_left: Some(0.0),
+            indent_first: Some(0.0),
+            suppress_hyphens: Some(true),
+            ..para()
+        };
+        add(Style {
+            id: "FigureCaption".into(),
+            name: "Figure Caption".into(),
+            based_on: Some("Caption".into()),
+            next: Some("Normal".into()),
+            para: caption_para(Align::Center, 0.0, 6.0),
+            chr: CharProps { bold: Some(true), italic: Some(true), size: Some(12.0), color: color(Rgb(0, 0, 0)), ..chr() },
+            priority: Some(35),
+            quick: true,
+            ..p_style()
+        });
+        add(Style {
+            id: "TableCaption".into(),
+            name: "Table Caption".into(),
+            based_on: Some("Caption".into()),
+            next: Some("Normal".into()),
+            para: caption_para(Align::Left, 6.0, 0.0),
+            chr: CharProps { bold: Some(false), italic: Some(false), size: Some(13.0), color: color(Rgb(0, 0, 0)), ..chr() },
+            priority: Some(35),
+            quick: true,
+            ..p_style()
+        });
+        add(Style {
+            id: "EquationCaption".into(),
+            name: "Equation Caption".into(),
+            based_on: Some("Caption".into()),
+            next: Some("Normal".into()),
+            para: caption_para(Align::Right, 0.0, 6.0),
+            chr: CharProps { bold: Some(false), italic: Some(false), size: Some(13.0), color: color(Rgb(0, 0, 0)), ..chr() },
+            priority: Some(35),
+            quick: true,
+            ..p_style()
+        });
         for (id, name) in [("Header", "Header"), ("Footer", "Footer")] {
             add(Style {
                 id: id.into(),
