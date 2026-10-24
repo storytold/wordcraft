@@ -89,6 +89,18 @@ impl ObjectHit {
         let (u, v) = self.spin.unapply(cx, cy, x, y);
         Point::new(u, v)
     }
+    /// Page point (`x`, `y`) in the frame its text is laid out in: a turned text box's text is
+    /// drawn turned with it (unmirrored; see [`Placed::Spun`]), unless the box shows story
+    /// `straight`, the one being edited, which is drawn straight.
+    pub fn text_point(&self, x: f32, y: f32, straight: Option<u32>) -> Point {
+        let turn = wordcraft_geom::Spin::new(self.spin.deg, false, false);
+        if self.text_box.is_none() || self.text_box == straight || turn.is_identity() {
+            return Point::new(x, y);
+        }
+        let (cx, cy) = (self.rect.x + self.rect.w / 2.0, self.rect.y + self.rect.h / 2.0);
+        let (u, v) = turn.unapply(cx, cy, x, y);
+        Point::new(u, v)
+    }
     /// The page area it covers: its frame's rotated bounds.
     pub fn bounds(&self) -> Rect {
         self.spin.bounds(self.rect)
@@ -316,13 +328,44 @@ impl DocLayout {
         Some(Pos { story: best.story, path: best.path.clone(), off })
     }
 
+    /// [`DocLayout::hit`] for a point on the page as shown while text box story `straight` is
+    /// edited: in a turned text box drawn turned, the point is taken into the box's unturned
+    /// frame first, so a click lands on the character drawn under it.
+    pub fn hit_shown(&self, page: usize, x: f32, y: f32, story: StoryRef, straight: Option<u32>) -> Option<Pos> {
+        let pt = self.shown_point(page, x, y, story, straight);
+        self.hit(page, pt.x, pt.y, story)
+    }
+
+    /// The point (x, y) on `page` as shown while text box story `straight` is edited, taken into
+    /// the unturned frame of the turned text box showing `story` (as [`DocLayout::hit_shown`]
+    /// does); the point itself for the body or an unturned box.
+    pub fn shown_point(&self, page: usize, x: f32, y: f32, story: StoryRef, straight: Option<u32>) -> Point {
+        match (story, self.pages.get(page)) {
+            (StoryRef::Part(id), Some(p)) => {
+                let boxes: Vec<ObjectHit> = all_objects(p, page).filter(|o| o.text_box == Some(id)).collect();
+                // Linked boxes show one story: the one under the point, else the first.
+                let o = boxes.iter().find(|o| o.rect.contains(o.text_point(x, y, straight))).or(boxes.first());
+                o.map_or(Point::new(x, y), |o| o.text_point(x, y, straight))
+            }
+            _ => Point::new(x, y),
+        }
+    }
+
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
     /// headers/footers). A text box wins inside its area, except one behind the text, which only
     /// wins where no body text is.
     pub fn story_at(&self, page: usize, x: f32, y: f32) -> Option<StoryRef> {
+        self.story_at_shown(page, x, y, None)
+    }
+
+    /// [`DocLayout::story_at`] as the page is shown while text box story `straight` is edited (drawn
+    /// straight; other turned text boxes are found on their turned frames).
+    pub fn story_at_shown(&self, page: usize, x: f32, y: f32, straight: Option<u32>) -> Option<StoryRef> {
         let p = self.pages.get(page)?;
         let text_box = |behind: bool| {
-            objects(p, page).find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(Point::new(x, y))).and_then(|o| o.text_box)
+            objects(p, page)
+                .find(|o| o.behind() == behind && o.text_box.is_some() && o.rect.contains(o.text_point(x, y, straight)))
+                .and_then(|o| o.text_box)
         };
         text_box(false).map(StoryRef::Part).or_else(|| text_at(p, page, x, y)).or_else(|| text_box(true).map(StoryRef::Part))
     }
@@ -338,10 +381,17 @@ impl DocLayout {
     /// (as before); a header/footer part looks only at that part's objects in the page's
     /// header and footer, so a header picture placed over the body never steals body clicks.
     pub fn object_at_in(&self, page: usize, x: f32, y: f32, edge: f32, story: StoryRef) -> Option<ObjectHit> {
+        self.object_at_shown(page, x, y, edge, story, None)
+    }
+
+    /// [`DocLayout::object_at_in`] as the page is shown while text box story `straight` is edited:
+    /// that box is drawn straight, so it is grabbed on its straight frame (it keeps its real turn
+    /// for the move).
+    pub fn object_at_shown(&self, page: usize, x: f32, y: f32, edge: f32, story: StoryRef, straight: Option<u32>) -> Option<ObjectHit> {
         let p = self.pages.get(page)?;
         // A rotated object is grabbed on its rotated shape: the point is taken into its frame.
         let grabs = |o: &ObjectHit| {
-            let pt = o.unspin(x, y);
+            let pt = if o.text_box.is_some() && o.text_box == straight { Point::new(x, y) } else { o.unspin(x, y) };
             o.rect.expand(edge).contains(pt) && (o.text_box.is_none() || !o.rect.expand(-edge).contains(pt) || o.rect.w.min(o.rect.h) <= edge * 3.0)
         };
         let cands: Vec<ObjectHit> = match story {

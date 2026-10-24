@@ -1,6 +1,7 @@
 //! Text boxes' text direction, alignment and linked boxes (Shape Format › Text).
 
 use super::*;
+use crate::display::Draw;
 use wordcraft_doc::props::{TextVert, VAlign};
 use wordcraft_doc::{PartKind, Pos, TextBody, para_block};
 
@@ -179,6 +180,200 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
     assert!(shown >= 1);
 }
 
+/// A floating text box turned `deg` (flipped as given) showing "Rotated text box", in a body of a
+/// few paragraphs; its story id.
+fn turned_box(d: &mut Document, deg: f32, flip_h: bool, flip_v: bool) -> u32 {
+    let id = text_box(d, 0, "Rotated text box", 180.0, 60.0, TextBody::default());
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    for o in p.objects.iter_mut() {
+        if let InlineObject::Shape { float, .. } = o {
+            float.wrap = Wrap::Square;
+            float.rot = deg;
+            float.flip_h = flip_h;
+            float.flip_v = flip_v;
+        }
+    }
+    id
+}
+
+/// The spins of the turns around the box text's glyphs (empty: drawn upright), and how many glyph
+/// runs are drawn upright, outside any turn.
+fn glyph_turns(draws: &[Draw]) -> (Vec<Spin>, usize) {
+    fn walk(ds: &[Draw], spin: Option<Spin>, turns: &mut Vec<Spin>, plain: &mut usize) {
+        for d in ds {
+            match d {
+                Draw::Glyphs { text, .. } if text.contains("Rotated") || text.contains("box") => match spin {
+                    Some(s) => turns.push(s),
+                    None => *plain += 1,
+                },
+                Draw::Rotated { spin: s, items, .. } => walk(items, Some(*s), turns, plain),
+                Draw::Clip { items, .. } | Draw::Turned { items, .. } => walk(items, spin, turns, plain),
+                _ => {}
+            }
+        }
+    }
+    let (mut turns, mut plain) = (Vec::new(), 0);
+    walk(draws, None, &mut turns, &mut plain);
+    (turns, plain)
+}
+
+#[test]
+fn text_in_a_rotated_text_box_turns_with_the_box() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let l = lay(&d);
+    assert!(!lines(&l, id).is_empty(), "the box shows its text");
+    let draws = display::page_display(&d, &l.pages[0], &display::DisplayOptions::default());
+    let (turns, plain) = glyph_turns(&draws);
+    assert_eq!(plain, 0, "no glyph of the box's text is drawn upright");
+    assert!(!turns.is_empty() && turns.iter().all(|s| (s.deg - 30.0).abs() < 0.01), "the text turns 30° with the box: {turns:?}");
+}
+
+#[test]
+fn a_rotated_text_box_is_drawn_straight_while_its_text_is_edited() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let other = text_box(&mut d, 0, "Another one", 120.0, 40.0, TextBody::default());
+    if let Some(InlineObject::Shape { float, .. }) = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.last_mut() {
+        float.wrap = Wrap::Square;
+        float.rot = 30.0;
+        float.y = 300.0;
+    }
+    let l = lay(&d);
+    let opts = display::DisplayOptions { straight: Some(id), ..Default::default() };
+    let draws = display::page_display(&d, &l.pages[0], &opts);
+    let (turns, plain) = glyph_turns(&draws);
+    assert!(turns.iter().all(|s| s.is_identity()), "the edited box's text isn't turned: {turns:?}");
+    assert!(plain > 0, "it is drawn upright");
+    // The other turned box stays turned, frame and all.
+    fn turned_text(ds: &[Draw], spin: bool) -> Vec<String> {
+        ds.iter()
+            .flat_map(|d| match d {
+                Draw::Glyphs { text, .. } if spin => vec![text.clone()],
+                Draw::Rotated { items, .. } => turned_text(items, true),
+                Draw::Clip { items, .. } => turned_text(items, spin),
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+    let turned = turned_text(&draws, false).concat();
+    assert!(turned.contains("Another"), "the other box stays turned: {turned:?}");
+    let _ = other;
+}
+
+#[test]
+fn a_flipped_text_box_turns_its_text_but_does_not_mirror_it() {
+    let mut d = Document::from_text("Body words around it.");
+    turned_box(&mut d, 30.0, true, false);
+    let l = lay(&d);
+    let (turns, plain) = glyph_turns(&display::page_display(&d, &l.pages[0], &display::DisplayOptions::default()));
+    assert_eq!(plain, 0);
+    assert!(!turns.is_empty() && turns.iter().all(|s| (s.deg - 30.0).abs() < 0.01 && !s.flip_h && !s.flip_v), "{turns:?}");
+}
+
+#[test]
+fn a_click_on_a_rotated_box_lands_on_the_character_drawn_there() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let l = lay(&d);
+    let o = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    let story = StoryRef::Part(id);
+    let pos = |off| Pos { story, path: Path::top(0), off };
+    // A quarter into the "b" of "box" (byte 13), unturned, and where it is drawn: turned about
+    // the frame's centre.
+    let (a, b) = (l.caret_on(&pos(13), 0).unwrap(), l.caret_on(&pos(14), 0).unwrap());
+    let (ux, uy) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+    let (x, y) = Spin::new(30.0, false, false).apply(cx, cy, ux, uy);
+    assert_eq!(l.story_at_shown(0, x, y, None), Some(story), "the click is in the box");
+    assert_eq!(l.hit_shown(0, x, y, story, None).map(|p| p.off), Some(13), "the click starts editing on the character under it");
+    assert_ne!(l.hit(0, x, y, story).map(|p| p.off), Some(13), "(plain coordinates miss it)");
+    // While the box is edited it is drawn straight: the point is plain page coordinates.
+    assert_eq!(l.story_at_shown(0, ux, uy, Some(id)), Some(story));
+    assert_eq!(l.hit_shown(0, ux, uy, story, Some(id)).map(|p| p.off), Some(13));
+    // Hostile points stay safe.
+    let _ = l.hit_shown(0, f32::NAN, f32::INFINITY, story, None);
+    assert!(l.story_at_shown(99, 0.0, 0.0, None).is_none());
+}
+
+#[test]
+fn an_edited_turned_box_is_grabbed_on_the_straight_border_it_is_drawn_with() {
+    let mut d = Document::from_text("Body words around it.");
+    let id = turned_box(&mut d, 30.0, false, false);
+    let l = lay(&d);
+    let o = l.find_object(0, |o| o.text_box == Some(id)).unwrap();
+    // A point on the straight frame's top edge, 60 pt right of its middle: well off the turned
+    // border.
+    let (x, y) = (o.rect.x + o.rect.w / 2.0 + 60.0, o.rect.y);
+    let grabbed = |straight: Option<u32>| l.object_at_shown(0, x, y, 3.0, StoryRef::Body, straight).map(|o| o.text_box);
+    assert_eq!(grabbed(None), None, "not edited, the box is turned: no border there");
+    assert_eq!(grabbed(Some(id)), Some(Some(id)), "edited, it is drawn straight: its border is there");
+    let hit = l.object_at_shown(0, x, y, 3.0, StoryRef::Body, Some(id)).unwrap();
+    assert!((hit.spin.deg - 30.0).abs() < 0.01, "the grab keeps the box's real turn for the move");
+    // Inside the straight frame (off the border) is its text, not a grab.
+    let (cx, cy) = (o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0);
+    assert!(l.object_at_shown(0, cx, cy, 3.0, StoryRef::Body, Some(id)).is_none());
+}
+
+/// The PDF draws an item inside its turned text box from a page of just the box's open marker
+/// and the item: that gives the same draws as the whole page on screen (a shadow keeps its page
+/// direction in both).
+#[test]
+fn a_turned_box_shape_draws_the_same_alone_as_on_the_page() {
+    let mut d = Document::from_text("Body words around it.");
+    turned_box(&mut d, 30.0, false, false);
+    if let Some(InlineObject::Shape { effects, fill, stroke, .. }) = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().objects.first_mut() {
+        effects.shadow = Some(wordcraft_doc::effects::Shadow { distance: 8.0, angle: 0.0, ..Default::default() });
+        *fill = Some(wordcraft_doc::fill::Fill::solid(wordcraft_doc::props::Rgb(0, 0, 255)));
+        *stroke = Some(wordcraft_doc::props::Rgb::BLACK);
+    }
+    let l = lay(&d);
+    let page = &l.pages[0];
+    let opts = display::DisplayOptions::default();
+    // The shadow angle of the shape drawn inside a turn.
+    fn shadow(ds: &[Draw], turned: bool) -> Option<f32> {
+        ds.iter().find_map(|d| match d {
+            Draw::Shape { effects, .. } if turned => effects.shadow.map(|s| s.angle),
+            Draw::Rotated { items, .. } => shadow(items, true),
+            _ => None,
+        })
+    }
+    let open = page.items.iter().position(|it| matches!(it, Placed::Spun { open: true, .. })).expect("an open marker");
+    let shape = page.items.iter().skip(open).find(|it| matches!(it, Placed::Shape { .. })).expect("the box's shape").clone();
+    let one = Page { items: vec![page.items[open].clone(), shape], ..page.clone() };
+    let alone = shadow(&display::page_display(&d, &one, &opts), false).expect("drawn alone, turned, with its shadow");
+    let whole = shadow(&display::page_display(&d, page, &opts), false).expect("drawn on the page, turned, with its shadow");
+    assert_eq!(alone, whole, "the PDF's shadow matches the screen's");
+    assert!((alone - 330.0).abs() < 0.01, "cast 30° back inside the turn, so it falls to the right on the page: {alone}");
+}
+
+/// Whether any glyph run of the box text ("box" in it) in `ds` carries a hyperlink.
+fn box_text_links(ds: &[Draw]) -> Vec<String> {
+    ds.iter()
+        .flat_map(|d| match d {
+            Draw::Glyphs { text, link: Some(l), .. } if text.contains("box") => vec![l.clone()],
+            Draw::Rotated { items, .. } | Draw::Clip { items, .. } | Draw::Turned { items, .. } | Draw::Figure { draws: items, .. } => {
+                box_text_links(items)
+            }
+            _ => Vec::new(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_link_in_a_rotated_text_box_gets_no_link_area_but_an_upright_box_keeps_it() {
+    for (deg, linked) in [(30.0, false), (0.0, true)] {
+        let mut d = Document::from_text("Body words around it.");
+        let id = turned_box(&mut d, deg, false, false);
+        let story = StoryRef::Part(id);
+        let n = d.para(story, &Path::top(0)).unwrap().len();
+        let at = |off| Pos { story, path: Path::top(0), off };
+        d.format_range(&at(0), &at(n), &|c| c.link = Some("https://a.example/".into())).unwrap();
+        let l = lay(&d);
+        let links = box_text_links(&display::page_display(&d, &l.pages[0], &display::DisplayOptions::default()));
+        assert_eq!(!links.is_empty(), linked, "turn {deg}: {links:?}");
+    }
+}
 #[test]
 fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
     // #2791: an inline box with Resize shape to fit text, saved 10 cm tall around three short

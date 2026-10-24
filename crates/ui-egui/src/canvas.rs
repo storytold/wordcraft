@@ -72,6 +72,8 @@ pub struct CanvasState {
     /// The last primary press on the page (time, screen point, clicks in a row), to count
     /// double- and triple-presses as they go down (egui reports them on release).
     pub(crate) last_press: Option<(f64, Pos2, u8)>,
+    /// A press that entered a turned text box (drawn straight from then on): where it was.
+    turned_press: Option<Pos2>,
     /// The first press of the current run of presses moved header/footer editing into another
     /// header/footer; the double-click it starts doesn't select a word there.
     hf_press_switched: bool,
@@ -260,6 +262,7 @@ impl Default for CanvasState {
             dragging: false,
             column_drag: None,
             last_press: None,
+            turned_press: None,
             hf_press_switched: false,
             unit_drag: None,
             last_highlight: "yellow".into(),
@@ -776,12 +779,13 @@ pub fn sync_fit_zoom(app: &mut WordApp, scale: f32) {
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
-fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
+fn view_key(app: &WordApp, layout: &DocLayout, dim_body: bool, hidden: Option<&Pos>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
+    straight_box(app, layout).hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
@@ -815,6 +819,7 @@ fn page_content_key(page: &Page) -> u64 {
                     format!("{spin:?}").hash(&mut h)
                 }
                 Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
+                Placed::Spun { rect, spin, part, open } => format!("{rect:?}{spin:?}{part}{open}").hash(&mut h),
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }
@@ -1295,7 +1300,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // The object a move has taken off its page: the page is drawn again without it (or it
         // would be on the page where it was and under the pointer at once).
         let hidden = app.canvas.dragged_off_page();
-        let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let view = view_key(app, &layout, dim_body, hidden.as_ref().map(|(_, p)| p));
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());
             let Some(page) = layout.pages.get(i) else { continue };
@@ -1323,6 +1328,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let mut opts = page_render_options(app, dim_body);
                 // Only on the page it is on: the `Pos` can't match an object of another page.
                 opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
+                opts.display.straight = straight_box(app, &layout);
                 let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
                 let ci = page_image(&img);
                 match app.canvas.textures.get_mut(&i) {
@@ -1379,6 +1385,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         let mut opts = page_render_options(app, dim_body);
                         // Only on the page it is on: the `Pos` can't match an object of another page.
                         opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
+                        opts.display.straight = straight_box(app, &layout);
                         // The tiny subtraction avoids a 1px overshoot from round-tripping f32
                         // pixels through page points and render_area's ceil() conversion.
                         let img = wordcraft_render::render_area(
@@ -2673,7 +2680,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             let host = if is_box(story) { text_box_host(app, layout).unwrap_or(StoryRef::Body) } else { story };
             let in_hf = matches!(part_kind(app, host), Some(PartKind::Header | PartKind::Footer));
             let hf_box = if in_hf { layout.header_footer_text_box_at(page, x, y).map(StoryRef::Part) } else { None };
-            match (hf_box, layout.story_at(page, x, y)) {
+            match (hf_box, layout.story_at_shown(page, x, y, straight_box(app, layout))) {
                 (Some(b), _) => b,
                 (None, Some(s)) if is_note(s) => s,
                 (None, Some(s)) if is_box(s) && !in_hf => s,
@@ -2758,10 +2765,13 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             app.canvas.dragging = true;
             return;
         }
-        let Some(pos) = layout.hit(page, x, y, story) else { return };
+        // A turned text box not being edited is drawn turned: the click is taken into its frame.
+        let straight = straight_box(app, layout);
+        let Some(pos) = layout.hit_shown(page, x, y, story, straight) else { return };
         // Ctrl/⌘+click follows a hyperlink.
         if mods.command
-            && let Some(link) = link_under(app, layout, page, x, y, &pos)
+            && let shown = layout.shown_point(page, x, y, story, straight)
+            && let Some(link) = link_under(app, layout, page, shown.x, shown.y, &pos)
         {
             if let Some(name) = link.strip_prefix('#') {
                 // The caret goes to the bookmark's start, as in Word (Go To selects its text).
@@ -2786,6 +2796,10 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         }
         app.canvas.column_drag = None;
         let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+        // Clicking into a turned text box draws it straight under the pointer: holding still
+        // mustn't then select from where the pointer is on the straight box.
+        let now = app.session.layout();
+        app.canvas.turned_press = (straight_box(app, &now) != straight).then_some(p);
         // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
         // the button and dragging then extends by whole units (Word, #549).
         let unit = match clicks {
@@ -2834,7 +2848,13 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && app.canvas.turned_press.is_some_and(|p0| p0.distance(p) < ui.ctx().options(|o| o.input_options.max_click_dist))
+    {
+        // Pressed into a turned text box (now drawn straight) and not yet dragged: nothing to extend.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
+        app.canvas.turned_press = None;
         // Through the command, so from one table cell into another the drag takes whole cells
         // (Word); straight to the session, as the app's `run` would scroll on every frame.
         if let Some(pos) = layout.hit(page, x, y, story)
@@ -2849,6 +2869,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         // content under it, this hit-test keeps the selection growing (#688).
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
+        app.canvas.turned_press = None;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
@@ -2862,8 +2883,10 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         && !app.canvas.context_menu_open
         && !resp.secondary_clicked()
         && !ui.input(|i| i.pointer.secondary_down())
-        && let Some(pos) = layout.hit(page, x, y, story)
-        && let Some(link) = link_under(app, layout, page, x, y, &pos)
+        && let straight = straight_box(app, layout)
+        && let Some(pos) = layout.hit_shown(page, x, y, story, straight)
+        && let shown = layout.shown_point(page, x, y, story, straight)
+        && let Some(link) = link_under(app, layout, page, shown.x, shown.y, &pos)
     {
         let key = if cfg!(target_os = "macos") { "⌘" } else { "Ctrl" };
         let target = if is_generated_bookmark_link(&link) { tl!("Current Document").to_string() } else { link };
@@ -3267,6 +3290,25 @@ pub fn page_to_screen(app: &mut WordApp, page: usize, x: f32, y: f32) -> Option<
     let layout = app.session.layout();
     let scale = layout.pages.get(page).map_or(app.canvas.scale, |page_data| page_screen_scale(*r, page_data, app.canvas.scale));
     Some(to_screen(pos2(0.0, 0.0), *r, scale, x, y))
+}
+
+/// The text box story being edited: a turned text box showing it is drawn straight (Word).
+pub(crate) fn edited_box(app: &WordApp) -> Option<u32> {
+    match app.session.sel.focus.story {
+        StoryRef::Part(id) if in_text_box(app) => Some(id),
+        _ => None,
+    }
+}
+
+/// The edited text box story the page is drawn with straight: the caret's text box, when it is
+/// turned (an unturned one looks the same either way, so the page isn't redrawn for it).
+pub(crate) fn straight_box(app: &WordApp, layout: &DocLayout) -> Option<u32> {
+    edited_box(app).filter(|id| layout.text_box(*id, app.session.page_hint).is_some_and(|o| turned(&o)))
+}
+
+/// Whether object `o` is turned (flips alone don't turn a text box's text).
+pub(crate) fn turned(o: &wordcraft_layout::hit::ObjectHit) -> bool {
+    !wordcraft_geom::Spin::new(o.spin.deg, false, false).is_identity()
 }
 
 /// Whether the caret is in a text box's story.
@@ -3707,6 +3749,103 @@ mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+    /// Gap 10: a click on a turned text box's text edits it at the character under the pointer
+    /// and the box is drawn straight; a click in the body turns it back.
+    #[test]
+    fn entering_a_turned_text_box_straightens_it_and_leaving_turns_it_back() {
+        use crate::objects::tests::{on_screen, press, turned_box_window};
+        let (mut h, id) = turned_box_window();
+        let layout = h.state_mut().session.layout();
+        assert_eq!(straight_box(h.state(), &layout), None, "turned while the caret is in the body");
+        // A quarter into the character at byte 8 ("t" of "text"), where it is drawn: turned.
+        let o = layout.text_box(id, 0).expect("laid out");
+        let pos = |off| Pos { story: StoryRef::Part(id), path: wordcraft_doc::Path::top(0), off };
+        let (a, b) = (layout.caret_on(&pos(8), 0).unwrap(), layout.caret_on(&pos(9), 0).unwrap());
+        let (ux, uy) = (a.x + (b.x - a.x) * 0.25, a.top + a.height / 2.0);
+        let (x, y) = wordcraft_geom::Spin::new(30.0, false, false).apply(o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0, ux, uy);
+        let at = on_screen(&h, x, y);
+        press(&mut h, at, true);
+        press(&mut h, at, false);
+        assert_eq!(h.state().session.sel.focus, pos(8), "the click lands on the character drawn there");
+        let layout = h.state_mut().session.layout();
+        assert_eq!(straight_box(h.state(), &layout), Some(id), "edited, the box is drawn straight");
+        // Back in the body: turned again.
+        let c = layout.caret_on(&Pos::body(0, 2), 0).unwrap();
+        let at = on_screen(&h, c.x + 1.0, c.top + c.height / 2.0);
+        press(&mut h, at, true);
+        press(&mut h, at, false);
+        assert_eq!(h.state().session.sel.focus.story, StoryRef::Body);
+        let layout = h.state_mut().session.layout();
+        assert_eq!(straight_box(h.state(), &layout), None, "left, the box turns back");
+    }
+
+    /// Ctrl/⌘+click on a link in a turned text box (drawn turned, not edited) follows it: the
+    /// point is taken into the box's unturned frame before the link is looked up.
+    #[test]
+    fn ctrl_click_follows_a_link_in_a_turned_text_box() {
+        use crate::objects::tests::{on_screen, turned_box_window};
+        let (mut h, id) = turned_box_window();
+        let story = StoryRef::Part(id);
+        let pos = |off| Pos { story, path: wordcraft_doc::Path::top(0), off };
+        h.state_mut().run("select.range", json!({"anchor": pos(0), "focus": pos(16)})).unwrap();
+        h.state_mut().run("insert.link", json!({"url": "https://example.com/"})).unwrap();
+        h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+        for _ in 0..3 {
+            h.step();
+        }
+        let layout = h.state_mut().session.layout();
+        assert_eq!(straight_box(h.state(), &layout), None, "the box is drawn turned");
+        let o = layout.text_box(id, 0).expect("laid out");
+        let (a, b) = (layout.caret_on(&pos(8), 0).unwrap(), layout.caret_on(&pos(9), 0).unwrap());
+        let (ux, uy) = (a.x + (b.x - a.x) * 0.5, a.top + a.height / 2.0);
+        let (x, y) = wordcraft_geom::Spin::new(30.0, false, false).apply(o.rect.x + o.rect.w / 2.0, o.rect.y + o.rect.h / 2.0, ux, uy);
+        let at = on_screen(&h, x, y);
+        let mods = egui::Modifiers::COMMAND;
+        h.event(egui::Event::ModifiersChanged(mods));
+        h.event(egui::Event::PointerMoved(at));
+        h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: mods });
+        h.step();
+        // The app hands the link to the system in the same frame.
+        let opened: Vec<&str> = h
+            .output()
+            .platform_output
+            .commands
+            .iter()
+            .filter_map(|c| if let egui::OutputCommand::OpenUrl(u) = c { Some(u.url.as_str()) } else { None })
+            .collect();
+        assert_eq!(opened, ["https://example.com/"], "the link under the turned text is followed");
+    }
+
+    /// The page image is redrawn when the edited turned box changes (so it never shows a box
+    /// straight that should be turned, or turned while edited), and not for an unturned box.
+    #[test]
+    fn the_page_image_follows_the_edited_turned_box() {
+        use crate::objects::tests::{edit, turned_box_window};
+        let (mut h, id) = turned_box_window();
+        let key = |h: &crate::objects::tests::H| h.state().canvas.textures.get(&0).map(|(k, _)| *k).expect("page 1 is drawn");
+        let turned = key(&h);
+        edit(&mut h, id);
+        let straight = key(&h);
+        assert_ne!(straight, turned, "entering the turned box redraws the page");
+        h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(key(&h), turned, "leaving it redraws it turned");
+        // An unturned box: entering it changes nothing on the page.
+        let pos = h.state_mut().session.layout().text_box(id, 0).unwrap().pos();
+        let end = Pos { off: pos.off + 3, ..pos.clone() };
+        h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+        h.state_mut().run("arrange.rotation", json!({"degrees": 0})).unwrap();
+        h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+        for _ in 0..3 {
+            h.step();
+        }
+        let flat = key(&h);
+        edit(&mut h, id);
+        assert_eq!(key(&h), flat, "entering an unturned box keeps the page image");
+    }
+
     /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
     /// table; the document, its revision and undo history stay as they were, and without a
     /// request the page is the document's own again.
@@ -4043,7 +4182,7 @@ mod tests {
         let at = |a: &mut WordApp, off: usize| {
             let layout = a.session.layout();
             let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-            let view = view_key(a, false, None);
+            let view = view_key(a, &layout, false, None);
             caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
         };
         assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -7112,10 +7251,11 @@ mod tests {
     #[test]
     fn the_view_key_changes_when_a_drag_takes_an_object_off_the_page() {
         let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
-        let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
         let object = Pos::body(0, 5);
-        let hidden = view_key(&app, false, Some(&object));
-        assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-        assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+        let layout = app.session.layout();
+        let hidden = view_key(&app, &layout, false, Some(&object));
+        assert_ne!(hidden, view_key(&app, &layout, false, None), "the page without the dragged object is rendered again");
+        assert_eq!(hidden, view_key(&app, &layout, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
     }
 }
