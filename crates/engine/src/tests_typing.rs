@@ -568,6 +568,71 @@ fn a_capitalised_word_after_a_symbol_is_not_in_the_symbol_font() {
     assert_eq!(p.props_of_char(m).sym_font, None);
 }
 
+/// Whether every character of the body paragraph `i` is marked deleted.
+fn all_deleted(s: &Session, i: usize, text: &str) -> bool {
+    s.doc.para_at(&Pos::body(i, 0)).is_some_and(|p| p.text == text && p.run_ranges().all(|(_, c)| c.del.is_some()))
+}
+
+#[test]
+fn a_tracked_border_line_is_a_deletion_and_a_formatting_change() {
+    let bottom = |s: &Session, i| s.doc.para_at(&Pos::body(i, 0)).and_then(|p| p.props.borders).and_then(|b| b.bottom);
+    let tracked = |s: &Session, i| s.doc.para_at(&Pos::body(i, 0)).is_some_and(|p| p.props.fmt_change.is_some());
+    // Characters that were there before Track Changes was turned on are marked deleted.
+    let mut s = typed("Above\n---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\n");
+    assert!(bottom(&s, 0).is_some() && tracked(&s, 0));
+    assert!(all_deleted(&s, 1, "---"), "{:?}", paras(&s));
+    // Enter again after the deleted characters is a plain Enter.
+    typ(&mut s, "\n");
+    assert_eq!(texts(&s), ["above", "---", ""]);
+    assert_eq!(s.sel.focus, Pos::body(2, 0));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(texts(&s), ["above", "---"]);
+    assert!(bottom(&s, 0).is_none());
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "review.acceptAll", json!({}));
+    assert_eq!(texts(&s), ["above", ""]);
+    assert!(bottom(&s, 0).is_some());
+    // At the top of the document the border goes on the characters' paragraph, and typing
+    // continues in a new one.
+    let mut s = typed("---");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\nText");
+    assert!(bottom(&s, 0).is_some() && tracked(&s, 0));
+    assert!(all_deleted(&s, 0, "---"), "{:?}", paras(&s));
+    assert_eq!(texts(&s)[1], "text");
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(texts(&s), ["---"]);
+    assert!(bottom(&s, 0).is_none());
+    // Typed with Track Changes on, the characters go and the border is still a change.
+    let mut s = typed("");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "---\n");
+    assert_eq!(texts(&s), ["", ""]);
+    assert!(bottom(&s, 0).is_some() && tracked(&s, 0));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert!(bottom(&s, 0).is_none());
+}
+
+#[test]
+fn a_tracked_table_line_keeps_its_characters_as_a_deletion() {
+    let mut s = typed("+--+------+");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\nA");
+    let Some(wordcraft_doc::Block::Table(t)) = s.doc.body.first().map(|b| &**b) else { panic!("no table: {:?}", paras(&s)) };
+    assert_eq!(t.rows[0].cells[0].blocks[0].as_para().map(|p| p.text.as_str()), Some("A"), "the caret is in the first cell");
+    assert!(all_deleted(&s, 1, "+--+------+"), "{:?}", paras(&s));
+    // Enter after the deleted characters makes no second table.
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 11}}));
+    typ(&mut s, "\n");
+    assert_eq!(s.doc.body.iter().filter(|b| b.as_para().is_none()).count(), 1, "{:?}", paras(&s));
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "review.rejectAll", json!({}));
+    assert!(s.doc.body.get(1).and_then(|b| b.as_para()).is_some_and(|p| p.text == "+--+------+"));
+}
+
 #[test]
 fn border_line_autoformat() {
     let s = typed("Above\n---\nBelow");

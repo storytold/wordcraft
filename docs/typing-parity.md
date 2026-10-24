@@ -170,6 +170,14 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 - A field covers only its own result: text typed or pasted with the caret just after a field
   (a Zotero citation at the end of a paragraph, the caret put there with a click) goes after
   the field, not into its result (#898; `typing_after_a_citation_goes_outside_its_field`).
+- With Track Changes on, the border-line and table AutoFormats below mark the characters
+  deleted, so Reject All brings them back; characters the same author inserted are removed.
+  The border is a tracked formatting change, at the top of a story too
+  (`a_tracked_border_line_is_a_deletion_and_a_formatting_change`); the table is inserted
+  untracked, as Insert › Table inserts one
+  (`a_tracked_table_line_keeps_its_characters_as_a_deletion`). A line holding a tracked
+  deletion stays as it is, so Enter after the deleted characters is a plain Enter. This is
+  WordCraft's own rule.
 - Enter after `---` `===` `***` `___` `~~~` `###` → a bottom border on the paragraph above
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`). ⌘Z right after brings the
   characters back and removes the border; the Enter stays (one undo step) ¹

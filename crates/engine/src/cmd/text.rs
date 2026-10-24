@@ -233,7 +233,8 @@ enum EnterAutoFormat {
     Table(Vec<usize>),
 }
 
-/// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###".
+/// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###". A line
+/// holding a tracked deletion stays as it is.
 fn border_line(s: &Session, at: &Pos) -> Option<Border> {
     let para = s.doc.para_at(at)?;
     let text = para.text.as_str();
@@ -244,6 +245,7 @@ fn border_line(s: &Session, at: &Pos) -> Option<Border> {
         || text.len() < 3
         || !text.chars().all(|x| x == c)
         || para.props.numbering.is_some_and(|n| n.num != 0)
+        || para.run_ranges().any(|(_, r)| r.del.is_some())
     {
         return None;
     }
@@ -260,8 +262,8 @@ fn border_line(s: &Session, at: &Pos) -> Option<Border> {
 }
 
 /// AutoFormat tables: a body paragraph that is exactly "+---+-----+" (plus signs around runs
-/// of hyphens). Returns the hyphen count of each column; more columns than a table can hold
-/// leave the text alone.
+/// of hyphens). Returns the hyphen count of each column; more columns than a table can hold,
+/// or a line holding a tracked deletion, leave the text alone.
 fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
     let para = s.doc.para_at(at)?;
     let text = para.text.as_str();
@@ -270,6 +272,7 @@ fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
         || at.path.0.len() != 1
         || at.off != text.len()
         || para.props.numbering.is_some_and(|n| n.num != 0)
+        || para.run_ranges().any(|(_, c)| c.del.is_some())
     {
         return None;
     }
@@ -285,7 +288,8 @@ fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
 }
 
 /// Turn the border-line characters into a bottom border on the paragraph above (or this one
-/// at the top of a story).
+/// at the top of a story). With Track Changes on, the characters are marked deleted (or
+/// removed, when this author typed them) and the border is a formatting revision.
 fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Result<(), CmdError> {
     let set_bottom = |p: &mut wordcraft_doc::Paragraph| {
         let mut b = p.props.borders.unwrap_or_default();
@@ -295,31 +299,52 @@ fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Result<(), CmdE
     };
     let i = at.path.last();
     let prev = if i > 0 { Some(at.path.with_last(i - 1)) } else { None };
-    let cur = s.doc.para_mut(at.story, &at.path)?;
-    let len = cur.len();
-    cur.delete(0, len)?;
-    let start = Pos { off: 0, ..at.clone() };
+    let end = delete_typed_line(s, at)?;
     match prev.filter(|q| matches!(s.doc.block(at.story, q), Some(Block::Para(_)))) {
         Some(q) => {
             // The characters' paragraph becomes the one typing continues in.
             set_bottom(s.doc.para_mut(at.story, &q)?);
-            s.sel = Selection::caret(start);
+            s.sel = Selection::caret(end);
         }
         None => {
+            let before = s.doc.para(at.story, &at.path).map(|p| p.props.clone());
             set_bottom(s.doc.para_mut(at.story, &at.path)?);
-            let new = split_para(s, &start)?;
+            let new = split_para(s, &end)?;
             let p = s.doc.para_mut(new.story, &new.path)?;
             p.props.borders = None;
             p.touch();
+            // The split changes the block count, and the formatting comparison after the command
+            // skips a container whose block count changed, so the border is recorded here.
+            if s.doc.settings.track_changes
+                && s.prefs.markup.track_formatting
+                && let Some(before) = before.filter(|b| b.fmt_change.is_none())
+            {
+                let rev = super::new_revision(s, wordcraft_doc::RevisionKind::Format);
+                let p = s.doc.para_mut(at.story, &at.path)?;
+                p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.formatting());
+                p.touch();
+            }
             s.sel = Selection::caret(new);
         }
     }
     Ok(())
 }
 
+/// Delete the AutoFormat characters of the paragraph at `at`, tracked when Track Changes is on.
+/// Returns the end of what is left: the paragraph's end, after any characters marked deleted.
+fn delete_typed_line(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    let len = s.doc.para(at.story, &at.path).map_or(0, |p| p.len());
+    s.sel = Selection { anchor: Pos { off: 0, ..at.clone() }, focus: Pos { off: len, ..at.clone() } };
+    delete_selection(s)?;
+    let left = s.doc.para(at.story, &at.path).map_or(0, |p| p.len());
+    Ok(Pos { off: left, ..at.clone() })
+}
+
 /// Replace the "+---+" characters with a one-row table across the text width, each column as
 /// wide as its share of the hyphens; the emptied paragraph stays after the table and the caret
-/// goes into the first cell.
+/// goes into the first cell. With Track Changes on, the characters are marked deleted (or
+/// removed, when this author typed them); the table is inserted untracked, as Insert › Table
+/// inserts one.
 fn apply_table_line(s: &mut Session, at: &Pos, cols: &[usize]) -> Result<(), CmdError> {
     let total = cols.iter().sum::<usize>().max(1) as f32;
     let block = at.path.0.first().copied().unwrap_or(0) as usize;
@@ -334,9 +359,7 @@ fn apply_table_line(s: &mut Session, at: &Pos, cols: &[usize]) -> Result<(), Cmd
             c.props.width = Some(w);
         }
     }
-    let p = s.doc.para_mut(at.story, &at.path)?;
-    let len = p.len();
-    p.delete(0, len)?;
+    delete_typed_line(s, at)?;
     s.doc.insert_block(at.story, &at.path, Block::Table(t))?;
     let mut first = at.path.0.clone();
     first.extend([0, 0, 0]);
