@@ -39,7 +39,11 @@ pub fn parse_page_range(spec: &str, total: usize) -> Result<Vec<usize>, String> 
             continue;
         }
         let page = |t: &str| -> Result<usize, String> {
-            let n: usize = t.parse().map_err(|_| format!("`{item}` isn't a page or a range like 2-4"))?;
+            let not_a_page = || format!("`{item}` isn't a page or a range like 2-4");
+            if !t.bytes().all(|b| b.is_ascii_digit()) {
+                return Err(not_a_page());
+            }
+            let n: usize = t.parse().map_err(|_| not_a_page())?;
             if n == 0 || n > total {
                 return Err(format!("page {n} doesn't exist; the document has {total} page{}", if total == 1 { "" } else { "s" }));
             }
@@ -194,7 +198,7 @@ mod tests {
         assert_eq!(parse_page_range("5,1-2,2", 6), Ok(vec![0, 1, 4]), "document order, no repeats");
         assert_eq!(parse_page_range("4-", 6), Ok(vec![3, 4, 5]));
         assert_eq!(parse_page_range("-2", 6), Ok(vec![0, 1]));
-        for bad in ["", " , ", "0", "7", "3-1", "a", "1-2-3", "99999999999999999999999", "-", "1..3", &"1,".repeat(400)] {
+        for bad in ["", " , ", "0", "7", "3-1", "a", "1-2-3", "99999999999999999999999", "-", "1..3", "+3", "1-+3", "+2-+4", &"1,".repeat(400)] {
             assert!(parse_page_range(bad, 6).is_err(), "`{bad}` is refused");
         }
         assert!(parse_page_range("1", 0).is_err());
