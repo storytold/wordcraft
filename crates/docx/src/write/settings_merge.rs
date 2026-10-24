@@ -9,8 +9,8 @@
 //! byte for byte; owned children come from the generated part (or go, when the model turned
 //! them off); owned children the original lacks are inserted at their CT_Settings position; in
 //! `w:compat` only the `compatibilityMode` setting is replaced. Kept children that refer to a
-//! relationship (`r:id`, e.g. a mail merge data source) are dropped: their relationships aren't
-//! carried. Anything unexpected returns `None`, and the generated part is written as before.
+//! relationship are dropped unless owned: mail merge is regenerated with remapped external
+//! sources by `mail_merge`. Anything unexpected returns `None`, and the generated part is written as before.
 
 /// Children of `w:settings` the model writes (`super::settings_xml`).
 const OWNED: &[&str] = &[
@@ -19,6 +19,7 @@ const OWNED: &[&str] = &[
     "w:displayBackgroundShape",
     "w:mirrorMargins",
     "w:attachedTemplate",
+    "w:mailMerge",
     "w:linkStyles",
     "w:trackRevisions",
     "w:doNotTrackMoves",
@@ -281,7 +282,36 @@ pub fn merge(original: &[u8], generated: &[u8]) -> Option<Vec<u8>> {
             return None;
         }
     }
-    let g_text = |k: &Child| gen_s.get(k.start..k.end).map(str::to_string);
+    let mut reader = quick_xml::NsReader::from_str(root_tag);
+    let strict = loop {
+        let (namespace, event) = reader.read_resolved_event().ok()?;
+        match event {
+            quick_xml::events::Event::Start(_) => {
+                break matches!(namespace, quick_xml::name::ResolveResult::Bound(ns) if ns.as_ref() == b"http://purl.oclc.org/ooxml/wordprocessingml/main");
+            }
+            quick_xml::events::Event::Eof => return None,
+            _ => {}
+        }
+    };
+    let g_text = |k: &Child| {
+        let text = gen_s.get(k.start..k.end)?;
+        // Only this generated child declares its own canonical aliases. Match the retained
+        // settings root; a fallback to the generated part keeps its Transitional declarations.
+        if strict && k.name == "w:mailMerge" {
+            Some(
+                text.replace(
+                    r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#,
+                    r#"xmlns:w="http://purl.oclc.org/ooxml/wordprocessingml/main""#,
+                )
+                .replace(
+                    r#"xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#,
+                    r#"xmlns:r="http://purl.oclc.org/ooxml/officeDocument/relationships""#,
+                ),
+            )
+        } else {
+            Some(text.to_string())
+        }
+    };
     let mut used = vec![false; g_kids.len()];
     let mark = |name: &str, used: &mut Vec<bool>| -> Option<usize> {
         let gi = g_kids.iter().enumerate().position(|(i, g)| g.name == name && !used.get(i).copied().unwrap_or(true))?;
