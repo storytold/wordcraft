@@ -849,6 +849,26 @@ fn hidden_separators_with_automatic_hyphenation_lay_out_in_linear_time() {
     assert!(ratio < 24.0, "8x the text took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
 }
 
+/// n one-line paragraphs, each starting a page.
+fn page_break_paragraphs(n: usize) -> Document {
+    let mut d = Document::from_text(&"hello\n".repeat(n));
+    for i in 0..n {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
+    }
+    d
+}
+
+/// A document of many paragraphs lays out in linear time. Every page asks the layout for the
+/// section properties (for the wrap areas of the headers and footers), and that used to rebuild
+/// the section list by walking the whole body, so a document of n paragraphs paid n body-length
+/// scans: a two-megabyte file took half a minute before the first page was drawn.
+#[test]
+fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
+    let (t1, tk, ratio) = layout_time_ratio(page_break_paragraphs, 2_500, &LayoutOptions::default());
+    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "8x the paragraphs took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
 #[test]
 fn many_hidden_float_anchors_lay_out_in_linear_time() {
     // n square-wrapped shapes, each anchored in its own hidden run (bold alternating, so runs do not

@@ -700,6 +700,11 @@ enum Pass {
 /// Walk state while paginating.
 struct Ctx<'a> {
     doc: &'a Document,
+    /// The body's sections ([`Document::sections`]) for one pass, with the block index each
+    /// starts after: header and footer wrap work asks for them per page, and rebuilding the
+    /// list walked the whole body every time, so a long document paid a body-length scan per
+    /// page. The document does not change during a pass.
+    sections: Vec<(usize, &'a SectionProps)>,
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
     counters: Counters,
@@ -2301,6 +2306,7 @@ fn layout_pass(
     });
     let mut ctx = Ctx {
         doc,
+        sections: doc.sections(),
         cache,
         opts,
         hide_deleted: opts.hides_deleted(StoryRef::Body),
@@ -3391,12 +3397,11 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     }
     ctx.footer_wraps.insert(key, Vec::new());
     let doc = ctx.doc;
-    let sections = doc.sections();
-    let Some((_, sect)) = sections.get(page.section) else { return Vec::new() };
+    let Some((_, sect)) = ctx.sections.get(page.section).copied() else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
     }
-    let set = linked(&sections, page.section, |s| s.footers);
+    let set = linked(&ctx.sections, page.section, |s| s.footers);
     let id = if sect.title_page && first {
         set.first
     } else if doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
@@ -3408,7 +3413,7 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     let Some(part) = doc.parts.get(&id) else { return Vec::new() };
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
-    let base = defining_width(&sections, page.section, |s| s.footers, Some(id));
+    let base = defining_width(&ctx.sections, page.section, |s| s.footers, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
@@ -4510,12 +4515,11 @@ fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     if let Some(areas) = ctx.header_tables.get(&key) {
         return areas.clone();
     }
-    let sections = ctx.doc.sections();
-    let Some((_, sect)) = sections.get(page.section) else { return Vec::new() };
+    let Some((_, sect)) = ctx.sections.get(page.section).copied() else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
     }
-    let set = linked(&sections, page.section, |s| s.headers);
+    let set = linked(&ctx.sections, page.section, |s| s.headers);
     let id = if sect.title_page && first {
         set.first
     } else if ctx.doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
@@ -4528,7 +4532,7 @@ fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
     let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
-    let base = defining_width(&sections, page.section, |s| s.headers, Some(id));
+    let base = defining_width(&ctx.sections, page.section, |s| s.headers, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
