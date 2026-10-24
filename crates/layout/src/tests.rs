@@ -5009,6 +5009,79 @@ fn floats_in_headers_and_table_cells_are_drawn() {
     assert!(c[0].x > 72.0 && c[0].x < 72.0 + 234.0, "inside the first cell: {:?}", c[0]);
 }
 
+/// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.
+#[test]
+fn box_float_origins_respect_vertical_anchor_with_space_before() {
+    use wordcraft_doc::{
+        PartKind,
+        para::{Anchor, Float, Wrap},
+    };
+    for context in ["header", "footer", "cell", "textbox"] {
+        for anchor in [
+            Anchor::Paragraph,
+            Anchor::Line,
+            Anchor::Page,
+            Anchor::Margin,
+            Anchor::TopMargin,
+            Anchor::BottomMargin,
+            Anchor::InsideMargin,
+            Anchor::OutsideMargin,
+        ] {
+            if matches!(context, "header" | "footer") && !matches!(anchor, Anchor::Paragraph | Anchor::Line) {
+                continue;
+            }
+            let gap = |before| {
+                let mut d = Document::from_text("Body");
+                let mut p = wordcraft_doc::Paragraph::with_text("Anchor", Default::default());
+                p.props.space_before = Some(before);
+                let float = Float { wrap: Wrap::BehindText, v_rel: anchor, y: 7.0, ..Default::default() };
+                p.insert_object(0, rect_shape(37.0, 9.0, float), &Default::default()).unwrap();
+                let story = match context {
+                    "header" | "footer" => {
+                        let kind = if context == "header" { PartKind::Header } else { PartKind::Footer };
+                        let id = d.add_part(kind, vec![wordcraft_doc::para_block(p)]);
+                        if context == "header" {
+                            d.last_section.headers.default = Some(id);
+                        } else {
+                            d.last_section.footers.default = Some(id);
+                        }
+                        StoryRef::Part(id)
+                    }
+                    "cell" => {
+                        let mut t = Table::new(1, 1, 468.0);
+                        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+                        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+                        StoryRef::Body
+                    }
+                    _ => {
+                        let id = text_box(&mut d, 0, "", 200.0, 100.0, page_float(100.0, 200.0));
+                        d.parts.get_mut(&id).unwrap().blocks = vec![wordcraft_doc::para_block(p)];
+                        StoryRef::Part(id)
+                    }
+                };
+                let l = lay(&d);
+                let page = &l.pages[0];
+                let items = match context {
+                    "header" => &page.header,
+                    "footer" => &page.footer,
+                    _ => &page.items,
+                };
+                let y = items
+                    .iter()
+                    .find_map(|i| match i {
+                        Placed::Lines { story: s, y, path, .. } if *s == story && (context != "cell" || path.0.len() > 1) => Some(*y),
+                        _ => None,
+                    })
+                    .unwrap();
+                let r = shapes(items).into_iter().find(|r| (r.w - 37.0).abs() < 0.01).unwrap();
+                r.y - y
+            };
+            let expected = if anchor == Anchor::Paragraph { -24.0 } else { 0.0 };
+            assert!((gap(24.0) - gap(0.0) - expected).abs() < 0.01, "{context} {anchor:?}: float/text gap must change by {expected}");
+        }
+    }
+}
+
 /// Inside a text box whose shape style gives its text a colour (`a:fontRef`, typically white on
 /// the accent fill), automatic text takes that colour instead of black; text with a colour of
 /// its own keeps it (Word, observed with synthetic documents).

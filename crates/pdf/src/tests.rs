@@ -6,6 +6,49 @@ use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Wate
 
 use crate::*;
 
+/// Verify preset lines and connectors emit the requested PDF line-cap operator.
+#[test]
+fn shape_line_caps_reach_pdf_content() {
+    use wordcraft_doc::{
+        connector::{LineCap as ShapeCap, ShapeExtra},
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (cap, operator) in [(ShapeCap::Flat, None), (ShapeCap::Round, Some("1 J")), (ShapeCap::Square, Some("2 J"))] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 40.0,
+                h: 0.0,
+                fill: None,
+                stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+                stroke_width: 10.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { cap, ..Default::default() },
+            };
+            let mut p = Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![para_block(p)];
+            let bytes = export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            // Content operators can share a line: PDF separates them by whitespace.
+            let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+            let has_operator = |op: &str| {
+                let expected: Vec<_> = op.split_ascii_whitespace().collect();
+                tokens.windows(2).any(|pair| pair == expected.as_slice())
+            };
+            if let Some(op) = operator {
+                assert!(has_operator(op), "{kind:?} {cap:?}: missing PDF cap operator {op}");
+            } else {
+                assert!(!has_operator("1 J") && !has_operator("2 J"), "flat cap must remain butt");
+            }
+        }
+    }
+}
+
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]));
     let mut buf = Vec::new();

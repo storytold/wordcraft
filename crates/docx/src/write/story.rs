@@ -1097,7 +1097,8 @@ impl Writer<'_> {
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));
-                let ln: &[(&str, &str)] = if ink { &[("w", width.as_str()), ("cap", "rnd")] } else { &[("w", width.as_str())] };
+                let cap = if ink { "rnd" } else { extra.cap.ooxml() };
+                let ln: &[(&str, &str)] = if ink || !extra.cap.is_flat() { &[("w", width.as_str()), ("cap", cap)] } else { &[("w", width.as_str())] };
                 w.open("a:ln", ln);
                 // An outline gradient read from a file, while the outline keeps its colour (#1500).
                 let grad = extra.outline_fill.as_ref().filter(|f| !ink && f.main_color() == *c);
@@ -1122,7 +1123,9 @@ impl Writer<'_> {
                 w.close("a:ln");
             }
             None => {
-                w.open("a:ln", &[]);
+                let cap = extra.cap.ooxml();
+                let ln: &[(&str, &str)] = if extra.cap.is_flat() { &[] } else { &[("cap", cap)] };
+                w.open("a:ln", ln);
                 w.empty("a:noFill", &[]);
                 line_dash(w, &extra.dash);
                 w.close("a:ln");

@@ -3687,6 +3687,50 @@ fn shape_dashes_import_and_save() {
     }
 }
 
+/// Preserve explicit caps, default missing/unknown caps, and retain caps on unpainted outlines.
+#[test]
+fn shape_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in
+        [("", LineCap::Flat), ("flat", LineCap::Flat), ("sq", LineCap::Square), ("rnd", LineCap::Round), ("unknown", LineCap::Flat)]
+    {
+        for outline in [true, false] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" cap="{attr}""#) };
+            let fill = if outline { r#"<a:solidFill><a:srgbClr val="C00000"/></a:solidFill>"# } else { "<a:noFill/>" };
+            let sppr = format!(r#"<a:prstGeom prst="line"/><a:noFill/><a:ln w="12700"{cap}>{fill}</a:ln>"#);
+            let body = anchored_wsp("Cap probe", 889000, 0, &sppr, "", "<wps:cNvSpPr/>");
+            let d = read_body(&format!("<w:p>{body}</w:p>"));
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, outline={outline}");
+            }
+        }
+    }
+}
+
+/// Preserve direct and shapetype-inherited VML end caps through a DrawingML save.
+#[test]
+fn vml_line_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in [("", LineCap::Flat), ("flat", LineCap::Flat), ("square", LineCap::Square), ("round", LineCap::Round)] {
+        for inherited in [false, true] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" endcap="{attr}""#) };
+            let stroke = format!("<v:stroke{cap}/>");
+            let (base, own) = if inherited { (stroke.as_str(), "") } else { ("", stroke.as_str()) };
+            let body = format!(
+                r##"<w:p><w:r><w:pict><v:shapetype id="probe" o:spt="32">{base}</v:shapetype><v:shape type="#probe" style="width:40pt;height:1pt" strokecolor="#ff0000">{own}</v:shape></w:pict></w:r></w:p>"##
+            );
+            let d = read_body(&body);
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, inherited={inherited}");
+            }
+        }
+    }
+}
+
 #[test]
 fn bookmark_end_name_and_id_trim() {
     let body = r#"<w:p>

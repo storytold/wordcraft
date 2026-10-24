@@ -1274,6 +1274,9 @@ fn layout_box(
                 } else if i > 0 && before > 0.0 && prev_after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
                     before = (before - prev_after).max(0.0);
                 }
+                // Paragraph-relative floats start above the effective space before, as in the
+                // body path. Keep text and wrap exclusions relative to the text's actual top.
+                let para_top = y;
                 y += if i == 0 { before } else { before.max(0.0) };
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
@@ -1288,10 +1291,13 @@ fn layout_box(
                     }
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
-                        pinned.insert(oi, float_rect(Some(page), (0.0, width), y, w, h, float));
+                        pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
                         continue;
                     }
-                    let r = float_rect(frame, (0.0, width), y, w, h, float);
+                    // Only paragraph-relative placement excludes space-before. Line anchors
+                    // and frameless page/margin fallbacks retain the text-top origin.
+                    let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
+                    let r = float_rect(frame, (0.0, width), float_y, w, h, float);
                     let outline = ctx.wrap_outline(o);
                     excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
                     floats.insert(oi, r);
@@ -1317,7 +1323,7 @@ fn layout_box(
                 prev_end = push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
+                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
                     let (back, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
                     for placed in back.iter().chain(front.iter()) {
                         if let Placed::Object { rect, spin, wrap, .. } = placed

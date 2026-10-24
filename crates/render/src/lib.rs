@@ -789,6 +789,10 @@ fn wave_path(x0: f64, y0: f64, x1: f64, y1: f64, amp: f64) -> BezPath {
     p
 }
 
+/// Rasterize one display item with `view` mapping its current point coordinates to pixels.
+/// `visible` is a culling area in those point coordinates; nested clips intersect it and turns
+/// transform it into the child's coordinates. Shape and path strokes apply their stored caps,
+/// while ink uses its tool's round ends and joins.
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
         Draw::Figure { draws, .. } => {
@@ -978,7 +982,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.pop_layer();
             }
         }
-        Draw::Path { segs, fill, stroke, stroke_width, dash } => {
+        Draw::Path { segs, fill, stroke, stroke_width, dash, cap } => {
             let path = wordcraft_layout::display::seg_path(segs);
             if path.elements().is_empty() {
                 return;
@@ -992,7 +996,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 // Width 0 (or none) is a hairline.
                 let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
                 ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(kurbo::Stroke::new(w as f64).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
+                ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(screen_cap(*cap)).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
                 ctx.stroke_path(&path);
             }
         }
@@ -1026,7 +1030,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
             ctx.stroke_path(&path);
         }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash } => {
+        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash, cap } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r, *corner);
             ctx.set_transform(view);
@@ -1082,6 +1086,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_paint(color(opts.ink(*s), 1.0));
                 ctx.set_stroke(
                     kurbo::Stroke::new(if stroke_width.is_nan() { 0.25 } else { stroke_width.clamp(0.25, 200.0) } as f64)
+                        .with_caps(screen_cap(*cap))
                         .with_dashes(0.0, dash.iter().map(|v| f64::from(*v))),
                 );
                 ctx.stroke_path(&path);
@@ -1137,6 +1142,15 @@ fn ink_path(pts: &[(f32, f32)]) -> Option<BezPath> {
         p.line_to(only);
     }
     Some(p)
+}
+
+/// Map the document cap to the raster backend without changing ink-tool stroke styles.
+fn screen_cap(cap: wordcraft_doc::connector::LineCap) -> kurbo::Cap {
+    match cap {
+        wordcraft_doc::connector::LineCap::Flat => kurbo::Cap::Butt,
+        wordcraft_doc::connector::LineCap::Square => kurbo::Cap::Square,
+        wordcraft_doc::connector::LineCap::Round => kurbo::Cap::Round,
+    }
 }
 
 /// Outline of a basic shape in a rectangle; `corner` is a rounded rectangle's
@@ -1354,6 +1368,7 @@ mod tests {
             effects: Default::default(),
             corner: None,
             dash: Vec::new(),
+            cap: Default::default(),
         };
         let at = |x: f32, y: f32| {
             let mut bg = [255.0; 3];
@@ -2237,6 +2252,43 @@ mod tests {
         assert!(solid.pixel(422, 400)[1] < 80);
         assert_eq!(dashed.pixel(422, 400), [255, 255, 255, 255]);
         assert!(dashed.pixel(406, 400)[1] < 80);
+    }
+
+    /// Distinguish flat, square and round endpoints for both preset lines and connector paths.
+    #[test]
+    fn shape_line_caps_reach_the_screen() {
+        use wordcraft_doc::{
+            connector::{LineCap, ShapeExtra},
+            para::{Anchor, Float, InlineObject, Wrap},
+        };
+        // A preset line uses Draw::Shape; a straight connector uses Draw::Path.
+        for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+            for cap in [LineCap::Flat, LineCap::Square, LineCap::Round] {
+                let shape = InlineObject::Shape {
+                    kind,
+                    w: 40.0,
+                    h: 0.0,
+                    fill: None,
+                    stroke: Some(Rgb::BLACK),
+                    stroke_width: 10.0,
+                    float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                    story: None,
+                    freeform: None,
+                    effects: Default::default(),
+                    extra: ShapeExtra { cap, ..Default::default() },
+                };
+                let mut p = wordcraft_doc::Paragraph::new();
+                p.insert_object(0, shape, &Default::default()).unwrap();
+                let mut d = Document::new();
+                d.body = vec![wordcraft_doc::para_block(p)];
+                let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+                let image = render_page(&d, &l.pages[0], 4.0, &RenderOptions::default());
+                let painted = |x, y| image.pixel(x, y)[0] < 80;
+                assert!(painted(404, 400), "line interior: {kind:?} {cap:?}");
+                assert_eq!(painted(388, 400), cap != LineCap::Flat, "past the endpoint: {kind:?} {cap:?}");
+                assert_eq!(painted(384, 384), cap == LineCap::Square, "square corner: {kind:?} {cap:?}");
+            }
+        }
     }
 
     #[test]
