@@ -3926,10 +3926,15 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             if over && l1 > l0 && !split {
                 break;
             }
-            // A line holding nothing but a page or column break stays at the bottom of the page
-            // even when it doesn't fit: it only ends the page, and moving it would leave a blank
-            // page behind it (Word does the same).
+            // A line holding nothing but a page or column break, with text after it in the
+            // paragraph, stays at the bottom of the page even when it doesn't fit: it only ends
+            // the page, and moving it would leave a blank page behind it (Word does the same).
+            // Measured in Word: a paragraph of only a page break is an ordinary line, and when
+            // its mark's text doesn't fit it goes to the next page, blank page and all.
+            let mark_only_after =
+                l.end == LineEnd::PageBreak && pl.lines.get(l1 + 1..).is_some_and(|rest| rest.iter().all(|m| only_markers(p, m.start..m.stop)));
             let only_break = matches!(l.end, LineEnd::PageBreak | LineEnd::ColumnBreak)
+                && !mark_only_after
                 && p.text
                     .get(l.start..l.stop)
                     .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
