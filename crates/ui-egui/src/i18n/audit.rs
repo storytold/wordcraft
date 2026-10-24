@@ -408,6 +408,7 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
                 | "MLA"
                 | "SIST02"
                 | "Turabian"
+                | "F4 (Folio)"
         )
     };
     // A command called with parameters it can't use (`bad parameters: \`path\` (string) is
