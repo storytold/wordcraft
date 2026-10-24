@@ -79,6 +79,8 @@ pub static LANGUAGES: [LangInfo; 27] = [
     LangInfo { code: "ko", prefer_hans: false, editing_lang: None },
     LangInfo { code: "uk", prefer_hans: false, editing_lang: None },
     // Spanish, neutral across Spain and Latin America; `es-ES`, `es-MX`, `es-419` … resolve here.
+    // No fixed editing language: new documents are written in the region's Spanish
+    // (`Session::region_spanish`), like English.
     LangInfo { code: "es", prefer_hans: false, editing_lang: None },
     // Brazilian Portuguese; `pt-BR` and `pt-BR-*` resolve here. Plain `pt` and `pt-PT` have no
     // catalog yet (the European vocabulary differs), so they stay in English ([`lang_from_tag`]).

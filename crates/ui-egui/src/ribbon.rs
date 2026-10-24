@@ -774,7 +774,7 @@ fn mi_text(ui: &mut Ui, app: &mut WordApp, text: &str, id: &str, params: Value) 
 }
 
 /// The proofing languages the Language menu offers: tag and English name (translated when drawn).
-pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 12] = [
+pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 16] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
     ("en-AU", "English (Australia)"),
@@ -787,6 +787,10 @@ pub(crate) const PROOFING_LANGUAGES: [(&str, &str); 12] = [
     ("ru-RU", "Russian"),
     ("cs-CZ", "Czech"),
     ("id-ID", "Indonesian"),
+    ("es-ES", "Spanish (Spain)"),
+    ("es-MX", "Spanish (Mexico)"),
+    ("es-419", "Spanish (Latin America)"),
+    ("es-UY", "Spanish (Uruguay)"),
 ];
 
 /// The English name of a proofing language tag, as the status bar shows it (no tag: WordCraft's
@@ -827,6 +831,7 @@ pub(crate) fn language_name(tag: Option<&str>) -> String {
             wordcraft_engine::proof::ProofLang::Ru => "Russian".into(),
             wordcraft_engine::proof::ProofLang::Cs => "Czech".into(),
             wordcraft_engine::proof::ProofLang::Id => "Indonesian".into(),
+            wordcraft_engine::proof::ProofLang::Es => "Spanish (Spain)".into(),
             wordcraft_engine::proof::ProofLang::De => "German (Germany)".into(),
             wordcraft_engine::proof::ProofLang::En if tag.eq_ignore_ascii_case("en") => "English (United States)".into(),
             _ => tag.to_string(),
@@ -966,6 +971,7 @@ pub(crate) fn language_menu(ui: &mut Ui, app: &mut WordApp) {
             || (tag == "tr-TR" && current.eq_ignore_ascii_case("tr"))
             || (tag == "cs-CZ" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Cs)
             || (tag == "id-ID" && wordcraft_engine::proof::ProofLang::from_tag(Some(&current)) == wordcraft_engine::proof::ProofLang::Id)
+            || (tag == "es-ES" && current.eq_ignore_ascii_case("es"))
             || (tag == "en-US" && current.eq_ignore_ascii_case("en"))
     };
     let checks = language_checks(&current, listed);
@@ -3324,6 +3330,26 @@ mod tests {
         }
     }
 
+    /// #3360, #3553: the Spanishes WordCraft proofs are in the menu, checked by their tags; other
+    /// Spanish regions show by name, and a bare `es` is Spain's.
+    #[test]
+    fn spanish_varieties_are_in_the_language_menu() {
+        for (tag, name) in
+            [("es-ES", "Spanish (Spain)"), ("es-MX", "Spanish (Mexico)"), ("es-419", "Spanish (Latin America)"), ("es-UY", "Spanish (Uruguay)")]
+        {
+            assert!(PROOFING_LANGUAGES.contains(&(tag, name)), "{tag}");
+            assert!(crate::dialogs_layout::LANGUAGES.contains(&(tag, name)), "{tag}");
+            assert_eq!(language_name(Some(tag)), name);
+            let c = language_checks(&tag.to_ascii_lowercase(), |t| t.eq_ignore_ascii_case(tag));
+            assert_eq!((c.extra, c.listed), (None, PROOFING_LANGUAGES.map(|(t, _)| t == tag)), "{tag}");
+        }
+        assert_eq!(language_name(Some("es")), "Spanish (Spain)");
+        assert_eq!(language_name(Some("es-AR")), "Spanish (Argentina)");
+        let c = language_checks("es-AR", |t| t.eq_ignore_ascii_case("es-AR"));
+        assert_eq!(c.extra.as_deref(), Some("Spanish (Argentina)"));
+        assert!(!c.listed.contains(&true));
+    }
+
     #[test]
     fn czech_has_a_name_in_the_language_menu() {
         assert!(PROOFING_LANGUAGES.contains(&("cs-CZ", "Czech")));
@@ -3603,7 +3629,7 @@ mod tests {
         let item = |label: &'static str| By::new().label_contains(label);
         let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Bonjour")), crate::Services::default());
         let mut h =
-            egui_kittest::Harness::builder().with_size(vec2(400.0, 400.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
+            egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
         h.run();
         assert!(h.query(item("French (France)")).is_none(), "the short list only, on an English document");
         assert!(!h.get(item("Set Proofing Language…")).accesskit_node().is_disabled(), "never greyed out on a fresh document");
@@ -3632,7 +3658,7 @@ mod tests {
         let mut app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Colour")), crate::Services::default());
         app.run("select.all", json!({})).unwrap();
         let mut h =
-            egui_kittest::Harness::builder().with_size(vec2(400.0, 500.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
+            egui_kittest::Harness::builder().with_size(vec2(400.0, 600.0)).build_ui_state(|ui, app: &mut WordApp| language_menu(ui, app), app);
         h.run();
         for (tag, name) in PROOFING_LANGUAGES {
             h.get(By::new().label_contains(name)).click();

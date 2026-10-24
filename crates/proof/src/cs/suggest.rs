@@ -6,7 +6,8 @@ use std::collections::{HashMap, HashSet};
 
 use crate::affix::{AffixDict, Casing, capitalize, casing};
 
-const MAX_LETTERS: usize = 40;
+/// Longest word suggestions are looked for, in letters (Spanish shares the bound).
+pub(crate) const MAX_LETTERS: usize = 40;
 const MAX_MAP_CHANGES: usize = 4;
 const MAX_MAP_VARIANTS: usize = 4096;
 /// Stems the scan of round 6 expands.

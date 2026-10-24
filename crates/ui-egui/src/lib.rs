@@ -2144,10 +2144,12 @@ impl WordApp {
         // New documents are written in the interface's language when WordCraft can proof it
         // (a Polish interface: Polish spelling, grammar and hyphenation from the first word).
         // An English interface writes the region's English (English (UK) on a British system,
-        // #1045).
+        // #1045), a Spanish one the region's Spanish (Spanish (Uruguay) on a Uruguayan system,
+        // Spain's elsewhere, #3360).
         let editing = match lang.editing_lang() {
             Some(t) => Some(t.to_string()),
             None if lang.code() == "en" => self.session.region_english(),
+            None if lang.code() == "es" => Some(self.session.region_spanish()),
             None => None,
         };
         if self.applied_editing.as_ref().is_none_or(|(l, e)| *l != lang || *e != editing) {

@@ -49,6 +49,23 @@ pub enum ProofLang {
     /// `id_ID` dictionary, dictionary-driven suggestions and generic checks with Indonesian
     /// messages. Hyphenation keeps the fallback English patterns.
     Id,
+    /// Spanish of Spain (`es`, `es-ES`, and every region not listed for [`ProofLang::EsMx`],
+    /// [`ProofLang::Es419`] or [`ProofLang::EsUy`]; also ISO 639-2 `spa`): the installed
+    /// Hunspell `es_ES` dictionary (or a generic Spanish one), dictionary-driven suggestions and
+    /// generic checks with Spanish messages ([`crate::es`]). Hyphenation keeps the fallback
+    /// English patterns.
+    Es,
+    /// Mexican Spanish (`es-MX`): [`ProofLang::Es`]'s tools with the installed `es_MX`
+    /// dictionary, else a Latin American or generic Spanish one.
+    EsMx,
+    /// Latin American Spanish (`es-419`, and the Spanish of the Americas other than Mexico and
+    /// Uruguay: `es-AR`, `es-CO`, `es-US`…): [`ProofLang::Es`]'s tools with the installed `es_419`
+    /// dictionary, else a generic or another Latin American Spanish one.
+    Es419,
+    /// Uruguayan Spanish (`es-UY`): [`ProofLang::Es`]'s tools with the installed `es_UY`
+    /// dictionary (else the neighbouring Rioplatense `es_AR`, a Latin American or a generic one),
+    /// and the `vos` forms of verbs (`tenés`, `vení`, `decime`) accepted ([`crate::es::voseo`]).
+    EsUy,
     /// German (`de`, `de-DE`, `de-AT`, `de-CH`…): hyphenation by the German patterns (reformed
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
@@ -62,7 +79,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 11] = [
+    pub const PROOFED: [ProofLang; 15] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -74,11 +91,16 @@ impl ProofLang {
         ProofLang::Ru,
         ProofLang::Cs,
         ProofLang::Id,
+        ProofLang::Es,
+        ProofLang::EsMx,
+        ProofLang::Es419,
+        ProofLang::EsUy,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
-    /// counts, and for English the region too ([`ProofLang::english`]). No tag (or an empty one)
-    /// is English, WordCraft's default editing language.
+    /// counts, and for English and Spanish the region too ([`ProofLang::english`],
+    /// [`ProofLang::spanish`]). No tag (or an empty one) is English, WordCraft's default editing
+    /// language.
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
         let primary = tag.split(['-', '_']).next().unwrap_or("");
@@ -102,6 +124,8 @@ impl ProofLang {
             ProofLang::Cs
         } else if primary.eq_ignore_ascii_case("id") || primary.eq_ignore_ascii_case("ind") || primary.eq_ignore_ascii_case("in") {
             ProofLang::Id
+        } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
+            ProofLang::spanish(tag)
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
             ProofLang::De
         } else {
@@ -109,22 +133,26 @@ impl ProofLang {
         }
     }
 
-    /// The English of an English tag, by its region (the first two-letter or three-digit subtag
-    /// after the language and script, before any singleton; a POSIX `.UTF-8` or `@…` tail is ignored): Canada is
-    /// [`ProofLang::EnCa`], regions that spell the British way are [`ProofLang::EnGb`], and the
-    /// United States, any other region and no region are [`ProofLang::En`].
+    /// The English of an English tag, by its [`region`]: Canada is [`ProofLang::EnCa`], regions
+    /// that spell the British way are [`ProofLang::EnGb`], and the United States, any other
+    /// region and no region are [`ProofLang::En`].
     fn english(tag: &str) -> ProofLang {
-        let tag = tag.split(['.', '@']).next().unwrap_or("");
-        // Subtags after a singleton (`x-…` private use, `u-…` extensions) aren't regions.
-        let region = tag
-            .split(['-', '_'])
-            .skip(1)
-            .take_while(|p| p.len() != 1)
-            .find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())));
-        match region {
+        match region(tag) {
             Some(r) if r.eq_ignore_ascii_case("CA") => ProofLang::EnCa,
             Some(r) if BRITISH_SPELLING.iter().any(|b| b.eq_ignore_ascii_case(r)) => ProofLang::EnGb,
             _ => ProofLang::En,
+        }
+    }
+
+    /// The Spanish of a Spanish tag, by its [`region`]: Mexico is [`ProofLang::EsMx`], Uruguay
+    /// [`ProofLang::EsUy`], Latin America (`419`) and the other countries of the Americas are
+    /// [`ProofLang::Es419`], and Spain, any other region and no region are [`ProofLang::Es`].
+    fn spanish(tag: &str) -> ProofLang {
+        match region(tag) {
+            Some(r) if r.eq_ignore_ascii_case("MX") => ProofLang::EsMx,
+            Some(r) if r.eq_ignore_ascii_case("UY") => ProofLang::EsUy,
+            Some(r) if LATIN_AMERICA.iter().any(|l| l.eq_ignore_ascii_case(r)) => ProofLang::Es419,
+            _ => ProofLang::Es,
         }
     }
 
@@ -133,7 +161,13 @@ impl ProofLang {
         matches!(self, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`); empty for [`ProofLang::Other`].
+    /// Is this one of the Spanishes ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`],
+    /// [`ProofLang::EsUy`])?
+    pub fn is_spanish(self) -> bool {
+        matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
+    }
+
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -146,6 +180,7 @@ impl ProofLang {
             ProofLang::Ru => "ru",
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
+            ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
             ProofLang::De => "de",
             ProofLang::Other => "",
         }
@@ -156,6 +191,24 @@ impl ProofLang {
         Self::PROOFED.contains(&self)
     }
 }
+
+/// The region of a tag: the first two-letter or three-digit subtag after the language and
+/// script, before any singleton; a POSIX `.UTF-8` or `@…` tail is ignored.
+fn region(tag: &str) -> Option<&str> {
+    let tag = tag.split(['.', '@']).next().unwrap_or("");
+    // Subtags after a singleton (`x-…` private use, `u-…` extensions) aren't regions.
+    tag.split(['-', '_'])
+        .skip(1)
+        .take_while(|p| p.len() != 1)
+        .find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())))
+}
+
+/// Regions whose Spanish is Latin American ([`ProofLang::Es419`]): Latin America and the
+/// Caribbean (`419`) and its parts (South America `005`, Central America `013`, the Caribbean
+/// `029`), the Spanish-speaking countries of the Americas other than Mexico and Uruguay, and the
+/// United States.
+const LATIN_AMERICA: [&str; 22] =
+    ["419", "005", "013", "029", "AR", "BO", "CL", "CO", "CR", "CU", "DO", "EC", "GT", "HN", "NI", "PA", "PE", "PR", "PY", "SV", "US", "VE"];
 
 /// Regions whose English uses British spelling ([`ProofLang::EnGb`]): the United Kingdom (and
 /// the non-standard `UK`), Ireland, Australia, New Zealand, South Africa, India and other
@@ -286,7 +339,7 @@ mod tests {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::De, "{t}");
         }
         assert!(!ProofLang::De.is_proofed());
-        for t in ["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "e", "-"] {
+        for t in ["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Other, "{t}");
         }
         assert_eq!(ProofLang::from_tag(None), ProofLang::En);
@@ -312,5 +365,30 @@ mod tests {
         assert_eq!(ProofLang::Hr.code(), "hr");
         assert_eq!(ProofLang::Tr.code(), "tr");
         assert!(ProofLang::PROOFED.contains(&ProofLang::Pt), "every proofed language is listed");
+    }
+
+    /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and
+    /// Latin America with the other countries of the Americas.
+    #[test]
+    fn spanish_tags_resolve_by_region() {
+        for t in ["es", "es-ES", "ES_es", "es_ES.UTF-8", " es-ES ", "spa", "es-Latn-ES", "es-GQ", "es-PH", "es-x-mx", "es_ES@euro"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Es, "{t}");
+        }
+        for t in ["es-MX", "es_MX", "ES-mx", "es_MX.UTF-8", "spa-MX", "es-Latn-MX"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::EsMx, "{t}");
+        }
+        for t in ["es-419", "es_419", "es-AR", "es-CO", "es_CL.UTF-8", "es-US", "ES-ve", "es-PR", "es-Latn-419", "es-005", "spa-PE"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Es419, "{t}");
+        }
+        for t in ["es-UY", "es_UY", "ES-uy", "es_UY.UTF-8", "spa-UY", "es-Latn-UY"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::EsUy, "{t}");
+        }
+        for l in [ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
+            assert!(l.is_spanish() && l.is_proofed() && ProofLang::PROOFED.contains(&l), "{l:?}");
+            assert!(!l.is_english());
+            assert_eq!(l.code(), "es");
+        }
+        assert!(!ProofLang::En.is_spanish() && !ProofLang::Pt.is_spanish() && !ProofLang::Other.is_spanish());
+        assert_eq!(normalize_tag("ES_mx").as_deref(), Some("es-MX"));
     }
 }
