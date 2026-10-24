@@ -265,9 +265,11 @@ fn remove_anchors(s: &mut Session, ids: &BTreeSet<u32>) -> Result<(), CmdError> 
 /// from a hostile file ends the walk instead of looping.
 fn thread_of(s: &Session, id: u32) -> Vec<u32> {
     let mut children: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-    for (k, c) in &s.doc.comments {
+    let mut comments: Vec<(u32, &wordcraft_doc::Comment)> = s.doc.comments.iter().map(|(k, c)| (*k, c)).collect();
+    comments.sort_by_key(|(k, _)| *k);
+    for (k, c) in comments {
         if let Some(parent) = c.parent {
-            children.entry(parent).or_default().push(*k);
+            children.entry(parent).or_default().push(k);
         }
     }
     let mut seen = BTreeSet::from([id]);
@@ -287,7 +289,9 @@ fn thread_of(s: &Session, id: u32) -> Vec<u32> {
 fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     validate_comment_id(v)?;
     let ids: Vec<u32> = if p::bool(v, "all").unwrap_or(false) {
-        s.doc.comments.keys().copied().collect()
+        let mut all: Vec<u32> = s.doc.comments.keys().copied().collect();
+        all.sort_unstable();
+        all
     } else {
         let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("no comment here".into()))?;
         thread_of(s, id)
@@ -321,10 +325,10 @@ pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
             }
         }
     }
-    for id in s.doc.comments.keys() {
-        if !found.iter().any(|(x, _)| x == id) {
-            found.push((*id, None));
-        }
+    let mut unanchored: Vec<u32> = s.doc.comments.keys().copied().filter(|id| !found.iter().any(|(x, _)| x == id)).collect();
+    unanchored.sort_unstable();
+    for id in unanchored {
+        found.push((id, None));
     }
     found
 }

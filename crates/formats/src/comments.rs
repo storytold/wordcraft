@@ -83,13 +83,24 @@ pub fn notes(doc: &Document) -> Vec<Note> {
             quotes.entry(*id).or_default().push(' ');
         }
     }
-    for id in doc.comments.keys() {
+    let mut ids: Vec<u32> = doc.comments.keys().copied().collect();
+    ids.sort_by(|&a, &b| {
+        let ca = doc.comments.get(&a);
+        let cb = doc.comments.get(&b);
+        let da = ca.map(|c| c.date.as_str()).unwrap_or("");
+        let db = cb.map(|c| c.date.as_str()).unwrap_or("");
+        match (!da.is_empty() && !db.is_empty(), da.cmp(db)) {
+            (true, std::cmp::Ordering::Equal) | (false, _) => a.cmp(&b),
+            (true, ord) => ord,
+        }
+    });
+    for id in &ids {
         if seen.insert(*id) {
             order.push(*id);
         }
     }
     let mut replies: BTreeMap<u32, Vec<u32>> = BTreeMap::new();
-    for id in doc.comments.keys() {
+    for id in &ids {
         let r = root(doc, *id);
         if r != *id {
             let v = replies.entry(r).or_default();
@@ -197,4 +208,38 @@ fn text(notes: &[Note]) -> String {
         }
     }
     s
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::{Comment, Document, Paragraph, para_block};
+
+    #[test]
+    fn replies_are_ordered_oldest_first() {
+        let mut doc = Document::new();
+        doc.parts.insert(
+            1,
+            wordcraft_doc::Part { blocks: vec![para_block(Paragraph::with_text("Root comment", Default::default()))], ..Default::default() },
+        );
+        doc.comments.insert(1, Comment { author: "Alice".into(), date: "2026-10-15T10:00:00Z".into(), parent: None, part: 1, ..Default::default() });
+
+        doc.parts.insert(
+            3,
+            wordcraft_doc::Part { blocks: vec![para_block(Paragraph::with_text("Second reply", Default::default()))], ..Default::default() },
+        );
+        doc.comments
+            .insert(3, Comment { author: "Charlie".into(), date: "2026-10-15T10:30:00Z".into(), parent: Some(1), part: 3, ..Default::default() });
+
+        doc.parts.insert(
+            2,
+            wordcraft_doc::Part { blocks: vec![para_block(Paragraph::with_text("First reply", Default::default()))], ..Default::default() },
+        );
+        doc.comments.insert(2, Comment { author: "Bob".into(), date: "2026-10-15T10:15:00Z".into(), parent: Some(1), part: 2, ..Default::default() });
+
+        let n = notes(&doc);
+        assert_eq!(n.len(), 1);
+        assert_eq!(n[0].author, "Alice");
+        assert_eq!(n[0].replies, vec![("Bob".to_string(), "First reply".to_string()), ("Charlie".to_string(), "Second reply".to_string()),]);
+    }
 }
