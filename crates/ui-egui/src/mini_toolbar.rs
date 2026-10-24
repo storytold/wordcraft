@@ -241,7 +241,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
     };
 
     row(ui, app, &|ui, app| {
-        let font = st.get("font").and_then(Value::as_str).unwrap_or("").to_string();
+        let font = st.get("fontShown").and_then(Value::as_str).unwrap_or("").to_string();
         let font = app.previews.font_shown(&font);
         let fams = app.previews.families();
         let recent: Vec<String> = app.ui.recent_fonts.iter().map(|f| app.previews.font_shown(f)).collect();
@@ -695,6 +695,27 @@ mod tests {
         steps(&mut h);
         assert!(!egui::Popup::is_any_open(&h.ctx));
         assert!(!h.state().canvas.context_menu_open, "dismissing another popup must not open the text context menu");
+    }
+
+    /// #1418: over East Asian text the Font box shows the East Asian font (`fontShown`), not the Latin one.
+    #[test]
+    fn the_font_box_shows_the_east_asian_font_over_cjk_text() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("text.insert", json!({"text": "你好世界"})).unwrap();
+        a.run("select.all", json!({})).unwrap();
+        a.run("format.font", json!({"name": "Georgia", "eastAsia": "SimSun"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        steps(&mut h);
+        assert!(h.query_all_by_value("SimSun").count() >= 1, "a Font box shows SimSun");
+        assert_eq!(h.query_all_by_value("Georgia").count(), 0, "no Font box shows the Latin font");
     }
 
     /// The bar was drawn on the Tooltip layer, over every drop-down: the ribbon's font size list
