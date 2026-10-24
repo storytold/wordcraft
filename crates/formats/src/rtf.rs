@@ -4,11 +4,15 @@
 //! Quote, Code), list tables (`\listtable` / `\listoverridetable` with `\listtext` labels for
 //! older readers), document info, page setup, paragraph formatting (`\pard`, alignment, page
 //! break before), character formatting (`\b \i \ul \strike \super \sub \f \fs \cf \chcbpat`),
-//! hyperlinks as `HYPERLINK` fields, bookmarks, pictures (`\pngblip` / `\jpegblip`) and tables
-//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading).
+//! hyperlinks as `HYPERLINK` fields, bookmarks, pictures (`\pngblip` / `\jpegblip`), tables
+//! (`\trowd … \cellx … \cell … \row`, header rows, vertical merges, shading), footnotes and
+//! endnotes (`{\super\chftn}{\footnote[\ftnalt] …}`) and comments (`{\*\atrfstart n}` …
+//! `{\*\atrfend n}` around the commented text, then `{\*\atnid initials}{\*\atnauthor name}`
+//! `\chatn{\*\annotation{\*\atnref n}{\*\atndate …}` text `}`).
 //!
-//! Import: a tolerant reader for groups and destinations (unknown `\*` destinations, headers,
-//! footers, notes and objects are skipped), `\par \line \tab \page`, `\uN` with `\ucN`
+//! Import: a tolerant reader for groups and destinations (unknown `\*` destinations and objects
+//! are skipped; headers, footers, notes and comments are read into stories of their own),
+//! `\par \line \tab \page`, `\uN` with `\ucN`
 //! fallback skipping, `\'hh` and 8-bit text in the document's code page (`\ansicpg`, `\mac`, `\pc`, `\pca`) or
 //! the current font's (`\fcharset`, `\cpg`: Cyrillic, Central European, Greek, Mac OS Roman, the
 //! East Asian multibyte pages 932/936/949/950…; Windows-1252 when none is named). A multibyte
@@ -16,12 +20,16 @@
 //! together and a run that looks like a UTF-8 BOM is not mistaken for one; the formatting words
 //! above, stylesheet-based
 //! headings and `\outlinelevel`, lists through `\ls`/`\ilvl`, fields, bookmarks, pictures and
-//! tables. Group nesting and picture sizes are capped.
+//! tables, footnotes, endnotes (`\footnote` with `\ftnalt`) and comments (author, initials, date,
+//! text, the commented range). Group nesting, picture sizes and the number of notes and comments
+//! are capped. Not kept: custom note marks, comment replies (`\atnparent`), notes inside
+//! headers, footers and other notes, tables inside note and comment texts (flattened).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
 use wordcraft_doc::props::VAlign;
-use wordcraft_doc::{Align, Document, Rgb};
+use wordcraft_doc::{Align, Block, Blocks, Document, InlineObject, Paragraph, Rgb};
 
 use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img};
 
@@ -29,6 +37,15 @@ use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo
 const MAX_GROUPS: usize = 512;
 /// Largest picture we decode (bytes).
 const MAX_PICT: usize = 64 << 20;
+/// Most notes, and most comments, one file may bring in.
+const MAX_NOTES: usize = 5_000;
+/// Most blocks kept of one note's or comment's text.
+const MAX_NOTE_BLOCKS: usize = 500;
+/// Brackets of a place marker in text: a note reference or a comment range end travels through the
+/// flow model as `OPEN tag number CLOSE` (private-use characters, which both the reader and the
+/// writer keep out of real text) and becomes an inline object once the document exists.
+const MARK_OPEN: char = '\u{F8F0}';
+const MARK_CLOSE: char = '\u{F8F1}';
 /// Most sections we read (`\sect`); later breaks end paragraphs only.
 const MAX_SECTIONS: usize = 10_000;
 /// The encoding of an East Asian multibyte code page (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5),
@@ -96,7 +113,30 @@ impl Tables {
     }
 }
 
+/// What a place marker in the exported text stands for (see [`MARK_OPEN`]).
+enum Mark {
+    Note {
+        endnote: bool,
+        blocks: Vec<FBlock>,
+    },
+    RangeStart(u32),
+    /// The end of a comment's range; the first end of each comment also carries its annotation.
+    RangeEnd {
+        id: u32,
+        ann: Option<Annotation>,
+    },
+    Done,
+}
+
+struct Annotation {
+    author: String,
+    initials: String,
+    date: String,
+    blocks: Vec<FBlock>,
+}
+
 struct Writer {
+    marks: Vec<Mark>,
     t: Tables,
     /// List definitions: per list, the ordered flag per level.
     lists: Vec<[bool; 9]>,
@@ -253,7 +293,68 @@ impl Writer {
         s
     }
 
+    /// A run of text; place markers in it become notes and comment ranges.
     fn run(&mut self, t: &str, f: &Fmt, out: &mut String) {
+        if !t.contains(MARK_OPEN) {
+            return self.run_plain(t, f, out);
+        }
+        let mut rest = t;
+        while !rest.is_empty() {
+            let Some((pre, after)) = rest.split_once(MARK_OPEN) else {
+                self.run_plain(rest, f, out);
+                break;
+            };
+            if !pre.is_empty() {
+                self.run_plain(pre, f, out);
+            }
+            let Some((tok, tail)) = after.split_once(MARK_CLOSE) else {
+                self.run_plain(after, f, out);
+                break;
+            };
+            self.mark(tok, out);
+            rest = tail;
+        }
+    }
+
+    /// The RTF for one place marker: `S` is a note's own number, a number indexes `marks`.
+    fn mark(&mut self, tok: &str, out: &mut String) {
+        if tok == "S" {
+            out.push_str("{\\super\\chftn}");
+            return;
+        }
+        let Some(m) = tok.parse::<usize>().ok().and_then(|i| self.marks.get_mut(i)) else { return };
+        match std::mem::replace(m, Mark::Done) {
+            Mark::Note { endnote, blocks } => {
+                out.push_str("{\\super\\chftn}{\\footnote");
+                if endnote {
+                    out.push_str("\\ftnalt");
+                }
+                out.push(' ');
+                self.blocks(&blocks, false, "\\par", out, 0);
+                out.push('}');
+            }
+            Mark::RangeStart(id) => out.push_str(&format!("{{\\*\\atrfstart {id}}}")),
+            Mark::RangeEnd { id, ann } => {
+                out.push_str(&format!("{{\\*\\atrfend {id}}}"));
+                if let Some(a) = ann {
+                    out.push_str(&format!(
+                        "{{\\*\\atnid {}}}{{\\*\\atnauthor {}}}\\chatn{{\\*\\annotation{{\\*\\atnref {id}}}",
+                        esc(&a.initials),
+                        esc(&a.author)
+                    ));
+                    if let Some(d) = rtf_date(&a.date) {
+                        out.push_str(&format!("{{\\*\\atndate {d}}}"));
+                    }
+                    out.push('\n');
+                    self.blocks(&a.blocks, false, "\\par", out, 0);
+                    out.push('}');
+                }
+            }
+            Mark::Done => {}
+        }
+    }
+
+    fn run_plain(&mut self, t: &str, f: &Fmt, out: &mut String) {
         let mut ctl = String::new();
         if let Some(c) = &f.fmt_change {
             // RTF 1.9.1, as Word writes it: the properties the change altered, as they were,
@@ -670,11 +771,131 @@ fn level_def(ordered: bool, l: usize) -> String {
     }
 }
 
+/// An ISO 8601 date-time from year, month, day, hour and minute.
+fn iso_date((y, mo, d, h, mi): (u32, u32, u32, u32, u32)) -> String {
+    format!("{y:04}-{:02}-{:02}T{:02}:{:02}:00Z", mo.clamp(1, 12), d.clamp(1, 31), h.min(23), mi.min(59))
+}
+
 fn rtf_date(s: &str) -> Option<String> {
     let num = |a: usize, b: usize| s.get(a..b).and_then(|x| x.parse::<u32>().ok());
     let (y, mo, d) = (num(0, 4)?, num(5, 7)?, num(8, 10)?);
     let (h, mi) = (num(11, 13).unwrap_or(0), num(14, 16).unwrap_or(0));
     Some(format!("\\yr{y}\\mo{mo}\\dy{d}\\hr{h}\\min{mi}"))
+}
+
+fn has_marks(bl: &Blocks, depth: usize) -> bool {
+    bl.iter().any(|b| match &**b {
+        Block::Para(p) => {
+            p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. } | InlineObject::CommentStart { .. } | InlineObject::CommentEnd { .. }))
+        }
+        Block::Table(t) => depth < 8 && t.rows.iter().any(|r| r.cells.iter().any(|c| has_marks(&c.blocks, depth + 1))),
+    })
+}
+
+/// A copy of `doc` whose note references and comment range ends are place markers in the text
+/// (see [`MARK_OPEN`]), with what each stands for; none when the body has neither.
+fn mark_doc(doc: &Document) -> Option<(Document, Vec<Mark>)> {
+    if !has_marks(&doc.body, 0) {
+        return None;
+    }
+    let mut m = Marker { doc, marks: Vec::new(), annotated: HashSet::new() };
+    let body = m.blocks(&doc.body, None, 0);
+    let mut d = doc.clone();
+    d.body = body;
+    Some((d, m.marks))
+}
+
+/// The story id standing for "inside a note or comment": no nested notes, no comment ranges.
+const IN_STORY: u32 = u32::MAX;
+
+struct Marker<'a> {
+    doc: &'a Document,
+    marks: Vec<Mark>,
+    annotated: HashSet<u32>,
+}
+
+impl Marker<'_> {
+    fn token(&mut self, m: Mark) -> String {
+        self.marks.push(m);
+        self.marks.len().saturating_sub(1).to_string()
+    }
+
+    /// The flow of a story (a note's or comment's text); tables are flattened to their paragraphs.
+    fn story(&mut self, bl: &Blocks, note: u32, depth: usize, out: &mut Vec<FBlock>) {
+        for b in bl.iter().take(MAX_NOTE_BLOCKS) {
+            match &**b {
+                Block::Para(p) => {
+                    let q = self.para(p, Some(note));
+                    out.extend(model::flow_paras(self.doc, &q).into_iter().map(FBlock::Para));
+                }
+                Block::Table(t) if depth < 4 => {
+                    for c in t.rows.iter().flat_map(|r| r.cells.iter()) {
+                        self.story(&c.blocks, note, depth + 1, out);
+                    }
+                }
+                Block::Table(_) => {}
+            }
+        }
+    }
+
+    fn blocks(&mut self, bl: &Blocks, note: Option<u32>, depth: usize) -> Blocks {
+        bl.iter()
+            .map(|b| match &**b {
+                Block::Para(p) if p.objects.is_empty() => b.clone(),
+                Block::Para(p) => Arc::new(Block::Para(self.para(p, note))),
+                Block::Table(t) if depth < 8 => {
+                    let mut t = t.clone();
+                    for c in t.rows.iter_mut().flat_map(|r| r.cells.iter_mut()) {
+                        c.blocks = self.blocks(&c.blocks, note, depth + 1);
+                    }
+                    Arc::new(Block::Table(t))
+                }
+                Block::Table(_) => b.clone(),
+            })
+            .collect()
+    }
+
+    /// `p` with its note references and comment range ends replaced by place markers. `note` is
+    /// the note being written, when `p` is part of one.
+    fn para(&mut self, p: &Paragraph, note: Option<u32>) -> Paragraph {
+        let mut q = p.clone();
+        for off in p.object_offsets().into_iter().rev() {
+            let Some(obj) = q.object_at(off).cloned() else { continue };
+            let tok = match obj {
+                InlineObject::NoteRef { id, .. } if note == Some(id) => Some(String::from("S")),
+                InlineObject::NoteRef { .. } if note.is_some() => Some(String::new()),
+                InlineObject::NoteRef { id, kind, .. } => self.doc.parts.get(&id).map(|part| {
+                    let mut blocks = Vec::new();
+                    self.story(&part.blocks, id, 0, &mut blocks);
+                    self.token(Mark::Note { endnote: kind == wordcraft_doc::para::NoteKind::Endnote, blocks })
+                }),
+                InlineObject::CommentStart { id } if note.is_none() => Some(self.token(Mark::RangeStart(id))),
+                InlineObject::CommentEnd { id } if note.is_none() => {
+                    let ann = if self.annotated.insert(id) { self.annotation(id) } else { None };
+                    Some(self.token(Mark::RangeEnd { id, ann }))
+                }
+                _ => None,
+            };
+            let Some(tok) = tok else { continue };
+            let end = off + wordcraft_doc::para::OBJ.len_utf8();
+            let text = if tok.is_empty() { tok } else { format!("{MARK_OPEN}{tok}{MARK_CLOSE}") };
+            if q.delete(off, end).is_err() {
+                continue;
+            }
+            if !text.is_empty() && q.insert_text(off, &text, &Default::default()).is_err() {
+                continue;
+            }
+        }
+        q
+    }
+
+    fn annotation(&mut self, id: u32) -> Option<Annotation> {
+        let c = self.doc.comments.get(&id)?;
+        let part = self.doc.parts.get(&c.part)?;
+        let mut blocks = Vec::new();
+        self.story(&part.blocks, IN_STORY, 0, &mut blocks);
+        Some(Annotation { author: c.author.clone(), initials: c.initials.clone(), date: c.date.clone(), blocks })
+    }
 }
 
 fn days_in_month(y: u32, m: u32) -> u32 {
@@ -733,9 +954,15 @@ pub fn iso_to_dttm(s: &str) -> Option<u32> {
 
 /// RTF text of a document.
 pub fn export(doc: &Document) -> String {
+    let (marked, marks) = match mark_doc(doc) {
+        Some((d, m)) => (Some(d), m),
+        None => (None, Vec::new()),
+    };
+    let doc = marked.as_ref().unwrap_or(doc);
     let flow = model::from_doc_tracked(doc);
     let base_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
     let mut w = Writer {
+        marks,
         t: Tables { fonts: vec![base_font], colors: Vec::new() },
         lists: Vec::new(),
         authors: None,
@@ -839,11 +1066,37 @@ enum Dest {
     FldInst,
     Pict,
     Bookmark,
+    /// A comment's text-valued word: 1 `\atrfstart`, 2 `\atrfend`, 3 `\atnid`, 4 `\atnauthor`,
+    /// 5 `\atndate`/`\atntime`, 6 `\atnref`.
+    Atn(u8),
     /// The author table of tracked changes (`\revtbl`).
     RevTbl,
     /// Formatting before a tracked change (`\oldpprops` when true, else `\oldcprops`): read
     /// into the group's own state, which the group's end keeps as the change's old formatting.
     OldProps(bool),
+}
+
+/// A footnote, endnote or comment group being read into an output of its own.
+struct Sub {
+    depth: usize,
+    comment: bool,
+    endnote: bool,
+    saved: Box<Output>,
+}
+
+/// A note read: its kind and text.
+struct NoteData {
+    endnote: bool,
+    blocks: Vec<FBlock>,
+}
+
+/// A comment read: the id its range markers carry, who wrote it and when, and its text.
+struct CommentData {
+    rtf_id: i32,
+    author: String,
+    initials: String,
+    date: String,
+    blocks: Vec<FBlock>,
 }
 
 /// A tracked formatting change being read (`\crauth`/`\crdate` with `\oldcprops`,
@@ -1184,6 +1437,22 @@ struct Reader {
     in_creatim: bool,
     rule_pending: bool,
     info_depth: Option<usize>,
+    // Notes and comments (only when the caller wants them).
+    marks_on: bool,
+    sub: Option<Sub>,
+    notes: Vec<NoteData>,
+    comments: Vec<CommentData>,
+    atn_text: String,
+    atn_initials: String,
+    atn_author: String,
+    atn_date: String,
+    atn_parts: Option<(u32, u32, u32, u32, u32)>,
+    atn_ref: Option<i32>,
+    last_end: Option<i32>,
+    range_starts: HashSet<i32>,
+    range_ends: HashSet<i32>,
+    claimed: HashSet<i32>,
+    synth: i32,
 }
 
 impl Reader {
@@ -1245,12 +1514,103 @@ impl Reader {
         }
     }
 
+    /// A footnote, endnote or comment group starts: read it into an output of its own.
+    fn start_sub(&mut self, comment: bool) {
+        if self.overflow > 0 || self.notes.len() >= MAX_NOTES || self.comments.len() >= MAX_NOTES {
+            self.st.dest = Dest::Skip;
+            return;
+        }
+        let saved = self.swap_output(Output::default());
+        self.sub = Some(Sub { depth: self.depth(), comment, endnote: false, saved: Box::new(saved) });
+        self.st.intbl = false;
+    }
+
+    /// A place marker as text in the current paragraph.
+    fn push_mark(&mut self, tag: char, n: i64, fmt: Fmt) {
+        self.para.push_text(&format!("{MARK_OPEN}{tag}{n}{MARK_CLOSE}"), &fmt);
+        self.para_has = true;
+    }
+
+    /// The footnote or comment group closed: keep its text and leave a marker in the body.
+    fn end_sub(&mut self) {
+        let Some(sub) = self.sub.take() else { return };
+        if self.para_has || !self.para.inlines.is_empty() {
+            self.end_para(false);
+        }
+        self.close_table();
+        let fmt = self.stack.last().map(|s| s.fmt.clone()).unwrap_or_default();
+        let mut inner = self.swap_output(*sub.saved);
+        inner.body.truncate(MAX_NOTE_BLOCKS);
+        if !sub.comment {
+            self.push_mark('N', self.notes.len() as i64, fmt);
+            self.notes.push(NoteData { endnote: sub.endnote, blocks: inner.body });
+            return;
+        }
+        let want = self.atn_ref.take().or(self.last_end.take());
+        let id = match want {
+            Some(i) if self.range_starts.contains(&i) && self.range_ends.contains(&i) && self.claimed.insert(i) => i,
+            _ => {
+                // No range of its own: the comment sits at this point.
+                self.synth = self.synth.saturating_sub(1);
+                let id = self.synth;
+                self.push_mark('B', i64::from(id), fmt.clone());
+                self.push_mark('E', i64::from(id), fmt);
+                id
+            }
+        };
+        let date =
+            if !self.atn_date.is_empty() { std::mem::take(&mut self.atn_date) } else { self.atn_parts.take().map(iso_date).unwrap_or_default() };
+        self.atn_parts = None;
+        self.comments.push(CommentData {
+            rtf_id: id,
+            author: std::mem::take(&mut self.atn_author),
+            initials: std::mem::take(&mut self.atn_initials),
+            date,
+            blocks: inner.body,
+        });
+    }
+
+    /// A comment word's text group closed (`\atrfstart 3`, `\atnauthor Ann`…).
+    fn commit_atn(&mut self, kind: u8) {
+        let text = std::mem::take(&mut self.atn_text);
+        let text = text.trim();
+        let id = text.parse::<i32>().ok();
+        let fmt = self.stack.last().map(|s| s.fmt.clone()).unwrap_or_default();
+        match kind {
+            1 => {
+                if let Some(id) = id {
+                    self.range_starts.insert(id);
+                    self.push_mark('B', i64::from(id), fmt);
+                }
+            }
+            2 => {
+                if let Some(id) = id {
+                    self.range_ends.insert(id);
+                    self.last_end = Some(id);
+                    self.push_mark('E', i64::from(id), fmt);
+                }
+            }
+            3 => self.atn_initials = text.to_string(),
+            4 => self.atn_author = text.to_string(),
+            5 => {
+                // Either `\yr\mo\dy\hr\min` words (read as they came) or a packed date-time number.
+                if let Some(parts) = self.atn_parts.take() {
+                    self.atn_date = iso_date(parts);
+                } else if let Some(n) = text.parse::<u32>().ok().filter(|n| *n != 0) {
+                    self.atn_date = iso_date((1900 + ((n >> 20) & 0x1FF), (n >> 16) & 0xF, (n >> 11) & 0x1F, (n >> 6) & 0x1F, n & 0x3F));
+                }
+            }
+            6 => self.atn_ref = id,
+            _ => {}
+        }
+    }
+
     /// `\sect`: end the paragraph, and with it the section, which takes its formatting and the
     /// headers and footers read since the last break. Inside a header, footer or table, and past
     /// [`MAX_SECTIONS`], it only ends the paragraph.
     fn end_section(&mut self) {
         self.end_para_mark();
-        if self.hf.is_some() || self.st.intbl || self.section_parts.len() + 1 >= MAX_SECTIONS {
+        if self.hf.is_some() || self.sub.is_some() || self.st.intbl || self.section_parts.len() + 1 >= MAX_SECTIONS {
             return;
         }
         let props = self.sec.props(&self.page);
@@ -1268,7 +1628,7 @@ impl Reader {
         let pv = p.unwrap_or(0);
         // Inside a header or footer the word is read into a scratch copy and dropped.
         let mut scratch;
-        let sec = if self.hf.is_some() {
+        let sec = if self.hf.is_some() || self.sub.is_some() {
             scratch = self.sec.clone();
             &mut scratch
         } else {
@@ -1324,6 +1684,9 @@ impl Reader {
             self.overflow -= 1;
             return;
         }
+        if self.sub.as_ref().is_some_and(|s| s.depth == self.depth()) {
+            self.end_sub();
+        }
         let closing = self.st.dest;
         // Destination-level commits.
         match closing {
@@ -1342,6 +1705,7 @@ impl Reader {
                 }
                 self.in_creatim = false;
             }
+            Dest::Atn(k) => self.commit_atn(k),
             _ => {}
         }
         let Some(mut prev) = self.stack.pop() else { return };
@@ -1606,6 +1970,11 @@ impl Reader {
                     return;
                 }
                 let mut f = self.st.fmt.clone();
+                if s.contains([MARK_OPEN, MARK_CLOSE]) {
+                    self.para.push_text(&s.replace([MARK_OPEN, MARK_CLOSE], "\u{FFFD}"), &f);
+                    self.para_has = true;
+                    return;
+                }
                 let r = self.st.rev;
                 if r.ins {
                     f.ins = Some(self.rev_mark(r.auth, r.dttm));
@@ -1652,6 +2021,11 @@ impl Reader {
                 }
             }
             Dest::Info(_) => self.info_text.push_str(s),
+            Dest::Atn(_) => {
+                if self.atn_text.len() < 256 {
+                    self.atn_text.push_str(s);
+                }
+            }
             Dest::FldInst => {
                 if let Some(f) = self.st.field.and_then(|i| self.fields.get_mut(i))
                     && f.len() < 4096
@@ -1914,6 +2288,26 @@ impl Reader {
             "shppict" => return,
             "pict" => Some(Dest::Pict),
             "bkmkstart" => Some(Dest::Bookmark),
+            "footnote" | "annotation" if self.marks_on && self.hf.is_none() && self.sub.is_none() && self.st.dest == Dest::Body => {
+                self.start_sub(w == "annotation");
+                return;
+            }
+            "atrfstart" | "atrfend" | "atnid" | "atnauthor" | "atndate" | "atntime" | "atnref"
+                if self.marks_on
+                    && self.hf.is_none()
+                    && self.st.dest == Dest::Body
+                    && self.sub.as_ref().is_none_or(|s| s.comment && !w.starts_with("atrf")) =>
+            {
+                self.atn_text.clear();
+                Some(Dest::Atn(match w {
+                    "atrfstart" => 1,
+                    "atrfend" => 2,
+                    "atnid" => 3,
+                    "atnauthor" => 4,
+                    "atndate" | "atntime" => 5,
+                    _ => 6,
+                }))
+            }
             "header" | "footer" | "headerl" | "headerr" | "headerf" | "footerl" | "footerr" | "footerf"
                 if self.hf.is_none() && self.st.dest == Dest::Body && !self.st.intbl =>
             {
@@ -2096,6 +2490,23 @@ impl Reader {
                     _ => {}
                 }
                 return;
+            }
+            Dest::Atn(k) => {
+                if k == 5 {
+                    let v = pv.clamp(0, 9999) as u32;
+                    let c = self.atn_parts.get_or_insert((0, 1, 1, 0, 0));
+                    match w {
+                        "yr" => c.0 = v,
+                        "mo" => c.1 = v,
+                        "dy" => c.2 = v,
+                        "hr" => c.3 = v,
+                        "min" => c.4 = v,
+                        _ => {}
+                    }
+                }
+                if !matches!(w, "u" | "uc") {
+                    return;
+                }
             }
             // Text destinations take Unicode escapes (with fallback skipping) like the body.
             Dest::Info(_) | Dest::FldInst | Dest::Bookmark if !matches!(w, "u" | "uc") => return,
@@ -2322,6 +2733,17 @@ impl Reader {
                 if self.defs.len() < 63 {
                     self.defs.push(d);
                 }
+            }
+            // A footnote group is an endnote when it says so.
+            "ftnalt" => {
+                if let Some(sub) = self.sub.as_mut() {
+                    sub.endnote = true;
+                }
+            }
+            // The note's own number, at the start of its text.
+            "chftn" if self.sub.as_ref().is_some_and(|s| !s.comment) => {
+                let f = self.st.fmt.clone();
+                self.push_mark('S', 0, f);
             }
             "field" => self.start_field(),
             "fldrslt" => {
@@ -2592,7 +3014,7 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 /// The flow, the page, and the default font (`\deff`, font 0 when the file names none), which
 /// is the font of all text that doesn't select one.
 fn parse_with_page(bytes: &[u8]) -> Result<(Flow, PageGeom, Option<String>), String> {
-    parse_full(bytes).map(|r| (r.flow, r.page, r.default_font))
+    parse_full(bytes, false).map(|r| (r.flow, r.page, r.default_font))
 }
 
 /// Everything an import takes from an RTF file.
@@ -2604,14 +3026,18 @@ struct Parsed {
     default_font: Option<String>,
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
+    notes: Vec<NoteData>,
+    comments: Vec<CommentData>,
 }
 
-fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
+/// `marks`: also read footnotes, endnotes and comments (as place markers in the flow's text, for
+/// [`import`] to turn into objects); without it they are skipped.
+fn parse_full(bytes: &[u8], marks: bool) -> Result<Parsed, String> {
     let start = bytes.iter().position(|b| !b.is_ascii_whitespace()).unwrap_or(0);
     if !bytes.get(start..).is_some_and(|b| b.starts_with(b"{\\rtf")) {
         return Err("not an RTF document (it doesn't start with {\\rtf)".into());
     }
-    let mut r = Reader::default();
+    let mut r = Reader { marks_on: marks, ..Reader::default() };
     let mut i = start;
     let mut first_in_group = false;
     let mut starred = false;
@@ -2690,7 +3116,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         r.info_depth = Some(r.depth());
                     }
                     if r.skip_chars > 0
-                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl)
+                        && matches!(r.st.dest, Dest::Body | Dest::Info(_) | Dest::FldInst | Dest::Bookmark | Dest::FontTbl | Dest::Atn(_))
                         && !matches!(word, "par" | "pard" | "cell" | "row")
                     {
                         r.skip_chars -= 1;
@@ -2778,8 +3204,10 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
             }
         }
     }
-    // A header or footer left open by a truncated file ends here, and so does a multibyte run.
+    // A multibyte run ends here, and so does a note, comment, header or footer left open by a
+    // truncated file.
     r.finish_multibyte();
+    r.end_sub();
     r.end_header_footer();
     if r.para_has || !r.para.inlines.is_empty() {
         r.end_para(false);
@@ -2806,7 +3234,15 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).cloned();
-    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
+    Ok(Parsed {
+        flow: Flow { blocks, meta: r.meta },
+        page: r.page,
+        last_section,
+        default_font,
+        headers_footers,
+        notes: r.notes,
+        comments: r.comments,
+    })
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -2848,7 +3284,7 @@ fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
 
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
-    let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
+    let Parsed { flow, last_section, default_font, headers_footers, notes, comments, .. } = parse_full(bytes, true)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
@@ -2880,6 +3316,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if let Some((h, f)) = sets.next() {
         (doc.last_section.headers, doc.last_section.footers) = (h, f);
     }
+    place_notes_and_comments(&mut doc, notes, comments);
     // RTF's paragraph defaults are single spacing and no space around paragraphs; what a file
     // wants beyond that it states on each paragraph.
     let dp = &mut doc.styles.default_para;
@@ -2890,6 +3327,130 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
         doc.styles.default_chr.font = default_font;
     }
     Ok(doc)
+}
+
+/// Turn the place markers the reader left in the text into note references and comment ranges,
+/// and add the notes' and comments' stories to `doc`.
+fn place_notes_and_comments(doc: &mut Document, notes: Vec<NoteData>, comments: Vec<CommentData>) {
+    use wordcraft_doc::para::NoteKind;
+    use wordcraft_doc::{Comment, PartKind};
+    if notes.is_empty() && comments.is_empty() {
+        return;
+    }
+    // (kind, part id) per note, by index.
+    let mut note_parts: Vec<(NoteKind, u32)> = Vec::new();
+    for n in notes {
+        let (pk, nk, style) =
+            if n.endnote { (PartKind::Endnote, NoteKind::Endnote, "EndnoteText") } else { (PartKind::Footnote, NoteKind::Footnote, "FootnoteText") };
+        let mut blocks = model::part_blocks(doc, &n.blocks);
+        for b in &mut blocks {
+            if let Block::Para(p) = Arc::make_mut(b)
+                && p.props.style.is_none()
+            {
+                p.props.style = Some(style.to_string());
+            }
+        }
+        note_parts.push((nk, doc.add_part(pk, blocks)));
+    }
+    // RTF range id to the comment's id in the document.
+    let mut by_rtf: HashMap<i64, u32> = HashMap::new();
+    for (k, c) in comments.into_iter().enumerate() {
+        let id = k as u32;
+        let blocks = model::part_blocks(doc, &c.blocks);
+        let part = doc.add_part(PartKind::Comment, blocks);
+        doc.comments
+            .insert(id, Comment { author: c.author, initials: c.initials, date: c.date, parent: None, resolved: false, part, ..Default::default() });
+        by_rtf.insert(i64::from(c.rtf_id), id);
+    }
+    let ctx = Placer { note_parts, by_rtf };
+    let mut body = std::mem::take(&mut doc.body);
+    ctx.blocks(&mut body, None, 0);
+    doc.body = body;
+    let ids: Vec<u32> = doc.parts.keys().copied().collect();
+    for id in ids {
+        let Some(part) = doc.parts.get_mut(&id) else { continue };
+        let own = ctx.note_parts.iter().find(|(_, p)| *p == id).copied();
+        ctx.blocks(&mut part.blocks, own, 0);
+        // A note starts with its own number, as Word's do.
+        if let Some((kind, pid)) = own
+            && let Some(first) = part.blocks.first_mut()
+            && let Block::Para(p) = Arc::make_mut(first)
+            && !p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { id, .. } if *id == pid))
+        {
+            let props = Placer::ref_props(kind);
+            if p.insert_object(0, InlineObject::NoteRef { kind, id: pid, custom: String::new() }, &props).is_err() {
+                // The paragraph can't take it; the note simply has no number mark.
+            }
+        }
+    }
+}
+
+struct Placer {
+    note_parts: Vec<(wordcraft_doc::para::NoteKind, u32)>,
+    by_rtf: HashMap<i64, u32>,
+}
+
+impl Placer {
+    fn ref_props(kind: wordcraft_doc::para::NoteKind) -> wordcraft_doc::CharProps {
+        let style = if kind == wordcraft_doc::para::NoteKind::Endnote { "EndnoteReference" } else { "FootnoteReference" };
+        wordcraft_doc::CharProps { style: Some(style.into()), ..Default::default() }
+    }
+
+    fn blocks(&self, bl: &mut Blocks, own: Option<(wordcraft_doc::para::NoteKind, u32)>, depth: usize) {
+        for b in bl.iter_mut() {
+            let needs = match &**b {
+                Block::Para(p) => p.text.contains(MARK_OPEN),
+                Block::Table(_) => depth < 8,
+            };
+            if !needs {
+                continue;
+            }
+            match Arc::make_mut(b) {
+                Block::Para(p) => self.para(p, own),
+                Block::Table(t) => {
+                    for r in &mut t.rows {
+                        for c in &mut r.cells {
+                            self.blocks(&mut c.blocks, own, depth + 1);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn para(&self, p: &mut Paragraph, own: Option<(wordcraft_doc::para::NoteKind, u32)>) {
+        // Every pass removes one marker, so this ends; the bound is only a seat belt.
+        for _ in 0..100_000 {
+            let Some(a) = p.text.find(MARK_OPEN) else { return };
+            let Some(len) = p.text.get(a..).and_then(|t| t.find(MARK_CLOSE)) else { return };
+            let end = a + len + MARK_CLOSE.len_utf8();
+            let inner = p.text.get(a + MARK_OPEN.len_utf8()..a + len).unwrap_or("").to_string();
+            let mut chars = inner.chars();
+            let tag = chars.next().unwrap_or(' ');
+            let n = chars.as_str().parse::<i64>().unwrap_or(i64::MIN);
+            let (obj, props) = match tag {
+                'N' => match usize::try_from(n).ok().and_then(|i| self.note_parts.get(i)) {
+                    Some(&(kind, id)) => (Some(InlineObject::NoteRef { kind, id, custom: String::new() }), Self::ref_props(kind)),
+                    None => (None, Default::default()),
+                },
+                'S' => match own {
+                    Some((kind, id)) => (Some(InlineObject::NoteRef { kind, id, custom: String::new() }), Self::ref_props(kind)),
+                    None => (None, Default::default()),
+                },
+                'B' => (self.by_rtf.get(&n).map(|&id| InlineObject::CommentStart { id }), Default::default()),
+                'E' => (self.by_rtf.get(&n).map(|&id| InlineObject::CommentEnd { id }), Default::default()),
+                _ => (None, Default::default()),
+            };
+            if p.delete(a, end).is_err() {
+                return;
+            }
+            if let Some(o) = obj
+                && p.insert_object(a, o, &props).is_err()
+            {
+                return;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -3856,6 +4417,7 @@ mod tests {
             &Fmt { font: Some("Arial".into()), fmt_change: Some(Box::new(FmtChange { mark, old: Fmt::default() })), ..Default::default() },
         );
         let mut w = Writer {
+            marks: Vec::new(),
             t: Tables { fonts: vec!["Aptos".into()], colors: Vec::new() },
             lists: Vec::new(),
             authors: None,
