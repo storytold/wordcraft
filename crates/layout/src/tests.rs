@@ -8879,13 +8879,20 @@ fn a_long_caption_wraps_and_a_side_justified_formula_stays_put() {
         p.insert_text(p.len(), "(1)", &Default::default()).unwrap();
         let l = lay(&d);
         assert_eq!(lines_of(&d), 1);
-        l.caret(&Pos::body(0, 0)).unwrap().x
+        let mark = wordcraft_doc::para::OBJ.len_utf8();
+        let eq = l.caret(&Pos::body(0, 0)).unwrap().x;
+        let after = l.caret(&Pos::body(0, mark)).unwrap().x;
+        let num = l.caret(&Pos::body(0, mark * 2)).unwrap().x;
+        (eq, after, num, d.last_section.text_width())
     };
-    let center = placed(MathJc::Center);
-    let left = placed(MathJc::Left);
-    let right = placed(MathJc::Right);
+    let (left, _, left_num, _) = placed(MathJc::Left);
+    let (center, _, _, _) = placed(MathJc::Center);
+    let (right, right_edge, right_num, width) = placed(MathJc::Right);
     assert!(left + 20.0 < center, "left {left} was recentred toward {center}");
-    assert!((right - center).abs() > 20.0, "right {right} matches the centred formula at {center}");
+    assert!(center + 20.0 < right, "right {right} is not to the right of the centred formula at {center}");
+    assert!(right_num > left + width * 0.75, "number at {right_num}, text starts at {left}, column {width}");
+    assert!((right_num - right_edge - 8.0).abs() < 1.5, "formula ends at {right_edge}, number at {right_num}");
+    assert!((left_num - right_num).abs() < 1.5, "the number moved between left {left_num} and right {right_num}");
 }
 
 /// Laying a paragraph out again (placed again after a page break before, or the rest of it again
