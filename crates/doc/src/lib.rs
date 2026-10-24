@@ -179,6 +179,33 @@ pub fn para_block(p: Paragraph) -> Arc<Block> {
     Arc::new(Block::Para(p))
 }
 
+/// The same blocks: the same content. The blocks are compared by address first — the
+/// document is copy-on-write, so a block that changed was copied and has another address —
+/// and a block that was copied but holds the same content is compared by value.
+fn same_blocks(a: &Blocks, b: &Blocks) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(x, y) || **x == **y)
+}
+
+/// The same parts: the same keys, and each part the same.
+fn same_parts(a: &BTreeMap<u32, Part>, b: &BTreeMap<u32, Part>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((k1, p1), (k2, p2))| k1 == k2 && same_part(p1, p2))
+}
+
+/// The same part: the same kind, text body and blocks. Every field is listed, so a new one
+/// does not build until someone decides whether a change to it counts.
+fn same_part(a: &Part, b: &Part) -> bool {
+    let Part { kind, blocks, body } = a;
+    let Part { kind: other_kind, blocks: other_blocks, body: other_body } = b;
+    kind == other_kind && body == other_body && same_blocks(blocks, other_blocks)
+}
+
+/// The same bytes: the same content. The bytes are compared by address first — a changed
+/// picture was copied, so it has another address — and a picture that was copied but holds
+/// the same bytes is compared by value.
+fn same_bytes(a: &BTreeMap<String, Arc<Vec<u8>>>, b: &BTreeMap<String, Arc<Vec<u8>>>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((k1, v1), (k2, v2))| k1 == k2 && (Arc::ptr_eq(v1, v2) || **v1 == **v2))
+}
+
 /// Which story a position is in.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
@@ -836,6 +863,70 @@ impl Document {
                 p.blocks.push(para_block(Paragraph::new()));
             }
         }
+    }
+
+    /// Whether the document holds the same content as `other`: the same blocks, the same
+    /// styles, lists, settings, comments and the rest.
+    ///
+    /// The blocks are compared by address first: the document is copy-on-write, so a block
+    /// that changed was copied and has another address. Comparing them by value would walk
+    /// the whole document, and this is asked after every command.
+    ///
+    /// Every field is listed, so a new one does not build until someone decides whether a
+    /// change to it counts (the same rule the session's edit snapshot follows).
+    pub fn same_content(&self, other: &Document) -> bool {
+        let Document {
+            body,
+            last_section,
+            parts,
+            styles,
+            numbering,
+            comments,
+            revisions,
+            settings,
+            core,
+            sources,
+            custom_props,
+            footnote_separators,
+            endnote_separators,
+            media,
+            passthrough,
+            glossary,
+        } = self;
+        let Document {
+            body: other_body,
+            last_section: other_section,
+            parts: other_parts,
+            styles: other_styles,
+            numbering: other_numbering,
+            comments: other_comments,
+            revisions: other_revisions,
+            settings: other_settings,
+            core: other_core,
+            sources: other_sources,
+            custom_props: other_props,
+            footnote_separators: other_footnotes,
+            endnote_separators: other_endnotes,
+            media: other_media,
+            passthrough: other_passthrough,
+            glossary: other_glossary,
+        } = other;
+        same_blocks(body, other_body)
+            && same_parts(parts, other_parts)
+            && last_section == other_section
+            && styles == other_styles
+            && numbering == other_numbering
+            && comments == other_comments
+            && revisions == other_revisions
+            && settings == other_settings
+            && core == other_core
+            && sources == other_sources
+            && custom_props == other_props
+            && footnote_separators == other_footnotes
+            && endnote_separators == other_endnotes
+            && same_bytes(media, other_media)
+            && same_bytes(passthrough, other_passthrough)
+            && glossary == other_glossary
     }
 
     pub fn story(&self, s: StoryRef) -> Option<&Blocks> {

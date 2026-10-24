@@ -275,6 +275,118 @@ fn typing_enter_undo() {
     assert_eq!(text(&s), "Hello world");
 }
 
+/// A command that changes nothing is not an edit (#23): no undo step, no unsaved changes
+/// and no relayout.
+#[test]
+fn a_command_that_changes_nothing_is_not_an_edit() {
+    let mut s = s();
+    let rev = s.rev();
+    // Backspace at the start of the document: there is nothing to delete.
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.undo_depth(), 0, "no undo step");
+    assert!(!s.dirty, "no unsaved changes");
+    assert_eq!(s.rev(), rev, "no relayout");
+    // Typing nothing is the same.
+    run(&mut s, "text.insert", json!({"text": ""}));
+    assert_eq!(s.undo_depth(), 0, "no undo step");
+    assert!(!s.dirty, "no unsaved changes");
+    // A command that changes something is an edit.
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(s.undo_depth(), 1, "one undo step");
+    assert!(s.dirty, "the document is edited");
+    // Setting the alignment a paragraph already has changes nothing.
+    let depth = s.undo_depth();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    let depth = s.undo_depth();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    assert_eq!(s.undo_depth(), depth, "no undo step");
+    // A command that changes nothing leaves the unsaved-changes flag and the layout revision as
+    // they were, even when it calls `touch` itself: a saved document is not marked edited for
+    // nothing, and its layout is not laid out again.
+    let mut clean = Session::new(wordcraft_doc::Document::new());
+    run(&mut clean, "para.align", json!({"value": "left"}));
+    clean.dirty = false;
+    let rev = clean.rev();
+    run(&mut clean, "para.align", json!({"value": "left"}));
+    assert!(!clean.dirty, "no unsaved changes");
+    assert_eq!(clean.rev(), rev, "no relayout");
+    assert_eq!(clean.undo_depth(), 1, "only the first align is a step");
+}
+
+/// Five hundred commands that change nothing used to fill the whole undo stack and push the
+/// user's own edits out of it, so they could never be undone again (#23).
+#[test]
+fn no_op_commands_do_not_evict_the_undo_history() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "caret.docStart", json!({}));
+    for _ in 0..600 {
+        run(&mut s, "text.backspace", json!({}));
+    }
+    assert_eq!(s.undo_depth(), 1, "the typing step is still there");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "", "the typed text is still undoable");
+}
+
+/// A command that changes nothing does not throw the redo stack away (#23).
+#[test]
+fn a_no_op_command_keeps_the_redo_stack() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.can_redo());
+    run(&mut s, "text.backspace", json!({}));
+    assert!(s.can_redo(), "the redo stack survives a command that changed nothing");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s), "Hello");
+}
+
+/// Commands that run as one undo step (`join_next_undo`: a dialog's OK, the frames of a drag):
+/// a group whose first command changes nothing has no step to merge into, so the next command
+/// in it starts the group's step instead of merging into an older edit (#23 follow-up).
+#[test]
+fn a_joined_command_starts_its_group_when_the_first_changed_nothing() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let (depth, margins) = (s.undo_depth(), (s.doc.last_section.margin_left, s.doc.last_section.margin_top));
+    // Portrait on a portrait page changes nothing.
+    run(&mut s, "layout.orientation", json!({"value": "portrait"}));
+    assert_eq!(s.undo_depth(), depth, "the first command of the group is no edit");
+    // The next command of the group starts the step the group needs.
+    s.join_next_undo();
+    run(&mut s, "layout.margins", json!({"left": 100.0}));
+    assert_eq!(s.doc.last_section.margin_left, 100.0);
+    assert_eq!(s.undo_depth(), depth + 1, "the group's one step");
+    // A command that changes nothing in the middle of the group leaves that step alone, and
+    // the next one merges into it.
+    s.join_next_undo();
+    run(&mut s, "layout.orientation", json!({"value": "portrait"}));
+    s.join_next_undo();
+    run(&mut s, "layout.margins", json!({"top": 60.0}));
+    assert_eq!(s.undo_depth(), depth + 1, "still the group's one step");
+    // Undo takes the whole group back and no more: the typing is still there.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!((s.doc.last_section.margin_left, s.doc.last_section.margin_top), margins, "the margins the group started from");
+    assert_eq!(text(&s), "Hello");
+}
+
+/// Bold with nothing selected arms the formatting for the next word: the document is the
+/// same, so only the caret's formatting changed — and that is an edit (#23).
+#[test]
+fn a_command_that_only_arms_the_caret_formatting_is_an_edit() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let depth = s.undo_depth();
+    run(&mut s, "format.bold", json!({}));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    // Undo takes the armed formatting back, as Word does (docs/typing-parity.md).
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.props_of_char(0).bold), Some(None));
+}
+
 /// The Undo button's list (#701): several steps undone at once, newest first.
 #[test]
 fn undo_to_takes_several_steps_back_at_once() {
@@ -8530,6 +8642,29 @@ fn a_version_snapshot_does_not_survive_an_untitled_comparison() {
         assert!(s.run("file.versions", &json!({"restore": 0})).is_err());
         assert!(s.path.is_none() && s.file_name.is_none());
     }
+}
+
+/// A comparison with an `original` replaces the open document in place — the handler loads the
+/// original into `s.doc` without `set_document` — so `document_id` does not move and two
+/// identical comparisons produce identical documents. A comparison is an edit of its own all
+/// the same: the `replaces_document` guard keeps its undo step (#4004 review).
+#[test]
+fn a_repeated_comparison_is_still_an_edit() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-compare-twice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("original.docx");
+    let mut other = Session::new(wordcraft_doc::Document::from_text("Original document."));
+    other.run("file.save", &json!({"path": original.to_string_lossy()})).unwrap();
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Current document."));
+    let compare = json!({"original": original.to_string_lossy(), "text": "Revised document."});
+    s.run("review.compare", &compare).unwrap();
+    let depth = s.undo_depth();
+    assert!(s.dirty);
+    s.run("review.compare", &compare).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1, "the second comparison is an edit of its own");
+    assert!(s.dirty, "the comparison result is unsaved");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A rejected comparison leaves the current document and its snapshots together.

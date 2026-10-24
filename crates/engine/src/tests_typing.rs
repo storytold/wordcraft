@@ -800,6 +800,20 @@ fn typing_then_selecting_then_typing_are_two_undo_steps() {
 }
 
 #[test]
+fn backspace_at_the_start_of_the_document_is_not_an_edit() {
+    // #23: a key that changes nothing adds no undo step, marks no unsaved changes and
+    // leaves the redo stack alone.
+    let mut s = typed("alpha");
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    s.dirty = false;
+    let depth = s.undo_depth();
+    typ(&mut s, "\u{8}");
+    assert_eq!(s.undo_depth(), depth, "no undo step");
+    assert!(!s.dirty, "no unsaved changes");
+    assert_eq!(s.doc.para_at(&Pos::body(0, 0)).unwrap().text, "alpha");
+}
+
+#[test]
 fn undoing_bold_at_the_caret_turns_bold_typing_off_again() {
     // #424: Bold at a caret in an empty paragraph, Undo, type: the text isn't bold.
     let mut s = s();
