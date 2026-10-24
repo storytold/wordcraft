@@ -1331,20 +1331,45 @@ fn caption_number_end(para: &Paragraph) -> usize {
         && let Some(id) = FieldCode::parse(instr).args.first()
     {
         let label = id.replace('_', " ");
+        let before: String = para.text[..o].chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
+        // `{label} {number} {text}` already wrote the label. A title that starts with the same
+        // word (`Table results`) is not a second label.
         let rest = &para.text[end..];
         let trimmed = rest.trim_start();
         if !label.is_empty()
+            && !text_has_label(&before, &label)
             && trimmed.len() >= label.len()
             && trimmed.is_char_boundary(label.len())
             && trimmed[..label.len()].eq_ignore_ascii_case(&label)
         {
             let after = trimmed[label.len()..].trim_start();
-            if after.is_empty() || after.starts_with([':', '\u{2013}', '\u{2014}']) || after.starts_with("- ") {
+            if after.is_empty() || after.starts_with([':', '.', '\u{2013}', '\u{2014}']) || after.starts_with("- ") {
                 end += rest.len() - trimmed.len() + label.len();
             }
         }
     }
     end
+}
+
+/// `label` stands on its own in `text` (a caption label before the number, not inside another word).
+fn text_has_label(text: &str, label: &str) -> bool {
+    let n = label.len();
+    if n == 0 || text.len() < n {
+        return false;
+    }
+    let mut i = 0;
+    while i + n <= text.len() {
+        if text.is_char_boundary(i)
+            && text.is_char_boundary(i + n)
+            && text[i..i + n].eq_ignore_ascii_case(label)
+            && text[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric())
+            && text[i + n..].chars().next().is_none_or(|c| !c.is_alphanumeric())
+        {
+            return true;
+        }
+        i += text[i..].chars().next().map(|c| c.len_utf8()).unwrap_or(1);
+    }
+    false
 }
 
 /// `para.text` from `from` to `to`, with each object replaced by the text it shows.
@@ -1630,6 +1655,28 @@ mod tests {
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("See 1 Plate"), "{}", s.doc.plain_text(StoryRef::Body));
         let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
         assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("1 Plate"));
+    }
+
+    /// `{number} {label}. {text}` keeps the label. A title that repeats the label does not.
+    #[test]
+    fn a_period_after_the_label_keeps_it_and_a_title_does_not() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\nPress\nSee "));
+        s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+        s.run("references.caption", &json!({"label": "Plate", "text": "The kiln", "pattern": "{number} {label}. {text}"})).unwrap();
+        s.run("select.text", &json!({"text": "Press"})).unwrap();
+        s.run("references.caption", &json!({"label": "Table", "text": "Table results", "pattern": "{label} {number} {text}"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        let plates = s.run("insert.crossReference", &json!({"to": "label:Plate"})).unwrap();
+        let plate = plates.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
+        s.run("insert.crossReference", &json!({"to": "label:Plate", "target": plate, "show": "number"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with("See 1 Plate"), "{}", s.doc.plain_text(StoryRef::Body));
+        let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
+        assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("1 Plate"));
+        s.run("text.insert", &json!({"text": " "})).unwrap();
+        let tables = s.run("insert.crossReference", &json!({"to": "label:Table"})).unwrap();
+        let table = tables.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
+        s.run("insert.crossReference", &json!({"to": "label:Table", "target": table, "show": "number"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with("Table 1"), "{}", s.doc.plain_text(StoryRef::Body));
     }
 
     /// The entries of every generated list, in order, with their last tab stop's leader.
