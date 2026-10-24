@@ -413,8 +413,13 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                 }
                 s.run("file.save", &params)
             };
-            r.map_err(|e| e.to_string())?;
+            let result = r.map_err(|e| e.to_string())?;
             eprintln!("wrote {o}");
+            // What a Word package couldn't carry of embedded objects (#1343).
+            for d in result.get("dropped").and_then(|d| d.as_array()).into_iter().flatten() {
+                let field = |k: &str| d.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+                eprintln!("dropped ({}): {} {}", field("kind"), field("part"), field("reason"));
+            }
             Ok(())
         }
         "info" => {

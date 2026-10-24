@@ -385,9 +385,20 @@ fn root_tag_start(frag: &[u8]) -> Option<usize> {
     }
 }
 
+/// [`write`], with what the package couldn't carry of the document's embedded objects (see
+/// [`crate::write_with_report`]).
+pub fn write_with_report(doc: &Document) -> Result<(Vec<u8>, Vec<crate::Loss>), DocxError> {
+    let (parts, losses) = crate::write::write_parts_report(doc, Flavor::Document)?;
+    Ok((flatten(&parts), losses))
+}
+
 /// Write `doc` as a Word XML Document (Flat OPC).
 pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
-    let parts = crate::write::write_parts(doc, Flavor::Document)?;
+    write_with_report(doc).map(|(bytes, _)| bytes)
+}
+
+/// The Flat OPC document holding package `parts` (as [`crate::write::write_parts`] gives them).
+fn flatten(parts: &[(String, Vec<u8>)]) -> Vec<u8> {
     let types = parts
         .iter()
         .find(|(n, _)| n == "[Content_Types].xml")
@@ -395,7 +406,7 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         .unwrap_or_default();
     let mut s = String::from("<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\n<?mso-application progid=\"Word.Document\"?>\n");
     s.push_str(&format!("<pkg:package xmlns:pkg=\"{PKG_NS}\">"));
-    for (name, bytes) in &parts {
+    for (name, bytes) in parts {
         if name == "[Content_Types].xml" {
             continue;
         }
@@ -421,7 +432,7 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
         }
     }
     s.push_str("</pkg:package>");
-    Ok(s.into_bytes())
+    s.into_bytes()
 }
 
 /// An XML part's markup without its XML declaration, to inline as `pkg:xmlData`; `None` for

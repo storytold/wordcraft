@@ -128,12 +128,29 @@ pub struct EmbeddedPart {
     pub rels: Vec<Rel>,
 }
 
+/// Most notes kept on what the kept parts' graph lacks ([`EmbeddedManifest::dropped`]), the last
+/// of which says more weren't listed ([`TRUNCATED`]).
+pub const MAX_DROPPED: usize = 256;
+/// What the last note says when there were more than [`MAX_DROPPED`].
+pub const TRUNCATED: &str = "more was lost than is listed";
+/// The name a note gives a part whose name can't be written in one (a tab or line break in it).
+pub const UNREADABLE_NAME: &str = "a part with an unreadable name";
+
+/// `name`, or [`UNREADABLE_NAME`] when it can't be a field of a manifest line.
+pub fn shown(name: &str) -> &str {
+    if manifest_field_ok(name) { name } else { UNREADABLE_NAME }
+}
+
 /// The parts kept for embedded objects, by part name (see [`EMBEDDED_PARTS`]). Stored as text:
 /// `P\tpart\tcontent type` per part, then `R\tpart\tid\ttype\ttarget\tI|E` per relationship of
-/// that part (`E`: `target` is an external URL).
+/// that part (`E`: `target` is an external URL), then `X\tpart\tkind\twhat` per note in `dropped`.
 #[derive(Clone, Debug, Default)]
 pub struct EmbeddedManifest {
     pub parts: BTreeMap<String, EmbeddedPart>,
+    /// What the file's graph of these parts lacked when read: (part, what it lost), e.g. a
+    /// relationship to a part the file doesn't hold. The part is the one whose relationship was
+    /// dropped (the main document part, for an object's own part).
+    pub dropped: Vec<(String, crate::LossKind, String)>,
 }
 
 /// Can `s` be a field of a manifest line?
@@ -158,10 +175,30 @@ impl EmbeddedManifest {
                         p.rels.push(Rel { id: (*id).to_string(), kind: (*kind).to_string(), target: (*target).to_string(), external: *mode == "E" });
                     }
                 }
+                ["X", part, kind, what] => {
+                    if let Some(kind) = crate::LossKind::from_name(kind) {
+                        m.note(part, kind, (*what).to_string());
+                    }
+                }
                 _ => {}
             }
         }
         m
+    }
+
+    /// Record that `part` lost `what` (once; bounded by [`MAX_DROPPED`], the last note saying
+    /// more weren't listed). An unreadable part name is noted as [`UNREADABLE_NAME`].
+    pub fn note(&mut self, part: &str, kind: crate::LossKind, what: String) {
+        let part = shown(part);
+        if !manifest_field_ok(&what) || self.dropped.iter().any(|(p, k, w)| p == part && *k == kind && *w == what) {
+            return;
+        }
+        let n = self.dropped.len();
+        if n + 1 < MAX_DROPPED {
+            self.dropped.push((part.to_string(), kind, what));
+        } else if n + 1 == MAX_DROPPED {
+            self.dropped.push((part.to_string(), crate::LossKind::Truncated, TRUNCATED.to_string()));
+        }
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -176,6 +213,9 @@ impl EmbeddedManifest {
             for r in p.rels.iter().filter(|r| [&r.id, &r.kind, &r.target].iter().all(|f| manifest_field_ok(f))) {
                 s.push_str(&format!("R\t{part}\t{}\t{}\t{}\t{}\n", r.id, r.kind, r.target, if r.external { "E" } else { "I" }));
             }
+        }
+        for (part, kind, what) in self.dropped.iter().filter(|(p, _, w)| manifest_field_ok(p) && manifest_field_ok(w)) {
+            s.push_str(&format!("X\t{part}\t{}\t{what}\n", kind.as_str()));
         }
         s.into_bytes()
     }

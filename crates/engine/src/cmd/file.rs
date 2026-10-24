@@ -85,13 +85,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)} → {path, paragraphs, words, encrypted, "incomplete"?: [{part, kind, reason}] (Word embedded objects — charts, diagrams, OLE objects, kept parts — the file doesn't hold whole; kind: missingPart|partLimit|relationshipLimit|notCarried|truncated)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
-            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)}"#)
+            .params(r#"{"path"?: string, "password"?: string (encrypt this and later saves with it, as file.encrypt does), "markup"?: bool (Print Markup for a PDF, PNG, HTML, Markdown or text copy: comments shown; default file.printMarkup), "format"?: "wordml2003" (an .xml file as a Word 2003 XML Document) | "flatopc" (as a Word XML Document, the default; saving over a Word 2003 XML file keeps that format)} → {saved, path, encrypted, "dropped"?: [{part, kind, reason}] (what a Word package couldn't carry of embedded objects; kind: missingPart|partLimit|relationshipLimit|notCarried|leftOut|danglingReference|truncated)}"#)
             .pure(),
-        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)}"#).pure(),
+        CommandSpec::new("file.saveAs", "Save As", "File", save_as).key(super::mac_or("F12 / Mod+Shift+S", "F12 / Alt+F2")).params(r#"{"path": string, "password"?: string, "markup"?: bool, "format"?: string (as file.save)} → as file.save, "dropped" included"#).pure(),
         // Pure: the password must not land in Repeat or a recorded macro, and it isn't an edit
         // to undo; it marks the document as changed itself.
         CommandSpec::new("file.encrypt", "Encrypt with Password", "File › Info › Protect Document", encrypt)
@@ -252,6 +252,8 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     {
         doc.styles.default_chr.lang = Some(lang.clone());
     }
+    // Embedded objects the file doesn't hold whole (#1343).
+    let incomplete = wordcraft_docx::incomplete_objects(&doc);
     s.set_document(doc);
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
@@ -261,7 +263,17 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+    let mut out = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted});
+    if !incomplete.is_empty() {
+        out["incomplete"] = losses_json(&incomplete);
+    }
+    Ok(out)
+}
+
+/// `[{"part", "kind", "reason"}…]` for what a Word package lacked or lost (`kind`: see
+/// [`wordcraft_docx::LossKind::as_str`]).
+pub(crate) fn losses_json(losses: &[wordcraft_docx::Loss]) -> Value {
+    losses.iter().map(|l| json!({"part": l.part, "kind": l.kind.as_str(), "reason": l.reason})).collect()
 }
 
 /// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
@@ -326,10 +338,13 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
     let password = s.password.as_ref().map(crate::io::Password::as_str);
     // A header/footer just made and left empty isn't saved (#960).
     let copy = super::insert::saved_copy(s);
-    if let Err(e) = crate::io::save_path_with(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
-        (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
-        return Err(CmdError::Failed(e));
-    }
+    let losses = match crate::io::save_path_report(&path, copy.as_ref().unwrap_or(&s.doc), password, &opts) {
+        Ok(losses) => losses,
+        Err(e) => {
+            (s.doc.settings.zoom, s.doc.core.last_modified_by, s.doc.core.created, s.doc.core.modified, s.doc.core.revision) = before_stamp;
+            return Err(CmdError::Failed(e));
+        }
+    };
     let encrypted = password.is_some() && crate::io::can_encrypt(&path.to_string_lossy());
     // A save in a format that doesn't keep everything (plain text, Markdown, a page image) is a
     // copy, except over the document's own file: a note.txt opened and saved is saved (#2376).
@@ -339,7 +354,12 @@ fn save(s: &mut Session, v: &Value) -> CmdResult {
         s.dirty = false;
         s.relayout();
     }
-    Ok(json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted}))
+    let mut out = json!({"saved": true, "path": path.to_string_lossy(), "encrypted": encrypted});
+    // What a Word package couldn't carry of the embedded objects (#1343).
+    if !losses.is_empty() {
+        out["dropped"] = losses_json(&losses);
+    }
+    Ok(out)
 }
 
 /// Does `path` hold a Word 2003 XML Document already (so a plain save keeps that format)?

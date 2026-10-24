@@ -135,12 +135,30 @@ pub fn write(doc: &Document) -> Result<Vec<u8>, DocxError> {
 
 /// Write a package of the given flavour (`.docx`, `.docm`, `.dotx`, `.dotm`).
 pub fn write_as(doc: &Document, flavor: Flavor) -> Result<Vec<u8>, DocxError> {
-    zip_entries(&write_parts(doc, flavor)?)
+    write_as_with_report(doc, flavor).map(|(bytes, _)| bytes)
+}
+
+/// [`write`], with what the package couldn't carry of the document's embedded objects.
+pub fn write_with_report(doc: &Document) -> Result<(Vec<u8>, Vec<crate::Loss>), DocxError> {
+    write_as_with_report(doc, Flavor::Document)
+}
+
+/// [`write_as`], with what the package couldn't carry of the document's embedded objects (a part
+/// missing or over a limit, an object left out). Relationships to parts not written are never
+/// written.
+pub fn write_as_with_report(doc: &Document, flavor: Flavor) -> Result<(Vec<u8>, Vec<crate::Loss>), DocxError> {
+    let (parts, losses) = write_parts_report(doc, flavor)?;
+    Ok((zip_entries(&parts)?, losses))
 }
 
 /// The parts of the package [`write_as`] zips, in order, `[Content_Types].xml` first: (part name
 /// without the leading `/`, bytes).
 pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String, Vec<u8>)>, DocxError> {
+    write_parts_report(doc, flavor).map(|(parts, _)| parts)
+}
+
+/// [`write_parts`], with what the embedded objects lost (see [`write_as_with_report`]).
+pub(crate) fn write_parts_report(doc: &Document, flavor: Flavor) -> Result<(Vec<(String, Vec<u8>)>, Vec<crate::Loss>), DocxError> {
     // A range field must be whole in the file: drop markers that lost their partner in editing.
     let balanced;
     let doc = if doc.has_unbalanced_field_ranges() {
@@ -549,7 +567,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     }
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
-    Ok(entries)
+    Ok((entries, std::mem::take(&mut wr.embeds.losses)))
 }
 
 fn push_part(entries: &mut Vec<(String, Vec<u8>)>, overrides: &mut Vec<(String, String)>, path: &str, bytes: Vec<u8>, ct: &str, rels: PartRels) {

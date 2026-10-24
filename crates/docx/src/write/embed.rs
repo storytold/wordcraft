@@ -10,12 +10,14 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use wordcraft_doc::graphic::Embedded;
+
+use crate::{Loss, LossKind};
 use wordcraft_doc::para::Float;
 
 use super::PartRels;
 use crate::package::{
-    CUSTOM_XML_ROOTS, EMBEDDED_PARTS, EmbeddedManifest, FONT_TABLE_PART, MAX_EMBEDDED_PARTS, MAX_EMBEDDED_RELS, VBA_PROJECT_PART, VBA_RELATED,
-    rel_is, relative, rt,
+    CUSTOM_XML_ROOTS, EMBEDDED_PARTS, EmbeddedManifest, FONT_TABLE_PART, MAX_DROPPED, MAX_EMBEDDED_PARTS, MAX_EMBEDDED_RELS, VBA_PROJECT_PART,
+    VBA_RELATED, rel_is, relative, rt,
 };
 use crate::units::{MAX_LEN_PT, emu, int};
 use crate::xml::{self, El, MAX_DEPTH};
@@ -26,6 +28,14 @@ const MAX_COPY_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_MARKUP_BYTES: u64 = 128 * 1024 * 1024;
 /// What one part copy costs at least against [`MAX_COPY_BYTES`] (its relationships, entry…).
 const PART_COST: u64 = 4096;
+
+/// What [`EmbedWriter::losses`] says of an object that couldn't be written back.
+const LEFT_OUT: &str = "the object couldn't be written back whole and is left out (an OLE object keeps only its picture)";
+
+/// The name a loss gives object `src`: its first part, else its kind of markup.
+fn object_name(src: &Embedded) -> String {
+    src.refs.iter().find(|r| !r.external).map_or_else(|| "embedded object".to_string(), |r| r.target.clone())
+}
 
 /// Where the stories' parts live: every story this writer makes is a part in `word/`.
 const STORY_PART: &str = "word/document.xml";
@@ -46,9 +56,28 @@ pub(crate) struct EmbedWriter<'d> {
     markup_bytes: u64,
     /// Parts to write: (name, bytes, content type, relationships).
     pub parts: Vec<(String, Vec<u8>, String, PartRels)>,
+    /// What couldn't be written whole (see [`crate::write_with_report`]).
+    pub losses: Vec<crate::Loss>,
+    /// Parts that lost relationships, checked for ids their markup still uses (see `check`).
+    checked: HashMap<String, PartCheck>,
     /// Leave out the main document's kept glossary (it's written from the model instead).
     pub drop_glossary: bool,
 }
+
+/// Whether a part that lost relationships can still be written (see [`EmbedWriter::check`]).
+#[derive(Clone)]
+enum PartCheck {
+    /// As it is.
+    Fine,
+    /// With these bytes: optional elements naming a lost relationship removed.
+    Fixed(Vec<u8>),
+    /// Not without a relationship it needs: whatever reaches it is left out.
+    Broken,
+}
+
+/// Elements that only link to something optional (a chart's data workbook or drawn shapes, a
+/// font table's embedded fonts) and can go when their relationship is lost.
+const OPTIONAL_LINKS: &[&str] = &["externalData", "userShapes", "embedRegular", "embedBold", "embedItalic", "embedBoldItalic"];
 
 impl<'d> EmbedWriter<'d> {
     pub fn new(doc: &'d wordcraft_doc::Document) -> EmbedWriter<'d> {
@@ -92,12 +121,18 @@ impl<'d> EmbedWriter<'d> {
             copy_bytes: MAX_COPY_BYTES,
             markup_bytes: MAX_MARKUP_BYTES,
             parts: Vec::new(),
+            losses: Vec::new(),
+            checked: HashMap::new(),
             drop_glossary: false,
         }
     }
 
     /// Write the font table kept from a file, with the fonts it embeds, relating it from `rels`.
     pub fn font_table(&mut self, rels: &mut PartRels) {
+        if self.tree_broken(&[FONT_TABLE_PART]) {
+            self.lose(FONT_TABLE_PART, LossKind::LeftOut, "names a relationship that is gone; it is left out".into());
+            return;
+        }
         let mut written = Vec::new();
         if let Some(name) = self.copy_tree(FONT_TABLE_PART, &mut HashMap::new(), &mut written) {
             rels.add(rt::FONT_TABLE, &relative(STORY_PART, &name), false);
@@ -177,6 +212,75 @@ impl<'d> EmbedWriter<'d> {
         }
     }
 
+    /// Report that `part` lost `reason` (once; bounded by [`MAX_DROPPED`], the last of which says
+    /// more weren't listed).
+    fn lose(&mut self, part: &str, kind: LossKind, reason: String) {
+        if self.losses.iter().any(|l| l.part == part && l.kind == kind && l.reason == reason) {
+            return;
+        }
+        let n = self.losses.len();
+        if n + 1 < MAX_DROPPED {
+            self.losses.push(Loss { part: part.to_string(), kind, reason });
+        } else if n + 1 == MAX_DROPPED {
+            self.losses.push(Loss { part: part.to_string(), kind: LossKind::Truncated, reason: crate::package::TRUNCATED.into() });
+        }
+    }
+
+    /// Can `part` be written without naming a relationship that won't be written? Only a part
+    /// that lost relationships (in the file read, or here) is looked at; optional links naming a
+    /// lost relationship are removed from its bytes.
+    fn check(&mut self, part: &str) -> PartCheck {
+        if let Some(c) = self.checked.get(part) {
+            return c.clone();
+        }
+        let result = self.check_uncached(part);
+        if matches!(result, PartCheck::Broken) {
+            self.lose(part, LossKind::DanglingReference, "names a relationship that is gone".into());
+        }
+        self.checked.insert(part.to_string(), result.clone());
+        result
+    }
+
+    fn check_uncached(&self, part: &str) -> PartCheck {
+        let (Some(info), Some(bytes)) = (self.manifest.parts.get(part), self.passthrough.get(part)) else { return PartCheck::Fine };
+        let kept: Vec<&str> = info.rels.iter().filter(|r| r.external || self.available(&r.target)).map(|r| r.id.as_str()).collect();
+        let lacked = self.manifest.dropped.iter().any(|(p, _, _)| p == part);
+        if kept.len() == info.rels.len() && !lacked {
+            return PartCheck::Fine;
+        }
+        let missing = match missing_ids(bytes, &kept) {
+            // Not XML: it can't name relationships.
+            Ids::NotXml => return PartCheck::Fine,
+            Ids::TooMany => return PartCheck::Broken,
+            Ids::Missing(m) if m.is_empty() => return PartCheck::Fine,
+            Ids::Missing(m) if m.len() > MAX_FIX_IDS => return PartCheck::Broken,
+            Ids::Missing(m) => m,
+        };
+        let fixed = remove_optional_links(bytes, &missing);
+        match missing_ids(&fixed, &kept) {
+            Ids::Missing(m) if m.is_empty() => PartCheck::Fixed(fixed),
+            _ => PartCheck::Broken,
+        }
+    }
+
+    /// Does any part reached from `roots` name a relationship that won't be written?
+    fn tree_broken(&mut self, roots: &[&str]) -> bool {
+        let mut seen: HashSet<String> = HashSet::new();
+        let mut todo: Vec<String> = roots.iter().map(|r| r.to_string()).collect();
+        while let Some(p) = todo.pop() {
+            if seen.len() > MAX_EMBEDDED_PARTS || !seen.insert(p.clone()) {
+                continue;
+            }
+            if matches!(self.check(&p), PartCheck::Broken) {
+                return true;
+            }
+            if let Some(info) = self.manifest.parts.get(&p) {
+                todo.extend(info.rels.iter().filter(|r| !r.external && self.available(&r.target)).map(|r| r.target.clone()));
+            }
+        }
+        false
+    }
+
     /// Can part `name` be written (bytes and manifest entry both kept)?
     fn available(&self, name: &str) -> bool {
         self.manifest.parts.contains_key(name) && self.passthrough.contains_key(name)
@@ -193,9 +297,16 @@ impl<'d> EmbedWriter<'d> {
             if *source != owner || !rel_is(kind, rt::CUSTOM_XML) {
                 continue;
             }
-            if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
-                let source_part = if owner == "P" { "" } else { STORY_PART };
-                rels.add(kind, &relative(source_part, &name), false);
+            if self.tree_broken(&[target]) {
+                self.lose(target, LossKind::LeftOut, "names a relationship that is gone; it is left out".into());
+                continue;
+            }
+            match self.copy_tree(target, &mut memo, &mut written) {
+                Some(name) => {
+                    let source_part = if owner == "P" { "" } else { STORY_PART };
+                    rels.add(kind, &relative(source_part, &name), false);
+                }
+                None => self.lose(target, LossKind::MissingPart, "was kept from the file but its bytes are gone; it is left out".into()),
             }
         }
         self.first = memo;
@@ -213,9 +324,16 @@ impl<'d> EmbedWriter<'d> {
             if *source != owner || (self.drop_glossary && owner == "D" && rel_is(kind, rt::GLOSSARY)) {
                 continue;
             }
-            if let Some(name) = self.copy_tree(target, &mut memo, &mut written) {
-                let source_part = if owner == "P" { "" } else { STORY_PART };
-                rels.add(kind, &relative(source_part, &name), false);
+            if self.tree_broken(&[target]) {
+                self.lose(target, LossKind::LeftOut, "names a relationship that is gone; it is left out".into());
+                continue;
+            }
+            match self.copy_tree(target, &mut memo, &mut written) {
+                Some(name) => {
+                    let source_part = if owner == "P" { "" } else { STORY_PART };
+                    rels.add(kind, &relative(source_part, &name), false);
+                }
+                None => self.lose(target, LossKind::MissingPart, "was kept from the file but its bytes are gone; it is left out".into()),
             }
         }
         self.first = memo;
@@ -263,6 +381,16 @@ impl<'d> EmbedWriter<'d> {
         while let Some(orig) = todo.pop() {
             let (Some(info), Some(bytes)) = (self.manifest.parts.get(&orig).cloned(), self.passthrough.get(&orig)) else { continue };
             let Some(new) = memo.get(&orig).cloned() else { continue };
+            // What the file's graph already lacked under this part (noted by the reader).
+            let lacked: Vec<(LossKind, String)> =
+                self.manifest.dropped.iter().filter(|(p, _, _)| *p == orig).map(|(_, k, w)| (*k, w.clone())).collect();
+            for (kind, what) in lacked {
+                self.lose(&orig, kind, format!("{what} (in the file read)"));
+            }
+            let bytes = match self.check(&orig) {
+                PartCheck::Fixed(fixed) => fixed,
+                _ => bytes.to_vec(),
+            };
             let mut rels = PartRels::default();
             for r in &info.rels {
                 if r.external {
@@ -277,14 +405,17 @@ impl<'d> EmbedWriter<'d> {
                         todo.push(r.target.clone());
                         t
                     }
-                    // A part that wasn't kept: leave the relationship out.
-                    None => continue,
+                    // A part that wasn't kept: leave the relationship out (never dangling).
+                    None => {
+                        self.lose(&orig, LossKind::MissingPart, format!("relates to {}, which is gone; the relationship is left out", r.target));
+                        continue;
+                    }
                 };
                 rels.add_with_id(&r.id, &r.kind, &relative(&new, &target), false);
             }
             let ct = if info.content_type.is_empty() { "application/octet-stream".to_string() } else { info.content_type };
             written.push(self.parts.len());
-            self.parts.push((new, bytes.to_vec(), ct, rels));
+            self.parts.push((new, bytes, ct, rels));
         }
         Some(name)
     }
@@ -304,19 +435,26 @@ impl super::Writer<'_> {
     pub(super) fn embedded_tree(&mut self, src: &Embedded, rels: &mut PartRels, resize: Option<(f32, f32, &Float, &str)>) -> Option<El> {
         let Some(left) = self.embeds.markup_bytes.checked_sub(src.xml.len() as u64) else {
             log::warn!("docx: too much embedded-object markup; the rest is left out");
+            self.embeds.lose(&object_name(src), LossKind::LeftOut, LEFT_OUT.into());
             return None;
         };
         self.embeds.markup_bytes = left;
         let mut root = xml::parse(src.xml.as_bytes()).ok()?;
-        let mut used = Vec::new();
-        rel_attr_values(&root, &mut used, 0);
+        let mut used = HashSet::new();
+        let counted = rel_attr_values(&root, &mut used, 0);
         // Every relationship the markup uses must be writable, or the object would be broken.
         let writable = |id: &String| src.refs.iter().any(|r| r.id == *id && (r.external || self.embeds.available(&r.target)));
-        if !used.iter().all(writable) {
+        if !counted || !used.iter().all(writable) {
             log::warn!("docx: an embedded object's parts are missing; it is left out");
+            self.embeds.lose(&object_name(src), LossKind::LeftOut, LEFT_OUT.into());
             return None;
         }
         let roots: Vec<&str> = src.refs.iter().filter(|r| !r.external).map(|r| r.target.as_str()).collect();
+        // A part it reaches names a relationship that's gone: it can't be written whole.
+        if self.embeds.tree_broken(&roots) {
+            self.embeds.lose(&object_name(src), LossKind::LeftOut, LEFT_OUT.into());
+            return None;
+        }
         // Written before (a copy of this object): give this one its own parts while the budget lasts.
         let again = roots.iter().any(|r| self.embeds.first.contains_key(*r));
         let cost = if again { self.embeds.tree_cost(&roots) } else { 0 };
@@ -331,7 +469,11 @@ impl super::Writer<'_> {
             let new_id = if r.external {
                 Some(rels.add(&r.kind, &r.target, true))
             } else {
-                self.embeds.copy_tree(&r.target, &mut memo, &mut written).map(|name| rels.add(&r.kind, &relative(STORY_PART, &name), false))
+                let copied = self.embeds.copy_tree(&r.target, &mut memo, &mut written);
+                if copied.is_none() {
+                    self.embeds.lose(&r.target, LossKind::MissingPart, "is gone; the object's relationship to it is left out".into());
+                }
+                copied.map(|name| rels.add(&r.kind, &relative(STORY_PART, &name), false))
             };
             if let Some(id) = new_id {
                 ids.insert(r.id.clone(), id);
@@ -342,6 +484,7 @@ impl super::Writer<'_> {
         }
         if used.iter().any(|u| !ids.contains_key(u)) {
             log::warn!("docx: an embedded object lost a part; it is left out");
+            self.embeds.lose(&object_name(src), LossKind::LeftOut, LEFT_OUT.into());
             return None;
         }
         // A SmartArt data part names its drawing's relationship (of the story part) by id.
@@ -587,18 +730,103 @@ fn set_attr(e: &mut El, k: &str, v: &str) {
     }
 }
 
-fn rel_attr_values(e: &El, out: &mut Vec<String>, depth: usize) {
+/// Is attribute `k` a relationship id (see `read::embed::rel_ids`)?
+/// What [`missing_ids`] found.
+enum Ids {
+    /// Not XML: it can't name relationships.
+    NotXml,
+    /// More distinct ids than [`MAX_EMBEDDED_RELS`]: not checked.
+    TooMany,
+    /// The ids used that aren't kept.
+    Missing(Vec<String>),
+}
+
+/// The relationship ids XML part `bytes` uses that aren't in `kept`.
+fn missing_ids(bytes: &[u8], kept: &[&str]) -> Ids {
+    let root = match xml::parse(bytes) {
+        Ok(root) => root,
+        // Real XML past the parser's limits may still name ids: it can't be checked.
+        Err(crate::DocxError::Limit(_)) => return Ids::TooMany,
+        Err(_) => return Ids::NotXml,
+    };
+    let mut used = HashSet::new();
+    if !rel_attr_values(&root, &mut used, 0) {
+        return Ids::TooMany;
+    }
+    let kept: HashSet<&str> = kept.iter().copied().collect();
+    Ids::Missing(used.into_iter().filter(|u| !kept.contains(u.as_str())).collect())
+}
+
+/// Most lost relationship ids [`remove_optional_links`] removes links for; a part naming more
+/// is left out (like the reader's cap on one object's ids).
+const MAX_FIX_IDS: usize = 64;
+/// Longest element name, and start tag, [`remove_optional_links`] looks at.
+const MAX_NAME: usize = 64;
+const MAX_START_TAG: usize = 4096;
+
+/// `xml` without the [`OPTIONAL_LINKS`] elements (any prefix) whose start tag names one of the
+/// relationships `ids`, in one pass. Unchanged when it isn't UTF-8 or has none.
+fn remove_optional_links(xml: &[u8], ids: &[String]) -> Vec<u8> {
+    let Ok(text) = std::str::from_utf8(xml) else { return xml.to_vec() };
+    let ids: HashSet<&str> = ids.iter().take(MAX_FIX_IDS).map(String::as_str).collect();
+    let bytes = text.as_bytes();
+    let mut out: Vec<u8> = Vec::with_capacity(bytes.len());
+    // Copied up to `copied`; looking for the next `<` from `pos`.
+    let (mut copied, mut pos) = (0usize, 0usize);
+    // Element names whose closing tag isn't in the rest of the part (not searched again).
+    let mut unclosed: HashSet<&str> = HashSet::new();
+    while let Some(lt) = text.get(pos..).and_then(|t| t.find('<')).map(|o| pos + o) {
+        pos = lt + 1;
+        let after = bytes.get(lt + 1..).unwrap_or(&[]);
+        let Some(name_len) = after.iter().take(MAX_NAME).position(|b| b.is_ascii_whitespace() || *b == b'/' || *b == b'>') else { continue };
+        let Some(name) = text.get(lt + 1..lt + 1 + name_len) else { continue };
+        let local = name.rsplit(':').next().unwrap_or(name);
+        if !OPTIONAL_LINKS.contains(&local) {
+            continue;
+        }
+        let Some(gt) = after.iter().take(MAX_START_TAG).position(|b| *b == b'>').map(|o| lt + 1 + o) else { continue };
+        let start = text.get(lt..=gt).unwrap_or("");
+        let names_lost = start.split("=\"").skip(1).filter_map(|v| v.split('"').next()).any(|v| ids.contains(v));
+        if !names_lost {
+            continue;
+        }
+        let end = if start.ends_with("/>") {
+            gt + 1
+        } else if unclosed.contains(name) {
+            continue;
+        } else {
+            let close = format!("</{name}>");
+            match text.get(gt..).and_then(|t| t.find(&close)) {
+                Some(c) => gt + c + close.len(),
+                None => {
+                    unclosed.insert(name);
+                    continue;
+                }
+            }
+        };
+        out.extend_from_slice(bytes.get(copied..lt).unwrap_or(&[]));
+        copied = end;
+        pos = end;
+    }
+    out.extend_from_slice(bytes.get(copied..).unwrap_or(&[]));
+    out
+}
+
+/// Add the relationship ids `e` uses to `out`. False past [`MAX_EMBEDDED_RELS`] distinct ids
+/// (the rest aren't collected).
+fn rel_attr_values(e: &El, out: &mut HashSet<String>, depth: usize) -> bool {
     if depth > MAX_DEPTH {
-        return;
+        return true;
     }
     for (k, v) in &e.attrs {
         if xml::is_rel_attr(&e.name, k) && !out.contains(v) {
-            out.push(v.clone());
+            if out.len() >= MAX_EMBEDDED_RELS {
+                return false;
+            }
+            out.insert(v.clone());
         }
     }
-    for c in e.els() {
-        rel_attr_values(c, out, depth + 1);
-    }
+    e.els().all(|c| rel_attr_values(c, out, depth + 1))
 }
 
 fn set_rel_ids(e: &mut El, ids: &HashMap<String, String>, depth: usize) {
@@ -746,5 +974,51 @@ mod tests {
             assert!(!name.to_ascii_lowercase().contains("%2f") && !name.to_ascii_lowercase().contains("%5c"), "{name}");
             assert!(name.split('/').all(|s| !s.is_empty() && !s.ends_with('.')), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod loss_tests {
+    use super::*;
+
+    /// A part full of `<` that never close (a comment or CDATA), naming many lost relationships,
+    /// is cleaned in one bounded pass: no rescan per `<` or per id (#1343).
+    #[test]
+    fn removing_links_from_a_lt_heavy_part_is_linear() {
+        let ids: Vec<String> = (0..64).map(|i| format!("rId{i}")).collect();
+        let mut xml =
+            String::from(r#"<c:chartSpace xmlns:c="c" xmlns:r="r"><c:externalData r:id="rId3"><c:autoUpdate val="0"/></c:externalData><!--"#);
+        xml.push_str(&"<".repeat(20_000));
+        xml.push_str("--></c:chartSpace>");
+        let start = std::time::Instant::now();
+        let out = remove_optional_links(xml.as_bytes(), &ids);
+        assert!(start.elapsed() < std::time::Duration::from_secs(1), "took {:?}", start.elapsed());
+        let out = String::from_utf8(out).unwrap();
+        assert!(!out.contains("externalData"));
+        assert_eq!(out.len(), xml.len() - r#"<c:externalData r:id="rId3"><c:autoUpdate val="0"/></c:externalData>"#.len());
+    }
+
+    /// More distinct relationship ids than a part may have can't be checked: too many.
+    #[test]
+    fn a_part_naming_too_many_ids_is_too_many() {
+        let mut xml = String::from(
+            r#"<c:chartSpace xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">"#,
+        );
+        for i in 0..=MAX_EMBEDDED_RELS {
+            xml.push_str(&format!(r#"<c:x r:id="rId{i}"/>"#));
+        }
+        xml.push_str("</c:chartSpace>");
+        assert!(matches!(missing_ids(xml.as_bytes(), &[]), Ids::TooMany));
+        let one = r#"<c:x xmlns:c="http://schemas.openxmlformats.org/drawingml/2006/chart" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" r:id="x"/>"#.as_bytes();
+        assert!(matches!(missing_ids(one, &["x"]), Ids::Missing(m) if m.is_empty()));
+        assert!(matches!(missing_ids(one, &[]), Ids::Missing(m) if m == ["x"]));
+        assert!(matches!(missing_ids(b"\x00 not xml", &[]), Ids::NotXml));
+    }
+
+    /// XML nested past the parser's depth limit is not "not XML": it can't be checked either.
+    #[test]
+    fn a_part_past_the_parser_limits_is_too_many() {
+        let deep = format!("{}{}", "<a>".repeat(MAX_DEPTH + 10), "</a>".repeat(MAX_DEPTH + 10));
+        assert!(matches!(missing_ids(deep.as_bytes(), &[]), Ids::TooMany));
     }
 }

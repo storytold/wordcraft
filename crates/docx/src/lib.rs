@@ -28,12 +28,83 @@ pub use crypt::{
     DEFAULT_SPIN_COUNT, MAX_PASSWORD_CHARS, PasswordCheck, check_password, check_protection_password, decrypt, encrypt, encrypt_with_spin_count,
     is_encrypted, protection_hash,
 };
-pub use flat::{XmlKind, sniff_xml, write as write_flat};
+pub use flat::{XmlKind, sniff_xml, write as write_flat, write_with_report as write_flat_with_report};
 pub use fonts::{EmbeddedFont, embedded_fonts};
 pub use read::read;
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
-pub use write::{write, write_as};
+pub use write::{write, write_as, write_as_with_report, write_with_report};
+
+/// Something a package didn't carry whole: a part of an embedded object (chart, diagram, OLE
+/// object, kept custom XML…) that was missing, over a limit, or left out. Read: see
+/// [`incomplete_objects`]; written: see [`write_with_report`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Loss {
+    /// The part (or object) concerned.
+    pub part: String,
+    /// What kind of loss: stable, for programs (see [`LossKind::as_str`]).
+    pub kind: LossKind,
+    /// What was lost, in a short sentence.
+    pub reason: String,
+}
+
+/// What kind of [`Loss`] it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum LossKind {
+    /// A part an object relates to isn't in the file, or is gone.
+    MissingPart,
+    /// Past the limit on parts kept for embedded objects.
+    PartLimit,
+    /// Past the limit on one part's relationships.
+    RelationshipLimit,
+    /// A part (or relationship) that can't be carried: an unreadable name, a relationships part,
+    /// the main document…
+    NotCarried,
+    /// A whole object couldn't be written back and was left out (an OLE object keeps its picture).
+    LeftOut,
+    /// A part names a relationship that isn't there.
+    DanglingReference,
+    /// More losses than are listed.
+    Truncated,
+}
+
+impl LossKind {
+    /// The kind's stable name (`missingPart`, `partLimit`, `relationshipLimit`, `notCarried`,
+    /// `leftOut`, `danglingReference`, `truncated`).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            LossKind::MissingPart => "missingPart",
+            LossKind::PartLimit => "partLimit",
+            LossKind::RelationshipLimit => "relationshipLimit",
+            LossKind::NotCarried => "notCarried",
+            LossKind::LeftOut => "leftOut",
+            LossKind::DanglingReference => "danglingReference",
+            LossKind::Truncated => "truncated",
+        }
+    }
+
+    /// The kind [`LossKind::as_str`] names.
+    pub fn from_name(name: &str) -> Option<LossKind> {
+        [
+            LossKind::MissingPart,
+            LossKind::PartLimit,
+            LossKind::RelationshipLimit,
+            LossKind::NotCarried,
+            LossKind::LeftOut,
+            LossKind::DanglingReference,
+            LossKind::Truncated,
+        ]
+        .into_iter()
+        .find(|k| k.as_str() == name)
+    }
+}
+
+/// The embedded objects of a document read from a file that weren't read whole: each part one
+/// of them relates to but the file lacked (or that was over a limit), so it can't be saved back.
+pub fn incomplete_objects(doc: &wordcraft_doc::Document) -> Vec<Loss> {
+    let Some(m) = doc.passthrough.get(package::EMBEDDED_PARTS) else { return Vec::new() };
+    package::EmbeddedManifest::parse(m).dropped.into_iter().map(|(part, kind, reason)| Loss { part, kind, reason }).collect()
+}
 
 /// Largest `.xml` file read as a Word XML document.
 pub const MAX_XML_FILE: usize = 1 << 30;

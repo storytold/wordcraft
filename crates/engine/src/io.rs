@@ -362,15 +362,21 @@ pub fn save_bytes(name: &str, doc: &Document) -> Result<Vec<u8>, String> {
 
 /// [`save_bytes`] with export options (Print Markup).
 pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Result<Vec<u8>, String> {
+    save_bytes_report(name, doc, opts).map(|(bytes, _)| bytes)
+}
+
+/// [`save_bytes_opts`], with what a Word package couldn't carry of the document's embedded
+/// objects (empty for other formats).
+pub fn save_bytes_report(name: &str, doc: &Document, opts: &ExportOptions) -> Result<(Vec<u8>, Vec<wordcraft_docx::Loss>), String> {
     let ext = ext_of(name);
     match ext.as_str() {
         // List paragraphs get their label and a tab, as in Word's plain-text save.
         "txt" | "text" => {
             let bytes = wordcraft_formats::txt::export(doc);
-            Ok(if opts.markup && opts.comments { wordcraft_formats::comments::append("txt", doc, bytes) } else { bytes })
+            Ok((if opts.markup && opts.comments { wordcraft_formats::comments::append("txt", doc, bytes) } else { bytes }, Vec::new()))
         }
-        "json" => serde_json::to_vec_pretty(doc).map_err(|e| e.to_string()),
-        other => match crate::io_ext::save(other, doc, opts) {
+        "json" => serde_json::to_vec_pretty(doc).map(|bytes| (bytes, Vec::new())).map_err(|e| e.to_string()),
+        other => match crate::io_ext::save_report(other, doc, opts) {
             Some(r) => r,
             None => Err(format!("{name}: can't save as `.{other}`")),
         },
@@ -380,10 +386,20 @@ pub fn save_bytes_opts(name: &str, doc: &Document, opts: &ExportOptions) -> Resu
 /// [`save_bytes`], encrypted with `password` when there is one and the format is a Word package
 /// (other formats are copies and are written as they are).
 pub fn save_bytes_with(name: &str, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<Vec<u8>, String> {
-    let bytes = save_bytes_opts(name, doc, opts)?;
+    save_bytes_with_report(name, doc, password, opts).map(|(bytes, _)| bytes)
+}
+
+/// [`save_bytes_with`], with what was lost as [`save_bytes_report`] says.
+pub fn save_bytes_with_report(
+    name: &str,
+    doc: &Document,
+    password: Option<&str>,
+    opts: &ExportOptions,
+) -> Result<(Vec<u8>, Vec<wordcraft_docx::Loss>), String> {
+    let (bytes, losses) = save_bytes_report(name, doc, opts)?;
     match password {
-        Some(pw) if can_encrypt(name) => wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string()),
-        _ => Ok(bytes),
+        Some(pw) if can_encrypt(name) => Ok((wordcraft_docx::encrypt(&bytes, pw).map_err(|e| e.to_string())?, losses)),
+        _ => Ok((bytes, losses)),
     }
 }
 
@@ -704,15 +720,31 @@ pub fn save_path(path: &std::path::Path, doc: &Document) -> Result<(), String> {
 }
 
 /// [`save_path`], encrypted with `password` as [`save_bytes_with`] does.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn save_path_with(path: &std::path::Path, doc: &Document, password: Option<&str>, opts: &ExportOptions) -> Result<(), String> {
+    save_path_report(path, doc, password, opts).map(|_| ())
+}
+
+/// [`save_path_with`], returning what was lost as [`save_bytes_report`] says.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn save_path_report(
+    path: &std::path::Path,
+    doc: &Document,
+    password: Option<&str>,
+    opts: &ExportOptions,
+) -> Result<Vec<wordcraft_docx::Loss>, String> {
     crate::file_access::check_write(&path.to_string_lossy())?;
-    let bytes = save_bytes_with(&path.to_string_lossy(), doc, password, opts)?;
-    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))
+    let (bytes, losses) = save_bytes_with_report(&path.to_string_lossy(), doc, password, opts)?;
+    safe_save::write(path, &bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(losses)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option<&str>, _opts: &ExportOptions) -> Result<(), String> {
+pub fn save_path_report(
+    path: &std::path::Path,
+    _doc: &Document,
+    _password: Option<&str>,
+    _opts: &ExportOptions,
+) -> Result<Vec<wordcraft_docx::Loss>, String> {
     Err(format!("{}: files are saved through the browser on the web", path.display()))
 }
 
