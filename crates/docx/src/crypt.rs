@@ -72,8 +72,14 @@ pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxErro
     let mut comp = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
     let info = stream(&mut comp, "/EncryptionInfo", MAX_INFO)?;
     let package = stream(&mut comp, "/EncryptedPackage", bytes.len() as u64)?;
-    let info = parse_info(&info)?;
     let Some(password) = password else { return Err(DocxError::PasswordRequired) };
+    // Standard (Office 2007) shares the container and the segmentation with agile, but its
+    // `EncryptionInfo` is binary, its key derivation is a fixed SHA-1 loop, its cipher is ECB
+    // and it carries no integrity value.
+    if matches!(version(&info)?, (2..=4, 2)) {
+        return standard_decrypt(&info, &package, password);
+    }
+    let info = parse_info(&info)?;
     let pe = &info.password;
     let hn = iterate(pe.hash, &pe.salt, password, pe.spin_count);
     // The verifier (§2.3.4.13): a random value and its hash, both encrypted with keys derived
@@ -793,8 +799,237 @@ fn primary_transform() -> Vec<u8> {
     v
 }
 
+/// The `EncryptionInfo` version pair (§2.3.4.2).
+fn version(info: &[u8]) -> Result<(u16, u16), DocxError> {
+    let Some([a, b, c, d]) = info.get(..4) else { return Err(bad("EncryptionInfo is truncated")) };
+    Ok((u16::from_le_bytes([*a, *b]), u16::from_le_bytes([*c, *d])))
+}
+
+/// The rounds Standard encryption iterates the password hash; fixed by the specification
+/// (§2.3.4.7), unlike agile's per-file `spinCount`.
+const STANDARD_SPIN: u32 = 50_000;
+
+/// What Standard encryption needs from its `EncryptionInfo`: the key length, the salt and the
+/// two verifier blocks (§2.3.4.5, §2.3.4.7).
+#[derive(Debug)]
+struct Standard {
+    key_bytes: usize,
+    salt: Vec<u8>,
+    verifier: Vec<u8>,
+    verifier_hash: Vec<u8>,
+}
+
+/// Parse the binary `EncryptionInfo` of Standard encryption (§2.3.4.5). The stream is
+/// `EncryptionVersionInfo`, a copy of the header's `Flags`, the header's size, the header itself
+/// and then the verifier — the header is not read at the offset the copy of `Flags` sits at.
+fn parse_standard(info: &[u8]) -> Result<Standard, DocxError> {
+    let word = |at: usize| -> Result<u32, DocxError> {
+        info.get(at..at + 4).and_then(|b| <[u8; 4]>::try_from(b).ok()).map(u32::from_le_bytes).ok_or_else(|| bad("EncryptionInfo is truncated"))
+    };
+    let header_size = usize::try_from(word(8)?).map_err(|_| bad("EncryptionInfo is truncated"))?;
+    let header = info.get(12..12 + header_size).ok_or_else(|| bad("EncryptionInfo is truncated"))?;
+    let head = |at: usize| -> Result<u32, DocxError> {
+        header
+            .get(at..at + 4)
+            .and_then(|b| <[u8; 4]>::try_from(b).ok())
+            .map(u32::from_le_bytes)
+            .ok_or_else(|| bad("the encryption header is truncated"))
+    };
+    // AlgID names the cipher; only AES is implemented, and it fixes the key length.
+    let key_bytes = match head(8)? {
+        0x660e => 16,
+        0x660f => 24,
+        0x6610 => 32,
+        id => return Err(bad(format!("this file uses cipher {id:#x}, which WordCraft can't open"))),
+    };
+    if head(12)? != 0x8004 {
+        return Err(bad("this file's password hash isn't SHA-1, which WordCraft can't open"));
+    }
+    // The verifier follows the header: salt size, salt, the encrypted verifier, the verifier
+    // hash's length, and the hash itself in as many cipher blocks as AES needs (two, 32 bytes).
+    let at = 12 + header_size;
+    let word_at = |i: usize| -> Result<u32, DocxError> {
+        info.get(at + i..at + i + 4)
+            .and_then(|b| <[u8; 4]>::try_from(b).ok())
+            .map(u32::from_le_bytes)
+            .ok_or_else(|| bad("the password verifier is truncated"))
+    };
+    let salt_size = usize::try_from(word_at(0)?).map_err(|_| bad("the salt size is absurd"))?;
+    let salt = info.get(at + 4..at + 4 + salt_size).ok_or_else(|| bad("the salt is truncated"))?.to_vec();
+    let v = at + 4 + salt_size;
+    let verifier = info.get(v..v + BLOCK).ok_or_else(|| bad("the password verifier is truncated"))?.to_vec();
+    let hash_at = v + BLOCK + 4;
+    let verifier_hash = info.get(hash_at..hash_at + BLOCK * 2).ok_or_else(|| bad("the verifier hash is truncated"))?.to_vec();
+    Ok(Standard { key_bytes, salt, verifier, verifier_hash })
+}
+
+/// The key of Standard encryption (§2.3.4.7): the password hash iterated `STANDARD_SPIN` times,
+/// then the PKCS #5 pair over a 64-byte buffer of 0x36 and 0x5C xored with the hash.
+fn standard_key(password: &str, salt: &[u8], key_bytes: usize) -> Zeroizing<Vec<u8>> {
+    let hn = iterate(Hash::Sha1, salt, password, STANDARD_SPIN);
+    let final_hash = derive_key(Hash::Sha1, &hn, &[0, 0, 0, 0], Hash::Sha1.size());
+    let x1 = fill_and_xor(&final_hash, 0x36);
+    let x2 = fill_and_xor(&final_hash, 0x5c);
+    let mut key = Zeroizing::new(Vec::with_capacity(x1.len() + x2.len()));
+    key.extend_from_slice(&x1);
+    key.extend_from_slice(&x2);
+    key.truncate(key_bytes);
+    key
+}
+
+/// X1 and X2 of PKCS #5: SHA-1 of a 64-byte buffer of `fill`, xored with `hash`.
+fn fill_and_xor(hash: &[u8], fill: u8) -> Vec<u8> {
+    let mut buf = [fill; 64];
+    for (b, h) in buf.iter_mut().zip(hash) {
+        *b ^= h;
+    }
+    Hash::Sha1.hash(&[&buf])
+}
+
+/// AES-ECB without padding: `data` must be whole blocks. Standard encryption has no per-segment
+/// initialization vector (§2.3.4.9), every block standing on its own.
+fn ecb_decrypt(key: &[u8], data: &[u8]) -> Result<Vec<u8>, DocxError> {
+    let aes = Aes::new(key)?;
+    if !data.len().is_multiple_of(BLOCK) {
+        return Err(bad("the encrypted package isn't a whole number of blocks"));
+    }
+    let (blocks, _) = data.as_chunks::<BLOCK>();
+    let mut out = Vec::with_capacity(data.len());
+    for block in blocks {
+        let mut b: aes::Block = (*block).into();
+        aes.decrypt(&mut b);
+        out.extend_from_slice(&b);
+    }
+    Ok(out)
+}
+
+/// Decrypt a Standard-encrypted package (§2.3.4.9): the verifier tells a wrong password apart,
+/// then the segments come off in ECB.
+fn standard_decrypt(info: &[u8], package: &[u8], password: &str) -> Result<Vec<u8>, DocxError> {
+    let s = parse_standard(info)?;
+    let key = standard_key(password, &s.salt, s.key_bytes);
+    let verifier = Zeroizing::new(ecb_decrypt(&key, &s.verifier)?);
+    let hash = Zeroizing::new(ecb_decrypt(&key, &s.verifier_hash)?);
+    let want = Hash::Sha1.hash(&[&verifier]);
+    let got = hash.get(..want.len()).ok_or_else(|| bad("the verifier hash is too short"))?;
+    if !same(&want, got) {
+        return Err(DocxError::WrongPassword);
+    }
+    let size = package
+        .get(..8)
+        .and_then(|b| <[u8; 8]>::try_from(b).ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(|| bad("the encrypted package is truncated"))?;
+    let data = package.get(8..).unwrap_or(&[]);
+    let size = usize::try_from(size).ok().filter(|s| *s <= data.len()).ok_or_else(|| bad("the encrypted package is truncated"))?;
+    let needed = size.div_ceil(BLOCK).saturating_mul(BLOCK);
+    let data = data.get(..needed).ok_or_else(|| bad("the encrypted package is truncated"))?;
+    let mut out = ecb_decrypt(&key, data)?;
+    out.truncate(size);
+    Ok(out)
+}
+
 #[cfg(test)]
 mod tests {
+    /// The key `protected_passtika.xlsx` (Apache POI test data, Apache-2.0) derives with the
+    /// password "tika". Computed from [MS-OFFCRYPTO] 2.3.4.7 independently of this code: the
+    /// file decrypts to a valid package under it and nothing else opens that file.
+    const KNOWN_STANDARD_SALT: [u8; 16] = [0x19, 0xd0, 0xc7, 0xf3, 0x95, 0x28, 0x78, 0x43, 0x6a, 0x49, 0x49, 0xd7, 0xf0, 0xa2, 0xcf, 0x1e];
+    const KNOWN_STANDARD_KEY: [u8; 16] = [0x8d, 0x4d, 0x00, 0x14, 0x3a, 0x5f, 0x2e, 0x49, 0x18, 0xaf, 0x7e, 0x6e, 0x74, 0x10, 0xd4, 0x6c];
+
+    #[test]
+    fn standard_key_matches_the_known_package() {
+        let key = super::standard_key("tika", &KNOWN_STANDARD_SALT, 16);
+        assert_eq!(&*key, &KNOWN_STANDARD_KEY);
+        // A different password, salt or length gives a different key.
+        assert_ne!(super::standard_key("tika2", &KNOWN_STANDARD_SALT, 16).as_slice(), &KNOWN_STANDARD_KEY);
+        assert_ne!(super::standard_key("tika", &[0; 16], 16).as_slice(), &KNOWN_STANDARD_KEY);
+        // The key is exactly the length asked for, for each AES width.
+        assert_eq!(super::standard_key("tika", &KNOWN_STANDARD_SALT, 24).len(), 24);
+        assert_eq!(super::standard_key("tika", &KNOWN_STANDARD_SALT, 32).len(), 32);
+    }
+
+    /// A real `EncryptionInfo` from that package, header included: `protected_passtika.xlsx`
+    /// carries a 164-byte header, so reading the fields at the header's own offset would read
+    /// the wrapper's fields instead and land on nonsense.
+    fn known_standard_info() -> Vec<u8> {
+        let mut info = Vec::new();
+        info.extend_from_slice(&4u16.to_le_bytes());
+        info.extend_from_slice(&2u16.to_le_bytes());
+        info.extend_from_slice(&0x24u32.to_le_bytes());
+        info.extend_from_slice(&164u32.to_le_bytes());
+        info.extend_from_slice(&0x24u32.to_le_bytes());
+        info.extend_from_slice(&0u32.to_le_bytes());
+        info.extend_from_slice(&0x660eu32.to_le_bytes());
+        info.extend_from_slice(&0x8004u32.to_le_bytes());
+        info.extend_from_slice(&128u32.to_le_bytes());
+        info.extend_from_slice(&0x18u32.to_le_bytes());
+        info.extend_from_slice(&[0u8; 8]);
+        info.extend_from_slice(&[0u8; 132]);
+        info.extend_from_slice(&16u32.to_le_bytes());
+        info.extend_from_slice(&KNOWN_STANDARD_SALT);
+        info.extend_from_slice(&[0u8; 16]);
+        info.extend_from_slice(&20u32.to_le_bytes());
+        info.extend_from_slice(&[0u8; 32]);
+        info
+    }
+
+    #[test]
+    fn standard_info_is_read_past_the_wrapper() {
+        let s = super::parse_standard(&known_standard_info()).unwrap();
+        assert_eq!(s.key_bytes, 16);
+        assert_eq!(s.salt, KNOWN_STANDARD_SALT);
+        assert_eq!(s.verifier.len(), 16);
+        assert_eq!(s.verifier_hash.len(), 32);
+    }
+
+    /// Every truncation of a real `EncryptionInfo` must be refused, never panic: the lengths in
+    /// it come from the file and are as hostile as any other input.
+    #[test]
+    fn a_truncated_standard_info_is_refused() {
+        let info = known_standard_info();
+        for n in 0..info.len() {
+            let _ = super::parse_standard(&info[..n]);
+        }
+        // Absurd sizes and a header that claims more than the stream holds.
+        let mut huge = known_standard_info();
+        huge[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(super::parse_standard(&huge).is_err());
+        let mut big_salt = known_standard_info();
+        big_salt[12 + 164..12 + 168].copy_from_slice(&0xffff_fff0u32.to_le_bytes());
+        assert!(super::parse_standard(&big_salt).is_err());
+    }
+
+    /// Only AES is implemented: RC4 and any other cipher is named in the error, not misread.
+    #[test]
+    fn an_unsupported_cipher_is_named() {
+        let mut info = known_standard_info();
+        info[12 + 8..12 + 12].copy_from_slice(&0x6801u32.to_le_bytes());
+        let err = super::parse_standard(&info).unwrap_err().to_string();
+        assert!(err.contains("0x6801"), "{err}");
+        // A password hash that isn't SHA-1 is refused too.
+        let mut sha256 = known_standard_info();
+        sha256[12 + 12..12 + 16].copy_from_slice(&0x800cu32.to_le_bytes());
+        assert!(super::parse_standard(&sha256).is_err());
+    }
+
+    /// AES-ECB without padding: whole blocks only, and what goes in comes back out.
+    #[test]
+    fn ecb_decrypt_round_trips_and_refuses_a_ragged_block() {
+        let key = &KNOWN_STANDARD_KEY[..];
+        let block: Vec<u8> = (0..16u8).collect();
+        let data: Vec<u8> = block.iter().chain(&block).copied().collect();
+        assert!(super::ecb_decrypt(key, &data[1..]).is_err());
+        let out = super::ecb_decrypt(key, &data).unwrap();
+        assert_eq!(out.len(), data.len());
+        // AES-ECB has no per-block chaining: the same input block gives the same output twice.
+        assert_eq!(&out[..16], &out[16..]);
+        assert_ne!(&out[..16], &block[..]);
+        // A different key gives a different result.
+        let other = super::ecb_decrypt(&[0u8; 16], &data).unwrap();
+        assert_ne!(&out[..16], &other[..16]);
+    }
+
     #[test]
     fn protection_password_round_trip() {
         use super::PasswordCheck::*;
