@@ -401,3 +401,74 @@ fn tracked_delete_of_struck_table_text_keeps_it_for_reject_all() {
         assert_eq!(cells(&s), [["A1", "B1"], ["A2", "B2"]], "{id}");
     }
 }
+
+#[derive(Clone, Copy, Debug)]
+enum Slot {
+    FootnoteSeparator,
+    EndnoteSeparator,
+    FootnoteContinuationSeparator,
+    EndnoteContinuationNotice,
+}
+
+const SLOTS: [Slot; 4] = [Slot::FootnoteSeparator, Slot::EndnoteSeparator, Slot::FootnoteContinuationSeparator, Slot::EndnoteContinuationNotice];
+
+fn slot_mut(doc: &mut wordcraft_doc::Document, slot: Slot) -> &mut Option<wordcraft_doc::Blocks> {
+    match slot {
+        Slot::FootnoteSeparator => &mut doc.footnote_separators.separator,
+        Slot::EndnoteSeparator => &mut doc.endnote_separators.separator,
+        Slot::FootnoteContinuationSeparator => &mut doc.footnote_separators.continuation_separator,
+        Slot::EndnoteContinuationNotice => &mut doc.endnote_separators.continuation_notice,
+    }
+}
+
+/// A session whose note separator `slot` holds the text "SEP" as a tracked insertion (revision 0).
+fn tracked_separator_session(slot: Slot) -> Session {
+    let mut doc = wordcraft_doc::Document::new();
+    doc.revisions.push(wordcraft_doc::Revision {
+        kind: wordcraft_doc::RevisionKind::Insert,
+        author: "Alice".into(),
+        date: String::new(),
+        move_name: None,
+    });
+    let props = wordcraft_doc::CharProps { ins: Some(0), ..Default::default() };
+    let p = wordcraft_doc::Paragraph::with_text("SEP", props);
+    *slot_mut(&mut doc, slot) = Some(vec![wordcraft_doc::para_block(p)]);
+    Session::new(doc)
+}
+
+fn separator_para(s: &mut Session, slot: Slot) -> wordcraft_doc::Paragraph {
+    slot_mut(&mut s.doc, slot).as_ref().and_then(|b| b.iter().find_map(|b| b.as_para())).expect("separator").clone()
+}
+
+#[test]
+fn accept_all_resolves_note_separator_revisions() {
+    for slot in SLOTS {
+        let mut s = tracked_separator_session(slot);
+        run(&mut s, "review.acceptAll", json!({}));
+        let p = separator_para(&mut s, slot);
+        assert_eq!(p.plain_text(), "SEP", "{slot:?}");
+        assert!(p.run_ranges().all(|(_, c)| c.ins.is_none() && c.del.is_none()), "{slot:?}");
+    }
+}
+
+#[test]
+fn reject_all_resolves_note_separator_revisions() {
+    for slot in SLOTS {
+        let mut s = tracked_separator_session(slot);
+        run(&mut s, "review.rejectAll", json!({}));
+        assert_eq!(separator_para(&mut s, slot).plain_text(), "", "{slot:?}");
+    }
+}
+
+#[test]
+fn new_tracked_change_does_not_alias_separator_revision() {
+    for slot in SLOTS {
+        let mut s = tracked_separator_session(slot);
+        run(&mut s, "review.acceptAll", json!({}));
+        s.author = "Bob".into();
+        run(&mut s, "review.trackChanges", json!({"value": true}));
+        run(&mut s, "text.insert", json!({"text": "NEW "}));
+        let p = separator_para(&mut s, slot);
+        assert!(p.run_ranges().all(|(_, c)| c.ins.is_none() && c.del.is_none()), "{slot:?}");
+    }
+}
