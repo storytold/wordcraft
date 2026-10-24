@@ -3345,6 +3345,44 @@ fn text_frames_read_and_round_trip() {
     assert!(q.iter().any(|x| x.props.drop_cap == Some(2) && x.props.frame.is_none()));
 }
 
+/// #3000: Word writes the drop cap's letter in its framed paragraph at the enlarged size the
+/// dialog computed for it. The merge gives the letter back the text's size — the layout sizes a
+/// dropped letter from the text around it, so keeping the file's size would render the
+/// enlargement twice, a letter twice as tall as the lines it drops through.
+#[test]
+fn a_word_drop_caps_letter_takes_the_texts_size_back() {
+    let body = r#"<w:p><w:r><w:t>Relationship with Myself</w:t></w:r></w:p>
+        <w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="3" w:hSpace="141" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:rFonts w:ascii="Lucida Calligraphy" w:hAnsi="Lucida Calligraphy"/><w:sz w:val="88"/><w:szCs w:val="88"/></w:rPr><w:t>B</w:t></w:r></w:p>
+        <w:p><w:r><w:rPr><w:sz w:val="24"/><w:szCs w:val="24"/></w:rPr><w:t>efore we start</w:t></w:r></w:p>"#;
+    let d = read_body(body);
+    let p = paras(&d);
+    assert_eq!(p.len(), 2);
+    assert_eq!(p[1].text, "Before we start");
+    assert_eq!(p[1].props.drop_cap, Some(3));
+    assert_eq!(p[1].props.drop_cap_font.as_deref(), Some("Lucida Calligraphy"));
+    assert_eq!(p[1].runs.len(), 1, "the letter and the text share a run once sized alike");
+    assert_eq!((p[1].runs[0].props.size, p[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)), "the letter keeps the text's size");
+    // Without a size of its own in the text, the letter inherits the paragraph's.
+    let plain = read_body(
+        r#"<w:p><w:pPr><w:framePr w:dropCap="drop" w:lines="2" w:wrap="around" w:vAnchor="text" w:hAnchor="text"/></w:pPr><w:r><w:rPr><w:sz w:val="72"/></w:rPr><w:t>D</w:t></w:r></w:p>
+        <w:p><w:r><w:t>rop cap text</w:t></w:r></w:p>"#,
+    );
+    let q = paras(&plain);
+    assert_eq!(q.len(), 1);
+    assert_eq!((q[0].runs[0].props.size, q[0].runs[0].props.size_cs), (None, None));
+    // Saved, the letter carries the size the layout draws it at — Word draws a framed letter at
+    // its run's own `w:sz` — here 3 lines of 12 pt text, (2*14.4 + 8.4)/0.7 = 53.14 pt → 106.
+    // Reading that back gives the document the first read gave: the letter at the text's size.
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = text(&unzip(&bytes), "word/document.xml");
+    assert!(xml.contains(r#"w:sz w:val="106""#), "the drawn size on the letter's run: {xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    let r = paras(&again);
+    assert_eq!((r.len(), r[1].text.as_str(), r[1].runs.len()), (2, "Before we start", 1));
+    assert_eq!((r[1].props.drop_cap, r[1].props.drop_cap_font.as_deref()), (Some(3), Some("Lucida Calligraphy")));
+    assert_eq!((r[1].runs[0].props.size, r[1].runs[0].props.size_cs), (Some(12.0), Some(12.0)));
+}
+
 /// #2360: a `w:framePr` in the document defaults, the sizeless top-left one Apple Pages writes,
 /// frames no paragraph, as in Word: a header's title and the body's text stay in the text instead
 /// of moving to the page's corner, and the default isn't written back. The defaults' other

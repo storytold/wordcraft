@@ -279,6 +279,14 @@ impl Reader<'_> {
                             }
                             props.drop_cap_font = cap_font;
                         }
+                        // The same for the size: the letter carries the enlarged one the file's
+                        // writer computed, and the layout sizes a dropped letter from the text
+                        // around it — keeping it would render the enlargement twice (#3000).
+                        let (text_size, text_size_cs) = p.runs.first().map_or((None, None), |r| (r.props.size, r.props.size_cs));
+                        for r in &mut first.runs {
+                            r.props.size = text_size;
+                            r.props.size_cs = text_size_cs;
+                        }
                         first.append(p);
                         first.props = props;
                         out.push(para_block(first));

@@ -2719,6 +2719,10 @@ fn drop_cap_options_round_trip() {
     assert!(xml.contains(r#"w:dropCap="drop" w:lines="2" w:hSpace="120""#), "{xml}");
     assert!(xml.contains(r#"w:dropCap="margin" w:lines="4""#), "{xml}");
     assert!(xml.contains(r#"w:ascii="Liberation Mono""#), "the letter's font on its run: {xml}");
+    // A dialog-made drop cap's runs carry no size, but the letter is saved at the size the
+    // layout draws it: 2 and 4 lines of the document's 12 pt text → 32.57 pt (65) and 73.71 (147).
+    assert!(xml.contains(r#"w:sz w:val="65""#), "a 2-line drop cap's drawn size on its run: {xml}");
+    assert!(xml.contains(r#"w:sz w:val="147""#), "a 4-line margin drop cap's drawn size on its run: {xml}");
     let r = wordcraft_docx::read(&bytes).expect("read");
     let got = paras(&r);
     assert_eq!(got.len(), 2, "each letter merges back into its paragraph");
