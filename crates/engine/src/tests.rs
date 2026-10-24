@@ -143,10 +143,10 @@ fn export_checks_see_the_export_options_and_serialise_like_lint() {
 
     s.set_export_check_commands(vec![("test.exportEcho".into(), json!({"forExport": true}))]);
     // The `markup` override reaches the check: the same stored command sees the current export.
-    let marked = crate::io::ExportOptions { markup: true, comments: false, word2003: false };
+    let marked = crate::io::ExportOptions { markup: true, ..Default::default() };
     let findings = s.run_export_checks(&marked, "pdf");
     assert!(findings.iter().any(|f| f["message"] == "markup=true"), "{findings:?}");
-    let plain = crate::io::ExportOptions { markup: false, comments: false, word2003: false };
+    let plain = crate::io::ExportOptions { markup: false, ..Default::default() };
     let findings = s.run_export_checks(&plain, "pdf");
     assert!(findings.iter().any(|f| f["message"] == "markup=false"), "the option is per export, not baked in: {findings:?}");
 
@@ -169,7 +169,7 @@ fn a_failed_export_check_clears_when_it_runs_again() {
     });
     assert_eq!(s.install_commands(vec![flaky]), 1);
     s.set_export_check_commands(vec![("test.exportFlaky".into(), json!({}))]);
-    let plain = crate::io::ExportOptions { markup: false, comments: false, word2003: false };
+    let plain = crate::io::ExportOptions { markup: false, ..Default::default() };
     s.run_export_checks(&plain, "pdf");
     assert_eq!(s.lint_findings_of("export:test.exportFlaky").len(), 1, "the failure shows in Proofing");
     FAIL.store(false, Ordering::SeqCst);
@@ -187,7 +187,7 @@ fn export_checks_see_the_output_format() {
     });
     assert_eq!(s.install_commands(vec![echo]), 1);
     s.set_export_check_commands(vec![("test.exportFormat".into(), json!({}))]);
-    let plain = crate::io::ExportOptions { markup: false, comments: false, word2003: false };
+    let plain = crate::io::ExportOptions { markup: false, ..Default::default() };
     // A non-PDF export tells the check what it is writing, so PDF-only checks can tell it apart.
     let findings = s.run_export_checks(&plain, "docx");
     assert!(findings.iter().any(|f| f["message"] == "format=docx"), "{findings:?}");
