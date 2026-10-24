@@ -23,6 +23,8 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+mod update_check;
+mod update_install;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -67,9 +69,23 @@ impl eframe::App for App {
         }
         // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
         let closing = ctx.input(|i| i.viewport().close_requested());
+        // A finished update asks to quit through the same path, so a document edited after the
+        // update worker finished is still checked for unsaved changes before the window closes.
+        // Asking to close (rather than acting on the quit now) leaves the next frame's close
+        // handling free to see any edit made after this check. A deferred quit cancels any close
+        // event already pending this frame (see `update::handle_quit`).
+        if wordcraft_ui_egui::update::handle_quit(&mut self.0, ctx) {
+            return;
+        }
         if closing && !self.0.close_requested() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
-        } else if (closing || self.0.quit_requested) && !self.0.printing.busy() {
+        } else if (closing || self.0.quit_requested) && !self.0.printing.busy() && !wordcraft_ui_egui::update::worker_busy(&self.0) {
+            if self.0.quit_requested && self.0.session.dirty && !self.0.close_requested() {
+                self.0.quit_requested = false;
+                #[cfg(target_os = "macos")]
+                ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+                return;
+            }
             // On macOS, letting eframe drop the window inside `-[NSApplication run]` aborts in
             // `-[_NSTouchBarFinderObservation invalidate]`. Command-Q calls `terminate:`. Once
             // the close is allowed, take that path instead of dropping the window on this turn.
@@ -112,7 +128,7 @@ impl eframe::App for App {
 #[cfg(target_os = "macos")]
 fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server::KeyFile>) {
     use std::sync::atomic::{AtomicBool, Ordering};
-    if app.printing.busy() {
+    if app.printing.busy() || wordcraft_ui_egui::update::worker_busy(app) {
         return;
     }
     static QUIT: AtomicBool = AtomicBool::new(false);
@@ -324,6 +340,9 @@ fn main() -> eframe::Result {
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
+    // Clear a macOS update download Finder is done with from an earlier session (a retained `.dmg`
+    // is not removed at handoff time; see `update_install`).
+    update_install::sweep_stale_staging();
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
@@ -431,6 +450,12 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            app.session.update_http = Some(update_check::http_get());
+            app.session.update_install = Some(update_install::handoff());
+            if let Ok(exe) = std::env::current_exe() {
+                app.session.update_exe = Some(exe.to_string_lossy().into_owned());
+            }
+            wordcraft_ui_egui::update::maybe_startup_prompt(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {

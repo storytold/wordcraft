@@ -34,7 +34,11 @@ impl ControlRequest {
 
 pub enum Outcome {
     Done(Value),
-    Screenshot { path: Option<String> },
+    /// Reply is sent when a background worker finishes (for example `file.checkForUpdates`).
+    Deferred,
+    Screenshot {
+        path: Option<String>,
+    },
 }
 
 fn ok(v: Value) -> Outcome {
@@ -133,6 +137,11 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
             if let Some(e) = close_refused(app, id, &params) {
                 return err(e);
+            }
+            if id == "file.checkForUpdates" && crate::update::can_run_off_thread(app) {
+                // Started or not, it answers on `reply` itself (one reply per request).
+                crate::update::queue_check_control(app, params, ctx, req.reply.clone());
+                return Outcome::Deferred;
             }
             match app.execute(id, params) {
                 Ok(v) => ok(v),
