@@ -4872,6 +4872,90 @@ mod tests {
         assert_eq!(h.state_mut().session.layout().pages[0].header_story.map(StoryRef::Part), Some(first));
     }
 
+    /// #1893: a single click on a shape only selects it; a double-click puts the caret in its
+    /// text (a shape with none gets one) and typing lands there. A line has no text to enter.
+    #[test]
+    fn double_click_a_shape_types_in_it() {
+        use egui::{Event, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("insert.shape", json!({"kind": "rectangle", "width": 120, "height": 80})).unwrap();
+        let pos = wordcraft_engine::cmd::objects::selected(&a.session).unwrap().0;
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the shape is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        let click = |h: &mut egui_kittest::Harness<'_, WordApp>, n: usize| {
+            h.event(Event::PointerMoved(at));
+            for _ in 0..n {
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                h.step();
+                h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                h.step();
+            }
+        };
+        click(&mut h, 1);
+        let picked = wordcraft_engine::cmd::objects::object_selection(&h.state().session).map(|(p, _)| p);
+        assert_eq!(picked, Some(pos.clone()), "a click selects the shape");
+        assert_eq!(h.state().session.sel.focus.story, StoryRef::Body, "and doesn't enter its text");
+        for _ in 0..40 {
+            h.step();
+        }
+        click(&mut h, 2);
+        assert!(in_text_box(h.state()), "the caret is in the shape's text");
+        h.event(Event::Text("Hello".into()));
+        for _ in 0..3 {
+            h.step();
+        }
+        let story = h.state().session.sel.focus.story;
+        assert_eq!(h.state().session.doc.plain_text(story), "Hello");
+    }
+
+    /// #1893: a text box so small that all of it counts as its frame still gives a double-click
+    /// to its text (select the word) when it has text, instead of moving the caret to the end.
+    #[test]
+    fn double_click_in_a_tiny_text_box_selects_its_word() {
+        use egui::{Event, PointerButton};
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        a.run("view.commentsPane", json!({"value": false})).unwrap();
+        a.run("view.zoom", json!({"value": 50})).unwrap();
+        a.run("insert.textBox", json!({"text": "Hi", "width": 18, "height": 18})).unwrap();
+        let pos = Pos::body(0, 0);
+        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let rect = h.state_mut().session.layout().object(&pos, 0).expect("the box is laid out").rect;
+        let at = crate::frame::to_screen(h.state().canvas.page_rects[0], h.state().canvas.scale, rect).center();
+        h.event(Event::PointerMoved(at));
+        for _ in 0..2 {
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: true, modifiers: Default::default() });
+            h.step();
+            h.event(Event::PointerButton { pos: at, button: PointerButton::Primary, pressed: false, modifiers: Default::default() });
+            h.step();
+        }
+        let sel = &h.state().session.sel;
+        assert_ne!(sel.anchor, sel.focus, "the double-click selected a word instead of parking the caret at the end");
+    }
+
     /// #1026: while editing the header, double-clicking the bottom margin switches to the
     /// footer (and back), as in Word, instead of selecting a word in the header.
     #[test]
