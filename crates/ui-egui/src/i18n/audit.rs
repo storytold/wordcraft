@@ -180,6 +180,7 @@ impl Exempt {
             || matches!(plain, "WordCraft" | "WordCraft User" | "Discord" | "https://" | "auto" | "I. II. III." | "i. ii. iii." | "I, II, III, …" | "i, ii, iii, …")
             || plain == "CONFIDENTIAL" // the watermark dialog's text: document content, kept as typed
             || plain == "Figure 1" // the caption dialog's sample: the label goes into the document as is
+            || crate::dialogs_insert::date_time_preview_matches(plain) // date/time picker examples are generated document values
     }
 }
 

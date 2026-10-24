@@ -272,17 +272,24 @@ pub(crate) fn track_delete_as(s: &mut Session, a: &Pos, b: &Pos, rid: u32) -> Re
 
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, true)
+    insert_text(s, text, true, None)
+}
+
+/// Insert typed text in an explicit language while preserving character formatting, tracked
+/// changes, content-control checks and selection replacement.
+pub fn type_text_with_lang(s: &mut Session, text: &str, language: Option<&str>) -> Result<(), CmdError> {
+    insert_text(s, text, true, language)
 }
 
 /// Insert pasted plain text like [`type_text`], except that its paragraph separators are text
 /// being transferred, not Enter key presses: an empty list item between them stays (Enter on
 /// one would end the list).
 pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, false)
+    insert_text(s, text, false, None)
 }
 
-fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError> {
+/// Shared insertion for typed or pasted text, optionally overriding the new run language.
+fn insert_text(s: &mut Session, text: &str, enter: bool, language: Option<&str>) -> Result<(), CmdError> {
     let mut props = s.typing_props();
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
@@ -294,6 +301,9 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError>
     // Pasted text is text: pending properties left by AutoCorrect don't give it a symbol's font (#2036).
     if !enter {
         props = props.without_symbol();
+    }
+    if let Some(language) = language {
+        props.lang = Some(language.to_string());
     }
     delete_selection(s)?;
     // Typed text is new: never deleted, and not a formatting change of the text around it.

@@ -995,8 +995,9 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
                 "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
-                    let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                    updates.push((k, super::insert::format_date(&pic)));
+                    let lang = field_lang(&s.doc, p, k);
+                    let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
+                    updates.push((k, super::insert::format_date_in(&pic, lang.as_deref())));
                 }
                 "REF" | "PAGEREF" => {
                     let f = FieldCode::parse(instr);
@@ -1075,8 +1076,9 @@ pub fn refresh_date_fields(doc: &mut wordcraft_doc::Document) {
                     continue;
                 }
                 // Word's default picture when the code carries no `\@` switch.
-                let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
-                updates.push((k, super::insert::format_date(&pic)));
+                let lang = field_lang(doc, p, k);
+                let pic = date_picture(instr).unwrap_or_else(|| default_picture(&name, lang.as_deref()));
+                updates.push((k, super::insert::format_date_in(&pic, lang.as_deref())));
             }
             if updates.is_empty() {
                 continue;
@@ -1122,6 +1124,18 @@ fn doc_property(doc: &wordcraft_doc::Document, name: &str) -> Option<String> {
         "revisionnumber" | "revision number" | "revision" => c.revision.to_string(),
         _ => return None,
     })
+}
+
+/// The language of field `k` of paragraph `p`: its run's, through the styles (the document's
+/// default when the run names none).
+fn field_lang(doc: &wordcraft_doc::Document, p: &wordcraft_doc::Paragraph, k: usize) -> Option<String> {
+    let off = p.object_offsets().get(k).copied()?;
+    doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off)).lang
+}
+
+/// Word's picture for a date or time field without `\@`, in the field's language.
+fn default_picture(name: &str, lang: Option<&str>) -> String {
+    if name == "TIME" { "h:mm am/pm".into() } else { super::insert::default_date_picture(lang).into() }
 }
 
 /// A field's `\@` date picture: the quoted text after it (switches may follow), or one word.

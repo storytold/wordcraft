@@ -1443,7 +1443,7 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
         });
         stack(ui, |ui| {
             small(ui, app, "signature", None, "Signature Line", "insert.signatureLine", json!({}), false);
-            small(ui, app, "dateTime", None, "Date & Time", "insert.dateTime", json!({}), false);
+            small(ui, app, "dateTime", None, "Date & Time", "ui.dialog", json!({"name": "dateTime"}), false);
             small(ui, app, "object", None, "Object", "insert.object", json!({}), false);
         });
     });
