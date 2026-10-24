@@ -578,7 +578,7 @@ impl Paragraph {
         // Never route to thai_word_at when the cursor is on a Latin/other script character (e.g.
         // the first letter of "test" in "ไทยtest" must select the Latin word, not the Thai one).
         let use_thai = at_off.is_some_and(crate::cluster::is_thai_lao)
-            || (at_off.map_or(true, |c| matches!(c, ' ' | '\u{00A0}')) && before_off.is_some_and(crate::cluster::is_thai_lao));
+            || (at_off.is_none_or(|c| matches!(c, ' ' | '\u{00A0}')) && before_off.is_some_and(crate::cluster::is_thai_lao));
         if use_thai {
             return crate::cluster::thai_word_at(&self.text, off);
         }

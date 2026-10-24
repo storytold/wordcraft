@@ -192,15 +192,15 @@ pub fn thai_input_action(tcb: &[(usize, char)], new_char: char, prev_char: Optio
         // Leading vowel: check for เ+เ=แ substitution; otherwise pass through.
         ThaiCharClass::LeadingVowel => {
             // เ (U+0E40) typed immediately after another เ → replace with แ (U+0E41).
-            if new_char == '\u{0E40}' {
-                if let Some((off, '\u{0E40}')) = prev_char {
-                    return ThaiInputAction::Replace {
-                        slot_offset: off,
-                        slot_bytes: '\u{0E40}'.len_utf8(),
-                        cons_swap: None,
-                        replacement: Some('\u{0E41}'),
-                    };
-                }
+            if new_char == '\u{0E40}'
+                && let Some((off, '\u{0E40}')) = prev_char
+            {
+                return ThaiInputAction::Replace {
+                    slot_offset: off,
+                    slot_bytes: '\u{0E40}'.len_utf8(),
+                    cons_swap: None,
+                    replacement: Some('\u{0E41}'),
+                };
             }
             ThaiInputAction::Accept
         }
@@ -209,15 +209,15 @@ pub fn thai_input_action(tcb: &[(usize, char)], new_char: char, prev_char: Optio
         // SARA_AA (า U+0E32) typed after a consonant+NIKHAHIT (ํ U+0E4D) combines
         // the two characters into a single SARA_AM (ำ U+0E33).
         ThaiCharClass::Other => {
-            if new_char == '\u{0E32}' {
-                if let Some(&(off, '\u{0E4D}')) = tcb.iter().find(|(_, c)| *c == '\u{0E4D}') {
-                    return ThaiInputAction::Replace {
-                        slot_offset: off,
-                        slot_bytes: '\u{0E4D}'.len_utf8(),
-                        cons_swap: None,
-                        replacement: Some('\u{0E33}'),
-                    };
-                }
+            if new_char == '\u{0E32}'
+                && let Some(&(off, '\u{0E4D}')) = tcb.iter().find(|(_, c)| *c == '\u{0E4D}')
+            {
+                return ThaiInputAction::Replace {
+                    slot_offset: off,
+                    slot_bytes: '\u{0E4D}'.len_utf8(),
+                    cons_swap: None,
+                    replacement: Some('\u{0E33}'),
+                };
             }
             ThaiInputAction::Accept
         }
@@ -322,7 +322,7 @@ mod tests {
 
     fn action(text: &str, new_char: char) -> ThaiInputAction {
         let tcb = current_tcb(text, text.len());
-        let prev = text.char_indices().next_back().map(|(o, c)| (o, c));
+        let prev = text.char_indices().next_back();
         thai_input_action(&tcb, new_char, prev)
     }
 
