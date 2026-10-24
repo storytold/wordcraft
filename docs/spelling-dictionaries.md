@@ -2,7 +2,7 @@
 
 > **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
-English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
+English spelling works out of the box. Polish, Russian, Portuguese, Czech, Slovak, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
 WordCraft reads at runtime. These dictionaries are not bundled: they are large, and several are
 GPL or LGPL licensed. Without one, the language isn't checked. The status bar then shows the
@@ -26,6 +26,7 @@ WordCraft looks for the first of these file names (each name means a `<name>.aff
 | Russian | `ru_RU`, `ru-RU`, `ru` | LibreOffice `dict-ru` |
 | Portuguese (Brazil and Portugal) | `pt_BR`, `pt-BR`, `pt` | VERO (LibreOffice `dict-pt-BR`) |
 | Czech | `cs_CZ`, `cs-CZ`, `cs` | LibreOffice `dict-cs` |
+| Slovak | `sk_SK`, `sk-SK`, `sk` | LibreOffice `dict-sk`, Debian/Ubuntu `hunspell-sk` |
 | Italian | `it_IT`, `it_CH`, `it-IT`, `it` | LibreOffice `dict-it` |
 | Croatian | `hr_HR`, `hr-HR`, `hr` | LibreOffice `dict-hr` |
 | Turkish | `tr_TR`, `tr-TR`, `tr` | LibreOffice `dict-tr` |

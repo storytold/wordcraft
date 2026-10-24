@@ -852,7 +852,9 @@ mod tests {
     #[test]
     fn languages_without_patterns_keep_the_english_ones() {
         for w in ["hyphenation", "typography", "internationalization"] {
-            for lang in [ProofLang::Other, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
+            for lang in
+                [ProofLang::Other, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Sk]
+            {
                 assert_eq!(hyphen_points_in(w, &Limits::default(), lang), hyphen_points(w, &Limits::default()), "{w}");
             }
         }

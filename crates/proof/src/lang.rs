@@ -66,6 +66,10 @@ pub enum ProofLang {
     /// dictionary (else the neighbouring Rioplatense `es_AR`, a Latin American or a generic one),
     /// and the `vos` forms of verbs (`tenés`, `vení`, `decime`) accepted ([`crate::es::voseo`]).
     EsUy,
+    /// Slovak (`sk`, `sk-SK`; also ISO 639-2 `slk` and `slo`): the installed Hunspell `sk_SK`
+    /// dictionary, dictionary-driven suggestions and generic checks with Slovak messages.
+    /// Hyphenation keeps the fallback English patterns.
+    Sk,
     /// German (`de`, `de-DE`, `de-AT`, `de-CH`…): hyphenation by the German patterns (reformed
     /// spelling). There is no German dictionary or grammar yet, so, as for [`ProofLang::Other`],
     /// no spelling or grammar marks.
@@ -79,7 +83,7 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
@@ -95,6 +99,7 @@ impl ProofLang {
         ProofLang::EsMx,
         ProofLang::Es419,
         ProofLang::EsUy,
+        ProofLang::Sk,
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
@@ -126,6 +131,8 @@ impl ProofLang {
             ProofLang::Id
         } else if primary.eq_ignore_ascii_case("es") || primary.eq_ignore_ascii_case("spa") {
             ProofLang::spanish(tag)
+        } else if ["sk", "slk", "slo"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
+            ProofLang::Sk
         } else if ["de", "deu", "ger"].iter().any(|c| primary.eq_ignore_ascii_case(c)) {
             ProofLang::De
         } else {
@@ -167,7 +174,7 @@ impl ProofLang {
         matches!(self, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy)
     }
 
-    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`); empty for [`ProofLang::Other`].
+    /// The primary language subtag (`en`, `pl`, `bg`, `tr`, `ru`, `cs`, `id`, `de`, `es`, `sk`); empty for [`ProofLang::Other`].
     pub fn code(self) -> &'static str {
         match self {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
@@ -181,6 +188,7 @@ impl ProofLang {
             ProofLang::Cs => "cs",
             ProofLang::Id => "id",
             ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "es",
+            ProofLang::Sk => "sk",
             ProofLang::De => "de",
             ProofLang::Other => "",
         }
@@ -297,6 +305,11 @@ mod tests {
         }
         assert_eq!(ProofLang::Id.code(), "id");
         assert!(ProofLang::Id.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Id));
+        for t in ["sk", "sk-SK", "SK-sk", "sk_SK", "sk_SK.UTF-8", " sk-SK ", "slk", "SLO"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Sk, "{t}");
+        }
+        assert_eq!(ProofLang::Sk.code(), "sk");
+        assert!(ProofLang::Sk.is_proofed() && ProofLang::PROOFED.contains(&ProofLang::Sk));
         for t in ["en", "en-US", "EN_us", "en-Latn-US", "en-PH", "en-001", "eng", "en_US.UTF-8", "en-x-gb"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::En, "{t}");
         }
@@ -339,7 +352,7 @@ mod tests {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::De, "{t}");
         }
         assert!(!ProofLang::De.is_proofed());
-        for t in ["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "e", "-"] {
+        for t in ["fr-FR", "dex", "x-none", "ja-JP", "plx", "bgx", "trx", "csx", "idx", "inx", "esx", "spax", "skx", "slv", "sl", "e", "-"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Other, "{t}");
         }
         assert_eq!(ProofLang::from_tag(None), ProofLang::En);
