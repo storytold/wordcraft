@@ -304,6 +304,9 @@ fn proofing(app: &mut WordApp, ui: &mut Ui) {
     flag(app, ui, "Check spelling as you type", "checkSpelling", spelling);
     ui.add_enabled_ui(app.session.view.proofing, |ui| flag(app, ui, "Mark grammar errors as you type", "markGrammar", pr.mark_grammar));
     ui.add_space(8.0);
+    section(ui, "LanguageTool");
+    language_tool(app, ui);
+    ui.add_space(8.0);
     section(ui, "Custom dictionary");
     custom_dictionary(app, ui);
     ui.add_space(8.0);
@@ -388,6 +391,71 @@ fn language_name(lang: wordcraft_engine::proof::ProofLang) -> &'static str {
         ProofLang::EsUy => tl!("Spanish (Uruguay)"),
         // English uses its bundled word list; Bulgarian and German have no dictionary yet.
         ProofLang::En | ProofLang::EnGb | ProofLang::EnCa | ProofLang::Bg | ProofLang::De | ProofLang::Other => "",
+    }
+}
+
+/// Options › Proofing › LanguageTool (#575). Off by default: when on, paragraph
+/// text goes to the chosen server. Everything goes through `ui.languageTool`: the switch and the
+/// language at once, the Server, Username and API key fields when committed (Enter or leaving
+/// the field), so nothing is sent to a half-typed address (#1283).
+pub(crate) fn language_tool(app: &mut WordApp, ui: &mut Ui) {
+    use crate::languagetool::{Field, text_field};
+    use wordcraft_languagetool::http;
+    let mut on = app.ui.language_tool.enabled;
+    // Switching on waits for the typed server, username and key to be applied, so text only ever
+    // goes to the server the box shows; off is always allowed (#672).
+    let pending = app.language_tool.drafts.pending();
+    let r = ui.add_enabled(http::available() && (on || !pending), egui::Checkbox::new(&mut on, tl!("Check spelling and grammar with LanguageTool")));
+    if !http::available() {
+        r.on_disabled_hover_text(tl!(http::UNSUPPORTED_REASON));
+    } else if r.changed()
+        && let Err(e) = app.run("ui.languageTool", json!({"enabled": on}))
+    {
+        app.status(e);
+    }
+    ui.label(
+        egui::RichText::new(tl!(
+            "Sends the text of your paragraphs to the LanguageTool server below. Off, WordCraft's built-in checker is used and nothing leaves this computer."
+        ))
+        .small()
+        .weak(),
+    );
+    ui.horizontal(|ui| {
+        ui.label(tl!("Server:"));
+        text_field(app, ui, Field::Server, 300.0);
+    });
+    ui.label(egui::RichText::new(tl!("Use your own LanguageTool server by entering its address, such as http://localhost:8081.")).small().weak());
+    ui.horizontal(|ui| {
+        ui.label(tl!("Username:"));
+        text_field(app, ui, Field::Username, 220.0);
+    });
+    ui.horizontal(|ui| {
+        ui.label(tl!("API key:"));
+        text_field(app, ui, Field::ApiKey, 220.0);
+    });
+    ui.label(egui::RichText::new(tl!("Changes to these fields apply when you press Enter or leave the field.")).small().weak());
+    if let Some(e) = &app.language_tool.drafts.error {
+        ui.label(egui::RichText::new(e.as_str()).small().color(ui.visuals().error_fg_color));
+    }
+    let s = &app.ui.language_tool;
+    let current = s.language.clone();
+    let label = |code: &str| match code {
+        "auto" | "" => tl!("Detect automatically").to_string(),
+        "document" => tl!("Each paragraph's proofing language").to_string(),
+        c => c.to_string(),
+    };
+    ui.horizontal(|ui| {
+        ui.label(tl!("Language:"));
+        egui::ComboBox::from_id_salt("languagetool_language").selected_text(label(&current)).width(260.0).show_ui(ui, |ui| {
+            for code in ["auto", "document"] {
+                if ui.selectable_label(current == code, label(code)).clicked() {
+                    let _ = app.run("ui.languageTool", json!({"language": code}));
+                }
+            }
+        });
+    });
+    if let Some(line) = crate::languagetool::status_line(app) {
+        ui.label(egui::RichText::new(line).small());
     }
 }
 
