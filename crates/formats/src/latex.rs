@@ -21,7 +21,8 @@
 use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Para};
 use wordcraft_doc::{Align, Document, Rgb};
 
-/// Largest `.tex` source imported (bytes); longer input is cut off.
+/// Largest `.tex` source imported (bytes); longer input is refused ([`import`] returns an
+/// error naming the limit) rather than cut off.
 pub const MAX_SOURCE: usize = 32 << 20;
 /// Nesting limit for groups, environments and arguments (hostile input).
 const MAX_NEST: usize = 32;
@@ -1053,11 +1054,21 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
 // =============================================================================================
 // Import
 
-/// Import a LaTeX source file.
-pub fn import(bytes: &[u8]) -> Document {
-    let mut d = model::to_doc(&parse(&crate::txt::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes))));
+/// Import a LaTeX source file. A source longer than [`MAX_SOURCE`] is an error: importing only
+/// its start would lose the rest of the writing without a word.
+pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    import_limited(bytes, MAX_SOURCE)
+}
+
+/// [`import`] with `max` bytes as the limit.
+fn import_limited(bytes: &[u8], max: usize) -> Result<Document, String> {
+    if bytes.len() > max {
+        let limit = if max >= 1 << 20 && max.is_multiple_of(1 << 20) { format!("{} MiB", max >> 20) } else { format!("{max} bytes") };
+        return Err(format!("this LaTeX file is larger than {limit}, the most WordCraft imports; split it into smaller files"));
+    }
+    let mut d = model::to_doc(&parse(&crate::txt::decode(bytes)));
     d.ensure_nonempty();
-    d
+    Ok(d)
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -3087,7 +3098,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         d.body = vec![wordcraft_doc::para_block(p)];
         let tex = export(&d);
         assert!(tex.contains("$\\pi r^2$") && tex.contains("\\usepackage{amsmath}"), "{tex}");
-        let back = import(tex.as_bytes());
+        let back = import(tex.as_bytes()).unwrap();
         let wordcraft_doc::Block::Para(bp) = &*back.body[0] else { panic!() };
         assert!(
             bp.objects.iter().any(|o| matches!(o, wordcraft_doc::para::InlineObject::Equation { linear, .. } if linear == "π r^2")),
@@ -3104,7 +3115,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         // `\item [x]` and `\\ [1]` would read the bracket as an optional argument.
         assert_eq!(escape_text("[x] a\n [1] b [c]"), "{[}x] a\\\\\n {[}1] b [c]");
         let doc = crate::markdown::import("- [x] done");
-        let back = import(export(&doc).as_bytes());
+        let back = import(export(&doc).as_bytes()).unwrap();
         assert_eq!(back.plain_text(Default::default()), "[x] done");
     }
 
@@ -3113,7 +3124,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let text = "50% of $5 & #1_a {b} ~c^ \\d <e> |f| -- ``g'' tab\there";
         let d = Document::from_text(text);
         let tex = export(&d);
-        let back = import(tex.as_bytes());
+        let back = import(tex.as_bytes()).unwrap();
         assert_eq!(back.plain_text(Default::default()).trim(), text.replace('\t', "\u{2003}"), "{tex}");
     }
 
@@ -3138,6 +3149,24 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let FBlock::Table(bt) = &back.blocks[0] else { panic!() };
         assert_eq!(bt.widths, vec![100.0, 200.0]);
         assert_eq!(bt.rows[1][0].colspan, 2);
+    }
+
+    /// #1341: a source at the import limit opens whole; one byte more is an error naming the
+    /// limit, never a silently cut prefix.
+    #[test]
+    fn source_over_the_limit_is_an_error_not_a_prefix() {
+        let at = format!("{}ENDMARK", "a".repeat(57));
+        assert_eq!(at.len(), 64);
+        let d = import_limited(at.as_bytes(), 64).unwrap();
+        assert!(d.plain_text(Default::default()).ends_with("ENDMARK"), "{:?}", d.plain_text(Default::default()));
+        let over = format!("{at}Z");
+        let err = import_limited(over.as_bytes(), 64).unwrap_err();
+        assert!(err.contains("64 bytes"), "{err}");
+        // The real limit, named in MiB.
+        let big = vec![b'a'; MAX_SOURCE + 1];
+        let err = import(&big).unwrap_err();
+        assert!(err.contains("32 MiB"), "{err}");
+        assert!(crate::import("tex", &big).is_some_and(|r| r.is_err()));
     }
 
     #[test]
@@ -3200,7 +3229,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         doc.body = vec![Arc::new(Block::Table(t_borderless))];
         let tex = export(&doc);
         assert!(!tex.contains("\\hline"));
-        let back = import(tex.as_bytes());
+        let back = import(tex.as_bytes()).unwrap();
         let Some(Block::Table(bt)) = back.body.first().map(|b| &**b) else { panic!() };
         assert!(bt.props.style.is_none(), "imported table should remain borderless");
 
@@ -3216,7 +3245,7 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         doc_bordered.body = vec![Arc::new(Block::Table(t_bordered))];
         let tex_bordered = export(&doc_bordered);
         assert!(tex_bordered.contains("\\hline"));
-        let back_bordered = import(tex_bordered.as_bytes());
+        let back_bordered = import(tex_bordered.as_bytes()).unwrap();
         let Some(Block::Table(bt_bordered)) = back_bordered.body.first().map(|b| &**b) else { panic!() };
         assert!(bt_bordered.props.style.is_some(), "imported table should remain bordered");
     }

@@ -379,6 +379,8 @@ pub struct ParaLayout {
     pub rubies: Vec<RubyLayout>,
     /// Display equations (on lines of their own): cluster index and justification.
     pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
+    /// The paragraph reached [`MAX_PARA_LINES`]: text after its last line isn't laid out.
+    pub truncated: bool,
     /// Positional tabs (laid out as tab clusters): cluster index, alignment, base and leader.
     pub ptabs: Vec<(usize, PTabAlign, PTabBase, TabLeader)>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
@@ -1916,6 +1918,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         ptabs,
         left_out: Vec::new(),
         enclosures,
+        truncated: false,
         auto_space,
     };
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
@@ -2010,6 +2013,34 @@ fn next_tab(x: f32, tabs: &[TabStop], default_tab: f32, hanging_at: Option<f32>)
     })
 }
 
+/// Most lines one paragraph lays out: a guard against hangs on hostile input. A longer
+/// paragraph is cut there ([`ParaLayout::truncated`]) and counted in
+/// [`crate::DocLayout::truncated_paragraphs`].
+pub const MAX_PARA_LINES: usize = 200_000;
+
+#[cfg(any(test, feature = "test-limits"))]
+thread_local! {
+    static LINE_LIMIT: std::cell::Cell<usize> = const { std::cell::Cell::new(MAX_PARA_LINES) };
+}
+
+/// The line limit in force ([`MAX_PARA_LINES`], or a test's smaller one).
+fn line_limit() -> usize {
+    #[cfg(any(test, feature = "test-limits"))]
+    return LINE_LIMIT.with(std::cell::Cell::get);
+    #[cfg(not(any(test, feature = "test-limits")))]
+    MAX_PARA_LINES
+}
+
+/// Run `f` with a smaller line limit (tests; other crates' tests through the `test-limits`
+/// feature).
+#[cfg(any(test, feature = "test-limits"))]
+pub fn with_line_limit<T>(limit: usize, f: impl FnOnce() -> T) -> T {
+    let old = LINE_LIMIT.with(|c| c.replace(limit));
+    let r = f();
+    LINE_LIMIT.with(|c| c.set(old));
+    r
+}
+
 /// A positional tab's stop (column coordinates): the left edge, centre or right edge of the
 /// column (`margin`) or of the space between the indents (`indent`), whatever the tab stops.
 fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, width: f32, indents: (f32, f32)) -> TabStop {
@@ -2028,6 +2059,7 @@ fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, width: f32, in
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
 fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
+    pl.truncated = false;
     // Narrow cells and float spans must retain their usable width.
     const MIN_LINE_WIDTH: f32 = 1.0;
     let suffix = level.map(|l| l.suffix);
@@ -2673,7 +2705,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             }
             break;
         }
-        if lines.len() > 200_000 {
+        if lines.len() >= line_limit() {
+            // The rest of the paragraph isn't laid out (nor shown); the layout counts the cut.
+            pl.truncated = true;
             break;
         }
     }

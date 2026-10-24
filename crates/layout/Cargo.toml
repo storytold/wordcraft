@@ -8,6 +8,11 @@ description = "WordCraft layout: shaping, line breaking, tabs, lists, tables, pa
 [lints]
 workspace = true
 
+[features]
+# Test-only hooks for other crates' tests (a smaller paragraph line limit,
+# `para::with_line_limit`). Never enabled by a normal build.
+test-limits = []
+
 [dependencies]
 wordcraft-geom = { workspace = true }
 wordcraft-doc = { workspace = true }

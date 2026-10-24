@@ -506,6 +506,8 @@ pub struct DocLayout {
     pub ms: f64,
     /// Text box stories laid out (each time a box's text was).
     pub text_boxes: usize,
+    /// Paragraphs cut at [`para::MAX_PARA_LINES`]: their text past the limit isn't laid out.
+    pub truncated_paragraphs: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -543,6 +545,11 @@ pub struct LayoutCache {
     outlines: HashMap<(String, usize, usize, [u32; 4]), Option<Arc<Vec<(f32, f32)>>>>,
     env: u64,
     used: HashSet<Key>,
+    /// Warnings logged for paragraphs cut at the line limit.
+    pub line_limit_warnings: usize,
+    /// The cut paragraphs (story, path and revision, hashed) last warned about: the warning is
+    /// logged once per revision of them, not on every relayout.
+    line_limit_warned: u64,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
     /// (shared, so an edited block is a different pointer) and `env` (styles and numbering). Kept
     /// while both are unchanged, so headers using STYLEREF don't rebuild it on every pass.
@@ -2646,14 +2653,37 @@ fn layout_pass(
         ctx.cache.used = used;
     }
     let mut index: HashMap<(StoryRef, Path), Vec<(usize, usize)>> = HashMap::new();
+    let mut truncated: HashSet<(StoryRef, Path)> = HashSet::new();
     for (pi, p) in pages.iter().enumerate() {
         for (ii, it) in p.items.iter().enumerate() {
-            if let Placed::Lines { story, path, .. } = it {
+            if let Placed::Lines { story, path, para, .. } = it {
                 index.entry((*story, path.clone())).or_default().push((pi, ii));
+                if para.truncated {
+                    truncated.insert((*story, path.clone()));
+                }
+            }
+        }
+        // Header and footer paragraphs are cut at the limit too; they aren't in the body index.
+        for it in p.header.iter().chain(p.footer.iter()) {
+            if let Placed::Lines { story, path, para, .. } = it
+                && para.truncated
+            {
+                truncated.insert((*story, path.clone()));
             }
         }
     }
-    let mut lay = DocLayout { pages, index, ms: 0.0, text_boxes: 0 };
+    let warned = truncated.iter().fold(truncated.len() as u64, |acc, (story, path)| {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        (story, path, doc.para(*story, path).map(|p| p.rev)).hash(&mut h);
+        acc.wrapping_add(h.finish())
+    });
+    if !truncated.is_empty() && warned != ctx.cache.line_limit_warned {
+        ctx.cache.line_limit_warnings = ctx.cache.line_limit_warnings.saturating_add(1);
+        log::warn!("{} paragraph(s) cut at {} lines: the rest of their text isn't laid out", truncated.len(), para::MAX_PARA_LINES);
+    }
+    ctx.cache.line_limit_warned = warned;
+    let mut lay = DocLayout { pages, index, ms: 0.0, text_boxes: 0, truncated_paragraphs: truncated.len() };
     if opts.comment_balloons && !web {
         balloons::add(&mut ctx, &mut lay);
     }

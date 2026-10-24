@@ -141,7 +141,9 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.properties", "Properties", "File › Info", properties)
             .params(r#"{"title"?, "subject"?, "author"?, "keywords"?, "comments"?, "category"?, "custom"?: {name: string | null (removes)}}"#),
-        CommandSpec::new("file.info", "Info", "File", info).pure(),
+        CommandSpec::new("file.info", "Info", "File", info)
+            .params(r#"{} → {path, dirty, pages, words, paragraphs, properties, trackChanges, comments, sections, encrypted, layoutMs, truncatedParagraphs (paragraphs cut at the layout's line limit, 200,000 lines: their text past it isn't laid out or shown)}"#)
+            .pure(),
         CommandSpec::new("file.setAuthor", "User Name", "File › Options › General", set_author)
             .params(r#"{"name": string (author of new tracked changes and comments)}"#)
             .pure(),
@@ -183,7 +185,9 @@ pub fn specs() -> Vec<CommandSpec> {
             Ok(r)
         })
         .pure(),
-        CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary).pure(),
+        CommandSpec::new("document.layout", "Layout Summary", "Agents", layout_summary)
+            .params(r#"{} → {pages: [{number, w, h, section, lines, firstBlock, header, footer}], caret, ms, truncatedParagraphs (paragraphs cut at the layout's line limit, as in file.info)}"#)
+            .pure(),
         CommandSpec::new("document.setText", "Replace Document Text", "Agents", |s, v| {
             let text = p::req_str(v, "text")?;
             let d = Document::from_text(text);
@@ -455,6 +459,7 @@ fn info(s: &mut Session, _: &Value) -> CmdResult {
         "sections": s.doc.sections().len(),
         "encrypted": s.password.is_some(),
         "layoutMs": l.ms,
+        "truncatedParagraphs": l.truncated_paragraphs,
     }))
 }
 
@@ -545,5 +550,5 @@ fn layout_summary(s: &mut Session, _: &Value) -> CmdResult {
         })
         .collect();
     let caret = l.caret_on(&s.sel.focus, s.page_hint).map(|c| json!({"page": c.page, "x": c.x, "y": c.top, "h": c.height}));
-    Ok(json!({"pages": pages, "caret": caret, "ms": l.ms}))
+    Ok(json!({"pages": pages, "caret": caret, "ms": l.ms, "truncatedParagraphs": l.truncated_paragraphs}))
 }

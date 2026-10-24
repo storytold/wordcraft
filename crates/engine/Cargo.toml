@@ -37,6 +37,7 @@ js-sys = "0.3"
 getrandom = { workspace = true }
 
 [dev-dependencies]
+wordcraft-layout = { workspace = true, features = ["test-limits"] }
 encoding_rs = { workspace = true }
 zip = { workspace = true }
 cfb = { workspace = true }
