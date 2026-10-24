@@ -565,7 +565,11 @@ impl Writer {
                             }
                             *top = true;
                         }
-                        out.push_str("<text:list-item>");
+                        let start_attr = q
+                            .list
+                            .and_then(|l| (qi == 0 && l.ordered && l.start > 1).then(|| format!(" text:start-value=\"{}\"", l.start)))
+                            .unwrap_or_default();
+                        out.push_str(&format!("<text:list-item{start_attr}>"));
                         self.para_in(q, chain(start + qi), out);
                     }
                     while let Some(open) = stack.pop() {
