@@ -2278,6 +2278,54 @@ fn a_page_break_closes_a_vertical_merge() {
     }
 }
 
+/// A row inside a vertical merge leaves room for the merged cell's border below it, as any row
+/// another row follows does: where the page breaks between its rows, that border closes the
+/// merged cell at the foot of the page and stays above the bottom margin. Only the merged column
+/// has borders between rows here, so the room is the merge's. Swept over the space above the
+/// table, so the break lands at every offset from the margin.
+#[test]
+fn a_row_leaves_room_for_the_merged_cell_closed_below_it() {
+    use wordcraft_doc::props::VMerge;
+    let hidden = Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 };
+    for border in [0.5f32, 3.0] {
+        for k in 0..20 {
+            let mut d = Document::from_text("filler");
+            d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props = ParaProps { space_before: Some(k as f32 * 1.3), ..Default::default() };
+            let mut t = Table::new(80, 2, 468.0);
+            t.props.style = None;
+            t.props.borders = Some(Borders::all(Border::single(border)));
+            for (i, row) in t.rows.iter_mut().enumerate() {
+                row.cells[0].props.vmerge = if i == 0 { VMerge::Restart } else { VMerge::Continue };
+                row.cells[1].props.borders = Some(Borders { top: Some(hidden), bottom: Some(hidden), ..Default::default() });
+                row.cells[1].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("row", Default::default()))];
+            }
+            d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+            let l = lay(&d);
+            let bottom = d.last_section.page_h - d.last_section.margin_bottom;
+            let page = &l.pages[0];
+            let end = page
+                .items
+                .iter()
+                .filter_map(|it| if let Placed::Cell { rect, cell: 1, .. } = it { Some(rect.bottom()) } else { None })
+                .fold(0.0f32, f32::max);
+            // The merged cell's edge at the foot of the page: the lowest rule across its column.
+            let x = page.items.iter().find_map(|it| if let Placed::Cell { rect, cell: 0, .. } = it { Some(rect.x) } else { None }).unwrap();
+            let closed = page
+                .items
+                .iter()
+                .filter_map(|it| match it {
+                    Placed::Rule { x0, y0, x1, y1, .. } if y0 == y1 && *x0 <= x + 1.0 && *x1 >= x + 20.0 => Some(*y0),
+                    _ => None,
+                })
+                .fold(0.0f32, f32::max);
+            let at = format!("border {border}, {:.1} pt above the table", k as f32 * 1.3);
+            assert!(l.pages.len() > 1, "{at}: the table runs onto a second page");
+            assert!((closed - end).abs() < 0.5, "{at}: the merged cell is closed where the last row ends ({closed}, {end})");
+            assert!(end + border <= bottom + 0.02, "{at}: the last row ends at {end}, the margin at {bottom}");
+        }
+    }
+}
+
 /// A 1×3 table after "before" whose middle cell holds `text` running `dir`.
 fn turned_table(dir: TextDirection, text: &str, row: Option<f32>) -> Document {
     let mut d = Document::from_text("before\nafter");

@@ -928,7 +928,16 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         }
         // The row's own cells come first: `row_keeps_next` reads the first cell's paragraph.
         parts.extend(run_on.into_iter().map(|(_, p)| p));
-        out.push(RowLayout { height: rh, items, bottom: bottoms.get(ri).copied().unwrap_or(0.0), edge: edges.get(ri).copied().unwrap_or(0.0), cells: parts, carried, lead, open });
+        out.push(RowLayout {
+            height: rh,
+            items,
+            bottom: bottoms.get(ri).copied().unwrap_or(0.0),
+            edge: edges.get(ri).copied().unwrap_or(0.0),
+            cells: parts,
+            carried,
+            lead,
+            open,
+        });
     }
     TableLayout { x, width: total, rows: out }
 }
