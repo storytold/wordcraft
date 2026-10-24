@@ -457,3 +457,13 @@ fn custom_props_set_get_remove() {
     assert!(!d.remove_custom_prop("other"));
     assert_eq!(d.custom_props.len(), 1);
 }
+
+#[test]
+fn next_shape_id_avoids_a_shape_at_the_largest_id() {
+    let mut d = Document::from_text("body");
+    d.body.extend(box_para(1, u32::MAX));
+    d.body.extend(box_para(2, 1));
+    assert_eq!(d.next_shape_id(), 2);
+    d.body.extend(box_para(3, 2));
+    assert_eq!(d.next_shape_id(), 3);
+}
