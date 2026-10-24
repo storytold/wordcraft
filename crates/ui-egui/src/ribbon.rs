@@ -2458,6 +2458,7 @@ fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Reset", None, app, |ui, app| {
         big(ui, app, "resetGraphic", "Reset\nGraphic", "smartArt.reset", json!({}), false);
     });
+    graphic_size(ui, app);
 }
 
 /// Chart Design: the selected chart's elements (title, legend, data labels), its data and type,
@@ -2492,6 +2493,11 @@ fn chart_design(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Type", None, app, |ui, app| {
         big(ui, app, "changeChartType", "Change\nChart Type", "chart.type", json!({}), false);
     });
+    graphic_size(ui, app);
+}
+
+/// Chart Design and SmartArt Design › Size: the selected graphic's height and width.
+fn graphic_size(ui: &mut Ui, app: &mut WordApp) {
     group(ui, "Size", None, app, |ui, app| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
@@ -2501,7 +2507,7 @@ fn chart_design(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     // The range bounds what is typed or dragged; a size outside it is shown as it
-                    // is (clamped, egui would report a change and resize the chart unasked).
+                    // is (clamped, egui would report a change and resize the graphic unasked).
                     let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(36.0..=2000.0).clamp_existing_to_range(false).suffix(" pt"));
                     if r.changed() && v != v0 {
                         if r.dragged() && !r.drag_started() {
