@@ -676,6 +676,62 @@ fn only_case_differs(source: &std::path::Path, destination: &std::path::Path) ->
     std::fs::read_dir(dir).is_ok_and(|entries| entries.filter_map(Result::ok).all(|entry| entry.file_name() != to))
 }
 
+/// [`read_file_capped`] on the web, where there are no files by path.
+#[cfg(target_arch = "wasm32")]
+pub fn read_file_capped(path: &str, _max: u64, _what: &str) -> Result<Vec<u8>, String> {
+    Err(format!("{path}: files are opened through the browser on the web"))
+}
+
+/// The files in folder `dir` (not its subfolders), inside the automation read root when there is
+/// one; at most `max` of them.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn list_files(dir: &std::path::Path, max: usize) -> Result<Vec<std::path::PathBuf>, String> {
+    crate::file_access::check_read(&dir.to_string_lossy())?;
+    let entries = std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    Ok(entries.flatten().map(|e| e.path()).filter(|p| p.is_file()).take(max).collect())
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn list_files(dir: &std::path::Path, _max: usize) -> Result<Vec<std::path::PathBuf>, String> {
+    Err(format!("{}: there are no folders on the web", dir.display()))
+}
+
+/// The real location of `path` (links followed, `..` resolved), or `None` when it isn't there
+/// or there is no file system. Reads nothing from the file.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn real_path(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    std::fs::canonicalize(path).ok()
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn real_path(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
+/// Create folder `dir` and its parents, inside the automation write root when there is one.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn create_dir(dir: &std::path::Path) -> Result<(), String> {
+    crate::file_access::check_write(&dir.to_string_lossy())?;
+    std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn create_dir(dir: &std::path::Path) -> Result<(), String> {
+    Err(format!("{}: there are no folders on the web", dir.display()))
+}
+
+/// Delete the file at `path`, inside the automation write root when there is one.
+#[cfg(not(target_arch = "wasm32"))]
+pub fn remove_file(path: &std::path::Path) -> Result<(), String> {
+    crate::file_access::check_write(&path.to_string_lossy())?;
+    std::fs::remove_file(path).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn remove_file(path: &std::path::Path) -> Result<(), String> {
+    Err(format!("{}: there are no files on the web", path.display()))
+}
+
 /// Write `bytes` to the file at `path`, inside the automation write root when there is one.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {

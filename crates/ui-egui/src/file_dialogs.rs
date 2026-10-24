@@ -50,6 +50,7 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
         "font" => &[("Fonts", wordcraft_fonts::FONT_FILE_EXTS)],
         "sources" => &[("Word sources", &["xml"]), ("All files", &["*"])],
         "recipients" => &[("Recipient lists", wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS), ("All files", &["*"])],
+        "theme" => &[("Theme files", &["thmx"]), ("Documents", &["docx", "docm", "dotx", "dotm"]), ("All files", &["*"])],
         _ => &[("Documents", DOCUMENTS), ("Word document", &["docx"]), ("All files", &["*"])],
     }
 }
@@ -79,6 +80,8 @@ pub(crate) enum AfterPick {
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
     ComparePath { revised: bool },
+    /// Save the current theme there (`save`), or apply the theme of the picked file (#1869).
+    Theme { save: bool },
 }
 
 /// What to do once Save As has written the document.
@@ -285,6 +288,10 @@ impl WordApp {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 self.load_recipients(json!({"path": path}))
             }
+            AfterPick::Theme { save } => {
+                let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
+                self.run(if save { "design.saveTheme" } else { "design.openTheme" }, json!({"path": path}))
+            }
             AfterPick::ComparePath { revised } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 crate::dialogs_review::set_compare_path(self, revised, path);
@@ -464,6 +471,30 @@ impl WordApp {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::OpenMany { purpose: "font".into() }, AfterPick::Font);
+    }
+
+    /// Save Current Theme… (`save`) asks where to write the `.thmx`; Browse for Themes… asks for a
+    /// theme file or document whose theme to apply (#1869). The browser has neither (its picker
+    /// opens what it picks as a document), so there the status bar says so; the ribbon leaves
+    /// both out.
+    pub(crate) fn pick_theme(&mut self, save: bool) {
+        if self.services.open_async.is_some() {
+            self.status(tl!("Theme files can't be opened or saved in the browser."));
+            return;
+        }
+        let req = if save {
+            // A custom theme's name suggests its file; a built-in's can't be saved over (and a name
+            // that makes no file name is no use), so those get Word for Mac's own "Theme1".
+            let current = &self.session.doc.settings.theme_name;
+            let name = wordcraft_engine::cmd::themes::check_name(current)
+                .ok()
+                .filter(|n| !wordcraft_engine::cmd::themes::is_builtin(n))
+                .unwrap_or_else(|| "Theme1".into());
+            FileDialogRequest::Save { name: format!("{name}.thmx"), dir: None }
+        } else {
+            FileDialogRequest::Open { purpose: "theme".into() }
+        };
+        let _ = self.ask_file(req, AfterPick::Theme { save });
     }
 
     /// Request loading local system installed fonts (web: queryLocalFonts).

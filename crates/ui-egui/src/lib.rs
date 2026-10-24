@@ -49,6 +49,7 @@ pub mod dialogs_ribbon;
 pub mod dialogs_smart_art;
 pub mod dialogs_table_style;
 pub mod dialogs_templates;
+pub mod dialogs_themes;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
 #[cfg(not(target_arch = "wasm32"))]
@@ -1489,6 +1490,9 @@ impl WordApp {
                 "exportPng" => self.export_dialog("png"),
                 "insertPicture" => self.pick_picture(),
                 "addFont" => self.pick_font(),
+                // Design › Themes › Save Current Theme… and Browse for Themes… (#1869).
+                "saveTheme" => self.pick_theme(true),
+                "browseTheme" => self.pick_theme(false),
                 "loadSystemFonts" => self.load_system_fonts(),
                 "print" => {
                     self.ui.backstage = true;
@@ -2815,6 +2819,9 @@ fn input_dialog(id: &str, params: &Value) -> Option<&'static str> {
         // Templates and Add-ins, and the Organizer without a file to list (#377).
         "tools.templates" => Some("templates"),
         "styles.organizer" if !has("path") => Some("organizer"),
+        // Design › Colors › Customize Colors… and Fonts › Customize Fonts… (#1869).
+        "design.customColors" if !has("colors") => Some("customizeColors"),
+        "design.customFonts" if !has("heading") => Some("customizeFonts"),
         // Language, Envelopes and Labels without settings show their dialogs (#407).
         "review.language" if params.as_object().is_none_or(|m| m.is_empty()) => Some("language"),
         "mailings.envelopes" if params.as_object().is_none_or(|m| m.is_empty()) => Some("envelopes"),
@@ -8767,6 +8774,43 @@ mod tests {
         a.watch_fonts(&ctx);
         assert!(kept.borrow().is_empty());
         assert!(!a.previews.families().iter().any(|f| f == FAMILY));
+    }
+
+    /// Web: Browse for Themes… and Save Current Theme… can't pick theme files there (#1869); run
+    /// from command search they say so instead of doing nothing, and no picker opens.
+    #[test]
+    fn theme_files_on_the_web_say_why_not() {
+        let mut a = typed();
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(String::new()));
+        let seen = asked.clone();
+        a.services.open_async = Some(Box::new(move |purpose| *seen.borrow_mut() = purpose.to_string()));
+        for cmd in ["design.openTheme", "design.saveTheme"] {
+            a.status_msg = None;
+            a.run(cmd, json!({})).unwrap();
+            assert!(a.status_msg.as_ref().is_some_and(|(m, _)| m.contains("browser")), "{cmd}: {:?}", a.status_msg);
+        }
+        assert!(asked.borrow().is_empty(), "no picker: {}", asked.borrow());
+    }
+
+    /// Save Current Theme… suggests the theme's name as the file name only when it is one (a
+    /// received document's theme may be named anything).
+    #[test]
+    fn save_theme_suggests_a_usable_file_name() {
+        let asked = std::rc::Rc::new(std::cell::RefCell::new(Vec::<String>::new()));
+        let seen = asked.clone();
+        let services = Services {
+            pick_save: Some(Box::new(move |name: &str| {
+                seen.borrow_mut().push(name.to_string());
+                None
+            })),
+            ..Default::default()
+        };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        for name in ["../../etc/passwd", "CON", "Craft", "Harbour"] {
+            a.session.doc.settings.theme_name = name.into();
+            let _ = a.run("design.saveTheme", json!({}));
+        }
+        assert_eq!(*asked.borrow(), vec!["Theme1.thmx", "Theme1.thmx", "Theme1.thmx", "Harbour.thmx"]);
     }
 
     /// Web: the picked file arrives through the inbox and loads as recipients, even as .txt; a

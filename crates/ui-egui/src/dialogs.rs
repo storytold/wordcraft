@@ -558,6 +558,8 @@ pub enum Dialog {
     },
     /// Line Numbers, Hyphenation, Language, Envelopes and Labels (#407).
     Layout(Box<crate::dialogs_layout::LayoutDialog>),
+    /// Design › Customize Colors… and Customize Fonts… (#1869).
+    Themes(Box<crate::dialogs_themes::ThemeDialog>),
 }
 
 /// The Table Properties dialog's fields. Lengths are in the interface unit
@@ -935,7 +937,8 @@ pub(crate) fn color_menu(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut 
 }
 
 /// A colour field: a swatch and a drop-down with `none_label` (which sets `none_value`), the
-/// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`.
+/// colour grid, Recent Colors and More Colors… (#606). `value` is hex or `none_value`. An empty
+/// `none_label` leaves the none option out: the field always holds a colour (#1869).
 pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String, none_label: &str, none_value: &str) {
     ui.horizontal(|ui| {
         let id = ui.id().with("colorField");
@@ -952,9 +955,9 @@ pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut
             }
         }
         ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
-        let label = if c.is_some() { value.clone() } else { tl!(none_label).to_string() };
+        let label = if c.is_some() || none_label.is_empty() { value.clone() } else { tl!(none_label).to_string() };
         ui.menu_button(label, |ui| {
-            if ui.button(tl!(none_label)).clicked() {
+            if !none_label.is_empty() && ui.button(tl!(none_label)).clicked() {
                 *value = none_value.to_string();
                 ui.close();
             }
@@ -1022,6 +1025,7 @@ impl Dialog {
             Dialog::Templates { .. } => "templates",
             Dialog::Organizer { .. } => "organizer",
             Dialog::Layout(d) => d.name(),
+            Dialog::Themes(d) => d.name(),
         }
     }
 
@@ -1050,6 +1054,9 @@ impl Dialog {
         }
         if let Some(d) = crate::dialogs_layout::open(name, app) {
             return Some(Dialog::Layout(Box::new(d)));
+        }
+        if let Some(d) = crate::dialogs_themes::open(name, app) {
+            return Some(Dialog::Themes(Box::new(d)));
         }
         if matches!(name, "compare" | "combine" | "autoCorrect" | "restrictEditing") {
             return crate::dialogs_review::open(name, app).map(|d| Dialog::Review(Box::new(d)));
@@ -1496,6 +1503,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::Templates { .. } => "Templates and Add-ins",
         Dialog::Organizer { .. } => "Organizer",
         Dialog::Layout(d) => d.title(),
+        Dialog::Themes(d) => d.title(),
     };
     let id = egui::Id::new(("dialog", title));
     let window = crate::window_close::window(ctx, egui::Window::new(tl!(title)).id(id).collapsible(false).resizable(false));
@@ -2986,6 +2994,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::Templates { form } => crate::dialogs_templates::templates(app, ui, form),
         Dialog::Organizer { form } => crate::dialogs_templates::organizer(app, ui, form),
         Dialog::Layout(d) => crate::dialogs_layout::body(app, ui, d),
+        Dialog::Themes(d) => crate::dialogs_themes::body(app, ui, d),
         Dialog::FindRecipient { text, message } => {
             ui.horizontal(|ui| {
                 ui.label(tl!("Find:"));

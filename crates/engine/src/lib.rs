@@ -174,6 +174,8 @@ mod tests_fonts;
 #[cfg(test)]
 mod tests_revision_checks;
 #[cfg(test)]
+mod tests_themes;
+#[cfg(test)]
 mod tests_typing;
 #[cfg(test)]
 mod tests_wordart;

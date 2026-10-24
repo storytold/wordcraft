@@ -199,6 +199,12 @@ impl Package {
     }
 
     pub fn open_limited(bytes: &[u8], max_part: u64, max_total: u64) -> Result<Package, DocxError> {
+        Package::open_filtered(bytes, &|_| true, max_part, max_total)
+    }
+
+    /// Like [`Package::open_limited`], but only the parts whose name `keep` accepts are unpacked
+    /// (and count against the limits); the rest are left compressed and absent.
+    pub fn open_filtered(bytes: &[u8], keep: &dyn Fn(&str) -> bool, max_part: u64, max_total: u64) -> Result<Package, DocxError> {
         let mut zip = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| DocxError::Zip(e.to_string()))?;
         if zip.len() > MAX_ENTRIES {
             return Err(DocxError::Limit(format!("{} zip entries", zip.len())));
@@ -217,6 +223,9 @@ impl Package {
                 continue;
             }
             let name = f.name().trim_start_matches('/').to_string();
+            if !keep(&name) {
+                continue;
+            }
             if f.size() > max_part {
                 return Err(DocxError::Limit(format!("part {name} declares {} bytes", f.size())));
             }

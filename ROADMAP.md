@@ -18,14 +18,14 @@ agent control. This page is the summary; the assessment is
 
 | Number | Value | Kind |
 | --- | --- | --- |
-| Ribbon/menu catalog coverage | **493 / 508 (97.0%)** | measured (`cargo xtask parity` → [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
+| Ribbon/menu catalog coverage | **502 / 517 (97.1%)** | measured (`cargo xtask parity` → [`docs/parity-checklist.md`](docs/parity-checklist.md)) |
 | **Feature breadth** (weighted, incl. dialog options, styles, languages beyond the ribbon) | **~80%** | estimated |
 | **Ready for real work** (full target) | **~60%** (55–63%) | estimated, additive weighted sum over the dimensions |
 | **Mainstream practitioner** | **~55%** | estimated: weekly-work depth × discounts for interaction (×0.93), stability (×0.90), file exchange (×0.90) |
 | **Essentials user** | **~63%** | estimated: core-feature depth × discounts for launch (×0.90), discoverability (×0.95), opening received files (×0.92) |
 | Remaining to **beta** | **~150–230 h** of Opus 5.5 agent wall-clock (gaps #1–#7) | estimated |
 | Remaining to **full parity** with Word desktop | **~750–1,250 h** (70–80% parallelizable) | estimated |
-| Commands / tests / code | 433 commands · 855 tests + 10 property blocks · ~88,700 lines of Rust | measured (source) |
+| Commands / tests / code | 439 commands · 855 tests + 10 property blocks · ~88,700 lines of Rust | measured (source) |
 | Releases | v0.4.0 (2026-10-10): signed macOS universal DMG, Windows MSI x64/x86/arm64, Linux AppImage/deb/rpm/Flatpak x86_64 + aarch64, FreeBSD, web | measured |
 
 Hours are calibrated from this repo's PRs (equations #191: ~9.7k lines in ~5 h; `.doc` reader
@@ -169,6 +169,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-18 | Design: custom theme colours, fonts and themes (#1869). Customize Colors… names a set of the 12 theme colours and Customize Fonts… a heading and body font pair; they show first in the Colors and Fonts galleries (right-click Edit…/Delete) and are kept in the settings folder's `themes`. Save Current Theme… writes an Office Theme (`.thmx`) and Browse for Themes… applies one or a document's theme (desktop); a custom theme is saved in the `.docx` theme part, and a built-in theme or colour set now replaces all 12 colours. Commands `design.customColors`, `design.customFonts`, `design.deleteCustom`, `design.customThemes`, `design.saveTheme`, `design.openTheme` |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
@@ -925,6 +926,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-15 | trivial | Charts: radar charts (standard, marker, filled) are drawn instead of a placeholder (#1890) |
 | 2026-10-15 | trivial | Progress log: dialog close box (#1885) |
 | 2026-10-15 | trivial | Progress log: mixed Hebrew/Latin text keeps its order in Word (#1543) |
+| 2026-10-18 | trivial | Progress log: custom theme colours, fonts and themes, .thmx (#1869); headline 433 → 439 commands |
 | 2026-10-15 | trivial | Progress log: ruler numbers by zoom, rulers follow the caret's page (#1878) |
 | 2026-10-17 | trivial | Progress log: saving into a folder that refuses a temporary file (#2138) |
 | 2026-10-19 | trivial | Progress log: personal templates in File › New, Save as Word Template (#2852) |

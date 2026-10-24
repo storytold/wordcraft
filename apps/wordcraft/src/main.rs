@@ -162,6 +162,22 @@ fn load_user_dictionary(app: &mut WordApp) {
     }
 }
 
+/// The themes folder: `themes` in the settings folder, holding custom colour and font sets and
+/// saved themes (`.thmx`, #1869). Whether the Craft apps share one themes folder is still open;
+/// this is the one place that decides where it is.
+fn themes_dir() -> Option<std::path::PathBuf> {
+    wordcraft_control_key::settings_dir().map(|b| b.join("themes"))
+}
+
+fn load_custom_themes(app: &mut WordApp) {
+    if !prefs_enabled() {
+        return;
+    }
+    if let Some(dir) = themes_dir() {
+        app.session.load_custom_themes(&dir);
+    }
+}
+
 /// Runs without preferences (`WORDCRAFT_NO_PREFS`, agents' test runs) neither read nor write them.
 fn prefs_enabled() -> bool {
     std::env::var_os("WORDCRAFT_NO_PREFS").is_none()
@@ -431,6 +447,7 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            load_custom_themes(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {
