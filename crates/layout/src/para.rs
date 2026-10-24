@@ -381,6 +381,8 @@ pub struct ParaLayout {
     pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
     /// Positional tabs (laid out as tab clusters): cluster index, alignment, base and leader.
     pub ptabs: Vec<(usize, PTabAlign, PTabBase, TabLeader)>,
+    /// Clusters that show a SEQ field (a caption number), sorted by cluster index.
+    pub seqs: Vec<usize>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
     /// tracked deletions in the final text. Resolved as laid out, table formatting included.
     pub left_out: Vec<std::ops::Range<usize>>,
@@ -1503,6 +1505,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut rubies = Vec::new();
     let mut displays = Vec::new();
     let mut ptabs = Vec::new();
+    let mut seqs = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
@@ -1631,6 +1634,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             }
                         }
                         Some(o @ InlineObject::Field { instr, result, code, .. }) => {
+                            let seq = crate::fields::field_name(instr) == "SEQ";
+                            let before_seq = b.clusters.len();
                             let form = if env.field_codes != *code { None } else { o.legacy_form() };
                             if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
                                 // Word draws a legacy check box as a square as tall as the text's
@@ -1680,6 +1685,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                         b.shape_atomic(&t, start, end, &rc);
                                     }
                                 }
+                            }
+                            if seq {
+                                seqs.extend(before_seq..b.clusters.len());
                             }
                         }
                         Some(InlineObject::NoteRef { kind, id, custom }) => {
@@ -1914,6 +1922,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         rubies,
         displays,
         ptabs,
+        seqs,
         left_out: Vec::new(),
         enclosures,
         auto_space,
@@ -2025,9 +2034,10 @@ fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, width: f32, in
     TabStop { pos, align, leader }
 }
 
-/// Text in `c0..end` is a short caption (a number or a title), not another equation or a sentence.
+/// Text in `c0..end` is a short caption: it holds a SEQ field, totals at most 220 pt, and is not
+/// another equation. Ordinary prose before a display equation is not a caption.
 fn caption_span(pl: &ParaLayout, c0: usize, end: usize) -> bool {
-    if end <= c0 {
+    if end <= c0 || !pl.seqs.iter().any(|k| (c0..end).contains(k)) {
         return false;
     }
     let mut w = 0.0f32;
@@ -2300,7 +2310,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
                 _ => {}
             }
-            // A display equation sits on a line of its own.
+            // A display equation sits on a line of its own, unless a short SEQ caption is already on this line.
             let is_display = pl.displays.iter().any(|(ci, _)| *ci == j);
             if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) && !caption_span(pl, c0, j) {
                 end = LineEnd::Wrap;

@@ -8809,27 +8809,62 @@ fn a_display_equation_keeps_its_right_number_on_the_same_line() {
     assert!(after.x + 0.5 >= eq.x, "caret after the formula at {}, formula at {}", after.x, eq.x);
 }
 
-/// A number written in front of a display equation stays on that line, at the left, and the
-/// equation stays centred.
+/// A SEQ caption written in front of a display equation stays on that line, at the left, and the
+/// equation stays centred. Plain text of the same length is not a caption.
 #[test]
 fn a_display_equation_keeps_its_left_number_on_the_same_line() {
     let mut d = Document::from_text("");
     let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
-    p.insert_text(0, "(1) ", &Default::default()).unwrap();
+    p.insert_object(
+        0,
+        InlineObject::Field {
+            instr: "SEQ Equation \\* ARABIC".into(),
+            result: "(1)".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &Default::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), " ", &Default::default()).unwrap();
+    let eq_at = p.len();
     let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear("a>=b"), ..Default::default() };
-    p.insert_object(p.len(), InlineObject::Equation { linear: "a>=b".into(), display: true, math }, &Default::default()).unwrap();
+    p.insert_object(eq_at, InlineObject::Equation { linear: "a>=b".into(), display: true, math }, &Default::default()).unwrap();
     let width = d.last_section.text_width();
     let l = lay(&d);
     let lines: Vec<_> = l.pages.iter().flat_map(|pg| pg.items.iter()).filter(|it| matches!(it, Placed::Lines { .. })).collect();
     assert_eq!(lines.len(), 1, "the formula wraps onto its own line");
     let num = l.caret(&Pos::body(0, 0)).unwrap();
-    let eq_at = "(1) ".len();
     let eq = l.caret(&Pos::body(0, eq_at)).unwrap();
     let after = l.caret(&Pos::body(0, eq_at + wordcraft_doc::para::OBJ.len_utf8())).unwrap();
     assert!((eq.top - num.top).abs() < 0.5, "formula top {} number top {}", eq.top, num.top);
     assert!(num.x < width * 0.2, "number at {}, column {}", num.x, width);
     assert!(eq.x > width * 0.2 && eq.x < width * 0.7, "formula at {}, column {}", eq.x, width);
     assert!(after.x + 0.5 >= eq.x, "caret after the formula at {}, formula at {}", after.x, eq.x);
+}
+
+/// Ordinary text before a display equation is not a caption, so the equation keeps its own line.
+#[test]
+fn ordinary_prose_before_a_display_equation_keeps_its_own_line() {
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_text(0, "Therefore we obtain: ", &Default::default()).unwrap();
+    let eq_at = p.len();
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear("a>=b"), ..Default::default() };
+    p.insert_object(eq_at, InlineObject::Equation { linear: "a>=b".into(), display: true, math }, &Default::default()).unwrap();
+    let l = lay(&d);
+    let n: usize = l
+        .pages
+        .iter()
+        .flat_map(|pg| pg.items.iter())
+        .map(|it| if let Placed::Lines { para, .. } = it { para.lines.len() } else { 0 })
+        .sum();
+    assert!(n >= 2, "the formula stays on the prose line ({n} lines)");
+    let prose = l.caret(&Pos::body(0, 0)).unwrap();
+    let eq = l.caret(&Pos::body(0, eq_at)).unwrap();
+    assert!(eq.top > prose.top + 1.0, "prose top {} formula top {}", prose.top, eq.top);
 }
 
 fn display_eq(linear: &str, jc: wordcraft_doc::math::MathJc) -> InlineObject {
