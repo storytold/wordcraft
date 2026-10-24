@@ -793,6 +793,12 @@ impl WordApp {
         self.no_document != Some(self.session.document_id())
     }
 
+    /// Whether a modal dialog is open: the rest of the window takes no clicks, keys or
+    /// shortcuts until it closes (#3859).
+    pub(crate) fn modal_open(&self) -> bool {
+        self.file_browser_open() || self.dialog.as_ref().is_some_and(dialogs::Dialog::is_modal) || self.colors.is_some()
+    }
+
     /// Preferences to save between runs: the UI state plus the current user name and editing
     /// preferences.
     pub fn prefs(&self) -> UiState {

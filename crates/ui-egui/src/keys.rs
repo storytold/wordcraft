@@ -707,8 +707,9 @@ fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
 
 /// Command shortcuts when the canvas isn't focused but no text field is either.
 pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
-    // Customize Keyboard records the keys pressed; they never run commands meanwhile.
-    if app.canvas.focused || ctx.egui_wants_keyboard_input() || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })) {
+    // No shortcuts run while a modal dialog is open (#3859); Customize Keyboard records the keys
+    // pressed meanwhile.
+    if app.canvas.focused || ctx.egui_wants_keyboard_input() || app.modal_open() {
         return;
     }
     let events = ctx.input(|i| i.events.clone());

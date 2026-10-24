@@ -295,7 +295,8 @@ pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_l
         return;
     }
     let t = Tokens::get(ctx);
-    egui::Area::new(egui::Id::new("smart_art_frame_button")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+    let area = egui::Area::new(egui::Id::new("smart_art_frame_button")).order(egui::Order::Foreground).interactable(!app.modal_open()).fixed_pos(at);
+    area.show(ctx, |ui| {
         egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(2).show(ui, |ui| {
             if crate::widgets::icon_button(ui, "textPane", tl!("Text Pane")).clicked() {
                 let _ = app.run("smartArt.textPane", json!({"value": true}));

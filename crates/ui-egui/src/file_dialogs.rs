@@ -119,12 +119,12 @@ impl WordApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn file_browser_open(&self) -> bool {
+    pub(crate) fn file_browser_open(&self) -> bool {
         self.file_browser.open.is_some()
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn file_browser_open(&self) -> bool {
+    pub(crate) fn file_browser_open(&self) -> bool {
         false
     }
 

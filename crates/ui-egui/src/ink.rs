@@ -390,6 +390,7 @@ pub fn replay_bar(app: &mut WordApp, ui: &Ui, area: Rect) {
     let mut action = None;
     egui::Area::new(egui::Id::new("ink_replay_bar"))
         .order(egui::Order::Foreground)
+        .interactable(!app.modal_open())
         .pivot(Align2::CENTER_BOTTOM)
         .fixed_pos(pos2(area.center().x, area.max.y - 18.0))
         .show(ui.ctx(), |ui| {

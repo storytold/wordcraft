@@ -165,6 +165,7 @@ pub fn popup(app: &mut WordApp, ctx: &egui::Context) {
     let mut close = false;
     let area = egui::Area::new(egui::Id::new("content_control_popup"))
         .order(egui::Order::Foreground)
+        .interactable(!app.modal_open())
         .fixed_pos(pos2(anchor.max.x - 180.0, anchor.max.y + 2.0));
     let shown = area.show(ctx, |ui| {
         egui::Frame::popup(ui.style()).fill(t.menu).show(ui, |ui| {

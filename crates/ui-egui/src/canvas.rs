@@ -988,8 +988,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     // Keys first, so this frame lays out and paints what was typed (handled after painting, a
     // keystroke showed one frame later). Focus is the canvas's from the last frame.
-    // While "Save changes?" is up, keys answer it rather than edit the document behind it.
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    // While a modal dialog ("Save changes?" too) is up, keys answer it rather than edit the
+    // document behind it, also in the frame it opens, before the canvas has given up focus.
+    if app.canvas.focused && !app.modal_open() {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         // Alt+numpad entry doesn't survive the canvas losing the keyboard.

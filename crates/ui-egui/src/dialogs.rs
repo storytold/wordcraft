@@ -962,6 +962,19 @@ pub(crate) fn color_field(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut
 }
 
 impl Dialog {
+    /// Whether the dialog blocks the rest of the window while it is open. As in Word for Mac
+    /// (16.114.1, #3859), all are but those you keep working beside.
+    pub fn is_modal(&self) -> bool {
+        use crate::dialogs_insert::InsertDialog;
+        use crate::dialogs_refs::RefsDialog;
+        match self {
+            Dialog::Find { .. } | Dialog::InsertMergeField { .. } => false,
+            Dialog::Insert(d) => !matches!(**d, InsertDialog::Symbol(_)),
+            Dialog::Refs(d) => !matches!(**d, RefsDialog::MarkEntry(_) | RefsDialog::CrossRef(_)),
+            _ => true,
+        }
+    }
+
     pub fn name(&self) -> &'static str {
         match self {
             Dialog::RenameDocument { .. } => "renameDocument",
@@ -1426,6 +1439,78 @@ fn count_dialog_frame(ctx: &egui::Context, id: egui::Id) {
     }
 }
 
+/// Makes `window` modal (#3859): the document gives up the keyboard now, and from the next frame
+/// nothing beneath the window takes the pointer or Tab. A press beside it nudges it ([`nudge`]).
+pub(crate) fn block_behind(app: &WordApp, ctx: &egui::Context, window: &egui::Response) {
+    let layer = window.layer_id;
+    // egui's hit test doesn't look at the modal layer, so a transparent backdrop just under the
+    // window takes the clicks; nothing is dimmed, as in Word.
+    let screen = ctx.content_rect();
+    let backdrop = egui::Area::new(layer.id.with("modal_backdrop"))
+        .order(layer.order)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| ui.allocate_rect(screen, Sense::CLICK | Sense::DRAG))
+        .inner;
+    // The backdrop also has the pointer just inside the window's edge (egui's hit radius).
+    let beside = ctx.input(|i| i.pointer.any_pressed() && i.pointer.press_origin().is_some_and(|p| !window.rect.contains(p)));
+    ctx.move_to_top(layer);
+    ctx.memory_mut(|m| m.set_modal_layer(layer));
+    ctx.accesskit_node_builder(window.id, |node| node.set_modal());
+    release_keyboard(app, ctx);
+    nudge(ctx, window, backdrop.contains_pointer() && beside, app.animations_on());
+}
+
+/// How long a modal window shakes or flashes after a press beside it, in seconds.
+const NUDGE_SECS: f64 = 0.4;
+
+/// The `ctx.data` key for when the window `id` was last nudged.
+fn nudge_id(id: egui::Id) -> egui::Id {
+    id.with("nudge")
+}
+
+/// Forgets a nudge of the window `id` as it closes, so it doesn't go on when the window reopens.
+pub(crate) fn forget_nudge(ctx: &egui::Context, id: egui::Id) {
+    ctx.data_mut(|d| d.remove::<f64>(nudge_id(id)));
+}
+
+/// The shake's sideways offset at `t` (0 to 1) through it: three swings either way of up to 6
+/// points, dying away.
+fn shake_offset(t: f32) -> f32 {
+    6.0 * (t * 3.0 * std::f32::consts::TAU).sin() * (1.0 - t)
+}
+
+/// A press beside a modal window shakes it a little (#3859), so the user sees why nothing behind
+/// it reacts; with animation effects off, its border flashes twice instead. A press while it runs
+/// doesn't start it over.
+fn nudge(ctx: &egui::Context, window: &egui::Response, pressed: bool, animate: bool) {
+    let id = nudge_id(window.layer_id.id);
+    let now = ctx.input(|i| i.time);
+    let start = match ctx.data(|d| d.get_temp::<f64>(id)).filter(|s| (0.0..NUDGE_SECS).contains(&(now - s))) {
+        Some(s) => s,
+        None if pressed => {
+            ctx.data_mut(|d| d.insert_temp(id, now));
+            now
+        }
+        None => return,
+    };
+    ctx.request_repaint();
+    let t = ((now - start) / NUDGE_SECS).clamp(0.0, 1.0) as f32;
+    if animate {
+        ctx.transform_layer_shapes(window.layer_id, egui::emath::TSTransform::from_translation(vec2(shake_offset(t), 0.0)));
+    } else if ((t * 4.0) as u32).is_multiple_of(2) {
+        let radius = ctx.global_style().visuals.window_corner_radius;
+        let stroke = egui::Stroke::new(2.0, Tokens::get(ctx).accent);
+        ctx.layer_painter(window.layer_id).rect_stroke(window.rect, radius, stroke, egui::StrokeKind::Inside);
+    }
+}
+
+/// Takes the keyboard from the document while a modal window is open.
+pub(crate) fn release_keyboard(app: &WordApp, ctx: &egui::Context) {
+    if let Some((id, _)) = app.canvas.widget_id {
+        ctx.memory_mut(|m| m.surrender_focus(id));
+    }
+}
+
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let Some(mut d) = app.dialog.take() else {
         ctx.data_mut(|d| d.remove::<(egui::Id, u8)>(dialog_top_key()));
@@ -1511,8 +1596,13 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         }
         count_dialog_frame(ctx, id);
         close |= crate::window_close::show(ctx, &shown.response, &Tokens::get(ctx));
+        // A file browser it opened (Attach…, Browse…) stays above it.
+        if d.is_modal() && !close && !app.file_browser_open() {
+            block_behind(app, ctx, &shown.response);
+        }
     }
     if close {
+        forget_nudge(ctx, id);
         app.canvas.want_focus = true;
     } else {
         app.dialog = Some(d);
@@ -4118,6 +4208,164 @@ mod tests {
         assert_eq!(goto_page(""), Some(json!({"pageBy": 1})));
         for junk in ["0", "abc", "+x", "1.5", "99999999999999999999999"] {
             assert_eq!(goto_page(junk), None, "{junk}");
+        }
+    }
+
+    /// #3859: a dialog is modal, as in Word. While Font is open, typing (from the frame it opens),
+    /// Mod+O and a click on File reach nothing behind it, and the dialog itself still works. Find
+    /// and Replace is modeless: with it open, File still opens.
+    #[test]
+    fn modal_dialogs_block_the_window_behind_them() {
+        use egui_kittest::kittest::Queryable;
+        let picks = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let counted = picks.clone();
+        a.services.pick_open = Some(Box::new(move |_| {
+            counted.set(counted.get() + 1);
+            None
+        }));
+        let mut h = app_harness(a);
+        h.run_steps(6);
+        let body = |h: &egui_kittest::Harness<WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let open = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
+            let d = Dialog::open(name, h.state_mut());
+            assert!(d.is_some(), "{name}");
+            h.state_mut().dialog = d;
+            h.run_steps(4);
+        };
+        h.event(egui::Event::Text("Kilns".into()));
+        h.run_steps(2);
+        assert_eq!(body(&h), "Kilns");
+
+        let font = Dialog::open("font", h.state_mut());
+        h.state_mut().dialog = font;
+        h.event(egui::Event::Text("x".into()));
+        h.event(egui::Event::Key { key: egui::Key::O, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
+        h.run_steps(2);
+        assert_eq!(body(&h), "Kilns", "typing doesn't reach the document");
+        assert_eq!(picks.get(), 0, "Mod+O opens nothing");
+        h.run_steps(2);
+        h.get_by_label("File").click();
+        h.run_steps(4);
+        assert!(!h.state().ui.backstage, "File doesn't open");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").click();
+        h.run_steps(4);
+        assert!(h.state().dialog.is_none(), "Cancel closes the dialog");
+        h.event(egui::Event::Text("!".into()));
+        h.run_steps(2);
+        assert_eq!(body(&h), "Kilns!", "the document takes typing again");
+
+        open(&mut h, "find");
+        h.get_by_label("File").click();
+        h.run_steps(4);
+        assert!(h.state().ui.backstage, "File opens beside Find");
+    }
+
+    /// #3859: a press beside a modal dialog nudges it, so the user sees why nothing behind it
+    /// reacts: it shakes, or with animation effects off its border flashes, then comes back to
+    /// rest. A press inside it (just inside its edge too) doesn't, nor does another press while the
+    /// nudge runs, and a dialog closed mid-nudge opens still.
+    #[test]
+    fn a_press_beside_a_modal_dialog_nudges_it() {
+        use crate::theme::Animations;
+        use egui_kittest::kittest::Queryable;
+        for animations in [Animations::On, Animations::Off] {
+            let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            a.ui.animations = animations;
+            a.dialog = Dialog::open("font", &mut a);
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(6);
+            let id = egui::Id::new(("dialog", "Font"));
+            let started = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<f64>(nudge_id(id)));
+            // What a nudge changes: where OK is drawn, and how many 2 pt borders there are.
+            let look = |h: &egui_kittest::Harness<WordApp>| {
+                let shapes = &h.output().shapes;
+                let ok = shapes.iter().find_map(|s| match &s.shape {
+                    egui::Shape::Text(t) if t.galley.text() == "OK" => Some(t.pos.x),
+                    _ => None,
+                });
+                (ok, shapes.iter().filter(|s| matches!(&s.shape, egui::Shape::Rect(r) if r.stroke.width == 2.0)).count())
+            };
+            let press = |h: &mut egui_kittest::Harness<WordApp>, pos: egui::Pos2| {
+                h.event(egui::Event::PointerMoved(pos));
+                for pressed in [true, false] {
+                    h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+                    h.step();
+                }
+            };
+            let rest = look(&h);
+            let rect = h.ctx.memory(|m| m.area_rect(id)).expect("the dialog is open");
+            press(&mut h, rect.center());
+            press(&mut h, rect.center_top() + vec2(0.0, 2.0));
+            assert_eq!(started(&h), None, "{animations:?}: presses inside the dialog");
+            let beside = egui::pos2(60.0, 600.0);
+            assert!(!rect.contains(beside));
+            press(&mut h, beside);
+            let first = started(&h).expect("a press beside the dialog nudges it");
+            let mut looks = vec![look(&h)];
+            press(&mut h, beside);
+            assert_eq!(started(&h), Some(first), "{animations:?}: a press while it runs doesn't start it over");
+            for _ in 0..6 {
+                h.step();
+                looks.push(look(&h));
+            }
+            if animations == Animations::On {
+                assert!(looks.iter().any(|l| l.0 != rest.0) && looks.iter().all(|l| l.1 == rest.1), "it shakes: {rest:?} {looks:?}");
+            } else {
+                assert!(looks.iter().any(|l| l.1 > rest.1) && looks.iter().all(|l| l.0 == rest.0), "its border flashes: {rest:?} {looks:?}");
+            }
+            h.run_steps(30);
+            assert_eq!(look(&h), rest, "{animations:?}: it comes back to rest");
+            press(&mut h, beside);
+            assert!(started(&h).is_some_and(|t| t > first), "{animations:?}: once it's over, the next press nudges again");
+
+            h.get_by_role_and_label(egui::accesskit::Role::Button, "Cancel").click();
+            h.step();
+            assert!(h.state().dialog.is_none());
+            let font = Dialog::open("font", h.state_mut());
+            h.state_mut().dialog = font;
+            h.run_steps(2);
+            assert_eq!(started(&h), None, "{animations:?}: a dialog closed mid-nudge opens still");
+        }
+    }
+
+    /// The shake starts and ends where the dialog is and swings at most 6 points either way.
+    #[test]
+    fn the_shake_comes_back_to_rest() {
+        assert_eq!(shake_offset(0.0), 0.0);
+        assert!(shake_offset(1.0).abs() < 1e-4);
+        assert!((0..=100).map(|i| shake_offset(i as f32 / 100.0).abs()).all(|x| x <= 6.0));
+        assert!((0..=100).any(|i| shake_offset(i as f32 / 100.0).abs() > 3.0), "it does move");
+    }
+
+    /// Which dialogs leave the window working (#3859, Word for Mac 16.114.1).
+    #[test]
+    fn find_symbol_mark_entry_cross_reference_and_merge_fields_are_modeless() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        for (name, modal) in [
+            ("find", false),
+            ("replace", false),
+            ("goto", false),
+            ("symbol", false),
+            ("crossReference", false),
+            ("markEntry", false),
+            ("insertMergeField", false),
+            ("font", true),
+            ("paragraph", true),
+            ("pageSetup", true),
+            ("wordCount", true),
+            ("bookmark", true),
+            ("insertTable", true),
+        ] {
+            let d = Dialog::open(name, &mut a);
+            assert_eq!(d.as_ref().map(Dialog::is_modal), Some(modal), "{name}");
         }
     }
 
