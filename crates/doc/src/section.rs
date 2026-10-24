@@ -732,6 +732,18 @@ pub struct SectionProps {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub form_prot: Option<bool>,
     pub page_borders: Option<Borders>,
+    /// Page borders are measured from the text (`w:offsetFrom="text"`, the schema default when
+    /// the attribute is absent; ECMA-376 §17.6.10) rather than the page edge (`"page"`). Kept
+    /// so saving writes it back. Borders created in WordCraft leave this `false` (page edge).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub page_borders_from_text: bool,
+    /// `w:display` of the page borders as read (`allPages`, `firstPage`, `notFirstPage`).
+    /// Kept so saving writes it back; WordCraft always draws them on every page.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_borders_display: Option<String>,
+    /// `w:zOrder` of the page borders as read (`front`, `back`). Kept so saving writes it back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub page_borders_z_order: Option<String>,
     /// Text direction / bidi section.
     pub rtl: bool,
     /// Which way the section's text runs (`w:textDirection`, ECMA-376 §17.6.20): vertical
@@ -779,6 +791,9 @@ impl Default for SectionProps {
             valign: PageVAlign::Top,
             form_prot: None,
             page_borders: None,
+            page_borders_from_text: false,
+            page_borders_display: None,
+            page_borders_z_order: None,
             rtl: false,
             text_direction: crate::props::TextDirection::Horizontal,
             text_direction_set: false,
