@@ -9757,3 +9757,81 @@ fn export_png_refuses_a_path_that_is_not_png() {
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// #4041: Word's TOC with its entries in columns has its title in a one-column section above them
+/// (title, blank line ending the section, entries). Replace puts the new title in its place, above
+/// the break, and Remove takes the title too; the section break stays.
+#[test]
+fn toc_title_above_a_section_break_goes_with_the_toc() {
+    use wordcraft_doc::para::InlineObject;
+    use wordcraft_doc::props::CharProps;
+    let file = |title_style: &str, blanks: usize, own_break: bool| {
+        let text = format!("Table of Contents\n{}\nOld entry\t1\nAlpha\nBeta", "\n".repeat(blanks - 1));
+        let mut s = Session::new(wordcraft_doc::Document::from_text(&text));
+        run(&mut s, "caret.set", json!({"pos": Pos::body(0, 0)}));
+        run(&mut s, "styles.apply", json!({"style": title_style}));
+        run(&mut s, "caret.set", json!({"pos": Pos::body(blanks, 0)}));
+        run(&mut s, "layout.break", json!({"kind": "continuous"}));
+        s.doc.remove_block(StoryRef::Body, &wordcraft_doc::Path::top(blanks + 1)).unwrap();
+        let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(blanks + 1)).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::FieldEnd, &CharProps::default()).unwrap();
+        p.insert_object(0, InlineObject::FieldStart { instr: r#"TOC \o "1-2" \h"#.into(), locked: false, dirty: false }, &CharProps::default())
+            .unwrap();
+        for (i, style) in [(blanks + 2, "Heading 1"), (blanks + 3, "Heading 2")] {
+            run(&mut s, "caret.set", json!({"pos": Pos::body(i, 0)}));
+            run(&mut s, "styles.apply", json!({"style": style}));
+        }
+        if own_break {
+            // The title's paragraph ends the section itself: no blank line under it.
+            let section = s.doc.body[1].as_para().unwrap().section.clone();
+            s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().section = section;
+            s.doc.remove_block(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap();
+        }
+        // Through DOCX, as an imported file is, then Update Table makes it the engine's TOC.
+        let mut s = Session::new(wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap());
+        run(&mut s, "references.updateToc", json!({}));
+        s
+    };
+    let style = |s: &Session, i: usize| s.doc.body.get(i).and_then(|b| b.as_para()).and_then(|p| p.props.style.clone());
+    let headings = |s: &Session| s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.props.style.as_deref() == Some("TOCHeading")).count();
+    let mut s = file("TOC Heading", 1, false);
+    let before = text(&s);
+    assert!(before.starts_with("Table of Contents\n\n"), "{before}");
+    for _ in 0..2 {
+        run(&mut s, "references.toc", json!({"levels": 2}));
+        let t = text(&s);
+        assert!(t.starts_with("Contents\n\n"), "the new title takes the old one's place: {t}");
+        assert!(!t.contains("Table of Contents"), "{t}");
+        assert_eq!(headings(&s), 1, "{t}");
+        assert!(s.doc.body.get(1).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some()), "the section break stays under the title");
+        assert_eq!(style(&s, 3).as_deref(), Some("TOC1"), "the entries stay below the break: {t}");
+    }
+    while s.undo() {}
+    assert!(text(&s).starts_with("Table of Contents\n"));
+    let mut s = file("TOC Heading", 1, false);
+    run(&mut s, "references.removeToc", json!({}));
+    let t = text(&s);
+    assert_eq!(headings(&s), 0, "{t}");
+    assert!(!t.contains("Table of Contents") && !t.contains("Alpha\t"), "{t}");
+    assert!(s.doc.body.first().and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some()), "the section break stays: {t}");
+    assert!(t.contains("Alpha\nBeta"), "{t}");
+    // A paragraph above the break that isn't a TOC Heading isn't the table's.
+    // However many blank lines lie between the title and the field's paragraph.
+    let mut s = file("TOC Heading", 6, false);
+    run(&mut s, "references.removeToc", json!({}));
+    assert_eq!(headings(&s), 0, "{}", text(&s));
+    // A title whose own paragraph ends the section: Replace keeps the break on the new title,
+    // Remove leaves it on an empty paragraph.
+    let has_break = |s: &Session, i: usize| s.doc.body.get(i).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
+    let mut s = file("TOC Heading", 1, true);
+    assert!(has_break(&s, 0), "{}", text(&s));
+    run(&mut s, "references.toc", json!({"levels": 2}));
+    assert!(text(&s).starts_with("Contents\n") && headings(&s) == 1 && has_break(&s, 0), "{}", text(&s));
+    let mut s = file("TOC Heading", 1, true);
+    run(&mut s, "references.removeToc", json!({}));
+    assert!(headings(&s) == 0 && has_break(&s, 0), "{}", text(&s));
+    let mut s = file("Normal", 1, false);
+    run(&mut s, "references.removeToc", json!({}));
+    assert!(text(&s).starts_with("Table of Contents\n"), "{}", text(&s));
+}

@@ -4,7 +4,7 @@ use serde_json::{Value, json};
 use wordcraft_doc::numbering::{Counters, LevelSuffix};
 use wordcraft_doc::para::{InlineObject, NoteKind, OBJ};
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
-use wordcraft_doc::section::NumFormat;
+use wordcraft_doc::section::{NumFormat, SectionProps};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, para_block};
 
 use super::{delete_selection, sel_result};
@@ -21,8 +21,13 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("references.removeToc", "Remove Table of Contents", "References › Table of Contents", |s, _| {
             if let Some((start, end)) = toc_range(s) {
-                for i in (start..=end).rev() {
-                    s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
+                let title = toc_title(s, start);
+                let sections = remove_toc_blocks(s, start, end)?;
+                keep_sections(s, start, sections)?;
+                // Word's title goes with the table (#4041); the section breaks stay.
+                if let Some(t) = title {
+                    let sections = remove_toc_blocks(s, t, t)?;
+                    keep_sections(s, t, sections)?;
                 }
                 s.clamp_selection();
             }
@@ -339,6 +344,26 @@ fn toc_range(s: &Session) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// The title of the TOC whose field is in body block `start`, when it is a paragraph of its own
+/// above the field's: a TOC Heading separated from it only by empty paragraphs, where it, one of
+/// them or the field's paragraph ends a section. Word lays out a TOC with entries in columns that way (title, blank line, continuous
+/// section break, entries), and its title belongs to the table (#4041).
+fn toc_title(s: &Session, start: usize) -> Option<usize> {
+    // The field's paragraph may end the section itself.
+    let mut section = s.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
+    // Only empty paragraphs are crossed, however many there are.
+    for i in (0..start).rev() {
+        let p = s.doc.body.get(i)?.as_para()?;
+        if p.is_empty() && p.objects.is_empty() {
+            section |= p.section.is_some();
+            continue;
+        }
+        // The title's own paragraph may end the section too.
+        return ((section || p.section.is_some()) && p.props.style.as_deref() == Some("TOCHeading")).then_some(i);
+    }
+    None
+}
+
 /// The caret is in the table of contents (its heading or an entry), where Word's context menu
 /// offers Update Field for the whole table.
 pub fn caret_in_toc(s: &Session) -> bool {
@@ -467,16 +492,37 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     let replace = v.as_object().is_some_and(|m| !m.is_empty());
     // Replacing a table puts the new one where the old one was, in place of an empty paragraph.
     let mut placeholder = false;
+    // The section breaks the replaced table's paragraphs ended.
+    let mut sections = Vec::new();
     let at = match toc_range(s) {
         // `{}` updates the table there; settings replace it where it is.
         Some(_) if !replace => {
             regenerate_toc(s, None, &tabs)?;
             return sel_result(s);
         }
-        Some((start, end)) => {
-            for i in (start..=end).rev() {
-                s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
+        Some((start, end)) if let Some(t) = toc_title(s, start) => {
+            // A title above a section break stays there with the new title, and the field keeps
+            // its own paragraph under the break, so the entries stay in their section (#4041).
+            let mut sections = remove_toc_blocks(s, start, end)?;
+            let title = p::str(v, "title").unwrap_or("Contents");
+            let mut heading = Paragraph::with_text(title, CharProps::default()).styled("TOCHeading");
+            // A section the old title's paragraph ended stays with the new one.
+            heading.section = remove_toc_blocks(s, t, t)?.into_iter().next().map(|(_, sec)| sec);
+            s.doc.insert_block(StoryRef::Body, &Path::top(t), Block::Para(heading))?;
+            let mut field = Paragraph::new();
+            field.insert_object(0, toc_field_object(v), &CharProps::default())?;
+            // So does one the field's paragraph ended; any other goes after the table.
+            if sections.first().is_some_and(|(k, _)| *k == 0) {
+                field.section = Some(sections.remove(0).1);
             }
+            s.doc.insert_block(StoryRef::Body, &Path::top(start), Block::Para(field))?;
+            keep_sections(s, start + 1, sections)?;
+            regenerate_toc(s, Some(leader(p::str(v, "tabLeader").unwrap_or("dot"))), &tabs)?;
+            s.clamp_selection();
+            return sel_result(s);
+        }
+        Some((start, end)) => {
+            sections = remove_toc_blocks(s, start, end)?;
             s.doc.insert_block(StoryRef::Body, &Path::top(start), Block::Para(Paragraph::new()))?;
             placeholder = true;
             s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(start), off: 0 });
@@ -490,11 +536,11 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
     }
     // Title paragraph carrying the TOC field marker.
     let mut head = Paragraph::with_text(&title, CharProps::default()).styled("TOCHeading");
-    head.insert_object(
-        head.len(),
-        InlineObject::Field { instr: toc_instr(v), result: String::new(), locked: false, dirty: false, code: false, form: String::new() },
-        &CharProps::default(),
-    )?;
+    head.insert_object(head.len(), toc_field_object(v), &CharProps::default())?;
+    // The new title ends the section the old one did; any other break goes after the table.
+    if sections.first().is_some_and(|(k, _): &(usize, _)| *k == 0) {
+        head.section = Some(sections.remove(0).1);
+    }
     let i = if s.doc.para_at(&at).is_some_and(|p| p.is_empty()) {
         if placeholder {
             s.doc.remove_block(StoryRef::Body, &at.path)?;
@@ -504,10 +550,36 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
         s.doc.split_paragraph(&at)?.path.last()
     };
     s.doc.insert_block(StoryRef::Body, &Path::top(i), Block::Para(head))?;
+    keep_sections(s, i + 1, sections)?;
     let leader = leader(p::str(v, "tabLeader").unwrap_or("dot"));
     regenerate_toc(s, Some(leader), &tabs)?;
     s.clamp_selection();
     sel_result(s)
+}
+
+/// Remove body blocks `start..=end` of a TOC, returning the section breaks their paragraphs ended
+/// (each with its place in the range): removing the table never removes a section (#4041).
+fn remove_toc_blocks(s: &mut Session, start: usize, end: usize) -> Result<Vec<(usize, Box<SectionProps>)>, CmdError> {
+    let sections = (start..=end).filter_map(|i| Some((i - start, s.doc.body.get(i)?.as_para()?.section.clone()?))).collect();
+    for i in (start..=end).rev() {
+        s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
+    }
+    Ok(sections)
+}
+
+/// Empty paragraphs at body block `at` ending `sections`, in order.
+fn keep_sections(s: &mut Session, at: usize, sections: Vec<(usize, Box<SectionProps>)>) -> Result<(), CmdError> {
+    for (k, (_, section)) in sections.into_iter().enumerate() {
+        let mut p = Paragraph::new();
+        p.section = Some(section);
+        s.doc.insert_block(StoryRef::Body, &Path::top(at + k), Block::Para(p))?;
+    }
+    Ok(())
+}
+
+/// The TOC field for the settings in `v`.
+fn toc_field_object(v: &Value) -> InlineObject {
+    InlineObject::Field { instr: toc_instr(v), result: String::new(), locked: false, dirty: false, code: false, form: String::new() }
 }
 
 /// A hidden `_Toc` bookmark around the heading at body block `i` (after its leading page breaks),
