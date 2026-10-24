@@ -192,11 +192,7 @@ pub fn is_thai_lao(c: char) -> bool {
 /// Returns sorted byte offsets into `text`.
 fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
     static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
-    S.get_or_init(|| {
-        icu_segmenter::LineSegmenter::new_dictionary(
-            icu_segmenter::options::LineBreakOptions::default(),
-        )
-    })
+    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
 }
 
 pub fn thai_lao_breaks(text: &str) -> Vec<usize> {
