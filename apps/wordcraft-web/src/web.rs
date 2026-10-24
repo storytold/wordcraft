@@ -9,6 +9,8 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::async_saves::{AsyncSaves, SaveOutcome};
 use wordcraft_ui_egui::{Inbox, Services, WordApp};
 
+use crate::size_gate;
+
 const DOC_EXTS: &[&str] = &["docx", "docm", "dotx", "dotm", "doc", "dot", "odt", "rtf", "txt", "md", "html", "htm", "tex", "json", "xml"];
 const IMAGE_EXTS: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "wmf", "emf"];
 const RECIPIENT_EXTS: &[&str] = wordcraft_engine::cmd::mailings::RECIPIENT_EXTENSIONS;
@@ -117,17 +119,29 @@ fn stored_prefs() -> Option<String> {
 impl eframe::App for WebShell {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
-        for f in dropped {
+        if !dropped.is_empty() {
             let inbox = self.inbox.clone();
             let ctx = ctx.clone();
+            let messages = self.messages.clone();
+            // One file is read at a time, and only after its size passed the budget (#1333).
             wasm_bindgen_futures::spawn_local(async move {
-                let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
-                match f.bytes_async().await {
-                    Ok(bytes) => {
-                        inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                for f in dropped {
+                    let name = f.path().file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "dropped".into());
+                    if let Some(file) = f.web_file()
+                        && let Err(e) = size_gate::check_size(&name, file.size(), size_gate::budget_for(&name, IMAGE_EXTS))
+                    {
+                        log::error!("{e}");
+                        messages.borrow_mut().push(e);
                         ctx.request_repaint();
+                        continue;
                     }
-                    Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
+                    match f.bytes_async().await {
+                        Ok(bytes) => {
+                            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+                            ctx.request_repaint();
+                        }
+                        Err(e) => log::error!("couldn't read dropped file {name}: {e}"),
+                    }
                 }
             });
         }
@@ -158,8 +172,6 @@ impl eframe::App for WebShell {
     }
 }
 
-/// Largest picture pasted from the browser's clipboard (as `insert.picture` allows).
-const MAX_PASTED_BYTES: f64 = (200u32 << 20) as f64;
 /// Most pictures one paste inserts.
 const MAX_PASTED_PICTURES: u32 = 20;
 
@@ -180,8 +192,8 @@ fn listen_for_pasted_pictures(inbox: Inbox, ctx: egui::Context) -> Result<(), St
             if !file.type_().starts_with("image/") {
                 continue;
             }
-            if file.size() > MAX_PASTED_BYTES {
-                log::warn!("pasted picture is larger than 200 MB; not inserted");
+            if let Err(e) = size_gate::check_size("pasted picture", file.size(), wordcraft_ui_egui::paste_picture::MAX_FILE_BYTES) {
+                log::warn!("{e}; not inserted");
                 continue;
             }
             let inbox = inbox.clone();
@@ -211,10 +223,17 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
     let save_ctx = ctx.clone();
     let font_ctx = ctx.clone();
     let font_messages = messages.clone();
+    let picker_messages = messages.clone();
     Services {
         open_async: Some(Box::new(move |purpose: &str| {
             let inbox = open_inbox.clone();
             let ctx = ctx.clone();
+            let picker_messages = picker_messages.clone();
+            let budget = match purpose {
+                "picture" => wordcraft_ui_egui::paste_picture::MAX_FILE_BYTES,
+                "font" => wordcraft_fonts::MAX_FONT_FILE_BYTES as u64,
+                _ => wordcraft_engine::io::MAX_OPEN_BYTES,
+            };
             let dialog = if purpose == "picture" {
                 rfd::AsyncFileDialog::new().add_filter("Pictures", IMAGE_EXTS)
             } else if purpose == "font" {
@@ -229,6 +248,14 @@ fn services(inbox: Inbox, ctx: egui::Context, dirty: Rc<Cell<bool>>, saves: Asyn
                 // Add Font takes every selected file (#1789); the others one.
                 let files = if many { dialog.pick_files().await.unwrap_or_default() } else { dialog.pick_file().await.into_iter().collect() };
                 for file in files.into_iter().take(MAX_PICKED_FILES) {
+                    // The size is checked before any of the file is read (#1333).
+                    if let Err(e) = size_gate::check_size(&file.file_name(), file.inner().size(), budget) {
+                        log::error!("{e}");
+                        // The status bar shows the rejection (WebShell::logic drains this queue).
+                        picker_messages.borrow_mut().push(e);
+                        ctx.request_repaint();
+                        continue;
+                    }
                     let mut bytes = file.read().await;
                     let mut pending = inbox.lock().unwrap_or_else(|e| e.into_inner());
                     // Fonts waiting for the app to drain them stay under a byte cap. A file

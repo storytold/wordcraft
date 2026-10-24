@@ -531,17 +531,67 @@ impl LocalImages {
 #[cfg(not(target_arch = "wasm32"))]
 fn read_regular_file(path: &std::path::Path, limit: u64) -> Option<Vec<u8>> {
     use std::io::Read;
-    if !std::fs::metadata(path).ok()?.is_file() {
-        return None;
-    }
-    let file = std::fs::File::open(path).ok()?;
-    let meta = file.metadata().ok()?;
-    if !meta.is_file() {
-        return None;
-    }
-    let mut out = Vec::with_capacity(usize::try_from(meta.len().min(limit)).unwrap_or(0));
+    let (file, len) = open_regular(path).ok()?;
+    let mut out = Vec::with_capacity(usize::try_from(len.min(limit)).unwrap_or(0));
     file.take(limit.saturating_add(1)).read_to_end(&mut out).ok()?;
     Some(out)
+}
+
+/// The most bytes of a document (or any file opened by path) that is read into memory.
+pub const MAX_OPEN_BYTES: u64 = 2 << 30;
+
+/// `max` for an error message: whole gigabytes (when exact), else megabytes, else bytes.
+pub fn limit_text(max: u64) -> String {
+    if max >= 1 << 30 && max.is_multiple_of(1 << 30) {
+        format!("{} GB", max >> 30)
+    } else if max >= 1 << 20 {
+        format!("{} MB", max >> 20)
+    } else {
+        format!("{max} bytes")
+    }
+}
+
+/// Opens the regular file at `path` (a named pipe blocks when opened and a device may never end,
+/// so the path is checked first and the opened handle again), with its length.
+#[cfg(not(target_arch = "wasm32"))]
+fn open_regular(path: &std::path::Path) -> Result<(std::fs::File, u64), String> {
+    let name = path.display();
+    let meta = std::fs::metadata(path).map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name}: not a regular file"));
+    }
+    let file = std::fs::File::open(path).map_err(|e| format!("{name}: {e}"))?;
+    let meta = file.metadata().map_err(|e| format!("{name}: {e}"))?;
+    if !meta.is_file() {
+        return Err(format!("{name}: not a regular file"));
+    }
+    Ok((file, meta.len()))
+}
+
+/// Reads the regular file at `path`, which may be at most `max` bytes: the length is checked
+/// before anything is read and the read itself is bounded, so a file that grows meanwhile
+/// cannot exceed the limit either. `what` names the kind of file in the error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn read_bounded(path: &std::path::Path, max: u64, what: &str) -> Result<Vec<u8>, String> {
+    let (file, len) = open_regular(path)?;
+    let label = format!("{}: the {what}", path.display());
+    if len > max {
+        return Err(format!("{label} is larger than the limit of {}", limit_text(max)));
+    }
+    read_bounded_from(file, len, max, &label)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// Reads at most `max` bytes from `reader` (`declared` is the length it reported, used only to
+/// size the buffer), erroring when more arrive: at most `max + 1` bytes are ever held.
+pub(crate) fn read_bounded_from(reader: impl std::io::Read, declared: u64, max: u64, label: &str) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let mut out = Vec::with_capacity(usize::try_from(declared.min(max)).unwrap_or(0));
+    reader.take(max.saturating_add(1)).read_to_end(&mut out).map_err(|e| format!("{label}: {e}"))?;
+    if out.len() as u64 > max {
+        return Err(format!("{label} is larger than the limit of {}", limit_text(max)));
+    }
+    Ok(out)
 }
 
 /// Largest file [`read_file`] reads whole — the same 2 GB ceiling [`open_path_with`] gives a
@@ -567,14 +617,7 @@ pub fn read_file(path: &str) -> Result<Vec<u8>, String> {
 #[cfg(not(target_arch = "wasm32"))]
 pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, String> {
     crate::file_access::check_read(path)?;
-    let meta = std::fs::metadata(path).map_err(|e| format!("{path}: {e}"))?;
-    if !meta.is_file() {
-        return Err(format!("{path}: not a file"));
-    }
-    if meta.len() > max {
-        return Err(format!("{path}: the {what} is larger than {} MB", max >> 20));
-    }
-    std::fs::read(path).map_err(|e| format!("{path}: {e}"))
+    read_bounded(std::path::Path::new(path), max, what)
 }
 
 /// The first `max` bytes of the file at `path` (fewer when it is shorter), inside the automation
@@ -583,7 +626,7 @@ pub fn read_file_capped(path: &str, max: u64, what: &str) -> Result<Vec<u8>, Str
 pub fn read_file_head(path: &str, max: u64) -> Result<Vec<u8>, String> {
     use std::io::Read;
     crate::file_access::check_read(path)?;
-    let f = std::fs::File::open(path).map_err(|e| format!("{path}: {e}"))?;
+    let (f, _) = open_regular(std::path::Path::new(path))?;
     let mut head = Vec::new();
     f.take(max).read_to_end(&mut head).map_err(|e| format!("{path}: {e}"))?;
     Ok(head)
@@ -721,4 +764,106 @@ pub fn save_path_with(path: &std::path::Path, _doc: &Document, _password: Option
 /// [`wordcraft_formats::txt::decode`]).
 pub fn decode_text(b: &[u8]) -> String {
     wordcraft_formats::txt::decode(b)
+}
+
+#[cfg(all(test, unix))]
+#[allow(clippy::unwrap_used, clippy::expect_used)]
+mod ingress_tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    /// Runs `f` on a thread and fails (instead of hanging the run) if it does not finish.
+    fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(f());
+        });
+        rx.recv_timeout(Duration::from_secs(5)).expect("read blocked on a non-regular file")
+    }
+
+    /// A scratch folder that is removed when the test ends, pass or fail.
+    struct Scratch(std::path::PathBuf);
+
+    impl std::ops::Deref for Scratch {
+        type Target = std::path::Path;
+        fn deref(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn scratch(name: &str) -> Scratch {
+        let dir = std::env::temp_dir().join(format!("wc1333-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        Scratch(dir)
+    }
+
+    fn fifo(dir: &std::path::Path) -> Option<std::path::PathBuf> {
+        let p = dir.join("pipe.docx");
+        std::process::Command::new("mkfifo").arg(&p).status().ok()?.success().then_some(p)
+    }
+
+    #[test]
+    fn open_path_in_rejects_a_directory() {
+        let dir = scratch("dir");
+        let d = dir.to_path_buf();
+        let r = within(move || open_path_in(&d, None, &wordcraft_geom::Region::default()));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn open_path_in_rejects_a_fifo_without_blocking() {
+        let dir = scratch("fifo-open");
+        let Some(p) = fifo(&dir) else { return };
+        let r = within(move || open_path_in(&p, None, &wordcraft_geom::Region::default()));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn read_file_capped_rejects_a_fifo_without_blocking() {
+        let dir = scratch("fifo-capped");
+        let Some(p) = fifo(&dir) else { return };
+        let r = within(move || read_file_capped(&p.to_string_lossy(), 1 << 20, "font"));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn read_file_head_rejects_a_fifo_without_blocking() {
+        let dir = scratch("fifo-head");
+        let Some(p) = fifo(&dir) else { return };
+        let r = within(move || read_file_head(&p.to_string_lossy(), 16));
+        assert!(r.is_err());
+    }
+
+    #[test]
+    fn read_bounded_rejects_an_over_budget_file_naming_it() {
+        let dir = scratch("big");
+        let p = dir.join("big.bin");
+        std::fs::write(&p, vec![0u8; 100]).unwrap();
+        let err = read_bounded(&p, 10, "document").unwrap_err();
+        assert!(err.contains("big.bin") && err.contains("limit"), "{err}");
+        assert_eq!(read_bounded(&p, 100, "document").unwrap().len(), 100);
+    }
+
+    #[test]
+    fn limits_read_in_the_largest_whole_unit() {
+        assert_eq!(limit_text(2 << 30), "2 GB");
+        assert_eq!(limit_text(200 << 20), "200 MB");
+        assert_eq!(limit_text(10), "10 bytes");
+    }
+
+    #[test]
+    fn read_bounded_from_errors_when_the_file_grew_past_its_length() {
+        let r = read_bounded_from(std::io::Read::take(std::io::repeat(7), 1000), 4, 10, "grow.bin");
+        let err = r.unwrap_err();
+        assert!(err.contains("grow.bin") && err.contains("limit"), "{err}");
+        assert_eq!(read_bounded_from(&b"abcd"[..], 4, 10, "x").unwrap(), b"abcd");
+    }
 }
