@@ -17,9 +17,11 @@ const USAGE: &str = "\
 wordcraft-cli — WordCraft from the command line
 
 USAGE:
-  wordcraft-cli convert <in> <out> [--markup] [--update-fields] [--format wordml2003|flatopc]
+  wordcraft-cli convert <in> <out> [--markup] [--update-fields | --refresh-toc] [--format wordml2003|flatopc]
                                               convert between formats (docx, doc [read], pdf, odt, rtf, html, md, tex, txt, json, png,
                                               xml); --update-fields refreshes unlocked fields before saving;
+                                              --refresh-toc rebuilds one supported TOC for PDF only;
+                                              locked/protected content skips rebuilding; unsupported TOCs fail;
                                               an .xml file is a Word XML Document (Flat OPC), or with
                                               --format wordml2003 a Word 2003 XML Document;
                                               --markup (Print Markup): comments beside each page and
@@ -92,6 +94,17 @@ fn open(path: &Path, password: Option<&str>) -> Result<Session, String> {
         s.password = password.map(wordcraft_engine::io::Password::new);
     }
     Ok(s)
+}
+
+fn refresh_pdf_toc(s: &mut Session, params: &Value) -> Result<(), String> {
+    if s.doc.settings.protection.is_some() {
+        const LOCKED_PRESERVED: &str = "LockedPreserved";
+        eprintln!("toc-refresh: {}", json!({"tocRefresh": LOCKED_PRESERVED}));
+        return Ok(());
+    }
+    let result = s.run("references.updateToc", params).map_err(|e| e.to_string())?;
+    eprintln!("toc-refresh: {result}");
+    Ok(())
 }
 
 /// The commands that open a file, and which of their arguments not starting with `--` it is (as
@@ -295,6 +308,7 @@ const CONVERT_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--markup", takes_value: false },
     OptionSpec { name: "--format", takes_value: true },
     OptionSpec { name: "--update-fields", takes_value: false },
+    OptionSpec { name: "--refresh-toc", takes_value: false },
     OptionSpec { name: "--password", takes_value: true },
     OptionSpec { name: "--password-file", takes_value: true },
 ];
@@ -399,8 +413,19 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let paths = positionals(&rest, CONVERT_OPTIONS);
             let (i, o) = (paths.first().ok_or_else(missing_argument)?.to_string(), paths.get(1).ok_or_else(missing_argument)?.to_string());
             let markup = rest.iter().any(|a| a == "--markup");
+            let refresh_toc = rest.iter().any(|a| a == "--refresh-toc");
+            if refresh_toc && !o.to_ascii_lowercase().ends_with(".pdf") {
+                return Err("--refresh-toc requires PDF output".into());
+            }
+            if refresh_toc && rest.iter().any(|a| a == "--update-fields") {
+                return Err("--refresh-toc cannot be combined with --update-fields".into());
+            }
             let password = password_from(&rest)?;
             let mut s = open(&i, password.as_deref())?;
+            // Rebuild only in this disposable session; conversion never saves the input.
+            if refresh_toc {
+                refresh_pdf_toc(&mut s, &json!({"forPdf": true, "markup": markup}))?;
+            }
             if rest.iter().any(|a| a == "--update-fields") {
                 s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
             }
@@ -768,6 +793,26 @@ mod tests {
         assert_eq!(run(&args(&["info", "missing.docx", "--passwrod", "x"])), Err("info: unknown option --passwrod".into()));
         assert_eq!(run(&args(&["render", "missing.docx", "out.png", "--sclae", "2"])), Err("render: unknown option --sclae".into()));
         assert_eq!(run(&args(&["zotero", "refresh", "missing.docx", "--prot", "1"])), Err("zotero: unknown option --prot".into()));
+    }
+
+    #[test]
+    fn toc_refresh_requires_pdf() {
+        assert_eq!(run(&args(&["convert", "missing.docx", "out.docx", "--refresh-toc"])), Err("--refresh-toc requires PDF output".into()));
+        assert_eq!(
+            run(&args(&["convert", "missing.docx", "out.pdf", "--refresh-toc", "--update-fields"])),
+            Err("--refresh-toc cannot be combined with --update-fields".into())
+        );
+        assert!(validate_options("convert", &args(&["in.docx", "out.pdf", "--refresh-toc"]), CONVERT_OPTIONS).is_ok());
+    }
+
+    #[test]
+    fn protected_refresh_is_skipped() {
+        let mut doc = wordcraft_doc::Document::from_text("Cached contents");
+        doc.settings.protection = Some("readOnly".into());
+        let before = serde_json::to_value(&doc).unwrap();
+        let mut session = Session::new(doc);
+        refresh_pdf_toc(&mut session, &json!({"forPdf": true})).unwrap();
+        assert_eq!(serde_json::to_value(&session.doc).unwrap(), before);
     }
 
     #[test]

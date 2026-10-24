@@ -474,7 +474,7 @@ fn toc_control_to_toc(body: &mut Blocks) {
             };
             let toc = matches!(&control.kind, ControlKind::Gallery { list: false, gallery, .. } if gallery == "Table of Contents");
             let at_end = body.get(*e)?.as_para()?.len() == off.checked_add(OBJ.len_utf8())?;
-            (depth == 0 && toc && at_end).then_some((*s, *e, *off))
+            (depth == 0 && toc && control.lock.can_edit() && at_end).then_some((*s, *e, *off))
         })
     };
     let Some((s, e, off)) = span else { return };
