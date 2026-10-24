@@ -310,11 +310,14 @@ fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
 /// The bytes are read as `file.open` reads a path: only a regular file, and at most 2 GB.
 fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
     let name = path.to_string_lossy();
+    // A template opens as a new document based on it, which has no path of its own (#3433): the
+    // template is never what a later save writes to.
+    let is_template = wordcraft_engine::io::is_template_name(&name);
     let opened = wordcraft_engine::io::read_document(path)
         .and_then(|bytes| app.run("file.open", serde_json::json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})));
     match opened {
         // Not when it waits for a password: that open names the document itself.
-        Ok(r) if r.get("pending").is_none() => app.session.path = Some(path.into()),
+        Ok(r) if r.get("pending").is_none() && !is_template => app.session.path = Some(path.into()),
         Ok(_) => {}
         Err(e) => log::warn!("{name}: {e}"),
     }

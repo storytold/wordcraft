@@ -496,10 +496,14 @@ pub enum Dialog {
         #[serde(skip)]
         basis: Box<CellMarginsForm>,
     },
-    /// Opening a password-protected document (#55): the password, then `file.open` with
-    /// `params` again. The password is never serialised or printed.
+    /// Opening a password-protected document (#55): the password, then the command that asked
+    /// for it (`file.open`, or `file.newFromTemplate` for a template) with `params` again. The
+    /// password is never serialised or printed.
     Password {
         name: String,
+        /// The command to run with the password.
+        #[serde(skip)]
+        command: String,
         #[serde(skip)]
         params: Value,
         #[serde(skip)]
@@ -2837,7 +2841,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             }
             cancel
         }
-        Dialog::Password { name, params, password, message } => {
+        Dialog::Password { name, command, params, password, message } => {
             ui.label(crate::i18n::fmt(tl!("{name} is protected with a password."), &[("name", name)]));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -2857,7 +2861,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                     o.insert("password".into(), json!(password.as_str()));
                 }
                 // `execute`, not `run`: Save Changes was asked when the open began.
-                match app.execute("file.open", p) {
+                match app.execute(command, p) {
                     Ok(_) => {
                         app.ui.backstage = false;
                         return true;

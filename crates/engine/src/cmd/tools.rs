@@ -501,15 +501,25 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("file.newFromTemplate", "New from Template", "File › New", |s, v| {
             let path = p::req_str(v, "path")?;
-            let mut doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
-            // As in Word, the new document is attached to the template it came from (#2852).
-            doc.settings.attached_template = Some(path.to_string());
+            let password = p::str(v, "password");
+            // The template's own styles and page setup are the document's, so it is opened like
+            // a document and only the path is dropped.
+            let doc = match p::str(v, "data") {
+                Some(data) => {
+                    let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
+                    crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?.0
+                }
+                None => crate::io::open_path_with(std::path::Path::new(path), password).map_err(CmdError::Failed)?.0,
+            };
             s.set_document(doc);
+            // The template stays attached, as Word's does (#3433): the document is built from it,
+            // and "Update Styles from Template" still finds it.
+            s.doc.settings.attached_template = Some(path.to_string());
             s.path = None;
             s.dirty = true;
             sel_result(s)
         })
-        .params(r#"{"path": string} → a new, untitled document from the template, attached to it"#)
+        .params(r#"{"path": string, "data"?: base64 (the template's bytes; `path` then only names it), "password"?: string (for a password-protected Word template)}"#)
         .pure(),
         CommandSpec::new("file.saveTemplate", "Save as Template", "File › Save As", |s, v| {
             let path = p::req_str(v, "path")?;
