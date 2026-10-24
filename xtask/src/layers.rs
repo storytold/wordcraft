@@ -49,6 +49,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("mcp", Class::Layer(5)),
     ("zotero", Class::Layer(5)),
     ("ui-egui", Class::Layer(6)),
+    ("audit", Class::Layer(2)),
     ("testkit", Class::Testkit),
     // apps and tooling
     ("wordcraft", Class::Exempt),
