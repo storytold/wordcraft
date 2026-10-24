@@ -239,6 +239,49 @@ proptest! {
     }
 }
 
+/// The streams of a Standard-encrypted package (gap 9), and a compound file holding them.
+fn standard_streams() -> (Vec<u8>, Vec<u8>) {
+    use std::io::Read;
+    let file = wordcraft_docx::encrypt_standard_for_tests(&sample(), "pw", 128).unwrap();
+    let mut comp = cfb::CompoundFile::open(std::io::Cursor::new(file)).unwrap();
+    let mut info = Vec::new();
+    comp.open_stream("/EncryptionInfo").unwrap().read_to_end(&mut info).unwrap();
+    let mut package = Vec::new();
+    comp.open_stream("/EncryptedPackage").unwrap().read_to_end(&mut package).unwrap();
+    (info, package)
+}
+
+fn compound(info: &[u8], package: &[u8]) -> Vec<u8> {
+    let mut comp = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
+    comp.create_stream("/EncryptionInfo").unwrap().write_all(info).unwrap();
+    comp.create_stream("/EncryptedPackage").unwrap().write_all(package).unwrap();
+    comp.flush().unwrap();
+    comp.into_inner().into_inner()
+}
+
+proptest! {
+    // Each case that parses runs the 50,000-spin key derivation, so fewer cases.
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    #[test]
+    fn mutated_standard_encryption_never_panics(ops in proptest::collection::vec((0u8..3, any::<prop::sample::Index>(), any::<u8>(), any::<bool>()), 1..8)) {
+        let (mut info, mut package) = standard_streams();
+        for (k, idx, byte, in_package) in ops {
+            let x = if in_package { &mut package } else { &mut info };
+            let at = idx.index(x.len() + 1);
+            match k {
+                0 => { if at < x.len() { x[at] = byte; } }
+                1 => { x.truncate(at); }
+                _ => { x.splice(at..at, std::iter::repeat_n(byte, usize::from(byte % 9))); }
+            }
+        }
+        let file = compound(&info, &package);
+        let _ = wordcraft_docx::decrypt(&file, Some("pw"));
+        let _ = wordcraft_docx::read_with_password(&file, Some("pw"));
+        prop_assert!(read(&file).is_err());
+    }
+}
+
 #[test]
 fn long_header_reference_chain_is_cut_off() {
     const HDR_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/header";
