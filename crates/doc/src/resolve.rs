@@ -208,6 +208,10 @@ pub struct ResolvedPara {
     /// point values; see [`ResolvedPara::set_char_unit`].
     #[serde(default)]
     pub indent_chars: [f32; 3],
+    /// Space before and after in lines (0 = in points), which wins over the point values; see
+    /// [`ResolvedPara::set_line_unit`].
+    #[serde(default)]
+    pub space_lines: [f32; 2],
 }
 
 const MAX_INDENT: f32 = 1584.0; // 22"
@@ -231,9 +235,28 @@ impl ResolvedPara {
             }
         }
     }
+
+    /// Turn the space before and after given in lines into points, one line being `line` points:
+    /// 12 pt, or the line pitch of a document grid with lines (as Word measures `w:beforeLines`).
+    /// Automatic (HTML-style) spacing keeps its own size.
+    pub fn set_line_unit(&mut self, line: f32) {
+        let line = if line.is_finite() { line.clamp(1.0, 1584.0) } else { LINE_UNIT };
+        let [b, a] = self.space_lines;
+        for (lines, pts, auto) in [(b, &mut self.space_before, self.before_auto), (a, &mut self.space_after, self.after_auto)] {
+            if lines != 0.0 && !auto {
+                *pts = (lines * line).clamp(0.0, MAX_SPACE);
+            }
+        }
+    }
 }
 
+/// One line of paragraph spacing in lines without a line grid (Word's fixed 12 pt).
+pub const LINE_UNIT: f32 = 12.0;
+const MAX_SPACE: f32 = 1584.0;
+
 impl ResolvedPara {
+    /// The resolved form of the cascaded properties `p` of a paragraph in style `style`: defaults
+    /// filled in and values clamped. Character and line units stay as given until converted.
     fn from(p: &ParaProps, style: &str) -> ResolvedPara {
         let clampi = |v: Option<f32>| v.unwrap_or(0.0).clamp(-MAX_INDENT, MAX_INDENT);
         let mut tabs: Vec<TabStop> =
@@ -282,12 +305,15 @@ impl ResolvedPara {
             snap_to_grid: p.snap_to_grid.unwrap_or(true),
             indent_chars: [p.indent_left_chars, p.indent_right_chars, p.indent_first_chars]
                 .map(|c| c.filter(|c| c.is_finite()).unwrap_or(0.0).clamp(-MAX_CHARS, MAX_CHARS)),
+            space_lines: [p.space_before_lines, p.space_after_lines].map(|l| l.filter(|l| l.is_finite()).unwrap_or(0.0).clamp(0.0, MAX_LINES)),
         }
     }
 }
 
 /// The largest indent in characters (Word allows indents up to 22").
 const MAX_CHARS: f32 = 1584.0;
+/// The most space in lines (Word allows spacing up to 1584 pt, 132 lines of 12 pt).
+const MAX_LINES: f32 = 132.0;
 
 impl StyleSheet {
     /// Paragraph properties after defaults and the style chain (without direct formatting).
@@ -343,6 +369,10 @@ impl StyleSheet {
         // the paragraph mark's (`set_char_unit`), which direct formatting may change.
         if rp.indent_chars.iter().any(|c| *c != 0.0) {
             rp.set_char_unit(self.resolve_char(Some(&style), &CharProps::default()).size);
+        }
+        // Spacing in lines: 12 pt lines here; layout uses the section's line grid if it has one.
+        if rp.space_lines.iter().any(|l| *l != 0.0) {
+            rp.set_line_unit(LINE_UNIT);
         }
         rp
     }

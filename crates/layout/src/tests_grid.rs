@@ -62,6 +62,43 @@ fn line_grid_snaps_line_heights_and_fixes_lines_per_page() {
     assert_eq!(lines(&lay(&off)).1[0], lines(&lay(&plain)).1[0]);
 }
 
+/// Spacing in lines (`w:beforeLines`/`w:afterLines`): a line is 12 pt, whatever the font size,
+/// unless the section has a line grid, whose pitch it then is (measured in Word: 100 hundredths
+/// before with no grid or a `linePitch` but no grid type is 12 pt; with `type="lines"` and
+/// `linePitch="360"` it is 18 pt, as with `linesAndChars` or `snapToChars`, and in a paragraph
+/// that doesn't snap to the grid too). Non-zero lines win over the points.
+#[test]
+fn spacing_in_lines_is_twelve_points_or_the_line_pitch() {
+    let gap = |kind: DocGridType, lines: Option<f32>| {
+        let mut d = with_grid("A\nB", kind, 0);
+        if let Some(Block::Para(p)) = d.body.get_mut(1).map(std::sync::Arc::make_mut) {
+            p.props.space_before = Some(5.0);
+            p.props.space_before_lines = lines;
+        }
+        let l = lay(&d);
+        let y = |block: usize| {
+            l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Lines { path, y, .. } if *path == Path::top(block) => Some(*y),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        y(1) - y(0)
+    };
+    let kinds = [(DocGridType::Default, 12.0), (DocGridType::Lines, 18.0), (DocGridType::LinesAndChars, 18.0), (DocGridType::SnapToChars, 18.0)];
+    for (kind, line) in kinds {
+        let points = gap(kind, None);
+        let one = gap(kind, Some(1.0)) - points + 5.0;
+        assert!((one - line).abs() < 0.01, "{kind:?}: one line of space before is {one}, not {line}");
+        let half = gap(kind, Some(0.5)) - points + 5.0;
+        assert!((half - line / 2.0).abs() < 0.01, "{kind:?}: half a line is {half}");
+        assert!((gap(kind, Some(0.0)) - points).abs() < 0.01, "{kind:?}: zero lines leave the points");
+    }
+}
+
 #[test]
 fn character_grid_places_east_asian_text_on_the_pitch() {
     let text = "日本語の文書abc";

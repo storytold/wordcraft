@@ -97,7 +97,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(on) = a_auto {
                     p.space_after_auto = Some(on);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, b.is_some(), a.is_some())
         })
         .params(r#"{"before"?: pt, "after"?: pt, "beforeAuto"?: bool, "afterAuto"?: bool (automatic, HTML-style spacing: 14 pt)}"#),
         CommandSpec::new("para.addSpaceBefore", "Add Space Before Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
@@ -108,7 +109,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if rp.before_auto {
                     p.space_before_auto = Some(false);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, true, false)
         })
         .key("Mod+0"),
         CommandSpec::new("para.removeSpaceAfter", "Remove Space After Paragraph", "Home › Paragraph › Line Spacing", |s, _| {
@@ -119,7 +121,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 if rp.after_auto {
                     p.space_after_auto = Some(false);
                 }
-            })
+            })?;
+            cancel_line_spacing(s, false, true)
         }),
         // Back to the paragraph style: direct indents, spacing, alignment… go; the style, list
         // membership and drop cap stay. ⌘Q quits on macOS, so Word for Mac uses ⌃Q.
@@ -246,6 +249,27 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         }),
     ]
+}
+
+/// After setting the space before/after in points in the selected paragraphs: keep spacing in
+/// lines (each paragraph's own or inherited) from winning over it, as Word does
+/// (`w:beforeLines="0"`). Paragraphs without spacing in lines are left as they are.
+fn cancel_line_spacing(s: &mut Session, before: bool, after: bool) -> CmdResult {
+    let story = s.sel.focus.story;
+    for path in super::selected_paths(s) {
+        let Some(para) = s.doc.para(story, &path) else { continue };
+        let [b, a] = s.doc.styles.resolve_para(&para.props).space_lines;
+        let (b, a) = (before && b != 0.0, after && a != 0.0);
+        if b || a {
+            let props = &mut s.doc.para_mut(story, &path)?.props;
+            for (on, lines) in [(b, &mut props.space_before_lines), (a, &mut props.space_after_lines)] {
+                if on {
+                    *lines = Some(0.0);
+                }
+            }
+        }
+    }
+    sel_result(s)
 }
 
 /// Resolved paragraph props at the caret.

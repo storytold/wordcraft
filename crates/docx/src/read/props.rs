@@ -372,6 +372,14 @@ impl PropCtx {
                     if let Some(v) = tw(k, "w:after") {
                         p.space_after = Some(v.max(0.0));
                     }
+                    // Line units (hundredths of a line), which win when non-zero.
+                    let lines = |a: &str| k.attr(a).and_then(int).map(|v| v.clamp(0, 13_200) as f32 / 100.0);
+                    if let Some(v) = lines("w:beforeLines") {
+                        p.space_before_lines = Some(v);
+                    }
+                    if let Some(v) = lines("w:afterLines") {
+                        p.space_after_lines = Some(v);
+                    }
                     // HTML-style automatic spacing; "0" switches an inherited one off.
                     let auto = |name| k.attr(name).map(|v| matches!(v.trim(), "1" | "true" | "on"));
                     if let Some(a) = auto("w:beforeAutospacing") {

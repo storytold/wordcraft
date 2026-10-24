@@ -864,6 +864,8 @@ fn rename(name: &str) -> String {
         "hangingChars" => "hanging-chars",
         "leftChars" => "left-chars",
         "rightChars" => "right-chars",
+        "beforeLines" => "before-lines",
+        "afterLines" => "after-lines",
         other => other,
     };
     format!("w:{new}")

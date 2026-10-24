@@ -1459,6 +1459,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if rp.indent_chars.iter().any(|c| *c != 0.0) {
         rp.set_char_unit(doc.styles.resolve_char_in(para_style, table_chr, &p.mark).size);
     }
+    // Spacing in lines: a line is the section's line pitch when it has a line grid.
+    if rp.space_lines.iter().any(|l| *l != 0.0) {
+        rp.set_line_unit(env.grid.line.unwrap_or(wordcraft_doc::resolve::LINE_UNIT));
+    }
     // List level indents apply unless the paragraph sets its own, or, for a list from the style,
     // the style giving the list (or one based on it) does (`indents_over_list`). A paragraph
     // that switches its style's list off (`num: 0`) drops the styles' indents, as Word does.

@@ -825,6 +825,7 @@ impl Ctx<'_> {
         );
         p.props.space_after = Some(0.0);
         p.props.space_before = Some(0.0);
+        (p.props.space_before_lines, p.props.space_after_lines) = (Some(0.0), Some(0.0));
         let env = para::ParaEnv {
             doc: self.doc,
             width: 60.0,
