@@ -621,6 +621,118 @@ fn plus_and_hyphen_line_becomes_a_table() {
     assert!(s.doc.body.iter().all(|b| b.as_para().is_some()));
 }
 
+/// Body paragraphs as (text, paragraph style).
+fn styled(s: &Session) -> Vec<(String, Option<String>)> {
+    s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| (p.text.clone(), p.props.style.clone())).collect()
+}
+
+fn with_heading_styles(keys: &str) -> Session {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
+    typ(&mut s, keys);
+    s
+}
+
+#[test]
+fn two_enters_after_a_short_line_make_it_a_heading() {
+    let h = |t: &str, st: Option<&str>| (t.to_string(), st.map(str::to_string));
+    // No tab: Heading 1; one or two tabs: Heading 2 or 3, without the tabs. Typing goes on in
+    // the paragraph after the heading.
+    for (keys, style) in [("Introduction\n\nText", "Heading1"), ("\tOur methods\n\nText", "Heading2"), ("\t\tStep 2\n\nText", "Heading3")] {
+        let s = with_heading_styles(keys);
+        let text = keys.trim_start_matches('\t').split('\n').next().unwrap_or_default();
+        assert_eq!(styled(&s), [h(text, Some(style)), h("Text", None)], "{keys:?}");
+    }
+    // Five words is the most; one Enter only ends the line.
+    let s = with_heading_styles("One two three four five\n\n");
+    assert_eq!(s.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.style.as_deref()), Some("Heading1"));
+    assert_eq!(styled(&with_heading_styles("Introduction\nText")), [h("Introduction", None), h("Text", None)]);
+    // Not a heading: six words, a closing punctuation mark, three tabs, a list item, a style.
+    for keys in ["One two three four five six\n\n", "Dear Sir,\n\n", "Is it?\n\n", "\t\t\tDeep\n\n", "* Item\n\n"] {
+        let s = with_heading_styles(keys);
+        assert!(
+            s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.style.as_deref().is_none_or(|st| !st.starts_with("Heading"))),
+            "{keys:?}: {:?}",
+            styled(&s)
+        );
+    }
+    let mut q = self::s();
+    run(&mut q, "tools.autocorrect", json!({"headingStyles": true}));
+    run(&mut q, "para.style", json!({"style": "Quote"}));
+    typ(&mut q, "Quoted\n\n");
+    assert_eq!(q.doc.body.first().and_then(|b| b.as_para()).and_then(|p| p.props.style.as_deref()), Some("Quote"));
+    // A list item numbered by the Normal style is not body text either.
+    let mut q = self::s();
+    run(&mut q, "tools.autocorrect", json!({"headingStyles": true}));
+    let num = q.doc.numbering.try_add_list(wordcraft_doc::ListKind::Bullet).unwrap();
+    if let Some(normal) = q.doc.styles.get_mut("Normal") {
+        normal.para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    }
+    typ(&mut q, "Item\n\n");
+    assert!(styled(&q).iter().all(|(_, st)| st.as_deref().is_none_or(|st| !st.starts_with("Heading"))), "{:?}", styled(&q));
+    // Off by default.
+    let s = typed("Introduction\n\n");
+    assert_eq!(styled(&s), [h("Introduction", None), h("", None), h("", None)]);
+}
+
+#[test]
+fn undo_right_after_a_heading_autoformat_keeps_the_enter() {
+    let mut s = with_heading_styles("\tMethods\n\n");
+    assert_eq!(styled(&s), [("Methods".to_string(), Some("Heading2".to_string())), (String::new(), None)]);
+    assert_eq!(s.sel.focus, Pos::body(1, 0));
+    run(&mut s, "edit.undo", json!({}));
+    // The AutoFormat is undone on its own: the tab and Normal text are back, the Enter stays.
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "\tMethods\n\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.is_none()));
+    assert_eq!(s.sel.focus, Pos::body(2, 0));
+}
+
+#[test]
+fn a_tracked_heading_autoformat_can_be_rejected() {
+    // With Track Changes on, the tab is marked deleted and the style change is a formatting
+    // revision, so Reject All brings the line back as it was.
+    let mut s = with_heading_styles("\tMethods\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("\tMethods", Some("Heading2")));
+    assert!(p.run_ranges().any(|(r, c)| r.start == 0 && c.del.is_some()), "the tab is marked deleted");
+    assert!(p.props.fmt_change.is_some(), "the style change is tracked");
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(styled(&s).first(), Some(&("\tMethods".to_string(), None)));
+    // A tab this author inserted is removed outright, and the style change is still tracked.
+    let mut s = with_heading_styles("Title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 0}}));
+    typ(&mut s, "\t");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    let p = s.doc.para_at(&Pos::body(0, 0)).cloned().unwrap_or_default();
+    assert_eq!((p.text.as_str(), p.props.style.as_deref()), ("Title", Some("Heading2")));
+    assert!(p.props.fmt_change.is_some(), "the style change is tracked");
+    run(&mut s, "review.rejectAll", json!({}));
+    assert_eq!(styled(&s).first(), Some(&("Title".to_string(), None)));
+    // A line holding a tracked deletion is left alone.
+    let mut s = with_heading_styles("Old title\n");
+    run(&mut s, "review.trackChanges", json!({"value": true}));
+    run(&mut s, "caret.set", json!({"pos": {"block": 0, "off": 3}}));
+    typ(&mut s, "\u{8}\u{8}\u{8}");
+    run(&mut s, "caret.set", json!({"pos": {"block": 1, "off": 0}}));
+    typ(&mut s, "\n");
+    assert!(styled(&s).iter().all(|(_, st)| st.is_none()), "{:?}", styled(&s));
+}
+
+#[test]
+fn a_locked_heading_style_is_not_applied_as_you_type() {
+    let mut s = s();
+    run(&mut s, "tools.autocorrect", json!({"headingStyles": true}));
+    run(&mut s, "review.restrict", json!({"mode": "none", "formatting": true, "lockedStyles": ["Heading1"]}));
+    typ(&mut s, "Locked\n\n\tOpen\n\n");
+    let st = styled(&s);
+    assert_eq!(st.first(), Some(&("Locked".to_string(), None)), "{st:?}");
+    assert!(st.contains(&("Open".to_string(), Some("Heading2".to_string()))), "{st:?}");
+}
+
 #[test]
 fn arrow_bullets() {
     for (keys, bullet) in [("> ", "\u{27A2}"), ("-> ", "\u{2794}"), ("=> ", "\u{21E8}")] {

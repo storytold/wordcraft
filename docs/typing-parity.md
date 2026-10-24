@@ -174,6 +174,18 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`). ⌘Z right after brings the
   characters back and removes the border; the Enter stays (one undo step) ¹
   (`undo_right_after_a_border_line_brings_the_characters_back`).
+- Built-in Heading styles (`tools.autocorrect {"headingStyles": true}`, off by default): Enter
+  twice after a line of five or fewer words that does not end with punctuation makes the line
+  Heading 1; one or two tabs before it make it Heading 2 or 3, and the tabs are removed ¹
+  (`two_enters_after_a_short_line_make_it_a_heading`). The rest is WordCraft's own rule: the
+  line is a Normal paragraph of the main text (not in a list, a table, a header or a text box)
+  and ends in a letter or digit; the caret stays in the empty paragraph after the heading; ⌘Z
+  right after brings back the tabs and the Normal style, and the second Enter stays
+  (`undo_right_after_a_heading_autoformat_keeps_the_enter`); with Track Changes on, the tabs are
+  marked deleted (or removed, when the same author inserted them) and the style change is a
+  tracked formatting change, and a line holding a tracked deletion stays as it is
+  (`a_tracked_heading_autoformat_can_be_rejected`); a heading style locked by formatting
+  restrictions is not applied (`a_locked_heading_style_is_not_applied_as_you_type`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay

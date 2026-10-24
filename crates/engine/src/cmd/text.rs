@@ -231,6 +231,8 @@ enum EnterAutoFormat {
     Border(Border),
     /// "+---+-----+": a one-row table; the dash count of each column.
     Table(Vec<usize>),
+    /// A short line before an empty paragraph: Heading 1, 2 or 3.
+    Heading(u8),
 }
 
 /// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###".
@@ -282,6 +284,73 @@ fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
         cols.push(run.len());
     }
     Some(cols)
+}
+
+/// AutoFormat Built-in Heading styles: Enter in an empty body paragraph whose previous paragraph
+/// is a line of Normal text with one to five words that ends in a letter or digit and holds no
+/// tracked deletion. The line becomes Heading 1, or Heading 2 or 3 when it starts with one or
+/// two tabs.
+fn heading_line(s: &Session, at: &Pos) -> Option<u8> {
+    let ac = &s.prefs.autocorrect;
+    let cur = s.doc.para_at(at)?;
+    let i = at.path.last();
+    if !ac.enabled || !ac.heading_styles || at.story != StoryRef::Body || at.path.0.len() != 1 || i == 0 || !cur.is_empty() {
+        return None;
+    }
+    let Some(Block::Para(prev)) = s.doc.block(at.story, &at.path.with_last(i - 1)) else { return None };
+    // Normal and outside a list, also one the style sheet gives (a numbered Normal style).
+    let plain = |p: &wordcraft_doc::Paragraph| {
+        let r = s.doc.styles.resolve_para(&p.props);
+        p.props.style.as_deref().is_none_or(|st| st == "Normal") && r.numbering.is_none_or(|n| n.num == 0) && r.outline_level.is_none_or(|l| l >= 9)
+    };
+    let text = prev.text.trim_start_matches('\t');
+    let tabs = prev.text.len() - text.len();
+    if !plain(cur)
+        || !plain(prev)
+        || !prev.objects.is_empty()
+        || prev.section.is_some()
+        || prev.run_ranges().any(|(_, c)| c.del.is_some())
+        || tabs > 2
+        || !(1..=5).contains(&text.split_whitespace().count())
+        || text.starts_with(char::is_whitespace)
+        || text.contains(char::is_control)
+        || !text.ends_with(char::is_alphanumeric)
+    {
+        return None;
+    }
+    let level = tabs as u8 + 1;
+    // Formatting limited to the document's styles: a locked heading style isn't applied.
+    let id = format!("Heading{level}");
+    if super::protect::enforced(&s.doc) && s.doc.settings.protect_formatting && s.doc.styles.get(&id).is_some_and(|st| st.locked) {
+        return None;
+    }
+    Some(level)
+}
+
+/// Give the paragraph before the empty one at `at` Heading `level` without its leading tabs;
+/// the caret stays in the empty paragraph. With Track Changes on, the tabs are marked deleted
+/// (or removed, when this author typed them) and the style change is a formatting revision.
+fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result<(), CmdError> {
+    let prev = at.path.with_last(at.path.last().saturating_sub(1));
+    let Some(before) = s.doc.para(at.story, &prev).cloned() else { return Ok(()) };
+    let tabs = before.text.len() - before.text.trim_start_matches('\t').len();
+    let start = Pos { story: at.story, path: prev.clone(), off: 0 };
+    s.sel = Selection { anchor: start.clone(), focus: Pos { off: tabs, ..start } };
+    delete_selection(s)?;
+    super::para::set_heading(s, at.story, &prev, Some(level))?;
+    // Removed tabs change the text, and the formatting comparison after the command only looks
+    // at paragraphs that keep theirs, so the style change is recorded here.
+    if s.doc.settings.track_changes
+        && s.prefs.markup.track_formatting
+        && s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text && p.props.fmt_change.is_none())
+    {
+        let rev = super::new_revision(s, wordcraft_doc::RevisionKind::Format);
+        let p = s.doc.para_mut(at.story, &prev)?;
+        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.props.formatting());
+        p.touch();
+    }
+    s.sel = Selection::caret(at.clone());
+    Ok(())
 }
 
 /// Turn the border-line characters into a bottom border on the paragraph above (or this one
@@ -584,7 +653,10 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     let mut at = delete_selection(s)?;
-    let auto = border_line(s, &at).map(EnterAutoFormat::Border).or_else(|| table_line(s, &at).map(EnterAutoFormat::Table));
+    let auto = border_line(s, &at)
+        .map(EnterAutoFormat::Border)
+        .or_else(|| table_line(s, &at).map(EnterAutoFormat::Table))
+        .or_else(|| heading_line(s, &at).map(EnterAutoFormat::Heading));
     if let Some(auto) = auto {
         // Word: Undo right after reverts only the AutoFormat, so the typed characters come back
         // and the Enter stays. Record that plain Enter as its own undo step.
@@ -596,6 +668,7 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         match auto {
             EnterAutoFormat::Border(line) => apply_border_line(s, &at, line)?,
             EnterAutoFormat::Table(cols) => apply_table_line(s, &at, &cols)?,
+            EnterAutoFormat::Heading(level) => apply_heading_line(s, &at, level)?,
         }
         s.goal_x = None;
         s.push_undo("AutoFormat", plain_doc, plain_sel);
