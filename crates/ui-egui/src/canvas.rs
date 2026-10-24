@@ -1654,6 +1654,17 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 });
             }
         }
+        if focused && ui.ctx().output(|o| o.ime.is_none()) {
+            let fallback_rect = rects.first().copied().unwrap_or(content);
+            ui.ctx().output_mut(|o| {
+                o.ime = Some(egui::output::IMEOutput {
+                    rect: fallback_rect,
+                    cursor_rect: fallback_rect,
+                    purpose: Default::default(),
+                    should_interrupt_composition: false,
+                });
+            });
+        }
         crate::objects::paint(app, &painter, &t, &layout, &rects, geo.scale);
         crate::dialogs_smart_art::frame_button(app, ui.ctx(), &layout, &rects, geo.scale, ui.clip_rect());
         crate::ink::paint(app, &painter, &rects, &layout, geo.scale);
@@ -1698,15 +1709,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     // Space and Enter also set `Response::clicked` on a focused click-sensing widget
     // (egui's fake primary click). `request_focus` always interrupts IME; on X11 that
-    // destroys the XIM context and fcitx then drops every later key (#1169). A pointer
-    // click, an accessibility click, or a drag still takes focus, including a click on
-    // a canvas that already has it, so a composition commits. `want_focus` focuses only
-    // while the canvas does not, and does not interrupt an editor that already has it.
+    // destroys the XIM context and fcitx then drops every later key (#1169, #2728).
+    // Re-requesting focus on a canvas that already has it interrupts IME without any benefit,
+    // freezing continuous typing on Linux X11/fcitx (#2728). Only request focus when the
+    // canvas does not already have it.
     let keyboard_click = ui.memory(|m| m.has_focus(resp.id)) && ui.input(|i| i.key_pressed(egui::Key::Space) || i.key_pressed(egui::Key::Enter));
     let pointer_click = resp.clicked_by(egui::PointerButton::Primary);
     let accesskit_click = resp.clicked() && !pointer_click && !keyboard_click;
     let focus_click = pointer_click || accesskit_click || resp.drag_started();
-    if focus_click || (app.canvas.want_focus && !resp.has_focus()) {
+    if (focus_click || app.canvas.want_focus) && !resp.has_focus() {
         resp.request_focus();
     }
     if focus_click || app.canvas.want_focus {
@@ -6870,11 +6881,9 @@ mod tests {
         let _ = collapse_white_space(&[], &[], 1.0, 1.0);
     }
 
-    /// #1169: Space and Enter count as `Response::clicked` on the focused canvas, and
-    /// `request_focus` always interrupts IME. On X11 that recreates the XIM context and
-    /// fcitx drops every later key. Those keys still type, and they must not set
-    /// `should_interrupt_composition`. A real pointer click still does, so a composition
-    /// commits when the caret moves.
+    /// #1169, #2728: Space, Enter, and clicks on an already focused canvas must not set
+    /// `should_interrupt_composition`. On X11 that recreates the XIM context and fcitx
+    /// drops every later key. A click when the canvas is not focused still takes focus.
     #[test]
     fn space_and_enter_on_the_canvas_do_not_interrupt_ime() {
         let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
@@ -6913,7 +6922,17 @@ mod tests {
             h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
             h.step();
         }
-        assert_eq!(ime_interrupted(&h), Some(true), "a click still interrupts composition");
+        assert_eq!(ime_interrupted(&h), Some(false), "clicking an already-focused canvas must not interrupt IME (#2728)");
+
+        // Clicking when not focused takes focus.
+        let canvas_id = h.state().canvas.widget_id.expect("widget id");
+        h.state_mut().canvas.focused = false;
+        h.ctx.memory_mut(|m| m.surrender_focus(canvas_id));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            h.step();
+        }
+        assert!(h.state().canvas.focused, "clicking an unfocused canvas takes focus");
     }
 
     /// While an input method composes, the caret and the candidate window sit at its cursor inside
