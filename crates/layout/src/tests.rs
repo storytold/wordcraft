@@ -8881,15 +8881,29 @@ fn space_after_stays_clear_of_the_footnote_separator() {
 #[test]
 fn space_after_may_overflow_the_bottom_margin_without_notes() {
     // Without footnotes nothing changes: the last line only has to fit, its space after may run
-    // past the bottom margin (Word).
+    // past the bottom margin (Word). "Fit" means its text: the leading multiple spacing adds below
+    // the text (this paragraph's 1.15) may run past the margin too (observed in Word at 1.15, 1.5
+    // and double spacing; see `a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits`).
     let mut tight = 0;
     for before in 0..=300 {
         let (d, t, _) = space_after_doc(before as f32, false);
         let l = lay(&d);
         let bottom_margin = d.last_section.page_h - d.last_section.margin_bottom;
         let (pieces, _) = para_pieces(&l, t);
-        let &(_, _, _, bottom) = pieces.last().unwrap();
-        assert!(bottom <= bottom_margin + 0.01, "before {before}: {bottom}");
+        let &(page, _, l1, bottom) = pieces.last().unwrap();
+        let leading = l.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [t as u32] => {
+                    para.lines.get(l1 - 1).map(|ln| ln.height - (ln.baseline - ln.top + ln.text_desc))
+                }
+                _ => None,
+            })
+            .unwrap()
+            .max(0.0);
+        let bottom = bottom - leading;
+        assert!(bottom <= bottom_margin + 0.01, "before {before}: the last line's text ends at {bottom}");
         if bottom > bottom_margin - 6.0 {
             tight += 1;
         }

@@ -3902,7 +3902,23 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 - new_notes.iter().map(|n| n.h).sum::<f32>()
                 - if pb.notes.is_empty() && !new_notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 }
                 - extra;
-            let bottom = pb.y + lead + (l.top + l.height - first.top);
+            // Multiple spacing above single puts its extra leading below the text (see
+            // `baseline_offset`), and Word lets that leading of a page's last line run into the
+            // bottom margin: only the text has to fit (observed: a double-spaced 12pt line stays on
+            // the page while its text ends above the margin, about half a line lower than when the
+            // whole line must fit). Only the bottom margin takes that leading: a footer taller than
+            // the margin, or footnotes, keep the whole line clear of them.
+            let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
+            let fit_h = match pl.rp.line_spacing {
+                wordcraft_doc::props::LineSpacing::Multiple(m)
+                    if m > 1.0 && at_margin && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
+                {
+                    // `baseline` is from the paragraph's top; the text ends a descent below it.
+                    (l.baseline - l.top + l.text_desc).clamp(0.0, l.height)
+                }
+                _ => l.height,
+            };
+            let bottom = pb.y + lead + (l.top + fit_h - first.top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
