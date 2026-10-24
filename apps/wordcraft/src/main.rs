@@ -192,13 +192,45 @@ fn load_user_fonts() {
     }
 }
 
-/// The saved window geometry, read before the window opens (`load_prefs` runs after).
-fn saved_window() -> Option<WindowGeometry> {
+/// The saved preferences, read before the window opens for its geometry and, on Linux and the
+/// BSDs, the display server (`load_prefs` runs after).
+fn saved_ui() -> Option<UiState> {
     if !prefs_enabled() {
         return None;
     }
     let bytes = std::fs::read(prefs_path()?).ok()?;
-    UiState::from_json(&bytes)?.window?.sanitized()
+    UiState::from_json(&bytes)
+}
+
+/// Whether the window runs through XWayland (X11) rather than native Wayland, and the log line
+/// saying why. `WORDCRAFT_WAYLAND` wins (`0`, `false`, `no` or `off` asks for X11, any other value
+/// for Wayland), then File › Options › Advanced › Linux display server (#2184). Automatic is X11
+/// whenever there's an X server: winit has no file drag-and-drop on Wayland, so dropping files from
+/// the file manager showed a "no" cursor. X11 is only forced with an X server (`DISPLAY`), and
+/// unforced winit picks Wayland when it's there and X11 otherwise, so a choice that isn't
+/// available falls back to the other instead of failing to start.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn uses_x11(setting: wordcraft_ui_egui::DisplayServer, env: impl Fn(&str) -> Option<std::ffi::OsString>) -> (bool, String) {
+    use wordcraft_ui_egui::DisplayServer;
+    let set = |name: &str| env(name).is_some_and(|v| !v.is_empty());
+    let (wanted, by) = match env("WORDCRAFT_WAYLAND") {
+        Some(v) if matches!(v.to_string_lossy().trim().to_ascii_lowercase().as_str(), "0" | "false" | "no" | "off") => {
+            (DisplayServer::X11, "WORDCRAFT_WAYLAND")
+        }
+        Some(_) => (DisplayServer::Wayland, "WORDCRAFT_WAYLAND"),
+        None => (setting, "the setting"),
+    };
+    let x11 = wanted != DisplayServer::Wayland && set("DISPLAY");
+    let runs = if x11 {
+        "X11"
+    } else if set("WAYLAND_DISPLAY") || set("WAYLAND_SOCKET") {
+        "native Wayland"
+    } else if set("DISPLAY") {
+        "X11 (no Wayland)"
+    } else {
+        "neither (no Wayland or X server found)"
+    };
+    (x11, format!("display: {runs}; {} asks for {}", by, wanted.code()))
 }
 
 fn save_prefs(app: &WordApp) {
@@ -397,19 +429,21 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
-    let restored = saved_window();
+    let saved = saved_ui();
+    let restored = saved.as_ref().and_then(|ui| ui.window?.sanitized());
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
     }
     #[cfg(all(unix, not(target_os = "macos")))]
-    // winit has no file drag-and-drop on Wayland (only on X11), so dropping files from the file
-    // manager showed a "no" cursor. Run through XWayland when it's there; WORDCRAFT_WAYLAND=1
-    // keeps the native Wayland backend.
-    if std::env::var_os("DISPLAY").is_some() && std::env::var_os("WORDCRAFT_WAYLAND").is_none() {
-        options.event_loop_builder = Some(Box::new(|b| {
-            use winit::platform::x11::EventLoopBuilderExtX11;
-            b.with_x11();
-        }));
+    {
+        let (x11, why) = uses_x11(saved.as_ref().map(|ui| ui.display_server).unwrap_or_default(), |name| std::env::var_os(name));
+        log::info!("{why}");
+        if x11 {
+            options.event_loop_builder = Some(Box::new(|b| {
+                use winit::platform::x11::EventLoopBuilderExtX11;
+                b.with_x11();
+            }));
+        }
     }
     // Registered before the event loop starts, so it catches the Finder event that launched us as
     // well as later ones. Lives until the event loop returns; the app creator only borrows it.
@@ -516,6 +550,32 @@ mod tests {
         open_non_unicode(&mut app, &dir.join(std::ffi::OsString::from_vec(b"gon\xe9.txt".to_vec())));
         assert_eq!(app.session.path.as_deref(), Some(path.as_path()));
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// #2184: `WORDCRAFT_WAYLAND` beats the setting, Automatic keeps XWayland where there's an X
+    /// server, and a choice that isn't available falls back to the other.
+    #[test]
+    fn the_display_server_follows_the_variable_then_the_setting() {
+        use wordcraft_ui_egui::DisplayServer::{Auto, Wayland, X11};
+        let x11 = |setting, vars: &[(&str, &str)]| {
+            uses_x11(setting, |name| vars.iter().find(|(k, _)| *k == name).map(|(_, v)| std::ffi::OsString::from(v))).0
+        };
+        let both = [("DISPLAY", ":0"), ("WAYLAND_DISPLAY", "wayland-0")];
+        assert!(x11(Auto, &both), "Automatic keeps XWayland, for file drag-and-drop");
+        assert!(x11(X11, &both));
+        assert!(!x11(Wayland, &both));
+        for (value, wants_x11) in [("1", false), ("", false), ("yes", false), ("0", true), (" Off ", true), ("FALSE", true), ("no", true)] {
+            let vars = [both[0], both[1], ("WORDCRAFT_WAYLAND", value)];
+            for setting in [Auto, Wayland, X11] {
+                assert_eq!(x11(setting, &vars), wants_x11, "WORDCRAFT_WAYLAND={value:?} beats {setting:?}");
+            }
+        }
+        // Without an X server X11 isn't forced: winit connects to Wayland instead of failing.
+        let wayland_only = [("WAYLAND_DISPLAY", "wayland-0"), ("DISPLAY", "")];
+        assert!(!x11(X11, &wayland_only) && !x11(Auto, &wayland_only));
+        // Without Wayland, Wayland isn't forced either: unforced winit picks X11.
+        let (forced, why) = uses_x11(Wayland, |name| (name == "DISPLAY").then(|| ":0".into()));
+        assert!(!forced && why.contains("X11 (no Wayland)"), "{why}");
     }
 
     /// A named pipe or a device under such a name is a warning, not a read: the pipe blocked

@@ -285,7 +285,10 @@ RISC-V (riscv64): `wordcraft-<ver>-linux-riscv64.tar.gz`, a tarball cross-compil
 **Wayland:** on a Wayland desktop the app runs through XWayland when it is available, because
 winit (the windowing library) supports dragging files into the window only on X11. To use the
 native Wayland backend instead (for example for sharper text with fractional scaling, at the cost
-of file drag-and-drop), start it with `WORDCRAFT_WAYLAND=1`:
+of file drag-and-drop), choose **File › Options › Advanced › Linux display server › Wayland**; it
+applies the next time WordCraft starts, and **X11 (XWayland)** or **Automatic** switches back. The
+`WORDCRAFT_WAYLAND` environment variable overrides the setting: `1` for native Wayland, `0` for
+XWayland:
 
 ```sh
 WORDCRAFT_WAYLAND=1 wordcraft

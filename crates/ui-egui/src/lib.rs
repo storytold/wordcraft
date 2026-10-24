@@ -220,6 +220,58 @@ pub enum DefaultApp {
     MadeDefault,
 }
 
+/// File › Options › Advanced › Linux display server (#2184, `ui.displayServer`): how the desktop
+/// app connects on Linux and the BSDs. It's read before the window opens, so a change applies at
+/// the next launch; `WORDCRAFT_WAYLAND` overrides it. An unknown saved value reads as Automatic.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub enum DisplayServer {
+    /// The app's own choice: XWayland whenever there's an X server, for file drag-and-drop.
+    #[default]
+    Auto,
+    Wayland,
+    X11,
+}
+
+impl DisplayServer {
+    /// In menu order.
+    pub const ALL: [DisplayServer; 3] = [DisplayServer::Auto, DisplayServer::Wayland, DisplayServer::X11];
+
+    /// The value used in `ui.json` and by the `ui.displayServer` command.
+    pub fn code(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "auto",
+            DisplayServer::Wayland => "wayland",
+            DisplayServer::X11 => "x11",
+        }
+    }
+
+    pub fn from_code(code: &str) -> Option<DisplayServer> {
+        DisplayServer::ALL.into_iter().find(|d| d.code().eq_ignore_ascii_case(code.trim()))
+    }
+
+    /// The English label; only Automatic is translated, the others are names.
+    pub fn label(self) -> &'static str {
+        match self {
+            DisplayServer::Auto => "Automatic",
+            DisplayServer::Wayland => "Wayland",
+            DisplayServer::X11 => "X11 (XWayland)",
+        }
+    }
+}
+
+impl From<String> for DisplayServer {
+    fn from(s: String) -> Self {
+        DisplayServer::from_code(&s).unwrap_or_default()
+    }
+}
+
+impl From<DisplayServer> for String {
+    fn from(d: DisplayServer) -> Self {
+        d.code().to_string()
+    }
+}
+
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 
@@ -359,6 +411,9 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// File › Options › Advanced › Linux display server (#2184): read by the desktop app before
+    /// the window opens.
+    pub display_server: DisplayServer,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -426,6 +481,7 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            display_server: DisplayServer::Auto,
         }
     }
 }
@@ -1818,6 +1874,18 @@ impl WordApp {
                 }
                 json!({"startScreen": self.ui.start_screen})
             }
+            "ui.displayServer" => {
+                // File › Options › Advanced › Linux display server (#2184): `value` `auto`,
+                // `wayland` or `x11`; no value reads it. The desktop app reads it at the next launch.
+                match p.get("value") {
+                    None => {}
+                    Some(v) => match v.as_str().and_then(DisplayServer::from_code) {
+                        Some(d) => self.ui.display_server = d,
+                        None => return Some(Err(format!("unknown display server {v}; use auto, wayland or x11"))),
+                    },
+                }
+                json!({"displayServer": self.ui.display_server.code()})
+            }
             // Shape Format › Text › Create Link: the next click on an empty text box links the
             // selected box to it (`shape.link` with that box as the target); Esc cancels.
             // Picture Format › Size › Crop: crop mode on the selected picture, or off (`crop`).
@@ -2870,6 +2938,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.displayServer"
     ) || id.starts_with("help.")
 }
 
@@ -3473,6 +3542,25 @@ mod tests {
         let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
         assert!(old.caret_animation && old.tab == "Insert");
         assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
+    }
+
+    /// #2184: the Linux display server is a UI command, kept in `ui.json` for the desktop app to
+    /// read at the next launch; junk is refused, and an unknown saved value reads as Automatic.
+    #[test]
+    fn display_server_is_a_ui_command_and_survives_a_restart() {
+        let mut a = app();
+        assert_eq!(a.run("ui.displayServer", json!({})).unwrap(), json!({"displayServer": "auto"}), "automatic by default; no value reads it");
+        assert_eq!(a.run("ui.displayServer", json!({"value": " X11 "})).unwrap(), json!({"displayServer": "x11"}));
+        for junk in [json!({"value": "mir"}), json!({"value": 1}), json!({"value": null}), json!({"value": ["wayland"]})] {
+            assert!(a.run("ui.displayServer", junk).is_err());
+        }
+        assert_eq!(a.ui.display_server, DisplayServer::X11, "a rejected value keeps the setting");
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""displayServer":"x11""#), "{saved}");
+        assert_eq!(UiState::from_json(saved.as_bytes()).unwrap().display_server, DisplayServer::X11);
+        for old in [r#"{"tab":"Insert"}"#, r#"{"displayServer":"mir"}"#, r#"{"displayServer":7}"#] {
+            assert_eq!(UiState::from_json(old.as_bytes()).unwrap().display_server, DisplayServer::Auto, "{old}");
+        }
     }
 
     /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
