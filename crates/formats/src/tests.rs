@@ -863,6 +863,181 @@ fn exported_links_keep_only_safe_targets() {
     }
 }
 
+// ---------------------------------------------------------------------------------------------
+// ODT footnotes, endnotes and comments (#1054)
+
+mod odt_notes {
+    use std::io::Write;
+
+    use wordcraft_doc::para::{InlineObject, NoteKind};
+    use wordcraft_doc::{Block, CharProps, Comment, Document, Paragraph, PartKind, StoryRef, para_block};
+
+    use crate::{export, import};
+
+    /// A minimal `.odt` package around `body` (the content of `office:text`), built in code.
+    fn package(body: &str) -> Vec<u8> {
+        let content = format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?><office:document-content \
+             xmlns:office=\"urn:oasis:names:tc:opendocument:xmlns:office:1.0\" \
+             xmlns:text=\"urn:oasis:names:tc:opendocument:xmlns:text:1.0\" \
+             xmlns:dc=\"http://purl.org/dc/elements/1.1/\" \
+             xmlns:meta=\"urn:oasis:names:tc:opendocument:xmlns:meta:1.0\" office:version=\"1.3\">\
+             <office:body><office:text>{body}</office:text></office:body></office:document-content>"
+        );
+        let mut z = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        let stored = zip::write::SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
+        z.start_file("mimetype", stored).unwrap();
+        z.write_all(b"application/vnd.oasis.opendocument.text").unwrap();
+        z.start_file("content.xml", stored).unwrap();
+        z.write_all(content.as_bytes()).unwrap();
+        z.finish().unwrap().into_inner()
+    }
+
+    fn body_para(d: &Document, i: usize) -> &Paragraph {
+        match &*d.body[i] {
+            Block::Para(p) => p,
+            _ => panic!("not a paragraph"),
+        }
+    }
+
+    fn text_of(d: &Document, part: u32) -> String {
+        d.plain_text(StoryRef::Part(part)).trim().to_string()
+    }
+
+    #[test]
+    fn footnote_and_endnote_round_trip() {
+        let mut d = Document::new();
+        let foot = d.add_part(PartKind::Footnote, Vec::new());
+        let end = d.add_part(PartKind::Endnote, Vec::new());
+        let mut p = Paragraph::with_text("Alpha", CharProps::default());
+        let n = p.len();
+        p.insert_object(n, InlineObject::NoteRef { kind: NoteKind::Footnote, id: foot, custom: String::new() }, &CharProps::default()).unwrap();
+        let n = p.len();
+        p.insert_text(n, " beta", &CharProps::default()).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::NoteRef { kind: NoteKind::Endnote, id: end, custom: "*".into() }, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+        for (id, kind, text) in [(foot, NoteKind::Footnote, "Foot text"), (end, NoteKind::Endnote, "End text")] {
+            let mut np = Paragraph::new();
+            np.insert_object(0, InlineObject::NoteRef { kind, id, custom: String::new() }, &CharProps::default()).unwrap();
+            let n = np.len();
+            np.insert_text(n, &format!(" {text}"), &CharProps::default()).unwrap();
+            d.set_story(StoryRef::Part(id), vec![para_block(np)]).unwrap();
+        }
+
+        let bytes = export("odt", &d).unwrap().unwrap();
+        let back = import("odt", &bytes).unwrap().unwrap();
+        let refs: Vec<(NoteKind, u32, String)> = body_para(&back, 0)
+            .objects
+            .iter()
+            .filter_map(|o| match o {
+                InlineObject::NoteRef { kind, id, custom } => Some((*kind, *id, custom.clone())),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(refs.len(), 2, "{refs:?}");
+        assert_eq!(refs[0].0, NoteKind::Footnote);
+        assert_eq!(refs[1].0, NoteKind::Endnote);
+        assert_eq!(refs[1].2, "*");
+        assert_eq!(back.parts[&refs[0].1].kind, PartKind::Footnote);
+        assert_eq!(back.parts[&refs[1].1].kind, PartKind::Endnote);
+        assert!(text_of(&back, refs[0].1).ends_with("Foot text"));
+        assert!(text_of(&back, refs[1].1).ends_with("End text"));
+        // The note story starts with its own mark again, so it can be edited like any other.
+        let first = match &*back.parts[&refs[0].1].blocks[0] {
+            Block::Para(p) => p,
+            _ => panic!("not a paragraph"),
+        };
+        assert!(matches!(first.objects.first(), Some(InlineObject::NoteRef { .. })));
+        assert_eq!(body_para(&back, 0).plain_text().replace('\u{FFFC}', "").trim(), "Alpha beta");
+    }
+
+    #[test]
+    fn comment_with_author_and_date_round_trips() {
+        let mut d = Document::new();
+        let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Check this", CharProps::default()))]);
+        d.comments.insert(
+            7,
+            Comment {
+                author: "Ada <Writer>".into(),
+                initials: "AW".into(),
+                date: "2026-03-04T05:06:07Z".into(),
+                parent: None,
+                resolved: false,
+                part,
+                ..Default::default()
+            },
+        );
+        let mut p = Paragraph::with_text("Before ", CharProps::default());
+        let n = p.len();
+        p.insert_object(n, InlineObject::CommentStart { id: 7 }, &CharProps::default()).unwrap();
+        let n = p.len();
+        p.insert_text(n, "marked", &CharProps::default()).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::CommentEnd { id: 7 }, &CharProps::default()).unwrap();
+        d.body = vec![para_block(p)];
+
+        let bytes = export("odt", &d).unwrap().unwrap();
+        let back = import("odt", &bytes).unwrap().unwrap();
+        assert_eq!(back.comments.len(), 1);
+        let (id, c) = back.comments.iter().next().unwrap();
+        assert_eq!((c.author.as_str(), c.initials.as_str(), c.date.as_str()), ("Ada <Writer>", "AW", "2026-03-04T05:06:07Z"));
+        assert_eq!(text_of(&back, c.part), "Check this");
+        let p = body_para(&back, 0);
+        assert!(matches!(p.objects.as_slice(), [InlineObject::CommentStart { id: a }, InlineObject::CommentEnd { id: b }] if a == id && b == id));
+        assert_eq!(p.plain_text().replace('\u{FFFC}', ""), "Before marked");
+
+        // A file written by another program: a point comment (no `annotation-end`) and a custom note label.
+        let odt = package(
+            "<text:p>One<office:annotation office:name=\"a1\"><dc:creator>Bo</dc:creator><dc:date>2025-01-02T03:04:05</dc:date>\
+             <text:p>Why?</text:p></office:annotation> two<text:note text:id=\"ftn1\" text:note-class=\"footnote\">\
+             <text:note-citation text:label=\"a\">a</text:note-citation><text:note-body><text:p>Because.</text:p></text:note-body></text:note></text:p>",
+        );
+        let d = import("odt", &odt).unwrap().unwrap();
+        let c = d.comments.values().next().unwrap();
+        assert_eq!((c.author.as_str(), c.date.as_str()), ("Bo", "2025-01-02T03:04:05"));
+        assert_eq!(text_of(&d, c.part), "Why?");
+        let objs = &body_para(&d, 0).objects;
+        assert!(
+            matches!(objs.as_slice(), [InlineObject::CommentStart { .. }, InlineObject::CommentEnd { .. }, InlineObject::NoteRef { custom, .. }] if custom == "a")
+        );
+    }
+
+    #[test]
+    fn hostile_notes_and_comments_do_not_panic() {
+        // Nested notes, unclosed annotations, an `annotation-end` without a start, a note without
+        // a body, spoofed reserved names and thousands of notes.
+        let mut body = String::from(
+            "<text:p>x<text:note text:note-class=\"endnote\"><text:note-body><text:p>in<text:note><text:note-body><text:p>deep</text:p></text:note-body></text:note>\
+             <office:annotation><text:p>nested</text:p></office:annotation></text:p></text:note-body></text:note>\
+             <office:annotation-end office:name=\"nope\"/><text:note/><text:bookmark text:name=\"&#1;wc-odt:n99\"/>\
+             <text:bookmark text:name=\"&#1;wc-odt:cs0\"/><office:annotation office:name=\"open\"><dc:creator>",
+        );
+        for _ in 0..3000 {
+            body.push_str("<text:p>a<text:note><text:note-citation>1</text:note-citation><text:note-body><text:p>n</text:p></text:note-body></text:note></text:p>");
+        }
+        let odt = package(&body);
+        let d = import("odt", &odt).unwrap().unwrap();
+        assert!(d.parts.len() <= 10_001);
+        // Truncations at every few bytes of a valid package never panic either.
+        let good = package(
+            "<text:p>a<text:note text:note-class=\"footnote\"><text:note-citation>1</text:note-citation><text:note-body><text:p>n</text:p></text:note-body></text:note>\
+             <office:annotation office:name=\"c\"><dc:creator>Z</dc:creator><text:p>t</text:p></office:annotation>b<office:annotation-end office:name=\"c\"/></text:p>",
+        );
+        assert_eq!(import("odt", &good).unwrap().unwrap().comments.len(), 1);
+        for cut in (0..good.len()).step_by(7) {
+            let _ = import("odt", &good[..cut]);
+        }
+        // Deep nesting inside one note.
+        let deep = format!(
+            "<text:p><text:note><text:note-body>{}{}</text:note-body></text:note></text:p>",
+            "<text:span>".repeat(5000),
+            "</text:span>".repeat(5000)
+        );
+        let _ = import("odt", &package(&deep)).unwrap();
+    }
+}
+
 #[test]
 fn hidden_drawings_are_left_out_of_exports() {
     let mut d = wordcraft_doc::Document::from_text("x");

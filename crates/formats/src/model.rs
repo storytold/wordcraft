@@ -1183,6 +1183,11 @@ fn flow_of(doc: &Document, tracked: bool) -> Flow {
     }
 }
 
+/// `blocks` (the story of a note or comment, say) as flow blocks.
+pub fn flow_of_blocks(doc: &Document, blocks: &Blocks) -> Vec<FBlock> {
+    flow_blocks(doc, blocks, 0, false)
+}
+
 // ---------------------------------------------------------------------------------------------
 // Shared helpers
 
