@@ -82,6 +82,90 @@ fn levels_for_persian_with_latin_and_numbers() {
     assert_eq!(lv[at("Hello سلام", 6)], 1);
 }
 
+/// #2150: Latin text with digits, hyphens, spaces, full stops and commas after a Persian word
+/// reads as typed, as in Word, in a right-to-left and in a left-to-right paragraph; UAX #9 alone
+/// showed "naphthol-2" and "11 Windows" (the neutral went with the Persian text) and, in a
+/// left-to-right paragraph, put a digit before the Persian word.
+#[test]
+fn latin_text_keeps_its_digits_spaces_and_punctuation_in_order() {
+    let latin = [
+        "2-naphthol",
+        "naphthol-2",
+        "(2-naphthol)",
+        "1,2-dichloroethane",
+        "naphthol 2",
+        "Windows 11",
+        "Fig. 3",
+        "e.g. 2, 3 and 4",
+        "version 2.0 of the paper",
+    ];
+    for w in latin {
+        let s = format!("برای مثال {w}");
+        for rtl in [true, false] {
+            let lv = bidi_levels(&s, rtl);
+            let word = at(&s, 10);
+            assert!(lv[word..].iter().all(|&l| l == lv[word]), "{s:?} (rtl {rtl}) is one left-to-right run: {:?}", &lv[word..]);
+            assert_eq!(lv[word] % 2, 0, "{s:?}");
+            assert_eq!(lv[at(&s, 9)], u8::from(rtl), "{s:?}: the space before the Latin text takes the paragraph's level");
+            let d = doc_of(&[(&s, rtl)]);
+            let l = lay(&d);
+            let xs: Vec<f32> = (10..s.chars().count()).map(|n| cluster_x(&l, 0, at(&s, n))).collect();
+            assert!(xs.windows(2).all(|p| p[0] < p[1]), "{s:?} (rtl {rtl}) reads left to right: {xs:?}");
+            let persian = cluster_x(&l, 0, 0);
+            if rtl {
+                assert!(xs.iter().all(|&x| x < persian), "{s:?}: the Latin text comes after the Persian words, on their left");
+            } else {
+                assert!(xs.iter().all(|&x| x > persian), "{s:?}: the Latin text comes after the Persian words, on their right");
+            }
+        }
+    }
+    // Sentence punctuation after the Latin text still ends the right-to-left sentence (far
+    // left), and Persian words after it keep their place.
+    let s = "برای مثال Windows 11. سلام";
+    let lv = bidi_levels(s, true);
+    assert_eq!(lv[at(s, 19)], 2, "the last 1 is the Latin text's");
+    assert_eq!(lv[at(s, 20)], 1, "the full stop is the paragraph's");
+    assert_eq!(lv[at(s, 21)], 1, "and so is the space after it");
+    // Joined to a Persian word by a colon: the colon is the paragraph's, the Latin text one run.
+    let s = "مثال:2-naphthol";
+    let lv = bidi_levels(s, true);
+    assert_eq!(lv[at(s, 4)], 1);
+    assert!(lv[at(s, 5)..].iter().all(|&l| l == 2), "{lv:?}");
+    // Inside an explicit isolate the Latin text is one run at the isolate's level.
+    let s = "سلام \u{2067}2-x\u{2069}";
+    assert_eq!(&bidi_levels(s, true)[at(s, 6)..at(s, 9)], &[4, 4, 4]);
+    // Inside an explicit left-to-right embedding (LRE) one level above the paragraph's, the
+    // space before the Latin text keeps the embedding's level, so it stays before "foo".
+    let s = "سلام \u{202A} foo\u{202C}";
+    let lv = bidi_levels(s, true);
+    assert_eq!(&lv[at(s, 6)..at(s, 10)], &[2, 2, 2, 2], "{lv:?}");
+    assert_eq!(lv, unicode_levels(s, true));
+    // A combining mark ending the Persian word before the Latin text (ٔ, U+0654) keeps the
+    // word's level, so the word is shaped in one run; only the space takes the paragraph's.
+    let s = "نسخهٔ Windows";
+    let lv = bidi_levels(s, false);
+    assert_eq!(lv[at(s, 4)], 1, "{lv:?}");
+    assert_eq!(lv[at(s, 5)], 0, "{lv:?}");
+    // With no space between them the mark still keeps the Persian word's level, in either
+    // paragraph direction; the Latin text after it is its own run.
+    let s = "نسخهٔWindows";
+    for rtl in [true, false] {
+        let lv = bidi_levels(s, rtl);
+        assert_eq!(lv[at(s, 4)], lv[at(s, 3)], "rtl {rtl}: {lv:?}");
+        assert_eq!(lv[at(s, 5)] % 2, 0, "rtl {rtl}: {lv:?}");
+    }
+    // Numbers alone and text across a tab are left to UAX #9.
+    for s in ["سال 5-10", "سال 2 و 3", "سلام 2\tx"] {
+        assert_eq!(bidi_levels(s, true), unicode_levels(s, true), "{s:?}");
+    }
+}
+
+/// UAX #9 levels with no adjustment.
+fn unicode_levels(text: &str, rtl: bool) -> Vec<u8> {
+    let level = if rtl { unicode_bidi::Level::rtl() } else { unicode_bidi::Level::ltr() };
+    unicode_bidi::ParagraphBidiInfo::new(text, Some(level)).levels.iter().map(|l| l.number()).collect()
+}
+
 #[test]
 fn rtl_paragraph_is_right_aligned_and_reads_right_to_left() {
     let s = "سلام دنیا";
