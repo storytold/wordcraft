@@ -13,6 +13,8 @@
 //!   (without `path`, both reply with the PNG as base64 `png`)
 //! - `ui.parity`: feature catalog parity
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::mpsc::Sender;
 
 use serde_json::{Value, json};
@@ -23,12 +25,40 @@ pub struct ControlRequest {
     pub method: String,
     pub params: Value,
     pub reply: Sender<Value>,
+    /// Waiting, taken by the UI thread, or given up on by the sender: whichever comes first wins.
+    state: Arc<AtomicU8>,
 }
+
+const WAITING: u8 = 0;
+const TAKEN: u8 = 1;
+const GIVEN_UP: u8 = 2;
 
 impl ControlRequest {
     pub fn new(method: impl Into<String>, params: Value) -> (Self, std::sync::mpsc::Receiver<Value>) {
         let (tx, rx) = std::sync::mpsc::channel();
-        (Self { method: method.into(), params, reply: tx }, rx)
+        (Self { method: method.into(), params, reply: tx, state: Arc::new(AtomicU8::new(WAITING)) }, rx)
+    }
+
+    /// The UI thread takes the request to run it. False when the sender gave up on it first: it
+    /// must not run then, since the sender already reported it as failed.
+    pub fn take(&self) -> bool {
+        self.state.compare_exchange(WAITING, TAKEN, Ordering::AcqRel, Ordering::Acquire).is_ok()
+    }
+
+    /// What the sender keeps to give up on the request if no answer comes in time.
+    pub fn give_up_handle(&self) -> GiveUp {
+        GiveUp(self.state.clone())
+    }
+}
+
+/// Gives up on a [`ControlRequest`] before it runs.
+pub struct GiveUp(Arc<AtomicU8>);
+
+impl GiveUp {
+    /// True when the request will never run; false when the UI thread took it (it is running or
+    /// has run, and its answer is on the way).
+    pub fn give_up(&self) -> bool {
+        self.0.compare_exchange(WAITING, GIVEN_UP, Ordering::AcqRel, Ordering::Acquire).is_ok()
     }
 }
 

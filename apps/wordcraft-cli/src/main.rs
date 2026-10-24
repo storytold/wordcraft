@@ -52,6 +52,20 @@ USAGE:
                                               running): addEditCitation, addEditBibliography,
                                               addNote, refresh, removeCodes, setDocPrefs
                                               (--cmd runs first, e.g. --cmd caret.docEnd)
+  wordcraft-cli ask \"PROMPT\" [--file F | --template T] [--model M] [--max-steps N] [--yes]
+                    [--author NAME] [--save OUT] [--automation-read-root DIR] [--automation-write-root DIR]
+                                              GeenioAI (the AI assistant) carries out PROMPT on the document
+                                              (draft, rewrite, summarize…) with WordCraft's commands,
+                                              through a FANTASTICO account:
+                                                $FANTASTICO_KEY   the account key (ck-fant-…) or
+                                                                  project key (sk-fant-…); get one, or
+                                                                  top up, at https://artcraft.fantastico.cc
+                                              --yes lets it start a new document, open and save files
+                                              without asking; --save writes the result (format from
+                                              the extension); the reply goes to stdout. The assistant
+                                              reads and writes no file of its own unless the
+                                              --automation-read-root / --automation-write-root folders
+                                              allow it (as for mcp); --file and --save are not limited
   wordcraft-cli [<command>] -h | --help       this help
   wordcraft-cli --version
 
@@ -67,7 +81,7 @@ same output on every machine.
 ";
 
 /// The subcommands, in `USAGE` order; `--help` or `-h` after any of them prints `USAGE` (#968).
-const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero"];
+const SUBCOMMANDS: &[&str] = &["convert", "info", "text", "inspect", "render", "run", "commands", "parity", "mcp", "zotero", "ask"];
 
 fn wants_help(cmd: &str, rest: &[String]) -> bool {
     SUBCOMMANDS.contains(&cmd) && rest.iter().any(|a| a == "--help" || a == "-h")
@@ -162,6 +176,22 @@ fn positionals<'a>(args: &'a [String], specs: &[OptionSpec]) -> Vec<&'a String> 
 
 /// A headless session in the system region: every way the CLI starts one gives `file.new` the
 /// same paper (#1381).
+/// Whether `out` can be written: its folder exists, it isn't a folder, and the document can take
+/// its format. Checked before any work, so a bad output path costs nothing.
+fn check_output(out: &str, doc: &wordcraft_doc::Document) -> Result<(), String> {
+    let parent = Path::new(out).parent().filter(|p| !p.as_os_str().is_empty());
+    if let Some(p) = parent.filter(|p| !p.is_dir()) {
+        return Err(format!("{out}: folder {} does not exist", p.display()));
+    }
+    if Path::new(out).is_dir() {
+        return Err(format!("{out}: is a folder, not a file"));
+    }
+    if !out.to_ascii_lowercase().ends_with(".png") {
+        wordcraft_engine::io::save_bytes(out, doc)?;
+    }
+    Ok(())
+}
+
 fn session(doc: wordcraft_doc::Document) -> Session {
     let mut s = Session::new(doc);
     s.system_region = system_region();
@@ -325,6 +355,17 @@ const ZOTERO_OPTIONS: &[OptionSpec] = &[
     OptionSpec { name: "--save", takes_value: true },
     OptionSpec { name: "--trace", takes_value: false },
     OptionSpec { name: "--port", takes_value: true },
+];
+const ASK_OPTIONS: &[OptionSpec] = &[
+    OptionSpec { name: "--file", takes_value: true },
+    OptionSpec { name: "--template", takes_value: true },
+    OptionSpec { name: "--model", takes_value: true },
+    OptionSpec { name: "--max-steps", takes_value: true },
+    OptionSpec { name: "--yes", takes_value: false },
+    OptionSpec { name: "--author", takes_value: true },
+    OptionSpec { name: "--save", takes_value: true },
+    OptionSpec { name: "--password", takes_value: true },
+    OptionSpec { name: "--password-file", takes_value: true },
 ];
 
 /// Why a CLI run stopped early.
@@ -511,16 +552,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let outputs: Vec<String> = script.iter().flat_map(|c| c.save.iter().cloned()).chain(arg_value(&rest, "--save")).collect();
             // Check every output can be made before writing any, so a bad one leaves no half-done job.
             for out in &outputs {
-                let parent = Path::new(out).parent().filter(|p| !p.as_os_str().is_empty());
-                if let Some(p) = parent.filter(|p| !p.is_dir()) {
-                    return Err(format!("{out}: folder {} does not exist", p.display()).into());
-                }
-                if Path::new(out).is_dir() {
-                    return Err(format!("{out}: is a folder, not a file").into());
-                }
-                if !out.to_ascii_lowercase().ends_with(".png") {
-                    wordcraft_engine::io::save_bytes(out, &s.doc)?;
-                }
+                check_output(out, &s.doc)?;
             }
             for out in outputs {
                 let r = if out.to_ascii_lowercase().ends_with(".png") {
@@ -649,9 +681,228 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             }
             Ok(())
         }
+        "ask" => {
+            let (roots, rest) = automation_roots("ask", &rest)?;
+            validate_options("ask", &rest, ASK_OPTIONS)?;
+            let a = parse_ask_args(&rest)?;
+            let key = std::env::var("FANTASTICO_KEY").ok().filter(|v| !v.trim().is_empty()).ok_or("ask needs a FANTASTICO key in $FANTASTICO_KEY")?;
+            let opts = fantastico_sdk::Options {
+                title: "WordCraft".into(),
+                referer: "https://github.com/storytold/wordcraft".into(),
+                ..fantastico_sdk::Options::default()
+            };
+            let mut provider = wordcraft_fantastico::Streaming::new(key, opts).map_err(|e| e.message)?;
+            // The account suggests a model; without one (a project key, or an account that names
+            // none) the request leaves it empty and the model the key was minted for answers.
+            let model = match (&a.model, provider.client().surface()) {
+                (Some(m), _) => m.clone(),
+                (None, fantastico_sdk::Surface::Edge) => provider.client().config().map_err(|e| e.message)?.model.unwrap_or_default(),
+                (None, fantastico_sdk::Surface::Runtime) => String::new(),
+            };
+            let mut s = match (&a.file, &a.template) {
+                (Some(f), _) => open(f, password_from(&rest)?.as_deref())?,
+                (None, Some(t)) => {
+                    let mut s = session(wordcraft_doc::Document::new());
+                    s.run("file.new", &json!({"template": t})).map_err(|e| e.to_string())?;
+                    s
+                }
+                _ => session(wordcraft_doc::Document::new()),
+            };
+            if let Some(name) = &a.author {
+                set_author(&mut s, name)?;
+            }
+            // Before the model is asked (and paid): an output that can't be written fails now.
+            if let Some(out) = &a.save {
+                check_output(out, &s.doc)?;
+            }
+            let mut backend = ask_backend(roots);
+            backend.session = s;
+            let mut config = wordcraft_assistant::Config::new(model);
+            if let Some(n) = a.max_steps {
+                config.max_steps = n;
+            }
+            let mut observer = AskObserver { yes: a.yes, printed: String::new() };
+            let turn = wordcraft_assistant::Agent::new(config)
+                .send(&mut provider, &mut backend, &a.prompt, &mut observer)
+                .map(|t| t.reply)
+                .map_err(|e| e.to_string());
+            finish_ask(
+                turn,
+                &observer.printed,
+                |text| write_stdout(|o| writeln!(o, "{text}")),
+                || {
+                    a.save.as_ref().map(|p| {
+                        let r = if p.to_ascii_lowercase().ends_with(".png") {
+                            backend.session.run("file.exportPng", &json!({"path": p}))
+                        } else {
+                            backend.session.run("file.save", &json!({"path": p}))
+                        };
+                        r.map(|_| p.clone()).map_err(|e| format!("{p}: {e}"))
+                    })
+                },
+            )
+        }
         "--version" | "-V" => write_stdout(|o| writeln!(o, "wordcraft-cli {}", env!("CARGO_PKG_VERSION"))),
         "" | "help" | "--help" | "-h" => write_stdout(|o| write!(o, "{USAGE}")),
         other => Err(format!("unknown command `{other}`\n\n{USAGE}").into()),
+    }
+}
+
+/// `ask`'s arguments: one prompt and its options.
+#[derive(Debug, Default, PartialEq)]
+struct AskArgs {
+    prompt: String,
+    file: Option<String>,
+    template: Option<String>,
+    model: Option<String>,
+    max_steps: Option<usize>,
+    yes: bool,
+    author: Option<String>,
+    save: Option<String>,
+}
+
+/// The end of `ask`, once the turn is over: the part of the reply that wasn't streamed goes to
+/// stdout (`print`), then the document is written (`save`) even when the turn stopped early or
+/// stdout is closed (`ask … | head -1`): the file was asked for, and a reader that left doesn't
+/// cancel it. A closed stdout is reported last, after the turn's and the save's errors.
+fn finish_ask(
+    turn: Result<String, String>,
+    printed: &str,
+    print: impl FnOnce(&str) -> Result<(), Failure>,
+    save: impl FnOnce() -> Option<Result<String, String>>,
+) -> Result<(), Failure> {
+    let shown = match &turn {
+        Ok(reply) => {
+            // Streamed text is on stdout already; what wasn't streamed (or differs) follows.
+            let reply = reply.trim();
+            if printed.trim() == reply {
+                print("")
+            } else {
+                let gap = if printed.is_empty() { "" } else { "\n" };
+                print(&format!("{gap}{reply}"))
+            }
+        }
+        Err(_) => Ok(()),
+    };
+    let saved = save();
+    if let Some(Ok(p)) = &saved {
+        eprintln!("wrote {p}");
+    }
+    ask_result(turn.map(|_| ()), saved)?;
+    shown
+}
+
+/// How `ask` ended: the turn's error and the save's, both when both failed (the check before the
+/// turn can't foresee every write failure, a full disk for one).
+fn ask_result(turn: Result<(), String>, saved: Option<Result<String, String>>) -> Result<(), String> {
+    match (turn, saved) {
+        (Err(t), Some(Err(s))) => Err(format!(
+            "{t}
+and the document could not be saved: {s}"
+        )),
+        (Err(t), _) => Err(t),
+        (Ok(()), Some(Err(s))) => Err(s),
+        (Ok(()), _) => Ok(()),
+    }
+}
+
+/// The assistant's way into the document for `ask`: every file its tools read or write stays inside
+/// `roots`, and with none given it may touch no file. `--file` and `--save` are the CLI's own.
+fn ask_backend(roots: Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>) -> wordcraft_mcp::Headless {
+    let roots = roots.unwrap_or_else(wordcraft_engine::file_access::AutomationRoots::none);
+    wordcraft_mcp::Headless::default().with_automation_roots(Some(roots))
+}
+
+fn parse_ask_args(rest: &[String]) -> Result<AskArgs, String> {
+    let mut a = AskArgs::default();
+    let mut prompts = Vec::new();
+    let mut i = 0;
+    while let Some(arg) = rest.get(i) {
+        // The option's value: the next argument, which can't be another option.
+        let value = || rest.get(i + 1).filter(|v| !v.starts_with("--")).cloned().ok_or_else(|| format!("ask: {arg} needs a value"));
+        match arg.as_str() {
+            "--file" => a.file = Some(value()?),
+            "--template" => a.template = Some(value()?),
+            "--model" => a.model = Some(value()?),
+            "--author" => a.author = Some(value()?),
+            "--save" => a.save = Some(value()?),
+            // Read by `password_from`, as for `run`.
+            "--password" | "--password-file" => {
+                value()?;
+            }
+            "--max-steps" => {
+                let v = value()?;
+                let n: usize = v.parse().map_err(|_| format!("ask: --max-steps needs a number from 1 to {}", wordcraft_assistant::MAX_STEPS))?;
+                if n == 0 || n > wordcraft_assistant::MAX_STEPS {
+                    return Err(format!("ask: --max-steps needs a number from 1 to {}", wordcraft_assistant::MAX_STEPS));
+                }
+                a.max_steps = Some(n);
+            }
+            "--yes" => {
+                a.yes = true;
+                i += 1;
+                continue;
+            }
+            other if other.starts_with("--") => return Err(format!("ask: unknown option {other}")),
+            other => {
+                prompts.push(other.to_string());
+                i += 1;
+                continue;
+            }
+        }
+        i += 2;
+    }
+    match prompts.as_slice() {
+        [one] if !one.trim().is_empty() => a.prompt = one.trim().to_string(),
+        [] | [_] => return Err(format!("ask needs a prompt\n\n{USAGE}")),
+        _ => return Err("ask takes one prompt: quote it".into()),
+    }
+    if a.file.is_some() && a.template.is_some() {
+        return Err("ask: choose one of --file and --template".into());
+    }
+    Ok(a)
+}
+
+/// `ask` on a terminal: progress on stderr, confirmations asked on stdin, the reply streamed to
+/// stdout as it arrives (`printed` is what went out, so the end doesn't repeat it).
+struct AskObserver {
+    yes: bool,
+    printed: String,
+}
+
+impl wordcraft_assistant::Observer for AskObserver {
+    fn confirm(&mut self, name: &str, arguments: &Value) -> bool {
+        use std::io::IsTerminal;
+        if self.yes {
+            return true;
+        }
+        if !std::io::stdin().is_terminal() {
+            eprintln!("   declined `{name}`: pass --yes to allow it");
+            return false;
+        }
+        eprint!("   allow `{name}` {}? [y/N] ", clip(&arguments.to_string()));
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line).is_ok() && matches!(line.trim().to_ascii_lowercase().as_str(), "y" | "yes")
+    }
+    fn event(&mut self, e: wordcraft_assistant::Event<'_>) {
+        use wordcraft_assistant::Event;
+        match e {
+            Event::ToolCall { name, arguments } => eprintln!("-> {name} {}", clip(&arguments.to_string())),
+            Event::ToolResult { ok: false, text, .. } => eprintln!("   error: {}", clip(text)),
+            Event::Declined { name } => eprintln!("   declined `{name}`"),
+            // The pieces go to stdout as they come; the whole text at the end only if it differs.
+            Event::Stream(wordcraft_assistant::Delta::Start) => {
+                if !self.printed.is_empty() {
+                    let _ = write_stdout(|o| writeln!(o));
+                }
+                self.printed.clear();
+            }
+            Event::Stream(wordcraft_assistant::Delta::Text(t)) => {
+                self.printed.push_str(t);
+                let _ = write_stdout(|o| write!(o, "{t}"));
+            }
+            Event::Text(_) | Event::ToolResult { .. } => {}
+        }
     }
 }
 
@@ -788,6 +1039,114 @@ mod tests {
             .filter(|word| !word.starts_with(['-', '[']))
             .collect();
         assert_eq!(listed, SUBCOMMANDS);
+    }
+
+    /// Neither failure hides the other.
+    #[test]
+    fn ask_reports_both_the_turn_and_the_save_when_both_fail() {
+        let both = ask_result(Err("the model failed".into()), Some(Err("out.docx: disk full".into()))).unwrap_err();
+        assert!(both.contains("the model failed") && both.contains("disk full"), "{both}");
+        assert_eq!(ask_result(Err("t".into()), Some(Ok("out.docx".into()))), Err("t".into()));
+        assert_eq!(ask_result(Ok(()), Some(Err("s".into()))), Err("s".into()));
+        assert_eq!(ask_result(Ok(()), Some(Ok("out.docx".into()))), Ok(()));
+        assert_eq!(ask_result(Ok(()), None), Ok(()));
+    }
+
+    /// `ask … | head -1`: the reader leaves, the document is still written.
+    #[test]
+    fn ask_saves_even_when_stdout_is_closed() {
+        let mut saved = false;
+        let r = finish_ask(
+            Ok("hi".into()),
+            "",
+            |_| Err(Failure::StdoutClosed),
+            || {
+                saved = true;
+                Some(Ok("out.docx".into()))
+            },
+        );
+        assert!(saved);
+        assert_eq!(r, Err(Failure::StdoutClosed));
+        // A failed save is the error worth reporting, not the closed stdout.
+        let r = finish_ask(Ok("hi".into()), "", |_| Err(Failure::StdoutClosed), || Some(Err("out.docx: disk full".into())));
+        assert_eq!(r, Err(Failure::Error("out.docx: disk full".into())));
+        // What was streamed isn't printed again; what wasn't follows on its own line.
+        let mut shown = Vec::new();
+        for (reply, streamed) in [("hi", "hi"), ("hi there", "hi")] {
+            let print = |t: &str| {
+                shown.push(t.to_string());
+                Ok(())
+            };
+            finish_ask(Ok(reply.into()), streamed, print, || None).unwrap();
+        }
+        assert_eq!(shown, ["", "\nhi there"]);
+    }
+
+    /// A bad output is caught before any work (`run`, and `ask` before the model is asked).
+    #[test]
+    fn outputs_are_checked_before_the_work() {
+        let doc = wordcraft_doc::Document::new();
+        let dir = std::env::temp_dir();
+        let e = check_output(&dir.join("no-such-folder-wc").join("out.docx").to_string_lossy(), &doc).unwrap_err();
+        assert!(e.contains("does not exist"), "{e}");
+        assert!(check_output(&dir.to_string_lossy(), &doc).unwrap_err().contains("folder"));
+        assert!(check_output(&dir.join("out.nosuchformat").to_string_lossy(), &doc).is_err());
+        assert!(check_output(&dir.join("out.docx").to_string_lossy(), &doc).is_ok());
+        assert!(check_output(&dir.join("out.png").to_string_lossy(), &doc).is_ok());
+    }
+
+    /// `ask`'s assistant reaches no file without a root, and only the root's files with one.
+    #[test]
+    fn the_ask_assistant_touches_no_file_outside_its_roots() {
+        use wordcraft_mcp::Backend;
+        let dir = std::env::temp_dir().join(format!("wordcraft-cli-ask-roots-{}", std::process::id()));
+        let inside = dir.join("in");
+        std::fs::create_dir_all(&inside).unwrap();
+        let mut doc = Session::new(wordcraft_doc::Document::new());
+        doc.run("text.insert", &json!({"text": "hi"})).unwrap();
+        let file = inside.join("a.txt");
+        doc.run("file.save", &json!({"path": file.to_string_lossy()})).unwrap();
+        let open = json!({"command": "file.open", "params": {"path": file.to_string_lossy()}});
+        let e = ask_backend(None).call("engine.execute", open.clone()).unwrap_err();
+        assert!(e.contains("not granted"), "{e}");
+        let save = json!({"command": "file.save", "params": {"path": dir.join("out.txt").to_string_lossy()}});
+        assert!(ask_backend(None).call("engine.execute", save.clone()).is_err());
+        let (roots, left) = automation_roots("ask", &args(&["p", "--automation-read-root", &inside.to_string_lossy()])).unwrap();
+        assert_eq!(left, ["p"]);
+        let mut confined = ask_backend(roots);
+        assert!(confined.call("engine.execute", open).is_ok());
+        assert!(confined.call("engine.execute", save).is_err(), "no write root, no writing");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn ask_takes_one_prompt_and_options() {
+        let a = parse_ask_args(&args(&["draft a letter", "--template", "letter", "--model", "m", "--max-steps", "5", "--yes", "--save", "o.docx"]))
+            .unwrap();
+        assert_eq!(a.prompt, "draft a letter");
+        assert!(a.yes);
+        assert_eq!((a.template.as_deref(), a.model.as_deref(), a.max_steps, a.save.as_deref()), (Some("letter"), Some("m"), Some(5), Some("o.docx")));
+        assert!(validate_options("ask", &args(&["p", "--file", "in.docx", "--author", "Claude"]), ASK_OPTIONS).is_ok());
+        for bad in [
+            &[][..],
+            &["  "],
+            &["a", "b"],
+            &["p", "--model"],
+            &["p", "--model", "--yes"],
+            &["p", "--max-steps", "0"],
+            &["p", "--max-steps", "99999999999999999999999"],
+            &["p", "--max-steps", "-1"],
+            &["p", "--file", "a.docx", "--template", "letter"],
+            &["p", "--frobnicate"],
+        ] {
+            assert!(parse_ask_args(&args(bad)).is_err(), "{bad:?}");
+        }
+        // Without a key nothing is sent and the error says where the key goes.
+        let had = std::env::var_os("FANTASTICO_KEY");
+        if had.is_none() {
+            let e = run(&args(&["ask", "hello"])).unwrap_err().to_string();
+            assert!(e.contains("FANTASTICO_KEY"), "{e}");
+        }
     }
 
     #[test]

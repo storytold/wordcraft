@@ -1,6 +1,6 @@
 # WordCraft architecture
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-10 · **Change:** minor (`proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (new L5 crate `assistant`: GeenioAI's agent loop over the MCP tools; previously minor: `proof` is per language: English and Polish; previously major: first committed version; `plan/architecture.md` is local-only) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 How WordCraft is built today (origin/main `40c5d51`). The longer design notes in
 `plan/architecture.md` are gitignored and local to the original author's machine; this file is the
@@ -28,9 +28,11 @@ winit or rfd.
 | L4 | `zotero` | 1.7k | Zotero's word-processor integration protocol answered against a `Session` |
 | L4 | `control-key` | 0.1k | Per-window control-port key files shared by the app and the MCP bridge |
 | L5 | `mcp` | 1.0k | MCP server: every command as a tool; headless or bridged to the running app |
+| L5 | `fantastico` | 0.4k | GeenioAI's model endpoint on a FANTASTICO account, with streaming replies (native only: a blocking HTTP transport under `fantastico-sdk`; `Class::Native`, left out of the wasm check) |
+| L5 | `assistant` | 0.6k | GeenioAI's agent loop over the MCP tools (`get_text`, `type_text`, `execute`…) against any backend; the model comes from the host as a `Provider`, no network code ([assistant.md](assistant.md)) |
 | L6 | `ui-egui` | 13.1k | Word-style front end: ribbon, keytips, mini-toolbar, Backstage, canvas, rulers, panes, dialogs, Equation tab, i18n catalogs, themes, control channel, headless `ui_shot` example |
-| apps | `wordcraft` | 1.6k | Desktop app (eframe + wgpu; logging, window geometry, file associations) |
-| apps | `wordcraft-cli` | 0.4k | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp`, `zotero` |
+| apps | `wordcraft` | 1.6k | Desktop app (eframe + wgpu; logging, window geometry, file associations; GeenioAI's FANTASTICO host and key store) |
+| apps | `wordcraft-cli` | 0.4k | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp`, `zotero`, `ask` |
 | apps | `wordcraft-web` | 0.3k | Browser build (eframe web runner, WebGPU with WebGL2 fallback) |
 
 ## Data flow
@@ -64,5 +66,7 @@ winit or rfd.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | minor | New native L5 crate `fantastico` (streaming provider); `Class::Native` for crates that don't build for the web |
+| 2026-10-18 | minor | New L5 crate `assistant` (agent loop over the MCP tools, no network code); the desktop app hosts it on a FANTASTICO account, the CLI gains `ask` |
 | 2026-10-10 | minor | `proof`: proofing languages (English, Polish), affix engine, Polish patterns; layout and engine route each run by its language |
 | 2026-10-10 | major | First committed architecture doc, from the crates' sources and `AGENTS.md` |

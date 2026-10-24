@@ -73,6 +73,12 @@ impl AutomationRoots {
         Ok(Some(Arc::new(Self { read, write })))
     }
 
+    /// Roots that grant nothing: a confined command may read and write no file at all. For an
+    /// agent that edits the open document and has no business with the disk.
+    pub fn none() -> Arc<Self> {
+        Arc::new(Self { read: None, write: None })
+    }
+
     /// The read root, absolute with its links followed.
     pub fn read_root(&self) -> Option<&Path> {
         self.read.as_ref().map(|r| r.shown.as_path())
@@ -282,6 +288,16 @@ mod tests {
 
     fn s(p: PathBuf) -> String {
         p.to_string_lossy().into_owned()
+    }
+
+    #[test]
+    fn no_roots_grant_nothing() {
+        let (base, _) = folders("none");
+        let none = AutomationRoots::none();
+        assert_eq!((none.read_root(), none.write_root()), (None, None));
+        assert!(none.check(&s(base.join("in/a.docx")), Access::Read).is_err());
+        assert!(none.check(&s(base.join("out/new.docx")), Access::Write).is_err());
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]

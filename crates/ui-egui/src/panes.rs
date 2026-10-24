@@ -100,6 +100,14 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
             .show(ui, |ui| comments(app, ui));
     }
+    // GeenioAI, the AI assistant (Home › GeenioAI), on the right like Word's Copilot pane.
+    if app.assistant.open {
+        egui::Panel::right("assistant_pane")
+            .default_size(340.0)
+            .resizable(true)
+            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
+            .show(ui, |ui| crate::assistant::show(app, ui));
+    }
 }
 
 pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {

@@ -132,15 +132,7 @@ fn cmd_layers() -> Result<(), String> {
 /// the egui shell.
 fn wasm_set() -> Result<Vec<String>, String> {
     let crates = layers::from_metadata(&metadata()?)?;
-    Ok(crates
-        .into_iter()
-        .filter(|c| match layers::classify(&c.name) {
-            Some(layers::Class::Layer(l)) => l <= 5 || layers::short_name(&c.name) == "ui-egui",
-            Some(layers::Class::Standalone) => true,
-            _ => false,
-        })
-        .map(|c| c.name)
-        .collect())
+    Ok(crates.into_iter().filter(|c| layers::classify(&c.name).is_some_and(|class| layers::built_for_wasm(&c.name, class))).map(|c| c.name).collect())
 }
 
 /// One `cargo check` for the whole set: each crate is checked once, and

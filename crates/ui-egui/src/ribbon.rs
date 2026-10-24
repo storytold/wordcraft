@@ -1320,6 +1320,11 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Editor", None, app, |ui, app| {
         big(ui, app, "editor", "Editor", "review.spelling", json!({}), false);
     });
+    // GeenioAI, the AI assistant pane, where Word's Home tab ends with its Copilot button.
+    group(ui, "GeenioAI", None, app, |ui, app| {
+        let open = app.assistant.open;
+        big_toggle(ui, app, "assistant", "GeenioAI", "ui.assistant", open);
+    });
 }
 
 fn insert(app: &mut WordApp, ui: &mut Ui) {

@@ -24,6 +24,8 @@ wordcraft-pdf = { path = "crates/pdf" }
 wordcraft-proof = { path = "crates/proof" }
 wordcraft-engine = { path = "crates/engine" }
 wordcraft-mcp = { path = "crates/mcp" }
+wordcraft-assistant = { path = "crates/assistant" }
+wordcraft-fantastico = { path = "crates/fantastico" }
 wordcraft-zotero = { path = "crates/zotero" }
 wordcraft-control-key = { path = "crates/control-key" }
 wordcraft-ui-egui = { path = "crates/ui-egui" }
@@ -37,6 +39,8 @@ serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
 # All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
 chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+# The AI Assistant's model endpoint: a FANTASTICO account (desktop app and CLI only).
+fantastico-sdk = "0.2"
 proptest = "1"
 rayon = "1"
 unicode-bidi = "0.3"

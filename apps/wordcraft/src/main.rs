@@ -12,6 +12,7 @@
 mod animations;
 #[cfg(target_os = "macos")]
 mod apple_events;
+mod assistant_host;
 mod clipboard;
 mod control_server;
 mod default_apps;
@@ -431,6 +432,16 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
+            // GeenioAI, the AI assistant (Home › GeenioAI): its account key lives in the settings folder.
+            // Runs without preferences get no assistant, so they never touch the key.
+            if prefs_enabled()
+                && let Some(dir) = wordcraft_control_key::settings_dir()
+            {
+                match assistant_host::LayerHost::new(&dir) {
+                    Ok(host) => app.assistant.set_host(std::sync::Arc::new(host)),
+                    Err(e) => log::warn!("GeenioAI is off: the AI layer is not available ({e})"),
+                }
+            }
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
             if !sample && app.session.prefs.region.is_some() {

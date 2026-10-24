@@ -22,6 +22,7 @@ macro_rules! tl {
 
 pub mod a11y;
 pub mod a11y_pane;
+pub mod assistant;
 pub mod async_saves;
 pub mod autoscroll;
 pub mod backstage;
@@ -359,6 +360,10 @@ pub struct UiState {
     pub update_fields_before_print: bool,
     /// The custom dictionary (File › Options › Proofing, Add to Dictionary), kept between runs.
     pub dictionary: Vec<String>,
+    /// GeenioAI (AI assistant) settings: the reply language (`auto`, `interface`, `en`) and the chosen
+    /// model (empty: the account's suggestion). The assistant owns them while running.
+    pub assistant_language: String,
+    pub assistant_model: String,
 }
 
 /// The ribbon tab the app opens on, and the one it falls back to when the tab that was showing
@@ -426,6 +431,8 @@ impl Default for UiState {
             print_backgrounds: false,
             update_fields_before_print: false,
             dictionary: Vec::new(),
+            assistant_language: "auto".into(),
+            assistant_model: String::new(),
         }
     }
 }
@@ -631,6 +638,8 @@ pub struct WordApp {
     pub(crate) outline_prev_tab: Option<String>,
     /// Zotero commands in flight (`ui.zotero.*`).
     pub zotero: zotero::ZoteroLink,
+    /// GeenioAI, the AI assistant pane and margin icon ([`assistant`]).
+    pub assistant: assistant::Assistant,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
@@ -746,6 +755,7 @@ impl WordApp {
             smart_art_row_focused: false,
             outline_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
+            assistant: assistant::Assistant::default(),
             ctx: None,
             read_aloud_at: None,
             read_aloud_error: None,
@@ -809,6 +819,8 @@ impl WordApp {
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
         ui.ink_pens = self.session.view.draw.pens.clone();
+        ui.assistant_language = self.assistant.language.code().into();
+        ui.assistant_model = self.assistant.model.clone().unwrap_or_default();
         ui
     }
 
@@ -862,6 +874,10 @@ impl WordApp {
         self.session.ribbon = std::mem::take(&mut self.ui.ribbon);
         self.session.ribbon.retain_known(&reg);
         self.session.view.draw.pens = std::mem::take(&mut self.ui.ink_pens);
+        // The assistant owns its settings from here on; `prefs` copies them back when saving.
+        // Junk values read as the defaults.
+        self.assistant.set_language(assistant::Language::parse(&self.ui.assistant_language).unwrap_or_default());
+        self.assistant.set_model(Some(std::mem::take(&mut self.ui.assistant_model)));
     }
 
     /// Select the picture or icon the person just inserted or pasted, so it shows its handles.
@@ -1590,6 +1606,28 @@ impl WordApp {
                 self.colors = None;
                 json!({})
             }
+            // GeenioAI, the AI assistant pane (Home › GeenioAI): `value` shows or hides it, none toggles.
+            "ui.assistant" => {
+                let open = p.get("value").and_then(Value::as_bool).unwrap_or(!self.assistant.open);
+                if open {
+                    assistant::open(self);
+                } else {
+                    self.assistant.open = false;
+                }
+                json!({"open": self.assistant.open, "available": self.assistant.available(), "connected": self.assistant.ready()})
+            }
+            // Ask the assistant: the pane opens and `prompt` is sent with the document context
+            // (the selection, or where the caret is). `draft` asks for the answer in the document.
+            "ui.assistant.ask" => {
+                let Some(prompt) = s("prompt").map(str::trim).filter(|t| !t.is_empty()) else { return Some(Err("missing `prompt`".into())) };
+                let draft = p.get("draft").and_then(Value::as_bool).unwrap_or(false);
+                let ctx = self.ctx.clone().unwrap_or_default();
+                assistant::open(self);
+                if let Err(e) = assistant::ask(self, &ctx, prompt, draft) {
+                    return Some(Err(e));
+                }
+                json!({"sent": true})
+            }
             "ui.changePicture" => {
                 let Some(media) = self.selected_picture_media() else {
                     return Some(Err("select a picture first".into()));
@@ -2225,6 +2263,7 @@ impl WordApp {
         }
         self.poll_printing(ctx);
         self.drain_control(ctx);
+        assistant::tick(self, ctx);
         zotero::poll(self, ctx);
         read_aloud::poll(self, ctx);
         self.clear_stale_change_picture();
