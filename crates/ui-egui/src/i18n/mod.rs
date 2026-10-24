@@ -172,6 +172,11 @@ impl Lang {
         self.info().is_some_and(|l| l.prefer_hans)
     }
 
+    /// Is the interface language Simplified Chinese (`zh-hans`)?
+    pub fn is_simplified_chinese(self) -> bool {
+        self.0.code == "zh-hans"
+    }
+
     pub fn prefers_korean(self) -> bool {
         self.code() == "ko"
     }

@@ -235,6 +235,91 @@ pub(crate) fn pick_face(data: &[u8], needed: &[char], hans: bool) -> Option<(u32
     best.map(|((covered, ..), i, family)| (i, family, covered))
 }
 
+fn is_pingfang_sc_family(f: &skrifa::FontRef<'_>, family: &str) -> bool {
+    if family == "PingFang SC" || family == "苹方-简" || family == "蘋方-簡" || family.starts_with("PingFang SC") {
+        return true;
+    }
+    if let Some(ps) = f.localized_strings(skrifa::string::StringId::POSTSCRIPT_NAME).english_or_first() {
+        let s = ps.to_string();
+        if s.starts_with("PingFangSC-") {
+            return true;
+        }
+    }
+    false
+}
+
+/// The face index and family name of PingFang SC Regular in `data`, if `data` contains that face
+/// and has standard glyph outline tables (`glyf`, `CFF `, `CFF2`, `VARC`) skrifa can render (#1250, #1969).
+pub(crate) fn find_pingfang_sc_face(data: &[u8]) -> Option<(u32, String)> {
+    let magic = data.get(..4)?;
+    if ![&[0, 1, 0, 0][..], b"OTTO", b"ttcf"].contains(&magic) {
+        return None;
+    }
+    let count = match FileRef::new(data).ok()? {
+        FileRef::Font(_) => 1,
+        FileRef::Collection(c) => c.len().min(MAX_FACES),
+    };
+    for i in 0..count {
+        let Ok(f) = skrifa::FontRef::from_index(data, i) else { continue };
+        if !OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()) {
+            continue;
+        }
+        let Some((family, style, _)) = crate::fontdb::face_names(&f) else { continue };
+        if !is_pingfang_sc_family(&f, &family) || !style.eq_ignore_ascii_case("Regular") {
+            continue;
+        }
+        let charmap = f.charmap();
+        if charmap.map('页').is_none() {
+            continue;
+        }
+        return Some((i, family));
+    }
+    None
+}
+
+/// Look for PingFang SC in `dirs`, returning the `PingFang SC Regular` face with standard outlines.
+pub(crate) fn find_pingfang_sc_in_dirs(dirs: &[std::path::PathBuf]) -> Option<SystemUiFont> {
+    const CANDIDATES: &[&str] = &[
+        "PingFang.ttc",
+        "PingFangSC.ttc",
+        "PingFang SC.ttc",
+        "PingFangSC-Regular.otf",
+        "PingFang.otf",
+        "/System/Library/Fonts/PingFang.ttc",
+        "/System/Library/Fonts/Supplemental/PingFang.ttc",
+        "/System/Library/PrivateFrameworks/FontServices.framework/Resources/Reserved/PingFangUI.ttc",
+    ];
+    let mut tried = std::collections::HashSet::new();
+    for path in CANDIDATES.iter().flat_map(|n| {
+        let p = std::path::Path::new(n);
+        if p.is_absolute() { vec![p.to_path_buf()] } else { dirs.iter().map(|d| d.join(n)).collect() }
+    }) {
+        if !tried.insert(path.clone()) {
+            continue;
+        }
+        let Some(size) = std::fs::metadata(&path).ok().filter(|m| m.is_file()).map(|m| m.len()) else { continue };
+        if size > MAX_FILE {
+            continue;
+        }
+        let Ok(bytes) = std::fs::read(&path) else { continue };
+        if let Some((index, family)) = find_pingfang_sc_face(&bytes) {
+            log::debug!("native macOS Chinese UI font: {family} ({}), index {index}", path.display());
+            return Some(SystemUiFont { family, bytes, index });
+        }
+    }
+    None
+}
+
+/// The native macOS PingFang SC Regular interface font, if available on the system (#1969).
+/// Looks in macOS font and asset directories (`with_asset_data`), picks the `PingFang SC Regular`
+/// face, and verifies that glyph outline tables (`glyf`, `CFF `, `CFF2`, `VARC`) are present (#1250).
+pub fn macos_pingfang_sc_ui_font() -> Option<SystemUiFont> {
+    if cfg!(target_arch = "wasm32") || !cfg!(target_os = "macos") {
+        return None;
+    }
+    find_pingfang_sc_in_dirs(&with_asset_data(crate::system_font_dirs()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -330,5 +415,33 @@ mod tests {
         assert!(found.bytes == sans);
         assert!(find_ui_font(std::slice::from_ref(&dir), &["hvgl.ttf"], &['A'], true).is_none());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn pingfang_sc_face_selection_and_validation() {
+        assert!(find_pingfang_sc_face(b"not-a-font").is_none());
+        // Face without outline tables (Apple hvgl-only) is skipped (#1250, #1969).
+        let sans = crate::bundled()[0];
+        let mut hvgl = sans.to_vec();
+        let tables = u16::from_be_bytes([hvgl[4], hvgl[5]]) as usize;
+        let glyf = (0..tables).map(|r| 12 + r * 16).find(|&at| &hvgl[at..at + 4] == b"glyf").unwrap();
+        hvgl[glyf..glyf + 4].copy_from_slice(b"hvgl");
+        assert!(find_pingfang_sc_face(&hvgl).is_none());
+        // A Latin face (Source Sans) is not PingFang SC and lacks '页'.
+        assert!(find_pingfang_sc_face(sans).is_none());
+
+        // On macOS where PingFang is installed, it correctly discovers PingFang SC Regular
+        // and does NOT assume index 0 (#1969).
+        #[cfg(target_os = "macos")]
+        if let Some(font) = macos_pingfang_sc_ui_font() {
+            assert_eq!(font.family, "PingFang SC");
+            // On macOS collections, index 0 is PingFang HK; index 3 is PingFang SC Regular.
+            assert_eq!(font.index, 3, "must select SC Regular face, never assume index 0");
+            let f = skrifa::FontRef::from_index(&font.bytes, font.index).unwrap();
+            let charmap = f.charmap();
+            assert!(charmap.map('页').is_some(), "must map Simplified Chinese probe character");
+            assert!(charmap.map('概').is_some(), "must map Chinese characters such as 概");
+            assert!(OUTLINE_TABLES.iter().any(|t| f.table_data(skrifa::Tag::new(t)).is_some()));
+        }
     }
 }
