@@ -35,6 +35,7 @@ pub enum LayoutDialog {
     Sort(SortForm),
     SplitCells(SplitCellsForm),
     TextToTable(TextToTableForm),
+    TableToText(TableToTextForm),
     Size(SizeForm),
     PageNumbers(PageNumbersForm),
 }
@@ -52,6 +53,7 @@ impl LayoutDialog {
             LayoutDialog::Sort(_) => "tableSort",
             LayoutDialog::SplitCells(_) => "splitCells",
             LayoutDialog::TextToTable(_) => "textToTable",
+            LayoutDialog::TableToText(_) => "tableToText",
             LayoutDialog::Size(_) => "pictureSize",
             LayoutDialog::PageNumbers(_) => "pageNumbers",
         }
@@ -70,6 +72,7 @@ impl LayoutDialog {
             LayoutDialog::Sort(_) => "Sort",
             LayoutDialog::SplitCells(_) => "Split Cells",
             LayoutDialog::TextToTable(_) => "Convert Text to Table",
+            LayoutDialog::TableToText(_) => "Convert to Text",
             LayoutDialog::Size(_) => "Size",
             LayoutDialog::PageNumbers(_) => "Page Number Format",
         }
@@ -89,6 +92,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "tableSort" => LayoutDialog::Sort(SortForm::read(app)?),
         "splitCells" => LayoutDialog::SplitCells(SplitCellsForm::read(app)?),
         "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
+        "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
         "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
         "pageNumbers" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),
         _ => return None,
@@ -108,6 +112,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::Sort(f) => sort_ui(app, ui, f),
         LayoutDialog::SplitCells(f) => split_cells_ui(app, ui, f),
         LayoutDialog::TextToTable(f) => text_to_table_ui(app, ui, f),
+        LayoutDialog::TableToText(f) => table_to_text_ui(app, ui, f),
         LayoutDialog::Size(f) => size_ui(app, ui, f),
         LayoutDialog::PageNumbers(f) => page_numbers_ui(app, ui, f),
     }
@@ -1121,6 +1126,55 @@ fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> 
 }
 
 // ---------------------------------------------------------------------------------------------
+// Convert to Text
+
+/// The Convert to Text dialog (Table Layout › Data): what sets the cells of a row apart in the
+/// text (`paragraph`, `tab`, `comma` or `other` with `other_char`). It opens on Tabs.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableToTextForm {
+    pub separator: String,
+    pub other_char: String,
+}
+
+impl TableToTextForm {
+    /// None when the caret isn't in a table.
+    pub fn read(app: &WordApp) -> Option<TableToTextForm> {
+        app.session.sel.focus.path.cell()?;
+        Some(TableToTextForm { separator: "tab".into(), other_char: "-".into() })
+    }
+
+    /// `table.toText` parameters for OK.
+    pub fn params(&self) -> Value {
+        let mut v = json!({"separator": self.separator});
+        if self.separator == "other" {
+            v["char"] = json!(self.other_char);
+        }
+        v
+    }
+}
+
+fn table_to_text_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TableToTextForm) -> bool {
+    heading(ui, "Separate text with");
+    ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraph marks"));
+    ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
+    ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+        if r.changed() {
+            f.separator = "other".into();
+        }
+    });
+    let ready = f.separator != "other" || !f.other_char.is_empty();
+    let (ok, cancel) = buttons(ui, "OK", ready);
+    if ok {
+        return run(app, "table.toText", f.params());
+    }
+    cancel
+}
+
+// ---------------------------------------------------------------------------------------------
 // Size
 
 /// The Size dialog's fields (Picture Format › Size launcher, #2573) for the selected picture or
@@ -1905,6 +1959,29 @@ mod tests {
         a.run("table.fromText", f.params()).unwrap();
         let t = a.session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
         assert_eq!(t.rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>(), [3, 3, 3, 3]);
+    }
+
+    /// Convert to Text opens its dialog on Tabs; OK converts with the separator chosen.
+    #[test]
+    fn table_to_text_opens_its_dialog() {
+        let mut a = table_app(2, &["a", "b", "c", "d"]);
+        assert_eq!(a.run("table.toText", json!({})).unwrap(), json!({"pending": "tableToText"}));
+        assert!(a.session.doc.body.iter().any(|b| b.as_table().is_some()), "nothing converted yet");
+        let LayoutDialog::TableToText(mut f) = form(&mut a) else { panic!("table to text") };
+        assert_eq!((f.separator.as_str(), f.other_char.as_str()), ("tab", "-"));
+        assert_eq!(f.params(), json!({"separator": "tab"}));
+        f.separator = "other".into();
+        f.other_char = "/".into();
+        assert_eq!(f.params(), json!({"separator": "other", "char": "/"}));
+        a.run("table.toText", f.params()).unwrap();
+        assert!(a.dialog.is_none());
+        let texts: Vec<&str> = a.session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect();
+        assert!(texts.contains(&"a/b") && texts.contains(&"c/d"), "{texts:?}");
+        assert!(a.session.doc.body.iter().all(|b| b.as_table().is_none()));
+
+        // Outside a table there is nothing to convert.
+        let mut a = app();
+        assert_eq!(a.run("ui.dialog", json!({"name": "tableToText"})).unwrap(), json!({"dialog": null}));
     }
 
     /// The envelope sizes go through the interface language's catalog and use the region's

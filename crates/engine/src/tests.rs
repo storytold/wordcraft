@@ -6548,6 +6548,209 @@ fn convert_text_to_table_keeps_inline_content() {
     assert_eq!(cell(3).props_of_char(0).del, Some(1), "cell 4 lost its tracked deletion");
 }
 
+/// A table `cols` wide holding `cells` row by row, typed in with Tab; the caret ends in the
+/// last cell.
+fn typed_table(cols: usize, cells: &[&str]) -> Session {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": cells.len() / cols, "cols": cols}));
+    for (k, c) in cells.iter().enumerate() {
+        if k > 0 {
+            run(&mut s, "text.tab", json!({}));
+        }
+        if !c.is_empty() {
+            run(&mut s, "text.insert", json!({"text": c}));
+        }
+    }
+    s
+}
+
+/// The body as `T` for a table and the text of each paragraph.
+fn body_outline(s: &Session) -> Vec<String> {
+    s.doc.body.iter().map(|b| b.as_para().map_or_else(|| "T".to_string(), |p| p.text.clone())).collect()
+}
+
+fn cell_at(table: u32, r: u32, c: u32) -> serde_json::Value {
+    json!({"story": "body", "path": [table, r, c, 0], "off": 0})
+}
+
+/// Convert to Text sets a row's cells apart with a tab, a comma, another character or
+/// paragraph marks; rows are paragraphs.
+#[test]
+fn convert_to_text_takes_each_separator() {
+    let cases = [
+        (json!({}), vec!["a\tb", "c\td"]),
+        (json!({"separator": "tab"}), vec!["a\tb", "c\td"]),
+        (json!({"separator": "comma"}), vec!["a,b", "c,d"]),
+        (json!({"separator": "other", "char": ";"}), vec!["a;b", "c;d"]),
+        (json!({"separator": "paragraph"}), vec!["a", "b", "c", "d"]),
+    ];
+    for (params, want) in cases {
+        let mut s = typed_table(2, &["a", "b", "c", "d"]);
+        run(&mut s, "table.toText", params.clone());
+        let got = body_outline(&s);
+        assert_eq!(got.get(..want.len()), Some(&want.iter().map(|x| x.to_string()).collect::<Vec<_>>()[..]), "{params}: {got:?}");
+        assert!(s.doc.body.iter().all(|b| b.as_table().is_none()), "{params}");
+    }
+    // U+FFFC marks an object in a paragraph's text, so it cannot be the separator.
+    let obj = wordcraft_doc::para::OBJ.to_string();
+    for bad in [
+        json!({"separator": "other"}),
+        json!({"separator": "other", "char": "\n"}),
+        json!({"separator": "other", "char": obj}),
+        json!({"separator": "pipe"}),
+    ] {
+        let mut s = typed_table(2, &["a", "b", "c", "d"]);
+        let depth = s.undo_depth();
+        assert!(s.run("table.toText", &bad).is_err(), "{bad}");
+        assert!(s.doc.body.iter().any(|b| b.as_table().is_some()), "{bad}: the table stays");
+        assert_eq!(s.undo_depth(), depth);
+    }
+}
+
+/// With rows selected, only those become text; the rows above and below stay tables, and a
+/// vertical merge cut by the selection starts again below it.
+#[test]
+fn convert_to_text_converts_the_selected_rows() {
+    let mut s = typed_table(2, &["a", "b", "c", "d", "e", "f", "g", "h"]);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    // Column 1 merged down rows 1 to 3.
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 1), "focus": cell_at(t, 3, 1)}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 0), "focus": cell_at(t, 1, 1)}));
+    run(&mut s, "table.toText", json!({}));
+    let at = t as usize;
+    // The merged cell holds d, f and h, one paragraph each.
+    assert_eq!(body_outline(&s).get(at..at + 5), Some(&["T", "c\td", "f", "h", "T"].map(String::from)[..]), "{:?}", body_outline(&s));
+    let head = s.doc.body[at].as_table().unwrap();
+    let tail = s.doc.body[at + 4].as_table().unwrap();
+    assert_eq!((head.rows.len(), tail.rows.len()), (1, 2));
+    use wordcraft_doc::props::VMerge;
+    let merges: Vec<VMerge> = tail.rows.iter().map(|r| r.cells.last().unwrap().props.vmerge).collect();
+    assert_eq!(merges, [VMerge::Restart, VMerge::Continue], "the merge starts again in the first row left");
+    assert_eq!(s.sel.focus.path.0, [t + 1], "the caret goes to the converted text");
+
+    // A merge that went on into the converted rows ends in the last row above them.
+    let mut s = typed_table(2, &["a", "b", "c", "d", "e", "f"]);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 0, 0), "focus": cell_at(t, 1, 0)}));
+    run(&mut s, "table.merge", json!({}));
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 1), "focus": cell_at(t, 2, 1)}));
+    run(&mut s, "table.toText", json!({}));
+    let head = s.doc.body[t as usize].as_table().unwrap();
+    assert_eq!(head.rows.len(), 1);
+    assert_eq!(head.rows[0].cells[0].props.vmerge, VMerge::None, "no merge goes on below the table");
+
+    // A floating table keeps its place in the part above; the part below goes in the text flow.
+    let mut s = typed_table(2, &["a", "b", "c", "d", "e", "f"]);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    let float = wordcraft_doc::props::TableFloat { x: 100.0, y: 200.0, overlap: true, ..Default::default() };
+    s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![t])).unwrap().props.float = Some(float);
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 0), "focus": cell_at(t, 1, 1)}));
+    run(&mut s, "table.toText", json!({}));
+    let at = t as usize;
+    assert_eq!(s.doc.body[at].as_table().unwrap().props.float, Some(float));
+    assert_eq!(s.doc.body[at + 2].as_table().unwrap().props.float, None, "the part below doesn't sit on the part above");
+
+    // The caret alone in a cell converts every row, as before.
+    let mut s = typed_table(2, &["a", "b", "c", "d", "e", "f"]);
+    run(&mut s, "table.toText", json!({}));
+    assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
+}
+
+/// A content control around the table keeps both its ends when the first rows, the last rows
+/// or every row become text.
+#[test]
+fn convert_to_text_keeps_a_content_control_around_the_table() {
+    use wordcraft_doc::{ContentControl, ControlWrap, InlineObject};
+    let has = |p: &wordcraft_doc::Paragraph, start: bool| {
+        p.objects.iter().any(|o| if start { matches!(o, InlineObject::ControlStart { .. }) } else { matches!(o, InlineObject::ControlEnd) })
+    };
+    for rows in [Some((0, 0)), Some((2, 2)), None] {
+        let mut s = typed_table(2, &["a", "b", "c", "d", "e", "f"]);
+        let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+        s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![t])).unwrap().controls =
+            ControlWrap { open: vec![ContentControl { tag: "wrap".into(), ..Default::default() }], close: 1 };
+        assert!(!s.doc.has_unbalanced_controls());
+        match rows {
+            Some((r0, r1)) => run(&mut s, "select.range", json!({"anchor": cell_at(t, r0, 0), "focus": cell_at(t, r1, 1)})),
+            None => run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 0), "focus": cell_at(t, 1, 0)})),
+        };
+        run(&mut s, "table.toText", json!({}));
+        assert!(!s.doc.has_unbalanced_controls(), "{rows:?}: {:?}", body_outline(&s));
+        let at = t as usize;
+        if rows != Some((2, 2)) {
+            assert!(s.doc.body[at].as_para().is_some_and(|p| has(p, true)), "{rows:?}: the control starts on the text");
+        }
+        if rows != Some((0, 0)) {
+            let last = s.doc.body.iter().skip(at).rfind(|b| b.as_para().is_some_and(|p| !p.text.is_empty()) || b.as_table().is_some()).unwrap();
+            assert!(last.as_para().is_some_and(|p| has(p, false)), "{rows:?}: the control ends on the text");
+        }
+    }
+
+    // A control around rows 0 to 3, row 1 converted: the table above closes it, the table below
+    // opens it again.
+    let mut s = typed_table(2, &["a", "b", "c", "d", "e", "f", "g", "h"]);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    {
+        let table = s.doc.table_mut(StoryRef::Body, &wordcraft_doc::Path(vec![t])).unwrap();
+        table.rows[0].controls.open = vec![ContentControl { tag: "rows".into(), ..Default::default() }];
+        table.rows[3].controls.close = 1;
+    }
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 0), "focus": cell_at(t, 1, 1)}));
+    run(&mut s, "table.toText", json!({}));
+    let at = t as usize;
+    let head = s.doc.body[at].as_table().unwrap();
+    let tail = s.doc.body[at + 2].as_table().unwrap();
+    assert_eq!((head.rows.len(), head.rows[0].controls.close), (1, 1), "the table above closes the control");
+    assert_eq!(tail.rows[0].controls.open.iter().map(|c| c.tag.as_str()).collect::<Vec<_>>(), ["rows"], "the table below opens it");
+    assert_eq!(tail.rows[1].controls.close, 1);
+    assert!(!s.doc.has_unbalanced_controls());
+}
+
+/// The text keeps its formatting, and a table nested in a cell stays a table.
+#[test]
+fn convert_to_text_keeps_formatting_and_nested_tables() {
+    let mut s = typed_table(2, &["Name", "X"]);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    let first = json!({"story": "body", "path": [t, 0, 0, 0], "off": 0});
+    let end = json!({"story": "body", "path": [t, 0, 0, 0], "off": 4});
+    run(&mut s, "select.range", json!({"anchor": first, "focus": end}));
+    run(&mut s, "format.bold", json!({}));
+    // A table nested in the second cell, after its text.
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 0, 1, 0]), off: 1 });
+    run(&mut s, "text.newParagraph", json!({}));
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    run(&mut s, "text.insert", json!({"text": "Inner"}));
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 0, 0, 0]), off: 0 });
+    run(&mut s, "table.toText", json!({}));
+    let at = t as usize;
+    let line = s.doc.body[at].as_para().unwrap();
+    assert_eq!(line.text, "Name\tX");
+    assert_eq!(line.props_of_char(0).bold, Some(true), "the text lost its bold");
+    assert_ne!(line.props_of_char(4).bold, Some(true), "the tab takes no formatting");
+    let inner = s.doc.body.iter().skip(at + 1).find_map(|b| b.as_table()).expect("the nested table stays a table");
+    assert_eq!(table_cell_text(inner), "Inner");
+
+    // A selected row whose first cell starts with a nested table: the caret goes to the row's
+    // text, not back into the table above.
+    let mut s = typed_table(2, &["A", "B", "", "D"]);
+    let t = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap() as u32;
+    s.sel = crate::Selection::caret(wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 1, 0, 0]), off: 0 });
+    run(&mut s, "insert.table", json!({"rows": 1, "cols": 1}));
+    let row = &s.doc.body[t as usize].as_table().unwrap().rows[1];
+    assert!(row.cells[0].blocks.first().is_some_and(|b| b.as_table().is_some()), "the cell starts with the nested table");
+    run(&mut s, "select.range", json!({"anchor": cell_at(t, 1, 1), "focus": cell_at(t, 1, 1)}));
+    s.sel.anchor = wordcraft_doc::Pos { story: StoryRef::Body, path: wordcraft_doc::Path(vec![t, 1, 0, 1]), off: 0 };
+    run(&mut s, "table.toText", json!({}));
+    let at = t as usize;
+    assert_eq!(body_outline(&s).get(at..at + 3), Some(&["T", "T", "\tD"].map(String::from)[..]), "{:?}", body_outline(&s));
+    assert_eq!(s.sel.focus.path.0, [t + 2], "the caret is on the row's text");
+}
+
+fn table_cell_text(t: &wordcraft_doc::Table) -> String {
+    t.rows.iter().flat_map(|r| &r.cells).flat_map(|c| &c.blocks).filter_map(|b| b.as_para()).map(|p| p.text.clone()).collect()
+}
+
 #[test]
 fn delete_columns_deletes_every_selected_column() {
     // Issue #431: only the selection's focus column went.

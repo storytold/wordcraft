@@ -120,6 +120,7 @@ Footnote and endnote editing keeps body and note text at normal opacity, on ligh
 | 2026-10-18 | trivial | Split Cells on a merged cell: non-divisor row counts refused with a divisor message, 1 × 1 on a merged cell does nothing (#2592 follow-up) |
 | 2026-10-18 | trivial | Split Cells merged-cell limits and equal parts, Convert Text to Table Initial column width, both from the Word check (#2592) |
 | 2026-10-16 | trivial | Split Cells and Convert Text to Table dialogs (#2592): 58 modal dialogs |
+| 2026-10-24 | trivial | Convert to Text dialog (Paragraph marks, Tabs, Commas, Other); only the selected rows become text |
 | 2026-10-16 | trivial | Font list: each entry's capitals are centred in its row, so a font with a very tall ascent (Amiri, Amiri Quran) no longer sits low or is cut in half, and the list reads as one even list (#2570) |
 | 2026-10-16 | trivial | Read Mode keeps the keyboard on entering, shows only whole columns, centred, and ends them above the page-turn bar (#1772) |
 | 2026-10-16 | trivial | Comment and revision balloons are readable in the dark theme: the card, the markup area, the author stripes and the leader lines come from theme tokens, and the text reaches 4.5:1 (#2045) |
