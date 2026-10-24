@@ -76,6 +76,7 @@ Footnote and endnote editing keeps body and note text at normal opacity, on ligh
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | trivial | Insert Caption: position (below, above, left or right of the item), alignment, caption style, a name template and presets. The Figure caption, Table caption and Equation number presets follow a GOST-style report (en dash, `(1)` at the margin); their ids are `figure`, `table` and `equation`. Readiness estimates unchanged |
 | 2026-10-22 | trivial | Mail merge: First Record, Last Record, a record number box, and record choices for Edit Individual Documents and Print Documents (#3028) |
 | 2026-10-22 | trivial | While editing a header, a single click in the footer (or the reverse, or another page's own header) edits that one with the caret where clicked; the click was placed in the header being edited, and the view scrolled back to it, so a double-click on the footer rarely landed |
 | 2026-10-18 | trivial | Explicit New/Open is not interrupted by startup recovery discovery; older copies stay available and Recover follows the interface theme. |

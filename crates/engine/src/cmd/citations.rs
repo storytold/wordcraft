@@ -1696,6 +1696,40 @@ mod tests {
         assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("1 Equation"));
     }
 
+    /// Any `SEQ` field is a caption. One whose text says `Item` is not a figure, and a table of
+    /// figures for Figure does not list it.
+    #[test]
+    fn a_seq_field_is_a_caption_only_for_its_identifier() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Item\nKiln"));
+        let p = s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        p.insert_object(
+            p.len(),
+            InlineObject::Field {
+                instr: "SEQ List \\* ARABIC".into(),
+                result: "1".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            },
+            &CharProps::default(),
+        )
+        .unwrap();
+        s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "The kiln", "style": "Normal"})).unwrap();
+        let figures = s.run("insert.crossReference", &json!({"to": "figure"})).unwrap();
+        let figures: Vec<_> = figures.as_array().unwrap().iter().filter_map(|v| v.as_str()).collect();
+        assert!(figures.iter().all(|t| !t.contains("Item")), "{figures:?}");
+        assert!(figures.iter().any(|t| t.contains("Figure")), "{figures:?}");
+        let labels = caption_labels(&s);
+        // The text before the SEQ field names it (`Item`), so it is a caption, but not a figure.
+        assert!(labels.iter().any(|l| l == "Figure") && labels.iter().any(|l| l == "Item"), "{labels:?}");
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({"label": "Figure"})).unwrap();
+        let entries = list_entries(&s);
+        assert!(entries.iter().any(|e| e.0.contains("kiln")) && entries.iter().all(|e| !e.0.contains("Item")), "{entries:?}");
+    }
+
     /// The entries of every generated list, in order, with their last tab stop's leader.
     fn list_entries(s: &Session) -> Vec<(String, Option<TabLeader>)> {
         s.doc

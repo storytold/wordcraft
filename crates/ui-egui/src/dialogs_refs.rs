@@ -367,7 +367,7 @@ impl CaptionForm {
     pub fn apply_preset(&mut self, preset: &str) {
         self.custom_pattern = false;
         match preset {
-            "gost-figure" => {
+            "figure" => {
                 self.pattern = "{label} {chapter}{number} – {text}".into();
                 self.position = "below".into();
                 self.align = "center".into();
@@ -378,7 +378,7 @@ impl CaptionForm {
                     self.label = "Figure".into();
                 }
             }
-            "gost-table" => {
+            "table" => {
                 self.pattern = "{label} {chapter}{number} – {text}".into();
                 self.position = "above".into();
                 self.align = "left".into();
@@ -389,7 +389,7 @@ impl CaptionForm {
                     self.label = "Table".into();
                 }
             }
-            "gost-equation" => {
+            "equation" => {
                 self.pattern = "({chapter}{number})".into();
                 self.position = "right".into();
                 self.align.clear();
@@ -517,13 +517,13 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
             f.apply_preset("word");
         }
         if ui.button(tl!("Figure caption")).clicked() {
-            f.apply_preset("gost-figure");
+            f.apply_preset("figure");
         }
         if ui.button(tl!("Table caption")).clicked() {
-            f.apply_preset("gost-table");
+            f.apply_preset("table");
         }
         if ui.button(tl!("Equation number")).clicked() {
-            f.apply_preset("gost-equation");
+            f.apply_preset("equation");
         }
     });
     ui.checkbox(&mut f.exclude_label, tl!("Leave the label out of the caption"));

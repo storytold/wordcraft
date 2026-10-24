@@ -8832,6 +8832,62 @@ fn a_display_equation_keeps_its_left_number_on_the_same_line() {
     assert!(after.x + 0.5 >= eq.x, "caret after the formula at {}, formula at {}", after.x, eq.x);
 }
 
+fn display_eq(linear: &str, jc: wordcraft_doc::math::MathJc) -> InlineObject {
+    InlineObject::Equation {
+        linear: linear.into(),
+        display: true,
+        math: wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear(linear), jc, ..Default::default() },
+    }
+}
+
+/// A caption longer than the same-line limit wraps, and a left- or right-justified formula is not recentred.
+#[test]
+fn a_long_caption_wraps_and_a_side_justified_formula_stays_put() {
+    use wordcraft_doc::math::MathJc;
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let lines_of = |d: &Document| lay(d).pages.iter().flat_map(|pg| pg.items.iter()).filter(|it| matches!(it, Placed::Lines { .. })).count();
+    let wide = wordcraft_doc::props::CharProps { size: Some(72.0), ..Default::default() };
+    let mut long_prefix = Document::from_text("");
+    let p = long_prefix.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_text(0, &"W".repeat(40), &wide).unwrap();
+    p.insert_text(p.len(), " ", &wide).unwrap();
+    p.insert_object(p.len(), display_eq("a>=b", MathJc::Center), &Default::default()).unwrap();
+    assert!(lines_of(&long_prefix) >= 2, "a caption wider than 220 pt stays on the formula line");
+    let mut long_tail = Document::from_text("");
+    let p = long_tail.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_object(0, display_eq("a>=b", MathJc::Center), &Default::default()).unwrap();
+    p.insert_object(
+        p.len(),
+        InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: Default::default() },
+        &Default::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), &"W".repeat(40), &wide).unwrap();
+    assert!(lines_of(&long_tail) >= 2, "a number wider than 144 pt stays on the formula line");
+
+    let placed = |jc: MathJc| {
+        let mut d = Document::from_text("");
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.insert_object(0, display_eq("a>=b", jc), &Default::default()).unwrap();
+        let n = p.len();
+        p.insert_object(
+            n,
+            InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: Default::default() },
+            &Default::default(),
+        )
+        .unwrap();
+        p.insert_text(p.len(), "(1)", &Default::default()).unwrap();
+        let l = lay(&d);
+        assert_eq!(lines_of(&d), 1);
+        l.caret(&Pos::body(0, 0)).unwrap().x
+    };
+    let center = placed(MathJc::Center);
+    let left = placed(MathJc::Left);
+    let right = placed(MathJc::Right);
+    assert!(left + 20.0 < center, "left {left} was recentred toward {center}");
+    assert!((right - center).abs() > 20.0, "right {right} matches the centred formula at {center}");
+}
+
 /// Laying a paragraph out again (placed again after a page break before, or the rest of it again
 /// for a later page's PAGE fields) doesn't count its numbered equations twice: they read (1), (2), (3).
 #[test]

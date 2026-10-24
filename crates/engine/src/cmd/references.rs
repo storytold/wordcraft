@@ -1504,6 +1504,37 @@ mod tests {
         assert_eq!(s.doc.body.last().unwrap().as_para().unwrap().plain_text(), "I");
     }
 
+    /// The three caption styles and a same-line equation number survive a DOCX save and reopen.
+    #[test]
+    fn caption_styles_and_an_equation_number_survive_docx() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Chart\nE = mc2"));
+        s.run("select.text", &json!({"text": "Chart"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "A chart", "style": "FigureCaption", "position": "below"})).unwrap();
+        s.run("select.text", &json!({"text": "E = mc2"})).unwrap();
+        s.run("references.caption", &json!({"label": "Equation", "position": "right", "pattern": "({number})"})).unwrap();
+        let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        for id in ["FigureCaption", "TableCaption", "EquationCaption"] {
+            assert!(doc.styles.styles.iter().any(|st| st.id == id), "missing {id}");
+        }
+        let figure = doc.styles.styles.iter().find(|st| st.id == "FigureCaption").unwrap();
+        assert_eq!(figure.para.align, Some(wordcraft_doc::props::Align::Center));
+        let formula = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("mc2")).unwrap();
+        assert!(formula.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { align: PTabAlign::Right, .. })));
+        assert!(formula.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if instr.contains("SEQ"))));
+        assert!(formula.plain_text().contains("(1)"), "{}", formula.plain_text());
+    }
+
+    /// Odd templates, a label outside ASCII and an unknown style do not panic.
+    #[test]
+    fn hostile_caption_params_do_not_panic() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Rock"));
+        s.run("select.text", &json!({"text": "Rock"})).unwrap();
+        let _ = s.run("references.caption", &json!({"label": "Рисунок", "text": "печь", "pattern": "{label {number}", "style": "No Such Style"}));
+        s.clamp_selection();
+        let _ = s.layout();
+        assert!(!s.doc.body.is_empty());
+    }
+
     /// A caption name can follow a template, take its own style and alignment, and an equation
     /// number can sit at the right of the formula as `(1)` with no label.
     #[test]
