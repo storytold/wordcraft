@@ -179,6 +179,35 @@ fn bullets_then_numbers() -> Document {
 }
 
 #[test]
+fn html_import_keeps_ordered_list_start() {
+    let d = import("html", b"<ol start=\"3\"><li>a</li><li value=\"7\">b</li><li>c</li></ol>").unwrap().unwrap();
+    let b = flat(&d);
+    let start = |t: &str| find_para(&b, t).unwrap().list.unwrap().start;
+    assert_eq!((start("a"), start("b"), start("c")), (3, 7, 8));
+}
+
+/// Two lists in a row — `<ol>a</ol><ol>b</ol>`, `<ul>a</ul><ul>b</ul>`, and any mix — used to
+/// flatten into a single run in the document: the importer only broke a run at a non-list
+/// paragraph, so `<ol start>` had nowhere to go and every list numbered on from the last (#3493).
+/// The first item of each list now carries the break and starts a run of its own.
+#[test]
+fn html_import_keeps_adjacent_lists_separate() {
+    let html = "<ol><li>a</li></ol><ol><li>b</li></ol><ul><li>c</li></ul><ul><li>d</li></ul>";
+    let flow = crate::html::parse(html);
+    let breaks: Vec<bool> = flow
+        .blocks
+        .iter()
+        .filter_map(|b| match b {
+            FBlock::Para(p) => p.list.map(|l| l.restart),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(breaks, [true; 4], "the first item of each list carries the break");
+    let d = import("html", html.as_bytes()).unwrap().unwrap();
+    assert_eq!(d.numbering.nums.len(), 4, "four list runs, not one: {:?}", d.numbering.nums);
+}
+
+#[test]
 fn numbered_list_after_bullets_keeps_its_kind() {
     let d = bullets_then_numbers();
     for ext in ["odt", "rtf"] {
@@ -205,7 +234,10 @@ fn markdown_list_items_that_start_like_blocks_keep_their_text() {
         let bytes = export("md", &d).unwrap().unwrap();
         let blocks = flat(&import("md", &bytes).unwrap().unwrap());
         let [FBlock::Para(p)] = blocks.as_slice() else { panic!("{text}: {}", String::from_utf8_lossy(&bytes)) };
-        assert_eq!((p.text().as_str(), p.kind, p.list), (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1 })));
+        assert_eq!(
+            (p.text().as_str(), p.kind, p.list),
+            (text, Kind::Normal, Some(model::ListInfo { ordered: false, level: 0, start: 1, restart: false }))
+        );
     }
 }
 

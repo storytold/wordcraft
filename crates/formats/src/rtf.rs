@@ -1757,7 +1757,7 @@ impl Reader {
             let list = self.overrides.get(&ls).and_then(|id| self.lists.get(id));
             let lv = st.ilvl.min(8);
             let ordered = list.and_then(|l| l.get(lv as usize).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv, start: 1 });
+            p.list = Some(ListInfo { ordered, level: lv, start: 1, restart: false });
         }
         p
     }
@@ -3639,7 +3639,7 @@ mod tests {
     fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
         use model::{FmtChange, ListInfo};
         // A numbered item Alice centred (it was left-aligned), and a second plain item.
-        let li = Some(ListInfo { ordered: true, level: 0, start: 1 });
+        let li = Some(ListInfo { ordered: true, level: 0, start: 1, restart: false });
         let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
         let old = Para { list: li, align: Some(Align::Left), ..Default::default() };
         let mut item = Para { list: li, align: Some(Align::Center), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
@@ -3669,7 +3669,7 @@ mod tests {
         use model::{FmtChange, ListInfo};
         // Alice took the paragraph out of a numbered list: it is no list item now, but was one.
         let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-        let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+        let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, restart: false }), ..Default::default() };
         let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
         item.push_text("Item", &Fmt::default());
         let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
@@ -3685,9 +3685,9 @@ mod tests {
     fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
         use model::{FmtChange, ListInfo};
         let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-        let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+        let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1, restart: false }), ..Default::default() };
         let mut item = Para {
-            list: Some(ListInfo { ordered: false, level: 0, start: 1 }),
+            list: Some(ListInfo { ordered: false, level: 0, start: 1, restart: false }),
             fmt_change: Some(Box::new(FmtChange { mark, old })),
             ..Default::default()
         };
