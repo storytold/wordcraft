@@ -68,3 +68,44 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/brand/artcraft-mark.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft trademark, `docs/brand/LICENSE-brand.txt` | Not open source; usable unmodified only |
 | craft-fonts (optional build input, not files in this repo): BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic | see https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md | embedded only when built with `CRAFT_FONTS_DIR` (all official releases) | OFL-1.1 | Japanese and Chinese UI, Japanese document fallback |
 | craft-i18n (optional build input, not files in this repo): the interface translations | see https://github.com/storytold/craft-i18n/blob/main/ATTRIBUTION.md, which credits every translator of WordCraft's former in-repo catalogs (`crates/ui-egui/src/i18n/*.tsv`, migrated at `wordcraft@806a945`) | embedded only when built with `CRAFT_I18N_DIR`, at the commit in `craft-i18n.rev` (all official releases) | MIT OR Apache-2.0 | Interface languages other than English; clean-room translations from the English interface labels |
+
+## PDF import dependencies
+
+The `hayro-interpret` dependency (MIT OR Apache-2.0) bundles the following resources; no font files are added to this repository:
+
+| Resource                           | Author          | Source                                                                  | Licence      | Use                       |
+|------------------------------------|-----------------|-------------------------------------------------------------------------|--------------|---------------------------|
+| Standard PDF substitute CFF fonts | PDFium Authors  | `hayro-interpret` 0.7.0, `assets/LICENSE_FOXIT`                           | BSD-3-Clause | Decode standard PDF fonts |
+| CGATS color conversion data       | hayro upstream  | `hayro-interpret` 0.7.0, `assets/CGATS_LICENSE.txt`                       | CC0-1.0      | Convert PDF image colors  |
+
+The BSD notice for the standard PDF substitute fonts follows:
+
+```text
+// Copyright 2014 PDFium Authors. All rights reserved.
+//
+// Redistribution and use in source and binary forms, with or without
+// modification, are permitted provided that the following conditions are
+// met:
+//
+//    * Redistributions of source code must retain the above copyright
+// notice, this list of conditions and the following disclaimer.
+//    * Redistributions in binary form must reproduce the above
+// copyright notice, this list of conditions and the following disclaimer
+// in the documentation and/or other materials provided with the
+// distribution.
+//    * Neither the name of Google Inc. nor the names of its
+// contributors may be used to endorse or promote products derived from
+// this software without specific prior written permission.
+//
+// THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+// "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+// LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+// A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+// OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+// SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+// LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+// DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+// THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+// (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+// OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

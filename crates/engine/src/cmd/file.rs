@@ -85,7 +85,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("file.new", "New", "File", new).key("Mod+N").params(r#"{"template"?: "blank|sample|letter|resume|report"}"#).pure(),
         CommandSpec::new("file.open", "Open", "File", open)
             .key("Mod+O / Mod+F12 / Mod+Alt+F2")
-            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document)}"#)
+            .params(r#"{"path": string, "data"?: base64 (the file's bytes; `path` then only names it), "password"?: string (for a password-protected Word document or PDF)}"#)
             .pure(),
         CommandSpec::new("file.save", "Save", "File", save)
             .key("Mod+S / Shift+F12 / Alt+Shift+F2")
@@ -231,20 +231,20 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
         return sel_result(s);
     };
     let password = p::str(v, "password");
-    let (mut doc, encrypted) = if let Some(data) = p::str(v, "data") {
+    let opened = if let Some(data) = p::str(v, "data") {
         let bytes = super::insert::base64_decode(data).ok_or_else(|| CmdError::Params("bad base64".into()))?;
-        // An empty file (File Explorer's New › Microsoft Word Document makes one) opens as a new
-        // blank document that saves back to it (#1384).
+        // An empty file opens as a blank document, as in File Explorer's New command.
         if bytes.is_empty() {
-            (normal_document(s), false)
+            crate::io::OpenedDocument { doc: normal_document(s), encrypted: false, pdf: None }
         } else {
-            crate::io::open_bytes_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
+            crate::io::open_bytes_report_in(path, &bytes, password, &s.region()).map_err(CmdError::Failed)?
         }
     } else if crate::io::is_empty_file(std::path::Path::new(path)) {
-        (normal_document(s), false)
+        crate::io::OpenedDocument { doc: normal_document(s), encrypted: false, pdf: None }
     } else {
-        crate::io::open_path_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
+        crate::io::open_path_report_in(std::path::Path::new(path), password, &s.region()).map_err(CmdError::Failed)?
     };
+    let crate::io::OpenedDocument { mut doc, encrypted, pdf } = opened;
     // Plain text and Markdown carry no language: they are in the editing language.
     let ext = std::path::Path::new(path).extension().and_then(std::ffi::OsStr::to_str).unwrap_or("").to_ascii_lowercase();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
@@ -256,12 +256,24 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(z) = s.doc.settings.zoom {
         super::view::restore_zoom(s, z);
     }
-    s.path = Some(path.into());
+    // A reflowed PDF is a new editable document, never an implicit overwrite of the source.
+    s.path = if pdf.is_some() { None } else { Some(path.into()) };
+    if pdf.is_some() {
+        // Save As suggests the PDF's own name, as a Word document.
+        s.file_name = std::path::Path::new(path).file_stem().map(|n| n.to_string_lossy().to_string()).filter(|n| !n.is_empty());
+        s.dirty = true;
+        s.status = "PDF imported as an editable copy.".into();
+    }
     // Like Word, a document opened with a password is saved with it again.
     if encrypted {
         s.password = password.map(crate::io::Password::new);
     }
-    Ok(json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted}))
+    let mut result = json!({"path": path, "paragraphs": s.doc.paragraph_count(), "words": s.doc.word_count(), "encrypted": encrypted});
+    if let Some(summary) = pdf {
+        s.ui_requests.push(json!({"open": "pdfImportReport", "warnings": summary.warnings}));
+        result["import"] = json!({"format": "pdf", "pages": summary.pages, "textCharacters": summary.text_characters, "images": summary.images, "warnings": summary.warnings, "saveAsRequired": true});
+    }
+    Ok(result)
 }
 
 /// File › Info › Protect Document › Encrypt with Password: the password Word documents are saved
