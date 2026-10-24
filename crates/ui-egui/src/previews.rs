@@ -699,10 +699,10 @@ mod tests {
     /// returns the painted shapes of the last one and every texture picture uploaded on the way.
     fn run_gallery(mut doc: Document, style: wordcraft_doc::styles::Style) -> (Vec<egui::epaint::ClippedShape>, Vec<egui::ColorImage>) {
         // Only the style under test is in the gallery.
-        for other in &mut doc.styles.styles {
+        for other in &mut Arc::make_mut(&mut doc.styles).styles {
             other.quick = false;
         }
-        doc.styles.upsert(style);
+        Arc::make_mut(&mut doc.styles).upsert(style);
         let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
         app.ui.language = "en".into();
         let ctx = egui::Context::default();

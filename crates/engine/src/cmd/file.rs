@@ -1,6 +1,7 @@
 //! File tab (Backstage): new, open, save, export, print, properties; document inspection.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::{Block, Document, StoryRef};
 
 use super::{pos_json, sel_result};
@@ -219,7 +220,7 @@ fn new(s: &mut Session, v: &Value) -> CmdResult {
 fn normal_document(s: &Session) -> Document {
     let mut d = s.blank_document();
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref()) {
-        d.styles.default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut d.styles).default_chr.lang = Some(lang.clone());
     }
     d
 }
@@ -250,7 +251,7 @@ fn open(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(lang) = s.prefs.default_language.as_ref().or(s.editing_lang.as_ref())
         && matches!(ext.as_str(), "txt" | "text" | "md" | "markdown")
     {
-        doc.styles.default_chr.lang = Some(lang.clone());
+        Arc::make_mut(&mut doc.styles).default_chr.lang = Some(lang.clone());
     }
     s.set_document(doc);
     if let Some(z) = s.doc.settings.zoom {

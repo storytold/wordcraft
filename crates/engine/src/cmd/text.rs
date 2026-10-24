@@ -1,6 +1,7 @@
 //! Typing and deleting.
 
 use serde_json::Value;
+use std::sync::Arc;
 use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_HYPHEN};
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
@@ -174,7 +175,7 @@ fn list_autoformat(s: &mut Session) -> Result<bool, CmdError> {
     let found = if kind.is_bullet() { s.doc.numbering.find_kind(kind) } else { None };
     let num = match found {
         Some(n) => n,
-        None => s.doc.numbering.try_add_list(kind)?,
+        None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
     };
     let para = s.doc.para_mut(f.story, &f.path)?;
     para.delete(0, f.off)?;

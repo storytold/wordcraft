@@ -1,4 +1,5 @@
 use super::*;
+use std::sync::Arc;
 
 #[test]
 fn new_document_is_valid() {
@@ -19,8 +20,8 @@ fn word_count() {
 #[test]
 fn word_count_includes_numbered_list_labels_but_not_bullets() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
-    let bul_id = d.numbering.add_list(ListKind::Bullet);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
+    let bul_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Bullet);
 
     let mut p1 = Paragraph::with_text("Apple", CharProps::default());
     p1.props.numbering = Some(props::NumRef { num: num_id, level: 0 });
@@ -44,9 +45,9 @@ fn word_count_includes_numbered_list_labels_but_not_bullets() {
 #[test]
 fn word_count_includes_numbered_labels_with_nothing_suffix() {
     let mut d = Document::new();
-    let num_id = d.numbering.add_list(ListKind::Numbered);
+    let num_id = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     let aid = d.numbering.num(num_id).expect("list num exists").abstract_id;
-    let a = d.numbering.abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
+    let a = Arc::make_mut(&mut d.numbering).abstracts.iter_mut().find(|a| a.id == aid).expect("abstract num exists");
     a.levels[0].suffix = numbering::LevelSuffix::Nothing;
 
     let mut p1 = Paragraph::with_text("Apple", CharProps::default());
@@ -115,7 +116,7 @@ fn parts_and_lists_after_the_largest_ids_take_free_ones() {
     assert_eq!(d.add_part(PartKind::Footer, Vec::new()), 3);
     assert!(parts.iter().all(|(k, p)| d.parts.get(k) == Some(p)));
 
-    let n = &mut d.numbering;
+    let n = Arc::make_mut(&mut d.numbering);
     n.add_list(ListKind::Bullet);
     n.add_list(ListKind::Bullet);
     n.abstracts[1].id = u32::MAX;

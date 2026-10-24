@@ -3,6 +3,7 @@
 //! of authorities, footnote options.
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::collate::{SortKey, heading_letter, sort_key};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
@@ -985,7 +986,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
 /// layout cache starts over (and the saved file would gain a style it doesn't use).
 fn add_entry_style(s: &mut Session) {
     if s.doc.styles.get(ENTRY_STYLE).is_none() {
-        s.doc.styles.upsert(wordcraft_doc::Style {
+        Arc::make_mut(&mut s.doc.styles).upsert(wordcraft_doc::Style {
             id: ENTRY_STYLE.into(),
             name: "List Entry".into(),
             kind: wordcraft_doc::StyleKind::Paragraph,

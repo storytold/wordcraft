@@ -1,6 +1,7 @@
 //! Paragraph formatting, lists and styles (Home › Paragraph, Home › Styles).
 
 use serde_json::{Value, json};
+use std::sync::Arc;
 use wordcraft_doc::collate::{SortKey, sort_key};
 use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, LineSpacing, NumRef, ParaProps, Rgb, TabAlign, TabLeader, TabStop};
@@ -240,7 +241,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("styles.addToGallery", "Add to Style Gallery", "Home › Styles", |s, v| {
             let id = style_id(s, p::req_str(v, "style")?)?;
             let on = p::bool(v, "value").unwrap_or(true);
-            if let Some(st) = s.doc.styles.get_mut(&id) {
+            if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
                 st.quick = on;
             }
             sel_result(s)
@@ -554,9 +555,9 @@ fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         None => match kind {
             ListKind::Bullet | ListKind::BulletChar(_) => match s.doc.numbering.find_kind(kind) {
                 Some(n) => n,
-                None => s.doc.numbering.try_add_list(kind)?,
+                None => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
             },
-            _ => s.doc.numbering.try_add_list(kind)?,
+            _ => Arc::make_mut(&mut s.doc.numbering).try_add_list(kind)?,
         },
     };
     fmt(s, &|p| {
@@ -577,7 +578,7 @@ fn restart_numbering(s: &mut Session, _: &Value) -> CmdResult {
     let Some(n) = s.doc.para_at(&f).and_then(|p| p.props.numbering).filter(|n| n.num != 0) else {
         return Err(CmdError::Failed("not in a numbered list".into()));
     };
-    let new = s.doc.numbering.restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
+    let new = Arc::make_mut(&mut s.doc.numbering).restart(n.num).ok_or_else(|| CmdError::Failed("bad list".into()))?;
     // This paragraph and the following ones of the same list use the new instance.
     let paths: Vec<_> = s.doc.para_paths(f.story).into_iter().filter(|p| *p >= f.path).collect();
     for path in paths {
@@ -778,7 +779,7 @@ pub(crate) fn ensure_heading_style(s: &mut Session, n: u8) -> String {
             if s.doc.styles.get(&sid).is_none()
                 && let Some(st) = builtin.get(&sid).cloned()
             {
-                s.doc.styles.upsert(st);
+                Arc::make_mut(&mut s.doc.styles).upsert(st);
             }
         }
         touch_all(s);
@@ -962,7 +963,7 @@ fn create_style(s: &mut Session, v: &Value) -> CmdResult {
         st.chr.fmt_change = None;
         st.para = st.para.formatting();
     }
-    s.doc.styles.upsert(st);
+    Arc::make_mut(&mut s.doc.styles).upsert(st);
     apply_style(s, &json!({"style": id}))?;
     Ok(json!({"id": id}))
 }
@@ -974,7 +975,7 @@ fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
     if let Some(c) = chr {
         st.chr.overlay(&c);
     }
@@ -1036,7 +1037,7 @@ fn update_to_match(s: &mut Session, v: &Value) -> CmdResult {
     };
     let chr = retarget(&target.chr, &have_c, &want_c, CHAR_KEEP)?;
     let pp = if target.kind == StyleKind::Paragraph { retarget(&target.para, &have_p, &want_p, PARA_KEEP)? } else { target.para.clone() };
-    if let Some(st) = s.doc.styles.get_mut(&id) {
+    if let Some(st) = Arc::make_mut(&mut s.doc.styles).get_mut(&id) {
         st.chr = chr;
         st.para = pp;
     }
@@ -1123,7 +1124,7 @@ fn delete_style(s: &mut Session, v: &Value) -> CmdResult {
     }
     let mut changed = 0;
     for g in &gone {
-        s.doc.styles.remove(&g.id);
+        Arc::make_mut(&mut s.doc.styles).remove(&g.id);
         // Fall back to the base only while it is a style of the same kind that still exists.
         let base = g.based_on.clone().filter(|b| s.doc.styles.get(b).is_some_and(|x| x.kind == g.kind));
         changed += s.doc.restyle(&g.id, base);
@@ -1139,7 +1140,7 @@ fn set_visibility(s: &mut Session, v: &Value) -> CmdResult {
     if gallery.is_none() && hidden.is_none() {
         return Err(CmdError::Params("give `gallery` and/or `hidden`".into()));
     }
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
+    let st = Arc::make_mut(&mut s.doc.styles).get_mut(&id).ok_or_else(|| CmdError::Params(format!("no style `{id}`")))?;
     if let Some(h) = hidden {
         st.hidden = h;
     }

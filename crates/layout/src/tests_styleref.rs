@@ -1,6 +1,7 @@
 //! STYLEREF fields in headers and footers (#775): each page shows its own result.
 
 use super::*;
+use std::sync::Arc;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, NumRef};
 use wordcraft_doc::{ListKind, PartKind, Pos, para_block};
@@ -88,7 +89,7 @@ fn character_styles_and_paragraph_numbers() {
     // Bold a word on page 2 with the Strong character style.
     d.format_range(&Pos::body(3, 8), &Pos::body(3, 11), &|c: &mut CharProps| c.style = Some("Strong".into())).unwrap();
     // Number the headings 1., 2., 3. and the section under them 3.1 (full context).
-    let num = d.numbering.add_list(ListKind::Numbered);
+    let num = Arc::make_mut(&mut d.numbering).add_list(ListKind::Numbered);
     for (i, lvl) in [(0, 0u8), (2, 0), (5, 0), (6, 1)] {
         d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.numbering = Some(NumRef { num, level: lvl });
     }
@@ -133,7 +134,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
     assert!(after[0].iter().any(|t| t.contains("Openings")), "{after:?}");
     // A style change rebuilds it too.
     let second = index(&c);
-    if let Some(st) = d.styles.styles.iter_mut().find(|s| s.id == "Heading1") {
+    if let Some(st) = Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Heading1") {
         st.name = "Chapter Title".into();
     }
     let _ = pages(&d, &mut c);
@@ -145,7 +146,7 @@ fn style_index_is_reused_until_the_body_or_styles_change() {
 fn heading_level_matches_a_localized_style_id() {
     let paras: Vec<(&str, &str, bool)> = CHAPTERS.iter().map(|(s, t, b)| (if *s == "Heading1" { "berschrift1" } else { *s }, *t, *b)).collect();
     let mut d = doc(&paras, &["STYLEREF 1"]);
-    let st = d.styles.styles.iter_mut().find(|s| s.id == "Heading1").unwrap();
+    let st = Arc::make_mut(&mut d.styles).styles.iter_mut().find(|s| s.id == "Heading1").unwrap();
     st.id = "berschrift1".into();
     st.name = "heading 1".into();
     let h = headers(&d);

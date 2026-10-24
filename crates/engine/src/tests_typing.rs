@@ -3,6 +3,7 @@
 //! results are what Word produces for the same keys.
 
 use serde_json::json;
+use std::sync::Arc;
 use wordcraft_doc::props::{BorderStyle, VertAlign};
 use wordcraft_doc::{Pos, StoryRef};
 
@@ -456,7 +457,7 @@ fn autocorrect_replacement_list_follows_the_texts_language() {
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "document default from the editing language");
     let mut s = self::s();
     s.set_editing_language(Some("pl-PL"));
-    s.doc.styles.default_chr.lang = None;
+    Arc::make_mut(&mut s.doc.styles).default_chr.lang = None;
     typ(&mut s, "Ala i kot ");
     assert_eq!(s.doc.plain_text(StoryRef::Body), "Ala i kot ", "untagged text in the editing language");
     // `eng` is English too, as for proofing.
@@ -1316,7 +1317,7 @@ fn typing_rtl_letters_into_an_empty_paragraph_makes_it_rtl() {
     assert_eq!(bidi(&s, 1), Some(true), "Enter carries the paragraph's direction on, as in Word");
     // A style that sets left-to-right wins.
     let mut doc = Session::new(wordcraft_doc::Document::new());
-    if let Some(st) = doc.doc.styles.get_mut("Normal") {
+    if let Some(st) = Arc::make_mut(&mut doc.doc.styles).get_mut("Normal") {
         st.para.bidi = Some(false);
     }
     typ(&mut doc, "سلام");
@@ -2323,15 +2324,15 @@ fn style_inherited_list(kind: wordcraft_doc::numbering::ListKind, chain: bool) -
     use wordcraft_doc::props::NumRef;
     use wordcraft_doc::styles::Style;
     let mut doc = wordcraft_doc::Document::from_text("Alpha\nBeta");
-    let num = doc.numbering.try_add_list(kind).unwrap();
-    doc.styles.styles.push(Style {
+    let num = Arc::make_mut(&mut doc.numbering).try_add_list(kind).unwrap();
+    Arc::make_mut(&mut doc.styles).styles.push(Style {
         id: "ListBase".into(),
         name: "Original List".into(),
         para: wordcraft_doc::ParaProps { numbering: Some(NumRef { num, level: 0 }), ..Default::default() },
         ..Default::default()
     });
     if chain {
-        doc.styles.styles.push(Style {
+        Arc::make_mut(&mut doc.styles).styles.push(Style {
             id: "ListChild".into(),
             name: "Original Derived".into(),
             based_on: Some("ListBase".into()),
@@ -2407,13 +2408,13 @@ fn list_toggle_uses_effective_level_and_override() {
             for explicit_kind in [false, true] {
                 let mut s = style_inherited_list(kind, true);
                 let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-                let num = s.doc.styles.styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
+                let num = Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListBase").unwrap().para.numbering.as_mut().unwrap();
                 num.level = 1;
                 let num_id = num.num;
-                s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+                Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
                 if override_level {
-                    s.doc.numbering.abstracts[0].levels[1] = levels_for(opposite)[1].clone();
-                    s.doc.numbering.nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
+                    Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[1] = levels_for(opposite)[1].clone();
+                    Arc::make_mut(&mut s.doc.numbering).nums[0].level_overrides.push((1, levels_for(kind)[1].clone()));
                 }
                 let before = s.doc.clone();
                 let params = if explicit_kind { json!({"kind": if kind == ListKind::Bullet { "bullet" } else { "numbered" }}) } else { json!({}) };
@@ -2442,7 +2443,7 @@ fn list_paragraph_style_survives_inherited_toggle_off() {
     use wordcraft_doc::styles::Style;
     for kind in [ListKind::Bullet, ListKind::Numbered] {
         let mut s = style_inherited_list(kind, false);
-        *s.doc.styles.styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
+        *Arc::make_mut(&mut s.doc.styles).styles.iter_mut().find(|x| x.id == "ListParagraph").unwrap() = Style {
             id: "ListParagraph".into(),
             name: "Original formatted list".into(),
             based_on: Some("ListBase".into()),
@@ -2497,7 +2498,7 @@ fn a_new_list_uses_the_requested_kind_after_a_mixed_format_list() {
     for (kind, command) in [(ListKind::Bullet, "para.bullets"), (ListKind::Numbered, "para.numbering")] {
         let mut s = style_inherited_list(kind, false);
         let opposite = if kind == ListKind::Bullet { ListKind::Numbered } else { ListKind::Bullet };
-        s.doc.numbering.abstracts[0].levels[0] = levels_for(opposite)[0].clone();
+        Arc::make_mut(&mut s.doc.numbering).abstracts[0].levels[0] = levels_for(opposite)[0].clone();
         let num = s.doc.numbering.nums[0].id;
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap().props.numbering = Some(NumRef { num, level: 1 });
         s.doc.para_mut(StoryRef::Body, &wordcraft_doc::Path::top(1)).unwrap().props = ParaProps::default();
