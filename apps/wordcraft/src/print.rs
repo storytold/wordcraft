@@ -13,7 +13,7 @@ pub fn discover() -> Discover {
 }
 
 // Keep submission workers reachable until normal app shutdown; dropping a JoinHandle would
-// let process exit kill PowerShell/CUPS before it hands the job to the spooler.
+// let process exit end an in-process Windows job or the CUPS hand-off before the spooler has it.
 static JOBS: std::sync::Mutex<Vec<std::thread::JoinHandle<()>>> = std::sync::Mutex::new(Vec::new());
 
 pub fn finish_pending_jobs() {

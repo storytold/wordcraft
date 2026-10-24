@@ -12,8 +12,9 @@ workspace = true
 craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
-# `craft-i18n.rev`). Its own rev: lazy per-locale parsing (storytold/craft-libs#247).
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "f7cc8a7df15e824b02cf73859567a6242d3a7de4" }
+# `craft-i18n.rev`). Its own rev, ahead of craft-ui's: lazy per-locale parsing
+# (storytold/craft-libs#247), ICU4X plural rules and bidi isolates around inserted values.
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "17744430be327d0257496a6a31c8d38fe20a6756" }
 wordcraft-geom = { workspace = true }
 wordcraft-doc = { workspace = true }
 unicode-bidi = { workspace = true }
