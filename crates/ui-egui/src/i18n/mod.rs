@@ -323,12 +323,7 @@ pub fn has(lang: Lang, s: &str) -> bool {
 
 /// `s` in the current language ([`tr`] with [`current`]).
 pub fn t(s: &str) -> &str {
-    let got = tr(current(), s);
-    if got != s {
-        return got;
-    }
-    // New caption-dialog wording, until the catalogs carry the row.
-    caption_ui_string(current().code(), s).unwrap_or(s)
+    tr(current(), s)
 }
 
 /// `s` in the current language as worded for `context` (`preview`, `template`), falling back to
@@ -408,84 +403,7 @@ pub fn builtin_style_name(name: &str) -> String {
             return fmt(t(template), &[("n", n)]);
         }
     }
-    caption_style_name(current().code(), name).unwrap_or(name).to_string()
-}
-
-/// Names of the figure, table and equation caption styles, for catalogs that do not have them yet.
-fn caption_style_name(code: &str, name: &str) -> Option<&'static str> {
-    let row: &[&str; 3] = match code {
-        "ru" => &["Подпись рисунка", "Подпись таблицы", "Подпись формулы"],
-        "uk" => &["Підпис рисунка", "Підпис таблиці", "Підпис формули"],
-        "bg" => &["Надпис на фигура", "Надпис на таблица", "Надпис на формула"],
-        "sr" => &["Натпис слике", "Натпис табеле", "Натпис формуле"],
-        "de" => &["Abbildungsbeschriftung", "Tabellenbeschriftung", "Formelbeschriftung"],
-        "fr" => &["Légende de figure", "Légende de tableau", "Légende d'équation"],
-        "es" => &["Título de ilustración", "Título de tabla", "Título de ecuación"],
-        "pt-br" => &["Legenda da figura", "Legenda da tabela", "Legenda da equação"],
-        "it" => &["Didascalia figura", "Didascalia tabella", "Didascalia equazione"],
-        "pl" => &["Podpis rysunku", "Podpis tabeli", "Podpis wzoru"],
-        "cs" => &["Titulek obrázku", "Titulek tabulky", "Titulek rovnice"],
-        "sk" => &["Titulok obrázka", "Titulok tabuľky", "Titulok rovnice"],
-        "nl" => &["Bijschrift afbeelding", "Bijschrift tabel", "Bijschrift vergelijking"],
-        "da" => &["Figuroverskrift", "Tabeloverskrift", "Formelforklaring"],
-        "sv" => &["Figurbildtext", "Tabellbildtext", "Formelförklaring"],
-        "hr" => &["Natpis slike", "Natpis tablice", "Natpis formule"],
-        "sr-latn" => &["Natpis slike", "Natpis tabele", "Natpis formule"],
-        "sl" => &["Napis slike", "Napis tabele", "Napis enačbe"],
-        "ro" => &["Legendă figură", "Legendă tabel", "Legendă ecuație"],
-        "hu" => &["Ábra felirata", "Táblázat felirata", "Képlet felirata"],
-        "tr" => &["Şekil başlığı", "Tablo başlığı", "Denklem başlığı"],
-        "et" => &["Joonise pealdis", "Tabeli pealdis", "Valemi pealdis"],
-        "vi" => &["Chú thích hình", "Chú thích bảng", "Chú thích công thức"],
-        "ja" => &["図の見出し", "表の見出し", "数式の見出し"],
-        "ko" => &["그림 캡션", "표 캡션", "수식 캡션"],
-        "zh-hans" => &["图题", "表题", "公式题"],
-        "zh-hant" => &["圖說", "表說", "公式標題"],
-        _ => return None,
-    };
-    match name {
-        "Figure Caption" => Some(row[0]),
-        "Table Caption" => Some(row[1]),
-        "Equation Caption" => Some(row[2]),
-        _ => None,
-    }
-}
-
-/// "Left of the item" for catalogs that do not have it yet. A catalog row wins in [`t`].
-fn caption_ui_string(code: &str, s: &str) -> Option<&'static str> {
-    if s != "Left of the item" {
-        return None;
-    }
-    Some(match code {
-        "ru" => "Слева от объекта",
-        "uk" => "Ліворуч від об’єкта",
-        "bg" => "Отляво на обекта",
-        "sr" => "Лево од објекта",
-        "de" => "Links vom Objekt",
-        "fr" => "À gauche de l’objet",
-        "es" => "A la izquierda del objeto",
-        "pt-br" => "À esquerda do objeto",
-        "it" => "A sinistra dell’oggetto",
-        "pl" => "Po lewej stronie obiektu",
-        "cs" => "Vlevo od objektu",
-        "sk" => "Naľavo od objektu",
-        "nl" => "Links van het object",
-        "da" => "Venstre for objektet",
-        "sv" => "Till vänster om objektet",
-        "hr" => "Lijevo od objekta",
-        "sr-latn" => "Levo od objekta",
-        "sl" => "Levo od predmeta",
-        "ro" => "În stânga obiectului",
-        "hu" => "Az objektumtól balra",
-        "tr" => "Nesnenin solunda",
-        "et" => "Objektist vasakul",
-        "vi" => "Bên trái đối tượng",
-        "ja" => "オブジェクトの左",
-        "ko" => "개체 왼쪽",
-        "zh-hans" => "对象左侧",
-        "zh-hant" => "物件左側",
-        _ => return None,
-    })
+    name.to_string()
 }
 
 /// A ribbon location (`Home › Font`) in the current language, segment by segment.

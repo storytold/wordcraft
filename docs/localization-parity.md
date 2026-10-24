@@ -39,13 +39,12 @@ native-speaker review (human).
   catalog covers **661 (98%)**. Some newer dialog and pane strings (Equation tab tooltips, Zotero,
   Read Aloud) aren't wrapped in `tl!` yet, so they show in English in every
   language: the true share of visible strings is **~93–95%** (estimated).
-  Insert Caption's newer labels have no catalog row yet, so they stay English until craft-i18n
-  carries them: `Alignment:`, `Caption style:`, `Name:`, `Template:`, `Title separator:`,
-  `Number:`, `Presets:`, `As in Word`, `Figure caption`, `Table caption`, `Equation number`,
-  `From the style`, `Justified`, `(space)`, and the template names. `Left of the item` and the
-  style names `Figure Caption`, `Table Caption` and `Equation Caption` have an in-code fallback
-  in `t()` / `style_name` for the languages the interface offers, used only when the catalog has
-  no row. A catalog row replaces that fallback.
+  Insert Caption looks up its new labels only in the catalog. `Alignment:`, `Name:`, `Left`,
+  `Center`, `Right` and `Justified` were already there. `Left of the item`, `Right of the item`,
+  `From the style`, `Caption style:`, the name templates, `Template:`, `Title separator:`,
+  `(space)`, `Number:`, `Presets:`, `As in Word`, `Figure caption`, `Table caption`,
+  `Equation number`, and the style names `Figure Caption`, `Table Caption` and `Equation Caption`
+  are in craft-i18n#35. Until that catalog is the one embedded, a build shows those keys in English.
 - Pending PRs: Norwegian Bokmål (#208) and Nynorsk (#210), Hebrew with RTL (#20).
 - **Proofing: English, Polish, Portuguese, Italian, Russian, Czech and Indonesian**, chosen per run from its language (`w:lang`, resolved through
   the styles; Review › Language and the status bar set it: a short list, plus Set Proofing
