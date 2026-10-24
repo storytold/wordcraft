@@ -243,7 +243,7 @@ fn border_line(s: &Session, at: &Pos) -> Option<Border> {
         || at.off != text.len()
         || text.len() < 3
         || !text.chars().all(|x| x == c)
-        || para.props.numbering.is_some_and(|n| n.num != 0)
+        || s.doc.styles.resolve_para(&para.props).numbering.is_some_and(|n| n.num != 0)
     {
         return None;
     }
@@ -269,7 +269,7 @@ fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
         || at.story != StoryRef::Body
         || at.path.0.len() != 1
         || at.off != text.len()
-        || para.props.numbering.is_some_and(|n| n.num != 0)
+        || s.doc.styles.resolve_para(&para.props).numbering.is_some_and(|n| n.num != 0)
     {
         return None;
     }

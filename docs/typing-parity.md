@@ -49,6 +49,7 @@ Bullets and Numbering decide whether to toggle off from the selected paragraphs'
 | Undo after a heading list | one step: paragraph styles and the heading styles' numbers come back | `undo_takes_a_heading_preset_back_in_one_step` |
 | A paragraph whose numbering was switched off, then Heading 2 from a heading-linked list | numbered (1.1) by the style | `applying_a_numbered_heading_style_numbers_the_paragraph` |
 | `1. ` typed in a Heading 1 (also `a) ` in a Heading 2, `1. ` in a Subtitle) | numbered, the style kept; only body text becomes List Paragraph (checked in Word for Mac, 2026-10-15) | `typing_1_dot_in_a_heading_keeps_the_heading_style` |
+| `---` or `+--+--+` Enter in a heading numbered by a heading-linked list, at the top of the document or below another paragraph | stays text, with no border or table, and the heading keeps its number, as in a paragraph numbered directly (WordCraft's rule; not compared with Word) | `border_and_table_lines_stay_text_in_a_style_numbered_heading` |
 | ⌘Z right after an AutoFormat | undoes only the AutoFormat (`* ` comes back as text) | `undo_right_after_autoformat_undoes_only_the_autoformat` |
 
 ## Undo

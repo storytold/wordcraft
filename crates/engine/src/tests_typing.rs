@@ -315,6 +315,29 @@ fn list_autoformat_does_not_override_a_style_linked_heading_number() {
     assert_eq!(paras(&s)[1].0, "- Two", "the trigger stays as typed text, not stripped into a bullet");
 }
 
+/// A heading numbered only through its style's linked Multilevel List keeps "---" and "+--+--+"
+/// as text on Enter, as a paragraph numbered directly does: no border, no table, and at the top
+/// of the document the heading keeps its number.
+#[test]
+fn border_and_table_lines_stay_text_in_a_style_numbered_heading() {
+    for (above, keys) in [("", "---"), ("Above\n", "---"), ("", "+--+--+"), ("Above\n", "+--+--+")] {
+        let mut s = s();
+        typ(&mut s, &format!("{above}{keys}"));
+        run(&mut s, "para.heading1", json!({}));
+        run(&mut s, "list.multilevelPreset", json!({"preset": "headings"}));
+        let at = Pos::body(s.doc.body.len() - 1, 0);
+        assert_eq!(s.doc.para_at(&at).unwrap().props.numbering, None, "numbered through the style, not directly");
+        typ(&mut s, "\nText");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), format!("{above}{keys}\nText"), "{above:?}{keys}");
+        assert!(s.doc.body.iter().all(|b| b.as_para().is_some_and(|p| p.props.borders.is_none())), "{above:?}{keys}");
+        let mut want = vec![num(Some("1"), "Heading1"), num(None, "Normal")];
+        if !above.is_empty() {
+            want.insert(0, num(None, "Normal"));
+        }
+        assert_eq!(numbers(&mut s), want, "{above:?}{keys}");
+    }
+}
+
 #[test]
 fn list_autoformat_triggers() {
     let s = typed("- Item\nNext");
