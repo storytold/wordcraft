@@ -864,17 +864,25 @@ fn equation_number_line(p: &Paragraph) -> bool {
 }
 
 fn captioned_as(p: &Paragraph, ident: &str) -> bool {
-    if !is_caption_style(p.props.style.as_deref()) && !equation_number_line(p) {
-        return false;
-    }
     let seq = p.objects.iter().find_map(|o| match o {
         InlineObject::Field { instr, .. } => Some(FieldCode::parse(instr)).filter(|f| f.name == "SEQ"),
         _ => None,
     });
     match seq {
+        // Insert Caption stores whatever paragraph style was chosen, so the SEQ identifier is
+        // what makes the paragraph a figure, table or equation.
         Some(f) => f.args.first().is_some_and(|id| id.eq_ignore_ascii_case(ident)),
         None => is_caption_style(p.props.style.as_deref()) && caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident)),
     }
+}
+
+/// Byte offset just after the right positional tab that holds an equation number on the formula line.
+fn equation_number_start(p: &Paragraph) -> usize {
+    p.object_offsets()
+        .into_iter()
+        .find(|o| matches!(p.object_at(*o), Some(InlineObject::PositionalTab { align: PTabAlign::Right, .. })))
+        .map(|o| o + wordcraft_doc::para::OBJ.len_utf8())
+        .unwrap_or(0)
 }
 
 /// A caption's text without its label and number (`\a`): what follows its SEQ field, or for a
@@ -1122,7 +1130,7 @@ fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let page = page_of(s, &pos);
     let result = match show {
         "page" => page.to_string(),
-        "number" => caption_number_text(&text),
+        "number" => s.doc.para(pos.story, &pos.path).map(caption_number_result).unwrap_or_else(|| caption_number_text(&text)),
         "aboveBelow" => {
             if pos < s.sel.focus {
                 "above".into()
@@ -1179,7 +1187,11 @@ fn caption_label(p: &Paragraph, text: &str) -> Option<String> {
             let first = fields.first().map_or(0, |(o, _)| *o);
             let after_previous =
                 i.checked_sub(1).and_then(|k| fields.get(k)).map_or(0, |(o, _)| o.saturating_add(wordcraft_doc::para::OBJ.len_utf8()));
-            said(0, first).or_else(|| said(after_previous, *seq_at)).or_else(|| instr.split_whitespace().nth(1).map(|id| id.replace('_', " ")))?
+            // A number on the formula line: the formula sits before the tab, so it is not the label.
+            let from = if equation_number_line(p) { equation_number_start(p) } else { 0 };
+            said(from, first.max(from))
+                .or_else(|| said(after_previous.max(from), *seq_at))
+                .or_else(|| instr.split_whitespace().nth(1).map(|id| id.replace('_', " ")))?
         }
         None => text.get(..text.find(|c: char| c.is_ascii_digit())?)?.trim().to_string(),
     };
@@ -1192,7 +1204,7 @@ fn captions(s: &Session) -> Vec<(String, Pos, Option<String>)> {
         .para_paths(StoryRef::Body)
         .into_iter()
         .filter_map(|path| {
-            let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption_style(p.props.style.as_deref()) || equation_number_line(p))?;
+            let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption_style(p.props.style.as_deref()) || has_seq(p))?;
             let text = p.plain_text();
             let label = caption_label(p, &text);
             Some((text, Pos { story: StoryRef::Body, path, off: 0 }, label))
@@ -1272,25 +1284,33 @@ fn caption_number_text(text: &str) -> String {
 }
 
 /// Byte offset where the label and number end: after the `SEQ` field and a closing bracket, or
-/// before the title's colon or dash when the caption was typed by hand.
+/// before the title's colon or dash when the caption was typed by hand. A period after the
+/// number introduces the title (`Figure 1. Title`), so it is not part of the number.
 fn caption_number_end(para: &Paragraph) -> usize {
     let seq = para.object_offsets().into_iter().find(|o| {
         matches!(para.object_at(*o), Some(InlineObject::Field { instr, .. }) if FieldCode::parse(instr).name == "SEQ")
     });
     let Some(o) = seq else {
-        return para.text.find([':', '\u{2013}', '\u{2014}']).unwrap_or(para.len());
+        let mut cut = para.len();
+        if let Some(i) = para.text.find([':', '\u{2013}', '\u{2014}']) {
+            cut = cut.min(i);
+        }
+        if let Some(i) = para.text.find(" - ") {
+            cut = cut.min(i);
+        }
+        return cut;
     };
     let mut end = o + wordcraft_doc::para::OBJ.len_utf8();
     while end < para.text.len() {
         let c = para.text[end..].chars().next().unwrap();
         let n = c.len_utf8();
-        if matches!(c, ')' | ']' | '.') {
+        if matches!(c, ')' | ']') {
             end += n;
             continue;
         }
         if c.is_whitespace() {
             let rest = para.text[end + n..].trim_start();
-            if rest.is_empty() || rest.starts_with([')', ']', '.']) {
+            if rest.is_empty() || rest.starts_with([')', ']']) {
                 end += n;
                 continue;
             }
@@ -1300,25 +1320,48 @@ fn caption_number_end(para: &Paragraph) -> usize {
     end
 }
 
+/// `para.text` from `from` to `to`, with each object replaced by the text it shows.
+fn plain_slice(para: &Paragraph, from: usize, to: usize) -> String {
+    let mut out = String::new();
+    let mut k = 0;
+    let mut at = 0;
+    for c in para.text.chars() {
+        let n = c.len_utf8();
+        if at >= to {
+            break;
+        }
+        if c == wordcraft_doc::para::OBJ {
+            if at >= from
+                && let Some(o) = para.objects.get(k)
+            {
+                out.push_str(o.plain_text());
+            }
+            k += 1;
+        } else if at >= from {
+            out.push(c);
+        }
+        at += n;
+    }
+    out.trim().to_string()
+}
+
+/// The label and number as they read, from the same extent the `_Ref` bookmark covers.
+fn caption_number_result(para: &Paragraph) -> String {
+    let start = if equation_number_line(para) { equation_number_start(para) } else { 0 };
+    plain_slice(para, start, caption_number_end(para))
+}
+
 fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> Result<(String, Pos), CmdError> {
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
     let para = s.doc.para(pos.story, &pos.path).ok_or_else(|| CmdError::Params("cross-reference target is gone".into()))?;
+    let start = if number_only && equation_number_line(para) { equation_number_start(para) } else { 0 };
     let end = if number_only { caption_number_end(para) } else { para.len() };
-    if let Some(InlineObject::BookmarkStart { name }) = para.object_at(0)
+    if let Some(InlineObject::BookmarkStart { name }) = para.object_at(start)
         && name.starts_with("_Ref")
     {
-        // Reuse it when it covers the same extent: up to the colon, or the whole paragraph.
+        // The end mark and `caption_number_end` are both measured with the start mark in place.
         let same = para.object_offsets().into_iter().any(|o| {
-            matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
-                && para.text.get(o.saturating_add(MARK)..).is_some_and(|rest| {
-                    if number_only {
-                        rest.is_empty()
-                            || rest.starts_with([':', '-', '\u{2013}', '\u{2014}'])
-                            || rest.chars().next().is_some_and(char::is_whitespace)
-                    } else {
-                        rest.is_empty()
-                    }
-                })
+            matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name) && o == end
         });
         if same {
             return Ok((name.clone(), at));
@@ -1329,11 +1372,12 @@ fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> R
     let name = format!("_Ref{next:09}");
     let props = CharProps::default();
     s.doc.insert_object(&Pos { off: end, ..pos.clone() }, InlineObject::BookmarkEnd { name: name.clone() }, &props)?;
-    s.doc.insert_object(&Pos { off: 0, ..pos.clone() }, InlineObject::BookmarkStart { name: name.clone() }, &props)?;
+    s.doc.insert_object(&Pos { off: start, ..pos.clone() }, InlineObject::BookmarkStart { name: name.clone() }, &props)?;
     if at.story == pos.story && at.path == pos.path {
         if at.off >= end {
-            at.off = at.off.saturating_add(2 * MARK);
-        } else if at.off > 0 {
+            at.off = at.off.saturating_add(MARK);
+        }
+        if at.off > start {
             at.off = at.off.saturating_add(MARK);
         }
     }
@@ -1504,6 +1548,34 @@ mod tests {
         s.run("caret.docEnd", &json!({})).unwrap();
         s.run("insert.crossReference", &json!({"to": "label:Photo Plate", "target": "Photo Plate I", "show": "number"})).unwrap();
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("See Photo Plate I"), "{}", s.doc.plain_text(StoryRef::Body));
+    }
+
+    /// A caption keeps its SEQ identity when Insert Caption applies a paragraph style other than
+    /// the four built-in caption styles.
+    #[test]
+    fn a_caption_in_another_style_is_still_a_cross_reference() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln"));
+        s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "The kiln", "style": "Normal"})).unwrap();
+        let list = s.run("insert.crossReference", &json!({"to": "figure"})).unwrap();
+        assert_eq!(list.as_array().unwrap().len(), 1, "{list}");
+        assert_eq!(caption_labels(&s), vec!["Figure".to_string()]);
+    }
+
+    /// A number parked on the formula line is `(1)`, not the formula, for a number-only reference.
+    #[test]
+    fn an_equation_number_reference_is_only_the_number() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("E = mc2\nSee "));
+        s.run("select.text", &json!({"text": "E = mc2"})).unwrap();
+        s.run("references.caption", &json!({"label": "Equation", "position": "right", "pattern": "({number})"})).unwrap();
+        let targets = s.run("insert.crossReference", &json!({"to": "equation"})).unwrap();
+        let target = targets.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
+        assert!(target.contains("(1)") && !caption_labels(&s).iter().any(|l| l.contains("mc2")), "{target} {:?}", caption_labels(&s));
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.crossReference", &json!({"to": "equation", "target": target, "show": "number"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with("See (1)"), "{}", s.doc.plain_text(StoryRef::Body));
+        let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
+        assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("(1)"));
     }
 
     /// The entries of every generated list, in order, with their last tab stop's leader.

@@ -385,6 +385,9 @@ impl CaptionForm {
                 self.style = "TableCaption".into();
                 self.number_wrap = "none".into();
                 self.exclude_label = false;
+                if self.label == "Figure" || self.label == "Equation" || self.label == "Table" {
+                    self.label = "Table".into();
+                }
             }
             "gost-equation" => {
                 self.pattern = "({chapter}{number})".into();

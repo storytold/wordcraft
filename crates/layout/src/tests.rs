@@ -8801,10 +8801,12 @@ fn a_display_equation_keeps_its_right_number_on_the_same_line() {
     let lines: Vec<_> = l.pages.iter().flat_map(|pg| pg.items.iter()).filter(|it| matches!(it, Placed::Lines { .. })).collect();
     assert_eq!(lines.len(), 1, "the number wraps onto its own line");
     let eq = l.caret(&Pos::body(0, 0)).unwrap();
+    let after = l.caret(&Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())).unwrap();
     let num = l.caret(&Pos::body(0, end.saturating_sub(1))).unwrap();
     assert!((eq.top - num.top).abs() < 0.5, "formula top {} number top {}", eq.top, num.top);
     assert!(num.x > width * 0.75, "number at {}, column {}", num.x, width);
     assert!(eq.x > width * 0.2 && eq.x < width * 0.7, "formula at {}, column {}", eq.x, width);
+    assert!(after.x + 0.5 >= eq.x, "caret after the formula at {}, formula at {}", after.x, eq.x);
 }
 
 /// A number written in front of a display equation stays on that line, at the left, and the
@@ -8821,10 +8823,13 @@ fn a_display_equation_keeps_its_left_number_on_the_same_line() {
     let lines: Vec<_> = l.pages.iter().flat_map(|pg| pg.items.iter()).filter(|it| matches!(it, Placed::Lines { .. })).collect();
     assert_eq!(lines.len(), 1, "the formula wraps onto its own line");
     let num = l.caret(&Pos::body(0, 0)).unwrap();
-    let eq = l.caret(&Pos::body(0, "(1) ".len())).unwrap();
+    let eq_at = "(1) ".len();
+    let eq = l.caret(&Pos::body(0, eq_at)).unwrap();
+    let after = l.caret(&Pos::body(0, eq_at + wordcraft_doc::para::OBJ.len_utf8())).unwrap();
     assert!((eq.top - num.top).abs() < 0.5, "formula top {} number top {}", eq.top, num.top);
     assert!(num.x < width * 0.2, "number at {}, column {}", num.x, width);
     assert!(eq.x > width * 0.2 && eq.x < width * 0.7, "formula at {}, column {}", eq.x, width);
+    assert!(after.x + 0.5 >= eq.x, "caret after the formula at {}, formula at {}", after.x, eq.x);
 }
 
 /// Laying a paragraph out again (placed again after a page break before, or the rest of it again

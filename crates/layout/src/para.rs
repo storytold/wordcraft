@@ -2632,7 +2632,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 let place = ideal.max(left_lim + gap).min((right_lim - eq_w).max(line_start_x));
                 let cur = xs.get(eq - c0).copied().unwrap_or(line_start_x);
                 let delta = place - cur;
-                let until = if numbered { last_tab.unwrap_or(eq + 1) } else { eq + 1 };
+                // Include the entry at the equation's right edge. On a numbered line that is the
+                // positional tab, which then starts at the moved equation and still ends at the number.
+                let until = if numbered { last_tab.map(|t| t + 1).unwrap_or(eq + 1) } else { c1 + 1 };
                 for k in eq..until {
                     if let Some(v) = xs.get_mut(k - c0) {
                         *v += delta;
