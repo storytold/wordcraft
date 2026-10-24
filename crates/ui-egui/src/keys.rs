@@ -705,10 +705,11 @@ fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
     m.command || m.alt || is_function_key(key)
 }
 
-/// Command shortcuts when the canvas isn't focused but no text field is either.
+/// Command shortcuts when the canvas isn't focused and no text field is: nothing has the
+/// keyboard, or a button or a pane's title bar does.
 pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
     // Customize Keyboard records the keys pressed; they never run commands meanwhile.
-    if app.canvas.focused || ctx.egui_wants_keyboard_input() || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })) {
+    if app.canvas.focused || ctx.text_edit_focused() || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })) {
         return;
     }
     let events = ctx.input(|i| i.events.clone());

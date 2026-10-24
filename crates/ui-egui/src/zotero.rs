@@ -46,6 +46,13 @@ pub struct ZoteroLink {
     methods: Vec<String>,
 }
 
+impl ZoteroLink {
+    /// Whether an alert from Zotero is waiting for an answer.
+    pub(crate) fn alert_open(&self) -> bool {
+        self.alert.is_some()
+    }
+}
+
 /// Focus requests from the bridge.
 struct AppHost<'a> {
     ctx: &'a egui::Context,

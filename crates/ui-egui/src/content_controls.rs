@@ -25,6 +25,13 @@ pub struct ControlUi {
     popup: Option<Popup>,
 }
 
+impl ControlUi {
+    /// Whether a control's list or calendar is open.
+    pub(crate) fn popup_open(&self) -> bool {
+        self.popup.is_some()
+    }
+}
+
 struct Popup {
     /// Content start of the control it belongs to.
     at: Pos,

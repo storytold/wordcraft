@@ -1,127 +1,359 @@
-//! Side panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector,
-//! Accessibility and Alt Text (see `a11y_pane`), Format Shape (see `format_shape`), Restrict Editing ([`crate::dialogs_review`]), Comments,
-//! and the SmartArt Text Pane.
+//! Task panes: Navigation (headings, pages, search results), Clipboard, Styles, Style Inspector,
+//! Accessibility and Alt Text (see `a11y_pane`), Format Shape (see `format_shape`), Restrict Editing
+//! ([`crate::dialogs_review`]), Comments, and the SmartArt Text Pane. `craft_ui::panes` draws them
+//! around the document, with their title bars, menus and resize edges; the session's view flags say
+//! which are open.
 
 use std::collections::BTreeMap;
 
+use craft_ui::panes::{Edge, PaneContent, PaneHost, PaneLabels, PaneRequest, PaneState, Place, SidePolicy};
 use egui::{Stroke, Ui, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::{Counters, LevelSuffix};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
+use wordcraft_engine::StylesPaneDock;
 
 use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
 
-pub fn show(app: &mut WordApp, ui: &mut Ui) {
-    let t = Tokens::get(ui.ctx());
-    // SmartArt Design › Text Pane, while a SmartArt graphic WordCraft can edit is selected.
-    if app.session.view.smart_art_pane && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some() {
-        egui::Panel::left("smart_art_pane")
-            .default_size(250.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| {
-                if header(ui, "Text Pane") {
-                    let _ = app.run("smartArt.textPane", json!({"value": false}));
-                    return;
-                }
-                crate::dialogs_smart_art::text_pane(app, ui);
-            });
+/// The task panes, in the order they open: each edge's first pane is outermost.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Pane {
+    /// SmartArt Design › Text Pane, while a SmartArt graphic WordCraft can edit is selected.
+    SmartArtText,
+    Navigation,
+    Clipboard,
+    Styles,
+    StyleInspector,
+    Accessibility,
+    AltText,
+    FormatShape,
+    RestrictEditing,
+    Comments,
+}
+
+impl Pane {
+    fn title(self) -> &'static str {
+        match self {
+            Self::SmartArtText => "Text Pane",
+            Self::Navigation => "Navigation",
+            Self::Clipboard => "Clipboard",
+            Self::Styles => "Styles",
+            Self::StyleInspector => "Style Inspector",
+            Self::Accessibility => "Accessibility",
+            Self::AltText => "Alt Text",
+            Self::FormatShape => "Format Shape",
+            Self::RestrictEditing => "Restrict Editing",
+            Self::Comments => "Comments",
+        }
     }
-    if app.session.view.nav_pane {
-        egui::Panel::left("nav_pane")
-            .default_size(260.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| nav(app, ui));
+
+    fn default_state(self) -> PaneState {
+        let (edge, width) = match self {
+            Self::SmartArtText => (Edge::Start, 250.0),
+            Self::Navigation => (Edge::Start, 260.0),
+            Self::Clipboard => (Edge::Start, 250.0),
+            Self::Styles => (Edge::End, 250.0),
+            Self::StyleInspector => (Edge::End, 240.0),
+            Self::Accessibility => (Edge::End, 280.0),
+            Self::AltText => (Edge::End, 260.0),
+            Self::FormatShape => (Edge::End, 280.0),
+            Self::RestrictEditing => (Edge::End, 270.0),
+            Self::Comments => (Edge::End, 290.0),
+        };
+        PaneState::docked(edge, width)
     }
-    if app.session.view.clipboard_pane {
-        egui::Panel::left("clipboard_pane")
-            .default_size(250.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| clipboard(app, ui));
+
+    /// The pane's key in `ui.json`'s `panePlaces`.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::SmartArtText => "smartArtText",
+            Self::Navigation => "navigation",
+            Self::Clipboard => "clipboard",
+            Self::Styles => "styles",
+            Self::StyleInspector => "styleInspector",
+            Self::Accessibility => "accessibility",
+            Self::AltText => "altText",
+            Self::FormatShape => "formatShape",
+            Self::RestrictEditing => "restrictEditing",
+            Self::Comments => "comments",
+        }
     }
-    if app.session.view.styles_pane {
-        egui::Panel::right("styles_pane")
-            .default_size(250.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| styles(app, ui));
-    }
-    if app.session.view.style_inspector {
-        egui::Panel::right("style_inspector")
-            .default_size(240.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| inspector(app, ui));
-    }
-    if app.session.view.accessibility_pane {
-        egui::Panel::right("accessibility_pane")
-            .default_size(280.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| crate::a11y_pane::accessibility(app, ui));
-    }
-    if app.session.view.alt_text_pane {
-        egui::Panel::right("alt_text_pane")
-            .default_size(260.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| crate::a11y_pane::alt_text(app, ui));
-    }
-    if !app.session.view.format_shape_pane {
-        crate::format_shape::forget_drag(ui.ctx());
-    } else {
-        egui::Panel::right("format_shape_pane")
-            .default_size(280.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui)));
-    }
-    if app.restrict.open {
-        egui::Panel::right("restrict_pane")
-            .default_size(270.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| {
-                if header(ui, "Restrict Editing") {
-                    app.restrict.open = false;
-                    return;
-                }
-                crate::dialogs_review::restrict_pane(app, ui);
-            });
-    }
-    if app.session.view.comments_pane {
-        egui::Panel::right("comments_pane")
-            .default_size(290.0)
-            .resizable(true)
-            .frame(egui::Frame::NONE.fill(t.panel).inner_margin(10).stroke(Stroke::new(1.0, t.border)))
-            .show(ui, |ui| comments(app, ui));
+
+    const ALL: [Self; 10] = [
+        Self::SmartArtText,
+        Self::Navigation,
+        Self::Clipboard,
+        Self::Styles,
+        Self::StyleInspector,
+        Self::Accessibility,
+        Self::AltText,
+        Self::FormatShape,
+        Self::RestrictEditing,
+        Self::Comments,
+    ];
+
+    /// The command that closes the pane; Restrict Editing has none and closes in [`close`].
+    fn close_command(self) -> Option<&'static str> {
+        match self {
+            Self::SmartArtText => Some("smartArt.textPane"),
+            Self::Navigation => Some("view.navigationPane"),
+            Self::Clipboard => Some("edit.clipboardPane"),
+            Self::Styles => Some("view.stylesPane"),
+            Self::StyleInspector => Some("styles.inspector"),
+            Self::Accessibility => Some("view.accessibilityPane"),
+            Self::AltText => Some("view.altTextPane"),
+            Self::FormatShape => Some("view.formatShapePane"),
+            Self::Comments => Some("view.commentsPane"),
+            Self::RestrictEditing => None,
+        }
     }
 }
 
-pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {
-    let mut close = false;
-    ui.horizontal(|ui| {
-        ui.label(egui::RichText::new(tl!(title)).font(semibold(15.0)));
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            // Drawn, not the "✕" character: the interface fonts have no glyph for it.
-            if crate::widgets::icon_button(ui, "close", tl!("Close")).clicked() {
-                close = true;
+/// The panes open now, from the session's view flags.
+pub fn open(app: &WordApp) -> Vec<Pane> {
+    let v = &app.session.view;
+    let smart_art = v.smart_art_pane && wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session).is_some();
+    [
+        (Pane::SmartArtText, smart_art),
+        (Pane::Navigation, v.nav_pane),
+        (Pane::Clipboard, v.clipboard_pane),
+        (Pane::Styles, v.styles_pane),
+        (Pane::StyleInspector, v.style_inspector),
+        (Pane::Accessibility, v.accessibility_pane),
+        (Pane::AltText, v.alt_text_pane),
+        (Pane::FormatShape, v.format_shape_pane),
+        (Pane::RestrictEditing, app.restrict.open),
+        (Pane::Comments, v.comments_pane),
+    ]
+    .into_iter()
+    .filter_map(|(pane, shown)| shown.then_some(pane))
+    .collect()
+}
+
+/// Where a task pane other than Styles sits, kept in `ui.json` (#1756). Styles keeps its place in
+/// `view.stylesPaneDock` and `stylesPaneFloat`.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct SavedPane {
+    /// `None`: the pane's default edge.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub dock: Option<SavedDock>,
+    /// `[x, y, width, height]` of the floating pane, also kept while it is docked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub float: Option<[f32; 4]>,
+    /// The docked width this run; like the Styles pane's, not kept between runs.
+    #[serde(skip)]
+    pub width: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SavedDock {
+    Left,
+    Right,
+    Float,
+}
+
+/// `panePlaces` as saved: unknown panes, places and rects are dropped, not the whole file.
+pub(crate) fn lenient_places<'de, D: serde::Deserializer<'de>>(d: D) -> Result<BTreeMap<String, SavedPane>, D::Error> {
+    let v = <Value as serde::Deserialize>::deserialize(d)?;
+    let Some(map) = v.as_object() else { return Ok(BTreeMap::new()) };
+    let dock = |v: &Value| match v.as_str() {
+        Some("left") => Some(SavedDock::Left),
+        Some("right") => Some(SavedDock::Right),
+        Some("float") => Some(SavedDock::Float),
+        _ => None,
+    };
+    Ok(Pane::ALL
+        .iter()
+        .filter(|pane| **pane != Pane::Styles)
+        .filter_map(|pane| {
+            let saved = map.get(pane.key())?;
+            let place = SavedPane { dock: saved.get("dock").and_then(dock), float: saved.get("float").and_then(float_rect), width: None };
+            Some((pane.key().to_string(), place))
+        })
+        .collect())
+}
+
+/// Four finite numbers as `[x, y, width, height]`; `craft_ui::panes` brings a saved rect back
+/// inside the window.
+pub(crate) fn float_rect(v: &Value) -> Option<[f32; 4]> {
+    let [x, y, w, h] = v.as_array().map(Vec::as_slice)? else { return None };
+    let n = |v: &Value| v.as_f64().map(|n| n as f32).filter(|n| n.is_finite());
+    n(x).zip(n(y)).zip(n(w)).zip(n(h)).map(|(((x, y), w), h)| [x, y, w, h])
+}
+
+/// A pane's place and size: Styles' from `view.stylesPaneDock` and its own preferences, the
+/// others' from `panePlaces`.
+fn pane_state(app: &WordApp, pane: Pane) -> PaneState {
+    if pane == Pane::Styles {
+        return styles_state(app);
+    }
+    let default = pane.default_state();
+    let Some(saved) = app.ui.pane_places.get(pane.key()) else { return default };
+    let place = match saved.dock {
+        Some(SavedDock::Left) => Place::Docked(Edge::Start),
+        Some(SavedDock::Right) => Place::Docked(Edge::End),
+        Some(SavedDock::Float) => Place::Floating,
+        None => default.place,
+    };
+    PaneState { place, size: saved.width.or(default.size), float_rect: saved.float }
+}
+
+/// The Styles pane's place and size, from `view.stylesPaneDock` and the UI preferences (#1756).
+fn styles_state(app: &WordApp) -> PaneState {
+    let place = match app.session.view.styles_pane_dock {
+        StylesPaneDock::Right => Place::Docked(Edge::End),
+        StylesPaneDock::Left => Place::Docked(Edge::Start),
+        StylesPaneDock::Floating => Place::Floating,
+    };
+    PaneState { place, size: app.ui.styles_pane_width.or(Pane::Styles.default_state().size), float_rect: app.ui.styles_pane_float }
+}
+
+fn labels() -> PaneLabels {
+    PaneLabels {
+        menu: tl!("Pane Options").into(),
+        move_start: tl!("Dock Left").into(),
+        move_end: tl!("Dock Right").into(),
+        float: tl!("Float").into(),
+        close: tl!("Close").into(),
+        move_pane: tl!("Move Pane: {title}").into(),
+        resize: tl!("Resize Pane").into(),
+        ..PaneLabels::default()
+    }
+}
+
+struct Content<'a> {
+    app: &'a mut WordApp,
+}
+
+impl PaneContent<Pane> for Content<'_> {
+    fn title(&self, pane: &Pane) -> String {
+        tl!(pane.title()).into()
+    }
+
+    fn body(&mut self, ui: &mut Ui, pane: &Pane) {
+        let app = &mut *self.app;
+        match pane {
+            Pane::SmartArtText => crate::dialogs_smart_art::text_pane(app, ui),
+            Pane::Navigation => nav(app, ui),
+            Pane::Clipboard => clipboard(app, ui),
+            Pane::Styles => styles(app, ui),
+            Pane::StyleInspector => inspector(app, ui),
+            Pane::Accessibility => crate::a11y_pane::accessibility(app, ui),
+            Pane::AltText => crate::a11y_pane::alt_text(app, ui),
+            Pane::FormatShape => {
+                egui::ScrollArea::vertical().show(ui, |ui| crate::format_shape::pane(app, ui));
             }
+            Pane::RestrictEditing => crate::dialogs_review::restrict_pane(app, ui),
+            Pane::Comments => comments(app, ui),
+        }
+    }
+
+    fn default_state(&self, pane: &Pane) -> PaneState {
+        pane.default_state()
+    }
+}
+
+const HOST: &str = "task_panes";
+
+/// F6 and Shift+F6 move the keyboard through the panes and back to the document. The key stays
+/// with an open dialog, file browser, popup or keytips (Customize Keyboard records it), and an
+/// F6 the user bound to a command runs that command instead.
+fn route_f6(app: &WordApp, ctx: &egui::Context) {
+    let busy = app.dialog.is_some()
+        || app.file_dialog_open()
+        || app.colors.is_some()
+        || app.controls.popup_open()
+        || app.zotero.alert_open()
+        || app.ui.keytips != crate::keytips::Phase::Off
+        || egui::Popup::is_any_open(ctx);
+    if busy {
+        return;
+    }
+    let reg = &app.session.registry;
+    let bound = |m: egui::Modifiers| app.session.keymap.resolve(reg, &crate::keys::combo(m, "F6", true)).is_some();
+    let mut cycle = None;
+    ctx.input_mut(|input| {
+        input.events.retain(|e| match e {
+            egui::Event::Key { key: egui::Key::F6, pressed: true, modifiers: m, .. } if !m.command && !m.ctrl && !m.mac_cmd && !bound(*m) => {
+                cycle = Some(m.shift);
+                false
+            }
+            _ => true,
         });
     });
-    ui.add_space(4.0);
-    close
+    if let Some(reverse) = cycle {
+        craft_ui::panes::focus_next(ctx, HOST, reverse);
+    }
+}
+
+/// Draw the open panes around the document. Call before the canvas's `CentralPanel`.
+pub fn show(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let open = open(app);
+    if !open.contains(&Pane::FormatShape) {
+        crate::format_shape::forget_drag(ui.ctx());
+    }
+    route_f6(app, ui.ctx());
+    let states: Vec<(Pane, PaneState)> = open.iter().map(|pane| (*pane, pane_state(app, *pane))).collect();
+    let out = PaneHost::new(HOST)
+        .policy(SidePolicy::Columns)
+        .f6(false)
+        .labels(labels())
+        .frame(egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)))
+        .body_margin(egui::Margin::same(10))
+        .show(ui, &open, |pane| states.iter().find(|(p, _)| p == pane).map(|(_, state)| *state), &mut Content { app });
+    for request in out.requests {
+        apply(app, request);
+    }
+    if out.to_document {
+        app.canvas.want_focus = true;
+    }
+}
+
+/// Run a request from the pane host through the pane's commands and the UI preferences.
+pub(crate) fn apply(app: &mut WordApp, request: PaneRequest<Pane>) {
+    match request {
+        PaneRequest::Close(pane) => close(app, pane),
+        PaneRequest::Place(Pane::Styles, place) => {
+            let dock = match place {
+                Place::Docked(Edge::Start) => "left",
+                Place::Docked(Edge::End) => "right",
+                Place::Floating => "float",
+                Place::Docked(Edge::Bottom) => return,
+            };
+            let _ = app.run("view.stylesPaneDock", json!({"dock": dock}));
+        }
+        PaneRequest::Resize(Pane::Styles, width) => app.ui.styles_pane_width = Some(width),
+        PaneRequest::FloatRect(Pane::Styles, rect) => app.ui.styles_pane_float = Some(rect),
+        PaneRequest::Place(pane, place) => {
+            let dock = match place {
+                Place::Docked(Edge::Start) => SavedDock::Left,
+                Place::Docked(Edge::End) => SavedDock::Right,
+                Place::Floating => SavedDock::Float,
+                Place::Docked(Edge::Bottom) => return,
+            };
+            app.ui.pane_places.entry(pane.key().into()).or_default().dock = Some(dock);
+        }
+        PaneRequest::Resize(pane, width) => app.ui.pane_places.entry(pane.key().into()).or_default().width = Some(width),
+        PaneRequest::FloatRect(pane, rect) => app.ui.pane_places.entry(pane.key().into()).or_default().float = Some(rect),
+        PaneRequest::Focus(_) => {}
+    }
+}
+
+fn close(app: &mut WordApp, pane: Pane) {
+    match pane.close_command() {
+        Some(id) => {
+            let _ = app.run(id, json!({"value": false}));
+        }
+        None => app.restrict.open = false,
+    }
 }
 
 fn nav(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Navigation") {
-        let _ = app.run("view.navigationPane", json!({"value": false}));
-        return;
-    }
     let qid = egui::Id::new("nav_query");
     let mut q = ui.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
     // Ctrl+F with text selected searches for it, as Word does (a selection within one line).
@@ -149,7 +381,7 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
         }
     }
     ui.add_space(4.0);
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         for (k, l) in [("headings", "Headings"), ("pages", "Pages"), ("results", "Results")] {
             if ui.selectable_label(app.ui.nav_tab == k, tl!(l)).clicked() {
                 app.ui.nav_tab = k.into();
@@ -311,12 +543,8 @@ fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, collapsed: Op
 
 /// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
 fn clipboard(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Clipboard") {
-        let _ = app.run("edit.clipboardPane", json!({"value": false}));
-        return;
-    }
     let items: Vec<String> = app.session.clip_history.items().iter().map(|i| i.preview()).collect();
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         if ui.add_enabled(!items.is_empty(), egui::Button::new(tl!("Paste All"))).clicked() {
             let _ = app.run("edit.pasteAllClipboard", json!({}));
             app.canvas.want_focus = true;
@@ -357,10 +585,6 @@ fn clipboard(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn styles(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Styles") {
-        let _ = app.run("view.stylesPane", json!({"value": false}));
-        return;
-    }
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let cur = st.get("style").and_then(Value::as_str).unwrap_or("Normal").to_string();
     let current_name = app
@@ -371,7 +595,8 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
         .map(crate::i18n::style_name)
         .unwrap_or_else(|| st.get("styleName").and_then(Value::as_str).unwrap_or("").to_string());
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Current style: {style}"), &[("style", &current_name)])).small());
-    ui.horizontal(|ui| {
+    // Wrapped: the host gives the pane a fixed width, and the row is wider than its default.
+    ui.horizontal_wrapped(|ui| {
         if ui.button(tl!("New Style…")).clicked() {
             app.dialog = crate::dialogs::Dialog::open("newStyle", app);
         }
@@ -432,10 +657,6 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
 }
 
 fn comments(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Comments") {
-        let _ = app.run("view.commentsPane", json!({"value": false}));
-        return;
-    }
     if crate::widgets::icon_text_button(ui, "newComment", tl!("New Comment"), regular(12.5)).clicked() {
         let _ = app.run("review.newComment", json!({"text": ""}));
     }
@@ -667,10 +888,6 @@ pub(crate) fn flush_comment_drafts(app: &mut WordApp) -> Result<(), String> {
 /// Style Inspector: the paragraph and character levels at the caret, each with its style and the
 /// direct formatting on top, and a button to clear each level.
 fn inspector(app: &mut WordApp, ui: &mut Ui) {
-    if header(ui, "Style Inspector") {
-        let _ = app.run("styles.inspector", json!({"value": false}));
-        return;
-    }
     // Read-only, so call it directly: running the command every frame would pay for the command
     // machinery and consume per-command state (a pending `join_next_undo`) just to draw the pane.
     let r = wordcraft_engine::cmd::inspector::inspect(&app.session);
@@ -909,7 +1126,9 @@ fn camel_words(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::comment_stamp;
+    use super::{Content, Pane, comment_stamp};
+    use craft_ui::panes::PaneContent;
+    use egui::vec2;
 
     #[test]
     fn comment_stamp_keeps_date_and_time() {
@@ -947,6 +1166,224 @@ mod tests {
         h.run_steps(4);
         assert!(h.state().canvas.focused, "Delete returns focus to the document");
         assert!(h.state().session.clip_history.items().is_empty(), "the item was deleted");
+    }
+
+    /// F6 past the last pane gives the document the keyboard, and typing reaches it (#1756).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn f6_past_the_last_pane_types_into_the_document() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+        app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+        app.run("edit.clipboardPane", serde_json::json!({"value": true})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        assert!(h.state().canvas.focused);
+        let f6 = egui::Event::Key { key: egui::Key::F6, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        for pane in ["Navigation", "Clipboard"] {
+            h.input_mut().events.push(f6.clone());
+            h.run_steps(2);
+            assert!(!h.state().canvas.focused, "F6 moved the keyboard to the {pane} pane");
+        }
+        h.input_mut().events.push(f6);
+        h.run_steps(2);
+        assert!(h.state().canvas.focused, "F6 past the last pane returns to the document");
+        h.input_mut().events.push(egui::Event::Text("typed".into()));
+        h.run_steps(2);
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "typed");
+    }
+
+    fn pane_harness(app: crate::WordApp) -> egui_kittest::Harness<'static, crate::WordApp> {
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(4);
+        h
+    }
+
+    fn press(h: &mut egui_kittest::Harness<'static, crate::WordApp>, key: egui::Key, modifiers: egui::Modifiers) {
+        h.input_mut().events.push(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+        h.run_steps(2);
+    }
+
+    /// F6 and Shift+F6 with a dialog open leave the keyboard in the dialog: no pane title bar and
+    /// no document behind it takes it.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn f6_in_an_open_dialog_keeps_focus_there() {
+        for panes in [true, false] {
+            let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+            app.run("view.navigationPane", serde_json::json!({"value": panes})).unwrap();
+            app.run("ui.dialog", serde_json::json!({"name": "replace"})).unwrap();
+            let mut h = pane_harness(app);
+            let focused = h.ctx.memory(|m| m.focused());
+            for shift in [false, true] {
+                press(&mut h, egui::Key::F6, if shift { egui::Modifiers::SHIFT } else { egui::Modifiers::NONE });
+                assert_eq!(h.ctx.memory(|m| m.focused()), focused, "panes open: {panes}, shift: {shift}");
+                assert!(!h.state().canvas.focused && h.state().dialog.is_some(), "panes open: {panes}, shift: {shift}");
+            }
+        }
+    }
+
+    /// Ctrl and F-key shortcuts run while F6 has put the keyboard on a pane's title bar; a pane's
+    /// text field keeps Ctrl+H for itself.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn shortcuts_run_while_a_pane_title_bar_has_focus() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+        app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+        let mut h = pane_harness(app);
+        press(&mut h, egui::Key::F6, egui::Modifiers::NONE);
+        assert!(!h.state().canvas.focused && h.ctx.memory(|m| m.focused()).is_some(), "the title bar has the keyboard");
+        press(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("replace"), "Ctrl+H opened Replace");
+        press(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert!(h.state().dialog.is_none());
+
+        h.state_mut().nav_search_focus = true;
+        h.run_steps(2);
+        assert!(h.ctx.text_edit_focused());
+        press(&mut h, egui::Key::H, egui::Modifiers::COMMAND);
+        assert!(h.state().dialog.is_none(), "the search field keeps Ctrl+H");
+    }
+
+    /// An F6 the user bound runs its command; plain F6 still moves to the panes when only
+    /// Shift+F6 is bound.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_user_bound_f6_runs_its_command() {
+        for key in ["F6", "Shift+F6"] {
+            let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+            app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+            app.session.keymap = wordcraft_engine::keymap::KeyMap::from_value(&serde_json::json!({"assigned": {key: "view.focus"}}));
+            let mut h = pane_harness(app);
+            assert!(h.state().canvas.focused);
+            let m = if key == "F6" { egui::Modifiers::NONE } else { egui::Modifiers::SHIFT };
+            press(&mut h, egui::Key::F6, m);
+            assert!(h.state().session.view.focus_mode, "{key} ran its command");
+            press(&mut h, egui::Key::F6, m);
+            assert!(!h.state().session.view.focus_mode, "{key} ran its command again");
+            if key == "Shift+F6" {
+                h.state_mut().canvas.want_focus = true;
+                h.run_steps(2);
+                press(&mut h, egui::Key::F6, egui::Modifiers::NONE);
+                assert!(!h.state().canvas.focused, "plain F6 moved the keyboard to the pane");
+            }
+        }
+    }
+
+    /// Every pane's body fits a pane at the 200 pt minimum width (the host clips what doesn't):
+    /// button rows wrap and fields narrow. Restrict Editing shows its style list and password
+    /// fields.
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn pane_bodies_fit_the_narrowest_pane() {
+        // 200 pt less the 10 pt body margins and the frame's 1 pt strokes.
+        const BODY: f32 = 178.0;
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), crate::Services::default());
+        app.run("select.all", serde_json::json!({})).unwrap();
+        app.run("edit.copy", serde_json::json!({})).unwrap();
+        app.restrict = crate::dialogs_review::RestrictPane {
+            open: true,
+            formatting: true,
+            show_styles: true,
+            editing: true,
+            asking: true,
+            ..Default::default()
+        };
+        let panes = [
+            Pane::Navigation,
+            Pane::Clipboard,
+            Pane::Styles,
+            Pane::StyleInspector,
+            Pane::Accessibility,
+            Pane::AltText,
+            Pane::FormatShape,
+            Pane::RestrictEditing,
+            Pane::Comments,
+        ];
+        let widths = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = widths.clone();
+        let mut fonts = false;
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(400.0, 1200.0)).build_ui_state(
+            move |ui, app: &mut crate::WordApp| {
+                // Fonts take effect the frame after they are installed.
+                if !fonts {
+                    crate::theme::install_fonts(ui.ctx());
+                    fonts = true;
+                    return;
+                }
+                let mut row = Vec::new();
+                for pane in panes {
+                    let width = ui
+                        .allocate_ui_with_layout(vec2(BODY, 1200.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                            ui.set_max_width(BODY);
+                            Content { app: &mut *app }.body(ui, &pane);
+                            ui.min_rect().width()
+                        })
+                        .inner;
+                    row.push((pane, width));
+                }
+                *seen.borrow_mut() = row;
+            },
+            app,
+        );
+        h.run_steps(3);
+        let widths = widths.borrow();
+        assert_eq!(widths.len(), panes.len());
+        let wide: Vec<_> = widths.iter().filter(|(_, width)| *width > BODY + 0.5).collect();
+        assert!(wide.is_empty(), "wider than the pane: {wide:?}");
+    }
+
+    /// A pane other than Styles floated from its menu comes back floating, at the same rect, after
+    /// a restart; junk in `panePlaces` reads as the defaults (#1756).
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn a_floated_pane_floats_again_after_a_restart() {
+        use craft_ui::panes::Place;
+        use egui_kittest::kittest::Queryable;
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+        app.run("view.navigationPane", serde_json::json!({"value": true})).unwrap();
+        let mut h = pane_harness(app);
+        let bar = h.get_by_label_contains("Move Pane: ").rect();
+        let on_row = |r: egui::Rect| r.center().y > bar.top() && r.center().y < bar.bottom();
+        h.get_all_by_label("Pane Options").find(|n| on_row(n.rect())).expect("the menu button beside the title bar").click();
+        h.run_steps(2);
+        h.get_by_label("Float").click();
+        h.run_steps(3);
+        assert_eq!(super::pane_state(h.state(), Pane::Navigation).place, Place::Floating);
+        let rect = h.state().ui.pane_places.get("navigation").and_then(|p| p.float).expect("the float rect is kept");
+
+        let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+        let mut next = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        next.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        let state = super::pane_state(&next, Pane::Navigation);
+        assert_eq!((state.place, state.float_rect), (Place::Floating, Some(rect)));
+        assert_eq!(super::pane_state(&next, Pane::Clipboard), Pane::Clipboard.default_state(), "other panes keep their defaults");
+
+        let mut junk = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        junk.apply_prefs(
+            serde_json::from_str(
+                r#"{"panePlaces": {"navigation": {"dock": "top", "float": [1, "x", 3, 4]}, "clipboard": 7, "nope": {}}, "navPane": true}"#,
+            )
+            .unwrap(),
+        );
+        assert_eq!(super::pane_state(&junk, Pane::Navigation), Pane::Navigation.default_state(), "junk reads as the default");
+        assert!(junk.session.view.nav_pane, "the rest of the file still loads");
+        let mut odd = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        odd.apply_prefs(serde_json::from_str(r#"{"panePlaces": [1, 2], "navPane": true}"#).unwrap());
+        assert!(odd.ui.pane_places.is_empty() && odd.session.view.nav_pane);
     }
 
     /// #3032: Delete is greyed out for built-in styles in the Styles pane (the engine refuses
