@@ -68,3 +68,23 @@ Generated-in-code art is original and has no file to list: the UI icon set (`cra
 | `docs/brand/artcraft-mark.svg` | ArtCraft Team | craftrules `assets/brand/` | ArtCraft trademark, `docs/brand/LICENSE-brand.txt` | Not open source; usable unmodified only |
 | craft-fonts (optional build input, not files in this repo): BIZ UDPGothic, BIZ UDMincho, Shippori Mincho, Noto Sans CJK SC, Noto Sans Arabic | see https://github.com/storytold/craft-fonts/blob/main/ATTRIBUTION.md | embedded only when built with `CRAFT_FONTS_DIR` (all official releases) | OFL-1.1 | Japanese and Chinese UI, Japanese document fallback |
 | craft-i18n (optional build input, not files in this repo): the interface translations | see https://github.com/storytold/craft-i18n/blob/main/ATTRIBUTION.md, which credits every translator of WordCraft's former in-repo catalogs (`crates/ui-egui/src/i18n/*.tsv`, migrated at `wordcraft@806a945`) | embedded only when built with `CRAFT_I18N_DIR`, at the commit in `craft-i18n.rev` (all official releases) | MIT OR Apache-2.0 | Interface languages other than English; clean-room translations from the English interface labels |
+
+## Android launcher icons (wordcraft)
+
+`apps/wordcraft-android` ships the Android Studio new-project template's default launcher art, unmodified.
+The adaptive icon in `res/mipmap-anydpi-v26/` composes the foreground drawable with the template's
+background colour; the density folders hold the same stand-in at each scale.
+
+| Asset | Author | Source | Licence |
+|---|---|---|---|
+| `apps/wordcraft-android/android/app/src/main/res/drawable/ic_launcher_foreground.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-hdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-hdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-mdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-mdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-xhdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-xhdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-xxhdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-xxhdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
+| `apps/wordcraft-android/android/app/src/main/res/mipmap-xxxhdpi/ic_launcher_round.png` | The Android Open Source Project | Android Studio new-project template (default launcher art), unmodified | Apache-2.0 |
