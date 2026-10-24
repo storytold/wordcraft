@@ -7827,7 +7827,8 @@ fn list_indents_and_style_indents_combine_like_word() {
     }
 }
 
-/// Keep with next at a page bottom, measured in Word for Windows (`plan/word` R19, 20 cases): a
+/// Keep with next at a page bottom, measured in Word for Windows (`plan/word` R19, 20 cases; Word
+/// for Mac splits the paragraph that would fit, see `KEEP_NEXT_SPLITS`): a
 /// paragraph that would fit on the page by itself moves over with the next one, but one that
 /// doesn't fit anyway breaks as usual, its last lines going over with the next paragraph (with
 /// Keep lines together it moves whole); a chain of kept paragraphs moves together. NIH's
@@ -7865,12 +7866,44 @@ fn keep_with_next_moves_a_paragraph_only_when_it_would_fit() {
     let kl = ParaProps { keep_lines: Some(true), ..kn.clone() };
     // Find where the kept paragraph just fits: its last line on page 1, the next one's on page 2.
     let fit = (20..80).find(|n| pages(*n, none.clone(), none.clone()) == [0, 0, 0, 0, 0, 1]).expect("a filler count that fills the page");
-    assert_eq!(pages(fit, kn.clone(), none.clone()), [1, 1, 1, 1, 1, 1], "fits by itself: moves with the next");
+    // Word for Mac splits it instead: its last two lines (widow control) go over with the next
+    // one, and so does a chain's (observed in Word for Mac 16.114, #3850).
+    let kept_over = if KEEP_NEXT_SPLITS { [0, 0, 0, 1, 1, 1] } else { [1, 1, 1, 1, 1, 1] };
+    assert_eq!(pages(fit, kn.clone(), none.clone()), kept_over, "fits by itself: moves with the next");
     let split = pages(fit + 1, none.clone(), none.clone());
     assert!(split[0] == 0 && split[4] == 1, "one more line splits it: {split:?}");
     assert_eq!(pages(fit + 1, kn.clone(), none.clone()), split, "doesn't fit anyway: breaks as usual");
     assert_eq!(pages(fit + 1, kl.clone(), none.clone()), [1, 1, 1, 1, 1, 1], "with keep lines together it moves whole");
-    assert_eq!(pages(fit - 1, kn.clone(), kn.clone()), [1, 1, 1, 1, 1, 1], "a kept chain moves together");
+    assert_eq!(pages(fit - 1, kn.clone(), kn.clone()), kept_over, "a kept chain moves together");
+}
+
+/// Keep with next before a three-line paragraph with widow control: that paragraph can't start a
+/// page bottom with two lines (it would leave one alone on the next page), so the kept one's last
+/// line always shares a page with its first line (#3850: WordCraft left the kept paragraph whole
+/// and sent the next one over alone, breaking the keep).
+#[test]
+fn keep_with_next_holds_before_a_three_line_paragraph() {
+    let plain = ParaProps {
+        space_before: Some(0.0),
+        space_after: Some(0.0),
+        line_spacing: Some(wordcraft_doc::props::LineSpacing::Multiple(1.0)),
+        ..Default::default()
+    };
+    let para = |text: &str, keep: bool| {
+        let mut x = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        x.props = ParaProps { keep_next: keep.then_some(true), ..plain.clone() };
+        wordcraft_doc::para_block(x)
+    };
+    for fillers in 30..60 {
+        let mut d = Document::new();
+        d.body = (0..fillers).map(|i| para(&format!("F{i}"), false)).collect();
+        d.body.push(para("Ka\nKb\nKc\nKd\nKe\nKf", true));
+        d.body.push(para("Na\nNb\nNc", false));
+        d.body.push(para("NY", false));
+        let l = lay(&d);
+        let page = |pos: Pos| l.caret(&pos).unwrap().page;
+        assert_eq!(page(Pos::body(fillers, 15)), page(Pos::body(fillers + 1, 0)), "{fillers} fillers: the keep holds");
+    }
 }
 
 /// A kept heading goes with the paragraph after it when that paragraph cannot start on its
