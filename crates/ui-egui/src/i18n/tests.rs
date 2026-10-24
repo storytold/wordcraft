@@ -1108,6 +1108,27 @@ fn bundled_interface_fonts_cover_slovenian_letters() {
     assert!(!lang("sl").uses_cjk());
 }
 
+#[test]
+fn georgian_locales_and_saved_preference_work_without_changing_the_document() {
+    needs_catalogs!();
+    let ka = lang("ka");
+    for tag in ["ka", "ka-GE", "ka_GE.UTF-8", "KA-ge"] {
+        assert_eq!(lang_from_tag(tag), Some(ka), "{tag}");
+    }
+    assert_eq!(first_supported([UNSUPPORTED, "ka-GE", "en-US"]), Some(ka));
+    let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+    let before = serde_json::to_value(&app.session.doc).unwrap();
+    let result = app.run("ui.language", serde_json::json!({"value": "KA"})).unwrap();
+    assert_eq!(result["effective"], "ka");
+    assert_eq!(app.ui.language, "ka");
+    assert!(result["available"].as_array().unwrap().iter().any(|l| l["code"] == "ka" && l["name"] == "ქართული"));
+    assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+    let saved = serde_json::to_string(&app.ui).unwrap();
+    let restored: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert_eq!(Lang::from_pref(&restored.language), ka);
+    assert!(!ka.uses_cjk());
+}
+
 /// The "Open" paragraph-spacing preset is roomy spacing, not the file verb: only a `spacing` row
 /// translates it.
 #[test]
