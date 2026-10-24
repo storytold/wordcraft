@@ -75,7 +75,7 @@ pub fn start(port: u16, ctx: egui::Context, settings: Option<&Path>) -> Option<(
 }
 
 /// A new key: 32 random bytes from the operating system, as hex.
-fn random_key() -> Result<String, String> {
+pub(crate) fn random_key() -> Result<String, String> {
     let mut b = [0u8; 32];
     getrandom::fill(&mut b).map_err(|e| e.to_string())?;
     Ok(b.iter().map(|x| format!("{x:02x}")).collect())
@@ -83,7 +83,7 @@ fn random_key() -> Result<String, String> {
 
 /// Write the key file: a stale one (from a run that did not exit cleanly) is replaced; on Unix
 /// the new file is created with mode 0600.
-fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
+pub(crate) fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
     if let Some(d) = p.parent() {
         std::fs::create_dir_all(d).map_err(|e| format!("cannot create {}: {e}", d.display()))?;
     }
@@ -98,7 +98,7 @@ fn write_key_file(p: &Path, key: &str) -> Result<(), String> {
 
 /// Compare a key with the window's in time that does not depend on where they differ. An
 /// empty key never matches.
-fn keys_match(given: &str, key: &str) -> bool {
+pub(crate) fn keys_match(given: &str, key: &str) -> bool {
     let (a, b) = (given.as_bytes(), key.as_bytes());
     !b.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0u8, |acc, (x, y)| acc | (x ^ y)) == 0
 }
@@ -117,7 +117,7 @@ fn serve_on(listener: TcpListener, ctx: egui::Context, key: String, first: Durat
 
 /// The read side of a connection with an optional overall deadline: each read waits only for
 /// the time left, so blank lines, bad JSON or a slow drip of bytes cannot extend it.
-struct Timed {
+pub(crate) struct Timed {
     s: TcpStream,
     deadline: Option<Instant>,
 }
@@ -133,6 +133,11 @@ impl Read for Timed {
 }
 
 impl Timed {
+    /// Reads from `s` that all end by `deadline`.
+    pub(crate) fn new(s: TcpStream, deadline: Instant) -> Self {
+        Timed { s, deadline: Some(deadline) }
+    }
+
     fn set_deadline(&mut self, d: Option<Instant>) {
         self.deadline = d;
         if d.is_none() {

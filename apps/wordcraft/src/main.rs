@@ -23,6 +23,7 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+mod windows;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -32,19 +33,21 @@ use wordcraft_ui_egui::{
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
 /// first frame that knows the monitor has checked it, the control server's key file (removed on
-/// exit), the file dialogs the app asked for and, on macOS, the documents opened from Finder.
+/// exit), the file dialogs the app asked for, this window's entry in the window registry
+/// (removed on exit; View › Window, #322) and, on macOS, the documents opened from Finder.
 struct App(
     WordApp,
     Option<WindowGeometry>,
     Option<control_server::KeyFile>,
     file_dialogs::Launcher,
+    Option<windows::RegistryFile>,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
 
 impl eframe::App for App {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.4, &mut self.0, ctx);
+        apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
@@ -98,6 +101,9 @@ impl eframe::App for App {
         save_prefs(&self.0);
         if let Some(key_file) = &self.2 {
             key_file.remove();
+        }
+        if let Some(entry) = &self.4 {
+            entry.remove();
         }
     }
 }
@@ -428,7 +434,14 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
+            let mut services = services(file_dialog, &cc.egui_ctx);
+            // The other WordCraft windows, for View › Window (#322).
+            let registry = wordcraft_control_key::settings_dir().and_then(|d| windows::start(&d.join("windows"), cc.egui_ctx.clone()));
+            let registry = registry.map(|(host, file)| {
+                services.windows = Some(Box::new(host));
+                file
+            });
+            let mut app = WordApp::new(session, services);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
@@ -480,6 +493,7 @@ fn main() -> eframe::Result {
                 Some(restored.unwrap_or_default()),
                 key_file,
                 dialogs,
+                registry,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))
