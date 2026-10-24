@@ -23,6 +23,10 @@ serde_json = { workspace = true }
 image = { workspace = true }
 log = { workspace = true }
 
+[dev-dependencies]
+# Peak heap in tests/table_rows_memory.rs.
+dhat = "0.3"
+
 [target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32-unknown-unknown).
 js-sys = "0.3"

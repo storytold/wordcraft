@@ -1936,6 +1936,16 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     if gone {
         collapse(&mut pl);
     }
+    // The layout is cached and kept until the document changes: it gives back the room its
+    // vectors grew for.
+    pl.styles.shrink_to_fit();
+    pl.glyphs.shrink_to_fit();
+    pl.clusters.shrink_to_fit();
+    pl.issues.shrink_to_fit();
+    pl.lines.shrink_to_fit();
+    for l in &mut pl.lines {
+        l.xs.shrink_to_fit();
+    }
     pl
 }
 

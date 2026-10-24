@@ -2132,6 +2132,10 @@ impl PageBuilder<'_> {
     fn new_page(&mut self, first_block: usize, body_top: f32) {
         self.apply_valign();
         self.flush_notes();
+        // The page before is done: it gives back the room its items grew for.
+        if let Some(p) = self.pages.last_mut() {
+            p.items.shrink_to_fit();
+        }
         self.beneath = self.sect_beneath;
         self.excl.clear();
         // Floats placed above their anchors further down this page are known from its start.
@@ -4366,16 +4370,19 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         }
     }
     let repeated_height: f32 = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.height).sum();
-    let place = |pb: &mut PageBuilder, row: &table::RowLayout| {
+    // The rows move onto the pages rather than being copied there: a long table would otherwise
+    // be held twice until it is placed. Only the repeated header rows are copied.
+    let rows = std::mem::take(&mut tl.rows);
+    let headers: Vec<(f32, Vec<Placed>)> = rows.iter().take(header_rows.len()).map(|r| (r.height, r.items.clone())).collect();
+    let place = |pb: &mut PageBuilder, height: f32, items: Vec<Placed>| {
         let (x, y) = (pb.col_x() + tl.x, pb.y);
         if let Some(pg) = pb.page() {
-            for it in &row.items {
-                let mut it = it.clone();
+            pg.items.extend(items.into_iter().map(|mut it| {
                 it.translate(x, y);
-                pg.items.push(it);
-            }
+                it
+            }));
         }
-        pb.y += row.height;
+        pb.y += height;
         pb.content_bottom = pb.content_bottom.max(pb.y);
     };
     // Measured in Word: an at-least row's minimum height is reserved, not split. Where less room
@@ -4389,9 +4396,9 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     let first = header_rows.len();
     if !header_rows.is_empty()
         && !pb.at_top()
-        && let Some(row) = tl.rows.get(first)
+        && let Some(row) = rows.get(first)
     {
-        let room = pb.bottom - pb.y - tl.rows.iter().take(first).map(|r| r.height).sum::<f32>();
+        let room = pb.bottom - pb.y - rows.iter().take(first).map(|r| r.height).sum::<f32>();
         let splittable = !t.rows.get(first).is_some_and(|r| r.props.cant_split);
         if row.height + row.edge > room + 0.01 && (short_of_min(first, room) || !(splittable && table::split_row(row, room).is_some())) {
             pb.advance(block, body_top);
@@ -4399,7 +4406,10 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     }
     // For the move-on rule, the table's own header rows at the top of a page leave it empty.
     let table_at_top = pb.at_top();
-    for (ri, row) in tl.rows.iter().enumerate() {
+    // The rows still to place: a kept row looks ahead at the rows it keeps with.
+    let mut ahead = rows.into_iter();
+    for ri in 0.. {
+        let Some(row) = ahead.next() else { break };
         // Word never splits a row of an exact height: it moves on whole.
         let splittable = !header_rows.contains(&ri)
             && !t
@@ -4413,7 +4423,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
         let under_top_headers = ri == first && table_at_top;
         // Each pass places the part of the row that fits, then breaks the page.
         for _ in 0..1000 {
-            let cur = rest.as_ref().unwrap_or(row);
+            let cur = rest.as_ref().unwrap_or(&row);
             // A fitting kept row follows the next row when that row cannot start below it.
             // Move only the prefix's start; an oversized follower cannot separate its kept rows.
             let defer_kept = pb.y + cur.height <= pb.bottom + 0.01
@@ -4426,7 +4436,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                     if end == ri {
                         return false;
                     }
-                    let (Some(next), Some(laid)) = (t.rows.get(end), tl.rows.get(end)) else { return false };
+                    let (Some(next), Some(laid)) = (t.rows.get(end), ahead.as_slice().get(end - ri - 1)) else { return false };
                     let page_height = pb.bottom - body_top - repeated_height;
                     height <= page_height + 0.01 && !row_can_start(next, laid, pb.bottom - pb.y - height, page_height)
                 });
@@ -4441,8 +4451,8 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             let split = if splittable && !moves_on && !defer_kept { table::split_row(cur, room) } else { None };
             match split {
                 Some((a, b)) => {
-                    place(pb, &a);
                     table_notes(ctx, pb, &a.items);
+                    place(pb, a.height, a.items);
                     rest = Some(b);
                 }
                 // Like Word, a row that does not fit on an empty page, or under the header rows
@@ -4453,21 +4463,19 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.
             if !header_rows.contains(&ri) && header_repeats < MAX_HEADER_REPEATS {
-                for hr in &header_rows {
+                for (h, items) in &headers {
                     if header_repeats >= MAX_HEADER_REPEATS {
                         break;
                     }
-                    if let Some(h) = tl.rows.get(*hr) {
-                        place(pb, h);
-                        header_repeats += 1;
-                    }
+                    place(pb, *h, items.clone());
+                    header_repeats += 1;
                 }
             }
             fresh = true;
         }
-        let last = rest.as_ref().unwrap_or(row);
-        place(pb, last);
+        let last = rest.unwrap_or(row);
         table_notes(ctx, pb, &last.items);
+        place(pb, last.height, last.items);
     }
 }
 
