@@ -177,6 +177,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-22 | Restrict Editing: the CLI's `--author` uses the same protection check as `file.setAuthor`, and File › Options disables the User name field while the document is protected. |
 | 2026-10-20 | Restrict Editing, three more gaps closed: the protection of a protected document only changes through the explicit stop (`review.restrict {"stop": true}`; the "none" mode is the shorthand and doesn't stop it), the session author used for new tracked changes and comments can't change through `file.setAuthor` while the document is protected (the CLI's `--author` uses the same protection check), and the post-check compares the document's settings, metadata, custom properties, list definitions, bibliography sources and the comments' resolved flags as well as its text and formatting |
 | 2026-10-20 | Restrict Editing holds for the file commands too: the privacy options, the properties and the inspector's removals are refused on a protected document, and restoring a stored version keeps the protection and its password instead of the snapshot's stale ones |
+| 2026-10-17 | LanguageTool checks a paragraph that mixes languages (an English sentence with a French quote, language set to the document's) in each of its languages: the whole paragraph goes once per language, so sentence context stays intact, and each answer's issues count only inside that language's runs; single-language paragraphs are sent once as before (#763) |
 | 2026-10-17 | Ribbon hints' reasons for a greyed-out control are translated in every interface language; a test fails if a reason it finds in the command sources, or the "Open a document first" hint, has no translation (#2678). |
 | 2026-10-17 | Ribbon hover hints: a disabled control says why (the command's own reason), split-button arrows, menu buttons and the font, size and outline boxes have hints, and hints show on keyboard focus (#1086). |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
@@ -530,6 +531,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-11 | Complex scripts (#604): Myanmar, Khmer and Indic text shaped one script at a time in OpenType fallback fonts (regular weight, not AAT-only fonts), the caret and line breaks never split a syllable, Myanmar wraps between syllables, Backspace removes one sign at a time |
 | 2026-10-11 | Any text file opens (#569): `.m3u`/`.m3u8` playlists and other unknown extensions open as plain text with encoding detection (UTF-8, BOMs, UTF-16, Windows-1252), misnamed Word/RTF files by their signature; binary files give a clear error |
 | 2026-10-11 | Select by dragging whole units (#549): after a double-click the drag grows by words, after a triple-click by paragraphs, after Ctrl/⌘+click by sentences, as in Word |
+| 2026-10-11 | LanguageTool spelling and grammar checking (#575), opt-in: File › Options › Proofing (server, default the public one or self-hosted; username/API key; language auto or per paragraph); paragraphs checked in the background, debounced and paced to the rate limit; squiggles and suggestions as in the built-in checker; `ui.languageTool` for agents; desktop only |
 | 2026-10-12 | Selection bar (#856): in the left margin beside body text a click selects the line, a double-click the paragraph, a triple-click or Ctrl/⌘+click the document; dragging there selects whole lines and Shift+click extends by lines; the pointer turns to an arrow. Right margin for right-to-left paragraphs not yet |
 | 2026-10-11 | Compare / Combine dialog with comparison settings, Restrict Editing pane (exceptions, SHA-512 password, locked styles; DOCX round trip), AutoCorrect Options dialog saved per user (#412) |
 | 2026-10-11 | DOCX diagrams (#611): lines, connectors and boxes styled by the theme now show (they were invisible); callouts and flowchart boxes drawn as the nearest shape; VML lines, rectangles and ovals |
@@ -597,6 +599,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-18 | trivial | Progress log: LanguageTool checks each run in its own language (#763) |
 | 2026-10-23 | trivial | Progress log: interface translations from storytold/craft-i18n through the `craft-i18n` crate |
 | 2026-10-22 | trivial | Progress log: mail merge record navigation and record ranges for Finish & Merge and Print Documents (#3028) |
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |
