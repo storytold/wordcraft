@@ -460,12 +460,24 @@ pub struct RenderOptions {
     pub dark: bool,
     /// The grey that black becomes on a dark page (white paper turns this, not pure black).
     pub dark_paper: u8,
+    /// Read Mode's Page Color: paper drawn instead of the document's page color and page
+    /// picture. `None` shows the document's page background. Screen only.
+    pub read_paper: Option<Rgb>,
 }
 
 /// Default grey for a dark page's paper.
 pub const DARK_PAPER: u8 = 0x33;
 
+/// Read Mode's Sepia paper: Word's RGB (112, 66, 20) at 80% transparency over white.
+pub const SEPIA_PAPER: Rgb = Rgb(0xE2, 0xD9, 0xD0);
+
 impl RenderOptions {
+    /// The on-screen color of the paper under `doc`'s pages: [`RenderOptions::read_paper`],
+    /// else the document's page color, else [`RenderOptions::paper`].
+    pub fn paper_of(&self, doc: &Document) -> Rgb {
+        self.ink(self.read_paper.or(doc.settings.page_color).unwrap_or(self.paper))
+    }
+
     /// The on-screen colour for a document colour (see [`RenderOptions::dark`]).
     pub fn ink(&self, c: Rgb) -> Rgb {
         if !self.dark {
@@ -541,6 +553,7 @@ impl Default for RenderOptions {
             text_darkening: false,
             dark: false,
             dark_paper: DARK_PAPER,
+            read_paper: None,
         }
     }
 }
@@ -567,9 +580,11 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     let (w16, h16) = (cw as u16, ch as u16);
     let mut ctx = context_pool::CONTEXTS.take(w16, h16);
     ctx.set_transform(Affine::IDENTITY);
-    ctx.set_paint(color(opts.ink(doc.settings.page_color.unwrap_or(opts.paper)), 1.0));
+    ctx.set_paint(color(opts.paper_of(doc), 1.0));
     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
-    draw_page_picture(&mut ctx, doc, page, view);
+    if opts.read_paper.is_none() {
+        draw_page_picture(&mut ctx, doc, page, view);
+    }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {
         draw_watermark(&mut ctx, view, page, wm, opts);
@@ -602,7 +617,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
 /// pictures and turned or rotated content are left out. The caret takes its colour from this
 /// so it shows against whatever lies behind it (#299).
 pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, y: f32) -> Rgb {
-    let paper = opts.ink(doc.settings.page_color.unwrap_or(opts.paper));
+    let paper = opts.paper_of(doc);
     if !(x.is_finite() && y.is_finite()) {
         return paper;
     }
@@ -1564,6 +1579,44 @@ mod tests {
         let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
         let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
         assert_eq!(&img.pixels[0..3], &[255, 255, 255]);
+    }
+
+    /// Read Mode's Page Color: the reading paper replaces the document's page color and page
+    /// picture on screen, in the raster and under the caret; the text keeps its color on Sepia.
+    #[test]
+    fn read_paper_replaces_the_page_background() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut d = Document::from_text("Hello WordCraft");
+        d.media.insert("bg.png".into(), Arc::new(png));
+        d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let page = &l.pages[0];
+        let at = |img: &Rendered, x: u32, y: u32| {
+            let i = ((y * img.width + x) * 4) as usize;
+            [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+        };
+        let sepia = RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() };
+        let white = RenderOptions { read_paper: Some(Rgb::WHITE), ..Default::default() };
+        assert_eq!(at(&render_page(&d, page, 1.0, &RenderOptions::default()), 5, 5), [0x10, 0x10, 0x40], "the page color");
+        assert_eq!(at(&render_page(&d, page, 1.0, &sepia), 5, 5), [0xE2, 0xD9, 0xD0]);
+        assert_eq!(at(&render_page(&d, page, 1.0, &white), 5, 5), [255, 255, 255]);
+        assert_eq!(background_at(&d, page, &sepia, 5.0, 5.0), SEPIA_PAPER);
+        assert_eq!(background_at(&d, page, &white, 5.0, 5.0), Rgb::WHITE);
+        let inverse = RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() };
+        assert_eq!(background_at(&d, page, &inverse, 5.0, 5.0), Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER));
+        d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "tile".into(), title: String::new() });
+        assert_eq!(at(&render_page(&d, page, 1.0, &RenderOptions::default()), 300, 300), [10, 200, 30], "the page picture");
+        assert_eq!(at(&render_page(&d, page, 1.0, &sepia), 300, 300), [0xE2, 0xD9, 0xD0]);
+        // The text is drawn in its own color on sepia paper: its darkest pixel is within 8 levels of its value on white.
+        d.settings.page_picture = None;
+        d.settings.page_color = None;
+        let darkest = |img: &Rendered| img.pixels.chunks(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap_or(255);
+        let plain = render_page(&d, page, 2.0, &RenderOptions::default());
+        let on_sepia = render_page(&d, page, 2.0, &sepia);
+        assert!(darkest(&plain) < 0x40 && darkest(&on_sepia) <= darkest(&plain) + 8, "{} {}", darkest(&plain), darkest(&on_sepia));
     }
 
     /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so

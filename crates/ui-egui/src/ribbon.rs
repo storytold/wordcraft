@@ -75,6 +75,20 @@ fn reading_toolbar(app: &mut WordApp, ui: &mut Ui, t: Tokens) {
                     }
                 });
                 ui.separator();
+                use wordcraft_engine::cmd::view::ReadPageColor;
+                let colors =
+                    [(ReadPageColor::None, "None", "none"), (ReadPageColor::Sepia, "Sepia", "sepia"), (ReadPageColor::Inverse, "Inverse", "inverse")];
+                let current = app.session.view.read_page_color;
+                let name = colors.iter().find(|c| c.0 == current).map_or("None", |c| c.1);
+                ui.menu_button(format!("{}: {}", tl!("Page color"), tl!(name)), |ui| {
+                    for (color, name, value) in colors {
+                        if ui.selectable_label(current == color, tl!(name)).clicked() {
+                            let _ = app.run("view.readPageColor", json!({"value": value}));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
                 // Headings to jump to, in the Navigation pane beside the columns (Outline view
                 // is an editing layout, so it isn't offered here).
                 if ui.button(tl!("Navigation Pane")).clicked() {
