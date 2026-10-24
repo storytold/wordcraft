@@ -304,13 +304,11 @@ fn fallback_cache_is_dropped_when_a_face_loads_by_its_legacy_family_name() {
     assert!(!cache.map.contains_key(&(missing, latin.id())), "answers from before the load are dropped");
 }
 
-#[test]
-fn fallback_reads_each_installed_font_file_once_however_many_characters_miss() {
-    // #605: every distinct character no font covers read every installed font file again.
-    let dir = font_dir("coverage");
-    // The installed Regular also maps U+30000 (no bundled font does): its last cmap group, the
-    // single character U+1F916, moved there (still the highest, so the groups stay sorted).
-    let mut regular = renamed("SourceSans3-Regular.ttf");
+/// A bundled Source Sans 3 Regular renamed `family` (13 characters) that also maps U+30000 (no
+/// bundled font does): its last cmap group, the single character U+1F916, moved there (still the
+/// highest, so the groups stay sorted).
+fn mapping_u30000(family: &str) -> Vec<u8> {
+    let mut regular = renamed_to("SourceSans3-Regular.ttf", family);
     let (from, to) = ([0x0001_F916_u32.to_be_bytes(); 2].concat(), [0x0003_0000_u32.to_be_bytes(); 2].concat());
     let mut patched = 0;
     while let Some(at) = regular.windows(from.len()).position(|w| w == from) {
@@ -318,7 +316,14 @@ fn fallback_reads_each_installed_font_file_once_however_many_characters_miss() {
         patched += 1;
     }
     assert!(patched > 0);
-    std::fs::write(dir.join("Sysfont-Regular.ttf"), regular).unwrap();
+    regular
+}
+
+#[test]
+fn fallback_reads_each_installed_font_file_once_however_many_characters_miss() {
+    // #605: every distinct character no font covers read every installed font file again.
+    let dir = font_dir("coverage");
+    std::fs::write(dir.join("Sysfont-Regular.ttf"), mapping_u30000(FAMILY)).unwrap();
     let db = FontDb::with_font_dirs(vec![dir]);
     let latin = db.face(FALLBACK_FAMILY, "Regular");
     let found = db.fallback_for('\u{30000}', latin.id()).expect("the installed font maps it");
@@ -332,7 +337,7 @@ fn fallback_reads_each_installed_font_file_once_however_many_characters_miss() {
     }
     let index = db.coverage.lock().unwrap();
     assert_eq!(index.files.len(), 2, "Regular and Bold are cataloged");
-    assert_eq!(index.reads, 2, "each file read once");
+    assert_eq!(index.reads, 2, "each file's character map read once");
 }
 
 /// A bundled Source Sans 3 `file` renamed `family` whose last cmap group (the single character
@@ -421,20 +426,134 @@ fn a_family_partly_loaded_by_a_character_fallback_is_loaded_whole_for_a_run() {
 }
 
 #[test]
-fn coverage_ranges_hold_exactly_the_mapped_characters() {
+fn a_preferred_fallback_family_loads_only_when_it_maps_the_character() {
+    // A character no loaded font covers loaded every installed family in the fallback list up
+    // to one that covers it, and kept them all: an emoji loaded every CJK family a Mac has,
+    // about 500 MB. Malgun Gothic comes before Apple Symbols in that list.
+    let dir = font_dir("preferred");
+    std::fs::write(dir.join("Malgun.ttf"), renamed_to("SourceSans3-Regular.ttf", "Malgun Gothic")).unwrap();
+    std::fs::write(dir.join("Symbols.ttf"), mapping_u30000("Apple Symbols")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    let found = db.fallback_for('\u{30000}', latin.id()).expect("Apple Symbols maps it");
+    assert_eq!(found.family, "Apple Symbols");
+    assert!(!db.is_loaded("Malgun Gothic"), "a family that lacks the character isn't loaded for it");
+    assert_eq!(db.coverage.lock().unwrap().reads, 2, "only the two families' character maps were read");
+    // The fallback order is unchanged: when both map it, the first in the list is chosen.
+    std::fs::write(dir.join("Malgun.ttf"), mapping_u30000("Malgun Gothic")).unwrap();
+    let db = FontDb::with_font_dirs(vec![dir]);
+    let found = db.fallback_for('\u{30000}', latin.id()).expect("both map it");
+    assert_eq!(found.family, "Malgun Gothic");
+    assert!(!db.is_loaded("Apple Symbols"));
+}
+
+#[test]
+fn a_preferred_fallback_family_in_a_very_large_file_is_still_found() {
+    // The coverage index reads character maps, not whole files, so a preferred family is found
+    // whatever its size (PingFang is 75 MB, Apple Color Emoji 180 MB): here a font padded past
+    // the limit on files the index loads by itself.
+    let dir = font_dir("large");
+    let mut data = mapping_u30000("Apple Symbols");
+    data.resize(data.len() + SYS_FALLBACK_MAX_FILE as usize, 0);
+    std::fs::write(dir.join("Symbols.ttf"), &data).unwrap();
+    drop(data);
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    let latin = db.face(FALLBACK_FAMILY, "Regular");
+    let found = db.fallback_for('\u{30000}', latin.id()).map(|f| f.family.clone());
+    std::fs::remove_file(dir.join("Symbols.ttf")).unwrap();
+    assert_eq!(found.as_deref(), Some("Apple Symbols"));
+}
+
+#[test]
+fn coverage_holds_exactly_the_mapped_characters() {
+    let dir = font_dir("coverage-ranges");
     let data = renamed("SourceSans3-Regular.ttf");
-    let ranges = coverage_ranges(&data);
+    let ranges = file_coverage(&dir.join("Sysfont-Regular.ttf"));
     assert!(ranges.windows(2).all(|w| w[0].1 + 1 < w[1].0), "sorted, disjoint and merged");
     let font = skrifa::FontRef::new(&data).unwrap();
     let mapped: Vec<u32> = font.charmap().mappings().map(|(cp, _)| cp).collect();
     assert!(ranges.len() < mapped.len() / 4, "ranges, not a set of characters");
     assert!(mapped.iter().all(|cp| ranges_hold(&ranges, *cp)));
-    for cp in [0x0, 0x9, 0x0E01, 0x17000, 0x10_FFFF] {
+    for cp in [0x0, 0x9, 0x0E01, 0x17000, 0x3_0000, 0x10_FFFF] {
         assert_eq!(ranges_hold(&ranges, cp), font.charmap().map(cp).is_some(), "U+{cp:04X}");
     }
-    // Damaged data indexes as nothing.
-    assert!(coverage_ranges(b"ttcf\0\x01\0\0\xff\xff\xff\xff").is_empty());
-    assert!(coverage_ranges(&data[..100]).is_empty());
+    // A collection: what its faces map together.
+    std::fs::write(dir.join("both.ttc"), collection(&[data.clone(), mapping_u30000(FAMILY)])).unwrap();
+    let both = file_coverage(&dir.join("both.ttc"));
+    assert!(ranges_hold(&both, 0x3_0000) && mapped.iter().all(|cp| ranges_hold(&both, *cp)));
+    // Damaged, cut short, not a font or missing: nothing.
+    std::fs::write(dir.join("short.ttf"), &data[..100]).unwrap();
+    for name in ["damaged.ttf", "short.ttf", "readme.txt", "missing.ttf"] {
+        assert!(file_coverage(&dir.join(name)).is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn coverage_stops_when_a_compaction_frees_too_little() {
+    // A crafted file whose faces interleave their code points made every mapping past the cap
+    // sort all the ranges again, freeing one: a compaction must free a quarter of the cap.
+    let cap = u32::try_from(Coverage::MAX_RANGES).unwrap();
+    let mut c = Coverage::default();
+    // One face maps every third code point, one range short of the cap; the next face maps the
+    // code points after them: the first fills the cap, the second compacts it and frees one.
+    assert!((0..cap - 1).all(|i| c.push(3 * i)));
+    assert!(c.push(1));
+    assert!(!c.push(4), "a compaction that frees one range ends the file's coverage");
+    // A compaction that frees enough goes on.
+    let mut c = Coverage::default();
+    assert!((0..cap / 2).all(|i| c.push(2 * i)) && (0..cap / 2).all(|i| c.push(2 * i + 1)));
+    assert!(c.push(cap + 1), "the compaction merges every range");
+    assert_eq!(&*c.finish(), &[(0, cap - 1), (cap + 1, cap + 1)]);
+}
+
+#[test]
+fn a_rescan_reads_a_replaced_font_files_character_maps_again() {
+    // A font updated in place since its character maps were read: what the update maps counts.
+    let dir = font_dir("replaced");
+    let db = FontDb::with_font_dirs(vec![dir.clone()]);
+    assert!(!db.family_maps(FAMILY, '\u{30000}'));
+    // The update is a few bytes longer, so it differs however coarse the file times are.
+    let mut data = mapping_u30000(FAMILY);
+    data.extend_from_slice(&[0; 4]);
+    std::fs::write(dir.join("Sysfont-Regular.ttf"), data).unwrap();
+    assert!(!db.family_maps(FAMILY, '\u{30000}'), "the index answers until the folders are scanned again");
+    db.load_system_fonts();
+    assert!(db.family_maps(FAMILY, '\u{30000}'));
+    assert_eq!(db.coverage.lock().unwrap().reads, 3, "the unchanged Bold file isn't read again");
+}
+
+#[test]
+fn coverage_of_installed_fonts_is_what_their_loaded_faces_map() {
+    // Read from the character maps alone, as the whole file maps. Uses installed fonts when
+    // there are some, collections among them.
+    let paths: Vec<&Path> = [
+        "/System/Library/Fonts/Helvetica.ttc",
+        "/System/Library/Fonts/Hiragino Sans GB.ttc",
+        "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+        "C:\\Windows\\Fonts\\arial.ttf",
+        "C:\\Windows\\Fonts\\msyh.ttc",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/noto/NotoSans-Regular.ttf",
+    ]
+    .iter()
+    .map(Path::new)
+    .filter(|p| p.exists())
+    .collect();
+    if paths.is_empty() {
+        eprintln!("no known font installed: nothing to check");
+    }
+    for path in paths {
+        let data = std::fs::read(path).unwrap();
+        let faces = match FileRef::new(&data).unwrap() {
+            FileRef::Font(_) => 1,
+            FileRef::Collection(c) => c.len(),
+        };
+        let mut whole = Coverage::default();
+        for i in 0..faces {
+            assert!(whole.add(&skrifa::FontRef::from_index(&data, i).unwrap()));
+        }
+        assert_eq!(file_coverage(path), whole.finish(), "{}", path.display());
+    }
 }
 
 /// A bundled font renamed by a `name` table holding just its family names: (Windows language id,
