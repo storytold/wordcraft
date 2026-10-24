@@ -5383,6 +5383,7 @@ dependencies = [
 name = "wordcraft-ui-egui"
 version = "0.10.0"
 dependencies = [
+ "accesskit_consumer 0.35.0",
  "cfb",
  "craft-i18n",
  "craft-ui",
