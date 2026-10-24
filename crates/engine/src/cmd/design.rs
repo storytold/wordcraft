@@ -169,11 +169,19 @@ fn style_set(s: &mut Session, v: &Value) -> CmdResult {
             _ => {}
         }
     }
-    // Keep custom styles and fonts.
-    let customs: Vec<_> = s.doc.styles.styles.iter().filter(|x| !x.builtin).cloned().collect();
-    fresh.styles.extend(customs);
-    fresh.default_chr.font = s.doc.styles.default_chr.font.clone();
-    s.doc.styles = fresh;
+    // Overlay the set onto the document's sheet: every other style, the latent styles and the
+    // document defaults stay as they are (no set defines its own defaults).
+    for mut st in fresh.styles {
+        match s.doc.styles.styles.iter_mut().find(|x| x.id == st.id) {
+            Some(old) => {
+                st.default = old.default;
+                st.locked = old.locked;
+                st.builtin = old.builtin;
+                *old = st;
+            }
+            None => s.doc.styles.styles.push(st),
+        }
+    }
     let (h, b) = (s.doc.settings.major_font.clone(), s.doc.settings.minor_font.clone());
     set_fonts(s, &h, &b);
     set_accent(s, accent);
