@@ -114,6 +114,8 @@ pub(crate) struct Writer<'d> {
     inline_controls: Vec<usize>,
     /// Media keys actually referenced by a written drawing.
     used_media: std::collections::BTreeSet<String>,
+    /// Replies without anchors of their own, by the comment they answer ([`unanchored_replies`]).
+    unanchored_replies: HashMap<u32, Vec<u32>>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
     boxes: wordcraft_doc::BoxBudget,
     /// Text box stories already written: a story shown by many shapes is written once, the other
@@ -180,6 +182,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         boxes: wordcraft_doc::BoxBudget::default(),
         written_boxes: std::collections::HashSet::new(),
         embeds: embed::EmbedWriter::new(doc),
+        unanchored_replies: unanchored_replies(doc),
         txbx_links: doc
             .text_box_chains()
             .iter()
@@ -550,6 +553,46 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
     w.close("Types");
     entries.insert(0, ("[Content_Types].xml".into(), w.into_bytes()));
     Ok(entries)
+}
+
+/// Replies made here have no anchors of their own, and Word for Mac shows a reply only when it
+/// has them (observed in Word for Mac 16.114: such a reply is dropped). Each is written with the
+/// anchors of its parent, or of the nearest comment up its thread that has them, as Word saves a
+/// reply: both starts, then each end with its reference. Anchored comment id → its replies
+/// without anchors, in id order.
+fn unanchored_replies(doc: &Document) -> HashMap<u32, Vec<u32>> {
+    let mut anchored = std::collections::HashSet::new();
+    let stories = std::iter::once(wordcraft_doc::StoryRef::Body).chain(doc.parts.keys().map(|k| wordcraft_doc::StoryRef::Part(*k)));
+    for story in stories {
+        for path in doc.para_paths(story) {
+            for o in doc.para(story, &path).map(|p| p.objects.as_slice()).unwrap_or_default() {
+                if let wordcraft_doc::InlineObject::CommentStart { id } = o {
+                    anchored.insert(*id);
+                }
+            }
+        }
+    }
+    // A reply to a reply made here has no anchored parent either: it takes the anchors of the
+    // nearest comment up its thread that has them.
+    let anchored_ancestor = |mut id: u32| {
+        for _ in 0..doc.comments.len() {
+            id = doc.comments.get(&id)?.parent?;
+            if anchored.contains(&id) {
+                return Some(id);
+            }
+        }
+        None
+    };
+    let mut out: HashMap<u32, Vec<u32>> = HashMap::new();
+    for (id, c) in &doc.comments {
+        if c.parent.is_some()
+            && !anchored.contains(id)
+            && let Some(root) = anchored_ancestor(*id)
+        {
+            out.entry(root).or_default().push(*id);
+        }
+    }
+    out
 }
 
 fn push_part(entries: &mut Vec<(String, Vec<u8>)>, overrides: &mut Vec<(String, String)>, path: &str, bytes: Vec<u8>, ct: &str, rels: PartRels) {
