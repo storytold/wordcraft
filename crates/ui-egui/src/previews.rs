@@ -581,6 +581,12 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     for (i, (icon, delta)) in [("chevronUp", -1i32), ("chevronDown", 1), ("more", 0)].iter().enumerate() {
         let br = Rect::from_min_size(pos2(ar.min.x, ar.min.y + thirds * i as f32), vec2(ar.width(), thirds));
         let resp = ui.interact(br, ui.id().with(("gal_arrow", i)), Sense::click());
+        let name = match delta {
+            ..0 => tl!("Previous Styles"),
+            0 => tl!("Styles Pane"),
+            _ => tl!("Next Styles"),
+        };
+        crate::widgets::describe_button(&resp, name, ui.is_enabled(), None);
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }
@@ -598,6 +604,16 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
 
 /// Style sets shown in the Design tab's gallery, in order.
 const STYLE_SETS: [&str; 7] = ["default", "basic", "lines", "shaded", "casual", "centered", "minimalist"];
+/// Each style set's display name (English, translated through `tl!`), by id.
+pub const STYLE_SET_LABELS: [(&str, &str); 7] = [
+    ("default", "Default"),
+    ("basic", "Basic"),
+    ("lines", "Lined"),
+    ("shaded", "Shaded"),
+    ("casual", "Casual"),
+    ("centered", "Centered"),
+    ("minimalist", "Minimalist"),
+];
 /// Width of one gallery thumbnail, points.
 const STYLE_SET_W: f32 = 56.0;
 /// Width the whole gallery takes with the ribbon's 1 pt item spacing.
@@ -630,7 +646,10 @@ pub fn style_set_gallery(app: &mut WordApp, ui: &mut Ui) {
             let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2((ir.width() / sz.x).min(1.0), (ir.height() / sz.y).min(1.0)));
             ui.painter().image(h.id(), ir, uv, preview_tint(&t, false));
         }
-        if resp.on_hover_text(format!("Style set: {name}")).clicked() {
+        // Read out and shown by its translated display name, not its id (#1012 review).
+        let label = STYLE_SET_LABELS.iter().find(|(id, _)| *id == name).map_or(name, |(_, label)| tl!(label));
+        crate::widgets::describe_button(&resp, label, ui.is_enabled(), None);
+        if resp.on_hover_text(crate::i18n::fmt(tl!("Style set: {name}"), &[("name", label)])).clicked() {
             let _ = app.run("design.styleSet", json!({"name": name}));
         }
     }

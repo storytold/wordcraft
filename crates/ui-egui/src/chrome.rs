@@ -38,6 +38,7 @@ fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, e
     }
     let c = if enabled { t.icon } else { t.text_disabled };
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), icon, c, if enabled { t.accent } else { c });
+    crate::widgets::describe_button(&resp, tip, enabled, None);
     let sc = crate::widgets::shortcut_text(app, id);
     let resp = resp.on_hover_text(if sc.is_empty() { tip.to_string() } else { format!("{tip} ({sc})") });
     if resp.clicked() && enabled {
@@ -77,6 +78,8 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         if app.ui.keytips == crate::keytips::Phase::Tabs && ui.is_rect_visible(resp.rect) {
             let label = crate::keytips::qat_label(index, ids.len());
             if label.starts_with(&app.ui.keytip_prefix) {
+                // Screen readers announce the number as the button's access key (#1012).
+                ui.ctx().accesskit_node_builder(resp.id, |n| n.set_access_key(label.clone()));
                 app.keytip_rects.push((resp.rect, label));
             }
         }
@@ -92,6 +95,8 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
         ui.painter().rect_filled(r, 4.0, t.hover);
     }
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(16.0, 16.0)), "more", t.icon, t.accent);
+    crate::widgets::describe_button(&resp, tl!("Customize Quick Access Toolbar"), true, None);
+    crate::widgets::opens_menu(&resp);
     let resp = resp.on_hover_text(tl!("Customize Quick Access Toolbar"));
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(220.0);
@@ -143,6 +148,8 @@ fn undo_list_button(ui: &mut Ui, app: &mut WordApp, enabled: bool) {
     }
     let c = if enabled { t.icon } else { t.text_disabled };
     icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(9.0, 9.0)), "dropdown", c, c);
+    crate::widgets::describe_button(&resp, tl!("Undo History"), enabled, None);
+    crate::widgets::opens_menu(&resp);
     let resp = resp.on_hover_text(tl!("Undo History"));
     egui::Popup::menu(&resp).show(|ui| undo_list(ui, app));
 }
@@ -290,6 +297,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let full = ui.max_rect();
             // Drag the window by the title bar (integrated title bar on macOS).
             let drag = ui.interact(full, ui.id().with("title_drag"), Sense::click_and_drag());
+            // The window's drag handle is nothing to a screen reader.
+            ui.ctx().accesskit_node_builder(drag.id, |n| n.set_hidden());
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
@@ -311,6 +320,12 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 let text = ui.add(
                     egui::Label::new(egui::RichText::new(tl!("AutoSave")).font(regular(11.5)).color(color)).selectable(false).sense(Sense::click()),
                 );
+                // The switch below is the one control a screen reader finds, named AutoSave.
+                ui.ctx().accesskit_node_builder(text.id, |n| {
+                    n.set_hidden();
+                    n.clear_value();
+                    n.clear_label();
+                });
                 let (r, resp) = ui.allocate_exact_size(vec2(30.0, 16.0), Sense::click());
                 let (fill, stroke, knob_fill) = match (&block, on) {
                     (Some(_), _) => (t.input.gamma_multiply(0.5), t.border.gamma_multiply(0.7), t.text_dim.gamma_multiply(0.45)),
@@ -320,6 +335,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 ui.painter().rect(r, 8.0, fill, Stroke::new(1.0, stroke), egui::StrokeKind::Inside);
                 let knob = if on { r.max.x - 8.0 } else { r.min.x + 8.0 };
                 ui.painter().circle_filled(pos2(knob, r.center().y), 5.0, knob_fill);
+                resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, tl!("AutoSave")));
                 let tip = block
                     .as_ref()
                     .map_or_else(|| tl!("AutoSave saves every change to the file (needs a saved document)").to_string(), |b| b.reason());
@@ -365,6 +381,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                             t.on_accent,
                         );
                         ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, tl!("Discord"), medium(11.5), t.on_accent);
+                        crate::widgets::describe_button(&resp, tl!("Discord"), true, None);
                         if resp.on_hover_text(tl!("Join the ArtCraft community on Discord")).clicked() {
                             let _ = app.run("ui.discord", json!({}));
                         }
@@ -445,6 +462,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
         t.text_dim,
     );
     if app.ui.keytips == crate::keytips::Phase::Tabs {
+        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_access_key(crate::keytips::SEARCH_LETTER));
         app.keytip_rects.push((r, crate::keytips::SEARCH_LETTER.to_string()));
     }
     let tip = match crate::widgets::shortcut_text(app, "tools.search") {

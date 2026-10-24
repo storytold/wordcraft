@@ -7,7 +7,7 @@ use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
 /// The side menu: page id, label and icon (#1714).
-const PAGES: [(&str, &str, &str); 11] = [
+pub(crate) const PAGES: [(&str, &str, &str); 11] = [
     ("home", "Home", "homeFolder"),
     ("new", "New", "blankPage"),
     ("open", "Open", "open"),
@@ -78,6 +78,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
+                // The keyboard (and a screen reader) lands on the open page when nothing else has it (#1012).
+                if active && on && app.dialog.is_none() && ui.ctx().memory(|m| m.focused().is_none()) {
+                    resp.request_focus();
+                }
                 if active {
                     ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
                 } else if on && resp.hovered() {

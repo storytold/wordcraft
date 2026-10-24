@@ -145,7 +145,7 @@ fn tooltip(app: &WordApp, resp: Response, label: &str, id: &str) -> Response {
 
 /// Record a keytip badge over a control's rect when keytips are showing commands. `ui` reaches
 /// the phase and badge list through egui memory, so widgets without `&mut WordApp` can record too.
-fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
+fn keytip_badge(ui: &Ui, resp: &Response, id: &str, name: &str) {
     if ui.data(|d| d.get_temp::<crate::keytips::Phase>(crate::keytips::phase_id())) != Some(crate::keytips::Phase::Commands) {
         return;
     }
@@ -163,12 +163,42 @@ fn keytip_badge(ui: &Ui, rect: Rect, id: &str, name: &str) {
     };
     let letter = ui.data(|d| d.get_temp::<Vec<String>>(crate::keytips::letters_id().with(&tab))).and_then(|l| l.get(i).cloned());
     if let Some(l) = letter {
+        // Screen readers announce the letters as the control's access key (#1012).
+        ui.ctx().accesskit_node_builder(resp.id, |n| n.set_access_key(l.clone()));
         ui.data_mut(|d| {
             let mut v: Vec<(Rect, String)> = d.get_temp::<Vec<(Rect, String)>>(crate::keytips::rects_id()).unwrap_or_default();
-            v.push((rect, l));
+            v.push((resp.rect, l));
             d.insert_temp(crate::keytips::rects_id(), v);
         });
+        // Choosing a tab moves the keyboard focus to its first command (the first to ask while
+        // the focus is pending); never to a combo's text box, which would start editing.
+        if id != "combo" {
+            crate::keytips::take_focus(ui.ctx(), resp, crate::keytips::Phase::Commands);
+        }
     }
+}
+
+/// What a screen reader is told about a drawn ribbon button: its name, whether it can run,
+/// and, for a toggle (`Some`), whether it is on. Free while no screen reader is on.
+pub(crate) fn describe_button(resp: &Response, name: &str, enabled: bool, toggled: Option<bool>) {
+    match toggled {
+        Some(on) => resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, enabled, on, name)),
+        None => resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, name)),
+    }
+}
+
+/// Name a field (a number box, a text box) to screen readers by the labels drawn beside it.
+pub(crate) fn labelled_by(field: &Response, labels: &[&Response]) {
+    field.ctx.accesskit_node_builder(field.id, |n| {
+        for l in labels {
+            n.push_labelled_by(l.id.accesskit_id());
+        }
+    });
+}
+
+/// Tell a screen reader that `resp` opens a menu (drop-down and split-button arrows).
+pub(crate) fn opens_menu(resp: &Response) {
+    resp.ctx.accesskit_node_builder(resp.id, |n| n.set_has_popup(egui::accesskit::HasPopup::Menu));
 }
 
 /// Whether a command exists and is enabled.
@@ -215,12 +245,17 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
-    big_button(ui, app, icon, label, id, params, menu, false)
+    big_button(ui, app, icon, label, id, params, menu, None)
 }
 
 /// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
 pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
-    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, checked)
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, Some(checked))
+}
+
+/// [`big_toggle`] run with `params` (Show Comments says which way it switches).
+pub fn big_toggle_with(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, checked: bool) -> Response {
+    big_button(ui, app, icon, label, id, params, false, Some(checked))
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
@@ -242,14 +277,15 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
 }
 
 #[allow(clippy::too_many_arguments)]
-fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
+fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, toggled: Option<bool>) -> Response {
+    let checked = toggled.unwrap_or(false);
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
         label.split('\n').map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x)).fold(0.0, f32::max);
     let w = (galley_w + 12.0).max(44.0);
     let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
-    keytip_badge(ui, r, id, &label.replace('\n', " "));
+    keytip_badge(ui, &resp, id, &label.replace('\n', " "));
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
@@ -262,6 +298,10 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
         y += LABEL_PITCH;
     }
     let resp = tooltip(app, resp, &label.replace('\n', " "), id);
+    describe_button(&resp, &label.replace('\n', " "), on, toggled);
+    if menu {
+        opens_menu(&resp);
+    }
     command_menu(&resp, app, id);
     if resp.clicked() && on && !menu {
         run_from_ribbon(app, id, params);
@@ -269,15 +309,37 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     resp
 }
 
-/// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
+/// A small button: 16 px icon with an optional label; `checked` draws it pressed.
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
+    small_button(ui, app, icon, label, tip, id, params, checked, false)
+}
+
+/// A small button for something that is on or off (Bold, Center, View Gridlines): `checked`
+/// draws it pressed, and screen readers hear it as a toggle that is on or off.
+#[allow(clippy::too_many_arguments)]
+pub fn small_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
+    small_button(ui, app, icon, label, tip, id, params, checked, true)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn small_button(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: Option<&str>,
+    tip: &str,
+    id: &str,
+    params: Value,
+    checked: bool,
+    toggle: bool,
+) -> Response {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     // A compact group (#662) shows only the icon; the tooltip keeps the name.
     let label = label.filter(|_| !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
     let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w, 22.0), Sense::click());
-    keytip_badge(ui, r, id, tip);
+    keytip_badge(ui, &resp, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
@@ -291,11 +353,13 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
+    describe_button(&resp, tip, on, toggle.then_some(checked));
     resp
 }
 
-/// A split button: the left part runs `id`, the arrow opens a menu filled by `menu`.
+/// A split button: the left part runs `id`, the arrow opens a menu filled by `menu`. `checked`
+/// is `Some` for an on/off button (Underline, Bullets): drawn pressed when on, and a toggle to
+/// screen readers.
 pub fn split(
     ui: &mut Ui,
     app: &mut WordApp,
@@ -303,16 +367,22 @@ pub fn split(
     tip: &str,
     id: &str,
     params: Value,
-    checked: bool,
+    toggled: Option<bool>,
     swatch: Option<Color32>,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
     let tip = tl!(tip);
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(24.0, 22.0), Sense::click());
-    keytip_badge(ui, r, id, tip);
+    keytip_badge(ui, &resp, id, tip);
     let (ar, aresp) = ui.allocate_exact_size(vec2(11.0, 22.0), Sense::click());
+    let checked = toggled.unwrap_or(false);
+    // Both halves tell a screen reader what they are (#1012): the button, and its menu.
     let on = enabled(app, id);
+    describe_button(&resp, tip, on, toggled);
+    let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
+    describe_button(&aresp, &arrow_title, on, None);
+    opens_menu(&aresp);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
     let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
@@ -328,12 +398,7 @@ pub fn split(
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
-    // The arrow opens the choices beside the button: it says whose, so it is not just "button"
-    // (#3172).
-    aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &arrow_title));
     if !on {
         return;
     }
@@ -374,7 +439,7 @@ pub fn menu_button(
             .fold(0.0, f32::max);
         let w = (galley_w + 22.0).max(44.0);
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
-        keytip_badge(ui, r, "menu", tip);
+        keytip_badge(ui, &resp, "menu", tip);
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
@@ -387,7 +452,7 @@ pub fn menu_button(
     } else {
         let text_w = label.map(|l| ui.ctx().fonts_mut(|f| f.layout_no_wrap(l.to_string(), regular(11.5), t.text).size().x) + 6.0).unwrap_or(0.0);
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
-        keytip_badge(ui, r, "menu", tip);
+        keytip_badge(ui, &resp, "menu", tip);
         bg(ui, r, &resp, false, &t);
         icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
         if let Some(l) = label {
@@ -400,6 +465,7 @@ pub fn menu_button(
     let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
     show_hint(&resp, &title, &notes);
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
+    opens_menu(&resp);
     if !on {
         return;
     }
@@ -479,7 +545,9 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
             ui.painter().rect_filled(lr.expand(2.0), 2.0, t.hover);
         }
         icons::paint(ui.painter(), lr, "launcher", t.text_dim, t.accent);
-        if resp.on_hover_text(crate::i18n::fmt(tl!("{group} settings"), &[("group", title)])).clicked() {
+        let name = crate::i18n::fmt(tl!("{group} settings"), &[("group", title)]);
+        describe_button(&resp, &name, ui.is_enabled(), None);
+        if resp.on_hover_text(name).clicked() {
             let _ = app.run(cmd, serde_json::json!({}));
         }
     }
@@ -827,6 +895,18 @@ struct ComboSearch {
     view_h: f32,
 }
 
+/// The name screen readers hear for a combo box, by its id (its label is drawn elsewhere, or
+/// not at all).
+fn combo_name(id: &str) -> Option<&'static str> {
+    Some(match id {
+        "font" | "mini_font" | "fontdlg_font" | "tstyle_font" | "ms_font" | "symbol_font" => tl!("Font"),
+        "size" | "mini_size" => tl!("Font Size"),
+        "outlineLevel" => tl!("Outline Level"),
+        "outlineShowLevel" => tl!("Show Level"),
+        _ => return None,
+    })
+}
+
 fn combo_impl(
     ui: &mut Ui,
     id: &str,
@@ -872,12 +952,11 @@ fn combo_impl(
         // The arrow's box is painted here, under the field, once its size is known.
         let arrow_bg = ui.painter().add(egui::Shape::Noop);
         let resp = ui.add(te);
-        // The field says what it is: without a name a screen reader has only "edit" to say
-        // (#3172). The arrow says whose options it opens, as the split buttons' arrow does.
-        if !tip.is_empty() {
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), tip));
+        keytip_badge(ui, &resp, "combo", id);
+        let name = combo_name(id);
+        if let Some(name) = name {
+            ui.ctx().accesskit_node_builder(resp.id, |n| n.set_label(name));
         }
-        keytip_badge(ui, resp.rect, "combo", id);
         focused = resp.has_focus();
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let mut reveal = step != 0;
@@ -929,10 +1008,11 @@ fn combo_impl(
             out = Some(text.clone());
         }
         let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
-        if !tip.is_empty() {
-            let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]);
-            aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &arrow_name));
+        if let Some(name) = name {
+            let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", name)]);
+            describe_button(&aresp, &arrow_name, ui.is_enabled(), None);
         }
+        opens_menu(&aresp);
         // It reaches one border width under the field, so the field's right border is the only line
         // between them: two borders side by side read as a double-width divider.
         let ar_radius = CornerRadius { nw: 0, sw: 0, ne: r.ne, se: r.se };

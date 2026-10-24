@@ -170,6 +170,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 - 2026-10-15: Find opens Navigation on Results; editing the query restores Results after manual Headings/Pages navigation. Typed and selected-text searches retain document contents (#2096).
 
 | Date | What landed |
+| 2026-10-15 | Screen readers hear the ribbon (#1012): every control on every tab, the contextual tabs and the Quick Access Toolbar has a name, a role and its disabled, on/off or opens-a-menu state; tabs are a tab list with the active tab selected. Keytips move the keyboard focus (Alt/F10 the active tab, a tab letter its first command, Escape back a level, then the page) and expose their letters as access keys. Tested headlessly; no NVDA, VoiceOver or Orca run yet. |
 | 2026-10-23 | Interface translations come from storytold/craft-i18n, shared with the other Crafting Apps: the catalogs are embedded at build time from the commit in `craft-i18n.rev` and looked up through craft-libs' `craft-i18n` crate; `crates/ui-egui/src/i18n/*.tsv` are gone (translations now go to craft-i18n). Strings other apps already translate show translated; a build without `CRAFT_I18N_DIR` is English only |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
@@ -602,6 +603,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-23 | trivial | Progress log: a relationship the markup names without the prefix is read as it wrote (#3411 follow-up) |
 | 2026-10-21 | trivial | Progress log: a document with many relationships opens in the time its part takes (#3411) |
 | 2026-10-23 | trivial | Progress log: an empty paragraph with a hidden mark draws no list number (#3982) |
+| 2026-10-15 | trivial | Progress log: the ribbon and keytips described to screen readers (#1012) |
 | 2026-10-22 | minor | Progress log: Spanish proofing (#3360, #3553) |
 | 2026-10-22 | minor | Compare's new and revised untitled results clear the previous document's version snapshots; a rejected protected comparison or mailing result preserves the snapshots and file identity. |
 | 2026-10-22 | minor | The CLI author flag and the Options user name field cannot change the session name after protection starts (#3279 follow-up). |

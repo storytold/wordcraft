@@ -11,7 +11,7 @@ use wordcraft_engine::math_gallery::{BUILT_INS, STRUCTURES, SYMBOL_SETS, Templat
 
 use crate::WordApp;
 use crate::theme::{Tokens, regular, semibold};
-use crate::widgets::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, LABEL_PITCH, group, small};
+use crate::widgets::{BIG_ICON_Y, BIG_LABEL_Y, CONTENT_H, LABEL_PITCH, group, small_toggle};
 
 /// What each structure button shows.
 pub(crate) fn button_picture(id: &str) -> &'static str {
@@ -65,6 +65,8 @@ fn math_menu_button(ui: &mut Ui, app: &mut WordApp, picture: &str, label: &str, 
         crate::widgets::label_line(ui, r.center().x, y, l, regular(11.5), t.text, i + 1 == lines.len());
         y += LABEL_PITCH;
     }
+    crate::widgets::describe_button(&resp, &label.replace('\n', " "), ui.is_enabled(), None);
+    crate::widgets::opens_menu(&resp);
     let resp = resp.on_hover_text(label.replace('\n', " "));
     egui::Popup::menu(&resp).show(|ui| {
         ui.set_min_width(260.0);
@@ -82,6 +84,7 @@ fn tile(ui: &mut Ui, app: &mut WordApp, tpl: &Template, size: egui::Vec2) -> boo
     }
     let pt = if size.x > 120.0 { 13.0 } else { 14.0 };
     paint_math(app, ui, r.shrink(2.0), &format!("tpl:{}", tpl.id), tpl.linear, Some(tpl.nodes()), true, pt);
+    crate::widgets::describe_button(&resp, tl!(tpl.label), true, None);
     resp.on_hover_text(tl!(tpl.label)).clicked()
 }
 
@@ -130,6 +133,7 @@ pub fn builtin_menu(ui: &mut Ui, app: &mut WordApp) {
                 ui.painter().rect_stroke(r, 2.0, Stroke::new(1.5, t.accent), egui::StrokeKind::Inside);
             }
             paint_math(app, ui, r.shrink(2.0), &format!("builtin:{id}"), lin, None, true, 11.0);
+            crate::widgets::describe_button(&resp, tl!(label), true, None);
             if resp.clicked() {
                 let _ = app.run("insert.equation", json!({"builtin": id}));
                 app.canvas.want_focus = true;
@@ -169,6 +173,10 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
         t.accent,
     );
     crate::widgets::label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, label, regular(11.5), t.text, true);
+    // A split button to screen readers too: the picture inserts, the label opens the list.
+    crate::widgets::describe_button(&rt, tl!("Insert New Equation"), ui.is_enabled(), None);
+    crate::widgets::describe_button(&rb, label, ui.is_enabled(), None);
+    crate::widgets::opens_menu(&rb);
     if rt.on_hover_text(tl!("Insert a new equation (Alt+=)")).clicked() {
         let _ = app.run("insert.equation", json!({}));
         app.canvas.want_focus = true;
@@ -257,6 +265,7 @@ fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
     let nodes = vec![wordcraft_doc::math::MNode::Run(wordcraft_doc::math::MRun { text: s.clone(), lit: true, ..Default::default() })];
     paint_math(app, ui, r, &format!("sym:{s}"), &s, Some(nodes), false, 11.0);
     let name = wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{s}  \\{n}")).unwrap_or_else(|| format!("{s}  U+{:04X}", c as u32));
+    crate::widgets::describe_button(&resp, &name, ui.is_enabled(), None);
     resp.on_hover_text(name).clicked()
 }
 
@@ -267,7 +276,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let latex = app.session.math_latex;
-            small(
+            small_toggle(
                 ui,
                 app,
                 "equation",
@@ -277,7 +286,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 json!({"format": "unicode"}),
                 !latex,
             );
-            small(ui, app, "formula", Some("LaTeX"), "Type equations in LaTeX", "equation.inputFormat", json!({"format": "latex"}), latex);
+            small_toggle(ui, app, "formula", Some("LaTeX"), "Type equations in LaTeX", "equation.inputFormat", json!({"format": "latex"}), latex);
             crate::widgets::menu_button(
                 ui,
                 app,
@@ -305,7 +314,16 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let normal = app.session.math_normal_text;
-            small(ui, app, "case", Some("Normal Text"), "Type normal (non-math) text in the equation", "equation.normalText", json!({}), normal);
+            small_toggle(
+                ui,
+                app,
+                "case",
+                Some("Normal Text"),
+                "Type normal (non-math) text in the equation",
+                "equation.normalText",
+                json!({}),
+                normal,
+            );
         });
     });
     group(ui, "Symbols", None, app, symbols);
@@ -321,7 +339,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             let info = app.session.run("equation.get", &json!({})).ok();
             let display = info.as_ref().and_then(|v| v.get("display")).and_then(|v| v.as_bool()).unwrap_or(false);
             let numbered = info.as_ref().and_then(|v| v.get("linear")).and_then(|v| v.as_str()).is_some_and(|l| l.contains('#'));
-            small(
+            small_toggle(
                 ui,
                 app,
                 "alignCenter",
@@ -331,7 +349,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 json!({"value": true}),
                 display,
             );
-            small(
+            small_toggle(
                 ui,
                 app,
                 "alignLeft",
@@ -341,7 +359,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 json!({"value": false}),
                 !display,
             );
-            small(
+            small_toggle(
                 ui,
                 app,
                 "numbering",
