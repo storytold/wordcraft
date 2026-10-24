@@ -2,6 +2,10 @@
 //! it starts with `Application_getActiveDocument`, ends with `Document_complete`, and all its
 //! changes are a single undo step ("Zotero").
 //!
+//! Every editing call runs through [`Session::guarded_edit`], so it obeys Restrict Editing like a
+//! command, and edits through the engine's revision-aware paths, so content-control locks refuse
+//! it and Track Changes records it (#1323).
+//!
 //! Field ids handed to Zotero stay valid for the transaction: they are kept in a list parallel
 //! to the document-order list of Zotero fields, updated as fields are inserted and removed.
 
@@ -11,6 +15,7 @@ use wordcraft_doc::para::OBJ;
 use wordcraft_doc::props::{LineSpacing, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::{CharProps, InlineObject, ParaProps, PartKind, Pos, StoryRef};
+use wordcraft_engine::cmd::{self, controls};
 use wordcraft_engine::{Selection, Session};
 
 use crate::fields::{self, ZField};
@@ -182,7 +187,8 @@ impl Bridge {
 
     /// Answer one call. Errors become `ERR:` replies; Zotero shows them and cancels.
     pub fn handle(&mut self, s: &mut Session, host: &mut dyn Host, c: &Call) -> R {
-        let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.dispatch(s, host, c)));
+        let r =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| if edits(s, c) { self.guarded(s, host, c) } else { self.dispatch(s, host, c) }));
         match r {
             Ok(r) => r,
             Err(_) => {
@@ -190,6 +196,18 @@ impl Bridge {
                 Err(format!("{}: internal error", c.method))
             }
         }
+    }
+
+    /// An editing call, under the rules commands obey: refused (the document, undo history and
+    /// field ids as they were) where the document is protected or a content control is locked.
+    fn guarded(&mut self, s: &mut Session, host: &mut dyn Host, c: &Call) -> R {
+        let saved = (self.ids.clone(), self.checkpointed, self.caret_after);
+        let r = s.guarded_edit(&c.method, |s| self.dispatch(s, host, c));
+        if r.is_err() {
+            (self.ids, self.checkpointed, self.caret_after) = saved;
+            s.clamp_selection();
+        }
+        r.map_err(|e| e.to_string())
     }
 
     fn dispatch(&mut self, s: &mut Session, host: &mut dyn Host, c: &Call) -> R {
@@ -246,8 +264,10 @@ impl Bridge {
                 self.begin_edit(s);
                 let at = delete_selection(s)?;
                 let base = s.doc.para_at(&at).map(|p| p.props_at(at.off).clone()).unwrap_or_default();
+                // New text: never deleted, even next to text Track Changes just struck.
+                let base = cmd::new_text_props(s, &at, base).map_err(|e| e.to_string())?;
                 let frag = rich::fragment(&html, true, &base);
-                let end = s.doc.insert_fragment(&at, &frag).map_err(|e| e.to_string())?;
+                let end = cmd::insert_fragment(s, &at, frag).map_err(|e| e.to_string())?;
                 s.sel = Selection::caret(end);
                 Self::end_edit(s);
                 Ok(Value::Null)
@@ -315,7 +335,7 @@ impl Bridge {
             "Field_delete" => {
                 let (k, f) = self.field(s, arg_id(c, 1)?)?;
                 self.begin_edit(s);
-                s.doc.delete_range(&f.start, &f.after()).map_err(|e| e.to_string())?;
+                cmd::delete_range(s, &f.start, &f.after()).map_err(|e| e.to_string())?;
                 self.forget(k);
                 let _ = remove_empty_note(s, &f);
                 Self::end_edit(s);
@@ -331,15 +351,16 @@ impl Bridge {
             "Field_removeCode" => {
                 let (k, f) = self.field(s, arg_id(c, 1)?)?;
                 self.begin_edit(s);
-                s.doc.delete_range(&f.end, &f.after()).map_err(|e| e.to_string())?;
-                s.doc.delete_range(&f.start, &f.content_start()).map_err(|e| e.to_string())?;
+                cmd::delete_range(s, &f.end, &f.after()).map_err(|e| e.to_string())?;
+                cmd::delete_range(s, &f.start, &f.content_start()).map_err(|e| e.to_string())?;
                 self.forget(k);
                 Self::end_edit(s);
                 Ok(Value::Null)
             }
             "Field_getText" => {
                 let (_, f) = self.field(s, arg_id(c, 1)?)?;
-                Ok(json!(s.doc.copy_range(&f.content_start(), &f.end).plain_text()))
+                // As it reads: text Track Changes holds as deleted isn't the citation any more.
+                Ok(json!(s.doc.copy_range(&f.content_start(), &f.end).to_document().final_text(StoryRef::Body)))
             }
             "Field_setText" => {
                 let id = arg_id(c, 1)?;
@@ -351,6 +372,7 @@ impl Bridge {
             "Field_setCode" => {
                 let (_, f) = self.field(s, arg_id(c, 1)?)?;
                 let code = arg_str(c, 2)?;
+                controls::check_edit(s, &f.start, &f.after()).map_err(|e| e.to_string())?;
                 self.begin_edit(s);
                 let p = s.doc.para_mut(f.start.story, &f.start.path).map_err(|e| e.to_string())?;
                 match p.object_at_mut(f.start.off) {
@@ -387,13 +409,14 @@ impl Bridge {
         let at = delete_selection(s)?;
         let base = s.doc.para_at(&at).map(|p| p.props_at(at.off).clone()).unwrap_or_default();
         let base = CharProps { style: base.style.filter(|st| !st.ends_with("Reference")), ..base };
+        let base = cmd::new_text_props(s, &at, base).map_err(|e| e.to_string())?;
         let start = at.clone();
         let mut cur = s
             .doc
             .insert_object(&start, InlineObject::FieldStart { instr: fields::PREFIX.to_string(), locked: false, dirty: false }, &base)
             .map_err(|e| e.to_string())?;
         match content {
-            Some(frag) => cur = s.doc.insert_fragment(&cur, &frag).map_err(|e| e.to_string())?,
+            Some(frag) => cur = cmd::insert_fragment(s, &cur, frag).map_err(|e| e.to_string())?,
             None => cur = s.doc.insert_text(&cur, PLACEHOLDER, &base).map_err(|e| e.to_string())?,
         }
         let after = s.doc.insert_object(&cur, InlineObject::FieldEnd, &base).map_err(|e| e.to_string())?;
@@ -406,10 +429,11 @@ impl Bridge {
         let (_, f) = self.field(s, id)?;
         self.begin_edit(s);
         let base = s.doc.para(f.start.story, &f.start.path).map(|p| p.props_of_char(f.start.off).clone()).unwrap_or_default();
+        let base = cmd::new_text_props(s, &f.content_start(), base).map_err(|e| e.to_string())?;
         let frag = rich::fragment(text, rich, &base);
         let multi = frag.blocks.len() > 1;
-        let at = s.doc.delete_range(&f.content_start(), &f.end).map_err(|e| e.to_string())?;
-        let end = s.doc.insert_fragment(&at, &frag).map_err(|e| e.to_string())?;
+        let at = cmd::delete_range(s, &f.content_start(), &f.end).map_err(|e| e.to_string())?;
+        let end = cmd::insert_fragment(s, &at, frag).map_err(|e| e.to_string())?;
         if f.code.get(..4).is_some_and(|k| k.eq_ignore_ascii_case("BIBL")) {
             ensure_bib_style(s);
             let paths = s.doc.paths_between(&f.start, &end);
@@ -448,7 +472,7 @@ impl Bridge {
         self.begin_edit(s);
         let saved = s.sel.clone();
         let frag = s.doc.copy_range(&f.start, &f.after());
-        s.doc.delete_range(&f.start, &f.after()).map_err(|e| e.to_string())?;
+        cmd::delete_range(s, &f.start, &f.after()).map_err(|e| e.to_string())?;
         // Where the citation goes in the text: where it was, or where its note's mark was.
         let at = match f.start.story {
             StoryRef::Body => f.start.clone(),
@@ -462,21 +486,16 @@ impl Bridge {
         };
         match target {
             None => {
-                s.doc.insert_fragment(&at, &frag).map_err(|e| e.to_string())?;
+                cmd::insert_fragment(s, &at, frag).map_err(|e| e.to_string())?;
             }
             Some(kind) => {
                 s.sel = Selection::caret(at.clone());
                 s.join_next_undo();
                 let cmd = if kind == PartKind::Footnote { "references.footnote" } else { "references.endnote" };
-                if let Err(e) = s.run(cmd, &json!({})) {
-                    // Put the citation back where it was taken from.
-                    let _ = s.doc.insert_fragment(&at, &frag);
-                    s.sel = saved;
-                    Self::end_edit(s);
-                    return Err(e.to_string());
-                }
+                // On failure the guarded edit puts the citation back where it was taken from.
+                s.run(cmd, &json!({})).map_err(|e| e.to_string())?;
                 let c = s.sel.focus.clone();
-                s.doc.insert_fragment(&c, &frag).map_err(|e| e.to_string())?;
+                cmd::insert_fragment(s, &c, frag).map_err(|e| e.to_string())?;
             }
         }
         s.sel = saved;
@@ -502,7 +521,7 @@ impl Bridge {
                     let _ = p.format(0, n, &|c| c.link = None);
                 }
             }
-            let at = s.doc.delete_range(&a, &b).map_err(|e| e.to_string())?;
+            let at = cmd::delete_range(s, &a, &b).map_err(|e| e.to_string())?;
             s.sel = Selection::caret(at);
             let (id, _) = self.insert_field(s, note, Some(text))?;
             ids.push(id);
@@ -519,10 +538,29 @@ impl Bridge {
     }
 }
 
+/// Whether call `c` would edit the document: the calls [`Bridge::guarded`] runs.
+fn edits(s: &Session, c: &Call) -> bool {
+    match c.method.as_str() {
+        // Zotero writes its preferences back unchanged at times; that needs no permission.
+        "Document_setDocumentData" => arg_str(c, 1).is_ok_and(|d| d != fields::get_prefs(&s.doc)),
+        "Document_insertField"
+        | "Document_insertText"
+        | "Document_convertPlaceholdersToFields"
+        | "Document_setBibliographyStyle"
+        | "Document_convert"
+        | "Field_convert"
+        | "Field_delete"
+        | "Field_removeCode"
+        | "Field_setText"
+        | "Field_setCode" => true,
+        _ => false,
+    }
+}
+
 /// Delete the selection; returns where it collapsed.
 fn delete_selection(s: &mut Session) -> Result<Pos, String> {
     let (a, b) = s.sel.ordered();
-    let at = if a == b { a } else { s.doc.delete_range(&a, &b).map_err(|e| e.to_string())? };
+    let at = cmd::delete_range(s, &a, &b).map_err(|e| e.to_string())?;
     s.sel = Selection::caret(at.clone());
     Ok(at)
 }
@@ -582,8 +620,11 @@ fn remove_empty_note(s: &mut Session, f: &ZField) -> Option<Pos> {
     }
     let at = note_ref_pos(s, id)?;
     let after = Pos { off: at.off + OBJ.len_utf8(), ..at.clone() };
-    s.doc.delete_range(&at, &after).ok()?;
-    s.doc.parts.remove(&id);
+    cmd::delete_range(s, &at, &after).ok()?;
+    // Tracked, the reference mark stays as a deletion, and its note with it.
+    if note_ref_pos(s, id).is_none() {
+        s.doc.parts.remove(&id);
+    }
     s.sel = Selection::caret(at.clone());
     Some(at)
 }
