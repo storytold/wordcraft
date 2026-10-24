@@ -2614,29 +2614,29 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 _ => 0.0,
             }
         };
-        if (numbered || prefix) && !matches!(display, Some(MathJc::Left | MathJc::Right)) {
-            if let Some((eq, _)) = display_at {
-                let eq_w = pl.clusters.get(eq).map(|c| c.adv).unwrap_or(0.0);
-                let mut left_lim = line_start_x;
-                for k in c0..eq {
-                    if let (Some(c), Some(x)) = (pl.clusters.get(k), xs.get(k - c0)) {
-                        left_lim = left_lim.max(*x + c.adv);
-                    }
+        if (numbered || prefix)
+            && !matches!(display, Some(MathJc::Left | MathJc::Right))
+            && let Some((eq, _)) = display_at
+        {
+            let eq_w = pl.clusters.get(eq).map(|c| c.adv).unwrap_or(0.0);
+            let mut left_lim = line_start_x;
+            for k in c0..eq {
+                if let (Some(c), Some(x)) = (pl.clusters.get(k), xs.get(k - c0)) {
+                    left_lim = left_lim.max(*x + c.adv);
                 }
-                let right_lim =
-                    if numbered { last_tab.and_then(|tab| xs.get(tab + 1 - c0).copied()).unwrap_or(right_edge) - 8.0 } else { right_edge };
-                let ideal = line_start_x + ((right_edge - line_start_x) - eq_w) / 2.0;
-                let gap = if left_lim > line_start_x + 0.5 { 8.0 } else { 0.0 };
-                let place = ideal.max(left_lim + gap).min((right_lim - eq_w).max(line_start_x));
-                let cur = xs.get(eq - c0).copied().unwrap_or(line_start_x);
-                let delta = place - cur;
-                // Include the entry at the equation's right edge. On a numbered line that is the
-                // positional tab, which then starts at the moved equation and still ends at the number.
-                let until = if numbered { last_tab.map(|t| t + 1).unwrap_or(eq + 1) } else { c1 + 1 };
-                for k in eq..until {
-                    if let Some(v) = xs.get_mut(k - c0) {
-                        *v += delta;
-                    }
+            }
+            let right_lim = if numbered { last_tab.and_then(|tab| xs.get(tab + 1 - c0).copied()).unwrap_or(right_edge) - 8.0 } else { right_edge };
+            let ideal = line_start_x + ((right_edge - line_start_x) - eq_w) / 2.0;
+            let gap = if left_lim > line_start_x + 0.5 { 8.0 } else { 0.0 };
+            let place = ideal.max(left_lim + gap).min((right_lim - eq_w).max(line_start_x));
+            let cur = xs.get(eq - c0).copied().unwrap_or(line_start_x);
+            let delta = place - cur;
+            // Include the entry at the equation's right edge. On a numbered line that is the
+            // positional tab, which then starts at the moved equation and still ends at the number.
+            let until = if numbered { last_tab.map(|t| t + 1).unwrap_or(eq + 1) } else { c1 + 1 };
+            for k in eq..until {
+                if let Some(v) = xs.get_mut(k - c0) {
+                    *v += delta;
                 }
             }
         }

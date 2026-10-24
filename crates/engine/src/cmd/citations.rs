@@ -1411,11 +1411,12 @@ fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> R
     if let Some(InlineObject::BookmarkStart { name }) = para.object_at(start)
         && name.starts_with("_Ref")
     {
-        // The end mark and `caption_number_end` are both measured with the start mark in place.
-        let same = para
-            .object_offsets()
-            .into_iter()
-            .any(|o| matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name) && o == end);
+        // A number-only bookmark ends exactly on the number. A whole-target bookmark is the last
+        // mark in the paragraph, so its placeholder sits one object before `para.len()`.
+        let same = para.object_offsets().into_iter().any(|o| {
+            matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
+                && if number_only { o == end } else { para.text.get(o + MARK..).is_some_and(|rest| rest.is_empty()) }
+        });
         if same {
             return Ok((name.clone(), at));
         }

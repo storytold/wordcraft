@@ -976,7 +976,7 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
                 // written between spaces (` – ` for a table title).
                 match p::str(v, "textSeparator") {
                     None => pieces.push(CaptionPiece::Lit(format!(": {text}"))),
-                    Some(sep) if sep.is_empty() => pieces.push(CaptionPiece::Lit(format!(" {text}"))),
+                    Some("") => pieces.push(CaptionPiece::Lit(format!(" {text}"))),
                     Some(sep) => pieces.push(CaptionPiece::Lit(format!(" {sep} {text}"))),
                 }
             }
