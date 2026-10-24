@@ -39,7 +39,7 @@ status 1, and nothing is saved. Every output is checked (known extension, folder
 ## Tracked changes by an agent
 
 Tracked changes and comments are recorded under the session's user name ("WordCraft User" by
-default). Name the agent so reviewers can tell its edits from people's: start the headless server
+default; the desktop app, which `--connect` drives, starts with the system account's name, #2209). Name the agent so reviewers can tell its edits from people's: start the headless server
 with `wordcraft-cli mcp --author "Claude (copyedit)"`, or run
 `file.setAuthor {"name": "Claude (copyedit)"}`. Turn tracking on explicitly with
 `review.trackChanges {"value": true}`; without `value` it toggles, which turns tracking *off* in

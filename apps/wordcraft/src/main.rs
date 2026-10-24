@@ -23,6 +23,7 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+mod user_name;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -176,6 +177,22 @@ fn load_prefs(app: &mut WordApp) {
         && let Some(ui) = UiState::from_json(&bytes)
     {
         app.apply_prefs(ui);
+    }
+}
+
+/// The system account's name (`user_name`, #2209) while the user name is still the default: on
+/// the first start, or with preferences from before there was a name to save (they hold the
+/// default). A name set in File › Options always wins, and the system is asked only until one is
+/// saved: `prefs` keeps the name from then on, as Word keeps the name it first starts with. The
+/// name goes through `file.setAuthor`, as one typed in Options does, so it's cleaned the same way.
+fn use_system_user_name(app: &mut WordApp, system: impl FnOnce() -> Option<String>) {
+    if app.session.author != Session::DEFAULT_AUTHOR {
+        return;
+    }
+    if let Some(name) = system()
+        && let Err(e) = app.session.run("file.setAuthor", &serde_json::json!({ "name": name }))
+    {
+        log::debug!("user name: the system's isn't usable: {e}");
     }
 }
 
@@ -430,6 +447,7 @@ fn main() -> eframe::Result {
             session.system_region = region;
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             load_prefs(&mut app);
+            use_system_user_name(&mut app, user_name::system);
             load_user_dictionary(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
@@ -550,6 +568,60 @@ mod tests {
             assert!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("kept"), "{p:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
+    }
+}
+
+#[cfg(test)]
+mod user_name_tests {
+    use super::*;
+
+    fn app() -> WordApp {
+        WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    #[test]
+    fn the_system_user_name_replaces_only_the_default() {
+        let mut a = app();
+        let undo = a.session.undo_depth();
+        use_system_user_name(&mut a, || Some(" Ada\u{7} Lovelace\n".into()));
+        assert_eq!(a.session.author, "Ada Lovelace", "cleaned as a name typed in Options is");
+        assert_eq!(a.session.user_initials(), "AL");
+        assert_eq!(a.session.undo_depth(), undo, "no undo step");
+        assert!(!a.session.dirty, "the document is unchanged");
+
+        // A chosen name, saved or set this run, never asks the system.
+        let mut asked = false;
+        use_system_user_name(&mut a, || {
+            asked = true;
+            Some("Grace Hopper".into())
+        });
+        assert!(!asked);
+        assert_eq!(a.session.author, "Ada Lovelace");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(r#"{"author": "Grace Hopper"}"#).unwrap());
+        use_system_user_name(&mut b, || Some("Ada Lovelace".into()));
+        assert_eq!(b.session.author, "Grace Hopper", "a saved name wins");
+    }
+
+    #[test]
+    fn preferences_holding_the_default_name_take_the_system_one() {
+        // Saved before #2209, when every run saved the default; or a name cleared in Options.
+        for saved in [r#"{"author": "WordCraft User"}"#, r#"{"author": "  "}"#, r#"{"dark": true}"#] {
+            let mut a = app();
+            a.apply_prefs(serde_json::from_str(saved).unwrap());
+            use_system_user_name(&mut a, || Some("Ada Lovelace".into()));
+            assert_eq!(a.session.author, "Ada Lovelace", "{saved}");
+            assert_eq!(a.prefs().author, "Ada Lovelace", "saved from now on: {saved}");
+        }
+    }
+
+    #[test]
+    fn no_usable_system_name_keeps_the_default() {
+        for system in [None, Some(String::new()), Some(" \t\n".into()), Some("\u{0}\u{1b}".into())] {
+            let mut a = app();
+            use_system_user_name(&mut a, || system.clone());
+            assert_eq!(a.session.author, Session::DEFAULT_AUTHOR, "{system:?}");
+        }
     }
 }
 

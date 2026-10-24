@@ -661,6 +661,11 @@ impl Session {
     /// File name of the persisted custom dictionary inside the settings folder.
     pub const USER_DICT_FILE: &str = "custom-dictionary.txt";
 
+    /// The user name a session starts with, until File › Options or the host sets one. The
+    /// desktop app replaces it with the system account's name (#2209), so it never counts as a
+    /// name the user chose.
+    pub const DEFAULT_AUTHOR: &str = "WordCraft User";
+
     /// Save the custom dictionary through [`Session::user_dict_path`], if the host wired one up,
     /// with `removed` (words just taken out) left out of the merge with the file. A failed save
     /// keeps the words in memory and never fails the command (#40).
@@ -697,7 +702,7 @@ impl Session {
             goal_x: None,
             page_hint: 0,
             registry,
-            author: "WordCraft User".into(),
+            author: Self::DEFAULT_AUTHOR.into(),
             initials: String::new(),
             painter: None,
             status: String::new(),

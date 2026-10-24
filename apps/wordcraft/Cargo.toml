@@ -65,9 +65,10 @@ open = "5"
 # The system's Animation effects setting (Settings › Accessibility › Visual effects), read through
 # the Windows Runtime's UISettings: a safe API, where the Win32 call needs unsafe, which our
 # workspace forbids. Already in the build through wgpu and AccessKit, at this version; this adds
-# only the `UI_ViewManagement` bindings, and `System_UserProfile` for the home region new
-# documents take their paper and units from (#838).
-windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfile"] }
+# only the `UI_ViewManagement` bindings, `System_UserProfile` for the home region new
+# documents take their paper and units from (#838), and `System` for the account's display
+# name a first start takes as the user name (#2209).
+windows = { version = "0.62", features = ["UI_ViewManagement", "System_UserProfile", "System"] }
 # The clipboard's "Rich Text Format" and the names of its formats (#687, #833), which arboard
 # doesn't read. Already in the build through arboard, at this version.
 clipboard-win = { version = "5.4", features = ["std"] }
