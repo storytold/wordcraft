@@ -138,12 +138,54 @@ pub fn tab_letter(tab: &str) -> &'static str {
     TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).find(|(t, _)| *t == tab).map(|(_, l)| *l).unwrap_or("")
 }
 
+/// Contextual tabs with no fixed letters, in the order that hands out their letters.
+const LETTERED_TABS: [&str; 6] = ["Picture Format", "Shape Format", "SmartArt Design", "Chart Design", "Equation", "Outlining"];
+
+/// A letter for each of `LETTERED_TABS`: use the tab's initial when free, else the first free
+/// letter. Tab letters, J (table tabs), Q (Search) and the first letters of legacy menu keys are
+/// taken. These app-assigned letters are fixed and do not claim to match Word's contextual tabs.
+fn lettered_tab_letters() -> &'static [(&'static str, char)] {
+    static LETTERS: std::sync::OnceLock<Vec<(&'static str, char)>> = std::sync::OnceLock::new();
+    LETTERS.get_or_init(|| {
+        let mut taken: Vec<char> = TAB_LETTERS.iter().chain(&TABLE_TAB_LETTERS).filter_map(|(_, l)| l.chars().next()).collect();
+        taken.extend(SEARCH_LETTER.chars());
+        taken.extend(legacy().iter().filter_map(|(k, _)| k.chars().next()));
+        let mut out = Vec::new();
+        for tab in LETTERED_TABS {
+            let initial = tab.chars().find(char::is_ascii_alphabetic).map(|c| c.to_ascii_uppercase());
+            let letter = initial.filter(|c| !taken.contains(c)).or_else(|| ('A'..='Z').find(|c| !taken.contains(c)));
+            if let Some(c) = letter {
+                taken.push(c);
+                out.push((tab, c));
+            }
+        }
+        out
+    })
+}
+
+/// The tabs of the selection that take a letter from `lettered_tab_letters`, in display order.
+fn lettered_tabs(app: &WordApp) -> Vec<&'static str> {
+    crate::ribbon::contextual_tabs(&app.session).into_iter().filter(|t| LETTERED_TABS.contains(t)).collect()
+}
+
+/// The badge for a tab: its fixed letters, or the letter its contextual tab was given.
+pub fn tab_letter_for(app: &WordApp, tab: &str) -> String {
+    match tab_letter(tab) {
+        "" if lettered_tabs(app).contains(&tab) => {
+            lettered_tab_letters().iter().find(|(t, _)| *t == tab).map(|(_, c)| c.to_string()).unwrap_or_default()
+        }
+        "" => String::new(),
+        fixed => fixed.to_string(),
+    }
+}
+
 /// The tabs that carry a badge, in display order.
 pub fn badge_tabs(app: &WordApp) -> Vec<&'static str> {
     let mut v: Vec<&'static str> = TAB_LETTERS.iter().filter(|(_, l)| !l.is_empty()).map(|(t, _)| *t).collect();
     if crate::ribbon::in_table_public(app) {
         v.extend_from_slice(&["Table Design", "Table Layout"]);
     }
+    v.extend(lettered_tabs(app));
     v
 }
 
@@ -413,6 +455,58 @@ fn controls(tab: &str) -> Vec<Control> {
             c("Convert to Text", "table.toText"),
             c("Formula", "table.formula"),
         ],
+        // Menus match by their tooltip, buttons by command id.
+        "Picture Format" => vec![
+            m("Brightness, contrast and sharpness", "picture.corrections"),
+            m("Saturation and recolor", "picture.color"),
+            m("Recolor a one-color picture, such as an icon", "picture.iconColor"),
+            m("Picture transparency", "picture.transparency"),
+            c("Change Picture", "ui.changePicture"),
+            c("Reset Picture", "picture.reset"),
+            m("Frames and effects", "picture.style"),
+            m("Picture border", "picture.border"),
+            c("Alt Text", "view.altTextPane"),
+            c("Position", "arrange.position"),
+            m("Wrap Text", "arrange.wrapText"),
+            m("Rotate", "arrange.rotate"),
+            m("Align", "arrange.align"),
+            m("Group", "arrange.group"),
+            c("Crop", "ui.crop"),
+        ],
+        "Shape Format" => vec![
+            m("Shape Fill", "shape.fill"),
+            m("Shape Outline", "shape.outline"),
+            m("Shadow, glow and soft edges", "shape.effects"),
+            c("Alt Text", "view.altTextPane"),
+            m("Drawing Canvas", "canvas.fit"),
+            m("WordArt Styles", "wordArt.style"),
+            m("Text Fill", "wordArt.textFill"),
+            m("Text Outline", "wordArt.textOutline"),
+            m("Text Effects", "wordArt.transform"),
+            m("Text Direction", "shape.textDirection"),
+            m("Align Text", "shape.alignText"),
+            c("Break Link", "shape.breakLink"),
+            c("Create Link", "ui.linkTextBox"),
+            c("Position", "arrange.position"),
+            m("Wrap Text", "arrange.wrapText"),
+            m("Rotate", "arrange.rotate"),
+            m("Align", "arrange.align"),
+        ],
+        "SmartArt Design" => vec![
+            c("Add Shape", "smartArt.addShape"),
+            c("Promote", "smartArt.promote"),
+            c("Demote", "smartArt.demote"),
+            c("Text Pane", "smartArt.textPane"),
+            m("Change Colors", "smartArt.colors"),
+            c("Reset Graphic", "smartArt.reset"),
+        ],
+        "Chart Design" => vec![
+            m("Chart Title", "chart.title"),
+            m("Legend", "chart.legend"),
+            m("Data Labels", "chart.dataLabels"),
+            c("Edit Data", "chart.editData"),
+            c("Change Chart Type", "chart.type"),
+        ],
         _ => Vec::new(),
     }
 }
@@ -492,10 +586,10 @@ fn letters_for(app: &WordApp, tab: &str) -> Vec<String> {
 /// Pure letter assignment `(tab letters, per-tab control letters)`, for tests without a window.
 #[cfg(test)]
 fn letters(app: &WordApp) -> (Vec<(&'static str, String)>, Vec<(String, Vec<String>)>) {
-    let tabs = badge_tabs(app).into_iter().map(|t| (t, tab_letter(t).to_string())).collect();
+    let tabs = badge_tabs(app).into_iter().map(|t| (t, tab_letter_for(app, t))).collect();
     let cmds = crate::ribbon::TABS
         .iter()
-        .filter(|t| !tab_letter(t).is_empty() || crate::ribbon::in_table_public(app))
+        .filter(|t| !tab_letter_for(app, t).is_empty() || crate::ribbon::in_table_public(app))
         .map(|t| ((*t).to_string(), letters_for(app, t)))
         .collect();
     (tabs, cmds)
@@ -540,10 +634,9 @@ pub fn badge(ui: &Ui, rect: Rect, letter: &str) {
 
 /// Record a tab badge over a tab's real rect, called as each tab is laid out. After a typed
 /// prefix (J, or Quick Access Toolbar digits) only the badges it can still complete show.
-pub fn record_tab(rect: Rect, tab: &str, prefix: &str, out: &mut Vec<(Rect, String)>) {
-    let l = tab_letter(tab);
-    if !l.is_empty() && l.starts_with(prefix) {
-        out.push((rect, l.to_string()));
+pub fn record_tab(rect: Rect, letter: String, prefix: &str, out: &mut Vec<(Rect, String)>) {
+    if !letter.is_empty() && letter.starts_with(prefix) {
+        out.push((rect, letter));
     }
 }
 
@@ -590,9 +683,9 @@ pub fn handle_key(app: &mut WordApp, key: egui::Key) -> bool {
                     Phase::Tabs => {
                         let name = format!("{}{name}", app.ui.keytip_prefix);
                         let tabs = badge_tabs(app);
-                        let hit = tabs.iter().copied().find(|t| tab_letter(t) == name);
+                        let hit = tabs.iter().copied().find(|t| tab_letter_for(app, t) == name);
                         // J waits for the table tab's second letter.
-                        if hit.is_none() && tabs.iter().any(|t| tab_letter(t).starts_with(&name)) {
+                        if hit.is_none() && tabs.iter().any(|t| tab_letter_for(app, t).starts_with(&name)) {
                             app.ui.keytip_prefix = name;
                             return true;
                         }
@@ -1220,6 +1313,55 @@ mod tests {
         activate(&mut b);
         handle_key(&mut b, egui::Key::J);
         assert_eq!(b.ui.keytips, Phase::Off);
+    }
+
+    /// Contextual tabs without Word-style letters get a free letter of their own, never one a
+    /// tab, Search, the table tabs or a legacy menu key uses.
+    #[test]
+    fn contextual_tabs_get_free_letters_that_open_them() {
+        let all = lettered_tab_letters();
+        assert_eq!(all.len(), LETTERED_TABS.len());
+        assert_eq!(
+            all,
+            &[("Picture Format", 'B'), ("Shape Format", 'C'), ("SmartArt Design", 'K'), ("Chart Design", 'L'), ("Equation", 'U'), ("Outlining", 'X'),]
+        );
+        let mut seen: Vec<char> = Vec::new();
+        for (tab, c) in all {
+            assert!(!seen.contains(c), "{tab}: {c} is used twice");
+            seen.push(*c);
+            assert!(TAB_LETTERS.iter().all(|(_, l)| !l.starts_with(*c)), "{tab}: {c} is a tab letter");
+            assert!(!"JQ".contains(*c) && legacy().iter().all(|(k, _)| !k.starts_with(*c)), "{tab}: {c} is taken");
+        }
+        let mut a = app();
+        a.run("insert.shape", serde_json::json!({"kind": "rectangle", "width": 50, "height": 50})).unwrap();
+        let letter = tab_letter_for(&a, "Shape Format");
+        assert_eq!(letter.chars().count(), 1);
+        assert!(badge_tabs(&a).contains(&"Shape Format"));
+        let key = egui::Key::from_name(&letter).expect("a letter key");
+        a.run("ui.tab", serde_json::json!({"tab": "Home"})).unwrap();
+        activate(&mut a);
+        assert!(handle_key(&mut a, key));
+        assert_eq!((a.ui.tab.as_str(), a.ui.keytips), ("Shape Format", Phase::Commands));
+        // Nothing selected: no contextual badge.
+        let b = app();
+        assert_eq!(tab_letter_for(&b, "Shape Format"), "");
+    }
+
+    /// Entering a contextual tab by its letter badges its controls, as the fixed tabs do.
+    #[test]
+    fn contextual_tabs_badge_their_controls() {
+        for tab in ["Picture Format", "Shape Format", "SmartArt Design", "Chart Design"] {
+            let a = app();
+            let ids: Vec<&str> = controls(tab).iter().filter_map(|c| if let Target::Cmd { id, .. } = &c.target { Some(*id) } else { None }).collect();
+            assert!(ids.iter().all(|id| a.session.registry.get(id).is_some() || id.starts_with("ui.")), "{tab}: unknown command id");
+            let letters = letters_for(&a, tab);
+            assert!(!letters.is_empty(), "{tab} has controls");
+            let mut seen = letters.clone();
+            seen.sort();
+            seen.dedup();
+            assert_eq!(seen.len(), letters.len(), "{tab}: letters are unique");
+            assert!(letters.iter().all(|l| !l.is_empty() && !l.starts_with('?')), "{tab}: every control has a letter");
+        }
     }
 
     #[test]
