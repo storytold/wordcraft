@@ -30,6 +30,12 @@ pub(crate) fn app_drawn(x11: bool) -> Option<Layout> {
 fn compositor_leaves_frame_to_app() -> bool {
     use wayland_client::Connection;
     use wayland_client::globals::registry_queue_init;
+    // A launcher that hands over a connected socket (`WAYLAND_SOCKET`) hands over the only one:
+    // connecting would take it, and winit would find no compositor. Keep the desktop's frame.
+    if std::env::var_os("WAYLAND_SOCKET").is_some() {
+        log::info!("WAYLAND_SOCKET is set; leaving the window frame to the desktop");
+        return false;
+    }
     // No Wayland compositor: X11, whose window manager draws the frame (winit falls back to it).
     let Ok(conn) = Connection::connect_to_env() else { return false };
     let Ok((globals, _queue)) = registry_queue_init::<Registry>(&conn) else { return false };
@@ -58,5 +64,28 @@ impl wayland_client::Dispatch<wayland_client::protocol::wl_registry::WlRegistry,
         _: &wayland_client::Connection,
         _: &wayland_client::QueueHandle<Self>,
     ) {
+    }
+}
+
+#[cfg(all(test, unix, not(target_os = "macos")))]
+mod tests {
+    /// A launch through a handed-over `WAYLAND_SOCKET` keeps it for winit: the probe used to
+    /// connect with it, which takes the variable, and the window then never opened. Run in a
+    /// child process, since the probe reads (and used to change) the process environment.
+    #[test]
+    fn the_probe_leaves_a_handed_over_wayland_socket_to_winit() {
+        if std::env::var_os("WORDCRAFT_TEST_PROBE_CHILD").is_some() {
+            assert!(!super::compositor_leaves_frame_to_app());
+            assert_eq!(std::env::var("WAYLAND_SOCKET").as_deref(), Ok("987"));
+            return;
+        }
+        let out = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "decorations::tests::the_probe_leaves_a_handed_over_wayland_socket_to_winit", "--nocapture"])
+            .env("WORDCRAFT_TEST_PROBE_CHILD", "1")
+            .env("WAYLAND_SOCKET", "987")
+            .env_remove("WAYLAND_DISPLAY")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
     }
 }
