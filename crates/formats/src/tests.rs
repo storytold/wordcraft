@@ -179,6 +179,25 @@ fn bullets_then_numbers() -> Document {
 }
 
 #[test]
+fn html_export_keeps_ordered_list_start() {
+    let mut d = Document::new();
+    let num = d.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    if let Some(a) = d.numbering.abstract_of(num).map(|a| a.id)
+        && let Some(abs) = d.numbering.abstracts.iter_mut().find(|x| x.id == a)
+        && let Some(level) = abs.levels.first_mut()
+    {
+        level.start = 5;
+    }
+    for t in ["five", "six"] {
+        let mut p = Paragraph::with_text(t, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+        d.body.push(para_block(p));
+    }
+    let html = String::from_utf8(export("html", &d).unwrap().unwrap()).unwrap();
+    assert!(html.contains("<ol start=\"5\">"), "{html}");
+}
+
+#[test]
 fn numbered_list_after_bullets_keeps_its_kind() {
     let d = bullets_then_numbers();
     for ext in ["odt", "rtf"] {

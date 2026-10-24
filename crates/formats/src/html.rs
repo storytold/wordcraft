@@ -1838,14 +1838,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
             }
             FBlock::Para(p) if p.list.is_some() => {
                 // Nested lists from consecutive list paragraphs.
-                let mut stack: Vec<(bool, bool)> = Vec::new(); // (ordered, li open)
+                let mut stack: Vec<(bool, bool, u32)> = Vec::new(); // (ordered, li open, start)
                 while let Some(FBlock::Para(q)) = blocks.get(i) {
                     let Some(li) = q.list else { break };
                     let lv = li.level.min(8) as usize;
                     while stack.len() > lv + 1 {
                         close_list(&mut stack, out);
                     }
-                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered) {
+                    if stack.len() == lv + 1 && stack.last().is_some_and(|s| s.0 != li.ordered || (li.ordered && s.2 != li.start)) {
                         close_list(&mut stack, out);
                     }
                     while stack.len() < lv + 1 {
@@ -1855,8 +1855,14 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
                             out.push_str("<li>");
                             top.1 = true;
                         }
-                        out.push_str(if li.ordered { "<ol>" } else { "<ul>" });
-                        stack.push((li.ordered, false));
+                        out.push_str(&if li.ordered && li.start > 1 {
+                            format!("<ol start=\"{}\">", li.start)
+                        } else if li.ordered {
+                            "<ol>".into()
+                        } else {
+                            "<ul>".into()
+                        });
+                        stack.push((li.ordered, false, li.start));
                     }
                     if let Some(top) = stack.last_mut() {
                         if top.1 {
@@ -1911,8 +1917,8 @@ fn blocks_html(blocks: &[FBlock], out: &mut String, depth: usize) {
     }
 }
 
-fn close_list(stack: &mut Vec<(bool, bool)>, out: &mut String) {
-    if let Some((ordered, li_open)) = stack.pop() {
+fn close_list(stack: &mut Vec<(bool, bool, u32)>, out: &mut String) {
+    if let Some((ordered, li_open, _)) = stack.pop() {
         if li_open {
             out.push_str("</li>");
         }
