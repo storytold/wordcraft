@@ -47,18 +47,18 @@ regex = { version = "1", default-features = false, features = ["std", "unicode",
 regex-automata = { version = "0.4", default-features = false, features = ["std", "syntax", "meta", "nfa-pikevm", "unicode"] }
 
 # text / rendering / formats
-skrifa = "0.47"
-harfrust = "0.13"
+skrifa = "0.48"
+harfrust = "0.14"
 # WOFF / WOFF2 web fonts added by the user (#582): pure Rust (MIT); its brotli and zlib decoders
 # (brotli-decompressor, flate2) are already in the tree.
 wuff = "0.2.9"
-vello_cpu = "0.2"
+vello_cpu = "0.3"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
 craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "9f75d3dc19b4b514c4f3d4847ed1ec1b0e86b4ef", version = "=0.1.0", default-features = false, features = ["write"] }
-quick-xml = "0.41"
-zip = { version = "3", default-features = false, features = ["deflate"] }
+quick-xml = "0.42"
+zip = { version = "9", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 cfb = "0.15"
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
 # text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause) and its
@@ -70,15 +70,15 @@ aes = "0.9"
 sha1 = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
-base64 = "0.22"
-getrandom = "0.3"
+base64 = "0.23"
+getrandom = "0.4"
 zeroize = "1"
 
 # ui
-egui = "0.36"
+egui = "0.37"
 egui_extras = { version = "0.36", default-features = false }
-eframe = { version = "0.36", default-features = false }
-egui_kittest = "0.36"
+eframe = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
 rfd = "0.17"
 arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
 

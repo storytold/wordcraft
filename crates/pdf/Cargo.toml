@@ -26,6 +26,6 @@ chrono = { workspace = true }
 js-sys = "0.3"
 
 [dev-dependencies]
-hayro-syntax = "0.7.2"
-hayro-interpret = { version = "0.7.0", default-features = false, features = ["embed-fonts"] }
+hayro-syntax = "0.8.0"
+hayro-interpret = { version = "0.8.0", default-features = false, features = ["embed-fonts"] }
 hayro-cmap = "0.1"

@@ -77,9 +77,9 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.
-pollster = "0.4"
+pollster = "1.0"
 # Pictures and copied files on the system clipboard (#45); egui's paste only carries text. Already
 # in the build through egui-winit, with the same features.
 arboard = { workspace = true, features = ["image-data"] }
 # The control server's random key.
-getrandom = "0.3"
+getrandom = "0.4"
