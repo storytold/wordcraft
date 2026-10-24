@@ -231,9 +231,12 @@ enum EnterAutoFormat {
     Border(Border),
     /// "+---+-----+": a one-row table; the dash count of each column.
     Table(Vec<usize>),
+    /// A short line before an empty paragraph: Heading 1, 2 or 3.
+    Heading(u8),
 }
 
-/// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###".
+/// AutoFormat border lines: Enter after "---", "___", "===", "***", "~~~" or "###". A line
+/// holding a tracked deletion stays as it is.
 fn border_line(s: &Session, at: &Pos) -> Option<Border> {
     let para = s.doc.para_at(at)?;
     let text = para.text.as_str();
@@ -244,6 +247,7 @@ fn border_line(s: &Session, at: &Pos) -> Option<Border> {
         || text.len() < 3
         || !text.chars().all(|x| x == c)
         || para.props.numbering.is_some_and(|n| n.num != 0)
+        || para.run_ranges().any(|(_, r)| r.del.is_some())
     {
         return None;
     }
@@ -260,8 +264,8 @@ fn border_line(s: &Session, at: &Pos) -> Option<Border> {
 }
 
 /// AutoFormat tables: a body paragraph that is exactly "+---+-----+" (plus signs around runs
-/// of hyphens). Returns the hyphen count of each column; more columns than a table can hold
-/// leave the text alone.
+/// of hyphens). Returns the hyphen count of each column; more columns than a table can hold,
+/// or a line holding a tracked deletion, leave the text alone.
 fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
     let para = s.doc.para_at(at)?;
     let text = para.text.as_str();
@@ -270,6 +274,7 @@ fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
         || at.path.0.len() != 1
         || at.off != text.len()
         || para.props.numbering.is_some_and(|n| n.num != 0)
+        || para.run_ranges().any(|(_, c)| c.del.is_some())
     {
         return None;
     }
@@ -284,8 +289,76 @@ fn table_line(s: &Session, at: &Pos) -> Option<Vec<usize>> {
     Some(cols)
 }
 
+/// AutoFormat Built-in Heading styles: Enter in an empty body paragraph whose previous paragraph
+/// is a line of Normal text with one to five words that ends in a letter or digit and holds no
+/// tracked deletion. The line becomes Heading 1, or Heading 2 or 3 when it starts with one or
+/// two tabs.
+fn heading_line(s: &Session, at: &Pos) -> Option<u8> {
+    let ac = &s.prefs.autocorrect;
+    let cur = s.doc.para_at(at)?;
+    let i = at.path.last();
+    if !ac.enabled || !ac.heading_styles || at.story != StoryRef::Body || at.path.0.len() != 1 || i == 0 || !cur.is_empty() {
+        return None;
+    }
+    let Some(Block::Para(prev)) = s.doc.block(at.story, &at.path.with_last(i - 1)) else { return None };
+    // Normal and outside a list, also one the style sheet gives (a numbered Normal style).
+    let plain = |p: &wordcraft_doc::Paragraph| {
+        let r = s.doc.styles.resolve_para(&p.props);
+        p.props.style.as_deref().is_none_or(|st| st == "Normal") && r.numbering.is_none_or(|n| n.num == 0) && r.outline_level.is_none_or(|l| l >= 9)
+    };
+    let text = prev.text.trim_start_matches('\t');
+    let tabs = prev.text.len() - text.len();
+    if !plain(cur)
+        || !plain(prev)
+        || !prev.objects.is_empty()
+        || prev.section.is_some()
+        || prev.run_ranges().any(|(_, c)| c.del.is_some())
+        || tabs > 2
+        || !(1..=5).contains(&text.split_whitespace().count())
+        || text.starts_with(char::is_whitespace)
+        || text.contains(char::is_control)
+        || !text.ends_with(char::is_alphanumeric)
+    {
+        return None;
+    }
+    let level = tabs as u8 + 1;
+    // Formatting limited to the document's styles: a locked heading style isn't applied.
+    let id = format!("Heading{level}");
+    if super::protect::enforced(&s.doc) && s.doc.settings.protect_formatting && s.doc.styles.get(&id).is_some_and(|st| st.locked) {
+        return None;
+    }
+    Some(level)
+}
+
+/// Give the paragraph before the empty one at `at` Heading `level` without its leading tabs;
+/// the caret stays in the empty paragraph. With Track Changes on, the tabs are marked deleted
+/// (or removed, when this author typed them) and the style change is a formatting revision.
+fn apply_heading_line(s: &mut Session, at: &Pos, level: u8) -> Result<(), CmdError> {
+    let prev = at.path.with_last(at.path.last().saturating_sub(1));
+    let Some(before) = s.doc.para(at.story, &prev).cloned() else { return Ok(()) };
+    let tabs = before.text.len() - before.text.trim_start_matches('\t').len();
+    let start = Pos { story: at.story, path: prev.clone(), off: 0 };
+    s.sel = Selection { anchor: start.clone(), focus: Pos { off: tabs, ..start } };
+    delete_selection(s)?;
+    super::para::set_heading(s, at.story, &prev, Some(level))?;
+    // Removed tabs change the text, and the formatting comparison after the command only looks
+    // at paragraphs that keep theirs, so the style change is recorded here.
+    if s.doc.settings.track_changes
+        && s.prefs.markup.track_formatting
+        && s.doc.para(at.story, &prev).is_some_and(|p| p.text != before.text && p.props.fmt_change.is_none())
+    {
+        let rev = super::new_revision(s, wordcraft_doc::RevisionKind::Format);
+        let p = s.doc.para_mut(at.story, &prev)?;
+        p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.props.formatting());
+        p.touch();
+    }
+    s.sel = Selection::caret(at.clone());
+    Ok(())
+}
+
 /// Turn the border-line characters into a bottom border on the paragraph above (or this one
-/// at the top of a story).
+/// at the top of a story). With Track Changes on, the characters are marked deleted (or
+/// removed, when this author typed them) and the border is a formatting revision.
 fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Result<(), CmdError> {
     let set_bottom = |p: &mut wordcraft_doc::Paragraph| {
         let mut b = p.props.borders.unwrap_or_default();
@@ -295,31 +368,52 @@ fn apply_border_line(s: &mut Session, at: &Pos, line: Border) -> Result<(), CmdE
     };
     let i = at.path.last();
     let prev = if i > 0 { Some(at.path.with_last(i - 1)) } else { None };
-    let cur = s.doc.para_mut(at.story, &at.path)?;
-    let len = cur.len();
-    cur.delete(0, len)?;
-    let start = Pos { off: 0, ..at.clone() };
+    let end = delete_typed_line(s, at)?;
     match prev.filter(|q| matches!(s.doc.block(at.story, q), Some(Block::Para(_)))) {
         Some(q) => {
             // The characters' paragraph becomes the one typing continues in.
             set_bottom(s.doc.para_mut(at.story, &q)?);
-            s.sel = Selection::caret(start);
+            s.sel = Selection::caret(end);
         }
         None => {
+            let before = s.doc.para(at.story, &at.path).map(|p| p.props.clone());
             set_bottom(s.doc.para_mut(at.story, &at.path)?);
-            let new = split_para(s, &start)?;
+            let new = split_para(s, &end)?;
             let p = s.doc.para_mut(new.story, &new.path)?;
             p.props.borders = None;
             p.touch();
+            // The split changes the block count, and the formatting comparison after the command
+            // skips a container whose block count changed, so the border is recorded here.
+            if s.doc.settings.track_changes
+                && s.prefs.markup.track_formatting
+                && let Some(before) = before.filter(|b| b.fmt_change.is_none())
+            {
+                let rev = super::new_revision(s, wordcraft_doc::RevisionKind::Format);
+                let p = s.doc.para_mut(at.story, &at.path)?;
+                p.props.fmt_change = wordcraft_doc::props::PropChange::boxed(rev, before.formatting());
+                p.touch();
+            }
             s.sel = Selection::caret(new);
         }
     }
     Ok(())
 }
 
+/// Delete the AutoFormat characters of the paragraph at `at`, tracked when Track Changes is on.
+/// Returns the end of what is left: the paragraph's end, after any characters marked deleted.
+fn delete_typed_line(s: &mut Session, at: &Pos) -> Result<Pos, CmdError> {
+    let len = s.doc.para(at.story, &at.path).map_or(0, |p| p.len());
+    s.sel = Selection { anchor: Pos { off: 0, ..at.clone() }, focus: Pos { off: len, ..at.clone() } };
+    delete_selection(s)?;
+    let left = s.doc.para(at.story, &at.path).map_or(0, |p| p.len());
+    Ok(Pos { off: left, ..at.clone() })
+}
+
 /// Replace the "+---+" characters with a one-row table across the text width, each column as
 /// wide as its share of the hyphens; the emptied paragraph stays after the table and the caret
-/// goes into the first cell.
+/// goes into the first cell. With Track Changes on, the characters are marked deleted (or
+/// removed, when this author typed them); the table is inserted untracked, as Insert › Table
+/// inserts one.
 fn apply_table_line(s: &mut Session, at: &Pos, cols: &[usize]) -> Result<(), CmdError> {
     let total = cols.iter().sum::<usize>().max(1) as f32;
     let block = at.path.0.first().copied().unwrap_or(0) as usize;
@@ -334,9 +428,7 @@ fn apply_table_line(s: &mut Session, at: &Pos, cols: &[usize]) -> Result<(), Cmd
             c.props.width = Some(w);
         }
     }
-    let p = s.doc.para_mut(at.story, &at.path)?;
-    let len = p.len();
-    p.delete(0, len)?;
+    delete_typed_line(s, at)?;
     s.doc.insert_block(at.story, &at.path, Block::Table(t))?;
     let mut first = at.path.0.clone();
     first.extend([0, 0, 0]);
@@ -584,7 +676,10 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         return sel_result(s);
     }
     let mut at = delete_selection(s)?;
-    let auto = border_line(s, &at).map(EnterAutoFormat::Border).or_else(|| table_line(s, &at).map(EnterAutoFormat::Table));
+    let auto = border_line(s, &at)
+        .map(EnterAutoFormat::Border)
+        .or_else(|| table_line(s, &at).map(EnterAutoFormat::Table))
+        .or_else(|| heading_line(s, &at).map(EnterAutoFormat::Heading));
     if let Some(auto) = auto {
         // Word: Undo right after reverts only the AutoFormat, so the typed characters come back
         // and the Enter stays. Record that plain Enter as its own undo step.
@@ -596,6 +691,7 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
         match auto {
             EnterAutoFormat::Border(line) => apply_border_line(s, &at, line)?,
             EnterAutoFormat::Table(cols) => apply_table_line(s, &at, &cols)?,
+            EnterAutoFormat::Heading(level) => apply_heading_line(s, &at, level)?,
         }
         s.goal_x = None;
         s.push_undo("AutoFormat", plain_doc, plain_sel);
@@ -613,7 +709,9 @@ fn new_paragraph(s: &mut Session, _: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// In a table: next cell (adds a row at the end). At the start of a list item: demote. Else a tab.
+/// In a table: next cell (adds a row at the end). At the start of a list item: demote. With "Set
+/// left- and first-indent with tabs and backspaces" on, at the start of a line of a paragraph with
+/// text: indent. Else a tab.
 fn tab(s: &mut Session, _: &Value) -> CmdResult {
     if let Some((tpath, r, c)) = s.sel.focus.path.cell() {
         let story = s.sel.focus.story;
@@ -643,15 +741,64 @@ fn tab(s: &mut Session, _: &Value) -> CmdResult {
         && n.num != 0
     {
         let para = s.doc.para_mut(f.story, &f.path)?;
-        para.props.numbering = Some(NumRef { num: n.num, level: (n.level + 1).min(8) });
+        para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) });
         para.touch();
         return sel_result(s);
+    }
+    if s.sel.is_collapsed() && tab_indent_on(s) && tab_indents(s, &f) {
+        return indent_by_tab(s, &f);
     }
     if !s.sel.is_collapsed() && s.sel.anchor.path != s.sel.focus.path {
         // Multiple paragraphs selected: increase indent.
         return super::para::indent(s, &Value::Null);
     }
     ins_char(s, '\t')
+}
+
+/// Is AutoFormat As You Type's "Set left- and first-indent with tabs and backspaces" on? Not
+/// while the document limits formatting to its styles: the indents are direct formatting.
+fn tab_indent_on(s: &Session) -> bool {
+    let ac = &s.prefs.autocorrect;
+    ac.enabled && ac.tab_indent && !(super::protect::enforced(&s.doc) && s.doc.settings.protect_formatting)
+}
+
+/// Does Tab at `f` indent instead of typing a tab? Only at the start of a line of a paragraph
+/// with text. Not before the first line of a list item numbered by its style, where Tab types a
+/// tab character as with the option off.
+fn tab_indents(s: &mut Session, f: &Pos) -> bool {
+    let Some(para) = s.doc.para_at(f).filter(|p| !p.is_empty()) else { return false };
+    if f.off == 0 {
+        return !s.doc.styles.resolve_para(&para.props).numbering.is_some_and(|n| n.num != 0);
+    }
+    let l = s.layout();
+    l.line_bounds(f, s.page_hint).is_some_and(|(a, _)| a == *f)
+}
+
+/// Tab before the first line indents the first line by one default tab stop; before any other
+/// line, or when the first line is indented or hanging already, it indents the whole paragraph.
+/// Before a later line of a list item, numbered directly or by its style, it takes the item down
+/// a level.
+fn indent_by_tab(s: &mut Session, f: &Pos) -> CmdResult {
+    let Some(para) = s.doc.para_at(f) else { return sel_result(s) };
+    let r = s.doc.styles.resolve_para(&para.props);
+    if f.off > 0
+        && para.props.numbering.is_none()
+        && let Some(n) = r.numbering.filter(|n| n.num != 0)
+    {
+        let p = s.doc.para_mut(f.story, &f.path)?;
+        p.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) });
+        p.touch();
+        return sel_result(s);
+    }
+    if f.off == 0 && r.indent_first == 0.0 && r.indent_chars[2] == 0.0 {
+        let tab = s.doc.settings.default_tab.max(1.0);
+        let p = s.doc.para_mut(f.story, &f.path)?;
+        p.props.indent_first = Some(tab);
+        p.props.cancel_char_indents(false, false, true);
+        p.touch();
+        return sel_result(s);
+    }
+    super::para::indent(s, &Value::Null)
 }
 
 fn back_tab(s: &mut Session, _: &Value) -> CmdResult {
@@ -732,6 +879,11 @@ fn backspace_inner(s: &mut Session, _: &Value) -> CmdResult {
         p.props.cancel_char_indents(false, false, true);
         p.touch();
         return sel_result(s);
+    }
+    if tab_indent_on(s) && (para.props.indent_left.is_some_and(|x| x > 0.0) || para.props.indent_left_chars.is_some_and(|x| x > 0.0)) {
+        // Set left- and first-indent with tabs and backspaces: the paragraph's own left indent
+        // (in points or characters) goes back one tab stop at a time before the paragraphs join.
+        return super::para::outdent(s, &Value::Null);
     }
     let i = f.path.last();
     if i == 0 {

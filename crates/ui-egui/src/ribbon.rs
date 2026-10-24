@@ -75,6 +75,20 @@ fn reading_toolbar(app: &mut WordApp, ui: &mut Ui, t: Tokens) {
                     }
                 });
                 ui.separator();
+                use wordcraft_engine::cmd::view::ReadPageColor;
+                let colors =
+                    [(ReadPageColor::None, "None", "none"), (ReadPageColor::Sepia, "Sepia", "sepia"), (ReadPageColor::Inverse, "Inverse", "inverse")];
+                let current = app.session.view.read_page_color;
+                let name = colors.iter().find(|c| c.0 == current).map_or("None", |c| c.1);
+                ui.menu_button(format!("{}: {}", tl!("Page color"), tl!(name)), |ui| {
+                    for (color, name, value) in colors {
+                        if ui.selectable_label(current == color, tl!(name)).clicked() {
+                            let _ = app.run("view.readPageColor", json!({"value": value}));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.separator();
                 // Headings to jump to, in the Navigation pane beside the columns (Outline view
                 // is an editing layout, so it isn't offered here).
                 if ui.button(tl!("Navigation Pane")).clicked() {
@@ -1156,15 +1170,16 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Double Strikethrough", "format.doubleStrikethrough", json!({}));
                 });
                 let hl = app.canvas.last_highlight.clone();
+                let (icon, sw, color) = crate::mini_toolbar::highlight_button_appearance(&hl);
                 split(
                     ui,
                     app,
-                    "highlight",
+                    icon,
                     "Text Highlight Color",
                     "format.highlight",
-                    json!({"color": hl}),
+                    json!({"color": color}),
                     false,
-                    None,
+                    sw,
                     crate::mini_toolbar::highlight_menu,
                 );
                 let fc = app.canvas.last_font_color.clone();
@@ -2458,6 +2473,7 @@ fn smart_art_design(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Reset", None, app, |ui, app| {
         big(ui, app, "resetGraphic", "Reset\nGraphic", "smartArt.reset", json!({}), false);
     });
+    graphic_size(ui, app);
 }
 
 /// Chart Design: the selected chart's elements (title, legend, data labels), its data and type,
@@ -2492,6 +2508,11 @@ fn chart_design(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Type", None, app, |ui, app| {
         big(ui, app, "changeChartType", "Change\nChart Type", "chart.type", json!({}), false);
     });
+    graphic_size(ui, app);
+}
+
+/// Chart Design and SmartArt Design › Size: the selected graphic's height and width.
+fn graphic_size(ui: &mut Ui, app: &mut WordApp) {
     group(ui, "Size", None, app, |ui, app| {
         let (w0, h0) =
             wordcraft_engine::cmd::objects::selected(&app.session).and_then(|(_, o)| o.frame().map(|(w, h, _)| (w, h))).unwrap_or((0.0, 0.0));
@@ -2501,7 +2522,7 @@ fn chart_design(app: &mut WordApp, ui: &mut Ui) {
                     ui.label(egui::RichText::new(tl!(label)).small());
                     let mut v = v0;
                     // The range bounds what is typed or dragged; a size outside it is shown as it
-                    // is (clamped, egui would report a change and resize the chart unasked).
+                    // is (clamped, egui would report a change and resize the graphic unasked).
                     let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(36.0..=2000.0).clamp_existing_to_range(false).suffix(" pt"));
                     if r.changed() && v != v0 {
                         if r.dragged() && !r.drag_started() {

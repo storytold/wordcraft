@@ -103,6 +103,14 @@ pub struct AutoCorrectPrefs {
     pub numbering: bool,
     /// Border lines.
     pub border_lines: bool,
+    /// Set left- and first-indent with tabs and backspaces: Tab at the start of a line of a
+    /// paragraph with text indents it instead of typing a tab, and Backspace at its start takes
+    /// the indent back. Off by default.
+    pub tab_indent: bool,
+    /// Built-in Heading styles: a second Enter after a line of five or fewer words that ends in a
+    /// letter or digit makes it Heading 1 (Heading 2 or 3 after one or two leading tabs).
+    /// Off by default.
+    pub heading_styles: bool,
     /// The user's entries: added, or replacing a built-in one.
     pub entries: Vec<(String, String)>,
     /// Built-in entries the user deleted.
@@ -138,6 +146,8 @@ impl Default for AutoCorrectPrefs {
             bullets: true,
             numbering: true,
             border_lines: true,
+            tab_indent: false,
+            heading_styles: false,
             entries: Vec::new(),
             removed: Vec::new(),
             exceptions: Vec::new(),
@@ -327,6 +337,8 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         ("bullets", &mut ac.bullets),
         ("numbering", &mut ac.numbering),
         ("borderLines", &mut ac.border_lines),
+        ("tabIndent", &mut ac.tab_indent),
+        ("headingStyles", &mut ac.heading_styles),
         ("autoAddFirstLetter", &mut ac.auto_add_first_letter),
         ("autoAddInitialCaps", &mut ac.auto_add_initial_caps),
     ] {
@@ -400,6 +412,8 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         "bullets": ac.bullets,
         "numbering": ac.numbering,
         "borderLines": ac.border_lines,
+        "tabIndent": ac.tab_indent,
+        "headingStyles": ac.heading_styles,
         "autoAddFirstLetter": ac.auto_add_first_letter,
         "autoAddInitialCaps": ac.auto_add_initial_caps,
         "entries": ac.list().into_iter().map(|(a, b, builtin)| json!({"from": a, "to": b, "builtIn": builtin})).collect::<Vec<_>>(),
@@ -437,7 +451,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("tools.autocorrect", "AutoCorrect Options", "File › Options › Proofing", autocorrect_options)
             .params(
-                r#"{"enabled"?: bool (all of AutoCorrect), "replaceText"|"twoInitialCaps"|"capSentences"|"capCells"|"capDays"|"capsLock"|"smartQuotes"|"fractions"|"ordinals"|"dashes"|"links"|"bullets"|"numbering"|"borderLines"?: bool, "autoAddFirstLetter"|"autoAddInitialCaps"?: bool (Automatically add words to the exception lists when an automatic capital is undone; default true), "add"?: {"from": string, "to": string} (adds or replaces an entry), "delete"?: string (an entry's "from", built in or added), "addException"?: string, "deleteException"?: string, "addInitialCapsException"?: string (keeps TWo INitial CApitals, like "IDs"), "deleteInitialCapsException"?: string} → options, entries and exceptions"#,
+                r#"{"enabled"?: bool (all of AutoCorrect), "replaceText"|"twoInitialCaps"|"capSentences"|"capCells"|"capDays"|"capsLock"|"smartQuotes"|"fractions"|"ordinals"|"dashes"|"links"|"bullets"|"numbering"|"borderLines"?: bool, "tabIndent"?: bool (Set left- and first-indent with tabs and backspaces; default false), "headingStyles"?: bool (Built-in Heading styles; default false), "autoAddFirstLetter"|"autoAddInitialCaps"?: bool (Automatically add words to the exception lists when an automatic capital is undone; default true), "add"?: {"from": string, "to": string} (adds or replaces an entry), "delete"?: string (an entry's "from", built in or added), "addException"?: string, "deleteException"?: string, "addInitialCapsException"?: string (keeps TWo INitial CApitals, like "IDs"), "deleteInitialCapsException"?: string} → options, entries and exceptions"#,
             )
             .pure(),
         CommandSpec::new("tools.customizeKeyboard", "Customize Keyboard", "File › Options", customize_keyboard)
@@ -466,18 +480,30 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"mode": "none|readOnly|comments|trackedChanges"} (starting enforcement; "none" doesn't stop a protected document — use review.restrict {"stop": true})"#),
         CommandSpec::new("file.versions", "Version History", "File › Info", |s, v| {
+            // Validate a restore before anything is saved: a rejected command must leave the
+            // version list as it was. A `restore` that is there but not a non-negative integer
+            // is refused, not read as absent.
+            let restore = if v.get("restore").is_some_and(|x| !x.is_null()) {
+                let i = p::u64(v, "restore").ok_or_else(|| CmdError::Params("restore (non-negative integer) is required".into()))?;
+                // A `u64` that doesn't fit in `usize` names no version: `as usize` would wrap it
+                // to a small index on a 32-bit target and restore the wrong document.
+                let i = usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?;
+                let version = s.versions.get(i).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
+                // The restore replaces the whole document, including the content the protection
+                // kept read-only, so the protection is stopped first (with its password, when it
+                // has one) — a restore must not go around it.
+                super::protect::check_version_restore(s)?;
+                Some(version)
+            } else {
+                None
+            };
             if let Some(label) = p::str(v, "save") {
                 s.versions.push((label.to_string(), super::now_iso(), s.doc.clone()));
                 if s.versions.len() > 50 {
                     s.versions.remove(0);
                 }
             }
-            if let Some(i) = p::u64(v, "restore") {
-                let (_, _, d) = s.versions.get(i as usize).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
-                // The restore replaces the whole document, including the content the protection
-                // kept read-only, so the protection is stopped first (with its password, when it
-                // has one) — a restore must not go around it.
-                super::protect::check_version_restore(s)?;
+            if let Some((_, _, d)) = restore {
                 s.checkpoint("Restore Version");
                 // A snapshot's own protection is stale: it was taken at some earlier moment, and
                 // restoring it must not bring a protection back that the live document doesn't
@@ -871,7 +897,9 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     }
     let trigger = if on_enter { 0 } else { last.len_utf8() };
     let Some(body) = before.get(..before.len() - trigger) else { return Ok(()) };
-    let start = body.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    // The word starts after the last white-space character, whatever its width (a no-break
+    // space is two bytes and an ideographic space is three).
+    let start = body.char_indices().rev().find(|(_, c)| c.is_whitespace()).map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
     let Some(mut word) = body.get(start..).map(str::to_string) else { return Ok(()) };
     if word.is_empty() {
         return Ok(());

@@ -275,6 +275,118 @@ fn typing_enter_undo() {
     assert_eq!(text(&s), "Hello world");
 }
 
+/// A command that changes nothing is not an edit (#23): no undo step, no unsaved changes
+/// and no relayout.
+#[test]
+fn a_command_that_changes_nothing_is_not_an_edit() {
+    let mut s = s();
+    let rev = s.rev();
+    // Backspace at the start of the document: there is nothing to delete.
+    run(&mut s, "text.backspace", json!({}));
+    assert_eq!(s.undo_depth(), 0, "no undo step");
+    assert!(!s.dirty, "no unsaved changes");
+    assert_eq!(s.rev(), rev, "no relayout");
+    // Typing nothing is the same.
+    run(&mut s, "text.insert", json!({"text": ""}));
+    assert_eq!(s.undo_depth(), 0, "no undo step");
+    assert!(!s.dirty, "no unsaved changes");
+    // A command that changes something is an edit.
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    assert_eq!(s.undo_depth(), 1, "one undo step");
+    assert!(s.dirty, "the document is edited");
+    // Setting the alignment a paragraph already has changes nothing.
+    let depth = s.undo_depth();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    let depth = s.undo_depth();
+    run(&mut s, "para.align", json!({"value": "center"}));
+    assert_eq!(s.undo_depth(), depth, "no undo step");
+    // A command that changes nothing leaves the unsaved-changes flag and the layout revision as
+    // they were, even when it calls `touch` itself: a saved document is not marked edited for
+    // nothing, and its layout is not laid out again.
+    let mut clean = Session::new(wordcraft_doc::Document::new());
+    run(&mut clean, "para.align", json!({"value": "left"}));
+    clean.dirty = false;
+    let rev = clean.rev();
+    run(&mut clean, "para.align", json!({"value": "left"}));
+    assert!(!clean.dirty, "no unsaved changes");
+    assert_eq!(clean.rev(), rev, "no relayout");
+    assert_eq!(clean.undo_depth(), 1, "only the first align is a step");
+}
+
+/// Five hundred commands that change nothing used to fill the whole undo stack and push the
+/// user's own edits out of it, so they could never be undone again (#23).
+#[test]
+fn no_op_commands_do_not_evict_the_undo_history() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "caret.docStart", json!({}));
+    for _ in 0..600 {
+        run(&mut s, "text.backspace", json!({}));
+    }
+    assert_eq!(s.undo_depth(), 1, "the typing step is still there");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(text(&s), "", "the typed text is still undoable");
+}
+
+/// A command that changes nothing does not throw the redo stack away (#23).
+#[test]
+fn a_no_op_command_keeps_the_redo_stack() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "edit.undo", json!({}));
+    assert!(s.can_redo());
+    run(&mut s, "text.backspace", json!({}));
+    assert!(s.can_redo(), "the redo stack survives a command that changed nothing");
+    run(&mut s, "edit.redo", json!({}));
+    assert_eq!(text(&s), "Hello");
+}
+
+/// Commands that run as one undo step (`join_next_undo`: a dialog's OK, the frames of a drag):
+/// a group whose first command changes nothing has no step to merge into, so the next command
+/// in it starts the group's step instead of merging into an older edit (#23 follow-up).
+#[test]
+fn a_joined_command_starts_its_group_when_the_first_changed_nothing() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    let (depth, margins) = (s.undo_depth(), (s.doc.last_section.margin_left, s.doc.last_section.margin_top));
+    // Portrait on a portrait page changes nothing.
+    run(&mut s, "layout.orientation", json!({"value": "portrait"}));
+    assert_eq!(s.undo_depth(), depth, "the first command of the group is no edit");
+    // The next command of the group starts the step the group needs.
+    s.join_next_undo();
+    run(&mut s, "layout.margins", json!({"left": 100.0}));
+    assert_eq!(s.doc.last_section.margin_left, 100.0);
+    assert_eq!(s.undo_depth(), depth + 1, "the group's one step");
+    // A command that changes nothing in the middle of the group leaves that step alone, and
+    // the next one merges into it.
+    s.join_next_undo();
+    run(&mut s, "layout.orientation", json!({"value": "portrait"}));
+    s.join_next_undo();
+    run(&mut s, "layout.margins", json!({"top": 60.0}));
+    assert_eq!(s.undo_depth(), depth + 1, "still the group's one step");
+    // Undo takes the whole group back and no more: the typing is still there.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!((s.doc.last_section.margin_left, s.doc.last_section.margin_top), margins, "the margins the group started from");
+    assert_eq!(text(&s), "Hello");
+}
+
+/// Bold with nothing selected arms the formatting for the next word: the document is the
+/// same, so only the caret's formatting changed — and that is an edit (#23).
+#[test]
+fn a_command_that_only_arms_the_caret_formatting_is_an_edit() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Hello"}));
+    run(&mut s, "caret.docStart", json!({}));
+    let depth = s.undo_depth();
+    run(&mut s, "format.bold", json!({}));
+    assert_eq!(s.undo_depth(), depth + 1, "one undo step");
+    // Undo takes the armed formatting back, as Word does (docs/typing-parity.md).
+    run(&mut s, "edit.undo", json!({}));
+    run(&mut s, "text.insert", json!({"text": "x"}));
+    assert_eq!(s.doc.para_at(&s.sel.focus).map(|p| p.props_of_char(0).bold), Some(None));
+}
+
 /// The Undo button's list (#701): several steps undone at once, newest first.
 #[test]
 fn undo_to_takes_several_steps_back_at_once() {
@@ -514,7 +626,10 @@ fn failed_command_restores_history_changed_by_nested_commands() {
             // Comments are stamped with the time to the second, and the two sessions compared
             // are built a moment apart, so leave the stamp out of the comparison.
             let mut doc = s.doc.clone();
-            doc.comments.values_mut().for_each(|c| c.date.clear());
+            doc.comments.values_mut().for_each(|c| {
+                c.date.clear();
+                c.date_utc = None;
+            });
             out.push((s.undo_labels(), doc));
             if !s.can_undo() {
                 return out;
@@ -1672,6 +1787,70 @@ fn tables_commands() {
     run(&mut s, "table.deleteTable", json!({}));
     assert!(s.doc.body.iter().all(|b| b.as_table().is_none()));
     assert!(s.run("table.merge", &json!({})).is_err());
+}
+
+#[test]
+fn inserting_a_column_keeps_cell_widths_in_step_with_the_grid() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 2}));
+    let widths = |s: &Session| {
+        let t = s.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        (t.grid.clone(), t.rows[0].cells.iter().map(|c| c.props.width.unwrap_or(0.0)).collect::<Vec<_>>())
+    };
+    let (grid_before, _) = widths(&s);
+    assert!(grid_before.iter().all(|w| *w > 0.0));
+    run(&mut s, "table.insertColumnRight", json!({}));
+    let (grid_after, cells) = widths(&s);
+    // The table keeps its total width, and each cell carries its grid columns' width: the
+    // layout and the saved `w:tcW` see the same shrink the grid got.
+    let sum = |v: &[f32]| v.iter().sum::<f32>();
+    assert!((sum(&grid_after) - sum(&grid_before)).abs() < 0.5, "{grid_after:?} vs {grid_before:?}");
+    assert_eq!(cells.len(), grid_after.len());
+    for (g, w) in grid_after.iter().zip(cells.iter()) {
+        assert!((w - g).abs() < 0.01, "cell width {w} vs grid {g}");
+    }
+}
+
+/// A row that skips grid columns (`w:gridBefore`) gives its cells the widths of the columns
+/// they sit in, not of the first ones.
+#[test]
+fn cell_widths_follow_the_grid_after_skipped_columns() {
+    let mut s = s();
+    run(&mut s, "insert.table", json!({"rows": 2, "cols": 3}));
+    let i = s.doc.body.iter().position(|b| b.as_table().is_some()).unwrap();
+    let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(&mut s.doc.body[i]) else { panic!("no table") };
+    t.grid = vec![100.0, 200.0, 300.0];
+    t.rows[1].props.grid_before = 1;
+    t.rows[1].cells.pop();
+    crate::cmd::table::sync_cell_widths(t);
+    let widths: Vec<f32> = t.rows[1].cells.iter().map(|c| c.props.width.unwrap_or(0.0)).collect();
+    assert_eq!(widths, [200.0, 300.0]);
+}
+
+#[test]
+fn a_rejected_version_restore_saves_nothing() {
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Original text."));
+    s.run("review.restrict", &json!({"mode": "readOnly", "password": "pw"})).unwrap();
+    s.run("file.versions", &json!({"save": "before"})).unwrap();
+    // One command asking for both a save and a restore the protection refuses: the save must
+    // not happen either.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": 0})).unwrap_err().to_string();
+    assert!(e.contains("stop protection"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+    // A bad index is refused before anything is saved, too.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": 99})).unwrap_err().to_string();
+    assert!(e.contains("no such version"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+    // A restore that is there but not a non-negative integer is refused, not read as absent:
+    // {"save": "mid", "restore": -1} must not save quietly without restoring.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": -1})).unwrap_err().to_string();
+    assert!(e.contains("restore (non-negative integer)"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
+    // An index too large for `usize` names no version: on a 32-bit target `as usize` would wrap
+    // it to 0 and restore the first version instead.
+    let e = s.run("file.versions", &json!({"save": "mid", "restore": 4294967296u64})).unwrap_err().to_string();
+    assert!(e.contains("no such version"), "{e}");
+    assert_eq!(s.versions.len(), 1, "the refused command saved a version anyway");
 }
 
 /// #3931: the page as a command would leave it, laid out without running it on the document:
@@ -3087,6 +3266,172 @@ fn word_toc_control_with_the_field_end_after_the_entries_survives_update_and_sav
         assert!(blocks.is_none_or(|n| n == s.doc.body.len()), "round {round}: the document grew: {}", text(&s));
         blocks = Some(s.doc.body.len());
     }
+}
+
+/// A paragraph style `id` named `name`, based on Normal.
+fn style_xml(id: &str, name: &str, ppr: &str, rpr: &str) -> String {
+    format!(
+        r#"<w:style w:type="paragraph" w:styleId="{id}"><w:name w:val="{name}"/><w:basedOn w:val="Normal"/><w:pPr>{ppr}</w:pPr><w:rPr>{rpr}</w:rPr></w:style>"#
+    )
+}
+
+/// A DOCX package with `body` and the paragraph `styles` after a default Normal style.
+fn docx_with_styles(body: &str, styles: &str) -> Vec<u8> {
+    use std::io::Write;
+    const W: &str = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main""#;
+    const RELS: &str = r#"xmlns="http://schemas.openxmlformats.org/package/2006/relationships""#;
+    const TYPE: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships";
+    let mut zip = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, value) in [
+        ("word/document.xml", format!(r#"<w:document {W}><w:body>{body}</w:body></w:document>"#)),
+        (
+            "word/styles.xml",
+            format!(
+                r#"<w:styles {W}><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>{styles}</w:styles>"#
+            ),
+        ),
+        (
+            "word/_rels/document.xml.rels",
+            format!(r#"<Relationships {RELS}><Relationship Id="rId1" Type="{TYPE}/styles" Target="styles.xml"/></Relationships>"#),
+        ),
+        (
+            "_rels/.rels",
+            format!(r#"<Relationships {RELS}><Relationship Id="main" Type="{TYPE}/officeDocument" Target="word/document.xml"/></Relationships>"#),
+        ),
+    ] {
+        zip.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+        zip.write_all(value.as_bytes()).unwrap();
+    }
+    zip.finish().unwrap().into_inner()
+}
+
+/// #3891: Update Table on a TOC Word wrote in Portuguese keeps the formatting of its TOC styles,
+/// stored under the ids `Sumrio1`/`Sumrio3` (`toc 1`/`toc 3`): bold Arial at level 1, italic and
+/// indented at level 3.
+#[test]
+fn update_table_keeps_the_formatting_of_localized_toc_styles() {
+    let t = |s: &str| format!(r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
+    let p = |st: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{inner}</w:p>"#);
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let body = [
+        p("CabealhodoSumrio", &t("Contents")),
+        p("Sumrio1", &format!("{begin}{}", t("Chapter\t1"))),
+        p("Sumrio3", &t("Detail\t1")),
+        r#"<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#.to_string(),
+        p("Ttulo1", &t("Chapter")),
+        p("Ttulo3", &t("Detail")),
+    ]
+    .concat();
+    let styles = [
+        style_xml("Ttulo1", "heading 1", r#"<w:outlineLvl w:val="0"/>"#, ""),
+        style_xml("Ttulo3", "heading 3", r#"<w:outlineLvl w:val="2"/>"#, ""),
+        style_xml("CabealhodoSumrio", "TOC Heading", "", ""),
+        style_xml("Sumrio1", "toc 1", "", r#"<w:rFonts w:ascii="Arial" w:hAnsi="Arial"/><w:b/>"#),
+        style_xml("Sumrio3", "toc 3", r#"<w:ind w:left="220"/>"#, "<w:i/>"),
+    ]
+    .concat();
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(&body, &styles)).unwrap());
+    run(&mut s, "references.updateToc", json!({}));
+    let entries: Vec<(String, bool, bool, f32)> = s
+        .doc
+        .body
+        .iter()
+        .filter_map(|b| b.as_para())
+        .filter(|p| p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading"))
+        .map(|p| {
+            let c = s.doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(0));
+            (c.font, c.bold, c.italic, s.doc.styles.resolve_para(&p.props).indent_left)
+        })
+        .collect();
+    let level3 = entries.get(1).map(|e| e.0.clone()).unwrap_or_default();
+    assert_eq!(entries, [("Arial".to_string(), true, false, 0.0), (level3, false, true, 11.0)], "{}", text(&s));
+}
+
+/// #3889: Word's TOC in two columns, written by Word in Portuguese. The TOC heading ends a
+/// one-column section; the entries, styled `Sumrio1`/`Sumrio2` (`toc 1`/`toc 2`), fill a continuous
+/// two-column one, and the field's end and the control's end share a paragraph after them. Update
+/// Table keeps the entries' styles, puts the page numbers at the first column's right edge (3888
+/// twips, as Word's own entries have them) and adds no blank line above the first column; update,
+/// save and reopen keeps it so.
+#[test]
+fn toc_in_columns_with_localized_styles_keeps_its_layout_through_update_table() {
+    let t = |s: &str| format!(r#"<w:r><w:t xml:space="preserve">{s}</w:t></w:r>"#);
+    let p = |st: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr>{inner}</w:p>"#);
+    let tab = r#"<w:tabs><w:tab w:val="right" w:leader="dot" w:pos="3888"/></w:tabs>"#;
+    let entry = |st: &str, inner: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/>{tab}</w:pPr>{inner}</w:p>"#);
+    let sect = |cols: &str, kind: &str| {
+        format!(
+            r#"<w:sectPr>{kind}<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1417" w:right="1701" w:bottom="1417" w:left="1701" w:header="708" w:footer="708" w:gutter="0"/><w:cols {cols} w:space="708"/></w:sectPr>"#
+        )
+    };
+    let continuous = r#"<w:type w:val="continuous"/>"#;
+    let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-2" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+    let toc = [
+        p("CabealhodoSumrio", &t("Contents")),
+        format!("<w:p><w:pPr>{}</w:pPr></w:p>", sect("", "")),
+        entry("Sumrio1", &format!("{begin}{}", t("Chapter One\t1"))),
+        entry("Sumrio2", &t("Section\t1")),
+        r#"<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>"#.to_string(),
+    ]
+    .concat();
+    let body = [
+        format!(
+            r#"<w:sdt><w:sdtPr><w:id w:val="-1360965913"/><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent>{toc}</w:sdtContent></w:sdt>"#
+        ),
+        format!(r#"<w:p><w:pPr>{}</w:pPr></w:p>"#, sect(r#"w:num="2""#, continuous)),
+        p("Ttulo1", &t("Chapter One")),
+        p("Ttulo2", &t("Section")),
+        sect("", ""),
+    ]
+    .concat();
+    let styles = [
+        style_xml("Ttulo1", "heading 1", r#"<w:outlineLvl w:val="0"/>"#, ""),
+        style_xml("Ttulo2", "heading 2", r#"<w:outlineLvl w:val="1"/>"#, ""),
+        style_xml("CabealhodoSumrio", "TOC Heading", "", ""),
+        style_xml("Sumrio1", "toc 1", r#"<w:spacing w:after="100"/>"#, ""),
+        style_xml("Sumrio2", "toc 2", r#"<w:spacing w:after="100"/><w:ind w:left="220"/>"#, ""),
+    ]
+    .concat();
+    let mut s = Session::new(wordcraft_docx::read(&docx_with_styles(&body, &styles)).unwrap());
+    let mut blocks = None;
+    for round in 0..3 {
+        run(&mut s, "references.updateToc", json!({}));
+        let entries: Vec<(usize, &wordcraft_doc::Paragraph)> = s
+            .doc
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(i, b)| b.as_para().map(|p| (i, p)))
+            .filter(|(_, p)| p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading"))
+            .collect();
+        // The chapters' section starts a new page.
+        let found: Vec<(Option<&str>, String)> = entries.iter().map(|(_, p)| (p.props.style.as_deref(), p.plain_text())).collect();
+        assert_eq!(found, [(Some("TOC1"), "Chapter One\t2".to_string()), (Some("TOC2"), "Section\t2".to_string())], "round {round}: {}", text(&s));
+        assert_eq!(s.doc.styles.get("TOC2").and_then(|st| st.para.indent_left), Some(11.0), "round {round}: the document's own TOC 2");
+        for (_, e) in &entries {
+            let right = e.props.tabs.as_ref().and_then(|t| t.iter().find(|t| t.align == wordcraft_doc::props::TabAlign::Right)).unwrap();
+            assert!((right.pos - 194.4).abs() < 0.1, "round {round}: page numbers at the first column's edge, not the page's: {}", right.pos);
+        }
+        // The paragraph above the first entry ends the one-column section: no blank line tops the
+        // first column.
+        let above = entries[0].0 - 1;
+        assert!(s.doc.body[above].as_para().unwrap().section.is_some(), "round {round}: a blank line above the entries: {}", text(&s));
+        let bytes = wordcraft_docx::write(&s.doc).unwrap();
+        s = Session::new(wordcraft_docx::read(&bytes).unwrap());
+        assert!(blocks.is_none_or(|n| n == s.doc.body.len()), "round {round}: the document grew: {}", text(&s));
+        blocks = Some(s.doc.body.len());
+    }
+    // The field's paragraph ends the one-column section: replacing or removing the TOC keeps it.
+    let columns = |s: &Session| s.doc.sections().iter().map(|(_, x)| x.columns.count).collect::<Vec<_>>();
+    assert_eq!(columns(&s), [1, 2, 1]);
+    // The heading goes with the table: one "Contents" after Replace, none after Remove.
+    let titles = |s: &Session| s.doc.body.iter().filter_map(|b| b.as_para()).filter(|p| p.plain_text() == "Contents").count();
+    run(&mut s, "references.toc", json!({"levels": 2}));
+    assert_eq!(columns(&s), [1, 2, 1], "{}", text(&s));
+    assert_eq!(titles(&s), 1, "{}", text(&s));
+    run(&mut s, "references.removeToc", json!({}));
+    assert_eq!(columns(&s), [1, 2, 1], "{}", text(&s));
+    assert_eq!(titles(&s), 0, "{}", text(&s));
 }
 
 /// #2182: with two TOCs only the one Update Table would refresh is offered Update Field; the other
@@ -5179,6 +5524,32 @@ fn reading_mode_reflows_per_viewport_without_changing_document_or_export() {
     assert_eq!(s.view.read_column_width, None);
     assert_eq!(s.view.read_zoom, 1.0);
     assert_eq!(s.view.read_line_spacing, None);
+}
+
+/// Read Mode › View › Page Color: None, Sepia or Inverse, a view setting that leaves the
+/// document alone, is not saved, and starts at None on each entry to Read Mode.
+#[test]
+fn reading_page_color_is_a_transient_view_setting() {
+    use crate::cmd::view::ReadPageColor;
+    let mut s = s();
+    let original = s.doc.clone();
+    let dirty = s.dirty;
+    run(&mut s, "view.readMode", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::None);
+    assert_eq!(s.run("view.readPageColor", &json!({"value": "sepia"})).unwrap(), json!({"pageColor": "sepia"}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Sepia);
+    run(&mut s, "view.readPageColor", json!({"value": "inverse"}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse);
+    for bad in [json!({"value": "black"}), json!({"value": 1}), json!({})] {
+        assert!(s.run("view.readPageColor", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(s.view.read_page_color, ReadPageColor::Inverse, "rejected values keep the color");
+    assert!(serde_json::to_value(&s.view).unwrap().get("readPageColor").is_none());
+    assert_eq!(s.doc, original);
+    assert_eq!(s.dirty, dirty);
+    run(&mut s, "view.printLayout", json!({}));
+    run(&mut s, "view.readMode", json!({}));
+    assert_eq!(s.view.read_page_color, ReadPageColor::None);
 }
 
 /// File › Options › Advanced › Numeral: the display mode for digits (display only).
@@ -8751,6 +9122,29 @@ fn a_version_snapshot_does_not_survive_an_untitled_comparison() {
         assert!(s.run("file.versions", &json!({"restore": 0})).is_err());
         assert!(s.path.is_none() && s.file_name.is_none());
     }
+}
+
+/// A comparison with an `original` replaces the open document in place — the handler loads the
+/// original into `s.doc` without `set_document` — so `document_id` does not move and two
+/// identical comparisons produce identical documents. A comparison is an edit of its own all
+/// the same: the `replaces_document` guard keeps its undo step (#4004 review).
+#[test]
+fn a_repeated_comparison_is_still_an_edit() {
+    let dir = std::env::temp_dir().join(format!("wordcraft-compare-twice-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let original = dir.join("original.docx");
+    let mut other = Session::new(wordcraft_doc::Document::from_text("Original document."));
+    other.run("file.save", &json!({"path": original.to_string_lossy()})).unwrap();
+
+    let mut s = Session::new(wordcraft_doc::Document::from_text("Current document."));
+    let compare = json!({"original": original.to_string_lossy(), "text": "Revised document."});
+    s.run("review.compare", &compare).unwrap();
+    let depth = s.undo_depth();
+    assert!(s.dirty);
+    s.run("review.compare", &compare).unwrap();
+    assert_eq!(s.undo_depth(), depth + 1, "the second comparison is an edit of its own");
+    assert!(s.dirty, "the comparison result is unsaved");
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// A rejected comparison leaves the current document and its snapshots together.

@@ -717,7 +717,9 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
 /// The whitespace-delimited token enclosing the word at `a..b` of `text`: its byte range, and
 /// whether it looks like a web or e-mail address.
 fn enclosing_token(text: &str, a: usize, b: usize) -> (usize, usize, bool) {
-    let ts = text.get(..a).and_then(|t| t.rfind(char::is_whitespace)).map(|i| i + 1).unwrap_or(0);
+    // The token starts after the last white-space character, whatever its width (a no-break
+    // space is two bytes and an ideographic space is three).
+    let ts = text.get(..a).and_then(|t| t.char_indices().rev().find(|(_, c)| c.is_whitespace())).map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
     let te = text.get(b..).and_then(|t| t.find(char::is_whitespace)).map(|i| b + i).unwrap_or(text.len());
     (ts, te, text.get(ts..te).is_some_and(is_address))
 }
@@ -1505,6 +1507,18 @@ mod tests {
         assert_eq!(bad.first(), Some(&"zxq"), "{bad:?}");
         assert!(bad.contains(&"qwirpy"), "{bad:?}");
         assert_eq!(bad.last(), Some(&"wugwug"), "{bad:?}");
+    }
+
+    #[test]
+    fn address_after_a_wide_space_is_an_internet_token() {
+        // A web or e-mail address after a no-break space or an ideographic space is skipped,
+        // as it is after a plain space.
+        let t = "see\u{a0}https://xyzq.example/blorp and\u{3000}www.qwirpy.example or\u{a0}zxq@mail.example wugwug";
+        let bad: Vec<&str> = check_spelling(t).iter().map(|i| &t[i.start..i.end]).collect();
+        assert_eq!(bad, vec!["wugwug"]);
+        let opts = Options { ignore_internet: false, ..Options::default() };
+        let bad: Vec<&str> = check_spelling_with(t, &opts).iter().map(|i| &t[i.start..i.end]).collect();
+        assert!(["xyzq", "blorp", "qwirpy", "zxq", "wugwug"].iter().all(|w| bad.contains(w)), "{bad:?}");
     }
 
     #[test]

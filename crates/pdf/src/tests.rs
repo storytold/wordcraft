@@ -6,6 +6,49 @@ use wordcraft_doc::{Block, CharProps, Document, ListKind, Paragraph, Table, Wate
 
 use crate::*;
 
+/// Verify preset lines and connectors emit the requested PDF line-cap operator.
+#[test]
+fn shape_line_caps_reach_pdf_content() {
+    use wordcraft_doc::{
+        connector::{LineCap as ShapeCap, ShapeExtra},
+        para::{Anchor, Float, ShapeKind, Wrap},
+    };
+    for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+        for (cap, operator) in [(ShapeCap::Flat, None), (ShapeCap::Round, Some("1 J")), (ShapeCap::Square, Some("2 J"))] {
+            let shape = InlineObject::Shape {
+                kind,
+                w: 40.0,
+                h: 0.0,
+                fill: None,
+                stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+                stroke_width: 10.0,
+                float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                story: None,
+                freeform: None,
+                effects: Default::default(),
+                extra: ShapeExtra { cap, ..Default::default() },
+            };
+            let mut p = Paragraph::new();
+            p.insert_object(0, shape, &Default::default()).unwrap();
+            let mut d = Document::new();
+            d.body = vec![para_block(p)];
+            let bytes = export(&d, &PdfOptions { compress: false, ..Default::default() }).unwrap();
+            let raw = String::from_utf8_lossy(&bytes);
+            // Content operators can share a line: PDF separates them by whitespace.
+            let tokens: Vec<_> = raw.split_ascii_whitespace().collect();
+            let has_operator = |op: &str| {
+                let expected: Vec<_> = op.split_ascii_whitespace().collect();
+                tokens.windows(2).any(|pair| pair == expected.as_slice())
+            };
+            if let Some(op) = operator {
+                assert!(has_operator(op), "{kind:?} {cap:?}: missing PDF cap operator {op}");
+            } else {
+                assert!(!has_operator("1 J") && !has_operator("2 J"), "flat cap must remain butt");
+            }
+        }
+    }
+}
+
 fn png() -> Vec<u8> {
     let img = image::RgbaImage::from_fn(16, 8, |x, y| image::Rgba([(x * 15) as u8, (y * 30) as u8, 200, 255]));
     let mut buf = Vec::new();
@@ -1020,6 +1063,34 @@ fn a_crop_keeping_a_sliver_draws_the_source_that_much_wider() {
     // The metafile: its red right half, a filled path.
     let (whole, cropped) = (widest(red_right_half_emf(), "emf", [0.0; 4]).1, widest(red_right_half_emf(), "emf", sliver).1);
     assert!(whole > 0.0 && (cropped / whole - 1.0 / 0.03).abs() < 0.5, "emf: {whole} → {cropped}");
+}
+
+/// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
+/// components unsubsampled, with no pixel data that size.
+fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
+    let mut jpeg = Vec::new();
+    image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+    let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+    jpeg[sof + 1] = 0xC2;
+    jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+    jpeg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+    for c in 0..3 {
+        jpeg[sof + 11 + 3 * c] = 0x11;
+    }
+    let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+    let n = usize::from(jpeg[sos + 4]);
+    jpeg[sos + 6 + 2 * n] = 0;
+    jpeg
+}
+
+/// #3644: a progressive JPEG's coefficients count toward the budget, beside its output.
+#[test]
+fn progressive_jpeg_coefficients_count_toward_the_image_budget() {
+    assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
+    assert!(load_image(&Arc::new(progressive_jpeg_header(7900, 7900))).is_none());
+    let mut baseline = Vec::new();
+    image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+    assert!(load_image(&Arc::new(baseline)).is_some(), "other JPEGs still embed");
 }
 
 /// #1502: an inline picture's Figure carries its own alt text, not the "picture" fallback.

@@ -13,6 +13,7 @@ use crate::{CmdError, CmdResult, CommandSpec, Session, p};
 /// Word's font size list.
 pub const SIZES: [f32; 17] = [8.0, 9.0, 10.0, 10.5, 11.0, 12.0, 14.0, 16.0, 18.0, 20.0, 22.0, 24.0, 26.0, 28.0, 36.0, 48.0, 72.0];
 
+/// Register character-formatting commands, their parameters and keyboard bindings.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("format.bold", "Bold", "Home › Font", |s, v| {
@@ -107,7 +108,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"color": "RRGGBB" | "auto"} (the underline's own colour; "auto" follows the text colour)"#),
         CommandSpec::new("format.highlight", "Text Highlight Color", "Home › Font", highlight)
             .params(
-                r#"{"color": "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"}"#,
+                r#"{"color"?: "yellow|brightGreen|turquoise|pink|blue|red|darkBlue|teal|green|violet|darkRed|darkYellow|gray50|gray25|black|none"} (explicit colour sets it; omitted toggles the last chosen colour, initially yellow)"#,
             )
             // ⌘⌥H hides other apps on macOS.
             .key(super::non_mac("Mod+Alt+H")),
@@ -228,7 +229,8 @@ pub fn apply(s: &mut Session, f: &dyn Fn(&mut CharProps)) -> CmdResult {
     sel_result(s)
 }
 
-/// Resolved formatting of every character in the target (or the caret).
+/// Resolved target formatting, sampled up to a paragraph/column-row boundary after 10,000 runs.
+/// Empty targets use pending caret formatting or the selected text box paragraph mark.
 fn resolved(s: &Session) -> Vec<ResolvedChar> {
     let mut out = Vec::new();
     if let Some(rows) = column_rows(s) {
@@ -391,18 +393,73 @@ fn underline_color(s: &mut Session, v: &Value) -> CmdResult {
     apply(s, &|x| x.underline_color = rgb)
 }
 
+/// Test the entire highlight target without the formatting-state query's run cap.
+/// Resolve one run at a time and stop at the first mismatch, without collecting them.
+fn target_has_highlight(s: &Session, h: Highlight) -> bool {
+    let matches = |style: Option<&str>, props: &CharProps| s.doc.styles.resolve_char(style, props).highlight == h.rgb();
+    let mut seen = false;
+    if let Some(rows) = column_rows(s) {
+        for (a, b) in rows {
+            let Some(p) = s.doc.para_at(&a) else { continue };
+            if a == b {
+                seen = true;
+                if !matches(p.props.style.as_deref(), &p.mark) {
+                    return false;
+                }
+            }
+            for (r, c) in p.run_ranges() {
+                if r.end > a.off && r.start < b.off {
+                    seen = true;
+                    if !matches(p.props.style.as_deref(), c) {
+                        return false;
+                    }
+                }
+            }
+        }
+        if seen {
+            return true;
+        }
+    }
+    if let Some((a, b)) = selected_text_box(s).or_else(|| target(s)) {
+        for path in s.doc.paths_between(&a, &b) {
+            let Some(p) = s.doc.para(a.story, &path) else { continue };
+            let from = if path == a.path { a.off } else { 0 };
+            let to = if path == b.path { b.off } else { p.len() };
+            for (r, c) in p.run_ranges() {
+                if r.end > from && r.start < to {
+                    seen = true;
+                    if !matches(p.props.style.as_deref(), c) {
+                        return false;
+                    }
+                }
+            }
+        }
+    }
+    // No runs: retain the caret/pending and empty text-box paragraph-mark rules.
+    seen || resolved(s).iter().all(|r| r.highlight == h.rgb())
+}
+
+/// Explicit palette/automation colours set highlighting; the shortcut (no colour) toggles
+/// the last choice off only when the whole formatting target already has that colour.
 fn highlight(s: &mut Session, v: &Value) -> CmdResult {
-    let c = p::str(v, "color").unwrap_or("yellow");
-    let h = Highlight::ALL
-        .iter()
-        .copied()
-        .find(|h| {
-            h.ooxml().eq_ignore_ascii_case(c)
-                || h.name().replace(['-', ' ', '%'], "").eq_ignore_ascii_case(&c.replace(['-', ' ', '%'], ""))
-                || format!("{h:?}").eq_ignore_ascii_case(c)
-        })
-        .ok_or_else(|| CmdError::Params(format!("unknown highlight colour `{c}`")))?;
-    apply(s, &|x| x.highlight = Some(h))
+    let color = v.get("color").map(|_| p::req_str(v, "color")).transpose()?;
+    let h = match color {
+        None => s.last_highlight,
+        Some(c) => Highlight::ALL
+            .iter()
+            .copied()
+            .find(|h| {
+                h.ooxml().eq_ignore_ascii_case(c)
+                    || h.name().replace(['-', ' ', '%'], "").eq_ignore_ascii_case(&c.replace(['-', ' ', '%'], ""))
+                    || format!("{h:?}").eq_ignore_ascii_case(c)
+            })
+            .ok_or_else(|| CmdError::Params(format!("unknown highlight colour `{c}`")))?,
+    };
+    let remove = color.is_none() && target_has_highlight(s, h);
+    let value = if remove { Highlight::None } else { h };
+    let result = apply(s, &|x| x.highlight = Some(value))?;
+    s.last_highlight = h;
+    Ok(result)
 }
 
 /// `format.changeCase`: `mode` (lower, upper, title, sentence, toggle), or Shift+F3's cycle

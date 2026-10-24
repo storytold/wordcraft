@@ -21,9 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("references.removeToc", "Remove Table of Contents", "References › Table of Contents", |s, _| {
             if let Some((start, end)) = toc_range(s) {
-                for i in (start..=end).rev() {
-                    s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
-                }
+                remove_toc(s, start, end)?;
                 s.clamp_selection();
             }
             sel_result(s)
@@ -339,6 +337,36 @@ fn toc_range(s: &Session) -> Option<(usize, usize)> {
     Some((start, end))
 }
 
+/// Removes the TOC blocks `start..=end` and returns where the TOC was. A field paragraph that ends
+/// a section stays, emptied, so its section break isn't lost (#3889). A heading paragraph of its
+/// own just above the field's paragraph (Word's tables start the field after their heading) goes
+/// with the table.
+fn remove_toc(s: &mut Session, start: usize, end: usize) -> Result<usize, CmdError> {
+    for i in (start + 1..=end).rev() {
+        s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
+    }
+    let at = match s.doc.para_mut(StoryRef::Body, &Path::top(start)) {
+        Ok(p) if p.section.is_some() => {
+            *p = Paragraph { section: p.section.take(), ..Paragraph::new() };
+            start + 1
+        }
+        _ => {
+            s.doc.remove_block(StoryRef::Body, &Path::top(start))?;
+            start
+        }
+    };
+    let titled = start
+        .checked_sub(1)
+        .and_then(|i| s.doc.body.get(i))
+        .and_then(|b| b.as_para())
+        .is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading") && p.section.is_none() && toc_field(p).is_none());
+    if titled {
+        s.doc.remove_block(StoryRef::Body, &Path::top(start - 1))?;
+        return Ok(at - 1);
+    }
+    Ok(at)
+}
+
 /// The caret is in the table of contents (its heading or an entry), where Word's context menu
 /// offers Update Field for the whole table.
 pub fn caret_in_toc(s: &Session) -> bool {
@@ -393,15 +421,24 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
     // lay it out) leaves an empty paragraph behind, which would show as a blank line above the
     // entries. The field goes at the end of the heading instead, as `insert_toc` places it.
     let i = at.path.last();
+    // Or one holding only the end of Word's TOC control, still styled as an entry: Update Table
+    // would delete it with the old entries anyway.
+    let leftover = |p: &Paragraph| {
+        p.is_empty()
+            || (p.objects.iter().all(|o| matches!(o, InlineObject::ControlEnd))
+                && p.text.chars().all(|c| c == OBJ)
+                && p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading"))
+    };
     if at.path.depth() == 0
         && i > 0
-        && s.doc.para_at(&at).is_some_and(|p| p.is_empty())
+        && s.doc.para_at(&at).is_some_and(leftover)
         // The paragraph before may also be the empty one the writer leaves where the engine's TOC
         // field was (the field is saved opening in the first entry), so the next save and update
         // doesn't add a blank line each time (#2182). A blank line the user typed right above a
-        // range TOC is reused the same way, so deleting it later deletes the TOC field.
+        // range TOC is reused the same way, so deleting it later deletes the TOC field. So is one
+        // ending the section before, as above entries in columns (#3889).
         && s.doc.body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| {
-            p.props.style.as_deref() == Some("TOCHeading") || (p.is_empty() && p.objects.is_empty() && p.section.is_none())
+            p.props.style.as_deref() == Some("TOCHeading") || (p.is_empty() && p.objects.is_empty())
         })
     {
         s.doc.remove_block(StoryRef::Body, &at.path)?;
@@ -474,9 +511,7 @@ fn insert_toc(s: &mut Session, v: &Value) -> CmdResult {
             return sel_result(s);
         }
         Some((start, end)) => {
-            for i in (start..=end).rev() {
-                s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
-            }
+            let start = remove_toc(s, start, end)?;
             s.doc.insert_block(StoryRef::Body, &Path::top(start), Block::Para(Paragraph::new()))?;
             placeholder = true;
             s.sel = Selection::caret(Pos { story: StoryRef::Body, path: Path::top(start), off: 0 });
@@ -585,10 +620,13 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     for i in (start + 1..=end).rev() {
         s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
     }
-    // The text width of the TOC's own section, not the caret's: after Select All the caret sits
-    // at the end of the document, possibly in a wider (landscape) section.
-    let section = s.doc.section_index_of(start);
-    let width = s.doc.sections().get(section).map_or_else(|| super::page::sect(s).text_width(), |(_, x)| x.text_width());
+    // The column width of the TOC's own section, not the caret's: after Select All the caret sits
+    // at the end of the document, possibly in a wider (landscape) section. In columns, the first
+    // column's, as Word does (#3889); after a field paragraph ending a section, the next section's.
+    let after_break = s.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
+    let section = s.doc.section_index_of(start + usize::from(after_break));
+    let column = |x: &wordcraft_doc::SectionProps| x.column_boxes().first().map_or(x.text_width(), |(_, w)| *w);
+    let width = s.doc.sections().get(section).map_or_else(|| column(&super::page::sect(s)), |(_, x)| column(x));
     let entries = toc_entries(s, &f);
     let links: Vec<Option<String>> = if f.has('h') {
         let mut v = Vec::new();

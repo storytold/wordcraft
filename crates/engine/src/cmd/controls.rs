@@ -864,6 +864,25 @@ mod editing_tests {
         assert_eq!(typed, None, "a placeholder style localized in id and name");
     }
 
+    /// Typed text with line breaks in it (`type_text` with paragraphs, a typed paste) is the
+    /// Enter key pressed between the lines, so a one-line control, where Enter does nothing, stays
+    /// one paragraph, and a multi-line one splits (#3973: the line breaks went in as one command
+    /// and split a one-line control).
+    #[test]
+    fn typed_line_breaks_do_not_split_a_one_line_control() {
+        for (multi_line, paragraphs) in [(false, 1), (true, 2)] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            run(&mut s, "text.insert", json!({"text": "Name: "}));
+            run(&mut s, "developer.plainText", json!({"title": "Name", "tag": "name"}));
+            run(&mut s, "developer.properties", json!({"control": "name", "multiLine": multi_line}));
+            run(&mut s, "caret.right", json!({}));
+            run(&mut s, "text.insert", json!({"text": "Ada\rLovelace", "raw": true}));
+            assert_eq!(s.doc.body.len(), paragraphs, "multi-line control: {multi_line}");
+            let r = s.doc.control_at(&s.sel.focus).unwrap();
+            assert_eq!(r.control.tag, "name", "still inside the control");
+        }
+    }
+
     #[test]
     fn typing_replaces_the_placeholder_and_emptying_brings_it_back() {
         let mut s = Session::new(wordcraft_doc::Document::new());

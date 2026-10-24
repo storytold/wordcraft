@@ -683,6 +683,32 @@ fn a_style_defined_twice_is_its_last_definition() {
     assert_eq!(h.para.align, None, "nothing kept from the first definition");
 }
 
+/// #3889: Word in another language writes the TOC styles under ids in that language (`toc 1` is
+/// `Sumrio1` in Portuguese). They take the engine's ids, which Update Table and the writer know
+/// the entries by, with their formatting and references; an id the file already uses stays.
+#[test]
+fn localized_toc_style_ids_take_the_engine_ids() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="CabealhodoSumrio"><w:name w:val="TOC Heading"/><w:next w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio1"><w:name w:val="toc 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="100"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio2"><w:name w:val="toc 2"/><w:basedOn w:val="Sumrio1"/><w:pPr><w:ind w:left="220"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="TOC3"><w:name w:val="toc 3"/></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio3"><w:name w:val="toc 3"/></w:style>
+</w:styles>"#
+    );
+    let p = |st: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr><w:r><w:t>{st}</w:t></w:r></w:p>"#);
+    let body = ["CabealhodoSumrio", "Sumrio1", "Sumrio2", "Sumrio3"].map(p).concat();
+    let d = wordcraft_docx::read(&docx(&body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let ids: Vec<Option<&str>> = paras(&d).iter().map(|p| p.props.style.as_deref()).collect();
+    assert_eq!(ids, [Some("TOCHeading"), Some("TOC1"), Some("TOC2"), Some("Sumrio3")]);
+    let toc2 = d.styles.get("TOC2").unwrap();
+    assert_eq!((toc2.name.as_str(), toc2.based_on.as_deref(), toc2.para.indent_left), ("TOC 2", Some("TOC1"), Some(11.0)));
+    assert_eq!(d.styles.get("TOC1").unwrap().para.space_after, Some(5.0));
+    assert!(d.styles.get("Sumrio1").is_none() && d.styles.get("TOC3").is_some() && d.styles.get("Sumrio3").is_some());
+}
+
 #[test]
 fn vml_image_and_inline_drawing() {
     let png: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
@@ -3683,6 +3709,50 @@ fn shape_dashes_import_and_save() {
             let InlineObject::Shape { w, h, stroke, stroke_width, extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
             assert_eq!(extra.dash, expected);
             assert_eq!((*w, *h, *stroke, *stroke_width), (70.0, 28.0, Some(Rgb(192, 0, 0)), 1.0));
+        }
+    }
+}
+
+/// Preserve explicit caps, default missing/unknown caps, and retain caps on unpainted outlines.
+#[test]
+fn shape_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in
+        [("", LineCap::Flat), ("flat", LineCap::Flat), ("sq", LineCap::Square), ("rnd", LineCap::Round), ("unknown", LineCap::Flat)]
+    {
+        for outline in [true, false] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" cap="{attr}""#) };
+            let fill = if outline { r#"<a:solidFill><a:srgbClr val="C00000"/></a:solidFill>"# } else { "<a:noFill/>" };
+            let sppr = format!(r#"<a:prstGeom prst="line"/><a:noFill/><a:ln w="12700"{cap}>{fill}</a:ln>"#);
+            let body = anchored_wsp("Cap probe", 889000, 0, &sppr, "", "<wps:cNvSpPr/>");
+            let d = read_body(&format!("<w:p>{body}</w:p>"));
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, outline={outline}");
+            }
+        }
+    }
+}
+
+/// Preserve direct and shapetype-inherited VML end caps through a DrawingML save.
+#[test]
+fn vml_line_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in [("", LineCap::Flat), ("flat", LineCap::Flat), ("square", LineCap::Square), ("round", LineCap::Round)] {
+        for inherited in [false, true] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" endcap="{attr}""#) };
+            let stroke = format!("<v:stroke{cap}/>");
+            let (base, own) = if inherited { (stroke.as_str(), "") } else { ("", stroke.as_str()) };
+            let body = format!(
+                r##"<w:p><w:r><w:pict><v:shapetype id="probe" o:spt="32">{base}</v:shapetype><v:shape type="#probe" style="width:40pt;height:1pt" strokecolor="#ff0000">{own}</v:shape></w:pict></w:r></w:p>"##
+            );
+            let d = read_body(&body);
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, inherited={inherited}");
+            }
         }
     }
 }

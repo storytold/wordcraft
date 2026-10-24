@@ -1203,19 +1203,11 @@ pub fn image_px(data: &[u8]) -> Option<(u32, u32)> {
     image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?.into_dimensions().ok()
 }
 
-/// Largest allocation one decoded picture may make when it is re-encoded on export: the `image`
-/// crate's default, stated here so the bound doesn't depend on a library default that may change.
-const MAX_DECODE_ALLOC: u64 = 512 << 20;
-
-/// Decode an encoded image with a bounded allocation, so a small file that declares huge
-/// dimensions can't exhaust memory when a picture is re-encoded on export. `None` when it would
-/// be too large or doesn't decode.
+/// Decode an encoded image within the budget pictures are drawn within, so a small file that
+/// declares huge dimensions can't exhaust memory when a picture is re-encoded on export. `None`
+/// when it would be too large or doesn't decode.
 pub fn decode_bounded(data: &[u8]) -> Option<image::DynamicImage> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(MAX_DECODE_ALLOC);
-    reader.limits(limits);
-    reader.decode().ok()
+    wordcraft_geom::picture::decode(data, wordcraft_geom::MAX_DECODED_BYTES).ok()
 }
 
 /// A picture from bytes with an optional display size (points); the natural size (96 dpi) is

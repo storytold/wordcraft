@@ -2,7 +2,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Weak};
 
 use vello_cpu::kurbo::{self, Affine, BezPath, Shape};
 use vello_cpu::peniko;
@@ -140,16 +140,16 @@ const CACHE_BYTES: usize = 256 * 1024 * 1024 / 2;
 /// Upper bound on cached entries per cache.
 const CACHE_ENTRIES: usize = 256;
 
-/// Decoded media by media key, shared across renders, with an approximate byte budget. An entry holds
-/// the source bytes it was decoded from, so a hit needs the same allocation (`Arc::ptr_eq`), and that
-/// allocation cannot be freed and its address reused while the entry lives.
+/// Decoded media by media key, shared across renders, with an approximate byte budget. An entry knows
+/// its source allocation weakly: a hit needs the same allocation, whose address can't be reused while
+/// the entry lives, and the source bytes are still freed with the document.
 struct MediaCache<T> {
     map: HashMap<String, Entry<T>>,
     bytes: usize,
 }
 
 struct Entry<T> {
-    src: Arc<Vec<u8>>,
+    src: Weak<Vec<u8>>,
     val: T,
     size: usize,
 }
@@ -157,14 +157,12 @@ struct Entry<T> {
 impl<T: Clone> MediaCache<T> {
     fn get(&self, key: &str, src: &Arc<Vec<u8>>) -> Option<T> {
         let e = self.map.get(key)?;
-        Arc::ptr_eq(&e.src, src).then(|| e.val.clone())
+        std::ptr::eq(e.src.as_ptr(), Arc::as_ptr(src)).then(|| e.val.clone())
     }
 
-    /// Stores `val` (about `size` bytes) with its source, whose bytes the entry keeps alive and so counts
-    /// too. Clears the cache first when the budget or entry cap is hit; an entry larger than the whole
-    /// budget is not kept.
+    /// Stores `val` (about `size` bytes) for `src`. Clears the cache first when the budget or entry
+    /// cap is hit; an entry larger than the whole budget is not kept.
     fn insert(&mut self, key: &str, src: &Arc<Vec<u8>>, val: T, size: usize) {
-        let size = size.saturating_add(src.len());
         if size > CACHE_BYTES {
             return;
         }
@@ -175,7 +173,7 @@ impl<T: Clone> MediaCache<T> {
             self.map.clear();
             self.bytes = 0;
         }
-        self.map.insert(key.to_string(), Entry { src: src.clone(), val, size });
+        self.map.insert(key.to_string(), Entry { src: Arc::downgrade(src), val, size });
         self.bytes = self.bytes.saturating_add(size);
     }
 }
@@ -202,6 +200,10 @@ const MAX_DECODE_SIDE: u32 = u16::MAX as u32;
 /// Decode an encoded image to a premultiplied pixmap. The dimension limit above and the default
 /// allocation cap (512 MB, what `load_from_memory` applied) bound the decode during paint.
 pub fn decode_pixmap(bytes: &[u8]) -> Option<Pixmap> {
+    // The shared probe also charges what the decoder holds beside its output (#3644).
+    if !wordcraft_geom::picture::probe(bytes).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
+        return None;
+    }
     decode_pixmap_within(bytes, wordcraft_geom::MAX_DECODED_BYTES)
 }
 
@@ -410,10 +412,10 @@ const MAX_BACKGROUND_PIXELS: u64 = 64 * 1024 * 1024;
 fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view: Affine) {
     let Some(pic) = &doc.settings.page_picture else { return };
     let Some(bytes) = doc.media.get(&pic.media) else { return };
-    match image_size(bytes) {
-        Some((w, h)) if w > 0 && h > 0 && (w as u64) * (h as u64) <= MAX_BACKGROUND_PIXELS => {}
+    let (nw, nh) = match image_size(bytes) {
+        Some((w, h)) if w > 0 && h > 0 && (w as u64) * (h as u64) <= MAX_BACKGROUND_PIXELS => (w as f64, h as f64),
         _ => return,
-    }
+    };
     let Some(pm) = pixmap_for(doc, &pic.media) else { return };
     let (pw, ph) = (pm.width().max(1) as f64, pm.height().max(1) as f64);
     let (w, h) = (page.w as f64, (page.h as f64).min(1e6));
@@ -421,7 +423,8 @@ fn draw_page_picture(ctx: &mut RenderContext, doc: &Document, page: &Page, view:
         return;
     }
     let tile = pic.fill_type.eq_ignore_ascii_case("tile");
-    let (sx, sy) = if tile { (0.75, 0.75) } else { (w / pw, h / ph) };
+    // Tiles at the picture's natural size, whatever size its cached pixmap is kept at.
+    let (sx, sy) = if tile { (0.75 * nw / pw, 0.75 * nh / ph) } else { (w / pw, h / ph) };
     let extend = if tile { peniko::Extend::Repeat } else { peniko::Extend::Pad };
     ctx.set_transform(view);
     ctx.set_paint(vello_cpu::Image {
@@ -438,10 +441,58 @@ fn pixmap_for(doc: &Document, key: &str) -> Option<Arc<Pixmap>> {
     if let Some(v) = lock(images()).get(key, bytes) {
         return v;
     }
-    let pm = decode_pixmap(bytes).map(Arc::new);
+    let pm = decode_pixmap(bytes).map(|p| Arc::new(cacheable(p)));
     let size = pm.as_ref().map_or(0, |p| p.width() as usize * p.height() as usize * 4);
     lock(images()).insert(key, bytes, pm.clone(), size);
     pm
+}
+
+/// A decoded picture at a size the media cache keeps. One too large for the whole cache is
+/// box-averaged down to half of it, so it is decoded once instead of on every render (#3665); pages
+/// draw it scaled to its frame either way.
+fn cacheable(pm: Pixmap) -> Pixmap {
+    let bytes = pm.width() as usize * pm.height() as usize * 4;
+    if bytes <= CACHE_BYTES {
+        return pm;
+    }
+    shrink(&pm, (CACHE_BYTES / 2 / 4) as u64).unwrap_or(pm)
+}
+
+/// `pm` averaged over square blocks, the smallest whole number of pixels a side that brings it to
+/// at most `max_pixels`; None when it already fits or none are allowed. Premultiplied pixels
+/// average without colour fringes.
+fn shrink(pm: &Pixmap, max_pixels: u64) -> Option<Pixmap> {
+    let (w, h) = (usize::from(pm.width()), usize::from(pm.height()));
+    if (w * h) as u64 <= max_pixels || max_pixels == 0 {
+        return None;
+    }
+    let mut k = (((w * h) as f64 / max_pixels as f64).sqrt().ceil() as usize).max(2);
+    while (w.div_ceil(k) * h.div_ceil(k)) as u64 > max_pixels {
+        k += 1;
+    }
+    let (nw, nh) = (w.div_ceil(k), h.div_ceil(k));
+    let mut out = Vec::with_capacity(nw * nh);
+    let mut sums = vec![[0u64; 4]; nw];
+    for (oy, band) in pm.data().chunks(w * k).enumerate() {
+        sums.fill([0; 4]);
+        for row in band.chunks(w) {
+            for (sum, block) in sums.iter_mut().zip(row.chunks(k)) {
+                for p in block {
+                    sum[0] += u64::from(p.r);
+                    sum[1] += u64::from(p.g);
+                    sum[2] += u64::from(p.b);
+                    sum[3] += u64::from(p.a);
+                }
+            }
+        }
+        let rows = (h - oy * k).min(k);
+        for (ox, sum) in sums.iter().enumerate() {
+            let n = (((w - ox * k).min(k)) * rows).max(1) as u64;
+            let [r, g, b, a] = sum.map(|s| (s / n) as u8);
+            out.push(vello_cpu::color::PremulRgba8 { r, g, b, a });
+        }
+    }
+    Some(Pixmap::from_parts(out, nw as u16, nh as u16))
 }
 
 /// Options for a page raster.
@@ -460,12 +511,24 @@ pub struct RenderOptions {
     pub dark: bool,
     /// The grey that black becomes on a dark page (white paper turns this, not pure black).
     pub dark_paper: u8,
+    /// Read Mode's Page Color: paper drawn instead of the document's page color and page
+    /// picture. `None` shows the document's page background. Screen only.
+    pub read_paper: Option<Rgb>,
 }
 
 /// Default grey for a dark page's paper.
 pub const DARK_PAPER: u8 = 0x33;
 
+/// Read Mode's Sepia paper: Word's RGB (112, 66, 20) at 80% transparency over white.
+pub const SEPIA_PAPER: Rgb = Rgb(0xE2, 0xD9, 0xD0);
+
 impl RenderOptions {
+    /// The on-screen color of the paper under `doc`'s pages: [`RenderOptions::read_paper`],
+    /// else the document's page color, else [`RenderOptions::paper`].
+    pub fn paper_of(&self, doc: &Document) -> Rgb {
+        self.ink(self.read_paper.or(doc.settings.page_color).unwrap_or(self.paper))
+    }
+
     /// The on-screen colour for a document colour (see [`RenderOptions::dark`]).
     pub fn ink(&self, c: Rgb) -> Rgb {
         if !self.dark {
@@ -541,6 +604,7 @@ impl Default for RenderOptions {
             text_darkening: false,
             dark: false,
             dark_paper: DARK_PAPER,
+            read_paper: None,
         }
     }
 }
@@ -567,9 +631,11 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     let (w16, h16) = (cw as u16, ch as u16);
     let mut ctx = context_pool::CONTEXTS.take(w16, h16);
     ctx.set_transform(Affine::IDENTITY);
-    ctx.set_paint(color(opts.ink(doc.settings.page_color.unwrap_or(opts.paper)), 1.0));
+    ctx.set_paint(color(opts.paper_of(doc), 1.0));
     ctx.fill_rect(&kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64));
-    draw_page_picture(&mut ctx, doc, page, view);
+    if opts.read_paper.is_none() {
+        draw_page_picture(&mut ctx, doc, page, view);
+    }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {
         draw_watermark(&mut ctx, view, page, wm, opts);
@@ -602,7 +668,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
 /// pictures and turned or rotated content are left out. The caret takes its colour from this
 /// so it shows against whatever lies behind it (#299).
 pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, y: f32) -> Rgb {
-    let paper = opts.ink(doc.settings.page_color.unwrap_or(opts.paper));
+    let paper = opts.paper_of(doc);
     if !(x.is_finite() && y.is_finite()) {
         return paper;
     }
@@ -789,6 +855,10 @@ fn wave_path(x0: f64, y0: f64, x1: f64, y1: f64, amp: f64) -> BezPath {
     p
 }
 
+/// Rasterize one display item with `view` mapping its current point coordinates to pixels.
+/// `visible` is a culling area in those point coordinates; nested clips intersect it and turns
+/// transform it into the child's coordinates. Shape and path strokes apply their stored caps,
+/// while ink uses its tool's round ends and joins.
 fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visible: &kurbo::Rect, opts: &RenderOptions) {
     match it {
         Draw::Figure { draws, .. } => {
@@ -978,7 +1048,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.pop_layer();
             }
         }
-        Draw::Path { segs, fill, stroke, stroke_width, dash } => {
+        Draw::Path { segs, fill, stroke, stroke_width, dash, cap } => {
             let path = wordcraft_layout::display::seg_path(segs);
             if path.elements().is_empty() {
                 return;
@@ -992,7 +1062,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 // Width 0 (or none) is a hairline.
                 let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
                 ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(kurbo::Stroke::new(w as f64).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
+                ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(screen_cap(*cap)).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
                 ctx.stroke_path(&path);
             }
         }
@@ -1026,7 +1096,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(kurbo::Cap::Round).with_join(kurbo::Join::Round));
             ctx.stroke_path(&path);
         }
-        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash } => {
+        Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner, dash, cap } => {
             let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
             let path = shape_path(*kind, r, *corner);
             ctx.set_transform(view);
@@ -1082,6 +1152,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_paint(color(opts.ink(*s), 1.0));
                 ctx.set_stroke(
                     kurbo::Stroke::new(if stroke_width.is_nan() { 0.25 } else { stroke_width.clamp(0.25, 200.0) } as f64)
+                        .with_caps(screen_cap(*cap))
                         .with_dashes(0.0, dash.iter().map(|v| f64::from(*v))),
                 );
                 ctx.stroke_path(&path);
@@ -1137,6 +1208,15 @@ fn ink_path(pts: &[(f32, f32)]) -> Option<BezPath> {
         p.line_to(only);
     }
     Some(p)
+}
+
+/// Map the document cap to the raster backend without changing ink-tool stroke styles.
+fn screen_cap(cap: wordcraft_doc::connector::LineCap) -> kurbo::Cap {
+    match cap {
+        wordcraft_doc::connector::LineCap::Flat => kurbo::Cap::Butt,
+        wordcraft_doc::connector::LineCap::Square => kurbo::Cap::Square,
+        wordcraft_doc::connector::LineCap::Round => kurbo::Cap::Round,
+    }
 }
 
 /// Outline of a basic shape in a rectangle; `corner` is a rounded rectangle's
@@ -1354,6 +1434,7 @@ mod tests {
             effects: Default::default(),
             corner: None,
             dash: Vec::new(),
+            cap: Default::default(),
         };
         let at = |x: f32, y: f32| {
             let mut bg = [255.0; 3];
@@ -1566,6 +1647,44 @@ mod tests {
         assert_eq!(&img.pixels[0..3], &[255, 255, 255]);
     }
 
+    /// Read Mode's Page Color: the reading paper replaces the document's page color and page
+    /// picture on screen, in the raster and under the caret; the text keeps its color on Sepia.
+    #[test]
+    fn read_paper_replaces_the_page_background() {
+        let mut png = Vec::new();
+        image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
+            .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+            .unwrap();
+        let mut d = Document::from_text("Hello WordCraft");
+        d.media.insert("bg.png".into(), Arc::new(png));
+        d.settings.page_color = Some(Rgb(0x10, 0x10, 0x40));
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let page = &l.pages[0];
+        let at = |img: &Rendered, x: u32, y: u32| {
+            let i = ((y * img.width + x) * 4) as usize;
+            [img.pixels[i], img.pixels[i + 1], img.pixels[i + 2]]
+        };
+        let sepia = RenderOptions { read_paper: Some(SEPIA_PAPER), ..Default::default() };
+        let white = RenderOptions { read_paper: Some(Rgb::WHITE), ..Default::default() };
+        assert_eq!(at(&render_page(&d, page, 1.0, &RenderOptions::default()), 5, 5), [0x10, 0x10, 0x40], "the page color");
+        assert_eq!(at(&render_page(&d, page, 1.0, &sepia), 5, 5), [0xE2, 0xD9, 0xD0]);
+        assert_eq!(at(&render_page(&d, page, 1.0, &white), 5, 5), [255, 255, 255]);
+        assert_eq!(background_at(&d, page, &sepia, 5.0, 5.0), SEPIA_PAPER);
+        assert_eq!(background_at(&d, page, &white, 5.0, 5.0), Rgb::WHITE);
+        let inverse = RenderOptions { read_paper: Some(Rgb::WHITE), dark: true, ..Default::default() };
+        assert_eq!(background_at(&d, page, &inverse, 5.0, 5.0), Rgb(DARK_PAPER, DARK_PAPER, DARK_PAPER));
+        d.settings.page_picture = Some(wordcraft_doc::PagePicture { media: "bg.png".into(), fill_type: "tile".into(), title: String::new() });
+        assert_eq!(at(&render_page(&d, page, 1.0, &RenderOptions::default()), 300, 300), [10, 200, 30], "the page picture");
+        assert_eq!(at(&render_page(&d, page, 1.0, &sepia), 300, 300), [0xE2, 0xD9, 0xD0]);
+        // The text is drawn in its own color on sepia paper: its darkest pixel is within 8 levels of its value on white.
+        d.settings.page_picture = None;
+        d.settings.page_color = None;
+        let darkest = |img: &Rendered| img.pixels.chunks(4).map(|p| p[0].min(p[1]).min(p[2])).min().unwrap_or(255);
+        let plain = render_page(&d, page, 2.0, &RenderOptions::default());
+        let on_sepia = render_page(&d, page, 2.0, &sepia);
+        assert!(darkest(&plain) < 0x40 && darkest(&on_sepia) <= darkest(&plain) + 8, "{} {}", darkest(&plain), darkest(&on_sepia));
+    }
+
     /// A PNG signature, an IHDR declaring `w`×`h` 8-bit RGBA and a short IDAT (all CRCs valid, so
     /// the header parses), with no real pixel data.
     fn ihdr_only_png(w: u32, h: u32) -> Vec<u8> {
@@ -1628,6 +1747,67 @@ mod tests {
         let big = render_page(&d, &l.pages[0], 1e9, &RenderOptions::default());
         assert!(big.width <= MAX_SIDE);
         assert!(decode_pixmap(b"not an image").is_none());
+    }
+
+    /// A JPEG whose headers say progressive (SOF2, a DC-only first scan) and `w` × `h`, its three
+    /// components unsubsampled, with no pixel data that size.
+    fn progressive_jpeg_header(w: u16, h: u16) -> Vec<u8> {
+        let mut jpeg = Vec::new();
+        image::RgbImage::new(16, 16).write_to(&mut std::io::Cursor::new(&mut jpeg), image::ImageFormat::Jpeg).unwrap();
+        let sof = jpeg.windows(2).position(|m| m == [0xFF, 0xC0]).unwrap();
+        jpeg[sof + 1] = 0xC2;
+        jpeg[sof + 5..sof + 7].copy_from_slice(&h.to_be_bytes());
+        jpeg[sof + 7..sof + 9].copy_from_slice(&w.to_be_bytes());
+        for c in 0..3 {
+            jpeg[sof + 11 + 3 * c] = 0x11;
+        }
+        let sos = jpeg.windows(2).position(|m| m == [0xFF, 0xDA]).unwrap();
+        let n = usize::from(jpeg[sos + 4]);
+        jpeg[sos + 6 + 2 * n] = 0;
+        jpeg
+    }
+
+    #[test]
+    fn progressive_jpeg_coefficients_count_toward_the_decode_budget() {
+        // Two RGBA buffers of 7900 × 7900 fit 512 MB, but RGB output beside three full-size
+        // coefficient planes (9 bytes a pixel) doesn't (#3644).
+        let jpeg = progressive_jpeg_header(7900, 7900);
+        assert!(wordcraft_geom::decode_fits(7900, 7900, wordcraft_geom::MAX_DECODED_BYTES));
+        assert!(decode_pixmap(&jpeg).is_none());
+        let mut baseline = Vec::new();
+        image::RgbImage::new(64, 64).write_to(&mut std::io::Cursor::new(&mut baseline), image::ImageFormat::Jpeg).unwrap();
+        assert!(decode_pixmap(&baseline).is_some(), "other JPEGs still draw");
+    }
+
+    /// #3665: a picture too large for the whole cache is kept at half of it, so it is cached
+    /// instead of decoded again on every render.
+    #[test]
+    fn pictures_too_large_for_the_cache_are_kept_smaller() {
+        let px = vello_cpu::color::PremulRgba8 { r: 40, g: 80, b: 120, a: 200 };
+        // 6000 × 6000 is 144 MB of RGBA, past the 128 MB cache.
+        let big = Pixmap::from_parts(vec![px; 6000 * 6000], 6000, 6000);
+        let small = cacheable(big);
+        let bytes = small.width() as usize * small.height() as usize * 4;
+        assert!(bytes <= CACHE_BYTES / 2, "{} x {}", small.width(), small.height());
+        assert!(small.width() >= 3000 && small.width() == small.height(), "aspect kept");
+        assert!(small.data().iter().all(|p| (p.r, p.g, p.b, p.a) == (40, 80, 120, 200)), "flat stays flat");
+        let mut cache = MediaCache { map: HashMap::new(), bytes: 0 };
+        // A source file larger than the whole cache (an uncompressed BMP, say) doesn't count against it.
+        let src = Arc::new(vec![0u8; CACHE_BYTES + 1]);
+        cache.insert("big", &src, Some(Arc::new(small)), bytes);
+        assert!(cache.get("big", &src).is_some(), "cached");
+        // Pictures the cache holds as they are keep their size.
+        assert_eq!(cacheable(Pixmap::from_parts(vec![px; 100 * 50], 100, 50)).width(), 100);
+    }
+
+    #[test]
+    fn shrinking_averages_premultiplied_pixels() {
+        let p = |v: u8| vello_cpu::color::PremulRgba8 { r: v, g: v, b: v, a: 255 };
+        let pm = Pixmap::from_parts(vec![p(0), p(100), p(200), p(40)], 4, 1);
+        let out = shrink(&pm, 2).unwrap();
+        assert_eq!((out.width(), out.height()), (2, 1));
+        assert_eq!(out.data().iter().map(|q| q.r).collect::<Vec<_>>(), [50, 120]);
+        assert!(shrink(&pm, 4).is_none() && shrink(&pm, 0).is_none());
     }
 
     #[test]
@@ -2237,6 +2417,43 @@ mod tests {
         assert!(solid.pixel(422, 400)[1] < 80);
         assert_eq!(dashed.pixel(422, 400), [255, 255, 255, 255]);
         assert!(dashed.pixel(406, 400)[1] < 80);
+    }
+
+    /// Distinguish flat, square and round endpoints for both preset lines and connector paths.
+    #[test]
+    fn shape_line_caps_reach_the_screen() {
+        use wordcraft_doc::{
+            connector::{LineCap, ShapeExtra},
+            para::{Anchor, Float, InlineObject, Wrap},
+        };
+        // A preset line uses Draw::Shape; a straight connector uses Draw::Path.
+        for kind in [ShapeKind::Line, ShapeKind::StraightConnector] {
+            for cap in [LineCap::Flat, LineCap::Square, LineCap::Round] {
+                let shape = InlineObject::Shape {
+                    kind,
+                    w: 40.0,
+                    h: 0.0,
+                    fill: None,
+                    stroke: Some(Rgb::BLACK),
+                    stroke_width: 10.0,
+                    float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+                    story: None,
+                    freeform: None,
+                    effects: Default::default(),
+                    extra: ShapeExtra { cap, ..Default::default() },
+                };
+                let mut p = wordcraft_doc::Paragraph::new();
+                p.insert_object(0, shape, &Default::default()).unwrap();
+                let mut d = Document::new();
+                d.body = vec![wordcraft_doc::para_block(p)];
+                let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+                let image = render_page(&d, &l.pages[0], 4.0, &RenderOptions::default());
+                let painted = |x, y| image.pixel(x, y)[0] < 80;
+                assert!(painted(404, 400), "line interior: {kind:?} {cap:?}");
+                assert_eq!(painted(388, 400), cap != LineCap::Flat, "past the endpoint: {kind:?} {cap:?}");
+                assert_eq!(painted(384, 384), cap == LineCap::Square, "square corner: {kind:?} {cap:?}");
+            }
+        }
     }
 
     #[test]

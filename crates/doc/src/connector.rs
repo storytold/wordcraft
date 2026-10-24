@@ -13,6 +13,41 @@ use crate::graphic::PathSeg;
 use crate::para::{InlineObject, ShapeKind};
 use crate::wordart::TextWarp;
 
+/// DrawingML outline ends (ST_LineCap); missing and unknown values use flat ends.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum LineCap {
+    #[default]
+    Flat,
+    Square,
+    Round,
+}
+
+impl LineCap {
+    /// Read an ST_LineCap value; absent or unrecognized values use the flat default.
+    pub fn from_ooxml(value: &str) -> Self {
+        match value {
+            "sq" => Self::Square,
+            "rnd" => Self::Round,
+            _ => Self::Flat,
+        }
+    }
+
+    /// Return the canonical DrawingML spelling used when saving the outline.
+    pub fn ooxml(self) -> &'static str {
+        match self {
+            Self::Flat => "flat",
+            Self::Square => "sq",
+            Self::Round => "rnd",
+        }
+    }
+
+    /// Whether the cap can be omitted from older-compatible serialized shape properties.
+    pub fn is_flat(&self) -> bool {
+        *self == Self::Flat
+    }
+}
+
 /// The rest of a shape's properties. Empty (the default) for most shapes.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -41,6 +76,9 @@ pub struct ShapeExtra {
     /// The outline dash pattern; absent in older saved documents means solid.
     #[serde(skip_serializing_if = "crate::line_dash::LineDash::is_solid")]
     pub dash: crate::line_dash::LineDash,
+    /// The outline ends; older saved documents and absent DrawingML caps are flat.
+    #[serde(skip_serializing_if = "LineCap::is_flat")]
+    pub cap: LineCap,
     /// The outline's gradient (`a:ln/a:gradFill`), kept for saving; the outline is drawn in its
     /// main colour (the shape's `stroke`).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -271,6 +309,18 @@ pub fn reroute_group(group: &mut InlineObject) -> bool {
 mod tests {
     use super::*;
     use crate::para::{Float, GroupChild};
+
+    /// Older JSON retains flat ends without adding a property; non-flat values round-trip.
+    #[test]
+    fn older_shape_json_defaults_to_flat_caps() {
+        let extra: ShapeExtra = serde_json::from_str("{}").unwrap();
+        assert_eq!(extra.cap, LineCap::Flat);
+        assert_eq!(serde_json::to_value(&extra).unwrap(), serde_json::json!({}));
+        for cap in [LineCap::Square, LineCap::Round] {
+            let extra = ShapeExtra { cap, ..Default::default() };
+            assert_eq!(serde_json::from_value::<ShapeExtra>(serde_json::to_value(&extra).unwrap()).unwrap(), extra);
+        }
+    }
 
     fn shape(kind: ShapeKind, w: f32, h: f32, extra: ShapeExtra) -> InlineObject {
         InlineObject::Shape {

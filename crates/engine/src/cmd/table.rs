@@ -243,14 +243,15 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
 pub(crate) fn sync_cell_widths(t: &mut Table) {
     let grid = t.grid.clone();
     for row in &mut t.rows {
-        let mut g = 0usize;
+        // A row's cells start after the grid columns it skips (`w:gridBefore`).
+        let mut g = row.first_grid();
         for c in &mut row.cells {
             let span = c.span();
             let w: f32 = grid.get(g..g.saturating_add(span).min(grid.len())).unwrap_or(&[]).iter().sum();
             if w > 0.0 {
                 c.props.width = Some(w);
             }
-            g += span;
+            g = g.saturating_add(span);
         }
     }
 }
@@ -516,6 +517,9 @@ pub(super) fn col(s: &mut Session, right: bool) -> CmdResult {
         let k = before / total;
         t.grid.iter_mut().for_each(|w| *w *= k);
     }
+    // The inserted cells carry the pre-scale column width, and the layout prefers a cell width
+    // over the grid: sync them, or the shrink never reaches the layout or the saved `w:tcW`.
+    sync_cell_widths(t);
     fix_caret(s, &tp, r, if right { c + 1 } else { c })
 }
 

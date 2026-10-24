@@ -1,12 +1,29 @@
 # Typing parity with Word
 
-> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-22 · **Change:** trivial (while an input method composes, the caret and its candidate window sit at the input method's cursor inside the composition; previously trivial: Ctrl+Tab types a tab in a table cell, #3137; previously trivial: List AutoFormat triggers in front of an already-written paragraph, not only a fresh empty one, checked in Word for Windows, #3352; previously trivial: AltGr types its characters without opening KeyTips on Linux, #2388; previously trivial: Delete on whole selected cells leaves one empty paragraph in each, with the cell's last paragraph's formatting; nested tables go too, #2802; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: a slash opening a word travels whole to the next line, #2963; previously trivial: typing over a selection takes the first selected character's formatting, also when the selection was made right to left, #2879; previously trivial: Turkish and Azerbaijani case mapping in AutoCorrect, #1923; previously trivial: smart quotes in Hebrew pinned: logical order, ” in acronyms as in Word, #1670; previously trivial: Backspace on a selected table, rows or columns deletes them, Delete clears them, #1844; previously trivial: typed text takes its direction from its own letters, #1543; previously trivial: an input method's request to erase text around the caret is honoured, so web typing in Cyrillic and other non-Latin text no longer repeats, #1480; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: a heading-list preset keeps Heading styles and makes other paragraphs Heading 1, as in Word, #1793; previously trivial: numbered headings: a heading-linked Multilevel List numbers new headings by their style; numbering keeps a heading a heading, #1793; previously trivial: reversing an automatic capital adds an exception, #1857; previously trivial: smart quotes open after guillemets and low quotes and nest; previously trivial: Enter on an empty list item numbered by its paragraph style moves it up a level, #2143; previously trivial: Backspace after a section break and Delete before it remove the break, also on the last paragraph, #2127; previously trivial: a table inserted in right-to-left text is right to left, so Tab moves left, #2634; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-11 · **Last updated:** 2026-10-25 · **Change:** trivial (full-target highlight check beyond 10,000 runs, #4085; previously trivial: AutoCorrect finds the word after a no-break space or an ideographic space; previously trivial: a command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it; previously trivial: while an input method composes, the caret and its candidate window sit at the input method's cursor inside the composition; previously trivial: Ctrl+Tab types a tab in a table cell, #3137; previously trivial: List AutoFormat triggers in front of an already-written paragraph, not only a fresh empty one, checked in Word for Windows, #3352; previously trivial: AltGr types its characters without opening KeyTips on Linux, #2388; previously trivial: Delete on whole selected cells leaves one empty paragraph in each, with the cell's last paragraph's formatting; nested tables go too, #2802; previously trivial: Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459); previously trivial: a text box that keeps the keyboard no longer resets the input method every frame, #2986; previously trivial: a slash opening a word travels whole to the next line, #2963; previously trivial: typing over a selection takes the first selected character's formatting, also when the selection was made right to left, #2879; previously trivial: Turkish and Azerbaijani case mapping in AutoCorrect, #1923; previously trivial: smart quotes in Hebrew pinned: logical order, ” in acronyms as in Word, #1670; previously trivial: Backspace on a selected table, rows or columns deletes them, Delete clears them, #1844; previously trivial: typed text takes its direction from its own letters, #1543; previously trivial: an input method's request to erase text around the caret is honoured, so web typing in Cyrillic and other non-Latin text no longer repeats, #1480; previously trivial: `-->` AutoCorrect replacement, #2223; previously trivial: a heading-list preset keeps Heading styles and makes other paragraphs Heading 1, as in Word, #1793; previously trivial: numbered headings: a heading-linked Multilevel List numbers new headings by their style; numbering keeps a heading a heading, #1793; previously trivial: reversing an automatic capital adds an exception, #1857; previously trivial: smart quotes open after guillemets and low quotes and nest; previously trivial: Enter on an empty list item numbered by its paragraph style moves it up a level, #2143; previously trivial: Backspace after a section break and Delete before it remove the break, also on the last paragraph, #2127; previously trivial: a table inserted in right-to-left text is right to left, so Tab moves left, #2634; previously trivial: Shift+Delete cuts the selection on every platform, #1669; previously trivial: Select All then Delete removes a table the document starts with, #1198; previously trivial: Alt+numpad character codes, #961; previously trivial: Down and Up from a line start beside a table go into it, #1007; previously trivial: sample-text formulas on Enter, #1067; previously trivial: Track Changes: Accept All after a tracked delete from a paragraph end keeps the next paragraph; Reject All after typing into an empty paragraph keeps it (#864); previously minor: Correct TWo INitial CApitals, cAPS LOCK and table-cell capitals, #544; previously trivial: complex-script caret and Backspace, #604; Move Paragraph Up/Down, Promote/Demote, Go Back and Alt+X keys, #343) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 What Word does when you type, observed black-box (same keystrokes typed into Word and
 WordCraft, results read back paragraph by paragraph) and pinned by tests in
 `crates/engine/src/tests_typing.rs`. When typing behaviour changes, change it here and in the
 tests together. Line breaking and pagination are in [`layout-parity.md`](layout-parity.md); the
 overall picture is in [`target-app-parity.md`](target-app-parity.md).
+
+## Highlight shortcut (#4085)
+
+On Windows/Linux, Ctrl+Alt+H toggles the last chosen highlighter colour (yellow in a
+new session). If every character in the formatting target already has that colour,
+it applies explicit No Color; otherwise it applies the chosen colour to the target.
+Choosing another colour applies it, and choosing No Color makes that the current choice.
+Explicit `format.highlight {"color": ...}` remains an idempotent setter; omitting `color`
+uses the toggle. Ribbon and mini-toolbar colour buttons remain setters, not toggles.
+The highlight decision checks the complete target, including mixed colours after 10,000 runs;
+formatting-state queries retain their existing sampling limit. Palette state is outside document undo; the formatting itself is undoable.
+The existing selection/word/pending-caret targeting is unchanged (the separate request #4086
+is not addressed).
+
+Regressions: `highlight_shortcut_toggles_the_last_colour` and
+`highlight_toggle_handles_mixed_inherited_and_pending_formatting`. Synthetic command/key
+qualification; native Word comparison has not been performed for this change.
 
 ## Sample text (#1067)
 
@@ -57,6 +74,11 @@ Bullets and Numbering decide whether to toggle off from the selected paragraphs'
 |---|---|---|
 | type, select some of it, type over it | two undo steps: the first ⌘Z brings the selected text back (still selected), the second removes the typing. Uninterrupted typing stays one step | `typing_then_selecting_then_typing_are_two_undo_steps` |
 | ⌘B with nothing selected, ⌘Z, type | the text isn't bold (Undo takes the waiting caret formatting back too); ⌘Y brings it back | `undoing_bold_at_the_caret_turns_bold_typing_off_again` |
+| ⌫ at the start of the document, or typing nothing | nothing happens: no undo step is added, the document is not marked edited, and the redo stack survives ³ | `backspace_at_the_start_of_the_document_is_not_an_edit`, `a_command_that_changes_nothing_is_not_an_edit`, `a_no_op_command_keeps_the_redo_stack` |
+
+³ Not re-observed side by side in Word for this change: Word's undo list does not grow when a
+key changes nothing, and the document is not marked edited. The gap was found by the read-only
+audit, which measured WordCraft's own history.
 
 ## Paste
 
@@ -113,7 +135,9 @@ The `-->` replacement produces `→` when completed with a space (#2223), includ
 at paragraph start without creating a list. It respects AutoCorrect preferences, user
 entries and undo. The existing `-> ` paragraph-start arrow bullet is unchanged.
 
-Applied when a word is finished by a space, punctuation **or Enter** (`enter_finishes_a_word_for_autocorrect`):
+Applied when a word is finished by a space, punctuation **or Enter** (`enter_finishes_a_word_for_autocorrect`).
+The word starts after the last white-space character before it, also when that is a no-break space or an
+ideographic space (`autocorrect_finds_the_word_after_a_wide_space`):
 
 - First letter of a sentence (paragraph or list item start, after `. ! ?`) is capitalised; not
   after abbreviations (`e.g.`, `Dr.`, …) or initials (`J.`), and not for mixed-case words
@@ -170,14 +194,43 @@ Applied when a word is finished by a space, punctuation **or Enter** (`enter_fin
 - A field covers only its own result: text typed or pasted with the caret just after a field
   (a Zotero citation at the end of a paragraph, the caret put there with a click) goes after
   the field, not into its result (#898; `typing_after_a_citation_goes_outside_its_field`).
+- With Track Changes on, the border-line and table AutoFormats below mark the characters
+  deleted, so Reject All brings them back; characters the same author inserted are removed.
+  The border is a tracked formatting change, at the top of a story too
+  (`a_tracked_border_line_is_a_deletion_and_a_formatting_change`); the table is inserted
+  untracked, as Insert › Table inserts one
+  (`a_tracked_table_line_keeps_its_characters_as_a_deletion`). A line holding a tracked
+  deletion stays as it is, so Enter after the deleted characters is a plain Enter. This is
+  WordCraft's own rule.
 - Enter after `---` `===` `***` `___` `~~~` `###` → a bottom border on the paragraph above
   (single, double, dotted, thick, wave, triple) (`border_line_autoformat`). ⌘Z right after brings the
   characters back and removes the border; the Enter stays (one undo step) ¹
   (`undo_right_after_a_border_line_brings_the_characters_back`).
+- Built-in Heading styles (`tools.autocorrect {"headingStyles": true}`, off by default): Enter
+  twice after a line of five or fewer words that does not end with punctuation makes the line
+  Heading 1; one or two tabs before it make it Heading 2 or 3, and the tabs are removed ¹
+  (`two_enters_after_a_short_line_make_it_a_heading`). The rest is WordCraft's own rule: the
+  line is a Normal paragraph of the main text (not in a list, a table, a header or a text box)
+  and ends in a letter or digit; the caret stays in the empty paragraph after the heading; ⌘Z
+  right after brings back the tabs and the Normal style, and the second Enter stays
+  (`undo_right_after_a_heading_autoformat_keeps_the_enter`); with Track Changes on, the tabs are
+  marked deleted (or removed, when the same author inserted them) and the style change is a
+  tracked formatting change, and a line holding a tracked deletion stays as it is
+  (`a_tracked_heading_autoformat_can_be_rejected`); a heading style locked by formatting
+  restrictions is not applied (`a_locked_heading_style_is_not_applied_as_you_type`).
 - `+---+------+` Enter (plus signs around runs of hyphens, the whole paragraph) → a one-row
   table across the text width, each column as wide as its share of the hyphens; the caret goes
   into the first cell. ⌘Z right after brings the characters back. More than 63 columns stay
   text ¹ (`plus_and_hyphen_line_becomes_a_table`).
+- Set left- and first-indent with tabs and backspaces (`tools.autocorrect {"tabIndent": true}`,
+  off by default): Tab before the first line of a paragraph with text indents its first line by
+  one default tab stop, and Tab before any other line, after a line break or where the text
+  wraps, indents the whole paragraph. A second Tab before an indented or hanging first line
+  indents the whole paragraph. Backspace at the start takes the first-line indent back, then the
+  paragraph's own left indent one tab stop at a time. An empty paragraph and Tab inside a line
+  still take a tab character. While formatting is limited to the document's styles, Tab and
+  Backspace work as with the option off ¹ (`tab_and_backspace_at_a_paragraph_start_set_its_indents`,
+  `tab_before_a_later_line_of_a_paragraph_indents_the_whole_paragraph`).
 - Smileys `:)` `:-)` `:(` `:-(` `:|` → ☺ ☹ 😐, also straight after a word (`ok:)` → `ok☺`) ¹
   (`smileys_are_replaced_inside_words_too`).
 
@@ -342,6 +395,9 @@ again.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-24 | trivial | AutoCorrect: a word typed after a no-break space or an ideographic space is corrected as after a plain space |
+| 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |
+| 2026-10-24 | trivial | Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). |
 | 2026-10-22 | trivial | Input methods: while composing, the caret and the candidate window follow the input method's cursor inside the marked text |
 | 2026-10-21 | trivial | Bullets and Numbering toggle off style-inherited lists at their effective level, including basedOn chains and numbered ListParagraph styles; other paragraphs and list definitions stay unchanged (related to #3459) |
 | 2026-10-21 | trivial | List AutoFormat (`- `, `1. `, …) triggers at the start of an already-written paragraph, not only a fresh empty one; checked in Word for Windows (#3352) |

@@ -37,6 +37,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("view.readLineSpacing", "Reading Line Spacing", "Reading › Layout", read_line_spacing)
             .params(r#"{"value": "document" | 1.0 | 1.25 | 1.5 | 2.0}"#)
             .pure(),
+        CommandSpec::new("view.readPageColor", "Reading Page Color", "Reading › Layout", read_page_color)
+            .params(r#"{"value": "none" | "sepia" | "inverse"}"#)
+            .pure(),
         // Print Layout: hide the white space (margins, headers, footers) between pages. Screen only.
         CommandSpec::new("view.hideWhiteSpace", "Hide White Space", "View › Show", |s, v| toggle(s, v, |x| &mut x.hide_white_space))
             .params(r#"{"value"?: bool}"#)
@@ -171,6 +174,7 @@ fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
         s.view.read_column_width = None;
         s.view.read_zoom = 1.0;
         s.view.read_line_spacing = None;
+        s.view.read_page_color = ReadPageColor::None;
     }
     s.view.mode = m;
     s.view.read_mode = read;
@@ -211,6 +215,31 @@ fn read_line_spacing(s: &mut Session, v: &Value) -> CmdResult {
     };
     s.view.read_line_spacing = spacing;
     Ok(json!({"spacing": spacing}))
+}
+
+/// Read Mode › View › Page Color, as in Word. Screen only: the document and its own page color
+/// are unchanged.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ReadPageColor {
+    /// White paper; the document's page color and page picture are not shown.
+    #[default]
+    None,
+    /// Sepia paper (Word's RGB 112, 66, 20 at 80% transparency over white); the text keeps its colors.
+    Sepia,
+    /// A dark page with light text, as View › Switch Modes draws it.
+    Inverse,
+}
+
+fn read_page_color(s: &mut Session, v: &Value) -> CmdResult {
+    let color = match v.get("value").and_then(Value::as_str) {
+        Some("none") => ReadPageColor::None,
+        Some("sepia") => ReadPageColor::Sepia,
+        Some("inverse") => ReadPageColor::Inverse,
+        _ => return Err(CmdError::Params("reading page color must be none, sepia, or inverse".into())),
+    };
+    s.view.read_page_color = color;
+    Ok(json!({"pageColor": color}))
 }
 
 /// The zoom a document is saved with (#995): the fit mode, else the percentage; `None` at 100%.

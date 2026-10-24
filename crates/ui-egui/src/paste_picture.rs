@@ -56,6 +56,47 @@ pub fn png_from_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<Vec<u
     Ok(png)
 }
 
+/// Whether a paste takes a `width` × `height` picture: the sides and pixels [`png_from_rgba`]
+/// allows.
+fn pastes(width: u32, height: u32) -> bool {
+    let (w, h) = (width as usize, height as usize);
+    w <= MAX_SIDE && h <= MAX_SIDE && w.checked_mul(h).is_some_and(|n| n <= MAX_PIXELS)
+}
+
+fn too_large_to_paste(width: u32, height: u32) -> ClipboardPicture {
+    ClipboardPicture::Unreadable(format!("the clipboard picture is too large to paste ({width} × {height} pixels)"))
+}
+
+/// An encoded picture the host read from the clipboard (the Windows "PNG" format), refused from
+/// its header when a paste can't take its size, before anything decodes it (#3623).
+pub fn encoded_picture(bytes: Vec<u8>) -> ClipboardPicture {
+    match wordcraft_geom::picture::probe(&bytes).map(|p| (p.width, p.height)) {
+        Ok((w, h)) if pastes(w, h) => ClipboardPicture::Encoded(bytes),
+        Ok((w, h)) => too_large_to_paste(w, h),
+        Err(e) => ClipboardPicture::Unreadable(e.to_string()),
+    }
+}
+
+/// A DIB from the Windows clipboard (`CF_DIBV5`, `CF_DIB`) as pixels: its size is checked from
+/// its header, then it is decoded within the decode budget. arboard decoded it with no limits
+/// before anything was checked (#3623).
+pub fn dib_picture(dib: Vec<u8>) -> ClipboardPicture {
+    let p = match wordcraft_geom::picture::probe_dib(dib) {
+        Ok(p) => p,
+        Err(e) => return ClipboardPicture::Unreadable(e.to_string()),
+    };
+    if !pastes(p.width, p.height) {
+        return too_large_to_paste(p.width, p.height);
+    }
+    match p.decode(wordcraft_geom::MAX_DECODED_BYTES) {
+        Ok(img) => {
+            let rgba = img.into_rgba8();
+            ClipboardPicture::Pixels { width: rgba.width() as usize, height: rgba.height() as usize, rgba: rgba.into_raw() }
+        }
+        Err(e) => ClipboardPicture::Unreadable(e.to_string()),
+    }
+}
+
 fn is_picture_file(path: &Path) -> bool {
     path.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| IMAGE_EXTS.iter().any(|x| x.eq_ignore_ascii_case(e)))
 }
@@ -182,6 +223,44 @@ mod tests {
         let abs = if cfg!(windows) { r"C:\tmp\b.JPG" } else { "/tmp/b.JPG" };
         assert!(names_picture_files(&format!("file:///home/me/shot%201.png\n{abs}\n")));
         assert!(!names_picture_files("see /tmp/b.png") && !names_picture_files("notes.txt") && !names_picture_files(""));
+    }
+
+    /// A BITMAPV5HEADER DIB of 32-bit `BI_RGB` pixels (bottom-up) with an alpha mask, as Windows
+    /// programs put one on the clipboard.
+    fn dib(w: i32, h: i32, pixels: &[[u8; 4]]) -> Vec<u8> {
+        let mut d = vec![0u8; 124];
+        d[0..4].copy_from_slice(&124u32.to_le_bytes());
+        d[4..8].copy_from_slice(&w.to_le_bytes());
+        d[8..12].copy_from_slice(&h.to_le_bytes());
+        d[12..14].copy_from_slice(&1u16.to_le_bytes());
+        d[14..16].copy_from_slice(&32u16.to_le_bytes());
+        d[52..56].copy_from_slice(&0xFF00_0000u32.to_le_bytes());
+        d.extend(pixels.iter().flatten());
+        d
+    }
+
+    /// #3623: what the Windows clipboard holds is checked from its header before it is decoded.
+    #[test]
+    fn windows_clipboard_pictures_are_checked_from_their_headers() {
+        let mut png = Vec::new();
+        image::RgbaImage::new(3, 2).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        assert!(matches!(encoded_picture(png.clone()), ClipboardPicture::Encoded(b) if b == png));
+        let mut wide = Vec::new();
+        image::GrayImage::new(20_000, 1).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+        assert!(matches!(encoded_picture(wide), ClipboardPicture::Unreadable(e) if e.contains("too large")));
+        assert!(matches!(encoded_picture(b"not a picture".to_vec()), ClipboardPicture::Unreadable(_)));
+        // BGRA in memory: a half-transparent red pixel and an opaque blue one.
+        let ClipboardPicture::Pixels { width, height, rgba } = dib_picture(dib(2, 1, &[[0, 0, 255, 128], [255, 0, 0, 255]])) else {
+            panic!("pixels")
+        };
+        assert_eq!((width, height, rgba), (2, 1, vec![255, 0, 0, 128, 0, 0, 255, 255]));
+        // A header claiming 60000 × 60000 over no pixels is refused unread.
+        assert!(matches!(dib_picture(dib(60_000, 60_000, &[])), ClipboardPicture::Unreadable(e) if e.contains("too large")));
+        assert!(matches!(dib_picture(vec![0; 10]), ClipboardPicture::Unreadable(_)));
+        // And a DIB pastes as a picture.
+        let mut a = app_with(|| Some(dib_picture(dib(2, 2, &[[9, 9, 9, 255]; 4]))));
+        a.run("edit.paste", json!({})).unwrap();
+        assert_eq!(pictures(&mut a), 1);
     }
 
     /// Hostile clipboard sizes are refused without inserting anything (or allocating for them).

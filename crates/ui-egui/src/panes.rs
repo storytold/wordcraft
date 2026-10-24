@@ -446,6 +446,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
         for c in list.as_array().cloned().unwrap_or_default() {
             let id = c.get("id").and_then(Value::as_u64).unwrap_or(0);
             let reply = c.get("parent").is_some_and(|p| !p.is_null());
+            let when = u32::try_from(id).ok().and_then(|i| app.session.doc.comments.get(&i)).map(crate::local_time::comment_time).unwrap_or_default();
             egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.border)).corner_radius(6).inner_margin(8).show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 if reply {
@@ -453,7 +454,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 }
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(c.get("author").and_then(Value::as_str).unwrap_or("")).font(semibold(12.0)));
-                    ui.label(egui::RichText::new(comment_stamp(c.get("date").and_then(Value::as_str).unwrap_or(""))).small().weak());
+                    ui.label(egui::RichText::new(when).small().weak());
                     if c.get("resolved").and_then(Value::as_bool).unwrap_or(false) {
                         ui.label(egui::RichText::new(tl!("Resolved")).small().color(t.green));
                     }
@@ -886,11 +887,6 @@ fn trim_num(x: f64) -> String {
     s.trim_end_matches('0').trim_end_matches('.').to_string()
 }
 
-/// `2026-10-12T04:44:00Z` → `2026-10-12 04:44` (date and time, no seconds) for comment cards.
-fn comment_stamp(iso: &str) -> String {
-    iso.chars().take(16).map(|c| if c == 'T' { ' ' } else { c }).collect()
-}
-
 /// `dotDash` → `Dot dash` (enum values from the document model).
 fn camel_words(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 4);
@@ -909,15 +905,6 @@ fn camel_words(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::comment_stamp;
-
-    #[test]
-    fn comment_stamp_keeps_date_and_time() {
-        assert_eq!(comment_stamp("2026-10-12T04:44:31Z"), "2026-10-12 04:44");
-        assert_eq!(comment_stamp("2026-10-12"), "2026-10-12");
-        assert_eq!(comment_stamp(""), "");
-    }
-
     /// #1902: Clipboard Delete returns focus to the document like paste does.
     #[test]
     #[cfg(not(target_arch = "wasm32"))]

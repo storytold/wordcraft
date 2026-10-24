@@ -129,7 +129,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
 pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
-    let Some(root) = pkg.xml(&main)? else {
+    let Some(root) = pkg.xml_strict(&main)? else {
         return Err(DocxError::MissingPart(main));
     };
     if root.name != "w:document" {
@@ -513,7 +513,9 @@ fn toc_control_to_toc(body: &mut Blocks) {
             let _ = p.insert_object(len, InlineObject::FieldEnd, &props);
         }
     }
-    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty() && p.section.is_none()) {
+    // An empty paragraph opening the control takes the field. It may end a section, as above
+    // entries in columns (#3889).
+    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty()) {
         field_to_heading(&mut engine, s + 1);
     } else {
         toc_field_to_heading(&mut engine);
@@ -900,6 +902,24 @@ impl Reader<'_> {
             && let Some(id) = def.attr("w:styleId")
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
+        }
+        // Word in other languages names the TOC styles' ids in that language (`toc 1` is `Sumrio1`
+        // in Portuguese): they take the engine's ids, which Update Table and the writer's TOC
+        // recognise the entries by (#3889). Not when the file or an earlier style has that id.
+        let mut taken: Vec<String> = root.children("w:style").take(10_000).filter_map(|s| s.attr("w:styleId")).map(str::to_string).collect();
+        for s in root.children("w:style").take(10_000).filter(|s| s.attr("w:type").is_none_or(|t| t == "paragraph")) {
+            let (Some(id), Some(name)) = (s.attr("w:styleId"), s.child_val("w:name")) else { continue };
+            let canonical = match name.trim().to_ascii_lowercase().as_str() {
+                "toc heading" => "TOCHeading".to_string(),
+                n => match n.strip_prefix("toc ").and_then(|d| d.parse::<u8>().ok()).filter(|d| (1..=9).contains(d)) {
+                    Some(d) => format!("TOC{d}"),
+                    None => continue,
+                },
+            };
+            if !taken.contains(&canonical) && !self.pc.alias.contains_key(id) {
+                taken.push(canonical.clone());
+                self.pc.alias.insert(id.to_string(), canonical);
+            }
         }
         let mut sheet = StyleSheet::empty();
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();

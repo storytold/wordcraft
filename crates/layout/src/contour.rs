@@ -168,17 +168,12 @@ const MAX_PICTURE_SIDE: u32 = 8192;
 /// in unit coordinates of the cropped picture. `None` for pictures without transparency (or
 /// that don't decode): their rectangle is their outline.
 pub fn picture_outline(bytes: &[u8], crop: [f32; 4]) -> Option<Vec<(f32, f32)>> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    let pic = wordcraft_geom::picture::probe(bytes).ok()?;
     // Formats that can't be transparent aren't decoded.
-    if matches!(reader.format(), None | Some(image::ImageFormat::Jpeg)) {
+    if pic.format == image::ImageFormat::Jpeg || pic.width > MAX_PICTURE_SIDE || pic.height > MAX_PICTURE_SIDE {
         return None;
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(MAX_PICTURE_SIDE);
-    limits.max_image_height = Some(MAX_PICTURE_SIDE);
-    limits.max_alloc = Some(512 << 20);
-    reader.limits(limits);
-    let img = reader.decode().ok()?;
+    let img = pic.decode(wordcraft_geom::MAX_DECODED_BYTES).ok()?;
     if !img.color().has_alpha() {
         return None;
     }

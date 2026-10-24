@@ -63,6 +63,7 @@ pub mod icons;
 pub mod ink;
 pub mod keys;
 pub mod keytips;
+mod local_time;
 pub mod mini_toolbar;
 pub mod objects;
 pub mod options;
@@ -127,6 +128,14 @@ pub struct Services {
     /// #1315). The hook starts a ticket for such a save and reports how it ended; until then the
     /// document's save isn't confirmed, and a New/Open held back by the Save Changes prompt waits.
     pub async_saves: Option<async_saves::AsyncSaves>,
+    /// Web, framed by a page that keeps the files (`?host=parent`): set alongside `download`,
+    /// Save, Save As and Export hand the bytes to that page instead, with whether it was Save As
+    /// ([`HostSaveFn`]: true for a `file.saveAs` in a format that keeps everything, which File ›
+    /// Export to such a format runs too; false for Save and for copies: the PDF and PNG exports
+    /// and Save As in a format that doesn't keep everything). Save then writes the opened file
+    /// under its own name and format, as on the desktop, and a Save or Save As that keeps
+    /// everything makes that name the document's file, so the next Save goes to it.
+    pub host_save: Option<HostSaveFn>,
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
@@ -222,6 +231,10 @@ pub enum DefaultApp {
 
 /// Files delivered asynchronously.
 pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
+
+/// [`Services::host_save`]: `(file name, bytes, save_as)`. An error means the page didn't get
+/// the file, and the save failed.
+pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
 
 /// Whether a pasted picture belongs in the document: the page has keyboard focus, and no
 /// Backstage or dialog is open (#1349). A focused text field (comment, Find box) means the page
@@ -1007,7 +1020,7 @@ impl WordApp {
         }
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
-            let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.default_save_name());
+            let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
             if matches!(id, "file.save" | "file.saveAs")
@@ -1032,19 +1045,28 @@ impl WordApp {
             if let Some(saves) = &saves {
                 let _ = saves.take_started();
             }
-            if let Some(d) = &self.services.download
-                && let Err(e) = d(&name, &bytes)
-            {
+            // An export is a copy, and so is a save in a format that doesn't keep everything (a
+            // page image, plain text): the document itself still has unsaved changes.
+            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+            let delivered = match (&self.services.host_save, &self.services.download) {
+                // Save As tells the host page the document is now this file, which it only is when
+                // the save marks it saved.
+                (Some(host), _) => host(&name, &bytes, id == "file.saveAs" && marked_saved),
+                (None, Some(download)) => download(&name, &bytes),
+                (None, None) => Ok(()),
+            };
+            if let Err(e) = delivered {
                 let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &name), ("error", &e)]);
                 log::error!("download of {name} failed: {e}");
                 self.status(msg.clone());
                 return Err(msg);
             }
-            // An export is a copy, and so is a save in a format that doesn't keep everything (a
-            // page image, plain text): the document itself still has unsaved changes.
-            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
             if marked_saved {
                 self.session.dirty = false;
+                // The host page keeps the file under this name now, as a desktop save would.
+                if self.services.host_save.is_some() {
+                    self.session.path = Some(std::path::PathBuf::from(&name));
+                }
             }
             // The browser's picker writes the file later (#1315): until it says how that went,
             // the document's save isn't confirmed.
@@ -1953,6 +1975,26 @@ impl WordApp {
             .and_then(|p| p.extension())
             .and_then(|e| e.to_str())
             .is_some_and(|e| e.eq_ignore_ascii_case("doc") || e.eq_ignore_ascii_case("dot"))
+    }
+
+    /// The name a browser Save or Export without a name uses. An export is named after the
+    /// document (`report.pdf`, not `report.docx.pdf`). A host page that keeps the files
+    /// ([`Services::host_save`]) gets Save back under the opened file's own name and format, as
+    /// the desktop app writes it, except an import-only Word 97–2003 file (#2445).
+    fn web_save_name(&self, id: &str) -> String {
+        match id {
+            "file.exportPdf" => return format!("{}.pdf", self.title_stem()),
+            "file.exportPng" => return format!("{}.png", self.title_stem()),
+            _ => {}
+        }
+        if id == "file.save"
+            && self.services.host_save.is_some()
+            && !self.legacy_word_path()
+            && let Some(name) = self.session.path.as_ref().and_then(|p| p.file_name())
+        {
+            return name.to_string_lossy().to_string();
+        }
+        self.default_save_name()
     }
 
     /// The name Save suggests: the open file's own Word format (so a .docm keeps its macros),
@@ -6906,6 +6948,105 @@ mod tests {
             a.execute("file.saveAs", json!({"path": name})).unwrap();
             assert!(!a.session.dirty, "{name}");
         }
+    }
+
+    /// Web inside a page that keeps the files: the app with `host_save` recording each file it
+    /// is handed (name, Save As, size).
+    fn host_app(fail: bool) -> (WordApp, std::rc::Rc<std::cell::RefCell<Vec<(String, bool, usize)>>>) {
+        let mut a = typed();
+        let got = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let seen = got.clone();
+        a.services.download = Some(Box::new(|_, _| Err("downloads go to the host page".into())));
+        a.services.host_save = Some(Box::new(move |name: &str, bytes: &[u8], save_as: bool| {
+            if fail {
+                return Err("the page is gone".into());
+            }
+            seen.borrow_mut().push((name.to_string(), save_as, bytes.len()));
+            Ok(())
+        }));
+        (a, got)
+    }
+
+    /// Open `name` as the host page sends it (bytes of the typed document in that format).
+    fn host_open(a: &mut WordApp, name: &str) {
+        let bytes = wordcraft_engine::io::save_bytes_with(name, &typed().session.doc, None, &Default::default()).unwrap();
+        a.execute("file.open", json!({"path": name, "data": wordcraft_engine::cmd::insert::base64_encode(&bytes)})).unwrap();
+        a.run("text.insert", json!({"text": "Edited "})).unwrap();
+        assert!(a.session.dirty);
+    }
+
+    /// Save hands the opened file back under its own name and format; Save As says so and
+    /// becomes the file the next Save writes.
+    #[test]
+    fn host_saves_go_back_to_the_opened_file() {
+        let (mut a, got) = host_app(false);
+        host_open(&mut a, "report.odt");
+        a.execute("file.save", json!({})).unwrap();
+        assert!(!a.session.dirty);
+        a.run("text.insert", json!({"text": "More "})).unwrap();
+        a.execute("file.saveAs", json!({"path": "report copy.docx"})).unwrap();
+        assert!(!a.session.dirty);
+        a.run("text.insert", json!({"text": "Again "})).unwrap();
+        a.execute("file.save", json!({})).unwrap();
+        let got = got.borrow();
+        let calls: Vec<(&str, bool)> = got.iter().map(|(n, s, _)| (n.as_str(), *s)).collect();
+        assert_eq!(calls, [("report.odt", false), ("report copy.docx", true), ("report copy.docx", false)]);
+        assert!(got.iter().all(|(_, _, len)| *len > 0));
+    }
+
+    /// A Markdown file goes back as Markdown, which doesn't keep everything: the document stays
+    /// unsaved, as on the desktop.
+    #[test]
+    fn host_save_of_markdown_keeps_its_format_and_stays_unsaved() {
+        let (mut a, got) = host_app(false);
+        host_open(&mut a, "notes.md");
+        a.execute("file.save", json!({})).unwrap();
+        assert_eq!(got.borrow().first().map(|(n, s, _)| (n.as_str(), *s)), Some(("notes.md", false)));
+        assert!(a.session.dirty);
+        assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("notes.md")));
+    }
+
+    /// An import-only Word 97–2003 file is saved as a .docx, never back over itself (#2445).
+    #[test]
+    fn host_save_of_a_legacy_word_file_writes_a_docx() {
+        let (mut a, got) = host_app(false);
+        a.session.path = Some("old.doc".into());
+        a.execute("file.save", json!({})).unwrap();
+        assert_eq!(got.borrow().first().map(|(n, _, _)| n.as_str()), Some("old.docx"));
+    }
+
+    /// Exports without a name are named after the document, not after its file.
+    #[test]
+    fn web_exports_are_named_after_the_document() {
+        let (mut a, got) = host_app(false);
+        host_open(&mut a, "report.docx");
+        a.execute("file.exportPdf", json!({})).unwrap();
+        a.execute("file.exportPng", json!({})).unwrap();
+        let names: Vec<(String, bool)> = got.borrow().iter().map(|(n, s, _)| (n.clone(), *s)).collect();
+        assert_eq!(names, [("report.pdf".to_string(), false), ("report.png".to_string(), false)]);
+        assert!(a.session.dirty, "an export is a copy");
+    }
+
+    /// Save As in a format that doesn't keep everything (File › Export to PDF or Markdown) is a
+    /// copy: the host page isn't told the document is now that file.
+    #[test]
+    fn host_save_as_a_copy_format_is_not_save_as() {
+        let (mut a, got) = host_app(false);
+        host_open(&mut a, "report.docx");
+        a.execute("file.saveAs", json!({"path": "report.pdf"})).unwrap();
+        a.execute("file.saveAs", json!({"path": "report.md"})).unwrap();
+        let calls: Vec<(String, bool)> = got.borrow().iter().map(|(n, s, _)| (n.clone(), *s)).collect();
+        assert_eq!(calls, [("report.pdf".to_string(), false), ("report.md".to_string(), false)]);
+        assert_eq!(a.session.path.as_deref(), Some(std::path::Path::new("report.docx")));
+    }
+
+    /// The page not getting the file is a failed save: the document keeps its changes.
+    #[test]
+    fn a_host_save_that_fails_leaves_the_document_unsaved() {
+        let (mut a, _) = host_app(true);
+        host_open(&mut a, "report.docx");
+        assert!(a.execute("file.save", json!({})).is_err());
+        assert!(a.session.dirty);
     }
 
     /// Macro-enabled documents and templates keep everything (#172), so once saved in this

@@ -102,7 +102,7 @@ pub fn tool_definitions() -> Value {
         tool(
             "type_text",
             "Type text",
-            "Type at the caret (replacing the selection). Use \\n... for line breaks inside text; use execute text.newParagraph for new paragraphs, or `paragraphs: true` to split lines into paragraphs.",
+            "Type at the caret (replacing the selection). Use \\n... for line breaks inside text; use execute text.newParagraph for new paragraphs, or `paragraphs: true` to split lines into paragraphs (all in one step, one Undo; the line breaks are plain text breaks: no AutoCorrect or AutoFormat runs on them).",
             obj(json!({"text": s("Text"), "paragraphs": {"type": "boolean"}}), &["text"]),
             false
         ),
@@ -229,22 +229,11 @@ pub fn call_tool(b: &mut dyn Backend, name: &str, a: &Value) -> ToolResult {
         "type_text" => {
             let t = st("text").unwrap_or("");
             if a.get("paragraphs").and_then(Value::as_bool).unwrap_or(false) {
-                let mut last = Ok(Value::Null);
-                for (i, line) in t.split('\n').enumerate() {
-                    if i > 0 {
-                        last = exec(b, "text.newParagraph", json!({}));
-                        if last.is_err() {
-                            break;
-                        }
-                    }
-                    if !line.is_empty() {
-                        last = exec(b, "text.insert", json!({"text": line, "raw": true}));
-                    }
-                    if last.is_err() {
-                        break;
-                    }
-                }
-                wrap(last)
+                // One command for all the lines: `text.insert` takes a carriage return as a
+                // paragraph break. A command per line was quadratic in the document (each one
+                // snapshots all of it for Undo: 10,000 lines took 2.8 s, 7 ms in one command),
+                // and left an Undo step per line. CRLF is one break, not two (#3973).
+                wrap(exec(b, "text.insert", json!({"text": t.replace("\r\n", "\n").replace('\n', "\r"), "raw": true})))
             } else {
                 wrap(exec(b, "text.insert", json!({"text": t, "raw": true})))
             }

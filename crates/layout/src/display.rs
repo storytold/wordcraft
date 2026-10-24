@@ -197,6 +197,7 @@ pub enum Draw {
         stroke_width: f32,
         /// Alternating dash/space lengths in page points; empty means solid.
         dash: Vec<f32>,
+        cap: wordcraft_doc::connector::LineCap,
         /// Shadow, glow and soft edges (drawn with [`wordcraft_doc::effects::bands`]).
         effects: wordcraft_doc::effects::ShapeEffects,
         /// A rounded rectangle's corner ([`wordcraft_doc::connector::ShapeExtra::corner`]).
@@ -206,7 +207,7 @@ pub enum Draw {
     /// wide, in `color` at opacity `alpha`.
     Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
-    Path { segs: Vec<PathSeg>, fill: Option<Paint>, stroke: Option<Rgb>, stroke_width: f32, dash: Vec<f32> },
+    Path { segs: Vec<PathSeg>, fill: Option<Paint>, stroke: Option<Rgb>, stroke_width: f32, dash: Vec<f32>, cap: wordcraft_doc::connector::LineCap },
     /// An inline chart, diagram or described shape's draws, as one figure with its alt text (for
     /// tagged PDF). `kind` is the graphic's, `None` for a shape (see [`crate::shape_figure_alt`]).
     Figure { alt: String, kind: Option<GraphicKind>, draws: Vec<Draw> },
@@ -836,6 +837,10 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer
     }
 }
 
+/// Append display items for the half-open line range `l0..l1` of a laid-out paragraph.
+/// `(x, y)` positions the paragraph's left origin and the first selected line's top; later lines
+/// retain their layout offsets. Includes glyphs, inline objects, decorations and requested markup.
+/// `down` keeps vertical East Asian glyphs upright before the caller turns the resulting draws.
 fn lines(
     doc: &Document,
     story: StoryRef,
@@ -1324,6 +1329,7 @@ fn lines(
                 effects: Default::default(),
                 corner: None,
                 dash: Vec::new(),
+                cap: Default::default(),
             });
         }
         // Ruby (Phonetic Guide) text over its base text, in runs of one style.
@@ -1549,10 +1555,18 @@ fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Dra
                 effects: Default::default(),
                 corner: None,
                 dash: Vec::new(),
+                cap: Default::default(),
             }),
             GraphicItem::Path { segs, fill, stroke, stroke_width } => {
                 let segs = page_segs(segs, |x, y| (rect.x + x * sx, rect.y + y * sy));
-                out.push(Draw::Path { segs, fill: fill.map(Paint::solid), stroke: *stroke, stroke_width: stroke_width * k, dash: Vec::new() })
+                out.push(Draw::Path {
+                    segs,
+                    fill: fill.map(Paint::solid),
+                    stroke: *stroke,
+                    stroke_width: stroke_width * k,
+                    dash: Vec::new(),
+                    cap: Default::default(),
+                })
             }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
             GraphicItem::Image { rect: r, media } => {
@@ -1630,7 +1644,17 @@ fn shape_draws(
         return;
     }
     let Some(f) = freeform.filter(|_| kind == ShapeKind::Freeform) else {
-        out.push(Draw::Shape { rect, kind, fill, stroke, stroke_width, effects, corner: extra.corner, dash: extra.dash.pattern(stroke_width) });
+        out.push(Draw::Shape {
+            rect,
+            kind,
+            fill,
+            stroke,
+            stroke_width,
+            effects,
+            corner: extra.corner,
+            dash: extra.dash.pattern(stroke_width),
+            cap: extra.cap,
+        });
         return;
     };
     if f.is_ink() && opts.hide_ink {
@@ -1662,7 +1686,14 @@ fn shape_draws(
             segs.push(PathSeg::Close);
         }
         let width = path_stroke_width(width);
-        out.push(Draw::Path { segs, fill: if closed { fill.clone() } else { None }, stroke, stroke_width: width, dash: extra.dash.pattern(width) });
+        out.push(Draw::Path {
+            segs,
+            fill: if closed { fill.clone() } else { None },
+            stroke,
+            stroke_width: width,
+            dash: extra.dash.pattern(width),
+            cap: extra.cap,
+        });
         if !closed
             && extra.arrow_end
             && let Some(color) = stroke
@@ -1680,6 +1711,10 @@ fn path_stroke_width(width: f32) -> f32 {
     if width.is_finite() && width > 0.0 { width.clamp(0.25, 200.0) } else { 0.75 }
 }
 
+/// Make a filled triangular arrowhead at the last point, in the points' coordinate space.
+/// The last distinct segment supplies its direction and the bounded stroke width sets its size.
+/// Returns `None` if there is no usable final segment. The triangle has no outline, so the path's
+/// cap setting does not affect its appearance.
 fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Option<Draw> {
     let tip = *points.last()?;
     let (prev_x, prev_y) = points.iter().rev().skip(1).copied().find(|p| *p != tip)?;
@@ -1695,7 +1730,7 @@ fn path_arrowhead(points: &[(f32, f32)], color: Rgb, stroke_width: f32) -> Optio
     let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
     let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
     let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-    Some(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new() })
+    Some(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() })
 }
 
 /// A line or connector at `rect` (its unflipped frame: flips are the frame's turn), with its
@@ -1722,9 +1757,19 @@ fn line_draws(
                 })
                 .collect();
             let width = path_stroke_width(stroke_width);
-            out.push(Draw::Path { segs, fill: None, stroke, stroke_width: width, dash: extra.dash.pattern(width) });
+            out.push(Draw::Path { segs, fill: None, stroke, stroke_width: width, dash: extra.dash.pattern(width), cap: extra.cap });
         }
-        None => out.push(Draw::Shape { rect, kind, fill: None, stroke, stroke_width, effects, corner: None, dash: extra.dash.pattern(stroke_width) }),
+        None => out.push(Draw::Shape {
+            rect,
+            kind,
+            fill: None,
+            stroke,
+            stroke_width,
+            effects,
+            corner: None,
+            dash: extra.dash.pattern(stroke_width),
+            cap: extra.cap,
+        }),
     }
     let Some(color) = stroke else { return };
     // Our line runs from the bottom-left corner to the top-right; connectors from the top-left
@@ -1741,7 +1786,7 @@ fn line_draws(
         let (bx, by) = (tip.0 - dx * len, tip.1 - dy * len);
         let (nx, ny) = (-dy * len * 0.45, dx * len * 0.45);
         let segs = vec![PathSeg::Move(tip.0, tip.1), PathSeg::Line(bx + nx, by + ny), PathSeg::Line(bx - nx, by - ny), PathSeg::Close];
-        out.push(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new() });
+        out.push(Draw::Path { segs, fill: Some(Paint::solid(color)), stroke: None, stroke_width: 0.0, dash: Vec::new(), cap: Default::default() });
     }
 }
 
@@ -1838,6 +1883,7 @@ pub fn check_box(frame: Rect, checked: bool, color: Rgb, alpha: f32, out: &mut V
         effects: Default::default(),
         corner: None,
         dash: Vec::new(),
+        cap: Default::default(),
     });
     if checked {
         out.extend([line(l, t, r, b, 0.48), line(r, t, l, b, 0.48)]);
@@ -1970,6 +2016,7 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         effects: Default::default(),
         corner: None,
         dash: Vec::new(),
+        cap: Default::default(),
     }
 }
 

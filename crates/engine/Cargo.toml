@@ -9,7 +9,7 @@ description = "WordCraft engine: session, selection, undo, the command registry 
 workspace = true
 
 [dependencies]
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }

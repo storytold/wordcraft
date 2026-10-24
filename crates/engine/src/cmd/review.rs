@@ -141,9 +141,20 @@ fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(&text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
-    s.doc
-        .comments
-        .insert(id, Comment { author: s.author.clone(), initials, date: now_iso(), parent: None, resolved: false, part, ..Default::default() });
+    let now = now_iso();
+    s.doc.comments.insert(
+        id,
+        Comment {
+            author: s.author.clone(),
+            initials,
+            date: now.clone(),
+            date_utc: Some(now),
+            parent: None,
+            resolved: false,
+            part,
+            ..Default::default()
+        },
+    );
     let props = Default::default();
     s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
     s.doc.insert_object(&a, InlineObject::CommentStart { id }, &props)?;
@@ -170,9 +181,19 @@ fn reply(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
+    let now = now_iso();
     s.doc.comments.insert(
         id,
-        Comment { author: s.author.clone(), initials, date: now_iso(), parent: Some(parent), resolved: false, part, ..Default::default() },
+        Comment {
+            author: s.author.clone(),
+            initials,
+            date: now.clone(),
+            date_utc: Some(now),
+            parent: Some(parent),
+            resolved: false,
+            part,
+            ..Default::default()
+        },
     );
     Ok(json!({"id": id}))
 }
@@ -363,20 +384,8 @@ fn nav_comment(s: &mut Session, dir: i32) -> CmdResult {
     sel_result(s)
 }
 
-/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
-/// the section break on it), `props` the paragraph's own formatting change.
-#[allow(clippy::too_many_arguments)]
-fn resolve_para(
-    s: &mut Session,
-    story: StoryRef,
-    path: &wordcraft_doc::Path,
-    from: usize,
-    to: usize,
-    mark: bool,
-    props: bool,
-    accept: bool,
-) -> Result<(), CmdError> {
-    let para = s.doc.para_mut(story, path)?;
+/// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
+fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
     if props && (para.props.fmt_change.is_some() || para.props.num_change.is_some()) {
         fmt_revisions::resolve_para(&mut para.props, accept);
         para.touch();
@@ -397,6 +406,24 @@ fn resolve_para(
             })?;
         }
     }
+    Ok(())
+}
+
+/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
+/// the section break on it), `props` the paragraph's own formatting change.
+#[allow(clippy::too_many_arguments)]
+fn resolve_para(
+    s: &mut Session,
+    story: StoryRef,
+    path: &wordcraft_doc::Path,
+    from: usize,
+    to: usize,
+    mark: bool,
+    props: bool,
+    accept: bool,
+) -> Result<(), CmdError> {
+    let para = s.doc.para_mut(story, path)?;
+    resolve_runs(para, from, to, props, accept)?;
     if !mark {
         return Ok(());
     }
@@ -513,6 +540,28 @@ pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
     out
 }
 
+/// Accept or reject the tracked text and paragraph marks of the top-level paragraphs in a block
+/// list that is not a story (a note separator).
+fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Result<(), CmdError> {
+    for b in blocks.iter_mut() {
+        let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
+        let len = p.len();
+        resolve_runs(p, 0, len, true, accept)?;
+        if p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
+            fmt_revisions::resolve_char(&mut p.mark, accept);
+            if let Some(sec) = p.section.as_deref_mut() {
+                fmt_revisions::resolve_section(sec, accept);
+            }
+        }
+        // A mark can't be removed here (no neighbour to join), so it just stops being a revision.
+        p.mark.ins = None;
+        p.mark.del = None;
+        p.touch();
+    }
+    fmt_revisions::resolve_containers(blocks, accept, 0);
+    Ok(())
+}
+
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
@@ -527,6 +576,13 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    // The note separators are block lists of their own, not stories; they must not keep ids of
+    // revisions that are about to be dropped.
+    for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {
+        for blocks in [&mut sep.separator, &mut sep.continuation_separator, &mut sep.continuation_notice].into_iter().flatten() {
+            resolve_loose_blocks(blocks, accept)?;
+        }
+    }
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)

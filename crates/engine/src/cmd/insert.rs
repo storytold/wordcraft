@@ -227,8 +227,8 @@ pub(crate) fn picture(s: &mut Session, v: &Value) -> CmdResult {
     place_picture(s, bytes, p::f32(v, "width"), p::str(v, "alt").unwrap_or(""))
 }
 
-/// The media extension of an encoded image by its magic bytes, as `image_size` accepted it
-/// (TIFF included: the `image` crate decodes it).
+/// The media extension of an encoded image by its magic bytes, as the picture probe accepted it
+/// (TIFF included when its compression is one the `image` crate decodes within limits).
 pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
     match bytes.get(..4) {
         Some([0x89, b'P', b'N', b'G']) => "png",
@@ -249,14 +249,15 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
-    // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802).
-    let (natural_w, natural_h, ext) = if let Some((pw, ph)) = wordcraft_render::image_size(&bytes) {
-        let ext = image_ext(&bytes);
-        (pw as f32 * 0.75, ph as f32 * 0.75, ext)
-    } else if let Some(size) = wordcraft_render::metafile_size(&bytes) {
-        size
-    } else {
-        return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
+    // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802). A picture that
+    // is never decoded (a TIFF with JPEG strips, #3645) isn't inserted.
+    let (natural_w, natural_h, ext) = match wordcraft_geom::picture::probe(&bytes) {
+        Ok(pic) => (pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(&bytes)),
+        Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => return Err(CmdError::Failed(why.into())),
+        Err(_) => match wordcraft_render::metafile_size(&bytes) {
+            Some(size) => size,
+            None => return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into())),
+        },
     };
     let key = s.doc.add_media(bytes, ext);
     // Fitted to the text width.
@@ -1049,6 +1050,36 @@ pub fn drop_cap_state(s: &Session) -> DropCapState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 4 × 4 RGB TIFF that says its strips are JPEG (they aren't): its header still reads.
+    fn jpeg_strip_tiff() -> Vec<u8> {
+        let mut t = Vec::new();
+        image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut t), image::ImageFormat::Tiff).unwrap();
+        assert_eq!(&t[..4], b"II*\0");
+        let ifd = u32::from_le_bytes(t[4..8].try_into().unwrap()) as usize;
+        let n = usize::from(u16::from_le_bytes([t[ifd], t[ifd + 1]]));
+        let e = (0..n).map(|i| ifd + 2 + 12 * i).find(|&e| t[e..e + 2] == 259u16.to_le_bytes()).unwrap();
+        t[e + 8..e + 10].copy_from_slice(&7u16.to_le_bytes());
+        t
+    }
+
+    /// #3645: a TIFF with JPEG strips is never decoded, so it is neither inserted nor swapped in;
+    /// before, its readable header was all insertion looked at.
+    #[test]
+    fn tiffs_with_jpeg_strips_are_refused() {
+        let tiff = jpeg_strip_tiff();
+        assert_eq!(wordcraft_render::image_size(&tiff), Some((4, 4)), "its header reads");
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let e = s.run("insert.picture", &json!({"data": base64_encode(&tiff)})).unwrap_err().to_string();
+        assert!(e.contains("TIFF"), "{e}");
+        assert!(s.doc.media.is_empty());
+        let mut plain = Vec::new();
+        image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut plain), image::ImageFormat::Tiff).unwrap();
+        s.run("insert.picture", &json!({"data": base64_encode(&plain)})).unwrap();
+        let e = s.run("picture.change", &json!({"data": base64_encode(&tiff)})).unwrap_err().to_string();
+        assert!(e.contains("TIFF"), "{e}");
+        assert_eq!(s.doc.media.len(), 1);
+    }
 
     /// Closing the header or footer (Esc, the ribbon) puts the caret back where it was in the
     /// body, not on page 1 (#3331).
