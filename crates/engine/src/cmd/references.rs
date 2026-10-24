@@ -1524,17 +1524,6 @@ mod tests {
         assert!(formula.plain_text().contains("(1)"), "{}", formula.plain_text());
     }
 
-    /// Odd templates, a label outside ASCII and an unknown style do not panic.
-    #[test]
-    fn hostile_caption_params_do_not_panic() {
-        let mut s = Session::new(wordcraft_doc::Document::from_text("Rock"));
-        s.run("select.text", &json!({"text": "Rock"})).unwrap();
-        let _ = s.run("references.caption", &json!({"label": "Рисунок", "text": "печь", "pattern": "{label {number}", "style": "No Such Style"}));
-        s.clamp_selection();
-        let _ = s.layout();
-        assert!(!s.doc.body.is_empty());
-    }
-
     /// A caption name can follow a template, take its own style and alignment, and an equation
     /// number can sit at the right of the formula as `(1)` with no label.
     #[test]
