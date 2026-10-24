@@ -1625,7 +1625,7 @@ fn align_css(a: Option<Align>) -> Option<&'static str> {
     match a? {
         Align::Center => Some("text-align:center"),
         Align::Right => Some("text-align:right"),
-        Align::Justify | Align::Distribute => Some("text-align:justify"),
+        Align::Justify | Align::Distribute | Align::ThaiDistribute => Some("text-align:justify"),
         Align::Left => None,
     }
 }

@@ -432,7 +432,8 @@ pub fn align(v: &str) -> Align {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
         "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "distribute" => Align::Distribute,
+        "thaiDistribute" => Align::ThaiDistribute,
         _ => Align::Left,
     }
 }

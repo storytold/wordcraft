@@ -5,7 +5,7 @@
 //!   and none ends with opening punctuation (（「【…). UAX #14 already forbids most of these
 //!   breaks; the lists make sure of it for the standard Japanese/Chinese sets.
 //! - Kinsoku off: a line may break between any two East Asian characters, punctuation included.
-//! - Word wrap off: Latin words may break at any character.
+//! - Word wrap off: Latin and Thai words may break at any safe grapheme boundary.
 //! - Automatic spacing (`autoSpaceDE`, `autoSpaceDN`): which neighbouring characters get room
 //!   between Asian text and Latin text or digits ([`auto_space`]).
 //!
@@ -13,6 +13,60 @@
 //! so text with no East Asian characters breaks exactly as before unless word wrap is off.
 
 use unicode_segmentation::UnicodeSegmentation;
+
+fn is_thai(c: char) -> bool {
+    matches!(u32::from(c), 0x0E00..=0x0E7F)
+}
+
+pub(crate) fn boundary_touches_thai(text: &str, off: usize) -> bool {
+    text.get(..off).and_then(|t| t.chars().next_back()).is_some_and(is_thai) || text.get(off..).and_then(|t| t.chars().next()).is_some_and(is_thai)
+}
+
+fn is_thai_prefix_vowel(c: char) -> bool {
+    matches!(u32::from(c), 0x0E40..=0x0E44)
+}
+
+fn is_thai_consonant(c: char) -> bool {
+    matches!(u32::from(c), 0x0E01..=0x0E2E)
+}
+
+pub(crate) fn is_thai_text_char(c: char) -> bool {
+    is_thai(c) && !matches!(c, '\u{0E2F}' | '\u{0E3F}' | '\u{0E46}' | '\u{0E4F}' | '\u{0E5A}' | '\u{0E5B}')
+}
+
+pub(crate) fn thai_text_runs(text: &str) -> Vec<std::ops::Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, c) in text.char_indices() {
+        if is_thai_text_char(c) {
+            start.get_or_insert(i);
+        } else if let Some(from) = start.take() {
+            runs.push(from..i);
+        }
+    }
+    if let Some(from) = start {
+        runs.push(from..text.len());
+    }
+    runs
+}
+
+/// Whether `off` is safe for line wrapping in the whole paragraph. Thai preposed vowels are
+/// encoded before their consonant and must stay with it; grapheme and shaping clusters stay whole.
+pub(crate) fn is_safe_line_break(text: &str, off: usize) -> bool {
+    if !wordcraft_doc::cluster::is_cluster_boundary(text, off) {
+        return false;
+    }
+    let prev = text.get(..off).and_then(|t| t.chars().next_back());
+    let next = text.get(off..).and_then(|t| t.chars().next());
+    !matches!((prev, next), (Some(p), Some(n)) if is_thai_prefix_vowel(p) && is_thai_consonant(n))
+}
+
+/// A boundary inside Thai text (rather than at its punctuation or a script transition).
+pub(crate) fn is_thai_text_boundary(text: &str, off: usize) -> bool {
+    let prev = text.get(..off).and_then(|t| t.chars().next_back());
+    let next = text.get(off..).and_then(|t| t.chars().next());
+    matches!((prev, next), (Some(p), Some(n)) if is_thai_text_char(p) && is_thai_text_char(n))
+}
 
 /// East Asian characters a line may not start with: closing brackets and quotes, the
 /// ideographic comma and full stop, fullwidth and halfwidth punctuation, the middle dot,
@@ -58,10 +112,10 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool) 
     if !word_wrap {
         // Between any two letters or digits that are not East Asian (whole graphemes, so accents
         // stay with their letters).
-        let latin = |g: &str| g.chars().next().is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c));
+        let wrap_char = |g: &str| g.chars().next().is_some_and(|c| is_thai_text_char(c) || (c.is_alphanumeric() && !is_east_asian(c) && !is_thai(c)));
         let mut prev: Option<&str> = None;
         for (i, g) in text.grapheme_indices(true) {
-            if prev.is_some_and(latin) && latin(g) {
+            if prev.is_some_and(wrap_char) && wrap_char(g) && (!boundary_touches_thai(text, i) || is_safe_line_break(text, i)) {
                 opps.push(i);
             }
             prev = Some(g);

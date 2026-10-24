@@ -7,7 +7,7 @@ use wordcraft_doc::numbering::ListKind;
 use wordcraft_doc::para::{Anchor, Float, FloatAlign, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{
     Align, Border, BorderStyle, Borders, CharProps, HeightRule, Highlight, LineSpacing, NumRef, ParaProps, Rgb, RowProps, TabAlign, TabLeader,
-    TabStop, TableLook, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
+    TabStop, TableLook, TableProps, TextColor, TextDirection, Underline, VAlign, VMerge, VertAlign,
 };
 use wordcraft_doc::section::{Columns, DocGrid, DocGridType, LineNumberRestart, LineNumbering, NumFormat, PageVAlign, SectionProps, SectionStart};
 use wordcraft_doc::styles::{Style, StyleKind};
@@ -223,6 +223,7 @@ fn every_para_prop_round_trips() {
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
@@ -241,6 +242,90 @@ fn every_para_prop_round_trips() {
     for (i, v) in variants.iter().enumerate() {
         assert_eq!(&got[i + 1].props, v, "variant {i}");
     }
+}
+
+#[test]
+fn distributed_alignments_keep_their_docx_values_across_repeated_round_trips() {
+    let mut d = Document::new();
+    d.styles.upsert(Style {
+        id: "ThaiBase".into(),
+        name: "Thai Base".into(),
+        kind: StyleKind::Paragraph,
+        para: ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
+        ..Default::default()
+    });
+    d.styles.upsert(Style {
+        id: "ThaiChild".into(),
+        name: "Thai Child".into(),
+        kind: StyleKind::Paragraph,
+        based_on: Some("ThaiBase".into()),
+        ..Default::default()
+    });
+
+    let mut inherited = Paragraph::with_text("inherited", CharProps::default());
+    inherited.props.style = Some("ThaiChild".into());
+    let mut overridden = Paragraph::with_text("override", CharProps::default());
+    overridden.props.style = Some("ThaiChild".into());
+    overridden.props.align = Some(Align::Distribute);
+    let mut direct_thai = Paragraph::with_text("direct thai", CharProps::default());
+    direct_thai.props.align = Some(Align::ThaiDistribute);
+    let mut direct_distribute = Paragraph::with_text("direct distribute", CharProps::default());
+    direct_distribute.props.align = Some(Align::Distribute);
+    d.body = [inherited, overridden, direct_thai, direct_distribute].into_iter().map(para_block).collect();
+
+    let check = |doc: &Document| {
+        let ps = paras(doc);
+        assert_eq!(ps[0].props.align, None, "the inherited paragraph keeps no direct override");
+        assert_eq!(doc.styles.resolve_para(&ps[0].props).align, Align::ThaiDistribute);
+        assert_eq!(ps[1].props.align, Some(Align::Distribute), "direct paragraph formatting overrides its style");
+        assert_eq!(doc.styles.get("ThaiChild").and_then(|s| s.based_on.as_deref()), Some("ThaiBase"));
+        assert_eq!(doc.styles.get("ThaiBase").map(|s| s.para.align), Some(Some(Align::ThaiDistribute)));
+        assert_eq!(ps[2].props.align, Some(Align::ThaiDistribute));
+        assert_eq!(ps[3].props.align, Some(Align::Distribute));
+    };
+    let check_xml = |doc: &Document| {
+        let bytes = wordcraft_docx::write(doc).expect("write DOCX");
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).expect("open DOCX zip");
+        let mut document_xml = String::new();
+        let mut styles_xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").expect("document part"), &mut document_xml).expect("read document XML");
+        std::io::Read::read_to_string(&mut zip.by_name("word/styles.xml").expect("styles part"), &mut styles_xml).expect("read styles XML");
+        assert!(document_xml.contains("<w:jc w:val=\"thaiDistribute\"/>"), "{document_xml}");
+        assert!(document_xml.contains("<w:jc w:val=\"distribute\"/>"), "{document_xml}");
+        assert!(styles_xml.contains("<w:jc w:val=\"thaiDistribute\"/>"), "{styles_xml}");
+    };
+
+    let first = rt(&d);
+    check(&first);
+    check_xml(&first);
+    let second = rt(&first);
+    check(&second);
+    check_xml(&second);
+}
+
+#[test]
+fn table_and_row_thai_distributed_alignment_keep_their_start_edge_fallback() {
+    let mut table = Table::new(1, 1, 180.0);
+    table.props.align = Some(Align::ThaiDistribute);
+    table.rows[0].props.exceptions = Some(Box::new(TableProps { align: Some(Align::ThaiDistribute), ..Default::default() }));
+    let mut d = Document::new();
+    d.body = vec![Arc::new(Block::Table(table))];
+
+    let bytes = wordcraft_docx::write(&d).expect("write DOCX");
+    let document_xml = {
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).expect("open DOCX zip");
+        let mut document_xml = String::new();
+        std::io::Read::read_to_string(&mut zip.by_name("word/document.xml").expect("document part"), &mut document_xml).expect("read document XML");
+        document_xml
+    };
+    assert!(document_xml.contains("<w:jc w:val=\"left\"/>"), "table distributed alignment falls back to start: {document_xml}");
+    assert_eq!(document_xml.matches("<w:jc w:val=\"left\"/>").count(), 2, "both table and row exception use a valid table alignment: {document_xml}");
+    assert!(!document_xml.contains("thaiDistribute"), "table properties never use paragraph-only thaiDistribute: {document_xml}");
+
+    let back = wordcraft_docx::read(&bytes).unwrap();
+    let got = back.body.first().and_then(|b| b.as_table()).expect("round-tripped table");
+    assert_eq!(got.props.align, Some(Align::Left));
+    assert_eq!(got.rows[0].props.exceptions.as_ref().and_then(|p| p.align), Some(Align::Left));
 }
 
 #[test]

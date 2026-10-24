@@ -638,7 +638,12 @@ pub enum Align {
     Center,
     Right,
     Justify,
+    /// Distributed alignment across a paragraph's character boundaries, as encoded by OOXML
+    /// `w:jc w:val="distribute"`.
     Distribute,
+    /// Thai distributed alignment, preserved independently from regular distributed alignment
+    /// (`w:jc w:val="thaiDistribute"`).
+    ThaiDistribute,
 }
 
 impl Align {
@@ -1383,6 +1388,21 @@ fn from_hsl(h: f64, s: f64, l: f64) -> Rgb {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn alignment_json_names_keep_old_values_and_add_thai_distribution() {
+        for (alignment, json) in [
+            (Align::Left, "\"left\""),
+            (Align::Center, "\"center\""),
+            (Align::Right, "\"right\""),
+            (Align::Justify, "\"justify\""),
+            (Align::Distribute, "\"distribute\""),
+            (Align::ThaiDistribute, "\"thaiDistribute\""),
+        ] {
+            assert_eq!(serde_json::to_string(&alignment).unwrap(), json);
+            assert_eq!(serde_json::from_str::<Align>(json).unwrap(), alignment);
+        }
+    }
 
     #[test]
     fn rgb_hex() {

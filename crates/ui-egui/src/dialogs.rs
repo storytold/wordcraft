@@ -1957,7 +1957,14 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                             }
                         }
                     });
-                    const ALIGNS: [(&str, &str); 4] = [("left", "Left"), ("center", "Center"), ("right", "Right"), ("justify", "Justify")];
+                    const ALIGNS: [(&str, &str); 6] = [
+                        ("left", "Left"),
+                        ("center", "Center"),
+                        ("right", "Right"),
+                        ("justify", "Justify"),
+                        ("distribute", "Distributed"),
+                        ("thaiDistribute", "Thai Distributed"),
+                    ];
                     ui.horizontal(|ui| {
                         ui.label(tl!("Alignment:"));
                         let shown = if mixed.contains("align") {
@@ -3461,11 +3468,12 @@ fn paragraph_dialog(rp: &wordcraft_doc::resolve::ResolvedPara, tab: u8) -> Dialo
         wordcraft_doc::props::LineSpacing::Multiple(m) => m,
         _ => 1.0,
     };
+    let align = rp.align.visual(rp.bidi);
     let (vl, vr) = rp.visual_indents();
     let unit = crate::options::unit().pt_per_unit();
     Dialog::Paragraph {
         rtl: rp.bidi,
-        align: format!("{:?}", rp.align.visual(rp.bidi)).to_lowercase(),
+        align: if align == wordcraft_doc::props::Align::ThaiDistribute { "thaiDistribute".into() } else { format!("{align:?}").to_lowercase() },
         left: vl / unit,
         right: vr / unit,
         first: rp.indent_first / unit,
@@ -4569,6 +4577,24 @@ mod tests {
         assert!(rtl);
         assert_eq!(align, "right", "a start-aligned right-to-left paragraph shows as right aligned");
         assert_eq!((left, right), (0.0, 0.5), "the start indent is the right one");
+    }
+
+    #[test]
+    fn paragraph_dialog_round_trips_thai_distributed_alignment() {
+        let mut app = app_with("ภาษาไทย");
+        let _ = app.run("para.align", json!({"value": "thaiDistribute"}));
+        let Some(Dialog::Paragraph { align, .. }) = Dialog::open("paragraph", &mut app) else { panic!("no paragraph dialog") };
+        assert_eq!(align, "thaiDistribute", "the dialog uses the command's canonical alignment key");
+        ok_unchanged(&mut app);
+        assert_eq!(para_props(&app, 0).align, Some(wordcraft_doc::props::Align::ThaiDistribute));
+
+        let mut app = app_with("ภาษาไทย");
+        let Some(mut dialog) = Dialog::open("paragraph", &mut app) else { panic!("no paragraph dialog") };
+        if let Dialog::Paragraph { align, .. } = &mut dialog {
+            *align = "thaiDistribute".into();
+        }
+        apply_paragraph(&mut app, &dialog);
+        assert_eq!(para_props(&app, 0).align, Some(wordcraft_doc::props::Align::ThaiDistribute), "para.set accepts the dialog's Thai alignment key");
     }
 
     #[test]

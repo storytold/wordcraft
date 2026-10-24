@@ -1,4 +1,5 @@
 use super::*;
+use crate::para::{ClKind, Line};
 use wordcraft_doc::fill::Fill;
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, ParaProps, TextDirection};
@@ -622,7 +623,7 @@ fn a_megabyte_long_word_lays_out_quickly() {
 
 /// A cluster with the given advance and kind, for the tests that measure a word by hand.
 fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
-    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false }
+    para::Cluster::for_test(kind, adv, break_after)
 }
 
 /// A word that a negative advance makes narrower still fits beside a float: the width of a word
@@ -4768,6 +4769,34 @@ fn justified_lines(text: &str, compat_mode: u32, align: Align) -> (usize, Vec<f3
     (lines_of(&l), ends)
 }
 
+fn thai_justification_layout_with_wrap(text: &str, align: Align, width: f32, size: f32, word_wrap: bool) -> (Document, DocLayout) {
+    let mut d = Document::from_text(text);
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.align = Some(align);
+        p.indent_right = Some((468.0 - width).max(0.0));
+        p.word_wrap = Some(word_wrap);
+    })
+    .unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| c.size = Some(size)).unwrap();
+    let l = lay(&d);
+    (d, l)
+}
+
+fn thai_justification_layout(text: &str, align: Align, width: f32, size: f32) -> (Document, DocLayout) {
+    thai_justification_layout_with_wrap(text, align, width, size, false)
+}
+
+fn body_para_and_x(l: &DocLayout) -> Option<(&ParaLayout, f32)> {
+    l.pages.iter().flat_map(|p| &p.items).find_map(|it| match it {
+        Placed::Lines { para, story: StoryRef::Body, path, x, .. } if path.0 == [0] => Some((para.as_ref(), *x)),
+        _ => None,
+    })
+}
+
+fn added_after(para: &ParaLayout, line: &Line, k: usize) -> f32 {
+    line.cl_left(k).zip(line.cl_right(k)).map_or(0.0, |(a, b)| b - a) - para.clusters.get(k).map_or(0.0, |c| c.adv)
+}
+
 #[test]
 fn justified_lines_shrink_spaces_in_word_2013_mode() {
     let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);
@@ -4836,6 +4865,252 @@ fn space_shrinking_is_only_for_justified_text() {
     for align in [Align::Left, Align::Center, Align::Right] {
         assert_eq!(justified_lines(&text, 15, align).0, justified_lines(&text, 14, align).0, "{align:?}");
     }
+}
+
+#[test]
+fn thai_distributed_alignment_temporarily_uses_wrapped_line_justification() {
+    let text = "We tie the spend to a pipe and to the books, so it is in an ad hoc view of all of it. ".repeat(40);
+    let (justify_lines, justify_ends) = justified_lines(&text, 15, Align::Justify);
+    let (thai_lines, thai_ends) = justified_lines(&text, 15, Align::ThaiDistribute);
+    assert_eq!(thai_lines, justify_lines);
+    assert_eq!(thai_ends, justify_ends, "Thai Distributed currently follows Justify on wrapped lines");
+    assert!(thai_ends.last().is_some_and(|last| *last < 540.0 - 1.0), "the last line is not distributed: {thai_ends:?}");
+
+    let (regular_lines, regular_ends) = justified_lines(&text, 15, Align::Distribute);
+    assert!(regular_lines >= justify_lines, "regular Distributed keeps its non-shrinking line fit");
+    assert!(regular_ends.last().is_some_and(|last| (*last - 540.0).abs() < 0.05), "regular Distributed remains unchanged: {regular_ends:?}");
+}
+
+#[test]
+fn thai_justify_and_distributed_use_safe_capped_group_spacing() {
+    let text = "กขคงจฉชซญฎฏฐฑฒณดตถทนมยรลวศษสหฬอฮ".repeat(8);
+    for align in [Align::Justify, Align::ThaiDistribute] {
+        let (d, l) = thai_justification_layout(&text, align, 45.0, 32.0);
+        let (para, _) = body_para_and_x(&l).unwrap();
+        let line = para.lines.iter().find(|line| line.end == LineEnd::Wrap && line.c1.saturating_sub(line.c0) >= 2).unwrap();
+        let mut gaps = 0;
+        let mut hit_cap = false;
+        for k in line.c0..line.c1.saturating_sub(1) {
+            let (Some(a), Some(b)) = (para.clusters.get(k), para.clusters.get(k + 1)) else { continue };
+            let left = d.body[0].as_para().and_then(|p| p.text.get(a.start..a.end)).and_then(|s| s.chars().next_back());
+            let right = d.body[0].as_para().and_then(|p| p.text.get(b.start..b.end)).and_then(|s| s.chars().next());
+            if a.kind != ClKind::Text
+                || b.kind != ClKind::Text
+                || !left.is_some_and(crate::kinsoku::is_thai_text_char)
+                || !right.is_some_and(crate::kinsoku::is_thai_text_char)
+                || !crate::kinsoku::is_safe_line_break(&text, a.end)
+            {
+                continue;
+            }
+            let sa = para.styles.get(a.style as usize).map_or(12.0, |s| s.size);
+            let sb = para.styles.get(b.style as usize).map_or(12.0, |s| s.size);
+            let cap = 0.15 * sa.min(sb);
+            let added = added_after(para, line, k);
+            assert!(added >= -0.02 && added <= cap + 0.03, "{align:?} gap after {k}: {added}, cap {cap}");
+            if added > 0.02 {
+                gaps += 1;
+            }
+            hit_cap |= added >= cap - 0.1;
+        }
+        assert!(gaps > 0, "Thai {align:?} adds space between safe groups");
+        assert!(hit_cap, "the observed group gap reaches its 0.15em cap");
+        let end = line.xs.last().copied().unwrap_or(line.left);
+        assert!(line.right - end > 0.25, "all opportunities are capped and leave right-side slack: {end} vs {}", line.right);
+    }
+}
+
+#[test]
+fn thai_justify_uses_spaces_before_group_gaps_and_respects_size_caps() {
+    let word = "ภาษาไทย";
+    let text = format!("A {word} {word} Z");
+    let (mut d, _) = thai_justification_layout_with_wrap(&text, Align::Justify, 190.0, 11.0, true);
+    let z = text.rfind('Z').unwrap();
+    d.format_range(&Pos::body(0, z), &Pos::body(0, text.len()), &|c| c.size = Some(1000.0)).unwrap();
+    let l = lay(&d);
+    let (para, _) = body_para_and_x(&l).unwrap();
+    let line = para.lines.iter().find(|line| line.end == LineEnd::Wrap && line.c1 > line.c0).unwrap();
+    let mut space_adds = Vec::new();
+    let mut group_adds = Vec::new();
+    for k in line.c0..line.c1 {
+        let Some(c) = para.clusters.get(k) else { continue };
+        if c.kind == ClKind::Space && k > line.c0 && k + 1 < line.c1 {
+            let (Some(left), Some(right)) = (para.clusters.get(k - 1), para.clusters.get(k + 1)) else { continue };
+            if left.kind == ClKind::Text && right.kind == ClKind::Text {
+                let min_size =
+                    para.styles.get(left.style as usize).map_or(12.0, |s| s.size).min(para.styles.get(right.style as usize).map_or(12.0, |s| s.size));
+                let added = added_after(para, line, k);
+                assert!(added >= -0.02 && added <= 0.5 * min_size + 0.03, "space increase {added} exceeds 0.5em of {min_size}");
+                space_adds.push(added);
+            }
+        }
+        let Some(next) = para.clusters.get(k + 1) else { continue };
+        let left = d.body[0].as_para().and_then(|p| p.text.get(c.start..c.end)).and_then(|s| s.chars().next_back());
+        let right = d.body[0].as_para().and_then(|p| p.text.get(next.start..next.end)).and_then(|s| s.chars().next());
+        if c.kind == ClKind::Text
+            && next.kind == ClKind::Text
+            && left.is_some_and(crate::kinsoku::is_thai_text_char)
+            && right.is_some_and(crate::kinsoku::is_thai_text_char)
+            && crate::kinsoku::is_safe_line_break(&text, c.end)
+        {
+            let min_size =
+                para.styles.get(c.style as usize).map_or(12.0, |s| s.size).min(para.styles.get(next.style as usize).map_or(12.0, |s| s.size));
+            let added = added_after(para, line, k);
+            assert!(added >= -0.02 && added <= 0.15 * min_size + 0.03, "Thai gap increase {added} exceeds 0.15em of {min_size}");
+            group_adds.push(added);
+        }
+    }
+    assert!(space_adds.iter().any(|added| (*added - 5.5).abs() < 0.04), "a space reaches its 0.5em cap: {space_adds:?}");
+    assert!(
+        group_adds.iter().any(|added| (*added - 1.65).abs() < 0.04),
+        "a Thai group gap uses the smaller 11pt size and reaches 0.15em: {group_adds:?}"
+    );
+    assert!(space_adds.iter().any(|added| *added > 0.02), "internal spaces receive the first share");
+    assert!(group_adds.iter().any(|added| *added > 0.02), "remaining room reaches safe Thai group gaps");
+}
+
+#[test]
+fn thai_justification_never_adds_spacing_inside_thai_clusters_or_format_boundaries() {
+    let motif = "\u{0E40}\u{0E01}\u{0E48}\u{0E01}\u{0E33}";
+    let text = motif.repeat(24);
+    let (mut d, _) = thai_justification_layout(&text, Align::ThaiDistribute, 120.0, 24.0);
+    // Force font and formatting seams inside a preposed-vowel/consonant pair, before a tone mark,
+    // and before sara am. The safety check still uses the full paragraph text across those runs.
+    d.format_range(&Pos::body(0, 3), &Pos::body(0, 6), &|c| {
+        c.font = Some("Source Serif 4".into());
+        c.size = Some(8.0);
+    })
+    .unwrap();
+    d.format_range(&Pos::body(0, 6), &Pos::body(0, 9), &|c| {
+        c.bold = Some(true);
+        c.font = Some("Inter".into());
+        c.size = Some(7.0);
+    })
+    .unwrap();
+    d.format_range(&Pos::body(0, 12), &Pos::body(0, 15), &|c| {
+        c.italic = Some(true);
+        c.font = Some("Source Serif 4".into());
+        c.size = Some(6.0);
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (para, _) = body_para_and_x(&l).unwrap();
+    assert!(para.lines.iter().any(|line| line.end == LineEnd::Wrap));
+    let unsafe_offsets: Vec<usize> = (0..text.len() / motif.len())
+        .flat_map(|i| {
+            let base = i * motif.len();
+            [base + 3, base + 6, base + 12]
+        })
+        .collect();
+    let mut checked = 0;
+    for line in &para.lines {
+        for k in line.c0..line.c1.saturating_sub(1) {
+            let (Some(left), Some(right)) = (para.clusters.get(k), para.clusters.get(k + 1)) else { continue };
+            if left.end != right.start || !unsafe_offsets.contains(&left.end) {
+                continue;
+            }
+            assert!(!crate::kinsoku::is_safe_line_break(&text, left.end), "fixture offset {} must be unsafe", left.end);
+            assert!(added_after(para, line, k).abs() < 0.03, "no added gap inside the Thai unit at byte {}", left.end);
+            checked += 1;
+        }
+    }
+    assert!(checked > 0, "the layout keeps at least one forced formatting seam for the unsafe boundaries");
+}
+
+#[test]
+fn thai_justification_does_not_expand_tabs_objects_or_trailing_spaces() {
+    let left = "\u{0E01}".repeat(20);
+    let right = "\u{0E02}".repeat(100);
+    let text = format!("{left}\t{right}  ");
+    let mut d = Document::from_text(&text);
+    d.insert_object(&Pos::body(0, 30), rect_shape(18.0, 18.0, wordcraft_doc::para::Float::default()), &Default::default()).unwrap();
+    let source = d.body[0].as_para().unwrap().text.clone();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.align = Some(Align::ThaiDistribute);
+        p.indent_right = Some(468.0 - 130.0);
+        p.word_wrap = Some(false);
+    })
+    .unwrap();
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, source.len()), &|c| c.size = Some(20.0)).unwrap();
+    let l = lay(&d);
+    let (para, _) = body_para_and_x(&l).unwrap();
+    assert!(para.lines.iter().any(|line| line.end == LineEnd::Wrap));
+    let mut saw_tab = false;
+    let mut saw_object = false;
+    for line in &para.lines {
+        for k in line.c0..line.c1 {
+            let Some(c) = para.clusters.get(k) else { continue };
+            if matches!(c.kind, ClKind::Tab | ClKind::Object(_)) {
+                assert!(added_after(para, line, k).abs() < 0.03, "special cluster {:?} is not a spacing opportunity", c.kind);
+                saw_tab |= c.kind == ClKind::Tab;
+                saw_object |= matches!(c.kind, ClKind::Object(_));
+            }
+            if c.kind == ClKind::Space && k + 1 >= line.c1 {
+                assert!(added_after(para, line, k).abs() < 0.03, "trailing spaces are not expanded");
+            }
+            if let Some(next) = para.clusters.get(k + 1)
+                && (matches!(c.kind, ClKind::Object(_)) || matches!(next.kind, ClKind::Object(_)))
+            {
+                assert!(added_after(para, line, k).abs() < 0.03, "no Thai gap is inserted through an inline object");
+            }
+        }
+    }
+    assert!(saw_tab && saw_object, "the fixture lays out both a tab and an inline object");
+    assert_eq!(d.body[0].as_para().unwrap().text, source, "layout does not alter source text");
+}
+
+#[test]
+fn thai_distributed_does_not_expand_last_or_explicit_break_lines() {
+    let body = "ภาษาไทยภาษาไทยภาษาไทยภาษาไทย";
+    let mut d = Document::from_text(&format!("{body}{body}"));
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+        p.align = Some(Align::ThaiDistribute);
+        p.indent_right = Some(468.0 - 120.0);
+        p.word_wrap = Some(false);
+    })
+    .unwrap();
+    let l = lay(&d);
+    let (para, _) = body_para_and_x(&l).unwrap();
+    let last = para.lines.last().unwrap();
+    assert_ne!(last.end, LineEnd::Wrap);
+    assert!(last.xs.last().copied().unwrap_or(0.0) < last.right - 1.0, "final Thai Distributed line stays short");
+
+    for break_char in [wordcraft_doc::para::LINE_BREAK, wordcraft_doc::para::PAGE_BREAK, wordcraft_doc::para::COLUMN_BREAK] {
+        let mut explicit = Document::from_text(body);
+        explicit.para_mut(StoryRef::Body, &Path::top(0)).unwrap().insert_text(body.len(), &break_char.to_string(), &Default::default()).unwrap();
+        explicit
+            .format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| {
+                p.align = Some(Align::ThaiDistribute);
+                p.indent_right = Some(468.0 - 420.0);
+                p.word_wrap = Some(false);
+            })
+            .unwrap();
+        let layout = lay(&explicit);
+        let (para, _) = body_para_and_x(&layout).unwrap();
+        let line = para.lines.iter().find(|line| matches!(line.end, LineEnd::LineBreak | LineEnd::PageBreak | LineEnd::ColumnBreak)).unwrap();
+        assert!(line.xs.last().copied().unwrap_or(0.0) < line.right - 1.0, "explicit {break_char:?} line remains unexpanded");
+    }
+}
+
+#[test]
+fn thai_justification_positions_match_caret_and_selection_geometry() {
+    let text = "ภาษาไทยภาษาไทยภาษาไทยภาษาไทยภาษาไทยภาษาไทยภาษาไทยภาษาไทยภาษาไทยภาษาไทย";
+    let (d, l) = thai_justification_layout(text, Align::ThaiDistribute, 45.0, 32.0);
+    let (para, x) = body_para_and_x(&l).unwrap();
+    let (li, line) = para.lines.iter().enumerate().find(|(_, line)| line.end == LineEnd::Wrap && line.c1 > line.c0).unwrap();
+    let k = (line.c0..line.c1.saturating_sub(1))
+        .find(|k| para.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Text) && added_after(para, line, *k) > 0.02)
+        .unwrap();
+    let cluster = &para.clusters[k];
+    let left = line.cl_left(k).unwrap();
+    let right = line.cl_right(k).unwrap();
+    let caret = l.caret(&Pos::body(0, cluster.start)).unwrap();
+    assert!((caret.x - (x + left)).abs() < 0.05, "caret and adjusted cluster origin agree");
+    let selected = l.selection_rects(&d, &Pos::body(0, cluster.start), &Pos::body(0, cluster.end), 0);
+    assert!(
+        selected.iter().any(|(_, rect)| (rect.x - (x + left)).abs() < 0.1 && (rect.w - (right - left)).abs() < 0.1),
+        "selection uses the same adjusted cluster box: {selected:?}"
+    );
+    assert!(li < para.lines.len());
 }
 
 #[test]

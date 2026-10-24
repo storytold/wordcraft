@@ -17,6 +17,7 @@ wordcraft-metafile = { workspace = true }
 kurbo = { workspace = true }
 unicode-bidi = { workspace = true }
 unicode-linebreak = { workspace = true }
+icu_segmenter = { workspace = true }
 unicode-segmentation = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

@@ -24,6 +24,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "right" => Align::Right,
                 "justify" | "both" => Align::Justify,
                 "distribute" => Align::Distribute,
+                "thaiDistribute" => Align::ThaiDistribute,
                 // Logical edges, whatever the paragraph's direction.
                 "start" => return fmt(s, &|p| p.align = Some(Align::Left)),
                 "end" => return fmt(s, &|p| p.align = Some(Align::Right)),
@@ -32,7 +33,7 @@ pub fn specs() -> Vec<CommandSpec> {
             // An explicit value sets it (no toggling back to the start edge like the buttons).
             set_align(s, a)
         })
-        .params(r#"{"value": "left|center|right|justify|distribute (as seen on the page) | start|end (reading direction)"}"#),
+        .params(r#"{"value": "left|center|right|justify|distribute|thaiDistribute (as seen on the page) | start|end (reading direction)"}"#),
         CommandSpec::new("para.rtl", "Right-to-Left Text Direction", "Home › Paragraph", |s, v| direction(s, v, true))
             .params(r#"{"value"?: bool (false = left to right)}"#),
         CommandSpec::new("para.ltr", "Left-to-Right Text Direction", "Home › Paragraph", |s, v| direction(s, v, false))
@@ -196,7 +197,7 @@ pub fn specs() -> Vec<CommandSpec> {
             fmt(s, &|p| p.outline_level = l)
         }),
         CommandSpec::new("para.set", "Set Paragraph Formatting", "Home › Paragraph › Paragraph", set_props).params(
-            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
+            r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute|thaiDistribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
         ),
         CommandSpec::new("para.dialog", "Paragraph Settings", "Home › Paragraph", |s, _| {
             s.push_ui_request(json!({"open": "paragraph"}));
@@ -277,6 +278,9 @@ pub fn fmt(s: &mut Session, f: &dyn Fn(&mut ParaProps)) -> CmdResult {
 /// `a` is the alignment as seen on the page (the buttons): in a right-to-left paragraph
 /// Align Left is its end edge.
 fn align(s: &mut Session, a: Align) -> CmdResult {
+    if a == Align::Distribute {
+        return distribute(s);
+    }
     let r = cur(s);
     // Clicking the active alignment again returns to the start edge (Word).
     let logical = a.visual(r.bidi);
@@ -286,6 +290,35 @@ fn align(s: &mut Session, a: Align) -> CmdResult {
         let rtl = p.bidi.unwrap_or(focus_rtl);
         p.align = Some(target.map_or(Align::Left, |a| a.visual(rtl)));
     })
+}
+
+/// The Distributed button selects Thai Distributed for paragraphs with Thai letters and regular
+/// Distributed for every other paragraph. The command decides once, then stores the chosen model
+/// value so later edits do not change the paragraph's alignment mode.
+fn distribute(s: &mut Session) -> CmdResult {
+    let story = s.sel.focus.story;
+    let targets: Vec<(wordcraft_doc::Path, Align)> = super::selected_paths(s)
+        .into_iter()
+        .filter_map(|path| {
+            let para = s.doc.para(story, &path)?;
+            let resolved = s.doc.styles.resolve_para(&para.props);
+            let target = if paragraph_has_thai_letter(&para.text) { Align::ThaiDistribute } else { Align::Distribute };
+            Some((path, target.visual(resolved.bidi)))
+        })
+        .collect();
+    let all_active = !targets.is_empty()
+        && targets.iter().all(|(path, target)| s.doc.para(story, path).is_some_and(|p| s.doc.styles.resolve_para(&p.props).align == *target));
+    for (path, target) in targets {
+        let para = s.doc.para_mut(story, &path)?;
+        // Left is the paragraph's logical start edge, including in right-to-left paragraphs.
+        para.props.align = Some(if all_active { Align::Left } else { target });
+        para.touch();
+    }
+    sel_result(s)
+}
+
+fn paragraph_has_thai_letter(text: &str) -> bool {
+    text.chars().any(|c| matches!(c, '\u{0E01}'..='\u{0E2E}' | '\u{0E30}' | '\u{0E32}'..='\u{0E33}' | '\u{0E40}'..='\u{0E45}'))
 }
 
 /// Set the alignment as seen on the page in every selected paragraph, in its own direction.
@@ -362,6 +395,7 @@ fn set_props(s: &mut Session, v: &Value) -> CmdResult {
         Some("right") => Some(Align::Right),
         Some("justify" | "both") => Some(Align::Justify),
         Some("distribute") => Some(Align::Distribute),
+        Some("thaiDistribute") => Some(Align::ThaiDistribute),
         Some(x) => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
     };
     let indent = |k: &str| p::f32(&page, k).map(|x| x.clamp(-1584.0, 1584.0));

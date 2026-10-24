@@ -481,7 +481,7 @@ impl Writer {
         match p.align {
             Some(Align::Center) => out.push_str("\\qc"),
             Some(Align::Right) => out.push_str("\\qr"),
-            Some(Align::Justify) => out.push_str("\\qj"),
+            Some(Align::Justify | Align::ThaiDistribute) => out.push_str("\\qj"),
             Some(Align::Distribute) => out.push_str("\\qd"),
             _ => out.push_str("\\ql"),
         }

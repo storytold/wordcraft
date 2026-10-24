@@ -237,17 +237,68 @@ fn typing_persian_keeps_logical_order() {
 fn explicit_alignment_sets_without_toggling() {
     for rtl in [false, true] {
         let mut s = session("متن", rtl);
-        for v in ["center", "center", "right", "right", "left", "left"] {
+        for v in ["center", "center", "right", "right", "left", "left", "distribute", "distribute", "thaiDistribute", "thaiDistribute"] {
             run(&mut s, "para.align", json!({"value": v}));
             let shown = props(&s, 0).align.unwrap_or_default().visual(rtl);
             let want = match v {
                 "center" => Align::Center,
                 "right" => Align::Right,
+                "distribute" => Align::Distribute,
+                "thaiDistribute" => Align::ThaiDistribute,
                 _ => Align::Left,
             };
             assert_eq!(shown, want, "{v} twice stays {v} (rtl={rtl})");
         }
     }
+}
+
+#[test]
+fn distributed_command_selects_per_paragraph_and_toggles_the_whole_selection() {
+    let mut s = session("ไทย\nEnglish\n๑ๆฯ", false);
+    run(&mut s, "select.text", json!({"text": "ไทย"}));
+    run(&mut s, "para.align", json!({"value": "thaiDistribute"}));
+    run(&mut s, "select.all", json!({}));
+    let selection = s.sel.clone();
+
+    run(&mut s, "para.distribute", json!({}));
+    assert_eq!(props(&s, 0).align, Some(Align::ThaiDistribute));
+    assert_eq!(props(&s, 1).align, Some(Align::Distribute));
+    assert_eq!(props(&s, 2).align, Some(Align::Distribute), "Thai digits and punctuation alone do not select Thai mode");
+    assert_eq!(s.sel, selection, "alignment preserves the selection");
+
+    run(&mut s, "para.distribute", json!({}));
+    assert!([0, 1, 2].iter().all(|i| props(&s, *i).align == Some(Align::Left)), "all active modes toggle to logical start");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(props(&s, 0).align, Some(Align::ThaiDistribute));
+    assert_eq!(props(&s, 1).align, Some(Align::Distribute));
+    run(&mut s, "edit.redo", json!({}));
+    assert!([0, 1, 2].iter().all(|i| props(&s, *i).align == Some(Align::Left)));
+}
+
+#[test]
+fn later_text_edits_do_not_reinfer_an_alignment_mode() {
+    let mut s = session("ไทย", false);
+    run(&mut s, "para.align", json!({"value": "thaiDistribute"}));
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "text.insert", json!({"text": "English"}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "English");
+    assert_eq!(props(&s, 0).align, Some(Align::ThaiDistribute));
+}
+
+#[test]
+fn distributed_command_keeps_rtl_start_alignment_semantics() {
+    let mut s = session("ไทย\nEnglish", true);
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.distribute", json!({}));
+    assert_eq!(props(&s, 0).align, Some(Align::ThaiDistribute));
+    assert_eq!(props(&s, 1).align, Some(Align::Distribute));
+    run(&mut s, "para.distribute", json!({}));
+    assert_eq!(props(&s, 0).align, Some(Align::Left));
+    assert_eq!(props(&s, 1).align, Some(Align::Left));
+    run(&mut s, "caret.docStart", json!({}));
+    let x = caret_x(&mut s);
+    assert!(props(&s, 0).bidi == Some(true) && props(&s, 0).align == Some(Align::Left));
+    assert!((500.0..540.0).contains(&x), "Thai's LTR glyph begins just inside the RTL start edge: {x}");
 }
 
 #[test]

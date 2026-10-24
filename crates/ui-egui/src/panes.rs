@@ -860,6 +860,7 @@ fn describe(prop: &str, v: &Value) -> String {
             "right" => "Right",
             "justify" => "Justified",
             "distribute" => "Distributed",
+            "thaiDistribute" => "Thai Distributed",
             _ => "Left",
         })
         .to_string(),
@@ -909,13 +910,19 @@ fn camel_words(s: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::comment_stamp;
+    use super::{comment_stamp, describe};
+    use serde_json::json;
 
     #[test]
     fn comment_stamp_keeps_date_and_time() {
         assert_eq!(comment_stamp("2026-10-12T04:44:31Z"), "2026-10-12 04:44");
         assert_eq!(comment_stamp("2026-10-12"), "2026-10-12");
         assert_eq!(comment_stamp(""), "");
+    }
+
+    #[test]
+    fn inspector_names_thai_distributed_alignment() {
+        assert_eq!(describe("align", &json!("thaiDistribute")), "Alignment: Thai Distributed");
     }
 
     /// #1902: Clipboard Delete returns focus to the document like paste does.
