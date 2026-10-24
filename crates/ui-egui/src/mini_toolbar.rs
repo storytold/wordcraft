@@ -278,7 +278,8 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
         sep(ui, t);
 
         let hl = app.canvas.last_highlight.clone();
-        widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
+        let hl_sw = widgets::highlight_swatch(&hl);
+        widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, hl_sw, |ui, app| {
             highlight_menu(ui, app);
         });
         let fc = app.canvas.last_font_color.clone();

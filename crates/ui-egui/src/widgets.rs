@@ -215,12 +215,18 @@ pub(crate) fn run_from_ribbon(app: &mut WordApp, id: &str, params: Value) {
 
 /// A large ribbon button: 32 px icon over a (possibly two-line) label.
 pub fn big(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool) -> Response {
-    big_button(ui, app, icon, label, id, params, menu, false)
+    big_button(ui, app, icon, label, id, params, menu, false, None)
 }
 
 /// A large ribbon button for a mode that stays on (`checked` draws it pressed), run without params.
 pub fn big_toggle(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool) -> Response {
-    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, checked)
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, checked, None)
+}
+
+/// [`big_toggle`] for a colour tool (Draw › Highlighter): the icon's colour bar is `swatch`, the
+/// colour the tool applies, not the accent.
+pub fn big_toggle_swatch(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, checked: bool, swatch: Color32) -> Response {
+    big_button(ui, app, icon, label, id, Value::Object(Default::default()), false, checked, Some(swatch))
 }
 
 /// Size of the drop-down marker drawn after a label or beside a split button (#659: one marker,
@@ -242,7 +248,17 @@ pub fn label_line(ui: &Ui, cx: f32, y: f32, text: &str, font: egui::FontId, colo
 }
 
 #[allow(clippy::too_many_arguments)]
-fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str, params: Value, menu: bool, checked: bool) -> Response {
+fn big_button(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: &str,
+    id: &str,
+    params: Value,
+    menu: bool,
+    checked: bool,
+    swatch: Option<Color32>,
+) -> Response {
     let label = tl!(label);
     let t = Tokens::get(ui.ctx());
     let galley_w =
@@ -253,8 +269,8 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     let ic = Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
+    let (c, a) = if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
     let mut y = r.min.y + BIG_LABEL_Y;
     let lines: Vec<&str> = label.split('\n').collect();
     for (i, l) in lines.iter().enumerate() {
@@ -269,6 +285,15 @@ fn big_button(ui: &mut Ui, app: &mut WordApp, icon: &str, label: &str, id: &str,
     resp
 }
 
+/// The highlight split's colour bar: the highlight `last` (an OOXML highlight name) applies, if
+/// it is one. "No Color" has no bar at all (a transparent swatch), not the accent.
+pub fn highlight_swatch(last: &str) -> Option<Color32> {
+    if last == "none" {
+        return Some(Color32::TRANSPARENT);
+    }
+    wordcraft_doc::props::Highlight::ALL.iter().find(|h| h.ooxml() == last).and_then(|h| h.rgb()).map(crate::theme::c32)
+}
+
 /// A small button: 16 px icon with an optional label; `checked` draws the toggled state.
 pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, tip: &str, id: &str, params: Value, checked: bool) -> Response {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
@@ -280,7 +305,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     keytip_badge(ui, r, id, tip);
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
-    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0));
+    let ic = Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0));
     let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
     icons::paint(ui.painter(), ic, icon, c, a);
     if let Some(l) = label {
@@ -315,14 +340,12 @@ pub fn split(
     let on = enabled(app, id);
     bg(ui, r, &resp, checked, &t);
     bg(ui, ar, &aresp, false, &t);
-    let ic = Rect::from_center_size(r.center(), vec2(17.0, 17.0));
-    let (c, a) = if on { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
-    icons::paint(ui.painter(), ic, icon, c, a);
-    if let Some(sw) = swatch {
-        let sw = if on { sw } else { t.text_disabled };
-        ui.painter().rect_filled(Rect::from_min_max(pos2(r.min.x + 4.0, r.max.y - 5.0), pos2(r.max.x - 4.0, r.max.y - 2.0)), 0.0, sw);
-    }
-    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, a);
+    let ic = Rect::from_center_size(r.center(), vec2(16.0, 16.0));
+    // Colour commands (font colour, highlight, shading) draw their colour bar in the accent, so the
+    // swatch is the colour that will be applied.
+    let (c, a) = if on { (t.icon, swatch.unwrap_or(t.accent)) } else { (t.text_disabled, t.text_disabled) };
+    icons::paint_state(ui.painter(), ic, icon, c, a, !on);
+    icons::paint(ui.painter(), Rect::from_center_size(ar.center(), vec2(DROPDOWN, DROPDOWN)), "dropdown", c, c);
     let resp = tooltip(app, resp, tip, id);
     command_menu(&resp, app, id);
     if resp.clicked() && on {
@@ -334,6 +357,7 @@ pub fn split(
     // The arrow opens the choices beside the button: it says whose, so it is not just "button"
     // (#3172).
     aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &arrow_title));
+    // A disabled split's arrow doesn't open its menu either.
     if !on {
         return;
     }
@@ -359,13 +383,30 @@ pub fn menu_button(
     id: &str,
     menu: impl FnOnce(&mut Ui, &mut WordApp),
 ) {
+    menu_button_swatch(ui, app, icon, label, tip, big_btn, id, None, menu);
+}
+
+/// [`menu_button`] for a colour menu (Shape Fill): the icon's colour bar is `swatch`, the current
+/// colour (transparent = none, no bar), not the accent.
+#[allow(clippy::too_many_arguments)]
+pub fn menu_button_swatch(
+    ui: &mut Ui,
+    app: &mut WordApp,
+    icon: &str,
+    label: Option<&str>,
+    tip: &str,
+    big_btn: bool,
+    id: &str,
+    swatch: Option<Color32>,
+    menu: impl FnOnce(&mut Ui, &mut WordApp),
+) {
     let (label, tip) = (label.map(|l| tl!(l)), tl!(tip));
     let label = label.filter(|_| big_btn || !crate::ribbon_fit::compact(ui.ctx()));
     let t = Tokens::get(ui.ctx());
     // `id` names the command the menu is about (Header for the Header menu…); while it is
     // disabled the button greys out and doesn't open, like the other ribbon buttons. "" = always on.
     let on = menu_enabled(app, id);
-    let (c, a, text) = if on { (t.icon, t.accent, t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
+    let (c, a, text) = if on { (t.icon, swatch.unwrap_or(t.accent), t.text) } else { (t.text_disabled, t.text_disabled, t.text_disabled) };
     let resp = if big_btn {
         let galley_w = label
             .unwrap_or("")
@@ -376,7 +417,7 @@ pub fn menu_button(
         let (r, resp) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a);
+        icons::paint_state(ui.painter(), Rect::from_center_size(pos2(r.center().x, r.min.y + BIG_ICON_Y), vec2(32.0, 32.0)), icon, c, a, !on);
         let lines: Vec<&str> = label.unwrap_or("").split('\n').collect();
         let mut y = r.min.y + BIG_LABEL_Y;
         for (i, l) in lines.iter().enumerate() {
@@ -389,7 +430,7 @@ pub fn menu_button(
         let (r, resp) = ui.allocate_exact_size(vec2(24.0 + text_w + 10.0, 22.0), Sense::click());
         keytip_badge(ui, r, "menu", tip);
         bg(ui, r, &resp, false, &t);
-        icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(17.0, 17.0)), icon, c, a);
+        icons::paint_state(ui.painter(), Rect::from_center_size(pos2(r.min.x + 12.0, r.center().y), vec2(16.0, 16.0)), icon, c, a, !on);
         if let Some(l) = label {
             ui.painter().text(pos2(r.min.x + 24.0, r.center().y), Align2::LEFT_CENTER, l, regular(11.5), text);
         }
@@ -575,7 +616,8 @@ fn group_icon(title: &str) -> &'static str {
 
 /// The icon a command's button shows outside its own ribbon group (custom groups, the Quick
 /// Access Toolbar): the one its ribbon button uses, which is usually named after the id's last
-/// part. Names the icon set doesn't have draw a lettered tile ([`icons::paint`]).
+/// part. Names the icon set doesn't have draw the fallback: a frame with the name's first letter
+/// in the accent ([`icons::paint`]).
 pub fn command_icon(id: &str) -> &str {
     const ICONS: &[(&str, &str)] = &[
         ("arrange.wrap", "wrapText"),
@@ -1302,6 +1344,46 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1282: the highlight split (ribbon and mini toolbar) shows the highlight it applies.
+    #[test]
+    fn highlight_swatch_is_the_colour_applied() {
+        assert_eq!(highlight_swatch("yellow"), Some(Color32::from_rgb(255, 255, 0)));
+        assert_ne!(highlight_swatch("green"), highlight_swatch("yellow"));
+        assert_eq!(highlight_swatch("no such colour"), None);
+        assert_eq!(highlight_swatch("none"), Some(Color32::TRANSPARENT));
+    }
+
+    /// #1282: the arrow of a disabled split button doesn't open its menu.
+    #[test]
+    fn disabled_split_arrow_opens_no_menu() {
+        for (id, opens) in [("nope.noSuchCommand", false), ("ui.noop", true)] {
+            let app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            assert_eq!(enabled(&app, id), opens);
+            let shown = std::rc::Rc::new(std::cell::Cell::new(false));
+            let origin = std::rc::Rc::new(std::cell::Cell::new(egui::Pos2::ZERO));
+            let (seen, at) = (shown.clone(), origin.clone());
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(240.0, 240.0)).build_ui_state(
+                move |ui, app: &mut WordApp| {
+                    ui.spacing_mut().item_spacing = egui::Vec2::ZERO;
+                    at.set(ui.cursor().min);
+                    let seen = seen.clone();
+                    ui.horizontal(|ui| split(ui, app, "highlight", "Split", id, Value::Null, false, None, move |_, _| seen.set(true)));
+                },
+                app,
+            );
+            h.run_steps(2);
+            // The arrow sits right of the 24 px button.
+            let arrow = origin.get() + vec2(29.5, 11.0);
+            h.hover_at(arrow);
+            h.run_steps(1);
+            h.drag_at(arrow);
+            h.run_steps(1);
+            h.drop_at(arrow);
+            h.run_steps(3);
+            assert_eq!(shown.get(), opens, "{id}: menu shown = {}", shown.get());
+        }
+    }
 
     /// #653: a large button's label line is no taller than `LABEL_LINE_H` in the interface font, so
     /// two lines (checked at compile time) end above the group title row.
