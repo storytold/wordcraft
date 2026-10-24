@@ -457,9 +457,9 @@ pub fn install_fonts_language(ctx: &egui::Context, prefer_hans: bool, prefer_kor
 }
 
 /// [`install_fonts_for`], also adding an installed CJK font after the embedded faces when
-/// `system_cjk` is set and the embedded faces leave CJK characters of the interface text without
-/// a glyph (#241, #486). Reading that font is a large file read, so callers ask for it only when
-/// CJK text is on screen: a CJK interface language, or the language names in Options.
+/// `system_cjk` is set (#241, #486). Reading that font is a large file read, so callers ask for
+/// it only when CJK text is on screen: a CJK interface language, language names in Options, or
+/// file names in Recent / Recover / the caption.
 pub fn install_fonts_with(ctx: &egui::Context, prefer_hans: bool, system_cjk: bool) {
     install_fonts_extra(ctx, prefer_hans, system_cjk, &[]);
 }
@@ -586,10 +586,11 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
     fonts
 }
 
-/// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once:
-/// `None` when the embedded faces already cover the interface text
-/// ([`cjk_font_text`](crate::i18n::Lang::cjk_font_text)). The font is picked for the catalogs'
-/// missing characters, or for the language names when only those are missing.
+/// The installed CJK interface font for a Chinese (`hans`) or other interface, chosen once.
+/// Picked for the catalog / language-name characters the embedded faces lack (#241, #486); when
+/// those are already covered, still loaded as a last-resort face so on-screen CJK that is not
+/// interface text (Recent / Recover paths, a Traditional Chinese file name next to a Simplified
+/// Chinese UI face, …) is not drawn as boxes or `?`.
 #[cfg(not(target_arch = "wasm32"))]
 fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts::SystemUiFont> {
     static ZH: std::sync::OnceLock<Option<wordcraft_fonts::SystemUiFont>> = std::sync::OnceLock::new();
@@ -608,11 +609,11 @@ fn system_cjk_font(hans: bool, korean: bool) -> Option<&'static wordcraft_fonts:
         let mut needed = wordcraft_fonts::ui_uncovered_cjk(&catalogs, &embedded);
         if needed.is_empty() {
             needed = wordcraft_fonts::ui_uncovered_cjk(&[&names], &embedded);
-            if needed.is_empty() {
-                return None;
-            }
         }
-        log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
+        if !needed.is_empty() {
+            log::debug!("interface: {} CJK characters lack an embedded glyph", needed.len());
+        }
+        // Empty `needed`: probe for a typical face of the language (see system_cjk_ui_font_for).
         wordcraft_fonts::system_cjk_ui_font_for(hans, korean, &needed)
     })
     .as_ref()
@@ -914,6 +915,30 @@ mod tests {
             let r = contrast(t.markup_edge, t.markup_area);
             assert!(r >= 1.1, "dark={}: the markup area edge is invisible ({r:.2}:1)", t.dark);
         }
+    }
+
+    /// When `system_cjk` is on, an installed CJK face is attached even if the embedded faces
+    /// already cover the interface catalogs: Recent paths in Traditional Chinese were boxes when
+    /// Noto Sans CJK SC covered the Simplified catalogs and nothing asked for YaHei / DengXian.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn system_cjk_flag_adds_an_installed_face_when_one_exists() {
+        if wordcraft_fonts::system_cjk_ui_font_for(true, false, &[]).is_none() {
+            eprintln!("skipped: no installed Chinese UI font on this machine");
+            return;
+        }
+        let defs = super::font_definitions_language(true, false, true);
+        assert!(
+            defs.font_data.keys().any(|k| k.starts_with("system ")),
+            "system_cjk=true must add a system face; keys={:?}",
+            defs.font_data.keys().collect::<Vec<_>>()
+        );
+        // Catalog coverage must not skip the system face (the old early-return).
+        let defs_en = super::font_definitions_language(false, false, true);
+        assert!(
+            defs_en.font_data.keys().any(|k| k.starts_with("system ")),
+            "English UI with system_cjk still needs a system face for Recent CJK paths"
+        );
     }
 
     /// #565: the composition of an input method (Bangla through ibus) drew as boxes because only the

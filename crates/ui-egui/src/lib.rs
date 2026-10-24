@@ -2041,6 +2041,21 @@ impl WordApp {
         }
     }
 
+    /// Han ideographs are about to be drawn outside a Chinese interface (Recent paths, the
+    /// caption, Recover names): the Chinese system face should lead the CJK fallback order.
+    fn screen_has_han(&self) -> bool {
+        let is_han = |c: char| {
+            matches!(c,
+                '\u{3400}'..='\u{9FFF}' // extension A + unified
+                | '\u{F900}'..='\u{FAFF}' // compatibility
+                | '\u{20000}'..='\u{3FFFF}' // extension B and later
+            )
+        };
+        self.ui.recent.iter().any(|p| p.chars().any(is_han))
+            || self.title_stem().chars().any(is_han)
+            || self.session.recovery_documents().iter().any(|d| d.name.chars().any(is_han))
+    }
+
     /// Recent documents in Backstage (and the Start screen) show file names and paths with the
     /// interface faces. Borrow document fallback faces for characters in non-Latin scripts (#2067),
     /// as the caption and comments do.
@@ -2297,10 +2312,14 @@ impl WordApp {
     /// face has changed since the last install.
     fn install_ui_fonts(&mut self, ctx: &egui::Context, lang: i18n::Lang) {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
-        if !self.styled || lang.prefers_hans() != self.fonts_hans || lang.prefers_korean() != self.fonts_korean || system_cjk != self.fonts_system_cjk
+        // An English interface with Chinese Recent paths still wants the Chinese system face
+        // before the Japanese one: the embedded face is Noto Sans CJK SC, and Traditional
+        // file names (聯豐亨…) need DengXian / YaHei after it.
+        let prefer_hans = lang.prefers_hans() || (self.want_system_cjk && !lang.prefers_korean() && self.screen_has_han());
+        if !self.styled || prefer_hans != self.fonts_hans || lang.prefers_korean() != self.fonts_korean || system_cjk != self.fonts_system_cjk
         {
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, &self.canvas.ime_faces);
-            self.fonts_hans = lang.prefers_hans();
+            theme::install_fonts_language_extra(ctx, prefer_hans, lang.prefers_korean(), system_cjk, &self.canvas.ime_faces);
+            self.fonts_hans = prefer_hans;
             self.fonts_korean = lang.prefers_korean();
             self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
@@ -3299,6 +3318,31 @@ mod tests {
         let n = arabic.canvas.ime_faces.len();
         frame(&mut arabic);
         assert_eq!(arabic.canvas.ime_faces.len(), n, "the face is added once");
+    }
+
+    /// #2067: a Chinese (or other CJK) path in Recent must load the CJK UI font. Without it the
+    /// Start screen drew names as `?` / boxes while Latin paths beside them looked fine — the
+    /// path string in `ui.json` was already correct. An English interface still picks the Chinese
+    /// face order so Traditional names are not left to a Japanese-only fallback.
+    #[test]
+    fn recent_cjk_paths_load_the_cjk_ui_font() {
+        let ctx = egui::Context::default();
+        let frame = |app: &mut WordApp| {
+            ctx.run_ui(egui::RawInput::default(), |ui| app.logic(ui.ctx())).drop_without_applying_deltas();
+        };
+        let mut latin = app();
+        latin.ui.recent.push(r"C:\proj\LFH\Register_Alicloud_SMS_Service_221116.docx".into());
+        frame(&mut latin);
+        assert!(!latin.want_system_cjk, "a Latin recent path needs no CJK font");
+        assert!(!latin.fonts_hans, "Latin recent leaves the English CJK order");
+
+        let mut cjk = app();
+        cjk.ui.recent.push(r"C:\proj\LFH\iRenewal\聯豐亨線上保險服務系統(iService)版本迭代文檔20260824.docx".into());
+        frame(&mut cjk);
+        assert!(cjk.want_system_cjk, "a CJK recent path loads the CJK UI font");
+        assert!(cjk.fonts_system_cjk, "the CJK UI font is installed");
+        assert!(cjk.fonts_hans, "Han in Recent uses the Chinese face order on an English UI");
+        assert!(cjk.canvas.ime_faces.is_empty(), "CJK collections are not copied into the fallback list");
     }
 
     /// #3248: the Find box and the Navigation pane's Results list draw the typed query and
