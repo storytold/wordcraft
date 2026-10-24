@@ -279,7 +279,7 @@ pub enum Placed {
         effects: wordcraft_doc::effects::ShapeEffects,
         spin: Spin,
         /// Arrowheads and text warp (see [`wordcraft_doc::connector::ShapeExtra`]).
-        extra: wordcraft_doc::connector::ShapeExtra,
+        extra: Box<wordcraft_doc::connector::ShapeExtra>,
         /// The floating object it draws (a Drawing Canvas's members: the canvas's), for leaving
         /// exactly one object out of a page (see [`crate::display::DisplayOptions::hide_object`]).
         object: Option<wordcraft_doc::Pos>,
@@ -3236,7 +3236,7 @@ fn float_items(o: &InlineObject, rect: Rect, outer: (Spin, Point), story: StoryR
                 effects: *effects,
                 freeform: freeform.clone(),
                 spin,
-                extra: extra.clone(),
+                extra: Box::new(extra.clone()),
                 object: Some(object),
                 alt: shape_figure_alt(o).unwrap_or_default().to_string(),
             }]

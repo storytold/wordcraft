@@ -1128,15 +1128,13 @@ impl Reader<'_> {
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
         // A textbox may contain a picture; its descendant blip is not the outer payload.
-        let direct_shape = gd.child("wps:wsp").filter(|shape| {
-            // Picture fills still use the image fallback; the shape model has no image fill.
-            shape.child("wps:spPr").and_then(|props| props.child("a:blipFill")).is_none()
-        });
+        let direct_shape = gd.child("wps:wsp");
         let mut obj = if let Some(c) = gd.child("wpc:wpc") {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
             self.read_group(sc, g, rels, w, h, float)?
         } else if direct_shape.is_none() && gd.find("a:blip").is_some() {
+            // A picture (a shape's picture fill has an `a:blip` too).
             self.read_pic(gd, rels, w, h, alt.clone(), float)?
         } else {
             let wsp = direct_shape.or_else(|| gd.find("wps:wsp"))?;
@@ -1559,6 +1557,15 @@ impl Reader<'_> {
             self.glued.extend(extra.start.iter().chain(extra.end.iter()).map(|e| e.id));
         }
         extra.warp = wsp.child("wps:bodyPr").and_then(|b| b.child("a:prstTxWarp")).and_then(text_warp);
+        // A picture fill (ECMA-376 §20.1.8.14), stretched over the box; a tiled one (`a:tile`)
+        // is stretched too. A picture that isn't in the package is no fill.
+        if !kind.is_open() {
+            extra.picture = sppr
+                .and_then(|s| s.child("a:blipFill"))
+                .and_then(|f| f.child("a:blip"))
+                .and_then(|b| b.attr("r:embed"))
+                .and_then(|id| self.media_for(rels, id));
+        }
         // A freeform: its custom geometry (#743: in a group too).
         let freeform = sppr.and_then(|s| super::freeform::cust_geom(s, w, h)).map(|mut f| {
             f.alpha = super::freeform::line_alpha(ln);

@@ -1360,6 +1360,14 @@ fn insert(app: &mut WordApp, ui: &mut Ui) {
                 ("Arrow", "arrow"),
                 ("Star", "star"),
                 ("Heart", "heart"),
+                ("Hexagon", "hexagon"),
+                ("Octagon", "octagon"),
+                ("Regular Pentagon", "pentagon"),
+                ("Decagon", "decagon"),
+                ("Parallelogram", "parallelogram"),
+                ("Trapezoid", "trapezoid"),
+                ("Cross", "plus"),
+                ("Chevron", "chevron"),
             ] {
                 mi_icon(ui, app, &format!("shape.{k}"), l, "insert.shape", json!({"kind": k}));
             }
@@ -2563,6 +2571,7 @@ fn shape_format(app: &mut WordApp, ui: &mut Ui) {
                 mi(ui, app, "No Color", "shape.fill", json!({"color": null}));
                 crate::colors::menu(ui, app, &theme, Target::cmd("shape.fill"));
                 ui.separator();
+                mi(ui, app, "Picture…", "shape.fill", json!({"picture": {}}));
                 ui.menu_button(tl!("Gradient"), |ui| gradient_menu(ui, app, fill.as_ref()));
             });
             menu_button(ui, app, "pen", Some("Shape Outline"), "Shape Outline", false, "shape.outline", |ui, app| {

@@ -1488,6 +1488,7 @@ impl WordApp {
                 "exportPdf" => self.export_dialog("pdf"),
                 "exportPng" => self.export_dialog("png"),
                 "insertPicture" => self.pick_picture(),
+                "shapeFillPicture" => self.pick_fill_picture(),
                 "addFont" => self.pick_font(),
                 "loadSystemFonts" => self.load_system_fonts(),
                 "print" => {

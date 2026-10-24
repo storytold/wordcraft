@@ -1074,6 +1074,14 @@ impl Writer<'_> {
             ShapeKind::ArrowDown => "downArrow",
             ShapeKind::Star => "star5",
             ShapeKind::Heart => "heart",
+            ShapeKind::Hexagon => "hexagon",
+            ShapeKind::Octagon => "octagon",
+            ShapeKind::Pentagon => "pentagon",
+            ShapeKind::Parallelogram => "parallelogram",
+            ShapeKind::Trapezoid => "trapezoid",
+            ShapeKind::Plus => "plus",
+            ShapeKind::Chevron => "chevron",
+            ShapeKind::Decagon => "decagon",
         };
         match geom {
             Some(f) => cust_geom(w, f, *sw, *sh),
@@ -1093,7 +1101,21 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
+        // A picture fill (ECMA-376 §20.1.8.14), stretched over the shape, in place of a colour.
+        let picture =
+            extra.picture.as_ref().filter(|_| !ink && !kind.is_open()).and_then(|m| self.media_files.get(m).cloned().map(|file| (m.clone(), file)));
+        if let Some((media, file)) = picture {
+            let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+            self.used_media.insert(media);
+            w.open("a:blipFill", &[("rotWithShape", "1")]);
+            w.empty("a:blip", &[("r:embed", &rid)]);
+            w.open("a:stretch", &[]);
+            w.empty("a:fillRect", &[]);
+            w.close("a:stretch");
+            w.close("a:blipFill");
+        } else {
+            write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
+        }
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));
