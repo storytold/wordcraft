@@ -198,7 +198,17 @@ fn saved_window() -> Option<WindowGeometry> {
         return None;
     }
     let bytes = std::fs::read(prefs_path()?).ok()?;
-    UiState::from_json(&bytes)?.window?.sanitized()
+    let mut win = UiState::from_json(&bytes)?.window?.sanitized()?;
+    if let Some([mon_w, mon_h]) = win.monitor {
+        // Clamp window dimensions so it never opens larger than the monitor it was saved on.
+        if win.width > mon_w {
+            win.width = (mon_w - 40.0).max(760.0);
+        }
+        if win.height > mon_h {
+            win.height = (mon_h - 80.0).max(480.0);
+        }
+    }
+    Some(win)
 }
 
 fn save_prefs(app: &WordApp) {
@@ -286,6 +296,153 @@ fn build_sha() -> &'static str {
     option_env!("WORDCRAFT_BUILD_SHA").map(|s| s.get(..8).unwrap_or(s)).unwrap_or("dev")
 }
 
+/// Validates a candidate X11 scale factor so invalid, non-positive, or non-normal values never
+/// reach `WINIT_X11_SCALE_FACTOR` (which would panic inside `winit`).
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn valid_x11_scale(scale: f64) -> Option<String> {
+    (scale.is_finite() && scale.is_normal() && scale > 0.0).then(|| scale.to_string())
+}
+
+/// Parses an XSETTINGS dump (`dump_xsettings` or `xsettingsd.conf`) for `Xft/DPI` or
+/// `Gdk/WindowScalingFactor` / `Gdk/UnscaledDPI`.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn parse_xsettings_scale(xsettings: &str) -> Option<String> {
+    let mut xft_dpi: Option<f64> = None;
+    let mut gdk_window_scale: Option<f64> = None;
+    let mut gdk_unscaled_dpi: Option<f64> = None;
+
+    for line in xsettings.lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let mut parts = line.split_whitespace();
+        let Some(key) = parts.next() else { continue };
+        let Some(val_str) = parts.next() else { continue };
+        let key = key.trim_end_matches(':');
+        let Ok(raw) = val_str.parse::<f64>() else { continue };
+        if !raw.is_finite() || raw <= 0.0 {
+            continue;
+        }
+        match key {
+            "Xft/DPI" => {
+                let dpi = if raw >= 1024.0 { raw / 1024.0 } else { raw };
+                xft_dpi = Some(dpi);
+            }
+            "Gdk/WindowScalingFactor" => {
+                gdk_window_scale = Some(raw);
+            }
+            "Gdk/UnscaledDPI" => {
+                let dpi = if raw >= 1024.0 { raw / 1024.0 } else { raw };
+                gdk_unscaled_dpi = Some(dpi);
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(dpi) = xft_dpi
+        && let Some(scale) = valid_x11_scale(dpi / 96.0)
+    {
+        return Some(scale);
+    }
+    if let Some(win_scale) = gdk_window_scale {
+        let unscaled_factor = gdk_unscaled_dpi.map_or(1.0, |dpi| dpi / 96.0);
+        if let Some(scale) = valid_x11_scale(win_scale * unscaled_factor) {
+            return Some(scale);
+        }
+    }
+    if let Some(dpi) = gdk_unscaled_dpi {
+        return valid_x11_scale(dpi / 96.0);
+    }
+    None
+}
+
+/// Resolves the X11 scale factor from XSETTINGS (`Xft/DPI`, `Gdk/WindowScalingFactor`),
+/// `xrdb -query` (`Xft.dpi`), `GDK_SCALE`, or `QT_SCALE_FACTOR`, defaulting to `"1"`.
+#[cfg(any(all(unix, not(target_os = "macos")), test))]
+fn resolve_x11_scale_factor(xrdb_stdout: Option<&str>, xsettings: Option<&str>, env: impl Fn(&str) -> Option<String>) -> String {
+    let valid_env = |name: &str| env(name).and_then(|value| value.trim().parse::<f64>().ok().and_then(valid_x11_scale));
+    if let Some(scale) = xsettings.and_then(parse_xsettings_scale) {
+        return scale;
+    }
+    if let Some(text) = xrdb_stdout {
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("Xft.dpi:")
+                && let Ok(dpi) = rest.trim().parse::<f64>()
+                && let Some(scale) = valid_x11_scale(dpi / 96.0)
+            {
+                return scale;
+            }
+        }
+    }
+    if let Some(scale) = valid_env("GDK_SCALE").or_else(|| valid_env("QT_SCALE_FACTOR")) {
+        return scale;
+    }
+    "1".to_string()
+}
+
+/// Runs a short-lived X11 helper with a bounded timeout so a hung server query cannot block startup.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn probe_command_bounded(program: &str, args: &[&str], timeout: std::time::Duration) -> Option<String> {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::Instant;
+
+    let mut child = Command::new(program).args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().ok()?;
+    let stdout = child.stdout.take()?;
+    let reader = std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        let _ = stdout.take(64 << 10).read_to_end(&mut buf);
+        buf
+    });
+    let start = Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if start.elapsed() < timeout => std::thread::sleep(std::time::Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    };
+    while !reader.is_finished() {
+        if start.elapsed() >= timeout {
+            return None;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    if !status.success() {
+        return None;
+    }
+    let bytes = reader.join().ok()?;
+    Some(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// Populates `WINIT_X11_SCALE_FACTOR` with a validated desktop scale factor before `winit` starts.
+#[cfg(all(unix, not(target_os = "macos")))]
+fn ensure_x11_scale_factor() {
+    if std::env::var_os("DISPLAY").is_some()
+        && std::env::var_os("WORDCRAFT_WAYLAND").is_none()
+        && std::env::var_os("WINIT_X11_SCALE_FACTOR").is_none()
+    {
+        let timeout = std::time::Duration::from_millis(500);
+        let xrdb_out = probe_command_bounded("xrdb", &["-query"], timeout);
+        let xsettings_out = probe_command_bounded("dump_xsettings", &[], timeout).or_else(|| {
+            let config = std::env::var_os("XDG_CONFIG_HOME")
+                .map(std::path::PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+            std::fs::read_to_string(config.join("xsettingsd/xsettingsd.conf")).ok()
+        });
+        let scale = resolve_x11_scale_factor(xrdb_out.as_deref(), xsettings_out.as_deref(), |k| std::env::var(k).ok());
+        if let Ok(exe) = std::env::current_exe() {
+            use std::os::unix::process::CommandExt;
+            let _ = std::process::Command::new(exe).args(std::env::args_os().skip(1)).env("WINIT_X11_SCALE_FACTOR", scale).exec();
+        }
+    }
+}
+
 /// The arguments as text, and apart the files whose names aren't valid Unicode, such as a Latin-1
 /// one (#1440). A `--control` port that isn't is an error.
 fn text_args() -> (Vec<String>, Vec<std::path::PathBuf>) {
@@ -321,6 +478,9 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    ensure_x11_scale_factor();
+
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
@@ -469,6 +629,7 @@ fn main() -> eframe::Result {
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
                     log::warn!("{f}: {e}");
+                    app.status(format!("{f}: {e}"));
                 }
             }
             for f in other_files {
@@ -485,6 +646,33 @@ fn main() -> eframe::Result {
             )))
         }),
     )
+}
+
+#[cfg(test)]
+mod x11_scale_tests {
+    use super::*;
+
+    #[test]
+    fn x11_scale_factor_validates_inputs_and_preserves_xsettings_before_default() {
+        let none = |_: &str| None;
+        assert_eq!(resolve_x11_scale_factor(Some("Xft.dpi:\t96\n"), None, none), "1");
+        assert_eq!(resolve_x11_scale_factor(Some("Xft.dpi: 144\n"), None, none), "1.5");
+        assert_eq!(resolve_x11_scale_factor(Some("Xft.dpi: inf\n"), None, |k| (k == "GDK_SCALE").then(|| "2".to_string())), "2");
+        assert_eq!(
+            resolve_x11_scale_factor(None, None, |k| match k {
+                "GDK_SCALE" => Some(String::new()),
+                "QT_SCALE_FACTOR" => Some("1.25".to_string()),
+                _ => None,
+            }),
+            "1.25"
+        );
+        assert_eq!(resolve_x11_scale_factor(None, Some("Xft/DPI 196608\n"), none), "2");
+        assert_eq!(resolve_x11_scale_factor(Some("Xft.dpi: 96\n"), Some("Xft/DPI 192\n"), none), "2");
+        assert_eq!(resolve_x11_scale_factor(Some("Xft.dpi: 96\n"), Some("Xft/DPI 196608\n"), none), "2");
+        assert_eq!(resolve_x11_scale_factor(None, Some("Gdk/WindowScalingFactor 1\nGdk/UnscaledDPI 98304\n"), none), "1");
+        assert_eq!(resolve_x11_scale_factor(None, None, |k| (k == "GDK_SCALE").then(|| "invalid".to_string())), "1");
+        assert_eq!(resolve_x11_scale_factor(None, None, none), "1");
+    }
 }
 
 // Not on macOS: APFS refuses file names that aren't valid UTF-8, so no such file can exist there.
