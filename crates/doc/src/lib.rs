@@ -1362,6 +1362,32 @@ impl Document {
         max.saturating_add(1).max(1)
     }
 
+    /// The stacking orders ([`para::Float::z`]) the floating objects of every story have, and how
+    /// many floating objects have none (objects made here). Every story saved with the document
+    /// counts: the body, the parts and the note separators (the glossary is a document of its own).
+    pub fn stacking_orders(&self) -> (std::collections::BTreeSet<u32>, usize) {
+        let (mut orders, mut unset) = (std::collections::BTreeSet::new(), 0usize);
+        let separators = [&self.footnote_separators, &self.endnote_separators]
+            .into_iter()
+            .flat_map(|s| [&s.separator, &s.continuation_separator, &s.continuation_notice])
+            .flatten();
+        for blocks in std::iter::once(&self.body).chain(self.parts.values().map(|p| &p.blocks)).chain(separators) {
+            for b in blocks {
+                edit::each_para(b, 0, &mut |p| {
+                    for (_, _, f) in p.objects.iter().filter_map(InlineObject::frame).filter(|(_, _, f)| f.wrap != para::Wrap::Inline) {
+                        match f.z {
+                            0 => unset = unset.saturating_add(1),
+                            z => {
+                                orders.insert(z);
+                            }
+                        }
+                    }
+                });
+            }
+        }
+        (orders, unset)
+    }
+
     /// Change every inline object in every story (paragraphs inside tables too), copying only
     /// the blocks whose paragraphs `wants` says have objects to change.
     pub fn objects_mut(&mut self, wants: &dyn Fn(&InlineObject) -> bool, f: &mut dyn FnMut(&mut InlineObject)) {

@@ -1717,6 +1717,11 @@ struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     behind: Vec<usize>,
+    /// Per page: where its floating objects' items are, put in stacking order once the layout
+    /// is done (see [`stack_page`]).
+    stacks: Vec<PageStacks>,
+    /// Floating objects placed so far: the text order that breaks stacking-order ties.
+    stack_seq: usize,
     /// The bottom of the tallest column on the current page before the current one.
     max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -2123,6 +2128,7 @@ impl PageBuilder<'_> {
         }
         self.pages.pop();
         self.behind.pop();
+        self.stacks.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
@@ -2170,6 +2176,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.stacks.push(PageStacks::default());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
@@ -2409,6 +2416,8 @@ fn layout_pass(
         seps: NoteSeps::default(),
         para_end: None,
         behind: Vec::new(),
+        stacks: Vec::new(),
+        stack_seq: 0,
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
@@ -2591,6 +2600,10 @@ fn layout_pass(
         pb.flush_notes();
     }
     pb.carry.clear();
+    // Floating objects anchored in different paragraphs stack in their order too (#2638).
+    for ((pg, st), n) in pb.pages.iter_mut().zip(std::mem::take(&mut pb.stacks)).zip(pb.behind.iter().copied()) {
+        stack_page(pg, n, st);
+    }
     let mut pages = pb.pages;
     for p in &mut pages {
         if let Some((_, s)) = sections.get(p.section)
@@ -2677,9 +2690,9 @@ struct Snap<'a> {
 impl<'a> Snap<'a> {
     fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
-        let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (pages, behind, stacks) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.stacks));
         let copy = pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.stacks) = (pages, behind, stacks);
         Snap {
             pb: copy,
             pages: pb.pages.len(),
@@ -2695,19 +2708,23 @@ impl<'a> Snap<'a> {
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
     fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
-        let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (mut pages, mut behind, mut stacks) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.stacks));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
+        stacks.truncate(self.pages);
         if let Some(pg) = pages.last_mut() {
             let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
             pg.items.drain(..k);
             pg.items.truncate(self.items);
+            if let Some(st) = stacks.last_mut() {
+                st.forget(k, self.items.saturating_sub(self.behind));
+            }
         }
         if let Some(b) = behind.last_mut() {
             *b = self.behind;
         }
         *pb = self.pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.stacks) = (pages, behind, stacks);
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
@@ -3464,9 +3481,32 @@ struct ObjFrame<'a> {
 /// The pictures, shapes and text boxes in lines `l0..l1` of paragraph `p` (story `story`, at
 /// `path`), whose lines start at (x, y): floating ones drawn, every one's area (hit testing,
 /// selection) and text boxes' text. Floating rects come from `floats` (by object index) or are
-/// worked out from `at`. Returns what goes behind the text, and what goes in front.
+/// worked out from `at`. Returns what goes behind the text, and what goes in front, the
+/// floating objects of each in their stacking order ([`Float::stack`]).
 #[allow(clippy::too_many_arguments)]
 fn place_objects(
+    ctx: &mut Ctx,
+    story: StoryRef,
+    path: &[u32],
+    p: &Paragraph,
+    pl: &ParaLayout,
+    lines: (usize, usize),
+    xy: (f32, f32),
+    at: &ObjFrame,
+    floats: &HashMap<usize, Rect>,
+    depth: usize,
+) -> (Vec<Placed>, Vec<Placed>) {
+    stack_objects(object_groups(ctx, story, path, p, pl, lines, xy, at, floats, depth))
+}
+
+/// One object's items behind and in front of the text, with its stacking order
+/// ([`Float::stack`]) if it floats.
+type ObjGroup = (Option<u64>, Vec<Placed>, Vec<Placed>);
+
+/// [`place_objects`], each object's items apart and in text order, so the body can put the
+/// floating objects of a whole page in stacking order ([`PageStacks`]).
+#[allow(clippy::too_many_arguments)]
+fn object_groups(
     ctx: &mut Ctx,
     story: StoryRef,
     path: &[u32],
@@ -3477,15 +3517,11 @@ fn place_objects(
     at: &ObjFrame,
     floats: &HashMap<usize, Rect>,
     depth: usize,
-) -> (Vec<Placed>, Vec<Placed>) {
-    // Each object's items (behind the text, in front), with its stacking order: drawn lowest
-    // first once all are placed, as Word stacks floating objects by `relativeHeight`, not by
-    // their order in the paragraph. Inline objects and objects without one keep their order.
-    let mut stack: Vec<(u32, Vec<Placed>, Vec<Placed>)> = Vec::new();
-    // The highest order so far: an object without one (inserted here) stacks above the objects
-    // before it, as the writer gives it the next order up on save.
-    let mut z_top = 0u32;
-    let Some(fl) = pl.lines.get(l0) else { return (Vec::new(), Vec::new()) };
+) -> Vec<ObjGroup> {
+    let mut placed: Vec<ObjGroup> = Vec::new();
+    // The same for the objects a header or footer cell places on the page (see `Ctx::pin`).
+    let mut pin_placed: Vec<ObjGroup> = Vec::new();
+    let Some(fl) = pl.lines.get(l0) else { return Vec::new() };
     // Objects left out of the layout (hidden, or deleted in the final text) aren't placed.
     let left_out = left_out_objects(ctx.doc, p, at.table_chr, ctx.opts.show_hidden, ctx.hide_deleted);
     // A floating object belongs to its paragraph, not to its line: Word puts it on the page the
@@ -3567,31 +3603,125 @@ fn place_objects(
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
             if pinned.is_some() {
+                let (b, f) = (std::mem::take(&mut behind), std::mem::take(&mut front));
                 if let Some(pin) = ctx.pin.as_mut()
                     && pin.seen.insert((path.to_vec(), c.start))
                 {
-                    pin.behind.extend(behind);
-                    pin.front.extend(front);
+                    pin_placed.push((floating.then(|| float.stack()), b, f));
                 }
                 continue;
             }
-            let z = if floating && float.z > 0 {
-                z_top = z_top.max(float.z);
-                float.z
-            } else {
-                z_top
-            };
-            stack.push((z, behind, front));
+            placed.push((floating.then(|| float.stack()), behind, front));
         }
     }
-    // Stable: equal orders (none given) keep the paragraph's order.
-    stack.sort_by_key(|(z, _, _)| *z);
+    // Put on the page in their stacking order too.
+    if !pin_placed.is_empty()
+        && let Some(pin) = ctx.pin.as_mut()
+    {
+        let (behind, front) = stack_objects(pin_placed);
+        pin.behind.extend(behind);
+        pin.front.extend(front);
+    }
+    placed
+}
+
+/// The items of objects placed in text order (each with its stacking order if floating), the
+/// floating ones put in stacking order (a stable sort: equal ones keep text order). Inline
+/// objects keep their places.
+fn stack_objects(mut placed: Vec<ObjGroup>) -> (Vec<Placed>, Vec<Placed>) {
+    let floating: Vec<bool> = placed.iter().map(|o| o.0.is_some()).collect();
+    let mut stacked: Vec<_> = placed.iter_mut().filter(|o| o.0.is_some()).map(std::mem::take).collect();
+    stacked.sort_by_key(|o| o.0);
+    let mut stacked = stacked.into_iter();
+    for (o, _) in placed.iter_mut().zip(floating).filter(|(_, f)| *f) {
+        if let Some(s) = stacked.next() {
+            *o = s;
+        }
+    }
     let (mut behind, mut front) = (Vec::new(), Vec::new());
-    for (_, b, f) in stack {
+    for (_, b, f) in placed {
         behind.extend(b);
         front.extend(f);
     }
     (behind, front)
+}
+
+/// A floating object's items on a body page: `len` items from `at`, its stacking order and
+/// its place in the text (`seq`, which breaks ties).
+#[derive(Clone, Copy, Debug)]
+struct StackSpan {
+    key: u64,
+    seq: usize,
+    at: usize,
+    len: usize,
+}
+
+/// Where a body page's floating objects are among its items: `behind`, the items in front of
+/// the page's list (behind the text), in list order; `front`, the rest, `at` counted from the
+/// end of the items behind the text.
+#[derive(Clone, Debug, Default)]
+struct PageStacks {
+    behind: Vec<StackSpan>,
+    front: Vec<StackSpan>,
+}
+
+impl PageStacks {
+    /// A [`Snap`] took the first `behind` items off the page's list and cut what follows the
+    /// items behind the text at `front`: forget the objects those were.
+    fn forget(&mut self, behind: usize, front: usize) {
+        let mut gone = 0usize;
+        let k = self.behind.iter().take_while(|s| {
+            gone = gone.saturating_add(s.len);
+            gone <= behind
+        });
+        let k = k.count();
+        self.behind.drain(..k);
+        self.front.retain(|s| s.at.saturating_add(s.len) <= front);
+    }
+}
+
+/// Puts the floating objects of a finished body page in stacking order: those behind the text
+/// (the first `behind` items) among themselves, and those in front of it in the places floating
+/// objects had among the text. Equal orders keep text order. A page whose record doesn't match
+/// its items is left as it is.
+fn stack_page(pg: &mut Page, behind: usize, st: PageStacks) {
+    // Behind the text: the first `behind` items are these objects' and nothing else.
+    if behind > 0 && behind <= pg.items.len() && st.behind.iter().try_fold(0usize, |n, s| n.checked_add(s.len)) == Some(behind) {
+        let mut rest = pg.items.split_off(behind);
+        let mut items = std::mem::take(&mut pg.items).into_iter();
+        let mut groups: Vec<(StackSpan, Vec<Placed>)> = st.behind.iter().map(|s| (*s, items.by_ref().take(s.len).collect())).collect();
+        groups.sort_by_key(|(s, _)| (s.key, s.seq));
+        pg.items = groups.into_iter().flat_map(|(_, g)| g).collect();
+        pg.items.append(&mut rest);
+    }
+    // In front: each object keeps a place, the objects change places.
+    let mut spans = st.front;
+    spans.sort_by_key(|s| s.at);
+    let end = pg.items.len().saturating_sub(behind);
+    let fits = spans.windows(2).all(|w| matches!(w, [a, b] if a.at.saturating_add(a.len) <= b.at))
+        && spans.last().is_none_or(|s| s.at.saturating_add(s.len) <= end);
+    if spans.len() < 2 || behind > pg.items.len() || !fits {
+        return;
+    }
+    let mut rest: Vec<Option<Placed>> = pg.items.split_off(behind).into_iter().map(Some).collect();
+    let mut groups: Vec<((u64, usize), Vec<Placed>)> = spans
+        .iter()
+        .map(|s| {
+            let g = rest.get_mut(s.at..s.at.saturating_add(s.len)).map(|r| r.iter_mut().filter_map(Option::take).collect());
+            ((s.key, s.seq), g.unwrap_or_default())
+        })
+        .collect();
+    groups.sort_by_key(|g| g.0);
+    let mut groups = groups.into_iter();
+    let mut starts = spans.iter().map(|s| s.at).peekable();
+    for (i, it) in rest.into_iter().enumerate() {
+        if starts.next_if_eq(&i).is_some()
+            && let Some((_, g)) = groups.next()
+        {
+            pg.items.extend(g);
+        }
+        pg.items.extend(it);
+    }
 }
 
 /// Footnotes referenced in a paragraph laid out as `pl`: in its text, and inside its text boxes
@@ -4029,8 +4159,23 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             table_chr: None,
             pinned: None,
         };
-        let (behind, front) = place_objects(ctx, StoryRef::Body, &[block as u32], p, &pl, (l0, l1), (x, y), &at, &float_rects, 0);
-        items.extend(front);
+        // The floating objects go in stacking order with the rest of the page's at the end.
+        let groups = object_groups(ctx, StoryRef::Body, &[block as u32], p, &pl, (l0, l1), (x, y), &at, &float_rects, 0);
+        let (mut behind, mut spans) = (Vec::new(), PageStacks::default());
+        for (key, b, f) in groups {
+            if let Some(key) = key {
+                pb.stack_seq = pb.stack_seq.saturating_add(1);
+                let span = |at: usize, len: usize| StackSpan { key, seq: pb.stack_seq, at, len };
+                if !b.is_empty() {
+                    spans.behind.push(span(0, b.len()));
+                }
+                if !f.is_empty() {
+                    spans.front.push(span(items.len(), f.len()));
+                }
+            }
+            behind.extend(b);
+            items.extend(f);
+        }
         // Line numbers in the left margin.
         if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && !pl.rp.suppress_line_numbers)
             && let Some(first) = pl.lines.get(l0)
@@ -4062,6 +4207,12 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         if let Some(pg) = pb.pages.last_mut() {
             for (i, it) in behind.into_iter().enumerate() {
                 pg.items.insert(i.min(pg.items.len()), it);
+            }
+            // Front spans count from the end of the items behind the text.
+            let base = pg.items.len().saturating_sub(pb.behind.last().copied().unwrap_or(0).saturating_add(n_behind));
+            if let Some(st) = pb.stacks.last_mut() {
+                st.behind.splice(0..0, spans.behind);
+                st.front.extend(spans.front.into_iter().map(|s| StackSpan { at: s.at.saturating_add(base), ..s }));
             }
             pg.items.extend(items);
         }

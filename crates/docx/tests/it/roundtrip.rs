@@ -19,23 +19,19 @@ fn rt(doc: &Document) -> Document {
     wordcraft_docx::read(&bytes).expect("read")
 }
 
-fn paras(doc: &Document) -> Vec<&Paragraph> {
-    doc.body.iter().filter_map(|b| b.as_para()).collect()
+/// `doc` without the stacking order a save gives objects made in WordCraft (`relativeHeight`,
+/// read back as `Float::z`), to compare them with the objects as made.
+fn unstacked(mut doc: Document) -> Document {
+    doc.objects_mut(&|_| true, &mut |o| {
+        if let Some(f) = o.float_mut() {
+            f.z = 0;
+        }
+    });
+    doc
 }
 
-/// `doc` with the stacking order of its body's floating objects cleared: saving gives objects
-/// without one an order (`relativeHeight`), so tests about other properties compare without it.
-fn unstacked(mut doc: Document) -> Document {
-    for b in &mut doc.body {
-        if let Block::Para(p) = std::sync::Arc::make_mut(b) {
-            for o in &mut p.objects {
-                if let Some(f) = o.float_mut() {
-                    f.z = 0;
-                }
-            }
-        }
-    }
-    doc
+fn paras(doc: &Document) -> Vec<&Paragraph> {
+    doc.body.iter().filter_map(|b| b.as_para()).collect()
 }
 
 fn part_text(doc: &Document, id: Option<u32>) -> String {

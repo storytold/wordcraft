@@ -70,6 +70,23 @@ impl PartRels {
     }
 }
 
+/// Where Word's stacking orders (`relativeHeight`) start for objects made in Word.
+const FIRST_Z: u32 = 251_658_240;
+
+/// The stacking order the objects of `doc` that have none count up from, and how the stored ones
+/// are written (#2638). They go above every stored one. When the stored orders leave no room for
+/// them below `u32::MAX` (a file using values that high), the stored ones are numbered again from
+/// [`FIRST_Z`] in their order, so no two objects share an order and none goes out of range.
+fn stacking(doc: &Document) -> (u32, BTreeMap<u32, u32>) {
+    let (orders, unset) = doc.stacking_orders();
+    let top = orders.last().copied().unwrap_or(0).max(FIRST_Z);
+    if u32::try_from(unset).ok().and_then(|n| top.checked_add(n)).is_some() {
+        return (top, BTreeMap::new());
+    }
+    let zmap: BTreeMap<u32, u32> = orders.iter().zip(FIRST_Z..=u32::MAX).map(|(&z, to)| (z, to)).collect();
+    (zmap.values().last().copied().unwrap_or(FIRST_Z), zmap)
+}
+
 pub(crate) struct Writer<'d> {
     doc: &'d Document,
     /// Numbered display equations written so far (automatic numbers are written as text).
@@ -83,7 +100,10 @@ pub(crate) struct Writer<'d> {
     docpr: u32,
     /// Shapes' own drawing ids written so far (connectors refer to them).
     shape_ids: std::collections::HashSet<u32>,
+    /// The last stacking order (`relativeHeight`) given to an object that had none.
     z: u32,
+    /// Stored stacking orders written as others (see [`stacking`]); empty: as they are.
+    zmap: BTreeMap<u32, u32>,
     /// Note part id → file note id, in first-reference order.
     footnotes: Vec<u32>,
     endnotes: Vec<u32>,
@@ -161,7 +181,8 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         // Fresh drawing ids start past the shapes' own (connectors refer to those).
         docpr: doc.next_shape_id().saturating_sub(1),
         shape_ids: std::collections::HashSet::new(),
-        z: 251_658_240,
+        z: 0,
+        zmap: BTreeMap::new(),
         footnotes: Vec::new(),
         endnotes: Vec::new(),
         hf: Vec::new(),
@@ -187,6 +208,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
             .flat_map(|(n, c)| c.iter().enumerate().map(move |(seq, id)| (*id, (n as u32 + 1, seq as u32))))
             .collect(),
     };
+    (wr.z, wr.zmap) = stacking(doc);
     wr.assign_media();
     wr.embeds.reserve_media(wr.media_files.values());
     let mut entries: Vec<(String, Vec<u8>)> = Vec::new();

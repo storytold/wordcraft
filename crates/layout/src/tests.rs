@@ -4896,6 +4896,80 @@ fn floats_align_within_their_reference_area() {
     assert!((r[0].y - (792.0 - 72.0)).abs() < 0.01, "top of the bottom margin: {:?}", r[0]);
 }
 
+/// #2638: floating objects are drawn in their stacking order (`relativeHeight`), the higher over
+/// the lower, in front of the text and behind it, whatever their order in the text; objects
+/// made here (no order) go on top. Before, the text order decided.
+#[test]
+fn floating_objects_are_drawn_in_their_stacking_order() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Two trees.");
+    let at = |x: f32, z: u32, wrap: Wrap| Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 100.0, z, ..Default::default() };
+    // Inserted at the start, so the text order is the reverse: 50, 40, 30, 20, 10.
+    for f in [at(10.0, 1, Wrap::InFrontOfText), at(20.0, 2, Wrap::InFrontOfText), at(30.0, 0, Wrap::InFrontOfText)]
+        .into_iter()
+        .chain([at(40.0, 5, Wrap::BehindText), at(50.0, 6, Wrap::BehindText)])
+    {
+        d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let drawn: Vec<f32> = shapes(&l.pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(drawn, [40.0, 50.0, 10.0, 20.0, 30.0], "behind the text, then in front, each lowest first");
+}
+
+/// An object made here (no stacking order) still goes over one whose stored order is the
+/// highest a file can give (`relativeHeight="4294967295"`), though it comes first in the text.
+#[test]
+fn an_object_with_no_stacking_order_goes_over_the_highest_stored_one() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Two trees.");
+    let at = |x: f32, z: u32| Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 100.0, z, ..Default::default() };
+    // Inserted at the start, so the text order is the reverse: 20, 10.
+    for f in [at(10.0, u32::MAX), at(20.0, 0)] {
+        d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 50.0, f), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let drawn: Vec<f32> = shapes(&l.pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(drawn, [10.0, 20.0], "the one with no order is drawn last, on top");
+}
+
+/// #2638: the stacking order holds across paragraphs: overlapping shapes anchored in different
+/// paragraphs of a page draw the higher over the lower, in front of the text and behind it,
+/// whichever paragraph comes first.
+#[test]
+fn floats_in_different_paragraphs_stack_in_their_order() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    for wrap in [Wrap::InFrontOfText, Wrap::BehindText] {
+        let mut d = Document::from_text("First\nSecond\nThird");
+        let at = |x: f32, z: u32| Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 100.0, z, ..Default::default() };
+        // Paragraph 1 holds the highest, paragraph 2 the lowest, paragraph 3 the one in between.
+        d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 50.0, at(10.0, 30)), &Default::default()).unwrap();
+        d.insert_object(&Pos::body(1, 0), rect_shape(100.0, 50.0, at(20.0, 10)), &Default::default()).unwrap();
+        d.insert_object(&Pos::body(2, 0), rect_shape(100.0, 50.0, at(30.0, 20)), &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let drawn: Vec<f32> = shapes(items).iter().map(|r| r.x).collect();
+        assert_eq!(drawn, [20.0, 30.0, 10.0], "{wrap:?}: lowest first, whatever the paragraph");
+        // Each object's area goes with it, so the topmost is the one hit.
+        let areas: Vec<f32> = items.iter().filter_map(|it| if let Placed::Object { rect, .. } = it { Some(rect.x) } else { None }).collect();
+        assert_eq!(areas, [20.0, 30.0, 10.0], "{wrap:?}: the areas in the same order");
+        let lines = items.iter().filter(|it| matches!(it, Placed::Lines { story: StoryRef::Body, .. })).count();
+        assert_eq!(lines, 3, "{wrap:?}: the text is all there");
+    }
+}
+
+/// Equal stacking orders on one page keep the text order, across paragraphs too.
+#[test]
+fn equal_stacking_orders_keep_the_text_order_across_paragraphs() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("First\nSecond");
+    let at = |x: f32| Float { wrap: Wrap::BehindText, h_rel: Anchor::Page, v_rel: Anchor::Page, x, y: 100.0, z: 7, ..Default::default() };
+    d.insert_object(&Pos::body(0, 0), rect_shape(100.0, 50.0, at(10.0)), &Default::default()).unwrap();
+    d.insert_object(&Pos::body(1, 0), rect_shape(100.0, 50.0, at(20.0)), &Default::default()).unwrap();
+    let l = lay(&d);
+    let drawn: Vec<f32> = shapes(&l.pages[0].items).iter().map(|r| r.x).collect();
+    assert_eq!(drawn, [10.0, 20.0]);
+}
+
 #[test]
 fn top_and_bottom_float_pushes_its_own_first_line_down() {
     use wordcraft_doc::para::{Anchor, Float, Wrap};
@@ -5036,6 +5110,29 @@ fn automatic_text_in_a_styled_text_box_takes_the_box_s_colour() {
     let white = Rgb(0xFF, 0xFF, 0xFF);
     assert_eq!(glyph_colors(Some(white)), (Some(Rgb::BLACK), Some(white), Some(Rgb(0, 0x80, 0))));
     assert_eq!(glyph_colors(None), (Some(Rgb::BLACK), Some(Rgb::BLACK), Some(Rgb(0, 0x80, 0))));
+}
+
+/// #2638: floats a header cell places on the page are drawn in their stacking order too, not in
+/// their order in the cell's text.
+#[test]
+fn header_cell_floats_on_the_page_keep_their_stacking_order() {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text("Body");
+    let float = |z: u32| Float { wrap: Wrap::BehindText, h_rel: Anchor::Margin, v_rel: Anchor::Margin, outside_cell: true, z, ..Default::default() };
+    let mut t = Table::new(1, 1, 468.0);
+    let mut cp = wordcraft_doc::Paragraph::with_text("Cell", Default::default());
+    // First in the text but higher in the stack: drawn last, over the other.
+    cp.insert_object(0, rect_shape(200.0, 50.0, float(10)), &Default::default()).unwrap();
+    cp.insert_object(0, rect_shape(100.0, 50.0, float(20)), &Default::default()).unwrap();
+    t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(cp)];
+    let id = d.add_part(
+        wordcraft_doc::PartKind::Header,
+        vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), wordcraft_doc::para_block(Default::default())],
+    );
+    d.last_section.headers.default = Some(id);
+    let l = lay(&d);
+    let widths: Vec<f32> = shapes(&l.pages[0].header).iter().map(|r| r.w.round()).collect();
+    assert_eq!(widths, [200.0, 100.0], "the lower one first");
 }
 
 /// Issue #1775: a picture watermark anchored in a header that starts with a table sits in a cell;
