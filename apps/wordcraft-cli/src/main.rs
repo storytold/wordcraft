@@ -379,6 +379,14 @@ fn script_operand<S: AsRef<OsStr>>(raw: &[S]) -> Option<PathBuf> {
     raw.get(at + 1).map(|a| PathBuf::from(a.as_ref()))
 }
 
+/// Whether `addr` (`HOST:PORT`, as `--connect` gives it) is at least shaped like an address: a
+/// host of some kind and a numeric port. Malformed addresses fail at startup — a lazy remote
+/// would otherwise retry one on every call and never say why nothing connects.
+fn valid_connect_addr(addr: &str) -> bool {
+    let Some((host, port)) = addr.rsplit_once(':') else { return false };
+    !host.is_empty() && port.parse::<u16>().is_ok()
+}
+
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
     let script_path = script_operand(args);
     let (args, file) = text_args(args)?;
@@ -582,11 +590,27 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
                 }
                 Some(addr) => {
-                    let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
-                    if let Some(w) = remote.key_warning() {
-                        eprintln!("wordcraft-cli: {w}");
+                    // A malformed address must fail at startup, not on every tool call the lazy
+                    // remote would retry it with.
+                    if !valid_connect_addr(&addr) {
+                        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
                     }
-                    Box::new(remote)
+                    match wordcraft_mcp::Remote::connect(&addr) {
+                        Ok(remote) => {
+                            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
+                            if let Some(w) = remote.key_warning() {
+                                eprintln!("wordcraft-cli: {w}");
+                            }
+                            Box::new(remote)
+                        }
+                        // The app may start after the client does: serve anyway and connect on the
+                        // first call, or the client marks the server failed for its whole session
+                        // (#4078).
+                        Err(e) => {
+                            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
+                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
+                        }
+                    }
                 }
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
@@ -807,6 +831,9 @@ mod tests {
         assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
         // The app's user name is the person's own; a bridge flag must not rewrite it.
         assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"])).is_err_and(|e| e.to_string().contains("--author")));
+        // A malformed address fails at startup, not on every retried call.
+        assert!(run(&args(&["mcp", "--connect", "127.0.0.1:notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
+        assert!(run(&args(&["mcp", "--connect", "notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
         // The flag goes through the same protection check as the command.
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
