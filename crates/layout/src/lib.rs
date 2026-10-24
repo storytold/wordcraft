@@ -1717,6 +1717,10 @@ struct PageBuilder<'a> {
     /// Per page: how many items were inserted at the front of its list (behind the text), so a
     /// [`Snap`] can take them out again.
     behind: Vec<usize>,
+    /// Per page: the items of objects in front of the text, as (start, count) counted after the
+    /// items behind the text. They are moved to the end of the page's list once it is laid out,
+    /// so tables and text after their anchors don't paint over them (#3863).
+    front: Vec<Vec<(usize, usize)>>,
     /// The bottom of the tallest column on the current page before the current one.
     max_y: f32,
     /// The bottom of the lowest line or table row placed on the current page (without the space
@@ -2123,6 +2127,7 @@ impl PageBuilder<'_> {
         }
         self.pages.pop();
         self.behind.pop();
+        self.front.pop();
         self.number = self.number.saturating_sub(1);
         self.after_break_mark = false;
         // The page before was aligned when it was left: nothing on it moves again.
@@ -2170,6 +2175,7 @@ impl PageBuilder<'_> {
         self.page_valign = s.valign;
         self.pages.push(Page { w, h, section: self.sect_idx, number: self.number, body, first_block, items: decor, ..Default::default() });
         self.behind.push(0);
+        self.front.push(Vec::new());
         self.col = 0;
         self.cols = s.column_boxes();
         self.top = body_top;
@@ -2409,6 +2415,7 @@ fn layout_pass(
         seps: NoteSeps::default(),
         para_end: None,
         behind: Vec::new(),
+        front: Vec::new(),
         max_y: 0.0,
         content_bottom: 0.0,
         balance: None,
@@ -2591,6 +2598,7 @@ fn layout_pass(
         pb.flush_notes();
     }
     pb.carry.clear();
+    lift_front(&mut pb.pages, &pb.behind, &pb.front);
     let mut pages = pb.pages;
     for p in &mut pages {
         if let Some((_, s)) = sections.get(p.section)
@@ -2661,6 +2669,30 @@ fn layout_pass(
     Pass::Done(lay)
 }
 
+/// Moves each page's items in front of the text (see `PageBuilder::front`) to the end of its
+/// list, in their order: Word draws floating objects above the text and tables of the page,
+/// whichever block they are anchored in.
+fn lift_front(pages: &mut [Page], behind: &[usize], front: &[Vec<(usize, usize)>]) {
+    for ((pg, &b), ranges) in pages.iter_mut().zip(behind).zip(front) {
+        if ranges.is_empty() {
+            continue;
+        }
+        let mut lifted = vec![false; pg.items.len()];
+        for &(at, n) in ranges {
+            let start = b.saturating_add(at);
+            for flag in lifted.iter_mut().skip(start).take(n) {
+                *flag = true;
+            }
+        }
+        let (mut rest, mut top) = (Vec::with_capacity(pg.items.len()), Vec::new());
+        for (it, up) in std::mem::take(&mut pg.items).into_iter().zip(lifted) {
+            if up { top.push(it) } else { rest.push(it) }
+        }
+        rest.extend(top);
+        pg.items = rest;
+    }
+}
+
 /// Pagination state saved before a block, to lay the blocks from there out again (balancing
 /// columns): the builder without its pages, how far its last page had got, and the walk state.
 struct Snap<'a> {
@@ -2677,9 +2709,9 @@ struct Snap<'a> {
 impl<'a> Snap<'a> {
     fn take(pb: &mut PageBuilder<'a>, ctx: &Ctx) -> Self {
         // The pages stay out of the copy: it would cost the whole document per block.
-        let (pages, behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (pages, behind, front) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.front));
         let copy = pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.front) = (pages, behind, front);
         Snap {
             pb: copy,
             pages: pb.pages.len(),
@@ -2695,9 +2727,14 @@ impl<'a> Snap<'a> {
     /// Go back to this state: drop the pages added since and what was added to the last one
     /// (appended, or inserted at the front behind the text).
     fn restore(&self, pb: &mut PageBuilder<'a>, ctx: &mut Ctx) {
-        let (mut pages, mut behind) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind));
+        let (mut pages, mut behind, mut front) = (std::mem::take(&mut pb.pages), std::mem::take(&mut pb.behind), std::mem::take(&mut pb.front));
         pages.truncate(self.pages);
         behind.truncate(self.pages);
+        front.truncate(self.pages);
+        if let Some(f) = front.last_mut() {
+            let kept = self.items.saturating_sub(self.behind);
+            f.retain(|&(at, n)| at.saturating_add(n) <= kept);
+        }
         if let Some(pg) = pages.last_mut() {
             let k = behind.last().copied().unwrap_or(0).saturating_sub(self.behind).min(pg.items.len());
             pg.items.drain(..k);
@@ -2707,7 +2744,7 @@ impl<'a> Snap<'a> {
             *b = self.behind;
         }
         *pb = self.pb.clone();
-        (pb.pages, pb.behind) = (pages, behind);
+        (pb.pages, pb.behind, pb.front) = (pages, behind, front);
         ctx.counters = self.counters.clone();
         ctx.eq_count = self.eq_count;
         ctx.fields.page = self.page_field;
@@ -4030,6 +4067,8 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             pinned: None,
         };
         let (behind, front) = place_objects(ctx, StoryRef::Body, &[block as u32], p, &pl, (l0, l1), (x, y), &at, &float_rects, 0);
+        let front_at = items.len();
+        let front_n = front.len();
         items.extend(front);
         // Line numbers in the left margin.
         if let Some(ln) = pb.sect.line_numbers.clone().filter(|_| !pb.web && pl.rp.style != "Header" && !pl.rp.suppress_line_numbers)
@@ -4060,6 +4099,12 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         }
         let n_behind = behind.len();
         if let Some(pg) = pb.pages.last_mut() {
+            if front_n > 0
+                && let Some(f) = pb.front.last_mut()
+            {
+                let at = pg.items.len().saturating_sub(pb.behind.last().copied().unwrap_or(0)).saturating_add(front_at);
+                f.push((at, front_n));
+            }
             for (i, it) in behind.into_iter().enumerate() {
                 pg.items.insert(i.min(pg.items.len()), it);
             }

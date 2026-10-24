@@ -6044,6 +6044,45 @@ fn a_behind_or_in_front_of_text_picture_in_a_cell_leaves_the_row_alone() {
     }
 }
 
+/// #3863: an in-front-of-text picture is drawn above the page's tables, wherever its anchor
+/// paragraph is: one anchored before them (a calendar's picture over its tables of days) must not
+/// end up under the tables laid out after it.
+#[test]
+fn an_in_front_of_text_picture_stays_above_a_later_table() {
+    let table = |text: &str| {
+        let mut t = Table::new(2, 2, 400.0);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, Default::default()))];
+        wordcraft_doc::Block::Table(t)
+    };
+    for (case, anchor_after) in [("anchored before the tables", false), ("anchored after the tables", true)] {
+        let mut d = Document::from_text("Anchor");
+        d.insert_block(StoryRef::Body, &Path::top(1), table("Day 1")).unwrap();
+        d.insert_block(StoryRef::Body, &Path::top(2), table("Month")).unwrap();
+        if anchor_after {
+            d.insert_block(
+                StoryRef::Body,
+                &Path::top(3),
+                wordcraft_doc::Block::Para(wordcraft_doc::Paragraph::with_text("After", Default::default())),
+            )
+            .unwrap();
+        }
+        let block = if anchor_after { 3 } else { 0 };
+        d.insert_object(&Pos::body(block, 0), rect_shape(400.0, 400.0, page_float(72.0, 72.0)), &Default::default()).unwrap();
+        let l = lay(&d);
+        let items = &l.pages[0].items;
+        let shape = items.iter().position(|i| matches!(i, Placed::Shape { .. })).expect("the picture is drawn");
+        let last_table = items
+            .iter()
+            .rposition(|i| match i {
+                Placed::Lines { story: StoryRef::Body, path, .. } => path.0.len() > 1,
+                Placed::Fill { .. } | Placed::Rule { .. } => true,
+                _ => false,
+            })
+            .expect("the tables are drawn");
+        assert!(shape > last_table, "{case}: the picture is drawn at item {shape}, before the tables' item {last_table}, which paint over it");
+    }
+}
+
 #[test]
 fn autofit_sizes_columns_by_their_content() {
     let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
