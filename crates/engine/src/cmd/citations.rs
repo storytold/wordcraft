@@ -1331,7 +1331,9 @@ fn caption_number_end(para: &Paragraph) -> usize {
         && let Some(id) = FieldCode::parse(instr).args.first()
     {
         let label = id.replace('_', " ");
-        let before: String = para.text[..o].chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
+        // On a formula line the words before the positional tab are the formula, not a caption label.
+        let from = if equation_number_line(para) { equation_number_start(para).min(o) } else { 0 };
+        let before: String = para.text[from..o].chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
         // `{label} {number} {text}` already wrote the label. A title that starts with the same
         // word (`Table results`) is not a second label.
         let rest = &para.text[end..];
@@ -1677,6 +1679,25 @@ mod tests {
         let table = tables.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
         s.run("insert.crossReference", &json!({"to": "label:Table", "target": table, "show": "number"})).unwrap();
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("Table 1"), "{}", s.doc.plain_text(StoryRef::Body));
+    }
+
+    /// Formula text that contains the label does not hide `{number} {label}` at the right margin.
+    #[test]
+    fn formula_text_does_not_hide_the_label_after_the_number() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Equation x\nSee "));
+        s.run("select.text", &json!({"text": "Equation x"})).unwrap();
+        s.run(
+            "references.caption",
+            &json!({"label": "Equation", "text": "rows", "position": "right", "pattern": "{number} {label}: {text}"}),
+        )
+        .unwrap();
+        let targets = s.run("insert.crossReference", &json!({"to": "equation"})).unwrap();
+        let target = targets.as_array().and_then(|a| a.first()).and_then(|v| v.as_str()).unwrap().to_string();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.crossReference", &json!({"to": "equation", "target": target, "show": "number"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).ends_with("See 1 Equation"), "{}", s.doc.plain_text(StoryRef::Body));
+        let (name, _) = s.doc.bookmarks().into_iter().find(|(n, _)| n.starts_with("_Ref")).unwrap();
+        assert_eq!(crate::cmd::references::bookmark_text(&s.doc, &name).as_deref(), Some("1 Equation"));
     }
 
     /// The entries of every generated list, in order, with their last tab stop's leader.
