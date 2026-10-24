@@ -288,13 +288,13 @@ pub fn autofit_widths(cols: &[(f32, f32)], avail: f32) -> Vec<f32> {
     cols.iter().map(|c| c.0 + (c.1 - c.0) * k).collect()
 }
 
-/// The first cell's left margin: how far its text sits inside the table's edge.
+/// How far an older-mode document (compatibility mode below 15) moves a table out past its
+/// indent: the table's default left cell margin (`w:tblCellMar`, else its style's, else Word's),
+/// so text in cells using it lines up with the text around the table. A first cell with its own
+/// margin (`w:tcMar`) doesn't change it: Word keeps the table where it is and insets that cell's
+/// text by its own margin (#3407).
 pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
-    first_cell_left_margin_in(t, default_margins(t, table_style(ctx, t).as_ref()))
-}
-
-fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
-    t.rows.first().and_then(|r| r.cells.first()).map_or(def, |cell| cell.props.resolved_margins(def))[1]
+    default_margins(t, table_style(ctx, t).as_ref())[1]
 }
 
 /// What a table style gives the cells in one set of parts: shading, vertical alignment and each
@@ -446,7 +446,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
         let border = first_cell.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left);
         indent + border.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0) / 2.0)
     } else {
-        indent - first_cell_left_margin_in(t, margins_def)
+        indent - margins_def[1]
     };
     let x = match (t.props.align, rtl) {
         (Some(Align::Center), _) => (avail - total) / 2.0,
