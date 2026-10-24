@@ -101,7 +101,7 @@ The same gaps grouped the way the parity documents are, for agents working in on
 - **Feature gaps:** #2 (preserve), #5, #10, #12, #13, #15, #17, #21, #25, #27, #28, #29; the Clipboard pane, Manage Styles and Group landed (#281, #323, #267). Paste Special, Advanced Find, Column Selection, Style Inspector, custom table
   styles, and Draw Table and Eraser (#303) landed on 2026-10-10. Paste from other programs keeps
   their formatting (system clipboard HTML/RTF), Merge Formatting keeps emphasis, Paste Special lists
-  what the system clipboard holds, and Linux/Wayland clipboard pictures paste (#687, #833);
+  what the system clipboard holds, and Linux/Wayland clipboard pictures paste (#687, #833, #1368);
 - **UI/UX gaps:** #7, #18, #24; context menus for objects (the table's landed; it still lacks Border Styles); Linux title bar theming (#78); File ›
   still missing: the Paste Options button after a paste, and RTF on macOS and X11. Copy puts
   HTML beside the text on the clipboard, so other programs keep the formatting (#1523), with
@@ -158,6 +158,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-16 | trivial | #2445: interactive Save on import-only .doc/.dot paths uses the existing DOCX Save As flow; cancel and failed writes keep the draft, and Close waits for a successful save. Explicit/script saves still report unsupported legacy output |
 | 2026-10-17 | trivial | #1327: Restrict Editing exceptions no longer let table, row or cell formatting change protected tables; formatting-only protection refuses Paste Formatting, table shading/borders/alignment/margins/text direction, table-style edits and locked table styles; recipient-list commands no longer rewrite merge-field results in a protected document. No gap row (enforcement fix); estimates unchanged |
 | 2026-10-17 | trivial | #21: Find in list and "Show only records that will be merged" in Edit Recipient List (#1576) |
+| 2026-10-17 | trivial | Linux Paste Picture falls back to Wayland/wl-paste/xclip and explains what to do when the clipboard can't be opened (#1368) |
 | 2026-10-16 | trivial | #24: the Spike (Ctrl+F3, Ctrl+Shift+F3) |
 | 2026-10-18 | trivial | #1: shape gradients and transparency (#1500): Word 365 cover pages' theme gradients and translucent shapes now open, draw and save |
 | 2026-10-17 | trivial | Glossary/building blocks closed (DOCX glossary read, kept and written); `w:altChunk` and sub-documents remain |

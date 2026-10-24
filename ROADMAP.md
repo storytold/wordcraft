@@ -229,6 +229,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-14 | ODT export writes sections (gap 19): every new-page section gets its own page layout and master page (the first stays "Standard"), named by its first paragraph or table with the page-numbering restart; a continuous section with columns is written as a columned `text:section`, so a landscape, two-column or restarted part survives a save as .odt |
 | 2026-10-14 | A bulleted or numbered list item that starts with a lower-case word no longer gets the grammar squiggle for a missing sentence capital (#1741): list items are often fragments, so the sentence-capital rule (every proofed language) skips the first word of a list paragraph (own or style numbering); later sentences in the item are still checked |
 | 2026-10-15 | The caret, clicks and selection edges fall between the letters of a ligature (fi, ffi, lam-alef), as in Word: the glyph's advance is shared evenly among its letters, mirrored in right-to-left text (#1974) |
+| 2026-10-17 | Paste Picture on Linux sessions where the clipboard library can't open tries Wayland data-control, then `wl-paste` / `xclip` (a helper's output must decode as a PNG), and otherwise says to use Insert > Picture or drag the file in; the Flatpak now ships the x11 socket so GNOME Wayland (no data-control) pastes through X11 (#1368) |
 | 2026-10-16 | The Spike, as in Word: Ctrl+F3 (⌘F3 on macOS) cuts the selection and adds it to the end of the Spike, each piece followed by a paragraph mark; Ctrl+Shift+F3 (⌘⇧F3) inserts everything collected, in order and with its formatting, and empties the Spike. The clipboard is left alone; each is one undo step. The Spike is the AutoText entry "Spike", so Insert › Quick Parts inserts it without emptying it. It lasts for the session (Word keeps it in Normal.dotm) |
 | 2026-10-17 | Home › Underline's drop-down shows each underline as a sample of its line, adds Dot-dot-dash, None and More Underlines…, and an Underline Color submenu backed by the new `format.underlineColor` command (catalog 490/505) (#2738) |
 | 2026-10-16 | Update Field is offered on a table of contents after a save and reopen, and repeated save and update adds no blank line (#2182; the flow in that report already worked since #1197) |
@@ -656,6 +657,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-16 | trivial | Save Changes exposes an alert-dialog role, the document-specific question and loss/failure context to accessibility; full-app focus/ancestry regression. Native screen-reader verification remains pending. |
 | 2026-10-18 | trivial | Progress log: legacy menu keys (#1697) |
 | 2026-10-18 | trivial | Progress log: Focus fills the screen; Full Screen View (#1678) |
+| 2026-10-17 | trivial | Progress log: Paste Picture fallback when the clipboard can't be opened (#1368) |
 | 2026-10-16 | trivial | Progress log: the Spike |
 | 2026-10-16 | trivial | Progress log: `w:eastAsianLayout` kept on save |
 | 2026-10-15 | trivial | Progress log: undrawable private-use list bullets show the level's default bullet (#1683) |
