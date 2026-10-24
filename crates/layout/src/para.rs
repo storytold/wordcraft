@@ -1062,8 +1062,10 @@ impl<'a> Builder<'a> {
                 _ if complex && wordcraft_fonts::needs_layout_tables(dc) && prim.covers(dc) && {
                     // Thai: check actual GSUB capabilities (WTT 2.0 PUA or `blws`).
                     // Other scripts: name-based heuristic (not in the preferred list).
+                    // A missing Thai font keeps its one substitute face for the run (#1549).
                     if matches!(u32::from(dc), 0x0E00..=0x0E7F) {
-                        !wordcraft_fonts::has_thai_short_tail_support(prim.get())
+                        !(resolved.substituted && wordcraft_fonts::word::is_thai_family(&rc.font))
+                            && !wordcraft_fonts::has_thai_short_tail_support(prim.get())
                     } else {
                         wordcraft_fonts::fallback_rank(dc, &prim.get().family) > wordcraft_fonts::script_fallbacks(dc).len()
                     }
