@@ -36,6 +36,31 @@ script's folder (the working folder for stdin). `--cmd` flags run after the scri
 `--save` after its outputs. A failing command stops the run with `command N (id): …` and exit
 status 1, and nothing is saved. Every output is checked (known extension, folder exists) before the first is written. Paths inside command params (a picture to insert, say) are relative to the working folder, not the script's. Scripts are capped at 4 MiB.
 
+## Search and selection scope
+
+`edit.find` and `select.text` search only the caret's current story by default. The body and
+each footnote, endnote, header or footer are separate stories. Inserting a footnote or endnote
+leaves the caret in that note, so body text will not match unless you request the body explicitly:
+
+```sh
+wordcraft-cli run --cmd 'text.insert={"text":"Main sentence."}' \
+  --cmd 'references.footnote={"text":"Note text."}' \
+  --cmd 'edit.find={"text":"Main","story":"body"}' \
+  --cmd 'select.text={"text":"Main","story":"body"}' --print
+```
+
+Both commands accept `"story":"body"` or `"story":{"part":n}`. Use a part ID from
+`document.inspect` to target a note, header or footer. Invalid selectors and nonexistent parts
+return an error. `select.text` also accepts `"occurrence":n`, counting from 1 in the chosen story.
+
+A match moves the selection into that story. Find Next/Previous then search the caret's story
+as usual. A no-match search leaves the selection in place; the requested scope applies only to
+that call. `edit.find` without `text` still focuses Navigation search. To list body matches
+without moving the caret, use `edit.advancedFind {"text":"Main","in":"main"}` instead.
+
+`edit.replace` and `edit.replaceAll` operate on the caret's story and reject `story`.
+To replace in another story, first select a match there with `select.text` or `edit.find`.
+
 ## Tracked changes by an agent
 
 Tracked changes and comments are recorded under the session's user name ("WordCraft User" by

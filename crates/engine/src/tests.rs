@@ -711,6 +711,131 @@ fn find_replace() {
 }
 
 #[test]
+fn search_story_explicit_body_and_note_preserve_text() {
+    for note in ["references.footnote", "references.endnote"] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "Main café 漢字 Main"}));
+        let id = run(&mut s, note, json!({"text": "Note café 漢字 Note"}))["id"].as_u64().unwrap();
+        let part = StoryRef::Part(id as u32);
+        let doc = serde_json::to_value(&s.doc).unwrap();
+        let depth = s.undo_depth();
+        let caret = s.sel.clone();
+
+        assert_eq!(run(&mut s, "edit.find", json!({"text": "Main"}))["count"], 0);
+        assert_eq!(s.sel, caret);
+        assert!(s.run("select.text", &json!({"text": "Main"})).is_err());
+        assert_eq!(run(&mut s, "edit.find", json!({"text": "Note"}))["count"], 2);
+        assert_eq!(s.sel.focus.story, part);
+
+        let found = run(&mut s, "edit.find", json!({"text": "café 漢字", "story": "body"}));
+        assert_eq!(found["count"], 1);
+        assert_eq!(s.sel.anchor, Pos::body(0, 5));
+        assert_eq!(s.sel.focus, Pos::body(0, 17));
+        run(&mut s, "select.text", json!({"text": "Main", "story": "body", "occurrence": 2}));
+        assert_eq!(s.sel.anchor, Pos::body(0, 18));
+
+        let found = run(&mut s, "edit.find", json!({"text": "Note", "story": {"part": id}}));
+        assert_eq!(found["count"], 2);
+        assert_eq!(s.sel.focus.story, part);
+        run(&mut s, "select.text", json!({"text": "Main", "story": "body"}));
+        run(&mut s, "select.text", json!({"text": "Note", "story": {"part": id}, "occurrence": 2}));
+        assert_eq!(s.sel.focus.story, part);
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+        assert_eq!(s.undo_depth(), depth, "search and selection do not add undo steps");
+    }
+}
+
+/// After an explicit search moves the caret, next/previous stay in that story and wrap.
+#[test]
+fn search_story_navigation_follows_the_matching_story() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Main Main"}));
+    let id = run(&mut s, "references.footnote", json!({"text": "Note Note"}))["id"].as_u64().unwrap();
+    for (query, story) in [("Main", json!("body")), ("Note", json!({"part": id}))] {
+        let found = run(&mut s, "edit.find", json!({"text": query, "story": story}));
+        assert_eq!(found["count"], 2);
+        let first = s.sel.clone();
+        assert_eq!(run(&mut s, "edit.findNext", json!({}))["index"], 1);
+        assert_eq!(s.sel.focus.story, first.focus.story);
+        assert_eq!(run(&mut s, "edit.findNext", json!({}))["index"], 0);
+        assert_eq!(s.sel, first);
+        assert_eq!(run(&mut s, "edit.findPrevious", json!({}))["index"], 1);
+        assert_eq!(run(&mut s, "edit.findPrevious", json!({}))["index"], 0);
+        assert_eq!(s.sel, first);
+    }
+}
+
+#[test]
+fn search_story_no_match_keeps_caret_and_ctrl_f_behavior() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Main"}));
+    run(&mut s, "references.footnote", json!({"text": "Note"}));
+    let caret = s.sel.clone();
+    let doc = serde_json::to_value(&s.doc).unwrap();
+    assert_eq!(run(&mut s, "edit.find", json!({"text": "absent", "story": "body"}))["count"], 0);
+    assert_eq!(s.sel, caret);
+    assert!(s.run("select.text", &json!({"text": "absent", "story": "body"})).is_err());
+    assert_eq!(s.sel, caret);
+    assert!(s.run("edit.findNext", &json!({})).is_err());
+    assert_eq!(s.sel, caret, "no match leaves subsequent navigation in the caret's story");
+    run(&mut s, "edit.find", json!({}));
+    assert!(s.view.nav_pane);
+    assert_eq!(s.ui_requests.last(), Some(&json!({"focus": "navSearch"})));
+    assert_eq!(s.sel, caret);
+    assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+}
+
+#[test]
+fn search_story_rejects_invalid_scope_without_changing_search_or_selection() {
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "Main"}));
+    run(&mut s, "edit.find", json!({"text": "Main"}));
+    let caret = s.sel.clone();
+    let doc = serde_json::to_value(&s.doc).unwrap();
+    let results = s.find.results.clone();
+    for command in ["edit.find", "select.text"] {
+        for story in [json!(null), json!("invalid"), json!({"part": -1}), json!({"part": "1"}), json!({"part": 999})] {
+            assert!(s.run(command, &json!({"text": "absent", "story": story})).is_err(), "{command}: {story}");
+            assert_eq!(s.sel, caret);
+            assert_eq!(s.find.query, "Main");
+            assert_eq!(s.find.results, results);
+            assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+        }
+    }
+}
+
+/// Unsupported scope must fail before changing a note, search options or undo history.
+#[test]
+fn search_story_replacement_rejects_scope_before_mutating_state() {
+    for command in ["edit.replace", "edit.replaceAll"] {
+        let mut s = s();
+        run(&mut s, "text.insert", json!({"text": "body old"}));
+        let id = run(&mut s, "references.footnote", json!({"text": "note old"}))["id"].as_u64().unwrap();
+        run(&mut s, "edit.find", json!({"text": "old"}));
+        let doc = serde_json::to_value(&s.doc).unwrap();
+        let caret = s.sel.clone();
+        let find = serde_json::to_value(&s.find).unwrap();
+        let results = s.find.results.clone();
+        let depth = s.undo_depth();
+        for story in [json!("body"), json!({"part": id}), json!(null), json!("invalid")] {
+            let error = s.run(command, &json!({"text": "old", "with": "new", "story": story, "matchCase": true})).unwrap_err();
+            assert!(error.to_string().contains("`story`"), "{command}: {error}");
+            assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+            assert_eq!(s.sel, caret);
+            assert_eq!(serde_json::to_value(&s.find).unwrap(), find);
+            assert_eq!(s.find.results, results);
+            assert_eq!(s.undo_depth(), depth);
+        }
+        // Reusing the previous query without a selector still replaces in the caret's note.
+        run(&mut s, command, json!({"with": "new"}));
+        assert_eq!(text(&s), "body old");
+        assert!(s.doc.plain_text(StoryRef::Part(id as u32)).contains("note new"));
+        run(&mut s, "edit.undo", json!({}));
+        assert_eq!(serde_json::to_value(&s.doc).unwrap(), doc);
+    }
+}
+
+#[test]
 fn find_replace_special_codes() {
     // ^p finds paragraph marks across paragraphs; Replace All with ^p splits paragraphs and is one undo step.
     let mut s = s();

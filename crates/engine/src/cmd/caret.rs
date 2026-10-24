@@ -59,7 +59,9 @@ pub fn specs() -> Vec<CommandSpec> {
             .params(r#"{"unit": "word|sentence|line|paragraph|document", "start": Pos, "end": Pos, "pos": Pos}"#)
             .pure(),
         CommandSpec::new("select.line", "Select Line", "Navigation", select_line).params(r#"{"pos"?: Pos}"#).pure(),
-        CommandSpec::new("select.text", "Select Text", "Navigation", select_text).params(r#"{"text": string, "occurrence"?: n}"#).pure(),
+        CommandSpec::new("select.text", "Select Text", "Navigation", select_text)
+            .params(r#"{"text": string, "occurrence"?: n, "story"?: "body" | {"part": n} (default: caret story)}"#)
+            .pure(),
         CommandSpec::new("select.collapse", "Collapse Selection", "Navigation", |s, v| {
             let to_end = p::bool(v, "end").unwrap_or(false);
             let (a, b) = s.sel.ordered();
@@ -444,7 +446,7 @@ fn drag_unit(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Select the n-th occurrence of `text` in the body (agents: "select the word X").
+/// Select the n-th occurrence of `text` in the requested story, or the caret's story.
 fn select_text(s: &mut Session, v: &Value) -> CmdResult {
     let needle = p::req_str(v, "text")?;
     let n = p::u64(v, "occurrence").unwrap_or(1).max(1) as usize;
@@ -452,7 +454,7 @@ fn select_text(s: &mut Session, v: &Value) -> CmdResult {
         return Err(CmdError::Params("`text` is empty".into()));
     }
     let mut count = 0;
-    let story = super::story_param(s, v);
+    let story = super::search_story_param(s, v)?;
     for path in s.doc.para_paths(story) {
         let Some(p) = s.doc.para(story, &path) else { continue };
         for (i, _) in p.text.match_indices(needle) {
