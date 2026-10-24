@@ -1064,6 +1064,22 @@ fn painter_double_click(app: &mut WordApp) {
     let _ = app.run("edit.formatPainter", json!({"sticky": true}));
 }
 
+/// The Text Highlight Color button's bar: the last highlight used (an OOXML name), if it has a colour.
+pub(crate) fn highlight_swatch(name: &str) -> Option<egui::Color32> {
+    wordcraft_doc::props::Highlight::ALL.iter().find(|h| h.ooxml() == name).and_then(|h| h.rgb()).map(crate::theme::c32)
+}
+
+/// What the Text Highlight Color split button passes as its swatch: the last colour, or a fully
+/// transparent one for "none" so no bar claims a colour the command will not apply.
+pub(crate) fn highlight_bar(name: &str) -> Option<egui::Color32> {
+    if name == "none" { Some(egui::Color32::TRANSPARENT) } else { highlight_swatch(name) }
+}
+
+/// The Shading button's bar: the last shading used (hex), if it parses.
+pub(crate) fn shading_swatch(hex: &str) -> Option<egui::Color32> {
+    wordcraft_doc::Rgb::parse(hex).map(crate::theme::c32)
+}
+
 fn home(app: &mut WordApp, ui: &mut Ui) {
     let st = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
@@ -1150,6 +1166,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Double Strikethrough", "format.doubleStrikethrough", json!({}));
                 });
                 let hl = app.canvas.last_highlight.clone();
+                let hl_sw = highlight_bar(&hl);
                 split(
                     ui,
                     app,
@@ -1158,7 +1175,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     "format.highlight",
                     json!({"color": hl}),
                     false,
-                    None,
+                    hl_sw,
                     crate::mini_toolbar::highlight_menu,
                 );
                 let fc = app.canvas.last_font_color.clone();
@@ -1270,11 +1287,21 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                     mi(ui, app, "Remove Space After Paragraph", "para.removeSpaceAfter", json!({}));
                     mi(ui, app, "Line Spacing Options…", "para.dialog", json!({}));
                 });
-                split(ui, app, "shading", "Shading", "para.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
-                    mi(ui, app, "No Color", "para.shading", json!({"color": null}));
-                    let theme = app.session.doc.settings.theme_colors.clone();
-                    crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
-                });
+                split(
+                    ui,
+                    app,
+                    "shading",
+                    "Shading",
+                    "para.shading",
+                    json!({"color": app.canvas.last_shading.clone()}),
+                    false,
+                    shading_swatch(&app.canvas.last_shading),
+                    |ui, app| {
+                        mi(ui, app, "No Color", "para.shading", json!({"color": null}));
+                        let theme = app.session.doc.settings.theme_colors.clone();
+                        crate::colors::menu(ui, app, &theme, Target::cmd("para.shading").remember(Remember::Shading));
+                    },
+                );
                 split(ui, app, "borders", "Borders", "para.borders", json!({"kind": "bottom"}), false, None, |ui, app| {
                     for (l, k) in [
                         ("Bottom Border", "bottom"),
@@ -2957,11 +2984,21 @@ fn table_design(app: &mut WordApp, ui: &mut Ui) {
                     ui.close();
                 }
             });
-            split(ui, app, "shading", "Shading", "table.shading", json!({"color": app.canvas.last_shading.clone()}), false, None, |ui, app| {
-                mi(ui, app, "No Color", "table.shading", json!({"color": null}));
-                let theme = app.session.doc.settings.theme_colors.clone();
-                crate::colors::menu(ui, app, &theme, Target::cmd("table.shading").remember(Remember::Shading));
-            });
+            split(
+                ui,
+                app,
+                "shading",
+                "Shading",
+                "table.shading",
+                json!({"color": app.canvas.last_shading.clone()}),
+                false,
+                shading_swatch(&app.canvas.last_shading),
+                |ui, app| {
+                    mi(ui, app, "No Color", "table.shading", json!({"color": null}));
+                    let theme = app.session.doc.settings.theme_colors.clone();
+                    crate::colors::menu(ui, app, &theme, Target::cmd("table.shading").remember(Remember::Shading));
+                },
+            );
         });
     });
     group(ui, "Borders", None, app, |ui, app| {
@@ -3105,7 +3142,7 @@ fn table_layout(app: &mut WordApp, ui: &mut Ui) {
                 [("bottomLeft", "Align Bottom Left"), ("bottomCenter", "Align Bottom Center"), ("bottomRight", "Align Bottom Right")],
             ] {
                 for (v, tip) in row {
-                    small(ui, app, "cellAlign", None, tip, "table.cellAlign", json!({"value": v}), false);
+                    small(ui, app, &format!("cellAlign.{v}"), None, tip, "table.cellAlign", json!({"value": v}), false);
                 }
                 ui.end_row();
             }
