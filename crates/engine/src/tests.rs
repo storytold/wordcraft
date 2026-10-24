@@ -3435,6 +3435,18 @@ fn hostile_params_never_panic() {
             let _ = s.layout();
         }
     }
+    // Caption templates: a stray brace, text outside ASCII, and a style that does not exist.
+    for params in [
+        json!({"label": "Рисунок", "text": "печь", "pattern": "{label {number}", "style": "No Such Style"}),
+        json!({"pattern": "{", "style": ""}),
+        json!({"pattern": "}", "position": "beside", "align": "distribute", "numberWrap": "brace"}),
+    ] {
+        let mut s = Session::new(crate::sample::sample_document());
+        let _ = s.run("references.caption", &params);
+        s.clamp_selection();
+        let _ = s.layout();
+        assert!(!s.doc.body.is_empty());
+    }
 }
 
 #[test]

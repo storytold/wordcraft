@@ -2,8 +2,8 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::{Counters, LevelSuffix};
-use wordcraft_doc::para::{InlineObject, NoteKind, OBJ};
-use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
+use wordcraft_doc::para::{InlineObject, NoteKind, OBJ, PTabAlign, PTabBase};
+use wordcraft_doc::props::{Align, CharProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::section::NumFormat;
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, para_block};
 
@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("references.caption", "Insert Caption", "References › Captions", caption)
-            .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–"}"#),
+            .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above|left|right", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–", "textSeparator"?: string (between the number and the text; default ":"), "numberWrap"?: "none|paren|bracket", "align"?: "left|center|right|justify", "style"?: paragraph style, "pattern"?: "{label} {chapter}{number} – {text} (when set, excludeLabel is ignored)"}"#),
         // F9: update fields; the selected ones that showed their code show their result again.
         CommandSpec::new("references.updateFields", "Update Field", "References", |s, v| {
             update_fields_in(s, v.get("all").and_then(Value::as_bool).unwrap_or(false))?;
@@ -814,38 +814,226 @@ pub fn seq_format(name: &str) -> &'static str {
 /// Separators Word offers between a chapter number and a caption number.
 pub const CHAPTER_SEPARATORS: [&str; 5] = ["-", ".", ":", "\u{2014}", "\u{2013}"];
 
-/// Insert a caption paragraph below (or above) the caret's paragraph, table or object: the label,
+/// Where a caption's number is wrapped.
+fn number_wrap(name: &str) -> (&'static str, &'static str) {
+    match name {
+        "paren" | "parentheses" | "()" => ("(", ")"),
+        "bracket" | "brackets" | "[]" => ("[", "]"),
+        _ => ("", ""),
+    }
+}
+
+fn caption_align(name: &str) -> Option<Align> {
+    match name {
+        "left" | "start" => Some(Align::Left),
+        "center" | "centre" => Some(Align::Center),
+        "right" | "end" => Some(Align::Right),
+        "justify" | "both" => Some(Align::Justify),
+        "distribute" => Some(Align::Distribute),
+        _ => None,
+    }
+}
+
+/// A piece of a caption name template. `{chapter}` is the chapter number and its separator,
+/// `{number}` the `SEQ` number, `{label}` the label and `{text}` the title.
+enum CaptionPiece {
+    Lit(String),
+    Label,
+    Chapter,
+    Number,
+    Text,
+}
+
+fn caption_pattern(pattern: &str) -> Vec<CaptionPiece> {
+    let mut out = Vec::new();
+    let mut rest = pattern;
+    while let Some(i) = rest.find('{') {
+        if i > 0 {
+            out.push(CaptionPiece::Lit(rest[..i].to_string()));
+        }
+        let after = &rest[i + 1..];
+        let Some(j) = after.find('}') else {
+            out.push(CaptionPiece::Lit(rest[i..].to_string()));
+            return out;
+        };
+        match &after[..j] {
+            "label" => out.push(CaptionPiece::Label),
+            "chapter" => out.push(CaptionPiece::Chapter),
+            "number" => out.push(CaptionPiece::Number),
+            "text" => out.push(CaptionPiece::Text),
+            name => out.push(CaptionPiece::Lit(format!("{{{name}}}"))),
+        }
+        rest = &after[j + 1..];
+    }
+    if !rest.is_empty() {
+        out.push(CaptionPiece::Lit(rest.to_string()));
+    }
+    out
+}
+
+/// Drop `{text}` and a separator that only introduces it, when the caption has no title.
+fn without_empty_title(mut pieces: Vec<CaptionPiece>) -> Vec<CaptionPiece> {
+    let Some(i) = pieces.iter().position(|p| matches!(p, CaptionPiece::Text)) else { return pieces };
+    pieces.remove(i);
+    if let Some(CaptionPiece::Lit(t)) = i.checked_sub(1).and_then(|k| pieces.get(k))
+        && t.chars().all(|c| c.is_whitespace() || matches!(c, ':' | '.' | '-' | '\u{2013}' | '\u{2014}'))
+    {
+        pieces.remove(i - 1);
+    }
+    pieces
+}
+
+/// Write `pieces` onto `para`. `chapter` is the heading level; `seq` is the `SEQ` instruction.
+fn write_caption(
+    para: &mut Paragraph,
+    pieces: &[CaptionPiece],
+    label: &str,
+    text: &str,
+    chapter: Option<u64>,
+    sep: &str,
+    seq: &str,
+    wrap: (&str, &str),
+    mut at: usize,
+) -> Result<usize, CmdError> {
+    let plain = CharProps::default();
+    let field = |instr: &str| InlineObject::Field {
+        instr: instr.to_string(),
+        result: String::new(),
+        locked: false,
+        dirty: false,
+        code: false,
+        form: String::new(),
+    };
+    let put = |para: &mut Paragraph, at: &mut usize, t: &str| -> Result<(), CmdError> {
+        *at += para.insert_text(*at, t, &plain)?;
+        Ok(())
+    };
+    for piece in pieces {
+        match piece {
+            CaptionPiece::Lit(t) => put(para, &mut at, t)?,
+            CaptionPiece::Label => put(para, &mut at, label)?,
+            CaptionPiece::Text => put(para, &mut at, text)?,
+            CaptionPiece::Chapter => {
+                if let Some(l) = chapter {
+                    para.insert_object(at, field(&format!("STYLEREF {l} \\s")), &plain)?;
+                    at += wordcraft_doc::para::OBJ.len_utf8();
+                    put(para, &mut at, sep)?;
+                }
+            }
+            CaptionPiece::Number => {
+                if !wrap.0.is_empty() {
+                    put(para, &mut at, wrap.0)?;
+                }
+                para.insert_object(at, field(seq), &plain)?;
+                at += wordcraft_doc::para::OBJ.len_utf8();
+                if !wrap.1.is_empty() {
+                    put(para, &mut at, wrap.1)?;
+                }
+            }
+        }
+    }
+    Ok(at)
+}
+
+/// Insert a caption below or above the caret's paragraph, table or object, or on the same line
+/// at the left or right margin (`position: "left"` or `"right"`, an equation's `(1)`). The name is the label,
 /// a chapter number (`STYLEREF n \s` and a separator) and a `SEQ label \* format \s n` number
-/// (ECMA-376 §17.16.5.56, §17.16.5.59).
+/// (ECMA-376 §17.16.5.56, §17.16.5.59), or `pattern` with `{label}`, `{chapter}`, `{number}` and
+/// `{text}`.
 fn caption(s: &mut Session, v: &Value) -> CmdResult {
     let label: String = p::str(v, "label").unwrap_or("Figure").chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect();
     let label = if label.trim().is_empty() { "Figure".to_string() } else { label.trim().to_string() };
     // SEQ identifiers are one word: Word joins a multi-word label with underscores.
     let ident = label.split_whitespace().collect::<Vec<_>>().join("_");
-    let text = p::str(v, "text").unwrap_or("").to_string();
-    let above = p::str(v, "position") == Some("above");
+    let text = p::str(v, "text").unwrap_or("").trim().to_string();
+    let position = p::str(v, "position").unwrap_or("below");
+    let above = position == "above";
+    let on_the_line = position == "right" || position == "left";
     let format = seq_format(p::str(v, "format").unwrap_or("ARABIC"));
     let chapter = p::u64(v, "chapter").filter(|l| (1..=9).contains(l));
     let sep = p::str(v, "separator").and_then(|x| CHAPTER_SEPARATORS.iter().find(|s| **s == x)).copied().unwrap_or("-");
-    let mut para = Paragraph::new().styled("Caption");
-    let field = |instr: String| InlineObject::Field { instr, result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
-    if !p::bool(v, "excludeLabel").unwrap_or(false) {
-        para.insert_text(0, &format!("{label} "), &CharProps::default())?;
-    }
+    let wrap = number_wrap(p::str(v, "numberWrap").unwrap_or("none"));
     let mut seq = format!("SEQ {ident} \\* {format}");
     if let Some(l) = chapter {
-        para.insert_object(para.len(), field(format!("STYLEREF {l} \\s")), &CharProps::default())?;
-        para.insert_text(para.len(), sep, &CharProps::default())?;
         seq.push_str(&format!(" \\s {l}"));
     }
-    para.insert_object(para.len(), field(seq), &CharProps::default())?;
-    if !text.is_empty() {
-        para.insert_text(para.len(), &format!(": {text}"), &CharProps::default())?;
+    let pieces = match p::str(v, "pattern").filter(|p| !p.trim().is_empty()) {
+        Some(pattern) => {
+            let pieces = caption_pattern(pattern);
+            if text.is_empty() { without_empty_title(pieces) } else { pieces }
+        }
+        None => {
+            let mut pieces = Vec::new();
+            if !p::bool(v, "excludeLabel").unwrap_or(false) {
+                pieces.push(CaptionPiece::Lit(format!("{label} ")));
+            }
+            if chapter.is_some() {
+                pieces.push(CaptionPiece::Chapter);
+            }
+            pieces.push(CaptionPiece::Number);
+            if !text.is_empty() {
+                // Absent means Word's colon. An empty separator is a space; anything else is
+                // written between spaces (` – ` for a table title).
+                match p::str(v, "textSeparator") {
+                    None => pieces.push(CaptionPiece::Lit(format!(": {text}"))),
+                    Some("") => pieces.push(CaptionPiece::Lit(format!(" {text}"))),
+                    Some(sep) => pieces.push(CaptionPiece::Lit(format!(" {sep} {text}"))),
+                }
+            }
+            pieces
+        }
+    };
+    let f = s.sel.focus.clone();
+    if on_the_line {
+        // The caption stays on the formula's line, at the left or right margin, so the formula
+        // keeps its paragraph. A right-hand number follows a positional tab; a left-hand one
+        // is written in front of the formula.
+        let path = match super::objects::object_selection(s) {
+            Some((pos, _)) => pos.path.clone(),
+            None => f.path.clone(),
+        };
+        let para = s.doc.para_mut(f.story, &path)?;
+        let at = if position == "left" {
+            let end = write_caption(para, &pieces, &label, &text, chapter, sep, &seq, wrap, 0)?;
+            if end < para.len() && !para.text[end..].starts_with(' ') {
+                para.insert_text(end, " ", &CharProps::default())?;
+            }
+            end
+        } else {
+            let at = para.len();
+            para.insert_object(
+                at,
+                InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: TabLeader::None },
+                &CharProps::default(),
+            )?;
+            write_caption(para, &pieces, &label, &text, chapter, sep, &seq, wrap, para.len())?
+        };
+        update_seq(s)?;
+        s.sel = Selection::caret(Pos { story: f.story, path, off: at });
+        return sel_result(s);
     }
+    let style = p::str(v, "style").unwrap_or("Caption");
+    let style = s
+        .doc
+        .styles
+        .find(style)
+        .filter(|st| st.kind == wordcraft_doc::StyleKind::Paragraph)
+        .map(|st| st.id.clone())
+        .unwrap_or_else(|| "Caption".into());
+    let mut para = Paragraph::new().styled(&style);
+    // A caption is not a body paragraph: no first-line indent, and no hyphenation in the title.
+    para.props.indent_first = Some(0.0);
+    para.props.suppress_hyphens = Some(true);
+    if above {
+        para.props.keep_next = Some(true);
+    }
+    if let Some(align) = p::str(v, "align").and_then(caption_align) {
+        para.props.align = Some(align);
+    }
+    write_caption(&mut para, &pieces, &label, &text, chapter, sep, &seq, wrap, 0)?;
     // A selected picture, shape or chart: next to the paragraph holding it, in the same cell or
     // text box (#1230). Otherwise next to the caret's top-level block: a paragraph, or the whole
     // table it is in.
-    let f = s.sel.focus.clone();
     let at = match super::objects::object_selection(s) {
         Some((pos, _)) => {
             let k = pos.path.last();
@@ -1314,6 +1502,75 @@ mod tests {
         s.run("caret.docEnd", &json!({})).unwrap();
         s.run("references.caption", &json!({"label": "Table", "excludeLabel": true, "format": "ROMAN"})).unwrap();
         assert_eq!(s.doc.body.last().unwrap().as_para().unwrap().plain_text(), "I");
+    }
+
+    /// The three caption styles and a same-line equation number survive a DOCX save and reopen.
+    #[test]
+    fn caption_styles_and_an_equation_number_survive_docx() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Chart\nE = mc2"));
+        s.run("select.text", &json!({"text": "Chart"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "A chart", "style": "FigureCaption", "position": "below"})).unwrap();
+        s.run("select.text", &json!({"text": "E = mc2"})).unwrap();
+        s.run("references.caption", &json!({"label": "Equation", "position": "right", "pattern": "({number})"})).unwrap();
+        let doc = wordcraft_docx::read(&wordcraft_docx::write(&s.doc).unwrap()).unwrap();
+        for id in ["FigureCaption", "TableCaption", "EquationCaption"] {
+            assert!(doc.styles.styles.iter().any(|st| st.id == id), "missing {id}");
+        }
+        let figure = doc.styles.styles.iter().find(|st| st.id == "FigureCaption").unwrap();
+        assert_eq!(figure.para.align, Some(wordcraft_doc::props::Align::Center));
+        let formula = doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().contains("mc2")).unwrap();
+        assert!(formula.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { align: PTabAlign::Right, .. })));
+        assert!(formula.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if instr.contains("SEQ"))));
+        assert!(formula.plain_text().contains("(1)"), "{}", formula.plain_text());
+    }
+
+    /// A caption name can follow a template, take its own style and alignment, and an equation
+    /// number can sit at the right of the formula as `(1)` with no label.
+    #[test]
+    fn caption_templates_alignment_and_equation_numbers() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("A chart\nE = mc2\nRows"));
+        s.run("select.text", &json!({"text": "A chart"})).unwrap();
+        s.run(
+            "references.caption",
+            &json!({
+                "label": "Figure",
+                "text": "The chart",
+                "pattern": "{label} {chapter}{number} – {text}",
+                "separator": ".",
+                "align": "center",
+                "style": "Figure Caption",
+            }),
+        )
+        .unwrap();
+        let fig = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.props.style.as_deref() == Some("FigureCaption")).unwrap();
+        assert_eq!(fig.plain_text(), "Figure 1 – The chart");
+        assert_eq!(fig.props.align, Some(wordcraft_doc::props::Align::Center));
+        assert_eq!(fig.props.indent_first, Some(0.0));
+        // No chapter field when chapter numbering is off, and no dangling separator before the title.
+        assert!(!fig.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if instr.starts_with("STYLEREF"))));
+
+        s.run("select.text", &json!({"text": "E = mc2"})).unwrap();
+        s.run("references.caption", &json!({"label": "Equation", "position": "right", "pattern": "({chapter}{number})", "numberWrap": "none"}))
+            .unwrap();
+        let formula = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.plain_text().starts_with("E = mc2")).unwrap();
+        assert_eq!(formula.plain_text(), "E = mc2\t(1)");
+        assert!(formula.props.style.as_deref() != Some("Caption"), "the formula keeps its own paragraph");
+        assert!(formula.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { .. })));
+
+        s.run("select.text", &json!({"text": "Rows"})).unwrap();
+        s.run(
+            "references.caption",
+            &json!({"label": "Table", "text": "Rows", "position": "above", "align": "left", "style": "TableCaption", "textSeparator": "–"}),
+        )
+        .unwrap();
+        let table = s.doc.body.iter().filter_map(|b| b.as_para()).find(|p| p.props.style.as_deref() == Some("TableCaption")).unwrap();
+        assert_eq!(table.plain_text(), "Table 1 – Rows");
+        assert_eq!(table.props.align, Some(wordcraft_doc::props::Align::Left));
+        assert_eq!(table.props.keep_next, Some(true));
+
+        // The equation number is a cross-reference target even though it shares the formula's line.
+        let eqs = s.run("insert.crossReference", &json!({"to": "equation"})).unwrap();
+        assert_eq!(eqs, json!(["E = mc2\t(1)"]));
     }
 
     #[test]

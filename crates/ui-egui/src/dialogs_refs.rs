@@ -218,6 +218,17 @@ const NUMBER_FORMATS: [(&str, &str); 5] =
 const SEPARATORS: [(&str, &str); 5] =
     [("-", "- (hyphen)"), (".", ". (period)"), (":", ": (colon)"), ("\u{2014}", "\u{2014} (em dash)"), ("\u{2013}", "\u{2013} (en dash)")];
 
+/// Name templates. `{chapter}` is empty unless chapter numbering is on, and then it is the
+/// chapter number plus [`CaptionForm::separator`]. `{text}` is left out when the title is empty.
+const NAME_TEMPLATES: [(&str, &str); 6] = [
+    ("", "Label number: title"),
+    ("{label} {chapter}{number} – {text}", "Label number – title"),
+    ("{label} {chapter}{number}. {text}", "Label number. title"),
+    ("{label} {chapter}{number}", "Label and number"),
+    ("({chapter}{number})", "Number in parentheses"),
+    ("custom", "Custom template"),
+];
+
 /// The Caption dialog's fields.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -227,7 +238,7 @@ pub struct CaptionForm {
     /// Normal template keeps them).
     pub labels: Vec<String>,
     pub text: String,
-    /// `below` or `above`.
+    /// `below`, `above` or `right` (on the same line, at the right margin).
     pub position: String,
     pub exclude_label: bool,
     /// `\*` format: `ARABIC`, `alphabetic`, `ALPHABETIC`, `roman`, `ROMAN`.
@@ -236,6 +247,18 @@ pub struct CaptionForm {
     /// Heading level that starts a chapter (1–9).
     pub chapter_level: u8,
     pub separator: String,
+    /// Between the number and the title when `pattern` is empty. `:` is Word's.
+    pub text_separator: String,
+    /// `none`, `paren` or `bracket`.
+    pub number_wrap: String,
+    /// Paragraph alignment, or empty to keep the style's.
+    pub align: String,
+    /// Paragraph style id.
+    pub style: String,
+    /// `{label}`, `{chapter}`, `{number}`, `{text}`. Empty keeps Word's "Label 1: title".
+    pub pattern: String,
+    /// The name menu is on Custom, so the template box stays open while the text still matches a preset.
+    pub custom_pattern: bool,
     /// New Label's text.
     pub new_label: String,
 }
@@ -269,11 +292,17 @@ impl CaptionForm {
             chapter: false,
             chapter_level: 1,
             separator: "-".into(),
+            text_separator: ":".into(),
+            number_wrap: "none".into(),
+            align: String::new(),
+            style: "Caption".into(),
+            pattern: String::new(),
+            custom_pattern: false,
             new_label: String::new(),
         }
     }
 
-    /// The number as it will show (`Figure 1-A`).
+    /// The number as it will show (`Figure 1-A`, `(1)`). The title stays in the text box beside it.
     pub fn preview(&self) -> String {
         let n = match self.format.as_str() {
             "alphabetic" => "a",
@@ -282,9 +311,25 @@ impl CaptionForm {
             "ROMAN" => "I",
             _ => "1",
         };
+        let (open, close) = match self.number_wrap.as_str() {
+            "paren" => ("(", ")"),
+            "bracket" => ("[", "]"),
+            _ => ("", ""),
+        };
         let chapter = if self.chapter { format!("1{}", self.separator) } else { String::new() };
-        let label = if self.exclude_label { String::new() } else { format!("{} ", self.label) };
-        format!("{label}{chapter}{n}")
+        let number = format!("{open}{n}{close}");
+        if self.pattern.is_empty() {
+            let label = if self.exclude_label { String::new() } else { format!("{} ", self.label) };
+            return format!("{label}{chapter}{number}");
+        }
+        // The title is typed next to this preview, so a separator that only introduces `{text}`
+        // is not part of the number.
+        let mut pattern = self.pattern.clone();
+        if let Some(i) = pattern.find("{text}") {
+            let head = pattern[..i].trim_end_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '.' | '-' | '\u{2013}' | '\u{2014}'));
+            pattern = format!("{head}{}", &pattern[i + "{text}".len()..]);
+        }
+        pattern.replace("{label}", &self.label).replace("{chapter}", &chapter).replace("{number}", &number).replace("{text}", "")
     }
 
     /// `references.caption` parameters.
@@ -300,7 +345,70 @@ impl CaptionForm {
             v["chapter"] = json!(self.chapter_level);
             v["separator"] = json!(self.separator);
         }
+        if !self.pattern.is_empty() {
+            v["pattern"] = json!(self.pattern);
+        }
+        if self.text_separator != ":" {
+            v["textSeparator"] = json!(self.text_separator);
+        }
+        if self.number_wrap != "none" {
+            v["numberWrap"] = json!(self.number_wrap);
+        }
+        if !self.align.is_empty() {
+            v["align"] = json!(self.align);
+        }
+        if self.style != "Caption" {
+            v["style"] = json!(self.style);
+        }
         v
+    }
+
+    /// Fill the fields a report's caption rules ask for. `word` is Insert Caption as it was.
+    pub fn apply_preset(&mut self, preset: &str) {
+        self.custom_pattern = false;
+        match preset {
+            "figure" => {
+                self.pattern = "{label} {chapter}{number} – {text}".into();
+                self.position = "below".into();
+                self.align = "center".into();
+                self.style = "FigureCaption".into();
+                self.number_wrap = "none".into();
+                self.exclude_label = false;
+                if self.label == "Figure" || self.label == "Equation" || self.label == "Table" {
+                    self.label = "Figure".into();
+                }
+            }
+            "table" => {
+                self.pattern = "{label} {chapter}{number} – {text}".into();
+                self.position = "above".into();
+                self.align = "left".into();
+                self.style = "TableCaption".into();
+                self.number_wrap = "none".into();
+                self.exclude_label = false;
+                if self.label == "Figure" || self.label == "Equation" || self.label == "Table" {
+                    self.label = "Table".into();
+                }
+            }
+            "equation" => {
+                self.pattern = "({chapter}{number})".into();
+                self.position = "right".into();
+                self.align.clear();
+                self.style = "Caption".into();
+                self.number_wrap = "none".into();
+                self.exclude_label = true;
+                self.text.clear();
+                self.label = "Equation".into();
+            }
+            _ => {
+                self.pattern.clear();
+                self.position = "below".into();
+                self.align.clear();
+                self.style = "Caption".into();
+                self.text_separator = ":".into();
+                self.number_wrap = "none".into();
+                self.exclude_label = false;
+            }
+        }
     }
 
     /// Insert the caption and remember its label for next time.
@@ -329,8 +437,94 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
         });
         ui.end_row();
         ui.label(tl!("Position:"));
-        choice(ui, "cap_pos", &mut f.position, &[("below".to_string(), "Below the item"), ("above".to_string(), "Above the item")]);
+        choice(
+            ui,
+            "cap_pos",
+            &mut f.position,
+            &[
+                ("below".to_string(), "Below the item"),
+                ("above".to_string(), "Above the item"),
+                ("left".to_string(), "Left of the item"),
+                ("right".to_string(), "Right of the item"),
+            ],
+        );
         ui.end_row();
+        ui.label(tl!("Alignment:"));
+        choice(
+            ui,
+            "cap_align",
+            &mut f.align,
+            &[
+                (String::new(), "From the style"),
+                ("left".into(), "Left"),
+                ("center".into(), "Center"),
+                ("right".into(), "Right"),
+                ("justify".into(), "Justified"),
+            ],
+        );
+        ui.end_row();
+        ui.label(tl!("Caption style:"));
+        let mut styles: Vec<(String, String)> = app
+            .session
+            .doc
+            .styles
+            .styles
+            .iter()
+            .filter(|s| s.kind == StyleKind::Paragraph && !s.hidden)
+            .map(|s| (s.id.clone(), crate::i18n::style_name(s)))
+            .collect();
+        styles.sort_by(|a, b| a.1.cmp(&b.1));
+        if !styles.iter().any(|(id, _)| id == &f.style) {
+            styles.push((f.style.clone(), f.style.clone()));
+        }
+        let shown = styles.iter().find(|(id, _)| id == &f.style).map(|(_, name)| name.clone()).unwrap_or_else(|| f.style.clone());
+        egui::ComboBox::from_id_salt("cap_style").selected_text(shown).width(180.0).show_ui(ui, |ui| {
+            for (id, name) in &styles {
+                ui.selectable_value(&mut f.style, id.clone(), name.clone());
+            }
+        });
+        ui.end_row();
+        ui.label(tl!("Name:"));
+        let known = NAME_TEMPLATES.iter().any(|(p, _)| *p == f.pattern);
+        let mut picked = if f.custom_pattern || !known { "custom".to_string() } else { f.pattern.clone() };
+        let opts: Vec<(String, &str)> = NAME_TEMPLATES.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+        choice(ui, "cap_name", &mut picked, &opts);
+        f.custom_pattern = picked == "custom";
+        if !f.custom_pattern {
+            f.pattern = picked;
+        }
+        ui.end_row();
+        if f.custom_pattern {
+            ui.label(tl!("Template:"));
+            ui.add(egui::TextEdit::singleline(&mut f.pattern).desired_width(220.0).hint_text("{label} {number} – {text}"));
+            ui.end_row();
+        }
+        ui.label(tl!("Title separator:"));
+        let seps: Vec<(String, String)> = [(":", ":"), ("–", "–"), ("—", "—"), (".", "."), ("-", "-"), ("", "(space)")]
+            .into_iter()
+            .map(|(v, l)| (v.to_string(), l.to_string()))
+            .collect();
+        let seps: Vec<(String, &str)> = seps.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
+        choice(ui, "cap_text_sep", &mut f.text_separator, &seps);
+        ui.end_row();
+        ui.label(tl!("Number:"));
+        choice(ui, "cap_wrap", &mut f.number_wrap, &[("none".into(), "1"), ("paren".into(), "(1)"), ("bracket".into(), "[1]")]);
+        ui.end_row();
+    });
+    ui.label(tl!("Presets:"));
+    ui.horizontal(|ui| {
+        if ui.button(tl!("As in Word")).clicked() {
+            f.apply_preset("word");
+        }
+        if ui.button(tl!("Figure caption")).clicked() {
+            f.apply_preset("figure");
+        }
+        if ui.button(tl!("Table caption")).clicked() {
+            f.apply_preset("table");
+        }
+        if ui.button(tl!("Equation number")).clicked() {
+            f.apply_preset("equation");
+        }
     });
     ui.checkbox(&mut f.exclude_label, tl!("Leave the label out of the caption"));
     ui.add_space(4.0);

@@ -381,6 +381,8 @@ pub struct ParaLayout {
     pub displays: Vec<(usize, wordcraft_doc::math::MathJc)>,
     /// Positional tabs (laid out as tab clusters): cluster index, alignment, base and leader.
     pub ptabs: Vec<(usize, PTabAlign, PTabBase, TabLeader)>,
+    /// Clusters that show a SEQ field (a caption number), sorted by cluster index.
+    pub seqs: Vec<usize>,
     /// Byte ranges of the text laid out as nothing ([`left_out`]): hidden text that is not shown,
     /// tracked deletions in the final text. Resolved as laid out, table formatting included.
     pub left_out: Vec<std::ops::Range<usize>>,
@@ -1503,6 +1505,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mut rubies = Vec::new();
     let mut displays = Vec::new();
     let mut ptabs = Vec::new();
+    let mut seqs = Vec::new();
     let mut eq_counter = env.eq_number;
     let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
@@ -1631,6 +1634,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             }
                         }
                         Some(o @ InlineObject::Field { instr, result, code, .. }) => {
+                            let seq = crate::fields::field_name(instr) == "SEQ";
+                            let before_seq = b.clusters.len();
                             let form = if env.field_codes != *code { None } else { o.legacy_form() };
                             if let Some(wordcraft_doc::legacy_form::LegacyForm::CheckBox { size, .. }) = form {
                                 // Word draws a legacy check box as a square as tall as the text's
@@ -1680,6 +1685,9 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                         b.shape_atomic(&t, start, end, &rc);
                                     }
                                 }
+                            }
+                            if seq {
+                                seqs.extend(before_seq..b.clusters.len());
                             }
                         }
                         Some(InlineObject::NoteRef { kind, id, custom }) => {
@@ -1914,6 +1922,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         rubies,
         displays,
         ptabs,
+        seqs,
         left_out: Vec::new(),
         enclosures,
         auto_space,
@@ -2023,6 +2032,60 @@ fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, width: f32, in
         PTabAlign::Right => (hi, TabAlign::Right),
     };
     TabStop { pos, align, leader }
+}
+
+/// Text in `c0..end` is a short caption: it holds a SEQ field, totals at most 220 pt, and is not
+/// another equation. Ordinary prose before a display equation is not a caption.
+fn caption_span(pl: &ParaLayout, c0: usize, end: usize) -> bool {
+    if end <= c0 || !pl.seqs.iter().any(|k| (c0..end).contains(k)) {
+        return false;
+    }
+    let mut w = 0.0f32;
+    for k in c0..end {
+        if pl.displays.iter().any(|(ci, _)| *ci == k) {
+            return false;
+        }
+        let Some(c) = pl.clusters.get(k) else { return false };
+        match c.kind {
+            ClKind::Marker | ClKind::Space | ClKind::Text | ClKind::Object(_) => {}
+            _ => return false,
+        }
+        w += c.adv;
+        if w > 220.0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// A display equation may share its line with the number at the right margin: a right positional
+/// tab and a short caption after it, and nothing else. A following sentence still starts the next line.
+fn equation_number_tail(pl: &ParaLayout, mut j: usize) -> bool {
+    let n = pl.clusters.len();
+    while j < n && matches!(pl.clusters.get(j).map(|c| c.kind), Some(ClKind::Marker | ClKind::Space)) {
+        j += 1;
+    }
+    if !pl.ptabs.iter().any(|(i, a, ..)| *i == j && *a == PTabAlign::Right) {
+        return false;
+    }
+    j += 1;
+    let mut w = 0.0f32;
+    while j < n {
+        if pl.displays.iter().any(|(ci, _)| *ci == j) {
+            return false;
+        }
+        let Some(c) = pl.clusters.get(j) else { return false };
+        match c.kind {
+            ClKind::Marker | ClKind::Space | ClKind::Text | ClKind::Object(_) => {}
+            _ => return false,
+        }
+        w += c.adv;
+        if w > 144.0 {
+            return false;
+        }
+        j += 1;
+    }
+    true
 }
 
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
@@ -2247,9 +2310,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
                 _ => {}
             }
-            // A display equation sits on a line of its own.
+            // A display equation sits on a line of its own, unless a short SEQ caption is already on this line.
             let is_display = pl.displays.iter().any(|(ci, _)| *ci == j);
-            if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+            if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) && !caption_span(pl, c0, j) {
                 end = LineEnd::Wrap;
                 break;
             }
@@ -2370,11 +2433,15 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
             }
             if is_display {
-                // Markers right after it stay on its line; anything else starts a new one.
+                // Markers right after it stay on its line; anything else starts a new one,
+                // except an equation number held at the right margin by a positional tab.
                 j += 1;
                 while j < n && pl.clusters.get(j).is_some_and(|c| c.kind == ClKind::Marker) {
                     xs.push(x);
                     j += 1;
+                }
+                if equation_number_tail(pl, j) {
+                    continue;
                 }
                 end = if j >= n { LineEnd::Para } else { LineEnd::Wrap };
                 break;
@@ -2537,15 +2604,55 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         let slack = right_edge - content_end;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
-        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
-        let shift = match (display, rp.align) {
-            (Some(MathJc::Left), _) => 0.0,
-            (Some(MathJc::Right), _) => slack,
-            (Some(_), _) => slack / 2.0,
-            (None, Align::Center) => slack / 2.0,
-            (None, Align::Right) => slack,
-            _ => 0.0,
+        let display_at = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).copied();
+        let display = display_at.map(|d| d.1);
+        // The number after a right positional tab stays at the margin. The usual whole-line shift
+        // would move it, so a caption on this line is placed inside the free interval instead.
+        let numbered = display.is_some()
+            && last_tab
+                .is_some_and(|t| pl.ptabs.iter().any(|(i, a, ..)| *i == t && *a == PTabAlign::Right) && display_at.is_some_and(|(eq, _)| eq < t));
+        let prefix = display_at.is_some_and(|(eq, _)| caption_span(pl, c0, eq));
+        let shift = if numbered || prefix {
+            0.0
+        } else {
+            match (display, rp.align) {
+                (Some(MathJc::Left), _) => 0.0,
+                (Some(MathJc::Right), _) => slack,
+                (Some(_), _) => slack / 2.0,
+                (None, Align::Center) => slack / 2.0,
+                (None, Align::Right) => slack,
+                _ => 0.0,
+            }
         };
+        // Left stays where the line put it. Right goes to the right of the free interval, just
+        // clear of the number. Anything else is centred in the full measure.
+        if (numbered || prefix)
+            && !matches!(display, Some(MathJc::Left))
+            && let Some((eq, _)) = display_at
+        {
+            let eq_w = pl.clusters.get(eq).map(|c| c.adv).unwrap_or(0.0);
+            let mut left_lim = line_start_x;
+            for k in c0..eq {
+                if let (Some(c), Some(x)) = (pl.clusters.get(k), xs.get(k - c0)) {
+                    left_lim = left_lim.max(*x + c.adv);
+                }
+            }
+            let right_lim = if numbered { last_tab.and_then(|tab| xs.get(tab + 1 - c0).copied()).unwrap_or(right_edge) - 8.0 } else { right_edge };
+            let ideal =
+                if matches!(display, Some(MathJc::Right)) { right_lim - eq_w } else { line_start_x + ((right_edge - line_start_x) - eq_w) / 2.0 };
+            let gap = if left_lim > line_start_x + 0.5 { 8.0 } else { 0.0 };
+            let place = ideal.max(left_lim + gap).min((right_lim - eq_w).max(line_start_x));
+            let cur = xs.get(eq - c0).copied().unwrap_or(line_start_x);
+            let delta = place - cur;
+            // Include the entry at the equation's right edge. On a numbered line that is the
+            // positional tab, which then starts at the moved equation and still ends at the number.
+            let until = if numbered { last_tab.map(|t| t + 1).unwrap_or(eq + 1) } else { c1 + 1 };
+            for k in eq..until {
+                if let Some(v) = xs.get_mut(k - c0) {
+                    *v += delta;
+                }
+            }
+        }
         if shift > 0.0 && slack > 0.0 {
             for v in xs.iter_mut().skip(align_from - c0) {
                 *v += shift;
