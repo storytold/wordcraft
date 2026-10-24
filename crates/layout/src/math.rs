@@ -227,7 +227,7 @@ pub fn layout_equation(
         [] => cx.hint(st),
         [MNode::EqArr { rows }] if display && rows.iter().any(|r| split_number(r).is_some()) => cx.numbered(rows, st, avail, counter),
         _ if display => cx.wrapped(nodes, st, avail, props),
-        _ => cx.arg(nodes, st, 0),
+        _ => cx.inline_wrapped(nodes, st, avail, props),
     };
     let mut slots = b.slots;
     let em = base;
@@ -1803,6 +1803,12 @@ impl Ctx {
         out
     }
 
+    /// Inline equation that wraps within available width (like display but inline).
+    fn inline_wrapped(&mut self, a: &[MNode], st: St, avail: f32, mp: &MathProps) -> Bx {
+        // Use the same wrapping logic as display equations, but for inline use
+        self.wrapped(a, st, avail, mp)
+    }
+
     /// Operator `c` drawn like the operator atom `like` (its face, size and colour), without
     /// caret slots.
     fn op_glyph(&self, like: &Bx, c: char, st: St) -> Option<Bx> {
@@ -2078,8 +2084,12 @@ mod tests {
         let m = lay_in(&Math::default(), sum, true, avail, &repeat);
         let ls = lines(&m);
         assert!(ls.len() >= 2 && ls[0].1.last().is_some_and(|g| g.1 == "+") && ls[1].1[0].1 == "+", "{ls:?}");
-        // Inline equations never wrap.
-        assert_eq!(lines(&lay_in(&Math::default(), sum, false, avail, &mp)).len(), 1);
+        // Inline equations wrap within available width (like display but inline).
+        let ls = lines(&lay_in(&Math::default(), sum, false, avail, &mp));
+        assert!(ls.len() >= 2, "inline equation wraps when it exceeds available width: {ls:?}");
+        let first_line_max_x = ls[0].1.iter().map(|(x, _)| x).fold(0.0f32, |acc, &x| f32::max(acc, x));
+        // First line should be close to available width (within ~15% for operator breaks)
+        assert!((first_line_max_x / avail) > 0.85, "first line reasonably fills available width: {first_line_max_x} vs {avail}");
         // A term wider than the line overflows it rather than breaking inside.
         let frac = lay_in(&Math::default(), "y=(a+b+c+d+e+f+g+h+i+j+k+l+m+n+o+p+q+r+s+t+u+v+w)/2", true, avail, &mp);
         assert!(frac.width > avail && frac.items.iter().any(|i| matches!(i, MItem::Rect { .. })), "{}", frac.width);

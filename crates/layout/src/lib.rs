@@ -1208,6 +1208,8 @@ fn layout_box(
     let mut prev_listed = false;
     let mut prev_style: Option<(String, bool)> = None;
     let mut last_top = 0.0f32;
+    // The frame the paragraphs before this one are in, and where that frame's last one ended.
+    let mut frame_run: Option<(FrameKey, f32)> = None;
     // Word has no frames in a text box: a framed paragraph there (its style's frame, usually)
     // runs with the box's text (#2357).
     let frames = !matches!(story, StoryRef::Part(id) if ctx.doc.parts.get(&id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox));
@@ -1234,12 +1236,24 @@ fn layout_box(
                         None => pf.height,
                     };
                     let float = frame_float(&fr);
-                    let r = float_rect(frame, (0.0, width), y, fw, h, &float);
+                    // Paragraphs that share a frame's placement are one frame: Word stacks them
+                    // inside it, one under the other (#2357). Each takes the frame's own place,
+                    // so on their own they would all be drawn over each other; the first takes
+                    // the frame's place and the rest follow it down.
+                    let key = frame_key(&fr);
+                    let at = match &frame_run {
+                        Some((k, bottom)) if *k == key => *bottom,
+                        _ => y,
+                    };
+                    let r = float_rect(frame, (0.0, width), at, fw, h, &float);
                     push_para(&mut items, story, &path, &pf, 0, pf.lines.len(), r.x, r.y, fw, Edges::own(&pf, 0, pf.lines.len()));
+                    frame_run = Some((key, r.y + h));
                     excl.extend(wrap_area(r, &float, None));
                     float_tables.push(r);
                     continue;
                 }
+                // A paragraph outside the frame ends the run of paragraphs sharing it.
+                frame_run = None;
                 // A legacy table compatibility flag lets same-style paragraphs in a table keep their
                 // spacing (`allow_same_style_space`).
                 let ctxl = pl.rp.contextual_spacing && !allow_same_style_space;
@@ -1400,6 +1414,39 @@ fn natural_width(pl: &ParaLayout) -> f32 {
         })
         .fold(0.0f32, f32::max);
     widest + pl.rp.indent_left.max(0.0) + pl.rp.indent_right.max(0.0)
+}
+
+/// What makes two paragraphs share a text frame: the frame's own placement and size (ECMA-376
+/// §17.3.1.11). The space around the frame is not part of it, so a run of paragraphs whose
+/// frames differ only in that is still one frame.
+#[derive(Clone, PartialEq)]
+struct FrameKey {
+    x: f32,
+    y: f32,
+    w: Option<f32>,
+    h: Option<f32>,
+    h_exact: bool,
+    x_align: Option<String>,
+    y_align: Option<String>,
+    h_anchor: String,
+    v_anchor: String,
+    wrap: String,
+}
+
+/// The key of a text frame's placement.
+fn frame_key(fr: &wordcraft_doc::props::TextFrame) -> FrameKey {
+    FrameKey {
+        x: fr.x,
+        y: fr.y,
+        w: fr.w,
+        h: fr.h,
+        h_exact: fr.h_exact,
+        x_align: fr.x_align.clone(),
+        y_align: fr.y_align.clone(),
+        h_anchor: fr.h_anchor.clone(),
+        v_anchor: fr.v_anchor.clone(),
+        wrap: fr.wrap.clone(),
+    }
 }
 
 /// A text frame's placement as a floating object's (`w:framePr` → anchors, alignment, wrap).
