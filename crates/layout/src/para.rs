@@ -2025,6 +2025,59 @@ fn ptab_stop(align: PTabAlign, base: PTabBase, leader: TabLeader, width: f32, in
     TabStop { pos, align, leader }
 }
 
+/// Text in `c0..end` is a short caption (a number or a title), not another equation or a sentence.
+fn caption_span(pl: &ParaLayout, c0: usize, end: usize) -> bool {
+    if end <= c0 {
+        return false;
+    }
+    let mut w = 0.0f32;
+    for k in c0..end {
+        if pl.displays.iter().any(|(ci, _)| *ci == k) {
+            return false;
+        }
+        let Some(c) = pl.clusters.get(k) else { return false };
+        match c.kind {
+            ClKind::Marker | ClKind::Space | ClKind::Text | ClKind::Object(_) => {}
+            _ => return false,
+        }
+        w += c.adv;
+        if w > 220.0 {
+            return false;
+        }
+    }
+    true
+}
+
+/// A display equation may share its line with the number at the right margin: a right positional
+/// tab and a short caption after it, and nothing else. A following sentence still starts the next line.
+fn equation_number_tail(pl: &ParaLayout, mut j: usize) -> bool {
+    let n = pl.clusters.len();
+    while j < n && matches!(pl.clusters.get(j).map(|c| c.kind), Some(ClKind::Marker | ClKind::Space)) {
+        j += 1;
+    }
+    if !pl.ptabs.iter().any(|(i, a, ..)| *i == j && *a == PTabAlign::Right) {
+        return false;
+    }
+    j += 1;
+    let mut w = 0.0f32;
+    while j < n {
+        if pl.displays.iter().any(|(ci, _)| *ci == j) {
+            return false;
+        }
+        let Some(c) = pl.clusters.get(j) else { return false };
+        match c.kind {
+            ClKind::Marker | ClKind::Space | ClKind::Text | ClKind::Object(_) => {}
+            _ => return false,
+        }
+        w += c.adv;
+        if w > 144.0 {
+            return false;
+        }
+        j += 1;
+    }
+    true
+}
+
 /// Break a paragraph into lines, measure each line, apply the paragraph's alignment and place
 /// the list label. Fills `pl.lines`, `pl.height` and the label's position.
 fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Option<&Level>) {
@@ -2249,7 +2302,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             }
             // A display equation sits on a line of its own.
             let is_display = pl.displays.iter().any(|(ci, _)| *ci == j);
-            if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) {
+            if is_display && (c0..j).any(|k| pl.clusters.get(k).is_some_and(|c| c.kind != ClKind::Marker)) && !caption_span(pl, c0, j) {
                 end = LineEnd::Wrap;
                 break;
             }
@@ -2370,11 +2423,15 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
             }
             if is_display {
-                // Markers right after it stay on its line; anything else starts a new one.
+                // Markers right after it stay on its line; anything else starts a new one,
+                // except an equation number held at the right margin by a positional tab.
                 j += 1;
                 while j < n && pl.clusters.get(j).is_some_and(|c| c.kind == ClKind::Marker) {
                     xs.push(x);
                     j += 1;
+                }
+                if equation_number_tail(pl, j) {
+                    continue;
                 }
                 end = if j >= n { LineEnd::Para } else { LineEnd::Wrap };
                 break;
@@ -2537,15 +2594,52 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         let slack = right_edge - content_end;
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
-        let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
-        let shift = match (display, rp.align) {
+        let display_at = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).copied();
+        let display = display_at.map(|d| d.1);
+        // The number after a right positional tab stays at the margin. The equation is centred
+        // in the line afterwards, instead of the usual shift (which would move the number).
+        let numbered = display.is_some()
+            && last_tab.is_some_and(|t| pl.ptabs.iter().any(|(i, a, ..)| *i == t && *a == PTabAlign::Right) && display_at.is_some_and(|(eq, _)| eq < t));
+        let prefix = display_at.is_some_and(|(eq, _)| caption_span(pl, c0, eq));
+        let shift = if numbered || prefix {
+            0.0
+        } else {
+            match (display, rp.align) {
             (Some(MathJc::Left), _) => 0.0,
             (Some(MathJc::Right), _) => slack,
             (Some(_), _) => slack / 2.0,
             (None, Align::Center) => slack / 2.0,
-            (None, Align::Right) => slack,
-            _ => 0.0,
+                (None, Align::Right) => slack,
+                _ => 0.0,
+            }
         };
+        if (numbered || prefix) && !matches!(display, Some(MathJc::Left | MathJc::Right)) {
+            if let Some((eq, _)) = display_at {
+                let eq_w = pl.clusters.get(eq).map(|c| c.adv).unwrap_or(0.0);
+                let mut left_lim = line_start_x;
+                for k in c0..eq {
+                    if let (Some(c), Some(x)) = (pl.clusters.get(k), xs.get(k - c0)) {
+                        left_lim = left_lim.max(*x + c.adv);
+                    }
+                }
+                let right_lim = if numbered {
+                    last_tab.and_then(|tab| xs.get(tab + 1 - c0).copied()).unwrap_or(right_edge) - 8.0
+                } else {
+                    right_edge
+                };
+                let ideal = line_start_x + ((right_edge - line_start_x) - eq_w) / 2.0;
+                let gap = if left_lim > line_start_x + 0.5 { 8.0 } else { 0.0 };
+                let place = ideal.max(left_lim + gap).min((right_lim - eq_w).max(line_start_x));
+                let cur = xs.get(eq - c0).copied().unwrap_or(line_start_x);
+                let delta = place - cur;
+                let until = if numbered { last_tab.unwrap_or(eq + 1) } else { eq + 1 };
+                for k in eq..until {
+                    if let Some(v) = xs.get_mut(k - c0) {
+                        *v += delta;
+                    }
+                }
+            }
+        }
         if shift > 0.0 && slack > 0.0 {
             for v in xs.iter_mut().skip(align_from - c0) {
                 *v += shift;

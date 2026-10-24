@@ -441,6 +441,7 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
             &[
                 ("below".to_string(), "Below the item"),
                 ("above".to_string(), "Above the item"),
+                ("left".to_string(), "Left of the item"),
                 ("right".to_string(), "Right of the item"),
             ],
         );
@@ -459,7 +460,7 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
             ],
         );
         ui.end_row();
-        ui.label(tl!("Style:"));
+        ui.label(tl!("Caption style:"));
         let mut styles: Vec<(String, String)> = app
             .session
             .doc
@@ -467,16 +468,16 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
             .styles
             .iter()
             .filter(|s| s.kind == StyleKind::Paragraph && !s.hidden)
-            .map(|s| (s.id.clone(), s.name.clone()))
+            .map(|s| (s.id.clone(), crate::i18n::style_name(s)))
             .collect();
         styles.sort_by(|a, b| a.1.cmp(&b.1));
         if !styles.iter().any(|(id, _)| id == &f.style) {
             styles.push((f.style.clone(), f.style.clone()));
         }
         let shown = styles.iter().find(|(id, _)| id == &f.style).map(|(_, name)| name.clone()).unwrap_or_else(|| f.style.clone());
-        egui::ComboBox::from_id_salt("cap_style").selected_text(tl!(&shown)).width(180.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("cap_style").selected_text(shown).width(180.0).show_ui(ui, |ui| {
             for (id, name) in &styles {
-                ui.selectable_value(&mut f.style, id.clone(), tl!(name));
+                ui.selectable_value(&mut f.style, id.clone(), name.clone());
             }
         });
         ui.end_row();
@@ -521,7 +522,7 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
     });
     ui.label(tl!("Presets:"));
     ui.horizontal(|ui| {
-        if ui.button(tl!("Word")).clicked() {
+        if ui.button(tl!("As in Word")).clicked() {
             f.apply_preset("word");
         }
         if ui.button(tl!("Figure caption")).clicked() {

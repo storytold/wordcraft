@@ -72,7 +72,7 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("references.caption", "Insert Caption", "References › Captions", caption)
-            .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above|right", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–", "textSeparator"?: string (between the number and the text; default ":"), "numberWrap"?: "none|paren|bracket", "align"?: "left|center|right|justify", "style"?: paragraph style, "pattern"?: "{label} {chapter}{number} – {text}"}"#),
+            .params(r#"{"label"?: "Figure|Table|Equation|any label", "text"?: string, "position"?: "below|above|left|right", "excludeLabel"?: bool, "format"?: "ARABIC|alphabetic|ALPHABETIC|roman|ROMAN", "chapter"?: heading level 1-9, "separator"?: "-|.|:|—|–", "textSeparator"?: string (between the number and the text; default ":"), "numberWrap"?: "none|paren|bracket", "align"?: "left|center|right|justify", "style"?: paragraph style, "pattern"?: "{label} {chapter}{number} – {text}"}"#),
         // F9: update fields; the selected ones that showed their code show their result again.
         CommandSpec::new("references.updateFields", "Update Field", "References", |s, v| {
             update_fields_in(s, v.get("all").and_then(Value::as_bool).unwrap_or(false))?;
@@ -884,42 +884,42 @@ fn without_empty_title(mut pieces: Vec<CaptionPiece>) -> Vec<CaptionPiece> {
 }
 
 /// Write `pieces` onto `para`. `chapter` is the heading level; `seq` is the `SEQ` instruction.
-fn write_caption(para: &mut Paragraph, pieces: &[CaptionPiece], label: &str, text: &str, chapter: Option<u64>, sep: &str, seq: &str, wrap: (&str, &str)) -> Result<(), CmdError> {
+fn write_caption(para: &mut Paragraph, pieces: &[CaptionPiece], label: &str, text: &str, chapter: Option<u64>, sep: &str, seq: &str, wrap: (&str, &str), mut at: usize) -> Result<usize, CmdError> {
     let plain = CharProps::default();
     let field = |instr: &str| InlineObject::Field { instr: instr.to_string(), result: String::new(), locked: false, dirty: false, code: false, form: String::new() };
+    let put = |para: &mut Paragraph, at: &mut usize, t: &str| -> Result<(), CmdError> {
+        *at += para.insert_text(*at, t, &plain)?;
+        Ok(())
+    };
     for piece in pieces {
         match piece {
-            CaptionPiece::Lit(t) => {
-                para.insert_text(para.len(), t, &plain)?;
-            }
-            CaptionPiece::Label => {
-                para.insert_text(para.len(), label, &plain)?;
-            }
-            CaptionPiece::Text => {
-                para.insert_text(para.len(), text, &plain)?;
-            }
+            CaptionPiece::Lit(t) => put(para, &mut at, t)?,
+            CaptionPiece::Label => put(para, &mut at, label)?,
+            CaptionPiece::Text => put(para, &mut at, text)?,
             CaptionPiece::Chapter => {
                 if let Some(l) = chapter {
-                    para.insert_object(para.len(), field(&format!("STYLEREF {l} \\s")), &plain)?;
-                    para.insert_text(para.len(), sep, &plain)?;
+                    para.insert_object(at, field(&format!("STYLEREF {l} \\s")), &plain)?;
+                    at += wordcraft_doc::para::OBJ.len_utf8();
+                    put(para, &mut at, sep)?;
                 }
             }
             CaptionPiece::Number => {
                 if !wrap.0.is_empty() {
-                    para.insert_text(para.len(), wrap.0, &plain)?;
+                    put(para, &mut at, wrap.0)?;
                 }
-                para.insert_object(para.len(), field(seq), &plain)?;
+                para.insert_object(at, field(seq), &plain)?;
+                at += wordcraft_doc::para::OBJ.len_utf8();
                 if !wrap.1.is_empty() {
-                    para.insert_text(para.len(), wrap.1, &plain)?;
+                    put(para, &mut at, wrap.1)?;
                 }
             }
         }
     }
-    Ok(())
+    Ok(at)
 }
 
-/// Insert a caption below or above the caret's paragraph, table or object, or the number at the
-/// right of the current line (`position: "right"`, an equation's `(1)`). The name is the label,
+/// Insert a caption below or above the caret's paragraph, table or object, or on the same line
+/// at the left or right margin (`position: "left"` or `"right"`, an equation's `(1)`). The name is the label,
 /// a chapter number (`STYLEREF n \s` and a separator) and a `SEQ label \* format \s n` number
 /// (ECMA-376 §17.16.5.56, §17.16.5.59), or `pattern` with `{label}`, `{chapter}`, `{number}` and
 /// `{text}`.
@@ -931,7 +931,7 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::str(v, "text").unwrap_or("").trim().to_string();
     let position = p::str(v, "position").unwrap_or("below");
     let above = position == "above";
-    let on_the_right = position == "right";
+    let on_the_line = position == "right" || position == "left";
     let format = seq_format(p::str(v, "format").unwrap_or("ARABIC"));
     let chapter = p::u64(v, "chapter").filter(|l| (1..=9).contains(l));
     let sep = p::str(v, "separator").and_then(|x| CHAPTER_SEPARATORS.iter().find(|s| **s == x)).copied().unwrap_or("-");
@@ -967,23 +967,32 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     let f = s.sel.focus.clone();
-    if on_the_right {
-        // The number sits on the formula's line, against the right margin (a positional tab),
-        // so the formula itself keeps its paragraph and its alignment.
+    if on_the_line {
+        // The caption stays on the formula's line, at the left or right margin, so the formula
+        // keeps its paragraph. A right-hand number follows a positional tab; a left-hand one
+        // is written in front of the formula.
         let path = match super::objects::object_selection(s) {
             Some((pos, _)) => pos.path.clone(),
             None => f.path.clone(),
         };
         let para = s.doc.para_mut(f.story, &path)?;
-        para.insert_object(
-            para.len(),
-            InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: TabLeader::None },
-            &CharProps::default(),
-        )?;
-        write_caption(para, &pieces, &label, &text, chapter, sep, &seq, wrap)?;
+        let at = if position == "left" {
+            let end = write_caption(para, &pieces, &label, &text, chapter, sep, &seq, wrap, 0)?;
+            if end < para.len() && !para.text[end..].starts_with(' ') {
+                para.insert_text(end, " ", &CharProps::default())?;
+            }
+            end
+        } else {
+            let at = para.len();
+            para.insert_object(
+                at,
+                InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: TabLeader::None },
+                &CharProps::default(),
+            )?;
+            write_caption(para, &pieces, &label, &text, chapter, sep, &seq, wrap, para.len())?
+        };
         update_seq(s)?;
-        let off = s.doc.para(f.story, &path).map_or(0, |p| p.len());
-        s.sel = Selection::caret(Pos { story: f.story, path, off });
+        s.sel = Selection::caret(Pos { story: f.story, path, off: at });
         return sel_result(s);
     }
     let style = p::str(v, "style").unwrap_or("Caption");
@@ -998,7 +1007,7 @@ fn caption(s: &mut Session, v: &Value) -> CmdResult {
     if let Some(align) = p::str(v, "align").and_then(caption_align) {
         para.props.align = Some(align);
     }
-    write_caption(&mut para, &pieces, &label, &text, chapter, sep, &seq, wrap)?;
+    write_caption(&mut para, &pieces, &label, &text, chapter, sep, &seq, wrap, 0)?;
     // A selected picture, shape or chart: next to the paragraph holding it, in the same cell or
     // text box (#1230). Otherwise next to the caret's top-level block: a paragraph, or the whole
     // table it is in.

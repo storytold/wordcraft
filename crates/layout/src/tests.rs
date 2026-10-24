@@ -8778,6 +8778,55 @@ fn an_equations_box_spans_its_width_and_its_line() {
     assert!(l.equation_box(&Pos::body(0, 6), 0).is_none());
 }
 
+/// A right-hand equation number stays on the formula's line: the formula stays centred and the
+/// number sits at the right margin, rather than wrapping onto a line of its own.
+#[test]
+fn a_display_equation_keeps_its_right_number_on_the_same_line() {
+    use wordcraft_doc::para::{PTabAlign, PTabBase};
+    let mut d = Document::from_text("");
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear("a>=b"), ..Default::default() };
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_object(0, InlineObject::Equation { linear: "a>=b".into(), display: true, math }, &Default::default()).unwrap();
+    let n = p.len();
+    p.insert_object(
+        n,
+        InlineObject::PositionalTab { align: PTabAlign::Right, relative_to: PTabBase::Margin, leader: Default::default() },
+        &Default::default(),
+    )
+    .unwrap();
+    p.insert_text(p.len(), "(1)", &Default::default()).unwrap();
+    let end = p.len();
+    let width = d.last_section.text_width();
+    let l = lay(&d);
+    let lines: Vec<_> = l.pages.iter().flat_map(|pg| pg.items.iter()).filter(|it| matches!(it, Placed::Lines { .. })).collect();
+    assert_eq!(lines.len(), 1, "the number wraps onto its own line");
+    let eq = l.caret(&Pos::body(0, 0)).unwrap();
+    let num = l.caret(&Pos::body(0, end.saturating_sub(1))).unwrap();
+    assert!((eq.top - num.top).abs() < 0.5, "formula top {} number top {}", eq.top, num.top);
+    assert!(num.x > width * 0.75, "number at {}, column {}", num.x, width);
+    assert!(eq.x > width * 0.2 && eq.x < width * 0.7, "formula at {}, column {}", eq.x, width);
+}
+
+/// A number written in front of a display equation stays on that line, at the left, and the
+/// equation stays centred.
+#[test]
+fn a_display_equation_keeps_its_left_number_on_the_same_line() {
+    let mut d = Document::from_text("");
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.insert_text(0, "(1) ", &Default::default()).unwrap();
+    let math = wordcraft_doc::math::Math { nodes: wordcraft_doc::math::parse_linear("a>=b"), ..Default::default() };
+    p.insert_object(p.len(), InlineObject::Equation { linear: "a>=b".into(), display: true, math }, &Default::default()).unwrap();
+    let width = d.last_section.text_width();
+    let l = lay(&d);
+    let lines: Vec<_> = l.pages.iter().flat_map(|pg| pg.items.iter()).filter(|it| matches!(it, Placed::Lines { .. })).collect();
+    assert_eq!(lines.len(), 1, "the formula wraps onto its own line");
+    let num = l.caret(&Pos::body(0, 0)).unwrap();
+    let eq = l.caret(&Pos::body(0, "(1) ".len())).unwrap();
+    assert!((eq.top - num.top).abs() < 0.5, "formula top {} number top {}", eq.top, num.top);
+    assert!(num.x < width * 0.2, "number at {}, column {}", num.x, width);
+    assert!(eq.x > width * 0.2 && eq.x < width * 0.7, "formula at {}, column {}", eq.x, width);
+}
+
 /// Laying a paragraph out again (placed again after a page break before, or the rest of it again
 /// for a later page's PAGE fields) doesn't count its numbered equations twice: they read (1), (2), (3).
 #[test]
