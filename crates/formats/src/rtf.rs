@@ -69,6 +69,12 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// [`esc`] for a `\fonttbl` name: `;` would end the entry, so it is written `\'3b`, and control
+/// characters, which `esc` writes as `\line` or `\tab`, are dropped.
+fn esc_font(name: &str) -> String {
+    esc(&name.replace(char::is_control, "")).replace(';', "\\'3b")
+}
+
 struct Tables {
     fonts: Vec<String>,
     colors: Vec<Rgb>,
@@ -760,7 +766,7 @@ fn export_with(m: &Meta, w: &Writer, body: &str, sec: &wordcraft_doc::SectionPro
     let mut out = String::from("{\\rtf1\\ansi\\ansicpg1252\\deff0\\deflang1033\\uc1\n{\\fonttbl");
     for (i, f) in w.t.fonts.iter().enumerate() {
         let fam = if model::is_mono(f) { "\\fmodern" } else { "\\fswiss" };
-        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc(f)));
+        out.push_str(&format!("{{\\f{i}{fam}\\fcharset0 {};}}", esc_font(f)));
     }
     out.push_str("}\n{\\colortbl;");
     for c in &w.t.colors {
@@ -1397,7 +1403,7 @@ impl Reader {
     }
 
     fn commit_font(&mut self) {
-        let name = std::mem::take(&mut self.font_name).trim().trim_end_matches(';').trim().to_string();
+        let name = std::mem::take(&mut self.font_name).trim().to_string();
         if !name.is_empty() && self.fonts.len() < 4096 {
             self.fonts.insert(self.font_cur, name);
             if let Some(cp) = self.font_cp_cur.take() {
@@ -1418,6 +1424,11 @@ impl Reader {
     fn byte(&mut self, b: u8) {
         if self.skip_chars > 0 {
             self.skip_chars -= 1;
+            return;
+        }
+        // `\'3b` in a font name is a `;` in every code page, and part of the name (see `ch`).
+        if b == b';' && self.st.dest == Dest::FontTbl {
+            self.ch(';');
             return;
         }
         let cp = self.code_page();
@@ -1490,10 +1501,11 @@ impl Reader {
     /// Big5 or UHC (a valid character pair followed by a lead byte) would be dropped as a UTF-8
     /// BOM and the rest decoded as UTF-8.
     fn run(&mut self, chunk: &[u8]) {
-        if self.skip_chars > 0 {
-            for b in chunk {
-                self.byte(*b);
-            }
+        // The fallback bytes after `\uN` are skipped; the rest of the run is text like any other.
+        let skip = self.skip_chars.min(chunk.len());
+        self.skip_chars -= skip;
+        let chunk = chunk.get(skip..).unwrap_or_default();
+        if chunk.is_empty() {
             return;
         }
         let cp = self.code_page();
@@ -1715,6 +1727,11 @@ impl Reader {
             return;
         }
         self.finish_multibyte();
+        // Only a literal `;` ends a font name: an escaped one (`\'3b`, `\u59?`) belongs to it.
+        if c == ';' && self.st.dest == Dest::FontTbl {
+            self.font_name.push(c);
+            return;
+        }
         let mut buf = [0u8; 4];
         self.text(c.encode_utf8(&mut buf));
     }
@@ -4043,6 +4060,26 @@ mod tests {
         let runs = text_runs(rtf.as_bytes());
         let f = run_fmt(&runs, "let x");
         assert_eq!((f.size, f.bold, f.code, f.font.as_deref()), (None, false, false, None), "{rtf}");
+    }
+
+    #[test]
+    fn a_semicolon_in_a_font_name_round_trips() {
+        // `;` ends a `\fonttbl` entry, so it is written `\'3b` and read back as part of the name (#3740).
+        let fonts = [("one", "Semi;Colon"), ("two", "Semi;Other"), ("three", "Tail;"), ("four", "Line\nBreak")];
+        let mut p = Para::default();
+        for (t, font) in fonts {
+            p.push_text(t, &Fmt { font: Some(font.into()), ..Default::default() });
+        }
+        let flow = Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() };
+        let rtf = export(&model::to_doc(&flow));
+        assert!(rtf.contains(r"Semi\'3bColon;") && !rtf.contains(r"\line"), "{rtf}");
+        let runs = text_runs(rtf.as_bytes());
+        for (t, font) in fonts {
+            assert_eq!(run_fmt(&runs, t).font.as_deref(), Some(font.replace('\n', "").as_str()), "{rtf}");
+        }
+        // A Unicode escape is part of the name too, in a multibyte code page as well; a literal `;` ends it.
+        let runs = text_runs(br"{\rtf1\ansi\ansicpg932{\fonttbl{\f0 A\u59?B;}{\f1 C\'3bD;}}\f0 x {\f1 y}\par}");
+        assert_eq!((run_fmt(&runs, "x ").font.as_deref(), run_fmt(&runs, "y").font.as_deref()), (Some("A;B"), Some("C;D")));
     }
 
     #[test]

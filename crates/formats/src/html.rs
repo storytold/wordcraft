@@ -683,6 +683,48 @@ fn strip_important(v: &str) -> &str {
     s
 }
 
+/// Decode CSS escapes (CSS Syntax §4.3.7): `\` and one to six hex digits, with one whitespace
+/// after them, is that code point; `\` and any other character is that character. CR LF, CR and
+/// form feed count as one newline, as CSS reads them (§3.3).
+fn css_unescape(s: &str) -> String {
+    let mut o = String::with_capacity(s.len());
+    let mut it = s.chars().peekable();
+    // Takes a newline (CR LF as one) or other whitespace off the front, if there is one.
+    let skip_space = |it: &mut std::iter::Peekable<std::str::Chars>| match it.peek() {
+        Some('\r') => {
+            it.next();
+            it.next_if_eq(&'\n');
+        }
+        Some(' ' | '\t' | '\n' | '\u{C}') => {
+            it.next();
+        }
+        _ => {}
+    };
+    while let Some(c) = it.next() {
+        if c != '\\' {
+            o.push(c);
+            continue;
+        }
+        let mut hex = String::new();
+        while hex.len() < 6 && it.peek().is_some_and(char::is_ascii_hexdigit) {
+            hex.extend(it.next());
+        }
+        if hex.is_empty() {
+            // Before a newline it continues the line; at the end it is dropped.
+            match it.peek() {
+                Some('\r' | '\n' | '\u{C}') => skip_space(&mut it),
+                Some(_) => o.extend(it.next()),
+                None => {}
+            }
+            continue;
+        }
+        skip_space(&mut it);
+        let cp = u32::from_str_radix(&hex, 16).unwrap_or(0);
+        o.push(char::from_u32(cp).filter(|c| *c != '\0').unwrap_or('\u{FFFD}'));
+    }
+    o
+}
+
 /// Apply a `style` attribute to formatting / block properties.
 fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut bool, page_break: &mut bool, page_break_after: &mut bool) {
     for decl in css.split(';').take(64) {
@@ -721,7 +763,7 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
                 }
             }
             "font-family" => {
-                let fam = v.split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']).to_string();
+                let fam = css_unescape(v.split(',').next().unwrap_or("").trim().trim_matches(['"', '\'']));
                 if model::is_mono(&fam) || fam.eq_ignore_ascii_case("monospace") {
                     f.code = true;
                 } else if !fam.is_empty() && !matches!(fam.to_ascii_lowercase().as_str(), "serif" | "sans-serif" | "inherit" | "initial") {
@@ -1622,6 +1664,24 @@ pub fn esc(s: &str) -> String {
     o
 }
 
+/// A font name as a quoted CSS string. Quotes, `\` and control characters would end the string,
+/// and `;` and `,` the declaration or the family list for a reader that splits on them, so all of
+/// these are written as hex escapes ([`css_unescape`] reads them back).
+fn css_font_name(name: &str) -> String {
+    let mut o = String::with_capacity(name.len() + 2);
+    o.push('\'');
+    for c in name.chars() {
+        match c {
+            '\0' => o.push('\u{FFFD}'),
+            '\'' | '"' | '\\' | ';' | ',' => o.push_str(&format!("\\{:x} ", u32::from(c))),
+            c if c.is_control() => o.push_str(&format!("\\{:x} ", u32::from(c))),
+            c => o.push(c),
+        }
+    }
+    o.push('\'');
+    o
+}
+
 fn align_css(a: Option<Align>) -> Option<&'static str> {
     match a? {
         Align::Center => Some("text-align:center"),
@@ -1695,7 +1755,7 @@ fn fmt_tags(f: &Fmt) -> (String, Vec<&'static str>) {
         css.push(format!("font-size:{}pt", trim_num(s)));
     }
     if let Some(fam) = &f.font {
-        css.push(format!("font-family:'{}'", esc(&fam.replace('\'', ""))));
+        css.push(format!("font-family:{}", esc(&css_font_name(fam))));
     }
     if !css.is_empty() {
         open.push_str(&format!("<span style=\"{}\">", css.join(";")));
@@ -2232,6 +2292,44 @@ mod tests {
         assert!(!html.contains("<p> lead"), "{html}");
         let back = import(&html);
         assert_eq!(back.plain_text(Default::default()).replace('\u{a0}', " "), " lead");
+    }
+
+    #[test]
+    fn css_escapes_read_every_kind_of_newline() {
+        // A backslash before CR LF, CR, LF or form feed continues the line; after hex digits, one
+        // of them (CR LF as one) ends the escape.
+        assert_eq!(css_unescape("A\\\r\nB\\\rC\\\nD\\\u{C}E"), "ABCDE");
+        assert_eq!(css_unescape("\\41\r\nB \\42\u{C}C \\43 D"), "AB BC CD");
+        assert_eq!(css_unescape("x\\'y\\"), "x'y");
+    }
+
+    #[test]
+    fn font_names_are_written_as_css_strings() {
+        // A font name could end the CSS string or the declaration and add CSS of its own (#3739).
+        let fonts = ["Arial\n;position:fixed", "Back\\slash", "O'Brien \"Sans\"", "A,B", "Times New Roman", "M+ 1p"];
+        let mut p = Para::default();
+        for (i, font) in fonts.iter().enumerate() {
+            p.push_text(&format!("t{i}"), &Fmt { font: Some((*font).into()), ..Default::default() });
+        }
+        let html = export(&model::to_doc(&Flow { blocks: vec![FBlock::Para(p)], meta: Meta::default() }));
+        assert!(html.contains("font-family:'Times New Roman'") && html.contains("font-family:'M+ 1p'"), "{html}");
+        let styles: Vec<&str> = html.split(" style=\"").skip(1).filter_map(|s| s.split('"').next()).filter(|s| s.contains("font-family")).collect();
+        assert_eq!(styles.len(), fonts.len(), "{html}");
+        for s in styles {
+            assert!(!s.contains([';', '\n']) && s.matches('\'').count() == 2, "{s}");
+        }
+        // Read back, each run has its font as it was.
+        let back = parse(&html);
+        let runs: Vec<(String, Option<String>)> = back
+            .blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| p.inlines.iter())
+            .filter_map(|i| if let Inline::Text(t, f) = i { Some((t.clone(), f.font.clone())) } else { None })
+            .collect();
+        for (i, font) in fonts.iter().enumerate() {
+            assert!(runs.contains(&(format!("t{i}"), Some(font.to_string()))), "{font:?} in {runs:?}");
+        }
     }
 
     /// A document that reads "I read " then a phonetic guide over `base`, then " daily.".

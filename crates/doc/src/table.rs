@@ -65,10 +65,12 @@ pub struct Table {
 /// Hard limits that keep hostile input from exhausting memory.
 pub const MAX_ROWS: usize = 32_767;
 pub const MAX_COLS: usize = 63;
-/// Most tables nested one inside another: the depth the DOCX reader and writer keep. Pasting
-/// and inserting stop there too, so no edit builds a document deep enough to overflow the stack
-/// when it is saved, copied or dropped (#1596).
-pub const MAX_TABLE_DEPTH: usize = 24;
+/// Most tables nested one inside another. Pasting and inserting stop there, so no edit builds a
+/// document deep enough to overflow the stack when it is saved, copied or dropped (#1596), or
+/// deeper than a `.json` save reads back: serde_json reads 127 nested containers, a table level
+/// takes six, and the deepest cell of a header, note or text box needs up to 15 more for its
+/// paragraph and the richest content measured (#3618). The DOCX reader and writer keep 24.
+pub const MAX_TABLE_DEPTH: usize = 18;
 
 impl Table {
     /// A `rows × cols` table spanning `width` points, "Table Grid" style.

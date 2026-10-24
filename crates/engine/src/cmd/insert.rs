@@ -263,7 +263,8 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     let max_w = s.doc.sections().first().map(|(_, sp)| sp.text_width()).unwrap_or(468.0);
     let (mut w, mut h) = (natural_w, natural_h);
     if let Some(want) = width {
-        let k = want.max(4.0) / w.max(1.0);
+        // At most 22 inches, as for icons: a huge width made the height of a tall picture infinite.
+        let k = want.clamp(4.0, 1584.0) / w.max(1.0);
         w *= k;
         h *= k;
     }
@@ -982,6 +983,21 @@ fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #3619: a huge finite width can't make a tall picture's height infinite, which a `.json` save
+    /// writes as `null` and can't read back.
+    #[test]
+    fn a_huge_picture_width_keeps_the_size_finite() {
+        let img = image::RgbaImage::from_pixel(2, 400, image::Rgba([10, 20, 30, 255]));
+        let mut png = Vec::new();
+        image::DynamicImage::ImageRgba8(img).write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).unwrap();
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let r = s.run("insert.picture", &json!({"data": base64_encode(&png), "width": 3e38})).unwrap();
+        let (w, h) = (r["width"].as_f64().unwrap(), r["height"].as_f64().unwrap());
+        assert!(w.is_finite() && h.is_finite() && (h / w - 200.0).abs() < 0.01, "{w} x {h}");
+        let saved = crate::io::save_bytes("a.json", &s.doc).unwrap();
+        assert!(crate::io::open_bytes("a.json", &saved).is_ok());
+    }
 
     /// Closing the header or footer (Esc, the ribbon) puts the caret back where it was in the
     /// body, not on page 1 (#3331).

@@ -1606,7 +1606,8 @@ impl Exporter<'_> {
                 }
             } else {
                 let url = target.trim();
-                if url.is_empty() {
+                // Web and mail links only, as the other exporters write them: the text stays, unlinked.
+                if url.is_empty() || !wordcraft_doc::link::is_safe_href(url) {
                     continue;
                 }
                 Target::Action(Action::Link(LinkAction::new(url.to_string())))

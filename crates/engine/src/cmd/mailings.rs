@@ -7,6 +7,7 @@ use wordcraft_doc::props::{Align, CharProps};
 use wordcraft_doc::section::{SectionProps, SectionStart};
 use wordcraft_doc::{Block, Blocks, Document, Paragraph, Part, PartKind, Pos, StoryRef, Table, para_block};
 
+use super::references::{field_arg, field_words, quoted};
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
@@ -392,7 +393,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .pure(),
         CommandSpec::new("mailings.insertField", "Insert Merge Field", "Mailings › Write & Insert Fields", |s, v| {
             let f = p::req_str(v, "field")?.to_string();
-            insert_field(s, &format!("MERGEFIELD {}", quote(&f)), &format!("«{f}»"))
+            insert_field(s, &format!("MERGEFIELD {}", field_arg(&f)), &format!("«{f}»"))
         })
         .params(r#"{"field": string}"#)
         .key(super::non_mac("Alt+Shift+F")),
@@ -406,14 +407,14 @@ pub fn specs() -> Vec<CommandSpec> {
             let rule = p::str(v, "rule").unwrap_or("NEXT").to_ascii_uppercase();
             let instr = match rule.as_str() {
                 "IF" => format!(
-                    "IF {{ MERGEFIELD {} }} = \"{}\" \"{}\" \"{}\"",
-                    quote(p::str(v, "field").unwrap_or("Field")),
-                    p::str(v, "value").unwrap_or(""),
-                    p::str(v, "then").unwrap_or(""),
-                    p::str(v, "else").unwrap_or("")
+                    "IF {{ MERGEFIELD {} }} = {} {} {}",
+                    field_arg(p::str(v, "field").unwrap_or("Field")),
+                    quoted(p::str(v, "value").unwrap_or("")),
+                    quoted(p::str(v, "then").unwrap_or("")),
+                    quoted(p::str(v, "else").unwrap_or(""))
                 ),
                 "SKIPIF" | "NEXTIF" => {
-                    format!("{rule} {{ MERGEFIELD {} }} = \"{}\"", quote(p::str(v, "field").unwrap_or("Field")), p::str(v, "value").unwrap_or(""))
+                    format!("{rule} {{ MERGEFIELD {} }} = {}", field_arg(p::str(v, "field").unwrap_or("Field")), quoted(p::str(v, "value").unwrap_or("")))
                 }
                 "MERGEREC" => "MERGEREC".into(),
                 _ => "NEXT".into(),
@@ -495,10 +496,6 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"text"?: string, "product"?: "letter-3x10|letter-2x10|letter-2x7|letter-2x5|letter-4x20|a4-3x7|a4-2x7|a4-3x8|a4-2x4", "rows"?: n, "cols"?: n, "fromRecipients"?: bool, "single"?: {"row": n, "col": n}}"#,
         ),
     ]
-}
-
-fn quote(f: &str) -> String {
-    if f.contains(' ') { format!("\"{f}\"") } else { f.to_string() }
 }
 
 fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
@@ -776,9 +773,8 @@ fn merge_fields(doc: &Document) -> Vec<String> {
 }
 
 fn mergefield_name(instr: &str) -> Option<String> {
-    let rest = instr.trim().strip_prefix("MERGEFIELD")?.trim();
-    let name = if let Some(r) = rest.strip_prefix('"') { r.split('"').next().unwrap_or("") } else { rest.split_whitespace().next().unwrap_or("") };
-    Some(name.to_string())
+    let rest = instr.trim().strip_prefix("MERGEFIELD")?;
+    Some(field_words(rest).into_iter().next().map(|(name, _)| name).unwrap_or_default())
 }
 
 /// Which columns hold address parts.
@@ -833,18 +829,18 @@ enum Act {
 
 /// Comparison of a rule condition `{ MERGEFIELD X } op "value" …` (IF, SKIPIF, NEXTIF) for
 /// `row`: whether it holds, and the quoted texts after the value (IF's true / false text).
-fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
+fn condition(s: &Session, t: &str, row: usize) -> (bool, Vec<String>) {
     let inner = t.split_once('{').and_then(|(_, r)| r.split('}').next()).unwrap_or("");
     let field = mergefield_name(inner).unwrap_or_default();
     let rest = t.split_once('}').map(|(_, r)| r).unwrap_or("");
     let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '=' | '<' | '>')).collect();
-    let mut quoted = rest.split('"').skip(1).step_by(2);
-    let cmp = quoted.next().unwrap_or("");
+    let mut texts = field_words(rest).into_iter().filter(|(_, q)| *q).map(|(w, _)| w);
+    let cmp = texts.next().unwrap_or_default();
     let v = value(s, row, &field);
     // Numbers compare as numbers (Word: "7" = "7.0"), everything else as text.
     let ord = match (v.trim().parse::<f64>(), cmp.trim().parse::<f64>()) {
         (Ok(a), Ok(b)) => a.partial_cmp(&b),
-        _ => Some(v.as_str().cmp(cmp)),
+        _ => Some(v.as_str().cmp(cmp.as_str())),
     };
     use std::cmp::Ordering::{Equal, Greater, Less};
     let holds = match op.as_str() {
@@ -855,7 +851,7 @@ fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
         ">=" => matches!(ord, Some(Greater | Equal)),
         _ => ord == Some(Equal),
     };
-    (holds, quoted.collect())
+    (holds, texts.collect())
 }
 
 /// The first word of a field instruction, upper-cased.
@@ -880,7 +876,7 @@ fn act(s: &Session, instr: &str, row: usize) -> Option<Act> {
         // IF { MERGEFIELD X } = "v" "then" "else" (an IF on other fields isn't ours to touch).
         "IF" if t.contains("MERGEFIELD") => {
             let (holds, texts) = condition(s, t, row);
-            Act::Text(texts.get(if holds { 0 } else { 1 }).copied().unwrap_or("").to_string())
+            Act::Text(texts.get(if holds { 0 } else { 1 }).cloned().unwrap_or_default())
         }
         _ => return None,
     })
@@ -1695,6 +1691,29 @@ mod tests {
         assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected");
         s.run("mailings.finish", &json!({})).unwrap();
         assert_eq!(s.doc.plain_text(StoryRef::Body), "Selected\nOther");
+    }
+
+    /// #3681: quotes and backslashes in a rule's texts and field name stay in them.
+    #[test]
+    fn rule_texts_keep_their_quotes() {
+        let mut s = Session::new(Document::new());
+        let rows = json!([{"Say \"hi\"": "a\\b", "Name": "O\"Neil"}, {"Say \"hi\"": "no", "Name": "Plain"}]);
+        s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        let rule = json!({"rule": "IF", "field": "Say \"hi\"", "value": "a\\b", "then": "Dear \"friend\"", "else": "C:\\dir\\"});
+        s.run("mailings.rules", &rule).unwrap();
+        s.run("mailings.preview", &json!({"value": true})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Dear \"friend\"");
+        s.run("mailings.next", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "C:\\dir\\");
+        // SKIPIF compares with the value as typed.
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({"rows": rows})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        s.run("mailings.rules", &json!({"rule": "SKIPIF", "field": "Name", "value": "O\"Neil"})).unwrap();
+        s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+        s.run("mailings.finish", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Plain");
     }
 
     /// #430: merge fields in headers and footers are previewed and merged; each letter gets its
