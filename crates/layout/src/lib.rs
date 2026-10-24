@@ -3615,6 +3615,25 @@ fn para_notes(doc: &Document, p: &Paragraph, pl: &ParaLayout) -> Vec<(usize, u32
 /// A closing mark before a continuous section takes no room after content. An otherwise empty
 /// section starting a new page retains its paragraph line.
 fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
+    // Word draws no shading for an empty paragraph that closes a section mid-page.
+    if p.section.is_some() && p.text.is_empty() && p.objects.is_empty() && !pb.at_top() && !pb.pages.is_empty() {
+        let first = pb.pages.len() - 1;
+        let from = pb.pages.get(first).map_or(0, |pg| pg.items.len());
+        place_para_inner(ctx, pb, p, block, body_top);
+        for (i, pg) in pb.pages.iter_mut().enumerate().skip(first) {
+            let keep = if i == first { from } else { 0 };
+            let mut n = 0;
+            pg.items.retain(|it| {
+                n += 1;
+                n <= keep || !matches!(it, Placed::Fill { .. })
+            });
+        }
+        return;
+    }
+    place_para_inner(ctx, pb, p, block, body_top);
+}
+
+fn place_para_inner(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, body_top: f32) {
     if !pb.web && ctx.quiet_marks.binary_search(&block).is_ok() {
         let follows_section = block.checked_sub(1).and_then(|i| ctx.doc.body.get(i)).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
         let section = pb.sect_idx;

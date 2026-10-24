@@ -11074,3 +11074,22 @@ fn a_row_leaves_room_for_the_border_below_it() {
         }
     }
 }
+
+/// An empty paragraph closing a section mid-page draws no shading, with a continuous or a
+/// new-page break (Word); a paragraph with text keeps it.
+#[test]
+fn an_empty_section_closing_paragraph_is_not_shaded() {
+    use wordcraft_doc::section::{SectionProps, SectionStart};
+    let fills = |mark: &str, start: SectionStart| {
+        let mut d = Document::from_text(&format!("Intro\nAAA\n{mark}\nBBB"));
+        let p = d.para_mut(StoryRef::Body, &Path::top(2)).unwrap();
+        p.props.shading = Rgb::parse("FFC000");
+        p.section = Some(Box::new(SectionProps { start: SectionStart::Continuous, ..Default::default() }));
+        d.last_section.start = start;
+        let l = lay(&d);
+        l.pages[0].items.iter().filter(|i| matches!(i, Placed::Fill { .. })).count()
+    };
+    assert_eq!(fills("", SectionStart::Continuous), 0);
+    assert_eq!(fills("", SectionStart::NextPage), 0);
+    assert_eq!(fills("Mark", SectionStart::Continuous), 1);
+}
