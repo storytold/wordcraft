@@ -770,6 +770,13 @@ impl Document {
         }
     }
 
+    /// Give every text box in `blocks` (content brought in from another document whose text box
+    /// stories are `parts`) a new story of its own, as pasting does.
+    pub fn adopt_text_box_stories(&mut self, blocks: &mut [Block], parts: &BTreeMap<u32, Part>) {
+        let mut budget = MAX_PASTED_BOXES;
+        self.adopt_text_boxes(blocks, parts, 0, &mut budget);
+    }
+
     /// A new text box story copied from `old`; its own boxes get new stories too.
     fn adopt_text_box(&mut self, old: u32, parts: &BTreeMap<u32, Part>, depth: usize, budget: &mut usize) -> Option<u32> {
         if depth >= MAX_BOX_DEPTH || *budget == 0 {

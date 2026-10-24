@@ -1962,9 +1962,14 @@ impl Reader<'_> {
         for (tr, row_controls) in rows.into_iter().take(MAX_ROWS) {
             let mut row = Row { props: tr.child("w:trPr").map(trpr).unwrap_or_default(), cells: Vec::new(), controls: row_controls };
             row.props.exceptions = tr.child("w:tblPrEx").map(|e| Box::new(self.pc.tblpr(e)));
-            if let Some(ch) = tr.child("w:trPr").and_then(|p| p.child("w:trPrChange")) {
-                let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
-                row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+            if let Some(pr) = tr.child("w:trPr") {
+                // A tracked row insertion or deletion (§17.13.5.17, §17.13.5.13).
+                row.props.ins = pr.child("w:ins").map(|k| self.revision(RevisionKind::Insert, k));
+                row.props.del = pr.child("w:del").map(|k| self.revision(RevisionKind::Delete, k));
+                if let Some(ch) = pr.child("w:trPrChange") {
+                    let old = ch.child("w:trPr").map(trpr).unwrap_or_default();
+                    row.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
+                }
             }
             let mut tcs = Vec::new();
             collect(tr, "w:tc", &mut tcs, &mut Vec::new(), 0);

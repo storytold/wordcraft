@@ -1304,8 +1304,12 @@ impl Writer<'_> {
                 open_rows += 1;
             }
             w.open("w:tr", &[]);
+            // The row's own insertion / deletion (a formatting revision isn't one).
+            let mark = |s: &mut Self, idx: Option<u32>| idx.filter(|_| s.rev_kind(idx) != Some(RevisionKind::Format)).map(|i| s.change_attrs(i));
+            let ins = mark(self, r.props.ins);
+            let del = mark(self, r.props.del);
             let chg = r.props.fmt_change.as_ref().map(|c| self.change_attrs(c.rev));
-            trpr(w, &r.props, chg.as_ref());
+            trpr(w, &r.props, ins.as_ref(), del.as_ref(), chg.as_ref());
             let mut open_cells = 0u32;
             for c in &r.cells {
                 for ctl in &c.controls.open {

@@ -406,6 +406,9 @@ fn split_rows(s: &mut Session, l: &DocLayout, page: usize, y: f32, (xa, xb): (f3
     let Some(row) = t.rows.get_mut(r) else { return Err(CmdError::Failed("the row isn't there any more".into())) };
     let mut new_row = wordcraft_doc::Row { props: row.props.clone(), cells: Vec::with_capacity(row.cells.len()), controls: Default::default() };
     new_row.props.header = false;
+    // The new row is not part of the split row's tracked insertion or deletion (#1317).
+    new_row.props.ins = None;
+    new_row.props.del = None;
     if top.is_finite() && bottom.is_finite() && bottom > top {
         let rule = if row.props.height_rule == HeightRule::Exact { HeightRule::Exact } else { HeightRule::AtLeast };
         let less = if rule == HeightRule::Exact { row_bottom } else { 0.0 };
@@ -787,5 +790,32 @@ mod tests {
         };
         assert!(vis(1, 1, false) && vis(2, 1, true) && vis(2, 2, true), "both sides along the whole edge");
         assert!(!vis(2, 0, true), "the first column is not part of the edge");
+    }
+
+    /// #1317: the row a drawn line splits off isn't part of the split row's tracked insertion.
+    #[test]
+    fn a_split_row_does_not_inherit_row_revisions() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.table", &json!({"rows": 2, "cols": 2})).unwrap();
+        s.doc.revisions.push(wordcraft_doc::Revision {
+            kind: wordcraft_doc::RevisionKind::Insert,
+            author: "A".into(),
+            date: String::new(),
+            move_name: None,
+        });
+        let t = s.doc.body.iter_mut().find_map(|b| match std::sync::Arc::make_mut(b) {
+            Block::Table(t) => Some(t),
+            _ => None,
+        });
+        let t = t.unwrap();
+        t.rows[0].props.ins = Some(0);
+        t.rows[0].props.height = Some(60.0);
+        s.touch();
+        let b = cell_rect(&mut s, 0, 1);
+        let y = b.y + 25.0;
+        s.run("table.draw", &json!({"page": 0, "x0": b.x + 1.0, "y0": y, "x1": b.right() - 1.0, "y1": y})).unwrap();
+        let t = first_table(&s);
+        assert_eq!(t.rows.len(), 3);
+        assert_eq!((t.rows[0].props.ins, t.rows[1].props.ins), (Some(0), None));
     }
 }

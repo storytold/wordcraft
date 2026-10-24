@@ -130,6 +130,9 @@ impl Table {
         }
         let mut row = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
         row.props.header = false;
+        // A new row is not part of the source row's tracked insertion or deletion.
+        row.props.ins = None;
+        row.props.del = None;
         for c in &src.cells {
             let mut nc = Cell::empty();
             nc.props = c.props.clone();
@@ -451,6 +454,8 @@ impl Table {
             let Some(src) = self.rows.get_mut(top) else { return false };
             let mut like = Row { props: src.props.clone(), cells: Vec::with_capacity(src.cells.len()), controls: ControlWrap::default() };
             like.props.header = false;
+            like.props.ins = None;
+            like.props.del = None;
             for (i, cell) in src.cells.iter_mut().enumerate() {
                 let mut nc = Cell::empty();
                 nc.props = cell.props.clone();
@@ -592,5 +597,16 @@ mod tests {
         v.merge(0, 2, 0, 0);
         assert_eq!(v.rows[0].cells[0].props.vmerge, VMerge::Restart);
         assert_eq!(v.rows[2].cells[0].props.vmerge, VMerge::Continue);
+    }
+
+    /// #1317: a row added to a tracked inserted or deleted row doesn't inherit the mark, so
+    /// resolving the change can't take the new row (and its text) with it.
+    #[test]
+    fn inserted_row_does_not_inherit_row_revisions() {
+        let mut t = Table::new(1, 2, 200.0);
+        t.rows[0].props.ins = Some(0);
+        t.rows[0].props.del = Some(1);
+        t.insert_row(1, 0);
+        assert_eq!((t.rows[1].props.ins, t.rows[1].props.del), (None, None));
     }
 }

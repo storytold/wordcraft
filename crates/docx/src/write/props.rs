@@ -516,18 +516,26 @@ fn tblpr_inner(w: &mut W, t: &TableProps) {
     }
 }
 
-/// `w:trPr` (when the row has any), with a tracked change last as for [`tblpr`].
-pub fn trpr(w: &mut W, r: &RowProps, change: Option<&ChangeAttrs>) {
+/// `w:trPr` (when the row has any), with a tracked change last as for [`tblpr`]. `ins` / `del`
+/// are the attributes of the row's own tracked insertion / deletion (§17.13.5.17, §17.13.5.13):
+/// the schema (`CT_TrPr`) puts them after the row's properties and before `w:trPrChange`.
+pub fn trpr(w: &mut W, r: &RowProps, ins: Option<&ChangeAttrs>, del: Option<&ChangeAttrs>, change: Option<&ChangeAttrs>) {
     if let Some(x) = &r.exceptions {
         tblprex(w, x);
     }
     let change = change.zip(r.fmt_change.as_ref());
     let gaps = r.grid_before > 0 || r.grid_after > 0 || r.w_before.is_some() || r.w_after.is_some();
-    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() {
+    if r.height.is_none() && !r.header && !r.cant_split && !gaps && change.is_none() && ins.is_none() && del.is_none() {
         return;
     }
     w.open("w:trPr", &[]);
     trpr_inner(w, r);
+    for (tag, a) in [("w:ins", ins), ("w:del", del)] {
+        if let Some(a) = a {
+            let refs: Vec<(&str, &str)> = a.iter().map(|(k, v)| (*k, v.as_str())).collect();
+            w.empty(tag, &refs);
+        }
+    }
     if let Some((a, ch)) = change {
         change_el(w, "w:trPrChange", "w:trPr", a, |w| trpr_inner(w, &ch.old));
     }

@@ -513,7 +513,24 @@ pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
     out
 }
 
+/// The comments with a mark (start or end) somewhere in the document.
+fn anchored_comments(s: &Session) -> BTreeSet<u32> {
+    let mut out = BTreeSet::new();
+    let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
+    for story in stories {
+        for path in s.doc.para_paths(story) {
+            for o in s.doc.para(story, &path).map(|p| p.objects.as_slice()).unwrap_or_default() {
+                if let InlineObject::CommentStart { id } | InlineObject::CommentEnd { id } = o {
+                    out.insert(*id);
+                }
+            }
+        }
+    }
+    out
+}
+
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
+    let anchored = anchored_comments(s);
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
         for path in s.doc.para_paths(st).into_iter().rev() {
@@ -523,13 +540,92 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     }
     // Tables, rows, cells and sections.
     fmt_revisions::resolve_containers(&mut s.doc.body, accept, 0);
+    resolve_rows(&mut s.doc.body, accept, 0);
     for part in s.doc.parts.values_mut() {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
+        resolve_rows(&mut part.blocks, accept, 0);
     }
+    s.doc.ensure_nonempty();
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    // A comment whose marks went with the text around them goes too (its replies with it, except
+    // a reply that still has marks of its own), not left as a comment on nothing.
+    let left = anchored_comments(s);
+    let gone: BTreeSet<u32> = anchored.difference(&left).flat_map(|id| thread_of(s, *id)).filter(|k| !left.contains(k)).collect();
+    for id in &gone {
+        if let Some(c) = s.doc.comments.remove(id) {
+            s.doc.parts.remove(&c.part);
+        }
+    }
+    for c in s.doc.comments.values_mut() {
+        if c.parent.is_some_and(|p| gone.contains(&p)) {
+            c.parent = None;
+        }
+    }
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)
+}
+
+/// Accept or reject the insertion or deletion of the table row the paragraph at `path` is in: an
+/// accepted deletion or a rejected insertion removes the row (and a table left without rows),
+/// any other is cleared. Returns whether the row had one.
+fn resolve_row_at(s: &mut Session, story: StoryRef, path: &wordcraft_doc::Path, accept: bool) -> Result<bool, CmdError> {
+    let Some((tp, r, _)) = path.cell() else { return Ok(false) };
+    resolve_row(s, story, &tp, r, accept)
+}
+
+/// The table rows a paragraph at `path` is in, outermost first: (table path, row).
+fn row_chain(path: &wordcraft_doc::Path) -> Vec<(wordcraft_doc::Path, usize)> {
+    (4..=path.0.len())
+        .step_by(3)
+        .filter_map(|n| {
+            let tp = path.0.get(..n - 3)?.to_vec();
+            let r = *path.0.get(n - 3)? as usize;
+            Some((wordcraft_doc::Path(tp), r))
+        })
+        .collect()
+}
+
+/// [`resolve_row_at`] for row `r` of the table at `tp`.
+fn resolve_row(s: &mut Session, story: StoryRef, tp: &wordcraft_doc::Path, r: usize, accept: bool) -> Result<bool, CmdError> {
+    let marks = s.doc.table(story, tp).and_then(|t| t.rows.get(r)).map(|row| (row.props.ins, row.props.del));
+    let Some((ins, del)) = marks.filter(|m| *m != (None, None)) else { return Ok(false) };
+    let t = s.doc.table_mut(story, tp)?;
+    if (accept && del.is_some()) || (!accept && ins.is_some()) {
+        if r < t.rows.len() {
+            t.rows.remove(r);
+        }
+        if t.rows.is_empty() {
+            s.doc.remove_block(story, tp)?;
+            s.doc.ensure_nonempty();
+        }
+    } else if let Some(row) = t.rows.get_mut(r) {
+        row.props.ins = None;
+        row.props.del = None;
+    }
+    Ok(true)
+}
+
+/// Accept or reject the inserted and deleted table rows in `blocks`: an accepted deletion or a
+/// rejected insertion removes the row, and a table left without rows goes too.
+fn resolve_rows(blocks: &mut wordcraft_doc::Blocks, accept: bool, depth: usize) {
+    if depth > fmt_revisions::MAX_DEPTH {
+        return;
+    }
+    let has = |b: &wordcraft_doc::Block| matches!(b, wordcraft_doc::Block::Table(_));
+    for b in blocks.iter_mut().filter(|b| has(b)) {
+        if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+            t.rows.retain(|r| !((accept && r.props.del.is_some()) || (!accept && r.props.ins.is_some())));
+            for r in &mut t.rows {
+                r.props.ins = None;
+                r.props.del = None;
+                for c in &mut r.cells {
+                    resolve_rows(&mut c.blocks, accept, depth + 1);
+                }
+            }
+        }
+    }
+    blocks.retain(|b| !matches!(&**b, wordcraft_doc::Block::Table(t) if t.rows.is_empty()));
 }
 
 fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
@@ -593,7 +689,9 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
                 (a.clone(), a)
             }
             None => {
-                if resolve_cell(s, a.story, &a.path, accept)? {
+                // `|` (not `||`): the cell's changes and its row's insertion or deletion both.
+                if resolve_cell(s, a.story, &a.path, accept)? | resolve_row_at(s, a.story, &a.path, accept)? {
+                    s.clamp_selection();
                     return sel_result(s);
                 }
                 return nav_change(s, 1);
@@ -604,7 +702,9 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     };
     // Moves with an end in the range: their other ends go with them.
     let moves = super::moves::names_in(s, &a, &b, caret_mark.as_ref());
-    for path in s.doc.paths_between(&a, &b).into_iter().rev() {
+    let paths = s.doc.paths_between(&a, &b);
+    for (i, path) in paths.iter().enumerate().rev() {
+        let path = path.clone();
         let len = s.doc.para(a.story, &path).map(|p| p.len()).unwrap_or(0);
         let from = if path == a.path { a.off } else { 0 };
         let to = if path == b.path { b.off } else { len };
@@ -614,6 +714,15 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
         resolve_para(s, a.story, &path, from, to, mark, props, accept)?;
         if ranged {
             resolve_cell(s, a.story, &path, accept)?;
+        }
+        // Leaving table rows (going back): their own insertions or deletions go with their cells',
+        // innermost first, each row once. Done here, before anything earlier changes, so the
+        // tables' paths still hold.
+        let before = i.checked_sub(1).and_then(|k| paths.get(k)).map(row_chain).unwrap_or_default();
+        for (tp, r) in row_chain(&path).into_iter().rev() {
+            if !before.contains(&(tp.clone(), r)) {
+                resolve_row(s, a.story, &tp, r, accept)?;
+            }
         }
     }
     super::moves::resolve(s, &moves, accept)?;
@@ -641,6 +750,13 @@ fn changes(s: &Session) -> Vec<Change> {
             ];
             for (rev, props) in found.into_iter().flatten() {
                 out.push(Change::format(mk(&path, 0), mk(&path, 0), rev, props));
+            }
+            // The row's own insertion or deletion, at its first cell.
+            if let Some(x) = row.filter(|_| c == 0) {
+                let kind = run_kind(&s.doc, x.props.ins, x.props.del);
+                if !kind.is_empty() {
+                    out.push(Change { a: mk(&path, 0), b: mk(&path, p.len()), kind, rev: x.props.ins.or(x.props.del), props: Vec::new() });
+                }
             }
         }
         if let Some(ch) = &p.props.fmt_change {
@@ -2045,5 +2161,85 @@ mod tests {
                 assert!(s.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty(), "{cmd}");
             }
         }
+    }
+
+    /// #1317: rejecting a row formatting change keeps the row's own insertion mark, so Reject All
+    /// on an inserted row with a formatting change removes it instead of leaving an empty table.
+    #[test]
+    fn reject_all_removes_an_inserted_row_with_a_formatting_change() {
+        use std::sync::Arc;
+        use wordcraft_doc::{Block, Revision, RevisionKind, Table, props::PropChange, props::RowProps};
+        let mut d = Document::from_text("Before\nAfter");
+        d.revisions.push(Revision { kind: RevisionKind::Insert, author: "A".into(), date: String::new(), move_name: None });
+        d.revisions.push(Revision { kind: RevisionKind::Format, author: "A".into(), date: String::new(), move_name: None });
+        let mut t = Table::new(1, 1, 100.0);
+        t.rows[0].props.ins = Some(0);
+        t.rows[0].props.height = Some(30.0);
+        t.rows[0].props.fmt_change = PropChange::boxed(1, RowProps::default());
+        d.body.insert(1, Arc::new(Block::Table(t)));
+        let mut s = Session::new(d);
+        s.run("review.rejectAll", &json!({})).unwrap();
+        assert!(s.doc.body.iter().all(|b| !matches!(**b, Block::Table(_))), "the inserted row and its table are gone");
+    }
+
+    /// #1317 (#10): a comment whose marks Accept All deletes with the text around them goes too,
+    /// with its text, rather than staying as a comment on nothing.
+    #[test]
+    fn accept_all_removes_a_comment_whose_anchors_were_deleted() {
+        use wordcraft_doc::para::InlineObject;
+        use wordcraft_doc::{CharProps, Comment, Paragraph, PartKind, Revision, RevisionKind, para_block};
+        let mut d = Document::from_text("Intro");
+        d.revisions.push(Revision { kind: RevisionKind::Delete, author: "A".into(), date: String::new(), move_name: None });
+        let part = d.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]).unwrap();
+        d.comments.insert(0, Comment { author: "A".into(), part, ..Default::default() });
+        let mut p = Paragraph::with_text("Keep ", CharProps::default());
+        let n = p.len();
+        p.insert_object(n, InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+        let n = p.len();
+        p.insert_text(n, "gone", &CharProps::default()).unwrap();
+        let n = p.len();
+        p.insert_object(n, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
+        let n = p.len();
+        p.format(5, n, &|c| c.del = Some(0)).unwrap();
+        d.body.push(para_block(p));
+        let mut s = Session::new(d);
+        s.run("review.acceptAll", &json!({})).unwrap();
+        assert!(s.doc.comments.is_empty());
+        assert!(!s.doc.parts.contains_key(&part));
+    }
+
+    /// #1317 (N3): a reply that keeps its own marks stays when Accept All removes its parent's.
+    #[test]
+    fn accept_all_keeps_a_reply_that_still_has_marks() {
+        use wordcraft_doc::para::InlineObject;
+        use wordcraft_doc::{CharProps, Comment, Paragraph, PartKind, Revision, RevisionKind, para_block};
+        let mut d = Document::from_text("Intro");
+        d.revisions.push(Revision { kind: RevisionKind::Delete, author: "A".into(), date: String::new(), move_name: None });
+        for id in [0u32, 1] {
+            let part = d.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text("Note", CharProps::default()))]).unwrap();
+            d.comments.insert(id, Comment { author: "A".into(), part, parent: (id == 1).then_some(0), ..Default::default() });
+        }
+        let plain = CharProps::default();
+        let mut p = Paragraph::with_text("Keep", plain.clone());
+        for (obj, text) in [(InlineObject::CommentStart { id: 1 }, ""), (InlineObject::CommentEnd { id: 1 }, " ")] {
+            let n = p.len();
+            p.insert_object(n, obj, &plain).unwrap();
+            let n = p.len();
+            p.insert_text(n, text, &plain).unwrap();
+        }
+        let start = p.len();
+        for (obj, text) in [(InlineObject::CommentStart { id: 0 }, "gone"), (InlineObject::CommentEnd { id: 0 }, "")] {
+            let n = p.len();
+            p.insert_object(n, obj, &plain).unwrap();
+            let n = p.len();
+            p.insert_text(n, text, &plain).unwrap();
+        }
+        let n = p.len();
+        p.format(start, n, &|c| c.del = Some(0)).unwrap();
+        d.body.push(para_block(p));
+        let mut s = Session::new(d);
+        s.run("review.acceptAll", &json!({})).unwrap();
+        assert!(!s.doc.comments.contains_key(&0));
+        assert!(s.doc.comments.contains_key(&1), "the reply with its own marks stays");
     }
 }
