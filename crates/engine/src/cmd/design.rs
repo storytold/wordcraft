@@ -229,7 +229,10 @@ fn page_borders(s: &mut Session, v: &Value) -> CmdResult {
     };
     let blocks: Vec<usize> = match p::str(v, "applyTo") {
         Some("document") => s.doc.sections().iter().map(|(end, _)| *end).collect(),
-        Some("section") | None => vec![s.sel.focus.path.0.first().copied().unwrap_or(0) as usize],
+        Some("section") | None => {
+            let i = super::page::section_index_of_focus(s);
+            vec![s.doc.sections().get(i).map(|(end, _)| *end).unwrap_or(0)]
+        }
         Some(x) => return Err(CmdError::Params(format!("unknown `applyTo` `{x}`"))),
     };
     for block in blocks {
