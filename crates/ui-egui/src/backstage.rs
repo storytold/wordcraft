@@ -502,6 +502,28 @@ fn personal_error_id() -> egui::Id {
     egui::Id::new("backstage_personal_error")
 }
 
+/// How the × of a recent row is drawn (#2716): not at all while nothing is hovered, dimmed while
+/// the row is, and with the stronger fill only when the pointer is on the × itself.
+#[derive(Debug, PartialEq, Eq)]
+enum RemoveCue {
+    Hidden,
+    Dim,
+    Strong,
+}
+
+fn remove_cue(row_active: bool, x_active: bool) -> RemoveCue {
+    if x_active {
+        RemoveCue::Strong
+    } else if row_active {
+        RemoveCue::Dim
+    } else {
+        RemoveCue::Hidden
+    }
+}
+
+/// Width of the × that sits at the right end of a recent row (#2716).
+const REMOVE_W: f32 = 28.0;
+
 fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("Recent")).font(semibold(16.0)));
@@ -518,7 +540,10 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
     let file_name = |p: &str| std::path::Path::new(p).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(p.to_string());
     let names = shown.iter().map(|p| file_name(p)).collect::<Vec<_>>();
     for (p, name) in shown.iter().zip(&names) {
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0), 40.0), Sense::click());
+        // #2716: each row carries its own Remove, as Word's context menu does. The × is a button
+        // of its own at the right end, so it never opens the document; clicking the rest of the
+        // row opens it as before.
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width().min(700.0) - REMOVE_W, 40.0), Sense::click());
         // Two documents with the same file name are told apart by their path, as on screen.
         let spoken = if names.iter().filter(|n| *n == name).count() > 1 { format!("{name}, {p}") } else { name.clone() };
         resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &spoken));
@@ -530,10 +555,33 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         let display_p = crate::canvas::bidi_display(p);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, display_name.as_ref(), medium(13.0), t.text);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, display_p.as_ref(), regular(11.0), t.text_dim);
+        let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
+        let xresp = ui.interact(xr, ui.id().with(("recent-remove", &p)), Sense::click());
+        xresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!("Remove from list")));
+        // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
+        // be found; only the × itself gets the stronger fill and full-strength glyph.
+        match remove_cue(resp.hovered() || resp.has_focus(), xresp.hovered() || xresp.has_focus()) {
+            RemoveCue::Hidden => {}
+            RemoveCue::Dim => {
+                ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text_dim);
+            }
+            RemoveCue::Strong => {
+                ui.painter().rect_filled(xr, 4.0, t.hover);
+                ui.painter().text(xr.center(), Align2::CENTER_CENTER, "×", medium(15.0), t.text);
+            }
+        }
         if resp.clicked() {
             let failed = open_recent(app, p).err();
             ui.ctx().data_mut(|d| d.insert_temp(open_error_id(), failed.unwrap_or_default()));
         }
+        if xresp.clicked() {
+            let _ = app.run("ui.recentRemove", json!({"path": p}));
+        }
+    }
+    if app.ui.recent.iter().take(app.ui.recent_shown()).next().is_some()
+        && ui.add(egui::Button::new(egui::RichText::new(tl!("Clear all")).font(medium(13.0)))).clicked()
+    {
+        let _ = app.run("ui.recentClear", json!({}));
     }
 }
 
@@ -1232,6 +1280,56 @@ mod tests {
         a.session.prefs.user_templates_folder = Some(own.to_string_lossy().into_owned());
         assert_eq!(a.user_templates_dir(), Some(own.clone()));
         let _ = std::fs::remove_dir_all(&own);
+    }
+
+    /// #2716: the × of a recent row is a cue, not a secret: dimmed when only the row is hovered,
+    /// stronger on the × itself, absent when neither is.
+    #[test]
+    fn recent_remove_cross_shows_when_the_row_is_hovered() {
+        use super::{RemoveCue, remove_cue};
+        assert_eq!(remove_cue(false, false), RemoveCue::Hidden);
+        assert_eq!(remove_cue(true, false), RemoveCue::Dim, "row hovered shows the glyph");
+        assert_eq!(remove_cue(false, true), RemoveCue::Strong);
+        assert_eq!(remove_cue(true, true), RemoveCue::Strong);
+    }
+
+    /// #2716: each recent row has its own Remove (× at the right end, so it opens nothing), and
+    /// Clear all takes the whole list away; the list is empty afterwards.
+    #[test]
+    fn recent_rows_can_be_removed_one_by_one_or_all_at_once() {
+        use egui::accesskit::Role;
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.ui.recent = vec!["/tmp/alpha.docx".into(), "/tmp/beta.docx".into()];
+        a.run("ui.backstage", json!({"value": true, "page": "home"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let row = |h: &egui_kittest::Harness<WordApp>, name: &str| h.query_all_by_role_and_label(Role::Button, name).next().map(|n| n.rect());
+        assert!(row(&h, "alpha.docx").is_some() && row(&h, "beta.docx").is_some(), "both rows show");
+        // The × inside alpha's row, not beta's: click it and only alpha goes.
+        let remove_in = |h: &mut egui_kittest::Harness<WordApp>, name: &str| {
+            let r = row(h, name).expect(name);
+            h.query_all_by_role_and_label(Role::Button, "Remove from list")
+                .find(|n| n.rect().min.y >= r.min.y && n.rect().min.y < r.max.y)
+                .expect("row has its Remove")
+                .click();
+        };
+        remove_in(&mut h, "alpha.docx");
+        h.run_steps(4);
+        assert_eq!(h.state().ui.recent, ["/tmp/beta.docx".to_string()], "the row's own Remove takes its row");
+        assert!(h.state().ui.backstage, "the × does not open the Backstage away");
+        assert!(row(&h, "alpha.docx").is_none() && row(&h, "beta.docx").is_some());
+        h.get_by_label("Clear all").click();
+        h.run_steps(4);
+        assert!(h.state().ui.recent.is_empty(), "Clear all empties the list");
+        assert!(h.query_by_label("Documents you open will show up here.").is_some());
+        assert!(row(&h, "beta.docx").is_none(), "and Clear all goes with it");
     }
 
     /// Home and New are different pages (#141): Home has the short template row, the link to New
