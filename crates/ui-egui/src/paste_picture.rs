@@ -77,7 +77,27 @@ pub fn names_picture_files(text: &str) -> bool {
 /// Paste the picture on the system clipboard. `None` when there is none (or no clipboard
 /// service): the caller pastes as usual.
 pub(crate) fn paste(app: &mut WordApp) -> Option<Result<Value, String>> {
-    let picture = app.services.clipboard_picture.as_ref()?()?;
+    insert(app, read(app)?)
+}
+
+/// Pictures copied as files (a file manager's Copy), pasted ahead of the text that copy also
+/// leaves on the clipboard: Finder puts the file's *name* there, and pasting that name into the
+/// document is not what Copy meant. `None` when the clipboard holds no copied files, or
+/// none of them is a picture — so text that only looks like a file name still pastes as text.
+pub(crate) fn paste_copied_files(app: &mut WordApp) -> Option<Result<Value, String>> {
+    match read(app)? {
+        picture @ ClipboardPicture::Files(_) => insert(app, picture),
+        ClipboardPicture::Pixels { .. } | ClipboardPicture::Encoded(_) | ClipboardPicture::Unreadable(_) => None,
+    }
+}
+
+/// What the host reads from the clipboard, when it has a clipboard service at all.
+fn read(app: &WordApp) -> Option<ClipboardPicture> {
+    app.services.clipboard_picture.as_ref()?()
+}
+
+/// Insert `picture` (see [`paste`]): `None` when it holds nothing to insert.
+fn insert(app: &mut WordApp, picture: ClipboardPicture) -> Option<Result<Value, String>> {
     let r = match picture {
         ClipboardPicture::Pixels { width, height, rgba } => match png_from_rgba(width, height, rgba) {
             Ok(png) => app.execute("insert.picture", json!({"data": wordcraft_engine::cmd::insert::base64_encode(&png)})),
