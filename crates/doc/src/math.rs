@@ -878,6 +878,32 @@ mod tests {
     }
 
     #[test]
+    fn quoted_text_is_normal_text_with_its_spaces() {
+        // #2581: `"…"` is normal text; spaces outside quotes still only separate operands.
+        let normal = |t: &str| MNode::Run(MRun { text: t.into(), nor: true, sty: Some(MSty::Plain), ..Default::default() });
+        let n = parse_linear("\"Giro dos Estoques\"=\"Custo das Vendas (CMV)\"/\"Saldo Médio\"");
+        assert_eq!(n.len(), 3, "{n:#?}");
+        assert_eq!(n[0], normal("Giro dos Estoques"));
+        assert_eq!(n[1], run("="));
+        assert_eq!(n[2], MNode::Frac { kind: FracKind::Bar, num: vec![normal("Custo das Vendas (CMV)")], den: vec![normal("Saldo Médio")] });
+        assert_eq!(parse_linear("a \" \" b"), vec![run("a"), normal(" "), run("b")]);
+        assert_eq!(parse_linear("a\"\"b"), vec![run("ab")]);
+        // An unclosed quote is a character; its spaces are build-up spaces.
+        assert_eq!(parse_linear("\"a b"), vec![run("\"ab")]);
+        // Quoted text is never syntax: not a number mark, not a cell or row separator.
+        assert_eq!(parse_linear("\"#\""), vec![normal("#")]);
+        let n = parse_linear("■(\"&\"&b@\"@\"&d)");
+        let MNode::Matrix { rows, .. } = &n[0] else { panic!("{n:#?}") };
+        assert_eq!(rows.len(), 2, "{rows:#?}");
+        assert_eq!(rows[0][0], vec![normal("&")]);
+        assert_eq!(rows[1][0], vec![normal("@")]);
+        // A script or an operand can be quoted text, and `""` doesn't end an operand.
+        let sup = MNode::Script { kind: ScriptKind::Sup, base: vec![run("x")], sub: Vec::new(), sup: vec![normal("a b")] };
+        assert_eq!(parse_linear("x^\"a b\""), vec![sup]);
+        assert_eq!(parse_linear("a/\"\"b"), vec![MNode::Frac { kind: FracKind::Bar, num: vec![run("a")], den: vec![run("b")] }]);
+    }
+
+    #[test]
     fn linear_round_trip_keeps_structure() {
         for s in [
             "x=(-b±√(b^2-4ac))/2a",

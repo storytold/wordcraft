@@ -3,13 +3,14 @@
 //! Grammar, informally: an expression is a sequence of atoms and operators. Atoms are characters,
 //! bracket groups (`(…)`, `[…]`, `{…}`, `|…|`, `〖…〗` invisible, `├…┤` one-sided, `│`
 //! separators), prefix structures (`√x`, `∑_a^b▒x`, `█(…)`, `■(…)`, `▭x`, `□x`, `¯x`, `▁x`,
-//! `⏞x`, `⏟x`, `⟡x`), function names (`sin x`, `log_2 x`, `lim┬(n→∞) x`) and placeholders (`⬚`).
+//! `⏞x`, `⏟x`, `⟡x`), function names (`sin x`, `log_2 x`, `lim┬(n→∞) x`), placeholders (`⬚`)
+//! and quoted normal text (`"Net sales"`, spaces kept).
 //! Postfix operators apply to the atom before them: `^` `_` scripts, combining accents, `┬` `┴`
 //! limits. `/` `⁄` `∕` `¦` take the operands on either side (an operand is a run of atoms up to
 //! an operator or space; a parenthesised operand loses its parentheses). `^`/`_` with nothing
 //! before them are pre-scripts. A top-level `#` numbers the equation (`E=mc^2#(1)`).
 
-use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
+use crate::math::{Arg, FracKind, MAX_DEPTH, MClass, MNode, MRun, MSty, ScriptKind, any_too_deep, is_nary_char, math_class, merge_runs, too_deep};
 
 /// Function names set upright and applied to the following operand.
 pub const FUNCTION_NAMES: &[&str] = &[
@@ -38,7 +39,7 @@ pub fn parse(s: &str) -> Arg {
     }
     let mut out = clean(out);
     // `expr#(n)`: a numbered equation.
-    if out.iter().any(|n| matches!(n, MNode::Run(r) if r.text.contains('#'))) {
+    if out.iter().any(|n| matches!(n, MNode::Run(r) if !r.nor && r.text.contains('#'))) {
         out = vec![MNode::EqArr { rows: vec![out] }];
     }
     out
@@ -208,6 +209,18 @@ impl P {
     /// One atom (a character, a bracket group, a structure or a function application).
     fn atom(&mut self, stops: &[char]) -> Arg {
         let Some(c) = self.peek() else { return Vec::new() };
+        if c == '"'
+            && let Some(len) = self.c.get(self.i + 1..).and_then(|r| r.iter().position(|&q| q == '"'))
+        {
+            // `"…"` is normal text: upright, spaces kept (#2581). An unclosed quote is a character.
+            let t: String = self.c.get(self.i + 1..self.i + 1 + len).unwrap_or(&[]).iter().collect();
+            self.i += len + 2;
+            return if t.is_empty() {
+                Vec::new()
+            } else {
+                vec![MNode::Run(MRun { text: t, nor: true, sty: Some(MSty::Plain), ..Default::default() })]
+            };
+        }
         if let Some(close) = closer(c) {
             self.i += 1;
             return vec![self.group(Some(c), &[close])];
@@ -346,7 +359,7 @@ impl P {
                     _ => Vec::new(),
                 };
                 let mut e = self.operand(stops);
-                if let Some(k) = e.iter().position(|n| matches!(n, MNode::Run(r) if r.text == "&")) {
+                if let Some(k) = e.iter().position(|n| matches!(n, MNode::Run(r) if !r.nor && r.text == "&")) {
                     let rest = e.split_off(k + 1);
                     e.pop();
                     deg = e;
@@ -518,8 +531,13 @@ impl P {
                 if stops.contains(&c) || is_boundary(c) || self.tired() {
                     break;
                 }
+                let at = self.i;
                 let a = self.atom(stops);
                 if a.is_empty() {
+                    // An empty `""` is nothing, and the operand goes on.
+                    if self.i > at {
+                        continue;
+                    }
                     break;
                 }
                 out.extend(a);
@@ -609,7 +627,7 @@ impl P {
                     other => vec![other],
                 }
             }
-            Some(c) if is_prefix(c) || closer(c).is_some() => self.atom(stops),
+            Some(c) if is_prefix(c) || closer(c).is_some() || c == '"' => self.atom(stops),
             Some(c) if c.is_ascii_digit() => {
                 let start = self.i;
                 while self.peek().is_some_and(|k| k.is_alphanumeric() || k == '.') {
@@ -651,7 +669,7 @@ fn operand_start(out: &[MNode]) -> usize {
     let mut k = out.len();
     while k > 0 {
         match out.get(k - 1) {
-            Some(MNode::Run(r)) if r.text.chars().all(is_boundary) => break,
+            Some(MNode::Run(r)) if !r.nor && r.text.chars().all(is_boundary) => break,
             _ => k -= 1,
         }
     }
@@ -689,8 +707,8 @@ fn grid(matrix: bool, inner: Arg) -> MNode {
     let mut rows: Vec<Vec<Arg>> = vec![vec![Vec::new()]];
     for n in inner {
         match &n {
-            MNode::Run(r) if r.text == "@" => rows.push(vec![Vec::new()]),
-            MNode::Run(r) if r.text == "&" && matrix => {
+            MNode::Run(r) if !r.nor && r.text == "@" => rows.push(vec![Vec::new()]),
+            MNode::Run(r) if !r.nor && r.text == "&" && matrix => {
                 if let Some(row) = rows.last_mut() {
                     row.push(Vec::new());
                 }
@@ -714,7 +732,7 @@ fn clean(a: Arg) -> Arg {
     let mut out = Vec::with_capacity(a.len());
     for n in a {
         match n {
-            MNode::Run(r) if r.text == " " || r.text.chars().all(|c| c == PLACEHOLDER) => {}
+            MNode::Run(r) if !r.nor && (r.text == " " || r.text.chars().all(|c| c == PLACEHOLDER)) => {}
             other => out.push(map_args(other, &clean)),
         }
     }
