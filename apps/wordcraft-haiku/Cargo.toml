@@ -1,0 +1,42 @@
+[package]
+name = "wordcraft-haiku"
+version = "0.6.1"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+# Keep experimental dependency overrides out of the normal desktop workspace.
+[workspace]
+resolver = "3"
+
+[dependencies]
+wordcraft-engine = { path = "../../crates/engine" }
+wordcraft-ui-egui = { path = "../../crates/ui-egui" }
+wordcraft-geom = { path = "../../crates/geom" }
+egui = "0.36"
+serde_json = { version = "1", features = ["float_roundtrip"] }
+rfd = "0.17.2"
+egui_software_backend = { git = "https://github.com/duncanmcqueen/egui_software_backend", rev = "3e0d09fbb3f9f7c3e350eef4678dedfa0573af67", features = ["rayon"] }
+
+[patch.crates-io]
+rfd = { git = "https://github.com/duncanmcqueen/rfd", rev = "376c3ef51b4823c392126ce1acf6eb380be5b715" }
+winit = { git = "https://github.com/duncanmcqueen/winit", rev = "9ac5d8fb4369a910f9a5c7b986fd1b2b2c1fc68a" }
+wayland-client = { git = "https://github.com/duncanmcqueen/wayland-rs", rev = "df9f9fc64a7b4bc5d16cec99e9b0bab86be29092" }
+wayland-backend = { git = "https://github.com/duncanmcqueen/wayland-rs", rev = "df9f9fc64a7b4bc5d16cec99e9b0bab86be29092" }
+calloop013 = { package = "calloop", git = "https://github.com/duncanmcqueen/calloop", rev = "80641145888ac2eb97586ea688279527d014c8a2" }
+calloop014 = { package = "calloop", git = "https://github.com/duncanmcqueen/calloop", rev = "bcad6118cdc3e20dd5ee10db890291fa19a38b42" }
+sctk019 = { package = "smithay-client-toolkit", git = "https://github.com/duncanmcqueen/client-toolkit", rev = "825cbd720e047ff6358e8c3a940763cd58721e73" }
+sctk020 = { package = "smithay-client-toolkit", git = "https://github.com/duncanmcqueen/client-toolkit", rev = "71454d29abd88ed1d5b78f305c2ea7ac83cbbaf3" }
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+[profile.release]
+opt-level = 3
+lto = false
+codegen-units = 16

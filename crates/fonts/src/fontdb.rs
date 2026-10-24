@@ -782,6 +782,12 @@ pub fn system_font_dirs() -> Vec<std::path::PathBuf> {
         if let Some(l) = std::env::var_os("LOCALAPPDATA") {
             dirs.push(std::path::PathBuf::from(l).join("Microsoft\\Windows\\Fonts"));
         }
+    } else if cfg!(target_os = "haiku") {
+        dirs.extend(["/boot/system/data/fonts", "/boot/system/non-packaged/data/fonts"].map(Into::into));
+        if let Some(h) = &home {
+            dirs.push(h.join("config/data/fonts"));
+            dirs.push(h.join("config/non-packaged/data/fonts"));
+        }
     } else {
         dirs.extend(["/usr/share/fonts", "/usr/local/share/fonts"].map(Into::into));
         if let Some(h) = &home {
