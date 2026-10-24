@@ -238,6 +238,8 @@ attributes inside stories and style or list definitions; a regenerated theme. Te
 
 
 
+> **Page-number update:** 2026-10-16 · `insert.pageNumber` at the top/bottom preserves existing header/footer blocks and appends numbering on its own paragraph (#2201). An existing simple or range PAGE field, including one in a deeply nested table or an anchored text box, is kept without restyling or duplication. Nested and grouped text boxes are followed once each; unrelated stories do not suppress numbering. Synthetic tests cover text, table-cell bold formatting, paragraph alignment, undo/redo, table depths 1 and 17, cyclic box references and two DOCX save/reopen cycles, including nested/grouped text-box fields; native Word interoperability is not established by these tests. Section-slot selection is unchanged. Readiness estimates unchanged.
+
 ## Saving legacy Word imports
 
 Word 97–2003 `.doc` and `.dot` remain import-only. A user Save without an explicit destination opens the existing Save As flow suggesting DOCX (#2445), including before Close. The original stays unchanged. Cancelling retains the draft, revision and path; a failed write keeps the draft open, and successful DOCX save/reopen retains the edited text. Uppercase extensions follow the same route. Scripts and explicitly supplied legacy destinations still receive an unsupported-format error and never open a dialog. Late Save As answers are rejected before writing if automation has replaced the document.
@@ -305,6 +307,8 @@ Imported text fields use the first nonempty cached result run's formatting on th
 | 2026-10-15 | trivial | Native .json writes pictures and kept parts as base64 text instead of arrays of numbers (a 27 MiB picture: 36 MiB instead of 286 MiB); files with the old arrays still open (#586 follow-up) |
 | 2026-10-13 | trivial | A cell's explicit top vertical alignment (`w:vAlign w:val="top"`) is kept on read and write and beats a table style that centres or bottom-aligns (#1288) |
 | 2026-10-14 | trivial | Row table border exceptions survive DOCX saves |
+| 2026-10-16 | trivial | Existing PAGE fields in deep tables and anchored header/footer text boxes prevent duplication (#2201); nested/grouped-box DOCX round trips and unrelated-story/cycle controls |
+| 2026-10-15 | trivial | Top/bottom page-number insertion preserves header/footer content (#2201); synthetic repeated DOCX save/reopen coverage |
 | 2026-10-12 | trivial | Fields keep `w:dirty` through DOCX round trips — on buffered fields and range-field begin markers alike — and computing a result (Update Field, Update Table) clears it like Word's F9, so a generator's placeholder TOC still refreshes when Word opens the file until WordCraft replaces the placeholder (#877) |
 | 2026-10-15 | trivial | ODT headers and footers (`style:header`/`-left`/`-first`, `style:footer`/…) read from each master page, so each section shows its own (#863) |
 | 2026-10-14 | trivial | VML freeforms (`v:shape` with a `path`, such as rule lines in headers) read as freeforms and kept on save instead of being dropped |
