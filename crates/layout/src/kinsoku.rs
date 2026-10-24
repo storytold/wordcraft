@@ -64,11 +64,11 @@ pub fn apply(text: &str, opps: &mut Vec<usize>, kinsoku: bool, word_wrap: bool, 
         // stay with their letters). Thai/Lao are excluded from the ordinary word_wrap=false path
         // so ICU4X dictionary boundaries are preserved; force_char_break (stacked text) includes
         // them to get one character per line.
-        let latin = |g: &str| g.chars().next().is_some_and(|c| {
-            c.is_alphanumeric()
-                && !is_east_asian(c)
-                && (force_char_break || !wordcraft_doc::cluster::is_thai_lao(c))
-        });
+        let latin = |g: &str| {
+            g.chars()
+                .next()
+                .is_some_and(|c| c.is_alphanumeric() && !is_east_asian(c) && (force_char_break || !wordcraft_doc::cluster::is_thai_lao(c)))
+        };
         let mut prev: Option<&str> = None;
         for (i, g) in text.grapheme_indices(true) {
             if prev.is_some_and(latin) && latin(g) {
@@ -176,10 +176,7 @@ mod tests {
             let next = thai.get(o..).and_then(|s| s.chars().next());
             let both_thai = matches!((prev, next), (Some(p), Some(n))
                 if wordcraft_doc::cluster::is_thai_lao(p) && wordcraft_doc::cluster::is_thai_lao(n));
-            assert!(
-                !both_thai || matches!(o, 24 | 36),
-                "Thai break at {o} is not an ICU4X word boundary (expected 24 or 36): {opps:?}"
-            );
+            assert!(!both_thai || matches!(o, 24 | 36), "Thai break at {o} is not an ICU4X word boundary (expected 24 or 36): {opps:?}");
         }
     }
 
