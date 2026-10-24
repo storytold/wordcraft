@@ -23,6 +23,8 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
+#[cfg(all(unix, not(target_os = "macos")))]
+mod x11_scale;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -321,6 +323,8 @@ fn open_non_unicode(app: &mut WordApp, path: &std::path::Path) {
 }
 
 fn main() -> eframe::Result {
+    #[cfg(all(unix, not(target_os = "macos")))]
+    x11_scale::apply();
     // First, so the panic hook and every start-up warning are recorded (`logging`).
     let logger = logging::install();
     logging::install_panic_hook();
