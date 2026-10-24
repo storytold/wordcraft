@@ -138,6 +138,145 @@ pub fn resolve_tab<'a>(current: &'a str, available: &[&str]) -> &'a str {
 /// Width of the » button that holds the tabs the strip has no room for.
 const MORE_TABS_W: f32 = 24.0;
 
+/// How long a contextual tab takes to settle into place after it appears, seconds.
+const TAB_ENTRY_SECS: f64 = 0.35;
+/// How far, in points, a new contextual tab starts to the left of its place.
+const TAB_ENTRY_SLIDE: f32 = 18.0;
+
+/// Fast at first, then slowing to rest: 0 → 1.
+fn ease_out_cubic(p: f32) -> f32 {
+    1.0 - (1.0 - p.clamp(0.0, 1.0)).powi(3)
+}
+
+/// Notes the contextual tabs shown this frame (each with its place in the strip), starts the
+/// entry of those that were not shown the frame before, and returns the tabs that just left,
+/// each with its old place and the time it left, while they still fade away (none with
+/// animations off). The first frame starts nothing: tabs already there do not slide.
+fn note_contextual_tabs(ctx: &egui::Context, shown: &[(&str, usize)], now: f64, animate: bool) -> Vec<(String, usize, f64)> {
+    let (shown_id, leaving_id) = (egui::Id::new("contextual_tabs_shown"), egui::Id::new("contextual_tabs_leaving"));
+    let prev: Option<Vec<(String, usize)>> = ctx.data(|d| d.get_temp(shown_id));
+    let mut leaving: Vec<(String, usize, f64)> = ctx.data(|d| d.get_temp(leaving_id)).unwrap_or_default();
+    leaving.retain(|(n, _, start)| animate && now - start < TAB_ENTRY_SECS && !shown.iter().any(|(s, _)| s == n));
+    if let Some(prev) = prev {
+        for (tab, _) in shown.iter().filter(|(t, _)| !prev.iter().any(|(p, _)| p == t)) {
+            ctx.data_mut(|d| d.insert_temp(egui::Id::new(("contextual_tab_entry", *tab)), now));
+        }
+        for (tab, at) in prev.iter().filter(|(p, _)| animate && !shown.iter().any(|(s, _)| s == p)) {
+            if !leaving.iter().any(|(n, _, _)| n == tab) {
+                leaving.push((tab.clone(), *at, now));
+            }
+        }
+    }
+    ctx.data_mut(|d| {
+        d.insert_temp(shown_id, shown.iter().map(|(t, at)| (t.to_string(), *at)).collect::<Vec<_>>());
+        d.insert_temp(leaving_id, leaving.clone());
+    });
+    leaving
+}
+
+/// How far a contextual tab's entry has come: 0 as it appears, 1 once settled (always 1 with
+/// animations off). Asks for repaints while it moves.
+fn tab_entry(ctx: &egui::Context, tab: &str, now: f64, animate: bool) -> f32 {
+    let start: Option<f64> = ctx.data(|d| d.get_temp(egui::Id::new(("contextual_tab_entry", tab))));
+    let Some(start) = start.filter(|_| animate) else { return 1.0 };
+    let p = ((now - start) / TAB_ENTRY_SECS).clamp(0.0, 1.0) as f32;
+    if p < 1.0 {
+        ctx.request_repaint();
+    }
+    ease_out_cubic(p)
+}
+
+/// How long the underline takes to slide to a newly chosen tab, seconds.
+const UNDERLINE_SLIDE_SECS: f64 = 0.2;
+/// How long the ribbon's content takes to fade and slide in after a tab change, seconds.
+const CONTENT_SWITCH_SECS: f64 = 0.16;
+/// How far, in points, the new content starts to the side of its place.
+const CONTENT_SWITCH_SLIDE: f32 = 14.0;
+
+/// The tab underline: its centre and width (`from`, `to`) and when it set off.
+#[derive(Clone, Debug, PartialEq)]
+struct Underline {
+    tab: String,
+    from: (f32, f32),
+    to: (f32, f32),
+    start: f64,
+}
+
+/// The underline once the active tab is at `target` (centre, width): a new tab starts a slide from
+/// where the underline is now, the same tab only follows its tab (a resized window).
+fn next_underline(prev: Option<&Underline>, tab: &str, target: (f32, f32), now: f64, animate: bool) -> Underline {
+    let snap = Underline { tab: tab.to_string(), from: target, to: target, start: now };
+    match prev {
+        Some(p) if animate && p.tab != tab => Underline { from: underline_at(p, now), ..snap },
+        Some(p) if animate && now - p.start < UNDERLINE_SLIDE_SECS => Underline { to: target, ..p.clone() },
+        _ => snap,
+    }
+}
+
+/// Where the underline is `now`: sliding from its old place to its new one, fast at first.
+fn underline_at(u: &Underline, now: f64) -> (f32, f32) {
+    let e = ease_out_cubic(((now - u.start) / UNDERLINE_SLIDE_SECS) as f32);
+    (egui::lerp(u.from.0..=u.to.0, e), egui::lerp(u.from.1..=u.to.1, e))
+}
+
+/// Draws the underline under the active tab, sliding it from the tab chosen before.
+fn slide_underline(ui: &Ui, tab: &str, target: Rect, color: egui::Color32, now: f64, animate: bool) {
+    let id = egui::Id::new("tab_underline");
+    let prev: Option<Underline> = ui.ctx().data(|d| d.get_temp(id));
+    let next = next_underline(prev.as_ref(), tab, (target.center().x, target.width()), now, animate);
+    if next.from != next.to && now - next.start < UNDERLINE_SLIDE_SECS {
+        ui.ctx().request_repaint();
+    }
+    let (x, w) = underline_at(&next, now);
+    ui.ctx().data_mut(|d| d.insert_temp(id, next));
+    ui.painter().rect_filled(Rect::from_center_size(pos2(x, target.center().y), vec2(w, target.height())), 2.0, color);
+}
+
+/// The last tab change: when it happened and which way it went (+1 towards the end of the strip,
+/// -1 towards the start, 0 for none).
+#[derive(Clone, Debug, PartialEq)]
+struct TabChange {
+    tab: String,
+    index: usize,
+    start: f64,
+    dir: f32,
+}
+
+fn next_tab_change(prev: Option<&TabChange>, tab: &str, index: usize, now: f64, animate: bool) -> TabChange {
+    let same = TabChange { tab: tab.to_string(), index, start: prev.map_or(f64::MIN, |p| p.start), dir: prev.map_or(0.0, |p| p.dir) };
+    match prev {
+        Some(p) if p.tab != tab => {
+            let dir = if !animate || index == p.index {
+                0.0
+            } else if index > p.index {
+                1.0
+            } else {
+                -1.0
+            };
+            TabChange { start: now, dir, ..same }
+        }
+        Some(_) => same,
+        None => TabChange { start: f64::MIN, dir: 0.0, ..same },
+    }
+}
+
+/// How far the ribbon's content has come after a tab change, eased: 0 as the tab changes, 1 once
+/// settled, with the side it comes from (+1 from the right, -1 from the left).
+fn tab_content_entry(ctx: &egui::Context, tab: &str, index: usize, now: f64, animate: bool) -> (f32, f32) {
+    let id = egui::Id::new("ribbon_tab_change");
+    let prev: Option<TabChange> = ctx.data(|d| d.get_temp(id));
+    let next = next_tab_change(prev.as_ref(), tab, index, now, animate);
+    let p = ((now - next.start) / CONTENT_SWITCH_SECS).clamp(0.0, 1.0) as f32;
+    let dir = next.dir;
+    ctx.data_mut(|d| d.insert_temp(id, next));
+    if p < 1.0 && dir != 0.0 {
+        ctx.request_repaint();
+        (ease_out_cubic(p), dir)
+    } else {
+        (1.0, 0.0)
+    }
+}
+
 /// Which tabs fit on a strip `avail` points wide (#897), from each tab's width and whether it must
 /// stay. The others give way from the end, leaving `more` points for the » menu that holds them
 /// (pure, tested).
@@ -295,10 +434,31 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             app.ui.tab = next.to_string();
         }
     }
+    let (now, animate) = (ui.input(|i| i.time), app.animations_on());
+    let leaving: Vec<(String, usize, f64)>;
+    {
+        let user_names: Vec<&str> = user_tabs.iter().filter(|e| e.custom).map(|e| e.name.as_str()).collect();
+        let contextual: Vec<(&str, usize)> = tabs
+            .iter()
+            .enumerate()
+            .map(|(i, (n, _))| (n.as_str(), i))
+            .filter(|(n, _)| wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(n) && !user_names.contains(n))
+            .collect();
+        leaving = note_contextual_tabs(ui.ctx(), &contextual, now, animate);
+    }
+    // A tab that just left stays in its place while it slides and fades away.
+    let ghosts: Vec<(String, usize, f64)> = leaving.iter().filter(|(n, ..)| !tabs.iter().any(|(t, _)| t == n)).cloned().collect();
+    for (name, at, _) in &ghosts {
+        tabs.insert((*at).min(tabs.len()), (name.clone(), false));
+    }
     // Tab strip.
     egui::Panel::top("tabs")
         .exact_size(30.0)
-        .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }))
+        .frame(
+            egui::Frame::NONE
+                .fill(if app.ribbon_glass() { crate::ribbon_blur::glass(t.tab_strip) } else { t.tab_strip })
+                .inner_margin(egui::Margin { left: 8, right: 10, top: 0, bottom: 0 }),
+        )
         .show(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.spacing_mut().item_spacing = vec2(2.0, 0.0);
@@ -393,8 +553,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let shown = if custom { tab } else { tl!(tab) };
                             let w = plan.widths.get(i).copied().unwrap_or(0.0) - 2.0;
                             let cut = specs.get(i).is_some_and(|sp| sp.text_w + plan.pad > w + 0.5);
-                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
-                            if app.ui.keytips == crate::keytips::Phase::Tabs {
+                            let ghost = ghosts.iter().find(|(n, ..)| n == tab);
+                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), if ghost.is_some() { Sense::hover() } else { Sense::click() });
+                            if app.ui.keytips == crate::keytips::Phase::Tabs && ghost.is_none() {
                                 crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
                             } else if app.ui.keytips == crate::keytips::Phase::Legacy {
                                 // Every tab: they only place the legacy keys' hint (#1697).
@@ -402,10 +563,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             let active = app.ui.tab == tab && !app.ui.backstage;
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, shown));
-                            if resp.hovered() && !active {
-                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                            let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered() && !active && ghost.is_none());
+                            if hover > 0.0 {
+                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, egui::Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover));
                             }
-                            let color = if contextual || active { t.accent_text } else { t.text };
+                            // A contextual tab glides in from the left, fast at first and then slowing:
+                            // the eye is drawn to the motion. One that just left glides back out the same
+                            // way, fading, and cannot be clicked.
+                            let entry = match ghost {
+                                Some((_, _, left)) => {
+                                    ui.ctx().request_repaint();
+                                    1.0 - ease_out_cubic(((now - left) / TAB_ENTRY_SECS) as f32)
+                                }
+                                None if contextual => tab_entry(ui.ctx(), tab, now, animate),
+                                None => 1.0,
+                            };
+                            let shift = vec2(-(1.0 - entry) * TAB_ENTRY_SLIDE, 0.0);
+                            let color = if contextual || active { t.accent_text } else { t.text }.gamma_multiply(entry);
                             if cut {
                                 let mut job = egui::text::LayoutJob::single_section(
                                     shown.to_string(),
@@ -418,10 +592,10 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     overflow_character: Some('…'),
                                 };
                                 let galley = ui.painter().layout_job(job);
-                                ui.painter().galley(r.center() - galley.size() / 2.0, galley, color);
+                                ui.painter().galley(r.center() + shift - galley.size() / 2.0, galley, color);
                             } else {
                                 ui.painter().text(
-                                    r.center(),
+                                    r.center() + shift,
                                     Align2::CENTER_CENTER,
                                     shown,
                                     if active { semibold(12.5) } else { medium(12.5) },
@@ -430,8 +604,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             let resp = if cut { resp.on_hover_text(shown) } else { resp };
                             if active {
-                                let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                ui.painter().rect_filled(u, 2.0, t.accent);
+                                let u = Rect::from_center_size(pos2(r.center().x + shift.x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
+                                slide_underline(ui, tab, u, t.accent.gamma_multiply(entry), now, animate);
                             }
                             if resp.clicked() {
                                 let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -439,19 +613,22 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             if resp.double_clicked() && tab != "File" {
                                 let _ = app.run("ui.collapseRibbon", json!({}));
                             }
-                            resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+                            if ghost.is_none() {
+                                resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+                            }
                         }
                         let left_out: Vec<(&str, &str)> = tabs
                             .iter()
                             .zip(&labels)
                             .zip(&plan.fits)
-                            .filter(|(_, fits)| !**fits)
+                            .filter(|(((tab, _), _), fits)| !**fits && !ghosts.iter().any(|(n, ..)| n == tab))
                             .map(|(((tab, _), shown), _)| (tab.as_str(), *shown))
                             .collect();
                         if !left_out.is_empty() {
                             let (r, resp) = ui.allocate_exact_size(vec2(MORE_TABS_W, 30.0), Sense::click());
-                            if resp.hovered() {
-                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
+                            let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+                            if hover > 0.0 {
+                                ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, egui::Color32::TRANSPARENT.lerp_to_gamma(t.hover, hover));
                             }
                             // The active tab is in the menu: the button says so.
                             let holds_active = left_out.iter().any(|(tab, _)| *tab == app.ui.tab);
@@ -485,9 +662,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     egui::Panel::top("ribbon")
         .exact_size(CONTENT_H + LABEL_H + 10.0)
         .frame(
-            egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 }).stroke(Stroke::new(1.0, t.border)),
+            egui::Frame::NONE
+                .fill(if app.ribbon_glass() { crate::ribbon_blur::glass(t.ribbon) } else { t.ribbon })
+                .inner_margin(egui::Margin { left: 8, right: 8, top: 4, bottom: 4 })
+                .stroke(Stroke::new(1.0, t.border)),
         )
-        .show(ui, |ui| {
+        .show(ui, |panel| {
+            // A tab change brings the new content in from the side it lies on, fading in.
+            let index = tabs.iter().position(|(n, _)| *n == app.ui.tab).unwrap_or(0);
+            let (settled, dir) = tab_content_entry(panel.ctx(), &app.ui.tab, index, now, animate);
+            let shift = vec2(dir * (1.0 - settled) * CONTENT_SWITCH_SLIDE, 0.0);
+            let mut shifted = panel.new_child(egui::UiBuilder::new().max_rect(panel.max_rect().translate(shift)).layout(*panel.layout()));
+            shifted.set_opacity(0.2 + 0.8 * settled);
+            let ui = &mut shifted;
             // Right-click on the ribbon (outside a button): Customize Ribbon. Registered first, so
             // the buttons drawn over it keep their own clicks.
             // No document open (#1129): every command is greyed out but Help's.
@@ -3624,6 +3811,43 @@ mod tests {
         assert_eq!(language_name(Some("de-DE")), "German (Germany)");
     }
 
+    /// A contextual tab that appears eases in (quick, then slowing); tabs shown from the first frame, or
+    /// still shown later, do not move; with animations off it is in place at once.
+    #[test]
+    fn a_new_contextual_tab_eases_in() {
+        let ctx = egui::Context::default();
+        note_contextual_tabs(&ctx, &[("Table Design", 1)], 1.0, true);
+        assert_eq!(tab_entry(&ctx, "Table Design", 1.0, true), 1.0, "tabs already there do not slide");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 2.0, true);
+        let at = |secs: f64| tab_entry(&ctx, "Picture Format", 2.0 + secs, true);
+        assert_eq!(at(0.0), 0.0);
+        let (a, b, c) = (at(0.1), at(0.2), at(TAB_ENTRY_SECS));
+        assert!(0.0 < a && a < b && b < c && c == 1.0, "{a} {b} {c}");
+        assert!(a > 0.1 / TAB_ENTRY_SECS as f32, "faster than linear at the start: {a}");
+        assert!(c - b < b - a, "slower at the end: {a} {b} {c}");
+        assert_eq!(tab_entry(&ctx, "Picture Format", 2.0, false), 1.0, "animations off");
+        note_contextual_tabs(&ctx, &[("Table Design", 1), ("Picture Format", 2)], 3.0, true);
+        assert_eq!(tab_entry(&ctx, "Picture Format", 3.0, true), 1.0, "staying shown does not restart it");
+    }
+
+    /// A contextual tab that goes away stays, in its old place, for the length of its exit, and not
+    /// at all with animations off; one that comes back is no longer leaving.
+    #[test]
+    fn a_contextual_tab_that_goes_away_leaves_gently() {
+        let ctx = egui::Context::default();
+        let both = [("Table Design", 1), ("Picture Format", 2)];
+        assert!(note_contextual_tabs(&ctx, &both, 1.0, true).is_empty());
+        let leaving = note_contextual_tabs(&ctx, &both[..1], 2.0, true);
+        assert_eq!(leaving, vec![("Picture Format".to_string(), 2, 2.0)]);
+        assert_eq!(note_contextual_tabs(&ctx, &both[..1], 2.2, true).len(), 1, "still leaving");
+        assert!(note_contextual_tabs(&ctx, &both[..1], 2.0 + TAB_ENTRY_SECS + 0.01, true).is_empty(), "gone");
+        assert!(note_contextual_tabs(&ctx, &both, 4.0, true).is_empty());
+        assert!(note_contextual_tabs(&ctx, &both[..1], 5.0, false).is_empty(), "animations off");
+        note_contextual_tabs(&ctx, &both, 6.0, true);
+        note_contextual_tabs(&ctx, &both[..1], 7.0, true);
+        assert!(note_contextual_tabs(&ctx, &both, 7.1, true).is_empty(), "back again");
+    }
+
     /// #1281: every short-list entry (the four Englishes, Indonesian…) is picked in the menu:
     /// clicking it sets the selection's proofing language, and the entry is then the checked one.
     #[test]
@@ -3801,5 +4025,40 @@ mod tests {
         let before = (size(&a), a.session.undo_depth());
         assert_eq!(before.0, Some((20.0, 2500.0)));
         assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
+    }
+
+    #[test]
+    fn the_underline_slides_to_a_newly_chosen_tab() {
+        let first = next_underline(None, "Home", (40.0, 50.0), 0.0, true);
+        assert_eq!(underline_at(&first, 5.0), (40.0, 50.0), "the first tab is just there");
+        let moved = next_underline(Some(&first), "Insert", (140.0, 60.0), 10.0, true);
+        assert_eq!(underline_at(&moved, 10.0), (40.0, 50.0), "it sets off from the old tab");
+        let mid = underline_at(&moved, 10.0 + UNDERLINE_SLIDE_SECS / 2.0);
+        assert!(mid.0 > 40.0 && mid.0 < 140.0 && mid.1 > 50.0 && mid.1 < 60.0, "{mid:?}");
+        assert_eq!(underline_at(&moved, 11.0), (140.0, 60.0), "and settles on the new one");
+        let again = next_underline(Some(&moved), "Draw", (240.0, 50.0), 10.0 + UNDERLINE_SLIDE_SECS / 2.0, true);
+        assert_eq!(underline_at(&again, 10.0 + UNDERLINE_SLIDE_SECS / 2.0), mid, "a second change starts from where it is");
+    }
+
+    #[test]
+    fn the_underline_follows_its_tab_without_sliding_when_nothing_changed() {
+        let first = next_underline(None, "Home", (40.0, 50.0), 0.0, true);
+        let resized = next_underline(Some(&first), "Home", (30.0, 44.0), 1.0, true);
+        assert_eq!(underline_at(&resized, 1.0), (30.0, 44.0));
+        let off = next_underline(Some(&first), "Insert", (140.0, 60.0), 1.0, false);
+        assert_eq!(underline_at(&off, 1.0), (140.0, 60.0), "animations off: no slide");
+    }
+
+    #[test]
+    fn the_content_comes_in_from_the_side_the_new_tab_lies_on() {
+        let first = next_tab_change(None, "Home", 1, 0.0, true);
+        assert_eq!(first.dir, 0.0, "the first tab does not animate");
+        let forward = next_tab_change(Some(&first), "Insert", 2, 5.0, true);
+        assert_eq!((forward.dir, forward.start), (1.0, 5.0));
+        let back = next_tab_change(Some(&forward), "Home", 1, 6.0, true);
+        assert_eq!((back.dir, back.start), (-1.0, 6.0));
+        let same = next_tab_change(Some(&back), "Home", 1, 7.0, true);
+        assert_eq!((same.dir, same.start), (-1.0, 6.0), "no change, no restart");
+        assert_eq!(next_tab_change(Some(&forward), "Draw", 3, 8.0, false).dir, 0.0, "animations off");
     }
 }

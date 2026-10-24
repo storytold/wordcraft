@@ -73,6 +73,7 @@ pub mod print_page;
 pub mod printing;
 pub mod read_aloud;
 pub mod ribbon;
+pub mod ribbon_blur;
 pub mod ribbon_fit;
 pub mod ruler_tabs;
 pub mod scroll;
@@ -324,6 +325,9 @@ pub struct UiState {
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
     pub caret_animation: bool,
+    /// File › Options › Advanced › Animation: the page scrolling up under the ribbon shows
+    /// through it as a blur. Off by default.
+    pub ribbon_blur: bool,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
     pub keyboard: wordcraft_engine::KeyMap,
     /// Custom ribbon tabs and groups, hidden tabs and the Quick Access Toolbar (Customize Ribbon,
@@ -412,6 +416,7 @@ impl Default for UiState {
             dark_page: false,
             check_spelling: true,
             caret_animation: true,
+            ribbon_blur: false,
             keyboard: wordcraft_engine::KeyMap::default(),
             ribbon: wordcraft_engine::RibbonLayout::default(),
             caption_labels: Vec::new(),
@@ -789,6 +794,14 @@ impl WordApp {
 
     /// Whether a document is open: false from a Start screen launch until the user creates or
     /// opens one (#1129).
+    pub fn ribbon_glass(&self) -> bool {
+        self.ui.ribbon_blur
+            && self.has_document()
+            && !self.ui.backstage
+            && !self.session.view.read_mode
+            && chrome::Screen::of(&self.session.view) == chrome::Screen::Normal
+    }
+
     pub fn has_document(&self) -> bool {
         self.no_document != Some(self.session.document_id())
     }
@@ -1798,6 +1811,15 @@ impl WordApp {
                 }
                 json!({"caretAnimation": self.ui.caret_animation})
             }
+            "ui.ribbonBlur" => {
+                // `value` true or false turns the blur under the ribbon on or off; no value reads it.
+                match p.get("value") {
+                    None => {}
+                    Some(Value::Bool(on)) => self.ui.ribbon_blur = *on,
+                    Some(_) => return Some(Err("`value` must be true or false".into())),
+                }
+                json!({"ribbonBlur": self.ui.ribbon_blur})
+            }
             "ui.alignmentGuides" => {
                 // File › Options › Advanced › Editing: `value` true or false turns snapping to
                 // alignment guides while moving pictures and shapes on or off; no value reads it.
@@ -2431,8 +2453,11 @@ impl WordApp {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
         }
-        if self.ui.backstage {
-            backstage::show(self, ui);
+        // File slides in over the editor and out again; the editor stays drawn under it meanwhile.
+        let enter = ctx.animate_bool_responsive(egui::Id::new("backstage_enter"), self.ui.backstage);
+        let enter = egui::emath::easing::cubic_out(enter);
+        if self.ui.backstage && enter >= 1.0 {
+            backstage::show(self, ui, 1.0);
         } else if !self.has_document() {
             // No document open (#1129): the ribbon greyed out but for Help, and no page.
             chrome::title_bar(self, ui);
@@ -2441,13 +2466,29 @@ impl WordApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
         } else {
             let screen = chrome::Screen::of(&self.session.view);
+            let mut glass = None;
             // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
             self.focus_ribbon &= screen == chrome::Screen::Focus;
             if screen != chrome::Screen::Normal {
                 chrome::screen_bar(self, ui, screen);
             } else {
+                // The blur is painted after the page, into a slot kept under the title bar and ribbon.
+                let before = ui.available_rect_before_wrap();
+                glass = self.ribbon_glass().then(|| (ui.painter().add(egui::Shape::Noop), before));
                 chrome::title_bar(self, ui);
+                ribbon_blur::set_drawing(&ctx, self.ribbon_glass());
+                let menu_fill = ctx.global_style().visuals.window_fill;
+                if glass.is_some() {
+                    ctx.global_style_mut(|s| s.visuals.window_fill = ribbon_blur::menu_glass(menu_fill, s.visuals.dark_mode));
+                }
                 ribbon::show(self, ui);
+                if glass.is_some() {
+                    ctx.global_style_mut(|s| s.visuals.window_fill = menu_fill);
+                }
+                ribbon_blur::set_drawing(&ctx, false);
+                if let Some((_, r)) = glass.as_mut() {
+                    r.max.y = ui.available_rect_before_wrap().min.y;
+                }
                 chrome::status_bar(self, ui);
                 panes::show(self, ui);
             }
@@ -2455,9 +2496,16 @@ impl WordApp {
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
                 canvas::show(self, ui);
             });
+            if let Some((slot, rect)) = glass {
+                ribbon_blur::paint(self, ui, slot, rect, self.canvas.view_top);
+            }
             if self.focus_ribbon {
                 chrome::focus_ribbon(self, &ctx);
             }
+        }
+        if enter > 0.0 && enter < 1.0 {
+            let mut over = ui.new_child(egui::UiBuilder::new().max_rect(ctx.content_rect()));
+            backstage::show(self, &mut over, enter);
         }
         content_controls::popup(self, &ctx);
         dialogs::show(self, &ctx);
@@ -2867,6 +2915,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.makeDefaultApp"
             | "ui.discord"
             | "ui.caretAnimation"
+            | "ui.ribbonBlur"
             | "ui.startScreen"
     ) || id.starts_with("help.")
 }
@@ -3473,6 +3522,25 @@ mod tests {
         assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
     }
 
+    /// The blur under the ribbon is a UI command, off by default and kept between runs.
+    #[test]
+    fn ribbon_blur_is_a_ui_command_and_survives_a_restart() {
+        let mut a = app();
+        assert_eq!(a.run("ui.ribbonBlur", json!({})).unwrap(), json!({"ribbonBlur": false}), "off by default");
+        assert_eq!(a.run("ui.ribbonBlur", json!({"value": true})).unwrap(), json!({"ribbonBlur": true}));
+        for junk in [json!({"value": "yes"}), json!({"value": 1}), json!({"value": null})] {
+            assert!(a.run("ui.ribbonBlur", junk).is_err());
+        }
+        assert!(a.ui.ribbon_blur, "a rejected value keeps the setting");
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""ribbonBlur":true"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert!(b.ui.ribbon_blur);
+        let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
+        assert!(!old.ribbon_blur);
+    }
+
     /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),
     /// kept between runs; settings saved before it existed show the toolbar; it works with no
     /// document open, like the other interface settings.
@@ -3510,6 +3578,24 @@ mod tests {
             },
             a,
         )
+    }
+
+    /// With the blur on, the ribbon is drawn over a strip made from the pages; it is off
+    /// where the ribbon has no page behind it (no document, File, Read Mode).
+    #[test]
+    fn ribbon_blur_draws_only_over_the_editor() {
+        let mut a = app();
+        a.run("text.insert", json!({"text": "Hello"})).unwrap();
+        a.run("ui.ribbonBlur", json!({"value": true})).unwrap();
+        assert!(a.ribbon_glass());
+        let mut h = harness(a);
+        h.run_steps(6);
+        assert!(ribbon_blur::strip_size(&h.ctx).is_some(), "the strip was made");
+        h.state_mut().run("ui.backstage", json!({"open": true})).unwrap();
+        assert!(!h.state().ribbon_glass(), "File covers the window");
+        h.state_mut().run("ui.backstage", json!({"open": false})).unwrap();
+        h.state_mut().run("ui.ribbonBlur", json!({"value": false})).unwrap();
+        assert!(!h.state().ribbon_glass(), "off is solid");
     }
 
     /// #766: started with nothing to open, the app shows File › Home (the Start screen) as Word

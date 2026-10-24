@@ -29,7 +29,10 @@ fn back_chevron_c(band_min_x: f32, center_y: f32, fullscreen: bool, content_left
     pos2(band_min_x + x, center_y)
 }
 
-pub fn show(app: &mut WordApp, ui: &mut Ui) {
+/// `enter` runs 0 to 1 as the page comes in or goes out: the nav slides from the left edge and
+/// the page fades in beside it.
+pub fn show(app: &mut WordApp, ui: &mut Ui, enter: f32) {
+    let enter = enter.clamp(0.0, 1.0);
     let t = Tokens::get(ui.ctx());
     // No document open (#1129): only the pages that open or create one, and Options.
     let has_document = app.has_document();
@@ -38,11 +41,18 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     }
     let mac = app.integrated_titlebar;
     egui::Panel::left("backstage_nav")
-        .exact_size(200.0)
+        .exact_size(200.0 * enter.max(0.01))
         // Fixed width, as in Word: without this egui shows a resize handle that does nothing (#502).
         .resizable(false)
         .frame(egui::Frame::NONE.fill(t.nav).inner_margin(egui::Margin { left: 0, right: 0, top: if mac { 0 } else { 12 }, bottom: 12 }))
-        .show(ui, |ui| {
+        .show(ui, |panel| {
+            let from = panel.max_rect().min - vec2((1.0 - enter) * 200.0, 0.0);
+            let slid_to = Rect::from_min_size(from, vec2(200.0, panel.max_rect().height()));
+            let mut slid = panel.new_child(egui::UiBuilder::new().max_rect(slid_to).layout(*panel.layout()));
+            if !app.ui.backstage {
+                slid.disable();
+            }
+            let ui = &mut slid;
             let back = if mac {
                 // macOS (#222): the Backstage covers the title bar, so its top band is the title
                 // bar: the back button sits beside the traffic lights, centred with them and as far
@@ -67,26 +77,29 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 resp
             };
             // Escape in the built-in file browser closes only the browser.
-            if back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape))) {
+            if app.ui.backstage && (back.clicked() || (!app.file_dialog_open() && ui.input(|i| i.key_pressed(egui::Key::Escape)))) {
                 app.ui.backstage = false;
                 app.canvas.want_focus = true;
             }
             ui.add_space(if mac { 12.0 } else { 6.0 });
             for (id, label, icon) in PAGES {
                 // No document open (#1129): Info, Save, Save As, Print and Export are greyed out.
-                let on = has_document || works_without_document(id);
+                let on = app.ui.backstage && (has_document || works_without_document(id));
                 let (r, resp) = ui.add_enabled_ui(on, |ui| ui.allocate_exact_size(vec2(200.0, 38.0), Sense::click())).inner;
                 resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tl!(label)));
                 let active = app.ui.backstage_page == id;
-                if active {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(46));
-                } else if on && resp.hovered() {
-                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                // The hover fades in and out, and the label eases a little to the right.
+                let h = ui.ctx().animate_bool_responsive(resp.id.with("hover"), on && resp.hovered());
+                let wash: f32 = if active { 46.0 } else { 0.0 };
+                let wash = wash.max(26.0 * h) as u8;
+                if wash > 0 {
+                    ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(wash));
                 }
+                let nudge = 3.0 * h;
                 let ink = if on { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(110) };
-                icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 31.0, r.center().y), vec2(18.0, 18.0)), icon, ink, ink);
+                icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 31.0 + nudge, r.center().y), vec2(18.0, 18.0)), icon, ink, ink);
                 ui.painter().text(
-                    pos2(r.min.x + 52.0, r.center().y),
+                    pos2(r.min.x + 52.0 + nudge, r.center().y),
                     Align2::LEFT_CENTER,
                     tl!(label),
                     if active { semibold(14.0) } else { medium(14.0) },
@@ -125,8 +138,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 for (label, id) in [("About", "about"), ("Discord community", "discord")] {
                     let (r, resp) = ui.allocate_exact_size(vec2(200.0, 32.0), Sense::click());
                     resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), tl!(label)));
-                    if resp.hovered() {
-                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha(26));
+                    let h = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
+                    if h > 0.0 {
+                        ui.painter().rect_filled(r, 0.0, egui::Color32::from_white_alpha((26.0 * h) as u8));
                     }
                     ui.painter().text(pos2(r.min.x + 22.0, r.center().y), Align2::LEFT_CENTER, tl!(label), regular(13.0), egui::Color32::WHITE);
                     if resp.clicked() {
@@ -139,24 +153,34 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             });
         });
-    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon).inner_margin(egui::Margin::symmetric(40, 30))).show(ui, |ui| {
-        // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
-        if app.ui.backstage_page == "print" {
-            export_page(app, ui);
-            return;
-        }
-        egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
-            "home" => home_page(app, ui),
-            "new" => new_page(app, ui),
-            "open" => open_page(app, ui),
-            "saveAs" => save_as_page(app, ui),
-            "info" => info_page(app, ui),
-            "recover" => recovery_page(app, ui),
-            "print" | "export" => export_page(app, ui),
-            "options" => crate::options::page(app, ui),
-            _ => home_page(app, ui),
-        });
-    });
+    egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.ribbon.gamma_multiply(enter)).inner_margin(egui::Margin::symmetric(40, 30))).show(
+        ui,
+        |panel| {
+            let shift = vec2((1.0 - enter) * 40.0, 0.0);
+            let mut slid = panel.new_child(egui::UiBuilder::new().max_rect(panel.max_rect().translate(shift)).layout(*panel.layout()));
+            slid.set_opacity(enter);
+            if !app.ui.backstage {
+                slid.disable();
+            }
+            let ui = &mut slid;
+            // The Print page fills the pane and scrolls its settings and its preview itself (#1156).
+            if app.ui.backstage_page == "print" {
+                export_page(app, ui);
+                return;
+            }
+            egui::ScrollArea::vertical().show(ui, |ui| match app.ui.backstage_page.as_str() {
+                "home" => home_page(app, ui),
+                "new" => new_page(app, ui),
+                "open" => open_page(app, ui),
+                "saveAs" => save_as_page(app, ui),
+                "info" => info_page(app, ui),
+                "recover" => recovery_page(app, ui),
+                "print" | "export" => export_page(app, ui),
+                "options" => crate::options::page(app, ui),
+                _ => home_page(app, ui),
+            });
+        },
+    );
 }
 
 /// Recovery is a separate copy. Leaving this page never discards it.
@@ -708,6 +732,43 @@ mod tests {
 
     use super::{HOME_TEMPLATES, TEMPLATES, matching_templates};
     use crate::{Services, WordApp};
+
+    #[test]
+    fn exiting_backstage_blocks_navigation_and_page_actions() {
+        for active in [false, true] {
+            for label in ["Save As", "Blank document"] {
+                let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+                a.run("text.insert", json!({"text": "Keep this draft"})).unwrap();
+                a.ui.backstage = true;
+                let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+                    |ui, app: &mut WordApp| {
+                        app.logic(&ui.ctx().clone());
+                        if app.fonts_frames < 2 {
+                            app.ui(ui);
+                            return;
+                        }
+                        super::show(app, ui, 0.75);
+                    },
+                    a,
+                );
+                h.run_steps(4);
+                let pos = h.get_by_label(label).rect().center();
+                h.state_mut().ui.backstage = active;
+                h.run_steps(2);
+                h.event(egui::Event::PointerMoved(pos));
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+                h.step();
+                h.event(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+                h.run_steps(2);
+                if label == "Save As" {
+                    assert_eq!(h.state().ui.backstage_page, if active { "saveAs" } else { "home" });
+                } else {
+                    assert_eq!(h.state().dialog.is_some(), active, "only an active template asks to replace the draft");
+                    assert!(h.state().session.dirty, "the existing draft stays unsaved");
+                }
+            }
+        }
+    }
 
     /// #1714: every side-menu item has its own icon, a drawn one (an unknown name would fall back
     /// to a tile with its first letter, the only icon here that draws text).

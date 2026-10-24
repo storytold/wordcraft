@@ -37,6 +37,8 @@ const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
+    /// Thumbnails of the page textures, for the blurred ribbon.
+    pub(crate) thumbs: HashMap<usize, crate::ribbon_blur::Thumb>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
     tiles: HashMap<(usize, usize), (u64, TextureHandle)>,
     /// Page content fingerprints of the current layout, for the texture cache (#811).
@@ -84,6 +86,9 @@ pub struct CanvasState {
     pub open_url: Option<String>,
     /// Screen rects of pages last frame (for the control channel: page ↔ screen coordinates).
     pub page_rects: Vec<Rect>,
+    /// Where the page viewport starts on screen, below the ruler. The blurred ribbon continues
+    /// the pages upward from here.
+    pub view_top: f32,
     /// While the vertical scrollbar is dragged: the page at the top of the window (0-based),
     /// which a tip beside the pointer names (#2551).
     pub scrollbar_page: Option<usize>,
@@ -243,6 +248,7 @@ impl Default for CanvasState {
     fn default() -> Self {
         CanvasState {
             textures: HashMap::new(),
+            thumbs: HashMap::new(),
             tiles: HashMap::new(),
             page_keys: PageKeys::default(),
             markup_facts: std::cell::Cell::new(None),
@@ -267,6 +273,7 @@ impl Default for CanvasState {
             last_shading: "FFF2CC".into(),
             open_url: None,
             page_rects: Vec::new(),
+            view_top: 0.0,
             scrollbar_page: None,
             viewed_page: None,
             scale: PX_PER_PT,
@@ -1043,7 +1050,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     // Keys first, so this frame lays out and paints what was typed (handled after painting, a
     // keystroke showed one frame later). Focus is the canvas's from the last frame.
     // While "Save changes?" is up, keys answer it rather than edit the document behind it.
-    if app.canvas.focused && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
+    if app.canvas.focused && !app.ui.backstage && !matches!(app.dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })) {
         crate::keys::canvas_events(app, ui.ctx());
     } else {
         // Alt+numpad entry doesn't survive the canvas losing the keyboard.
@@ -1284,6 +1291,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // Read Mode's neighbouring columns end right at the viewport's edges: keep their
         // shadows from showing there as hairlines.
         let clip = if app.session.view.read_mode { ui.clip_rect().shrink2(vec2(3.0, 0.0)) } else { ui.clip_rect() };
+        app.canvas.view_top = ui.clip_rect().min.y;
         let painter = ui.painter_at(clip);
         let ppp = ui.ctx().pixels_per_point();
         let max_tex = ui.ctx().input(|i| i.max_texture_side).min(wordcraft_render::MAX_SIDE as usize).max(1) as f32;
@@ -1317,14 +1325,27 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // The page a drag took an object off: render it this frame whatever the budget, or the
             // raster with the object still on it shows for a frame.
             let forced = hidden.as_ref().is_some_and(|(page, _)| *page == i);
+            // A page the blurred ribbon would show draws at once, whatever the budget.
+            let blur_needs = app.ribbon_glass()
+                && !app.canvas.thumbs.contains_key(&i)
+                && sr.max.y > ui.clip_rect().min.y - 200.0
+                && sr.min.y < ui.clip_rect().min.y;
+            // A cached page has no thumbnail from before the blur was on: render it again.
+            if blur_needs {
+                fresh = false;
+            }
             // Render before placing the page: a page re-rendered in this frame (a zoom step, an
             // edit) then sits on the pixel grid in this frame too, rather than a frame later.
-            if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
+            if visible && !tiled && !fresh && (forced || blur_needs || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
                 let mut opts = page_render_options(app, dim_body);
                 // Only on the page it is on: the `Pos` can't match an object of another page.
                 opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                 let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
                 let ci = page_image(&img);
+                let paper = if dark_page { Color32::from_gray(dark_paper) } else { Color32::WHITE };
+                if app.ribbon_glass() {
+                    app.canvas.thumbs.insert(i, crate::ribbon_blur::Thumb::of(&ci, crate::ribbon_blur::block_for(ppp), paper));
+                }
                 match app.canvas.textures.get_mut(&i) {
                     Some((k, tex)) => {
                         tex.set(ci, egui::TextureOptions::LINEAR);
@@ -1488,6 +1509,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         let clip = ui.clip_rect();
         let near = clip.expand2(vec2(clip.width(), clip.height() * TEXTURE_KEEP_SCREENS));
         app.canvas.textures.retain(|k, _| *k < n && geo.rects.get(*k).is_some_and(|r| r.translate(content_origin.to_vec2()).intersects(near)));
+        let glass = app.ribbon_glass();
+        app.canvas.thumbs.retain(|k, _| glass && app.canvas.textures.contains_key(k));
         app.canvas.tiles.retain(|id, _| visible_tile_keys.contains(id));
         app.canvas.page_rects = rects.clone();
         let view_rect = ui.clip_rect();
@@ -2881,8 +2904,14 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let t = Tokens::get(ui.ctx());
     let p = ui.painter();
     let corner = Rect::from_min_max(pos2(v.min.x, h.min.y), pos2(v.max.x, h.max.y));
-    p.rect_filled(corner, 0.0, t.canvas);
-    p.rect_filled(h, 0.0, t.canvas);
+    // The frosted ribbon goes on down through the ruler.
+    let glass = app.ribbon_glass();
+    let tint = |c: Color32| if glass { crate::ribbon_blur::glass(c) } else { c };
+    if glass {
+        crate::ribbon_blur::paint_band(app, ui, corner.union(h));
+    }
+    p.rect_filled(corner, 0.0, tint(t.canvas));
+    p.rect_filled(h, 0.0, tint(t.canvas));
     p.rect_filled(v, 0.0, t.canvas);
     crate::ruler_tabs::selector(app, ui, corner);
     let pi = app.session.page_hint.min(layout.pages.len().saturating_sub(1));
@@ -2893,9 +2922,9 @@ fn rulers(app: &mut WordApp, ui: &mut Ui, h: Rect, v: Rect, rects: &[Rect], layo
     let hp = ui.painter_at(h);
     let x0 = pr.min.x;
     let bar = Rect::from_min_max(pos2(x0, h.min.y + 4.0), pos2(x0 + page.w * scale, h.max.y - 3.0));
-    hp.rect_filled(bar, 0.0, t.ruler_margin);
+    hp.rect_filled(bar, 0.0, tint(t.ruler_margin));
     let text = Rect::from_min_max(pos2(x0 + page.body.x * scale, bar.min.y), pos2(x0 + page.body.right() * scale, bar.max.y));
-    hp.rect_filled(text, 0.0, t.ruler);
+    hp.rect_filled(text, 0.0, tint(t.ruler));
     let rp = app.session.doc.para_at(&app.session.sel.focus).map(|para| app.session.doc.styles.resolve_para(&para.props));
     // Graduations in the File › Options unit.
     let (unit, div, step) = ruler_scale(app.session.units());
@@ -3707,6 +3736,30 @@ mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
 
+    #[test]
+    fn backstage_blocks_typing_in_the_still_visible_canvas() {
+        for backstage in [false, true] {
+            let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+            app.ui.backstage = backstage;
+            let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+                |ui, app: &mut WordApp| {
+                    app.logic(&ui.ctx().clone());
+                    if app.fonts_frames < 2 {
+                        app.ui(ui);
+                        return;
+                    }
+                    app.canvas.focused = true;
+                    show(app, ui);
+                },
+                app,
+            );
+            h.run_steps(4);
+            assert!(!h.state().session.dirty);
+            h.event(egui::Event::Text("Must not reach the hidden document".into()));
+            h.run_steps(2);
+            assert_eq!(h.state().session.dirty, !backstage, "typing belongs to the canvas only outside Backstage");
+        }
+    }
     /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
     /// table; the document, its revision and undo history stay as they were, and without a
     /// request the page is the document's own again.
@@ -4077,6 +4130,23 @@ mod tests {
         );
         h.run_steps(4);
         assert!(h.state().canvas.caret_bg.is_none(), "no caret, no colour lookup");
+    }
+
+    /// Page thumbnails feed the ribbon blur only, so none are kept while it is off.
+    #[test]
+    fn no_page_thumbnails_are_made_while_the_ribbon_blur_is_off() {
+        let a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        assert!(!h.state().canvas.textures.is_empty(), "the page was drawn");
+        assert!(h.state().canvas.thumbs.is_empty(), "no thumbnail without the blur");
     }
 
     /// #167: dragging a ruler's margin edge sets that margin, snapped, never negative, and
