@@ -245,6 +245,29 @@ fn heading_style_level(p: &Paragraph) -> Option<u8> {
     p.props.style.as_deref()?.strip_prefix("Heading")?.trim().parse::<u8>().ok().filter(|l| (1..=9).contains(l))
 }
 
+/// The document's style ID for TOC level `level` (1..=9), preserving localized IDs (`Sumrio1` for
+/// `"TOC 1"`) when present.
+fn toc_style_id(doc: &wordcraft_doc::Document, level: u8) -> String {
+    let id = format!("TOC{level}");
+    let name = format!("TOC {level}");
+    doc.styles.get(&id).or_else(|| doc.styles.find(&name)).map_or(id, |st| st.id.clone())
+}
+
+fn is_toc_heading_style(doc: &wordcraft_doc::Document, style: Option<&str>) -> bool {
+    style.is_some_and(|st| st == "TOCHeading" || doc.styles.get(st).is_some_and(|s| s.name.eq_ignore_ascii_case("TOC Heading")))
+}
+
+fn is_toc_entry_style(doc: &wordcraft_doc::Document, style: Option<&str>) -> bool {
+    style.is_some_and(|st| {
+        if st.starts_with("TOC") && st != "TOCHeading" {
+            return true;
+        }
+        doc.styles.get(st).is_some_and(|s| {
+            s.name.strip_prefix("TOC ").or_else(|| s.name.strip_prefix("toc ")).is_some_and(|rest| matches!(rest.trim().parse::<u8>(), Ok(1..=9)))
+        })
+    })
+}
+
 /// The entries a TOC field collects from the body, in document order: built-in heading styles
 /// in the `\o` range, paragraphs with an outline level (`\u`), styles listed in `\t`, and TC
 /// fields (`\f`, levels `\l`).
@@ -279,7 +302,7 @@ fn toc_entries(s: &Session, f: &FieldCode) -> Vec<TocEntry> {
                 LevelSuffix::Nothing => label,
             });
         let style = p.props.style.as_deref().unwrap_or("Normal");
-        if style.starts_with("TOC") {
+        if is_toc_heading_style(&s.doc, Some(style)) || is_toc_entry_style(&s.doc, Some(style)) {
             continue;
         }
         let lead = p.text.bytes().take_while(|b| *b == 0x0C).count();
@@ -330,7 +353,7 @@ fn toc_range(s: &Session) -> Option<(usize, usize)> {
     let start = s.doc.body.iter().position(|b| b.as_para().is_some_and(|p| toc_field(p).is_some()))?;
     let mut end = start;
     while let Some(Block::Para(p)) = s.doc.body.get(end + 1).map(|b| &**b) {
-        if p.props.style.as_deref().is_some_and(|st| st.starts_with("TOC") && st != "TOCHeading") {
+        if is_toc_entry_style(&s.doc, p.props.style.as_deref()) {
             end += 1;
         } else {
             break;
@@ -388,23 +411,40 @@ fn range_toc_to_field(s: &mut Session) -> Result<(), CmdError> {
     let Some(after_end) = r.end.off.checked_add(OBJ.len_utf8()) else { return Ok(()) };
     let end = Pos { off: after_end, ..r.end.clone() };
     let props = s.doc.para_at(&r.start).map(|p| p.props_of_char(r.start.off).clone()).unwrap_or_default();
+    let end_para_props = s.doc.para_at(&r.end).map(|p| p.props.clone());
     let mut at = s.doc.delete_range(&r.start, &end)?;
+    let empty_at = s.doc.para_at(&at).is_some_and(|p| p.is_empty() && p.section.is_none());
+    let only_control_end = s
+        .doc
+        .para_at(&at)
+        .is_some_and(|p| p.section.is_none() && p.len() == OBJ.len_utf8() && matches!(p.object_at(0), Some(InlineObject::ControlEnd)));
+    if only_control_end
+        && r.start.off == 0
+        && let Some(end_props) = end_para_props
+        && let Ok(p) = s.doc.para_mut(at.story, &at.path)
+    {
+        p.props = end_props;
+        p.touch();
+    }
     // A range that filled its own paragraphs right under a TOC heading (as Word and other writers
     // lay it out) leaves an empty paragraph behind, which would show as a blank line above the
     // entries. The field goes at the end of the heading instead, as `insert_toc` places it.
     let i = at.path.last();
     if at.path.depth() == 0
         && i > 0
-        && s.doc.para_at(&at).is_some_and(|p| p.is_empty())
+        && (empty_at || only_control_end)
         // The paragraph before may also be the empty one the writer leaves where the engine's TOC
         // field was (the field is saved opening in the first entry), so the next save and update
         // doesn't add a blank line each time (#2182). A blank line the user typed right above a
-        // range TOC is reused the same way, so deleting it later deletes the TOC field.
+        // range TOC (including the 1-column section-break paragraph above a 2-column TOC, #3889)
+        // is reused the same way, so no blank paragraph is left at the top of the first column.
         && s.doc.body.get(i - 1).and_then(|b| b.as_para()).is_some_and(|p| {
-            p.props.style.as_deref() == Some("TOCHeading") || (p.is_empty() && p.objects.is_empty() && p.section.is_none())
+            is_toc_heading_style(&s.doc, p.props.style.as_deref()) || (p.is_empty() && p.objects.is_empty())
         })
     {
-        s.doc.remove_block(StoryRef::Body, &at.path)?;
+        if empty_at {
+            s.doc.remove_block(StoryRef::Body, &at.path)?;
+        }
         let heading = Path::top(i - 1);
         let len = s.doc.para(StoryRef::Body, &heading).map_or(0, |p| p.len());
         at = Pos { story: StoryRef::Body, path: heading, off: len };
@@ -453,7 +493,7 @@ fn cached_toc_tabs(s: &Session) -> Vec<(String, Vec<TabStop>)> {
         if !direct.iter().any(|t| matches!(t.align, TabAlign::Left | TabAlign::Center | TabAlign::Decimal)) {
             continue;
         }
-        if !style.starts_with("TOC") || style == "TOCHeading" || tabs.iter().any(|(id, _)| id == style) {
+        if !is_toc_entry_style(&s.doc, Some(style)) || tabs.iter().any(|(id, _)| id == style) {
             continue;
         }
         tabs.push((style.clone(), direct.clone()));
@@ -585,10 +625,15 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
     for i in (start + 1..=end).rev() {
         s.doc.remove_block(StoryRef::Body, &Path::top(i))?;
     }
-    // The text width of the TOC's own section, not the caret's: after Select All the caret sits
-    // at the end of the document, possibly in a wider (landscape) section.
-    let section = s.doc.section_index_of(start);
-    let width = s.doc.sections().get(section).map_or_else(|| super::page::sect(s).text_width(), |(_, x)| x.text_width());
+    // The column width of the TOC entries' own section, not the caret's: after Select All the
+    // caret sits at the end of the document, possibly in a wider (landscape) section, and a
+    // multi-column TOC places its entries in the section after the heading's section break (#3889).
+    let col_width = |x: &wordcraft_doc::section::SectionProps| {
+        x.column_boxes().iter().map(|(_, w)| *w).min_by(|a, b| a.total_cmp(b)).unwrap_or_else(|| x.text_width())
+    };
+    let has_break = s.doc.body.get(start).and_then(|b| b.as_para()).is_some_and(|p| p.section.is_some());
+    let section = s.doc.section_index_of(start) + usize::from(has_break);
+    let width = s.doc.sections().get(section).map_or_else(|| col_width(&super::page::sect(s)), |(_, x)| col_width(x));
     let entries = toc_entries(s, &f);
     let links: Vec<Option<String>> = if f.has('h') {
         let mut v = Vec::new();
@@ -627,7 +672,8 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
             let show_page = no_pages.is_none_or(|(a, b)| !(a..=b).contains(&(e.level + 1)));
             let text = if show_page { format!("{}{sep}{page}", e.text) } else { e.text.clone() };
             let props = CharProps { link: links.get(k).cloned().flatten(), ..Default::default() };
-            let mut para = Paragraph::with_text(&text, props).styled(&format!("TOC{}", e.level + 1));
+            let style = toc_style_id(&s.doc, e.level + 1);
+            let mut para = Paragraph::with_text(&text, props).styled(&style);
             para.mark = CharProps::default();
             if e.text.contains('\t') {
                 para.props.tabs = tabs.iter().find(|(style, _)| Some(style) == para.props.style.as_ref()).map(|(_, tabs)| tabs.clone());
@@ -1511,5 +1557,107 @@ mod tests {
         s.run("references.caption", &json!({})).unwrap();
         let texts: Vec<String> = s.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.plain_text()).collect();
         assert_eq!(texts.get(1).map(String::as_str), Some("Figure 1"), "{texts:?}");
+    }
+
+    /// #3889: updating a two-column Table of Contents (with a 1-column section break after the
+    /// TOC heading and a 2-column continuous section for the entries) sizes each entry's right tab
+    /// stop to the column width rather than the full page width, keeps localized TOC style IDs,
+    /// and leaves no blank paragraph at the top of the first column.
+    #[test]
+    fn updating_two_column_toc_respects_column_boundaries() {
+        use std::io::Write;
+        let ns = r#"xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships""#;
+        let pg = r#"<w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1701" w:right="1701" w:bottom="1701" w:left="1701"/>"#;
+        let sect_1col = format!("<w:sectPr>{pg}</w:sectPr>");
+        let sect_2col = format!(r#"<w:sectPr>{pg}<w:cols w:num="2" w:space="708"/><w:type w:val="continuous"/></w:sectPr>"#);
+        let begin = r#"<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> TOC \o "1-3" \h \z \u </w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>"#;
+        let mut old_entries = String::new();
+        let mut body_headings = String::new();
+        for i in 1..=60 {
+            let prefix = if i == 1 { begin } else { "" };
+            let st = if i % 2 == 1 { "Sumrio1" } else { "Sumrio2" };
+            let hst = if i % 2 == 1 { "Heading1" } else { "Heading2" };
+            old_entries.push_str(&format!(
+                r#"<w:p><w:pPr><w:pStyle w:val="{st}"/><w:tabs><w:tab w:val="right" w:leader="dot" w:pos="3888"/></w:tabs></w:pPr>{prefix}<w:r><w:t>Section {i}</w:t></w:r><w:r><w:tab/></w:r><w:r><w:t>1</w:t></w:r></w:p>"#
+            ));
+            body_headings.push_str(&format!(r#"<w:p><w:pPr><w:pStyle w:val="{hst}"/></w:pPr><w:r><w:t>Section {i}</w:t></w:r></w:p>"#));
+        }
+        let sdt = format!(
+            r#"<w:sdt><w:sdtPr><w:docPartObj><w:docPartGallery w:val="Table of Contents"/><w:docPartUnique/></w:docPartObj></w:sdtPr><w:sdtContent><w:p><w:pPr><w:pStyle w:val="CabealhodoSumrio"/></w:pPr><w:r><w:t>Table of Contents</w:t></w:r></w:p><w:p/><w:p><w:pPr>{sect_1col}</w:pPr></w:p>{old_entries}<w:p><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:sdtContent></w:sdt>"#
+        );
+        let document = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?><w:document {ns}><w:body>{sdt}<w:p/><w:p><w:pPr>{sect_2col}</w:pPr></w:p>{body_headings}{sect_1col}</w:body></w:document>"#
+        );
+        let styles = format!(
+            r#"<w:styles {ns}><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:pPr><w:outlineLvl w:val="0"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:pPr><w:outlineLvl w:val="1"/></w:pPr></w:style><w:style w:type="paragraph" w:styleId="CabealhodoSumrio"><w:name w:val="TOC Heading"/></w:style><w:style w:type="paragraph" w:styleId="Sumrio1"><w:name w:val="TOC 1"/></w:style><w:style w:type="paragraph" w:styleId="Sumrio2"><w:name w:val="TOC 2"/><w:pPr><w:ind w:left="220"/></w:pPr></w:style></w:styles>"#
+        );
+        let root = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rIdS" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, text) in [
+            ("_rels/.rels", root),
+            ("word/_rels/document.xml.rels", rels),
+            ("word/document.xml", document.as_str()),
+            ("word/styles.xml", styles.as_str()),
+        ] {
+            zw.start_file(name, zip::write::SimpleFileOptions::default()).unwrap();
+            zw.write_all(text.as_bytes()).unwrap();
+        }
+        let bytes = zw.finish().unwrap().into_inner();
+        let mut s = Session::new(wordcraft_docx::read(&bytes).unwrap());
+        let expected_blocks = s.doc.body.len();
+        for round in 0..2 {
+            s.run("references.updateToc", &json!({})).unwrap();
+            assert_eq!(s.doc.body.len(), expected_blocks, "round {round}: block count stays identical");
+            let sect = &s.doc.sections()[1].1;
+            let boxes = sect.column_boxes();
+            assert_eq!(boxes.len(), 2);
+            let (col1_x, col_w) = boxes[0];
+            let (col2_x, _) = boxes[1];
+            let margin = sect.margin_left;
+            let l = s.layout();
+            let mut left_first_y: Option<f32> = None;
+            let mut right_first_y: Option<f32> = None;
+            let mut entry_count = 0;
+            for (i, b) in s.doc.body.iter().enumerate() {
+                let Some(p) = b.as_para() else { continue };
+                if !matches!(p.props.style.as_deref(), Some("Sumrio1" | "Sumrio2")) {
+                    continue;
+                }
+                entry_count += 1;
+                let right_stop = p.props.tabs.as_ref().and_then(|t| t.last()).expect("TOC entry has right tab stop");
+                assert!((right_stop.pos - (col_w - 0.5)).abs() < 0.2, "round {round}: tab stop {} != {}", right_stop.pos, col_w - 0.5);
+                let start_c = l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: 0 }).unwrap();
+                let end_c = l.caret(&Pos { story: StoryRef::Body, path: Path::top(i), off: p.len() }).unwrap();
+                if start_c.x < margin + col2_x - 5.0 {
+                    left_first_y.get_or_insert(start_c.top);
+                    assert!(
+                        (end_c.x - (margin + col1_x + col_w)).abs() < 2.0,
+                        "round {round}: left column entry {:?} ends at {} (expected {})",
+                        p.plain_text(),
+                        end_c.x,
+                        margin + col1_x + col_w
+                    );
+                } else {
+                    right_first_y.get_or_insert(start_c.top);
+                    assert!(
+                        (end_c.x - (margin + col2_x + col_w)).abs() < 2.0,
+                        "round {round}: right column entry {:?} ends at {} (expected {})",
+                        p.plain_text(),
+                        end_c.x,
+                        margin + col2_x + col_w
+                    );
+                }
+            }
+            assert_eq!(entry_count, 60);
+            assert!(
+                (left_first_y.unwrap() - right_first_y.unwrap()).abs() < 1.0,
+                "round {round}: left column top {:?} and right column top {:?} align without a leading blank line",
+                left_first_y,
+                right_first_y
+            );
+            let saved = wordcraft_docx::write(&s.doc).unwrap();
+            s = Session::new(wordcraft_docx::read(&saved).unwrap());
+        }
     }
 }
