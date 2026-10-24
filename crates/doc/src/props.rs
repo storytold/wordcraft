@@ -970,6 +970,10 @@ pub struct ParaProps {
     /// "Allow Latin text to wrap in the middle of a word"). Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub word_wrap: Option<bool>,
+    /// Internal layout flag: break between every character in every script, including Thai/Lao.
+    /// Set by `textbox::lay` for vertically stacked text; never stored in the document format.
+    #[serde(skip)]
+    pub force_char_break: bool,
     /// `w:overflowPunct`: punctuation may hang past the line end. Unset = on.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub overflow_punct: Option<bool>,
@@ -999,6 +1003,8 @@ impl ParaProps {
             contextual_spacing, mirror_indents, keep_next, keep_lines, page_break_before, widow_control, outline_level, numbering, tabs, shading, borders,
             suppress_hyphens, suppress_line_numbers, bidi, drop_cap, drop_cap_margin, drop_cap_distance, drop_cap_font, frame, kinsoku, word_wrap, overflow_punct, top_line_punct, auto_space_de, auto_space_dn,
             snap_to_grid);
+        // Internal layout flag: not an Option, so not handled by overlay_fields!; true wins.
+        self.force_char_break |= patch.force_char_break;
     }
     pub fn overlaid(mut self, patch: &ParaProps) -> ParaProps {
         self.overlay(patch);
