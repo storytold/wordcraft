@@ -4,7 +4,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::collate::{SortKey, heading_letter, sort_key};
-use wordcraft_doc::para::InlineObject;
+use wordcraft_doc::para::{InlineObject, PTabAlign};
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, Source, StoryRef};
 
@@ -849,8 +849,22 @@ fn figures_label(instr: &str) -> Option<String> {
 
 /// Whether `p` is a caption numbered by SEQ identifier `ident` (any case, as Word matches it). A
 /// caption typed by hand, without a SEQ field, goes by its label.
+/// Paragraph styles Insert Caption can apply. A number parked on the formula's own line is not
+/// one of these; it is recognised by the right-margin positional tab in front of its `SEQ` field.
+fn is_caption_style(id: Option<&str>) -> bool {
+    matches!(id, Some("Caption" | "FigureCaption" | "TableCaption" | "EquationCaption"))
+}
+
+fn has_seq(p: &Paragraph) -> bool {
+    p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, .. } if FieldCode::parse(instr).name == "SEQ"))
+}
+
+fn equation_number_line(p: &Paragraph) -> bool {
+    p.objects.iter().any(|o| matches!(o, InlineObject::PositionalTab { align: PTabAlign::Right, .. })) && has_seq(p)
+}
+
 fn captioned_as(p: &Paragraph, ident: &str) -> bool {
-    if p.props.style.as_deref() != Some("Caption") {
+    if !is_caption_style(p.props.style.as_deref()) && !equation_number_line(p) {
         return false;
     }
     let seq = p.objects.iter().find_map(|o| match o {
@@ -859,7 +873,7 @@ fn captioned_as(p: &Paragraph, ident: &str) -> bool {
     });
     match seq {
         Some(f) => f.args.first().is_some_and(|id| id.eq_ignore_ascii_case(ident)),
-        None => caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident)),
+        None => is_caption_style(p.props.style.as_deref()) && caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident)),
     }
 }
 
@@ -1108,7 +1122,7 @@ fn cross_ref(s: &mut Session, v: &Value) -> CmdResult {
     let page = page_of(s, &pos);
     let result = match show {
         "page" => page.to_string(),
-        "number" => text.split(':').next().unwrap_or(&text).trim().to_string(),
+        "number" => caption_number_text(&text),
         "aboveBelow" => {
             if pos < s.sel.focus {
                 "above".into()
@@ -1178,7 +1192,7 @@ fn captions(s: &Session) -> Vec<(String, Pos, Option<String>)> {
         .para_paths(StoryRef::Body)
         .into_iter()
         .filter_map(|path| {
-            let p = s.doc.para(StoryRef::Body, &path).filter(|p| p.props.style.as_deref() == Some("Caption"))?;
+            let p = s.doc.para(StoryRef::Body, &path).filter(|p| is_caption_style(p.props.style.as_deref()) || equation_number_line(p))?;
             let text = p.plain_text();
             let label = caption_label(p, &text);
             Some((text, Pos { story: StoryRef::Body, path, off: 0 }, label))
@@ -1218,10 +1232,10 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
                 "equation" => "Equation",
                 _ => "Figure",
             };
+            let ident = seq_ident(label);
             for path in s.doc.para_paths(StoryRef::Body) {
                 if let Some(p) = s.doc.para(StoryRef::Body, &path)
-                    && p.props.style.as_deref() == Some("Caption")
-                    && p.plain_text().starts_with(label)
+                    && captioned_as(p, &ident)
                 {
                     targets.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
                 }
@@ -1244,17 +1258,67 @@ pub fn ref_targets(s: &Session, to: &str) -> Vec<(String, Pos)> {
 /// The hidden `_Ref` bookmark around the target paragraph at `pos` (its label and number only
 /// when `number_only`), reusing one already there. Returns its name and `at` moved past the
 /// bookmark marks inserted before it.
+/// The label and number of a caption, without its title. A colon or a spaced dash introduces the title.
+fn caption_number_text(text: &str) -> String {
+    if let Some(i) = text.find(':') {
+        return text[..i].trim().to_string();
+    }
+    for sep in [" \u{2014} ", " \u{2013} ", " - "] {
+        if let Some(i) = text.find(sep) {
+            return text[..i].trim().to_string();
+        }
+    }
+    text.trim().to_string()
+}
+
+/// Byte offset where the label and number end: after the `SEQ` field and a closing bracket, or
+/// before the title's colon or dash when the caption was typed by hand.
+fn caption_number_end(para: &Paragraph) -> usize {
+    let seq = para.object_offsets().into_iter().find(|o| {
+        matches!(para.object_at(*o), Some(InlineObject::Field { instr, .. }) if FieldCode::parse(instr).name == "SEQ")
+    });
+    let Some(o) = seq else {
+        return para.text.find([':', '\u{2013}', '\u{2014}']).unwrap_or(para.len());
+    };
+    let mut end = o + wordcraft_doc::para::OBJ.len_utf8();
+    while end < para.text.len() {
+        let c = para.text[end..].chars().next().unwrap();
+        let n = c.len_utf8();
+        if matches!(c, ')' | ']' | '.') {
+            end += n;
+            continue;
+        }
+        if c.is_whitespace() {
+            let rest = para.text[end + n..].trim_start();
+            if rest.is_empty() || rest.starts_with([')', ']', '.']) {
+                end += n;
+                continue;
+            }
+        }
+        break;
+    }
+    end
+}
+
 fn ref_bookmark(s: &mut Session, pos: &Pos, number_only: bool, mut at: Pos) -> Result<(String, Pos), CmdError> {
     const MARK: usize = wordcraft_doc::para::OBJ.len_utf8();
     let para = s.doc.para(pos.story, &pos.path).ok_or_else(|| CmdError::Params("cross-reference target is gone".into()))?;
-    let end = if number_only { para.text.find(':').unwrap_or(para.len()) } else { para.len() };
+    let end = if number_only { caption_number_end(para) } else { para.len() };
     if let Some(InlineObject::BookmarkStart { name }) = para.object_at(0)
         && name.starts_with("_Ref")
     {
         // Reuse it when it covers the same extent: up to the colon, or the whole paragraph.
         let same = para.object_offsets().into_iter().any(|o| {
             matches!(para.object_at(o), Some(InlineObject::BookmarkEnd { name: n }) if n == name)
-                && para.text.get(o.saturating_add(MARK)..).is_some_and(|rest| if number_only { rest.starts_with(':') } else { rest.is_empty() })
+                && para.text.get(o.saturating_add(MARK)..).is_some_and(|rest| {
+                    if number_only {
+                        rest.is_empty()
+                            || rest.starts_with([':', '-', '\u{2013}', '\u{2014}'])
+                            || rest.chars().next().is_some_and(char::is_whitespace)
+                    } else {
+                        rest.is_empty()
+                    }
+                })
         });
         if same {
             return Ok((name.clone(), at));
