@@ -295,7 +295,7 @@ pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_l
         return;
     }
     let t = Tokens::get(ctx);
-    egui::Area::new(egui::Id::new("smart_art_frame_button")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("smart_art_frame_button")).order(egui::Order::Foreground).fixed_pos(at).show(ctx, |ui| {
         egui::Frame::NONE.fill(t.panel).stroke(Stroke::new(1.0, t.border)).corner_radius(4).inner_margin(2).show(ui, |ui| {
             if crate::widgets::icon_button(ui, "textPane", tl!("Text Pane")).clicked() {
                 let _ = app.run("smartArt.textPane", json!({"value": true}));
@@ -306,20 +306,45 @@ pub fn frame_button(app: &mut WordApp, ctx: &egui::Context, layout: &wordcraft_l
 
 /// Text typed with a SmartArt graphic selected goes at the end of its current item (the first,
 /// before any is picked), and the Text Pane opens, as Word does; it never replaces the graphic.
-/// False when no graphic is selected.
-pub fn type_into(app: &mut WordApp, typed: &str) -> bool {
-    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else { return false };
-    let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0)) else { return true };
+///
+/// What typing into a selected SmartArt graphic did.
+///
+/// A selected graphic always consumes the input, even when it has no item to edit: the typing
+/// must not fall through into the body. Only the absence of a SmartArt target lets the body type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SmartArtTypeResult {
+    /// No SmartArt graphic is selected: the caller may type into the body.
+    NotHandled,
+    /// A selected graphic consumed the input without editing the document.
+    ConsumedNoChange,
+    /// A SmartArt item really changed.
+    Changed,
+}
+
+/// Appends typing to the selected SmartArt item, joining an active typing undo, and returns
+/// whether the input was unhandled, consumed without a change, or changed an item.
+pub(crate) fn type_into(app: &mut WordApp, typed: &str) -> SmartArtTypeResult {
+    let Some(g) = wordcraft_engine::cmd::smart_art::selected_smart_art(&app.session) else {
+        return SmartArtTypeResult::NotHandled;
+    };
+    let Some(i) = app.smart_art_item.filter(|i| *i < g.items.len()).or((!g.items.is_empty()).then_some(0)) else {
+        // Selected but empty: consume, never insert into the body, never claim an edit.
+        return SmartArtTypeResult::ConsumedNoChange;
+    };
     let text = g.items.get(i).map_or(String::new(), |it| it.text.clone()) + typed;
     if app.smart_art_typing == Some(i) {
         app.session.join_next_undo();
     }
-    if app.run("smartArt.items", items_with(&g, i, &text)).is_ok() {
-        app.smart_art_item = Some(i);
-        app.smart_art_typing = Some(i);
+    if app.run("smartArt.items", items_with(&g, i, &text)).is_err() {
+        // A selected graphic that refuses the edit still consumes the event; an IME composition
+        // must start afresh rather than be applied to the body.
+        app.canvas.ime_interrupt_now = true;
+        return SmartArtTypeResult::ConsumedNoChange;
     }
+    app.smart_art_item = Some(i);
+    app.smart_art_typing = Some(i);
     let _ = app.run("smartArt.textPane", json!({"value": true}));
-    true
+    SmartArtTypeResult::Changed
 }
 
 /// The Text Pane: a row per item, indented by level. Typing changes the graphic as you go (one
@@ -330,7 +355,7 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(tl!("One line per item. Enter adds an item.")).color(t.text_dim));
     ui.add_space(4.0);
-    let focus_id = egui::Id::new("smart_art_focus");
+    let focus_id = egui::Id::unique("smart_art_focus");
     let want_focus: Option<usize> = ui.data_mut(|d| d.remove_temp(focus_id));
     let mut typed = false;
     app.smart_art_row_focused = false;
@@ -340,7 +365,10 @@ pub fn text_pane(app: &mut WordApp, ui: &mut Ui) {
                 ui.add_space(f32::from(it.level) * 16.0);
                 ui.label(egui::RichText::new("•").color(t.text_dim));
                 let mut text = it.text.clone();
-                let r = ui.add(egui::TextEdit::singleline(&mut text).id_salt(("smart_art_item", i)).desired_width(f32::INFINITY));
+                let item_name = format!("{} {}", tl!("Text Pane"), i + 1);
+                let r = ui
+                    .add(egui::TextEdit::singleline(&mut text).id_salt(("smart_art_item", i)).desired_width(f32::INFINITY))
+                    .accessible_name(item_name);
                 if want_focus == Some(i) {
                     r.request_focus();
                 }

@@ -15,6 +15,8 @@ use crate::DocxError;
 pub const MAX_DEPTH: usize = 256;
 /// Maximum number of elements in one part.
 pub const MAX_ELEMENTS: usize = 8_000_000;
+/// Maximum number of attributes on one element (#3702).
+pub const MAX_ATTRS: usize = 1024;
 
 /// Known namespaces and the canonical prefix we use for them (read and write).
 pub const NAMESPACES: &[(&str, &str)] = &[
@@ -360,6 +362,9 @@ fn parse_with(bytes: &[u8], extra: &[(&'static str, &str)], strict: bool) -> Res
                 };
                 let mut el = El { name, attrs: Vec::new(), kids: Vec::new() };
                 for a in e.attributes().with_checks(false) {
+                    if el.attrs.len() >= MAX_ATTRS {
+                        return Err(DocxError::Limit("too many attributes on one element".into()));
+                    }
                     let Ok(a) = a else { continue };
                     let key = a.key;
                     let raw_key = key.as_ref();
@@ -667,6 +672,39 @@ mod tests {
         }
         s.push_str("><b/></a>");
         assert!(parse(s.as_bytes()).is_err());
+    }
+
+    /// One start tag carrying 200,000 attributes (distinct or duplicate names) is refused or
+    /// truncated instead of allocated: a 59 KB `.docx` used to cost 611 MB (#3702, WC-06).
+    #[test]
+    fn too_many_attributes_on_one_element_is_capped() {
+        // The cap the issue suggests; a fix may pick a lower one, never a higher one.
+        const CAP: usize = 1024;
+        let distinct: String = (0..200_000).map(|i| format!(" a{i}=\"\"")).collect();
+        let duplicate = " a=\"\"".repeat(200_000);
+        for (label, attrs) in [("distinct", distinct), ("duplicate", duplicate)] {
+            let x = format!("<w:p xmlns:w=\"{}\"{attrs}/>", NAMESPACES[0].1);
+            match parse(x.as_bytes()) {
+                Err(DocxError::Limit(_)) => {}
+                Ok(p) => assert!(p.attrs.len() <= CAP, "{label}: kept {} attributes", p.attrs.len()),
+                Err(e) => panic!("{label}: expected a Limit error or a capped element, got {e}"),
+            }
+        }
+        // Real-world attribute counts are untouched.
+        let x = format!(
+            r#"<w:p xmlns:w="{}" w:rsidR="00A1" w:rsidRDefault="00A1" w:rsidP="00A1" w:rsidRPr="00A1"><w:rPr><w:rFonts w:ascii="A" w:hAnsi="B" w:eastAsia="C" w:cs="D" w:asciiTheme="minorHAnsi" w:hAnsiTheme="minorHAnsi" w:eastAsiaTheme="minorEastAsia" w:cstheme="minorBidi" w:hint="eastAsia"/></w:rPr></w:p>"#,
+            NAMESPACES[0].1
+        );
+        let p = parse(x.as_bytes()).unwrap();
+        assert_eq!(p.attrs.len(), 4);
+        let fonts = p.child("w:rPr").and_then(|r| r.child("w:rFonts")).unwrap();
+        assert_eq!(fonts.attrs.len(), 9);
+        assert_eq!(fonts.attr("w:cstheme"), Some("minorBidi"));
+        // Far more than any real producer writes, still well under any sane cap.
+        let many: String = (0..256).map(|i| format!(" a{i}=\"{i}\"")).collect();
+        let p = parse(format!("<p{many}/>").as_bytes()).unwrap();
+        assert_eq!(p.attrs.len(), 256);
+        assert_eq!(p.attr("a255"), Some("255"));
     }
 
     #[test]

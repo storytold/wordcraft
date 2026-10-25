@@ -470,11 +470,11 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
     let base_name = styles.iter().find(|(i, _)| i == based_on).map(|(_, n)| n.clone()).unwrap_or_else(|| based_on.clone());
     let mut rebased = false;
     egui::Grid::new("tstyle").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Name:"));
-        ui.text_edit_singleline(name);
+        let name_label = ui.label(tl!("Name:"));
+        ui.text_edit_singleline(name).labelled_by(name_label.id);
         ui.end_row();
-        ui.label(tl!("Style based on:"));
-        egui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
+        let base_label = ui.label(tl!("Style based on:"));
+        let base = egui::ComboBox::from_id_salt("tstyle_base").width(200.0).selected_text(base_name).show_ui(ui, |ui| {
             for (sid, sname) in &styles {
                 if ui.selectable_label(sid == based_on, sname).clicked() && sid != based_on {
                     *based_on = sid.clone();
@@ -482,16 +482,18 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
                 }
             }
         });
+        base.response.labelled_by(base_label.id);
         ui.end_row();
-        ui.label(tl!("Apply formatting to:"));
-        egui::ComboBox::from_id_salt("tstyle_region").width(200.0).selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l))).show_ui(
-            ui,
-            |ui| {
+        let region_label = ui.label(tl!("Apply formatting to:"));
+        let part = egui::ComboBox::from_id_salt("tstyle_region")
+            .width(200.0)
+            .selected_text(tl!(PARTS.get(*region).map_or("Whole Table", |(_, l)| *l)))
+            .show_ui(ui, |ui| {
                 for (i, (_, n)) in PARTS.iter().enumerate() {
                     ui.selectable_value(region, i, tl!(*n));
                 }
-            },
-        );
+            });
+        part.response.labelled_by(region_label.id);
         ui.end_row();
     });
     // A new style shows its new base's formatting; a modified one keeps its own.
@@ -512,7 +514,8 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
             {
                 r.font = f;
             }
-            ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0)).on_hover_text(tl!("Size:"));
+            let size = ui.add(egui::TextEdit::singleline(&mut r.size).desired_width(36.0));
+            size.on_hover_text(tl!("Size:")).accessible_name(tl!("Size:"));
             ui.toggle_value(&mut r.bold, egui::RichText::new("B").strong()).on_hover_text(tl!("Bold"));
             ui.toggle_value(&mut r.italic, egui::RichText::new("I").italics()).on_hover_text(tl!("Italic"));
             ui.toggle_value(&mut r.underline, egui::RichText::new("U").underline()).on_hover_text(tl!("Underline"));
@@ -524,14 +527,15 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
         // Borders: the pen (style, width, colour) and which edges; then the cell shading.
         ui.horizontal(|ui| {
             let current = LINE_STYLES.iter().find(|(s, _)| *s == pen.style).map_or("Single", |(_, n)| *n);
-            ui.label(tl!("Style:"));
-            egui::ComboBox::from_id_salt("tstyle_pen_style").selected_text(tl!(current)).width(90.0).show_ui(ui, |ui| {
+            let style_label = ui.label(tl!("Style:"));
+            let style = egui::ComboBox::from_id_salt("tstyle_pen_style").selected_text(tl!(current)).width(90.0).show_ui(ui, |ui| {
                 for (s, n) in LINE_STYLES {
                     ui.selectable_value(&mut pen.style, s, tl!(n));
                 }
             });
-            ui.label(tl!("Width:"));
-            egui::ComboBox::from_id_salt("tstyle_pen_width")
+            style.response.labelled_by(style_label.id);
+            let width_label = ui.label(tl!("Width:"));
+            let width = egui::ComboBox::from_id_salt("tstyle_pen_width")
                 .selected_text(crate::i18n::fmt(tl!("{n} pt"), &[("n", &pen.width.to_string())]))
                 .width(70.0)
                 .show_ui(ui, |ui| {
@@ -539,6 +543,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, f: Form) -> bool {
                         ui.selectable_value(&mut pen.width, w, crate::i18n::fmt(tl!("{n} pt"), &[("n", &w.to_string())]));
                     }
                 });
+            width.response.labelled_by(width_label.id);
             ui.push_id("tstyle_pen_color", |ui| {
                 ui.label(tl!("Color:"));
                 color_menu(ui, &theme, &mut pen.color);

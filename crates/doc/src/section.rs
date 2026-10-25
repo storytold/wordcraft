@@ -255,7 +255,7 @@ impl NumFormat {
     pub fn from_ooxml(s: &str) -> NumFormat {
         NumFormat::ALL.into_iter().find(|f| f.ooxml() == s).unwrap_or(NumFormat::Decimal)
     }
-    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Arabic, Hindi, Thai,
+    /// Format `n` (1-based). Formats WordCraft doesn't draw yet (Hebrew, Hindi, Thai,
     /// Vietnamese, text amounts) show decimal, as do values past a sequence's end
     /// (the 21st item of ①…⑳).
     pub fn format(self, n: u32) -> String {
@@ -268,6 +268,8 @@ impl NumFormat {
             NumFormat::LowerLetter => letters(n),
             NumFormat::RussianUpper => russian_letters(n).to_uppercase(),
             NumFormat::RussianLower => russian_letters(n),
+            NumFormat::ArabicAlpha => repeated_letter(&ARABIC_ALPHA, n),
+            NumFormat::ArabicAbjad => repeated_letter(&ARABIC_ABJAD, n),
             NumFormat::Ordinal => format!("{n}{}", ordinal_suffix(n)),
             NumFormat::CardinalText => cardinal_text(n),
             NumFormat::OrdinalText => ordinal_text(n),
@@ -308,8 +310,6 @@ impl NumFormat {
             | NumFormat::VietnameseCounting
             | NumFormat::Hebrew1
             | NumFormat::Hebrew2
-            | NumFormat::ArabicAlpha
-            | NumFormat::ArabicAbjad
             | NumFormat::HindiVowels
             | NumFormat::HindiConsonants
             | NumFormat::HindiNumbers
@@ -396,6 +396,27 @@ pub fn russian_letters(n: u32) -> String {
     let n = n.min(len * 30);
     let k = (n - 1) / len + 1;
     let c = RUSSIAN_LETTERS.get(((n - 1) % len) as usize).copied().unwrap_or('а');
+    std::iter::repeat_n(c, k as usize).collect()
+}
+
+/// `arabicAlpha`: the 28 letters in alphabetical (hijā'ī) order.
+const ARABIC_ALPHA: [char; 28] =
+    ['أ', 'ب', 'ت', 'ث', 'ج', 'ح', 'خ', 'د', 'ذ', 'ر', 'ز', 'س', 'ش', 'ص', 'ض', 'ط', 'ظ', 'ع', 'غ', 'ف', 'ق', 'ك', 'ل', 'م', 'ن', 'ه', 'و', 'ي'];
+
+/// `arabicAbjad`: the 28 letters in abjad order (أبجد هوز حطي كلمن سعفص قرشت ثخذ ضظغ).
+const ARABIC_ABJAD: [char; 28] =
+    ['أ', 'ب', 'ج', 'د', 'ه', 'و', 'ز', 'ح', 'ط', 'ي', 'ك', 'ل', 'م', 'ن', 'س', 'ع', 'ف', 'ص', 'ق', 'ر', 'ش', 'ت', 'ث', 'خ', 'ذ', 'ض', 'ظ', 'غ'];
+
+/// One letter of `alphabet`, repeated once per pass through it (as [`letters`]: a..z, aa..zz).
+fn repeated_letter(alphabet: &[char], n: u32) -> String {
+    let Some(&first) = alphabet.first() else { return n.to_string() };
+    if n == 0 {
+        return String::new();
+    }
+    let len = alphabet.len() as u32;
+    let n = n.min(len * 30);
+    let k = (n - 1) / len + 1;
+    let c = alphabet.get(((n - 1) % len) as usize).copied().unwrap_or(first);
     std::iter::repeat_n(c, k as usize).collect()
 }
 
@@ -918,6 +939,19 @@ mod tests {
         assert_eq!(NumFormat::RussianLower.format(100), "нннн");
         assert_eq!(NumFormat::RussianUpper.format(26), "Ы");
         assert_eq!(NumFormat::RussianUpper.format(36), "ЖЖ");
+    }
+
+    #[test]
+    fn arabic_letters_count_in_both_orders() {
+        let alpha: Vec<String> = (1..=5).map(|n| NumFormat::ArabicAlpha.format(n)).collect();
+        assert_eq!(alpha.join(" "), "أ ب ت ث ج");
+        let abjad: Vec<String> = (1..=5).map(|n| NumFormat::ArabicAbjad.format(n)).collect();
+        assert_eq!(abjad.join(" "), "أ ب ج د ه");
+        assert_eq!(NumFormat::ArabicAlpha.format(28), "ي");
+        assert_eq!(NumFormat::ArabicAbjad.format(28), "غ");
+        // Past the 28th letter they double, as Latin and Russian letters do.
+        assert_eq!(NumFormat::ArabicAlpha.format(29), "أأ");
+        assert_eq!(NumFormat::ArabicAbjad.format(30), "بب");
     }
 
     #[test]

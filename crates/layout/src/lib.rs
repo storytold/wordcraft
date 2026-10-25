@@ -58,9 +58,9 @@ pub enum ViewMode {
 /// How digits look on screen (Word › File › Options › Advanced › Numeral).
 ///
 /// Display only: the document text keeps the typed codepoints, so find, spelling, copying and
-/// the saved file all see the original digits. Extended Arabic-Indic digits (U+06F0–U+06F9,
-/// Persian/Urdu ۰۱۲۳…) always show as typed; only ASCII and Arabic-Indic (U+0660–U+0669) digits
-/// are substituted.
+/// the saved file all see the original digits. Only ASCII digits are substituted: Arabic-Indic
+/// (U+0660–U+0669) and Extended Arabic-Indic digits (U+06F0–U+06F9, Persian/Urdu ۰۱۲۳…) always
+/// show as typed, so fonts that ligate them (e.g. the end-of-ayah mark U+06DD) keep working.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NumeralMode {
@@ -121,13 +121,7 @@ impl NumeralMode {
             NumeralMode::Context => rtl,
             NumeralMode::System => false,
         };
-        if hindi {
-            if c.is_ascii_digit() { char::from_u32(0x660 + (c as u32 - '0' as u32)).unwrap_or(c) } else { c }
-        } else if ('\u{660}'..='\u{669}').contains(&c) {
-            (b'0' + (c as u32 - 0x660) as u8) as char
-        } else {
-            c
-        }
+        if hindi { if c.is_ascii_digit() { char::from_u32(0x660 + (c as u32 - '0' as u32)).unwrap_or(c) } else { c } } else { c }
     }
 }
 
@@ -1304,7 +1298,7 @@ fn layout_box(
                     let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
                     let r = float_rect(frame, (0.0, width), float_y, w, h, float);
                     let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
+                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -3045,8 +3039,8 @@ impl PageFrame<'_> {
     /// Alignment `a` across the page: inside and outside become right and left on an even page.
     fn h_align(frame: Option<&Self>, a: Option<FloatAlign>) -> Option<FloatAlign> {
         match a {
-            Some(FloatAlign::Inside) if frame.is_some_and(|f| f.even()) => Some(FloatAlign::End),
-            Some(FloatAlign::Outside) if frame.is_some_and(|f| f.even()) => Some(FloatAlign::Start),
+            Some(FloatAlign::Inside) if frame.is_some_and(Self::even) => Some(FloatAlign::End),
+            Some(FloatAlign::Outside) if frame.is_some_and(Self::even) => Some(FloatAlign::Start),
             a => a,
         }
     }
@@ -3365,7 +3359,7 @@ fn anchor_floats(
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
-            let outline = outline.as_deref().map(|v| v.as_slice());
+            let outline = outline.as_deref().map(Vec::as_slice);
             let mut area = wrap_area(r, float, outline);
             if pb.settle && text_before {
                 let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
@@ -4938,6 +4932,8 @@ mod tests_complex;
 mod tests_grid;
 #[cfg(test)]
 mod tests_ligature;
+#[cfg(test)]
+mod tests_nbsp;
 #[cfg(test)]
 mod tests_numeral;
 #[cfg(test)]

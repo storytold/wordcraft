@@ -231,10 +231,12 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
                                     // Position, edited in place: the interface unit by default, any
                                     // unit spelled out, either decimal separator (`.measure`).
                                     let mut pv = t.pos / k;
-                                    let r = ui.add_sized(
-                                        vec2(58.0, 18.0),
-                                        egui::DragValue::new(&mut pv).speed(0.05).range(-1584.0 / k..=1584.0 / k).measure(u).max_decimals(2),
-                                    );
+                                    let r = ui
+                                        .add_sized(
+                                            vec2(58.0, 18.0),
+                                            egui::DragValue::new(&mut pv).speed(0.05).range(-1584.0 / k..=1584.0 / k).measure(u).max_decimals(2),
+                                        )
+                                        .accessible_name(format!("{} {}", tl!("Tab stop position:"), i + 1));
                                     if r.changed() {
                                         f.set_pos(i, pv * k);
                                     }
@@ -253,7 +255,9 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
                                             for v in crate::ruler_tabs::KINDS {
                                                 ui.selectable_value(&mut a, v, tl!(crate::ruler_tabs::kind_label(v)));
                                             }
-                                        });
+                                        })
+                                        .response
+                                        .accessible_name(format!("{} {}", tl!("Alignment:"), i + 1));
                                     if a != t.align {
                                         f.set_align(i, a);
                                         pick = Some(i);
@@ -265,11 +269,16 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
                                         .find(|(v, _, _)| *v == l)
                                         .map(|(_, _, fill)| if fill.is_empty() { tl!("None").to_string() } else { (*fill).to_string() })
                                         .unwrap_or_default();
-                                    egui::ComboBox::from_id_salt("tab_leader").width(64.0).selected_text(shown).show_ui(ui, |ui| {
-                                        for (v, label, _) in LEADERS {
-                                            ui.selectable_value(&mut l, v, tl!(label));
-                                        }
-                                    });
+                                    egui::ComboBox::from_id_salt("tab_leader")
+                                        .width(64.0)
+                                        .selected_text(shown)
+                                        .show_ui(ui, |ui| {
+                                            for (v, label, _) in LEADERS {
+                                                ui.selectable_value(&mut l, v, tl!(label));
+                                            }
+                                        })
+                                        .response
+                                        .accessible_name(format!("{} {}", tl!("Leader"), i + 1));
                                     if l != t.leader {
                                         f.set_leader(i, l);
                                         pick = Some(i);
@@ -313,8 +322,9 @@ pub fn tabs(app: &mut WordApp, ui: &mut Ui, f: &mut TabsForm) -> bool {
         ui.add_space(12.0);
         ui.vertical(|ui| {
             ui.set_min_width(130.0);
-            ui.label(tl!("Default tab stops:"));
-            ui.add(egui::DragValue::new(&mut f.default_tab).speed(0.05).range(1.0 / k..=1584.0 / k).measure(u).max_decimals(2));
+            let default_label = ui.label(tl!("Default tab stops:"));
+            ui.add(egui::DragValue::new(&mut f.default_tab).speed(0.05).range(1.0 / k..=1584.0 / k).measure(u).max_decimals(2))
+                .labelled_by(default_label.id);
             ui.add_space(8.0);
             ui.label(tl!("Tab stops to be cleared:"));
             let list = if f.clear_all {
@@ -912,6 +922,31 @@ mod tests {
         let mut f = TabsForm::read(&app).unwrap_or_else(|| panic!("form"));
         f.new_stop();
         assert_eq!(f.stops[0].pos, 36.0);
+    }
+
+    /// The inline tab-stop rows are named by their column, and the default interval by its label.
+    #[test]
+    fn tab_stop_fields_have_semantic_names() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app_with("a\tb");
+        app.run("para.tabs", json!({"set": [{"pos": 72.0}]})).unwrap();
+        app.dialog = crate::dialogs::Dialog::open("tabs", &mut app);
+        assert!(matches!(app.dialog, Some(crate::dialogs::Dialog::Tabs { .. })));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Tab stop position: 1");
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Alignment: 1");
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Leader 1");
+        h.get_by_role_and_label(egui::accesskit::Role::SpinButton, "Default tab stops:");
     }
 
     /// #3031: a paragraph with no stops — the default — says so in the list box instead of

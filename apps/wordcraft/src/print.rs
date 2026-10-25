@@ -1,11 +1,16 @@
 //! Desktop spooler adapter. Discovery and submission never run on the UI thread.
 use wordcraft_ui_egui::printing::{Discover, Duplex, Printer, Settings, Submit};
 
+/// Returns a discovery callback that enumerates spooler printers on a named worker thread and
+/// sends the list through a channel, keeping spooler calls off the UI thread.
 pub fn discover() -> Discover {
     Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
         let _ = std::thread::Builder::new().name("print-discovery".into()).spawn(move || {
-            let printers = craft_print::printers().into_iter().map(|printer| Printer { name: printer.name, default: printer.default }).collect();
+            let printers = craft_print::printers()
+                .into_iter()
+                .map(|printer| Printer { name: printer.name, label: printer.description, default: printer.default })
+                .collect();
             let _ = sender.send(printers);
         });
         receiver

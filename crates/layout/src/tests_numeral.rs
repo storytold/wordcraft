@@ -49,18 +49,18 @@ fn parse_accepts_the_four_modes_any_case() {
 }
 
 #[test]
-fn map_substitutes_digits_both_ways() {
+fn map_substitutes_ascii_digits_only() {
     for d in '0'..='9' {
         let hindi = char::from_u32(0x660 + (d as u32 - '0' as u32)).unwrap();
         assert_eq!(NumeralMode::Hindi.map(d, false), hindi);
         assert_eq!(NumeralMode::Hindi.map(d, true), hindi, "Hindi mode ignores direction");
-        assert_eq!(NumeralMode::Arabic.map(hindi, false), d);
-        assert_eq!(NumeralMode::Arabic.map(hindi, true), d, "Arabic mode converts back both ways");
+        assert_eq!(NumeralMode::Arabic.map(hindi, false), hindi);
+        assert_eq!(NumeralMode::Arabic.map(hindi, true), hindi, "Arabic mode keeps typed Hindi digits");
         assert_eq!(NumeralMode::Arabic.map(d, false), d);
         assert_eq!(NumeralMode::Context.map(d, true), hindi);
         assert_eq!(NumeralMode::Context.map(d, false), d);
         assert_eq!(NumeralMode::Context.map(hindi, true), hindi);
-        assert_eq!(NumeralMode::Context.map(hindi, false), d);
+        assert_eq!(NumeralMode::Context.map(hindi, false), hindi);
     }
     // Letters, punctuation and Persian digits are never touched.
     for c in ['A', 'ب', '.', ' ', '(', '۰', '۹'] {
@@ -120,21 +120,11 @@ fn hindi_mode_reshapes_digits_but_keeps_offsets() {
 }
 
 #[test]
-fn arabic_mode_converts_hindi_digits_back() {
+fn arabic_mode_keeps_typed_hindi_digits() {
     let text = "عام ٢٠٢٤";
-    let hindi = lay_opts(text, true, NumeralMode::Hindi);
-    let arabic = lay_opts(text, true, NumeralMode::Arabic);
-    let h = line_gids(&hindi, text);
-    let a = line_gids(&arabic, text);
-    assert_eq!(h.len(), a.len());
-    let mut changed = 0;
-    for (n, (gh, ga)) in h.iter().zip(a.iter()).enumerate() {
-        if text.chars().nth(n).unwrap() == '٢' {
-            assert_ne!(gh, ga);
-            changed += 1;
-        }
-    }
-    assert!(changed > 0, "typed Hindi digits display Western in Arabic mode");
+    let hindi = line_gids(&lay_opts(text, true, NumeralMode::Hindi), text);
+    let arabic = line_gids(&lay_opts(text, true, NumeralMode::Arabic), text);
+    assert_eq!(hindi, arabic, "typed Hindi digits display as typed in Arabic mode");
 }
 
 #[test]
@@ -175,4 +165,25 @@ fn remap_range_maps_display_bytes_to_original() {
     assert_eq!(remap_range(&[], &[], 0, 0, 0), (0, 0));
     assert_eq!(remap_range(&map_starts, &orig_of, orig.len(), 99, 200), (4, 4));
     assert_eq!(remap_range(&map_starts, &orig_of, orig.len(), 3, 1), (1, 2));
+}
+
+#[test]
+fn arabic_mode_keeps_arabic_indic_digits_as_typed() {
+    // Issue #3259: the end-of-ayah mark (U+06DD) ligates with the real Arabic-Indic digits that
+    // follow it, so those codepoints must reach the shaper unchanged in the default mode.
+    for n in 0..10u32 {
+        let hindi = char::from_u32(0x660 + n).unwrap();
+        let ascii = char::from_u32('0' as u32 + n).unwrap();
+        for m in [NumeralMode::default(), NumeralMode::Arabic, NumeralMode::System] {
+            assert_eq!(m.map(hindi, false), hindi, "{m:?} keeps {hindi:?} (ltr)");
+            assert_eq!(m.map(hindi, true), hindi, "{m:?} keeps {hindi:?} (rtl)");
+        }
+        let typed = format!("\u{6dd}{hindi}");
+        let western = format!("\u{6dd}{ascii}");
+        let t = line_gids(&lay_opts(&typed, true, NumeralMode::default()), &typed);
+        let w = line_gids(&lay_opts(&western, true, NumeralMode::default()), &western);
+        let h = line_gids(&lay_opts(&typed, true, NumeralMode::Hindi), &typed);
+        assert_ne!(t, w, "U+{:04X} is not shaped as ASCII {ascii:?} in the default mode", 0x660 + n);
+        assert_eq!(t, h, "U+{:04X} shapes the same as in Hindi mode", 0x660 + n);
+    }
 }
