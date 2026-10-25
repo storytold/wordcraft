@@ -1032,9 +1032,15 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                     };
                     updates.push((k, text));
                 } else if let Some(fmt) = wordcraft_layout::fields::format_switch(instr) {
-                    // `{ = 12345 \* BahtText }` outside a table: evaluate the literal.
-                    let after_eq = instr.trim_start().trim_start_matches('=');
-                    let val = after_eq.split_whitespace().next().and_then(|t| t.parse::<f64>().ok());
+                    // `{ = 12345 \* BahtText }` outside a table: evaluate only single literals.
+                    // Multi-operand expressions (e.g. `{ = 100 + 50 \* Hex }`) are left
+                    // unchanged so their Word-computed cached results are preserved.
+                    let token = wordcraft_layout::fields::literal_after_eq(instr);
+                    let val = if fmt == NumFormat::BahtText {
+                        token.and_then(wordcraft_doc::section::parse_baht_token)
+                    } else {
+                        token.and_then(|t| t.parse::<f64>().ok())
+                    };
                     if fmt == NumFormat::BahtText {
                         if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
                             updates.push((k, text));
@@ -1103,7 +1109,8 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 }
                 "BAHTTEXT" => {
                     // `{ BAHTTEXT 12345 }` — number is the second token.
-                    let val = instr.split_whitespace().nth(1).and_then(|t| t.parse::<f64>().ok());
+                    // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
+                    let val = instr.split_whitespace().nth(1).and_then(wordcraft_doc::section::parse_baht_token);
                     if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
                         updates.push((k, text));
                     }
@@ -1111,19 +1118,23 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                 // `{ 12345 \* <fmt> }` — field name IS the number; apply any recognised format switch.
                 _ => {
                     if let Some(fmt) = wordcraft_layout::fields::format_switch(instr) {
-                        let val = name.parse::<f64>().ok();
                         if fmt == wordcraft_doc::section::NumFormat::BahtText {
+                            // Use parse_baht_token for precision (e.g. "1.005" → 1.01).
+                            let val = wordcraft_doc::section::parse_baht_token(&name);
                             if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
                                 updates.push((k, text));
                             }
-                        } else if fmt == wordcraft_doc::section::NumFormat::DollarText {
-                            if let Some(x) = val {
-                                if let Some(text) = wordcraft_layout::fields::dollar_text(x) {
-                                    updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
+                        } else {
+                            let val = name.parse::<f64>().ok();
+                            if fmt == wordcraft_doc::section::NumFormat::DollarText {
+                                if let Some(x) = val {
+                                    if let Some(text) = wordcraft_layout::fields::dollar_text(x) {
+                                        updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
+                                    }
                                 }
+                            } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX) && x.fract() == 0.0) {
+                                updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
                             }
-                        } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX) && x.fract() == 0.0) {
-                            updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
                         }
                     }
                 }
