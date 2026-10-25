@@ -8,21 +8,23 @@
 //!
 //! ## TCB structure
 //! ```text
-//! Form A (normal):  [consonant]  [upper_vowel | lower_vowel | sara_am]?  [tone | diacritic]?
+//! Form A (normal):  [consonant]  [upper_vowel | lower_vowel | sara_am]?  [tone | karan | diacritic]?
+//! Form A2 (tone-am):[consonant]  [tone]  [sara_am]   — canonical Thai order
 //! Form B (pali):    [consonant]  [pali_mark]
 //! ```
 //!
-//! Sara am (ำ U+0E33) occupies the same vowel slot as upper/lower vowels.
+//! Sara am (ำ U+0E33) occupies the same vowel slot as upper/lower vowels, but is its own
+//! class (`SaraAm`) in the input sequencer.
 //!
 //! Pali marks (◌ํ nikhahit U+0E4D and ◌ฺ phinthu U+0E3A) cannot share a TCB with
-//! upper/lower vowels, tone marks, diacritics, or sara_am (ำ).  They occupy the consonant
-//! alone.
+//! upper/lower vowels, tone marks, diacritics, karan, or sara_am (ำ).  They occupy the
+//! consonant alone.
 //!
 //! ## Replacement rules
 //! - Typing an upper/lower vowel or sara_am when slot 1 is already filled → replaces it.
-//! - Typing a tone/diacritic when slot 2 is already filled → replaces it.
+//! - Typing a tone/karan when slot 2 is already filled → replaces it.
 //! - Typing maitaikhu (◌็) when a vowel occupies slot 1 (and slot 2 is free) → replaces it.
-//! - Typing a pali mark when any vowel/tone/diac is present → replaces them all.
+//! - Typing a pali mark when any vowel/tone/diac/karan is present → replaces them all.
 //! - Typing a vowel/tone/diac when a pali mark is present → replaces the pali mark.
 //! - Typing a consonant always starts a new TCB.
 //! - Typing a combining character with no preceding consonant → rejected.
@@ -34,7 +36,6 @@ use crate::thai_char::{
 };
 
 /// Classification of a Unicode Thai character for input-sequence purposes.
-/// Derived from `TBL_CHTYPE` in the original THAIFUNC.CPP (Algorithms Co., 2001).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ThaiCharClass {
     /// Consonant (TCT_THAICONS / THAICONSLOWER / THAICONSUPPER): the mandatory TCB base.
@@ -43,25 +44,25 @@ pub enum ThaiCharClass {
     UpperVowel,
     /// Below vowel (TCT_THAILOWERVOWEL): ◌ุ ◌ู — occupies slot 1.
     LowerVowel,
-    /// Tone mark (TCT_THAITONE): ◌้ ◌่ ◌๊ ◌๋ ◌์ — occupies slot 2.
+    /// Tone mark (ctMAI1234): ◌่ ◌้ ◌๊ ◌๋ — occupies slot 2.
+    /// Note: ์ (thanthakhat U+0E4C) is `Karan`, not `Tone`.
     Tone,
-    /// Diacritic (TCT_THAIDIAC): ◌็ (maitaikhu U+0E47) — occupies slot 2.
+    /// Diacritic (ctTYKOU): ◌็ (maitaikhu U+0E47) — occupies slot 2.
     Diacritic,
+    /// Karan (ctKARAN): ์ (thanthakhat U+0E4C) — occupies slot 2.
+    /// Silent-consonant marker; treated separately from tone marks.
+    Karan,
     /// Pali mark: ◌ํ (nikhahit U+0E4D) and ◌ฺ (phinthu U+0E3A).
     ///
     /// Pali marks are used in Sanskrit/Pali loanwords.  They can only appear directly
     /// after a consonant — never alongside upper/lower vowels, tone marks, diacritics,
-    /// or sara_am (ำ) in the same TCB.
+    /// karan, or sara_am (ำ) in the same TCB.
     ///
     /// Nikhahit (U+0E4D) additionally combines with a following sara_aa (า) to produce
     /// sara_am (ำ U+0E33) — see the `Other` arm in [`thai_input_action`].
     PaliMark,
-    /// Sara am ำ (U+0E33): occupies the same vowel slot as `UpperVowel`/`LowerVowel`.
-    ///
-    /// Kept for API and match-exhaustiveness compatibility; `thai_char_class` now
-    /// returns `UpperVowel` for U+0E33 so external exhaustive matches still compile.
-    /// Typing an upper/lower vowel or sara_am when one of these is already present
-    /// replaces it in-place.
+    /// Sara am ำ (U+0E33, ctUM): occupies the same vowel slot as
+    /// `UpperVowel`/`LowerVowel`, but is its own distinct class in the input sequencer.
     SaraAm,
     /// Leading vowel (TCT_LEADINGVOWEL): เ แ โ ใ ไ — written before the consonant visually
     /// but typed/stored after; handled outside TCB logic.
@@ -111,10 +112,9 @@ pub enum ThaiInputAction {
     Reject,
 }
 
-/// Classify a Unicode Thai character according to `TBL_CHTYPE` from THAIFUNC.CPP.
+/// Classify a Unicode Thai character for input-sequence purposes.
 pub fn thai_char_class(c: char) -> ThaiCharClass {
     match u32::from(c) {
-        // Consonants — normal (TCT_THAICONS)
         // Consonants — normal (TCT_THAICONS): ก–ญ ฐ–น ผ พ ภ–ร ล ว–ฮ
         0x0E01..=0x0E0D
         | 0x0E10..=0x0E1A
@@ -139,7 +139,6 @@ pub fn thai_char_class(c: char) -> ThaiCharClass {
         => ThaiCharClass::UpperVowel,
 
         // Below vowels (TCT_THAILOWERVOWEL): ◌ุ ◌ู  (SARA_U SARA_UU)
-        // Note: PHINTHU (U+0E3A) is a Pali mark, not a vowel, despite TBL_CHTYPE.
         _ if c == SARA_U || c == SARA_UU
         => ThaiCharClass::LowerVowel,
 
@@ -147,22 +146,23 @@ pub fn thai_char_class(c: char) -> ThaiCharClass {
         _ if c == PHINTHU || c == NIKHAHIT
         => ThaiCharClass::PaliMark,
 
-        // SARA_AM ำ: occupies the vowel slot — same class as UpperVowel.
-        // (Nikhahit + sara_aa combination still produces ำ via input logic.)
+        // SARA_AM ำ (ctUM): occupies the vowel slot; own distinct class.
         _ if c == SARA_AM
-        => ThaiCharClass::UpperVowel,
+        => ThaiCharClass::SaraAm,
 
-        // Diacritic (TCT_THAIDIAC): MAITAIKHU ◌็ — occupies slot 2.
+        // Diacritic (ctTYKOU): MAITAIKHU ◌็ — occupies slot 2.
         _ if c == MAITAIKHU
         => ThaiCharClass::Diacritic,
 
-        // Tone marks (TCT_THAITONE): ◌่ ◌้ ◌๊ ◌๋ ◌์
-        // MAIEK MAITHO MAITRI MAICHATTAWA THANTHAKHAT
-        _ if c == MAIEK || c == MAITHO || c == MAITRI || c == MAICHATTAWA || c == THANTHAKHAT
+        // Karan (ctKARAN): THANTHAKHAT ์ — silent-consonant marker, slot 2.
+        _ if c == THANTHAKHAT
+        => ThaiCharClass::Karan,
+
+        // Tone marks (ctMAI1234): ◌่ ◌้ ◌๊ ◌๋  (NOT ์ — that is Karan)
+        _ if c == MAIEK || c == MAITHO || c == MAITRI || c == MAICHATTAWA
         => ThaiCharClass::Tone,
 
         // Leading vowels (TCT_LEADINGVOWEL): เ แ โ ใ ไ
-        // SARA_E SARA_AE SARA_O MAIMUAN MAIMALAI
         _ if c == SARA_E || c == SARA_AE || c == SARA_O || c == MAIMUAN || c == MAIMALAI
         => ThaiCharClass::LeadingVowel,
 
@@ -175,9 +175,12 @@ pub fn thai_char_class(c: char) -> ThaiCharClass {
 /// that form a valid Thai Character Block (consonant + optional combining marks).
 /// Returns a slice of 0–3 `(byte_offset, char)` pairs in logical order.
 ///
-/// Recognises both TCB forms:
-/// - Form A (normal): `[consonant][vowel?][tone|diac?]`  (sara_am counts as a vowel)
-/// - Form B (pali):   `[consonant][pali_mark]`
+/// Valid TCB patterns (pattern matched explicitly):
+/// - 3-char: `(Consonant, UpperVowel|LowerVowel, Tone|Karan|Diacritic)`
+/// - 3-char: `(Consonant, Tone, SaraAm)` — canonical Thai order
+/// - 3-char: `(Consonant, SaraAm, Tone)` — alternative Unicode order
+/// - 2-char: `(Consonant, UpperVowel|LowerVowel|Tone|Karan|Diacritic|PaliMark|SaraAm)`
+/// - 1-char: `Consonant`
 pub fn current_tcb(text: &str, caret_off: usize) -> Vec<(usize, char)> {
     let before = match text.get(..caret_off) {
         Some(s) => s,
@@ -192,41 +195,80 @@ pub fn current_tcb(text: &str, caret_off: usize) -> Vec<(usize, char)> {
         return Vec::new();
     }
 
-    let cls_of = |i: usize| thai_char_class(chars[i].1);
-    let mut end = n; // exclusive; we peel right-to-left, then check the head is a consonant
+    let cls = |i: usize| thai_char_class(chars[i].1);
 
-    // Step 1: peel at most one rightmost slot occupant.
-    // Tone/Diacritic and PaliMark are mutually exclusive in this slot.
-    // (SaraAm now classifies as UpperVowel and is peeled in step 2.)
-    match cls_of(end - 1) {
-        ThaiCharClass::Tone | ThaiCharClass::Diacritic | ThaiCharClass::PaliMark => {
-            end -= 1;
+    // Pattern match on the last 1–3 chars explicitly.
+    match n {
+        3 => {
+            let (c0, c1, c2) = (cls(0), cls(1), cls(2));
+            let valid = match (c0, c1, c2) {
+                // Form A full TCB: consonant + vowel + slot-2
+                (ThaiCharClass::Consonant,
+                 ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel,
+                 ThaiCharClass::Tone | ThaiCharClass::Karan | ThaiCharClass::Diacritic) => true,
+                // Canonical: consonant + tone + sara_am
+                (ThaiCharClass::Consonant, ThaiCharClass::Tone, ThaiCharClass::SaraAm) => true,
+                // Alternative Unicode order: consonant + sara_am + tone
+                (ThaiCharClass::Consonant, ThaiCharClass::SaraAm, ThaiCharClass::Tone) => true,
+                _ => false,
+            };
+            if valid {
+                chars.to_vec()
+            } else {
+                // Fall back: try 2-char suffix (last 2 of the 3 collected)
+                let (c1, c2) = (cls(1), cls(2));
+                let valid2 = matches!(
+                    (c1, c2),
+                    (ThaiCharClass::Consonant,
+                     ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel
+                     | ThaiCharClass::Tone | ThaiCharClass::Karan
+                     | ThaiCharClass::Diacritic | ThaiCharClass::PaliMark
+                     | ThaiCharClass::SaraAm)
+                );
+                if valid2 {
+                    chars[1..].to_vec()
+                } else if c2 == ThaiCharClass::Consonant {
+                    chars[2..].to_vec()
+                } else {
+                    Vec::new()
+                }
+            }
         }
-        _ => {}
+        2 => {
+            let (c0, c1) = (cls(0), cls(1));
+            let valid = matches!(
+                (c0, c1),
+                (ThaiCharClass::Consonant,
+                 ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel
+                 | ThaiCharClass::Tone | ThaiCharClass::Karan
+                 | ThaiCharClass::Diacritic | ThaiCharClass::PaliMark
+                 | ThaiCharClass::SaraAm)
+            );
+            if valid {
+                chars.to_vec()
+            } else if c1 == ThaiCharClass::Consonant {
+                chars[1..].to_vec()
+            } else {
+                Vec::new()
+            }
+        }
+        1 => {
+            if cls(0) == ThaiCharClass::Consonant {
+                chars.to_vec()
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
     }
-
-    // Step 2: if what we peeled was NOT a PaliMark, also peel an optional vowel.
-    // (PaliMark is incompatible with vowels — no vowel to peel in Form B.)
-    let had_pali = end < n && cls_of(end) == ThaiCharClass::PaliMark;
-    if !had_pali
-        && end > 0
-        && matches!(cls_of(end - 1), ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel)
-    {
-        end -= 1;
-    }
-
-    // Step 3: the remaining head must be a consonant.
-    if end == 0 || cls_of(end - 1) != ThaiCharClass::Consonant {
-        return Vec::new();
-    }
-
-    chars[end - 1..].to_vec()
 }
 
 /// Determine what action to take when the user types `new_char` given the current TCB
 /// (0–3 chars immediately before the caret, as returned by [`current_tcb`]) and the
 /// character immediately before the caret (which may differ from the TCB when the caret
 /// sits after a leading vowel).
+///
+/// Logic ported from the Thai input sequence algorithm.
 ///
 /// - `tcb`: result of `current_tcb(text, caret_off)` — may be empty.
 /// - `prev_char`: `Some((byte_offset, char))` for the char immediately before the caret,
@@ -258,8 +300,7 @@ pub fn thai_input_action(
         // Other characters: pass through, with one exception —
         // SARA_AA (า U+0E32) typed after a consonant+NIKHAHIT (ํ U+0E4D) combines
         // the two characters into SARA_AM (ำ U+0E33).
-        // Note: sara_am (ำ U+0E33) typed directly is now UpperVowel and handled below.
-        ThaiCharClass::Other | ThaiCharClass::SaraAm => {
+        ThaiCharClass::Other => {
             if new_char == '\u{0E32}'
                 && let Some(&(off, '\u{0E4D}')) = tcb.iter().find(|(_, c)| *c == '\u{0E4D}')
             {
@@ -292,7 +333,7 @@ pub fn thai_input_action(
                     replacement: None,
                 };
             }
-            // Pali marks cannot co-exist with vowels, tone, diacritics, or sara_am.
+            // Pali marks cannot co-exist with vowels, tone, diacritics, karan, or sara_am.
             // If any are present, delete them all and place the pali mark in their stead.
             let first_incompat = tcb.iter().find(|(_, c)| {
                 matches!(
@@ -301,11 +342,15 @@ pub fn thai_input_action(
                         | ThaiCharClass::LowerVowel
                         | ThaiCharClass::Tone
                         | ThaiCharClass::Diacritic
+                        | ThaiCharClass::Karan
                         | ThaiCharClass::SaraAm
                 )
             });
             if let Some(&(incompat_off, _)) = first_incompat {
-                let last = tcb.last().unwrap(); // safe: tcb non-empty (checked above)
+                let last = match tcb.last() {
+                    Some(v) => v,
+                    None => return ThaiInputAction::Accept,
+                };
                 let delete_bytes = last.0 + last.1.len_utf8() - incompat_off;
                 return ThaiInputAction::Replace {
                     slot_offset: incompat_off,
@@ -316,6 +361,219 @@ pub fn thai_input_action(
             }
             // TCB has only a consonant: accept.
             ThaiInputAction::Accept
+        }
+
+        // ── Sara am ำ (ctUM) ──────────────────────────────────────────────────────────
+        // ำ typed directly; uses its own class now.
+        ThaiCharClass::SaraAm => {
+            // Get the last element of the TCB (the character immediately before caret).
+            let &(prev_off, prev_ch) = match tcb.last() {
+                Some(v) => v,
+                None => return ThaiInputAction::Accept,
+            };
+            let prev_cls = thai_char_class(prev_ch);
+
+            match prev_cls {
+                // After consonant alone: Accept (append).
+                ThaiCharClass::Consonant => ThaiInputAction::Accept,
+
+                // After vowel or existing sara_am: replace it (vowel slot taken by ำ).
+                ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel | ThaiCharClass::SaraAm => {
+                    ThaiInputAction::Replace {
+                        slot_offset: prev_off,
+                        slot_bytes: prev_ch.len_utf8(),
+                        cons_swap: None,
+                        replacement: None,
+                    }
+                }
+
+                // After tone mark: look at prev-prev.
+                ThaiCharClass::Tone => {
+                    // Find the element before this tone in the TCB.
+                    let prev_prev_cls = if tcb.len() >= 2 {
+                        thai_char_class(tcb[tcb.len() - 2].1)
+                    } else {
+                        ThaiCharClass::Consonant // only one element means consonant
+                    };
+                    match prev_prev_cls {
+                        // [cons, vowel, tone] + type ำ → replace the vowel with ำ (tone stays).
+                        ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel => {
+                            let (vowel_off, vowel_ch) = tcb[tcb.len() - 2];
+                            ThaiInputAction::Replace {
+                                slot_offset: vowel_off,
+                                slot_bytes: vowel_ch.len_utf8(),
+                                cons_swap: None,
+                                replacement: None,
+                            }
+                        }
+                        // [cons, tone] + type ำ → Accept (append; result: cons+tone+ำ).
+                        _ => ThaiInputAction::Accept,
+                    }
+                }
+
+                // After diacritic, karan, or pali mark: replace it.
+                ThaiCharClass::Diacritic | ThaiCharClass::Karan | ThaiCharClass::PaliMark => {
+                    ThaiInputAction::Replace {
+                        slot_offset: prev_off,
+                        slot_bytes: prev_ch.len_utf8(),
+                        cons_swap: None,
+                        replacement: None,
+                    }
+                }
+
+                // Anything else: accept.
+                _ => ThaiInputAction::Accept,
+            }
+        }
+
+        // ── Tone marks (ctMAI1234 — ่ ้ ๊ ๋ only) ───────────────────────────────────
+        ThaiCharClass::Tone => {
+            let &(prev_off, prev_ch) = match tcb.last() {
+                Some(v) => v,
+                None => return ThaiInputAction::Accept,
+            };
+            let prev_cls = thai_char_class(prev_ch);
+
+            // Typing a tone while a pali mark is present replaces the pali mark.
+            if prev_cls == ThaiCharClass::PaliMark {
+                return ThaiInputAction::Replace {
+                    slot_offset: prev_off,
+                    slot_bytes: prev_ch.len_utf8(),
+                    cons_swap: None,
+                    replacement: None,
+                };
+            }
+
+            match prev_cls {
+                // After consonant or vowel: Accept (slot 2 free).
+                ThaiCharClass::Consonant
+                | ThaiCharClass::UpperVowel
+                | ThaiCharClass::LowerVowel => ThaiInputAction::Accept,
+
+                // After existing tone, diacritic, or karan: replace it.
+                ThaiCharClass::Tone | ThaiCharClass::Diacritic | ThaiCharClass::Karan => {
+                    ThaiInputAction::Replace {
+                        slot_offset: prev_off,
+                        slot_bytes: prev_ch.len_utf8(),
+                        cons_swap: None,
+                        replacement: None,
+                    }
+                }
+
+                // After sara_am: depends on what came before it.
+                ThaiCharClass::SaraAm => {
+                    // Check if there is already a tone before the sara_am.
+                    if tcb.len() >= 2 {
+                        let prev_prev_cls = thai_char_class(tcb[tcb.len() - 2].1);
+                        if prev_prev_cls == ThaiCharClass::Tone {
+                            // [cons, tone, sara_am] + new tone → replace the old tone (2 back).
+                            let (tone_off, tone_ch) = tcb[tcb.len() - 2];
+                            return ThaiInputAction::Replace {
+                                slot_offset: tone_off,
+                                slot_bytes: tone_ch.len_utf8(),
+                                cons_swap: None,
+                                replacement: None,
+                            };
+                        }
+                    }
+                    // [cons, sara_am] + tone → insert before sara_am.
+                    ThaiInputAction::Replace {
+                        slot_offset: prev_off,
+                        slot_bytes: 0,
+                        cons_swap: None,
+                        replacement: None,
+                    }
+                }
+
+                // After pali mark: already handled above; anything else: accept.
+                _ => ThaiInputAction::Accept,
+            }
+        }
+
+        // ── Karan (ctKARAN — ์ only) ──────────────────────────────────────────────────
+        ThaiCharClass::Karan => {
+            let &(prev_off, prev_ch) = match tcb.last() {
+                Some(v) => v,
+                None => return ThaiInputAction::Reject,
+            };
+            let prev_cls = thai_char_class(prev_ch);
+
+            match prev_cls {
+                // After consonant alone: Accept.
+                ThaiCharClass::Consonant => ThaiInputAction::Accept,
+
+                // After upper/lower vowel: special case for กิ์ and กุ์.
+                ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel => {
+                    if prev_ch == SARA_I || prev_ch == SARA_U {
+                        // กิ์ and กุ์ are valid; append.
+                        ThaiInputAction::Accept
+                    } else {
+                        // Other vowels: karan replaces them.
+                        ThaiInputAction::Replace {
+                            slot_offset: prev_off,
+                            slot_bytes: prev_ch.len_utf8(),
+                            cons_swap: None,
+                            replacement: None,
+                        }
+                    }
+                }
+
+                // After tone, sara_am, diacritic, karan, or pali mark: replace.
+                ThaiCharClass::Tone
+                | ThaiCharClass::SaraAm
+                | ThaiCharClass::Diacritic
+                | ThaiCharClass::Karan
+                | ThaiCharClass::PaliMark => ThaiInputAction::Replace {
+                    slot_offset: prev_off,
+                    slot_bytes: prev_ch.len_utf8(),
+                    cons_swap: None,
+                    replacement: None,
+                },
+
+                _ => ThaiInputAction::Reject,
+            }
+        }
+
+        // ── Diacritic (ctTYKOU — ็ only) ─────────────────────────────────────────────
+        ThaiCharClass::Diacritic => {
+            let &(prev_off, prev_ch) = match tcb.last() {
+                Some(v) => v,
+                None => return ThaiInputAction::Accept,
+            };
+            let prev_cls = thai_char_class(prev_ch);
+
+            // Typing a diac while a pali mark is present replaces the pali mark.
+            if prev_cls == ThaiCharClass::PaliMark {
+                return ThaiInputAction::Replace {
+                    slot_offset: prev_off,
+                    slot_bytes: prev_ch.len_utf8(),
+                    cons_swap: None,
+                    replacement: None,
+                };
+            }
+
+            match prev_cls {
+                // After consonant alone: Accept.
+                ThaiCharClass::Consonant => ThaiInputAction::Accept,
+
+                // After any other class: check prev-prev.
+                _ => {
+                    // If the TCB has prev-prev = Consonant, replace the slot-2 occupant.
+                    if tcb.len() >= 2 {
+                        let prev_prev_cls = thai_char_class(tcb[tcb.len() - 2].1);
+                        if prev_prev_cls == ThaiCharClass::Consonant {
+                            return ThaiInputAction::Replace {
+                                slot_offset: prev_off,
+                                slot_bytes: prev_ch.len_utf8(),
+                                cons_swap: None,
+                                replacement: None,
+                            };
+                        }
+                    }
+                    // [cons, vowel, tone/karan] + type ็ → Reject (structurally invalid).
+                    ThaiInputAction::Reject
+                }
+            }
         }
 
         // ── Upper and lower vowels ─────────────────────────────────────────────────────
@@ -331,13 +589,21 @@ pub fn thai_input_action(
                     replacement: None,
                 };
             }
-            // Replace an existing vowel in-place (sara_am counts as a vowel).
+            // Look for an existing vowel (UpperVowel, LowerVowel, or SaraAm) in the TCB.
             if let Some(&(vowel_off, existing_vowel)) = tcb.iter().find(|(_, c)| {
                 matches!(
                     thai_char_class(*c),
-                    ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel
+                    ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel | ThaiCharClass::SaraAm
                 )
             }) {
+                // Special case: if the vowel is SaraAm and there's a Tone before it
+                // (pattern: [cons, tone, sara_am]), reject — that slot combination is locked.
+                if thai_char_class(existing_vowel) == ThaiCharClass::SaraAm && tcb.len() >= 2 {
+                    let prev_of_sara_am_cls = thai_char_class(tcb[tcb.len() - 2].1);
+                    if prev_of_sara_am_cls == ThaiCharClass::Tone {
+                        return ThaiInputAction::Reject;
+                    }
+                }
                 ThaiInputAction::Replace {
                     slot_offset: vowel_off,
                     slot_bytes: existing_vowel.len_utf8(),
@@ -345,14 +611,14 @@ pub fn thai_input_action(
                     replacement: None,
                 }
             } else {
-                // No existing vowel: insert before a tone/diac if present, else append.
+                // No existing vowel: insert before a tone/karan/diac if present, else append.
                 let caret_pos = tcb.last().map(|&(o, c)| o + c.len_utf8()).unwrap_or(0);
                 let slot_offset = tcb
                     .iter()
                     .find(|(_, c)| {
                         matches!(
                             thai_char_class(*c),
-                            ThaiCharClass::Tone | ThaiCharClass::Diacritic
+                            ThaiCharClass::Tone | ThaiCharClass::Karan | ThaiCharClass::Diacritic
                         )
                     })
                     .map(|&(o, _)| o)
@@ -368,50 +634,6 @@ pub fn thai_input_action(
                     }
                 }
             }
-        }
-
-        // ── Tone marks and diacritics ─────────────────────────────────────────────────
-        ThaiCharClass::Tone | ThaiCharClass::Diacritic => {
-            // Typing a tone/diac while a pali mark is present replaces the pali mark.
-            if let Some(&(pali_off, existing_pali)) =
-                tcb.iter().find(|(_, c)| thai_char_class(*c) == ThaiCharClass::PaliMark)
-            {
-                return ThaiInputAction::Replace {
-                    slot_offset: pali_off,
-                    slot_bytes: existing_pali.len_utf8(),
-                    cons_swap: None,
-                    replacement: None,
-                };
-            }
-            // Replace an existing tone/diac.
-            if let Some(&(tone_off, existing)) = tcb
-                .iter()
-                .find(|(_, c)| matches!(thai_char_class(*c), ThaiCharClass::Tone | ThaiCharClass::Diacritic))
-            {
-                return ThaiInputAction::Replace {
-                    slot_offset: tone_off,
-                    slot_bytes: existing.len_utf8(),
-                    cons_swap: None,
-                    replacement: None,
-                };
-            }
-            // Maitaikhu (◌็ U+0E47) also replaces an upper/lower vowel when slot 2 is free.
-            if new_char == '\u{0E47}' {
-                if let Some(&(vowel_off, existing_vowel)) = tcb.iter().find(|(_, c)| {
-                    matches!(
-                        thai_char_class(*c),
-                        ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel
-                    )
-                }) {
-                    return ThaiInputAction::Replace {
-                        slot_offset: vowel_off,
-                        slot_bytes: existing_vowel.len_utf8(),
-                        cons_swap: None,
-                        replacement: None,
-                    };
-                }
-            }
-            ThaiInputAction::Accept
         }
     }
 }
@@ -440,11 +662,15 @@ mod tests {
         // Pali marks
         assert_eq!(cls('\u{0E3A}'), ThaiCharClass::PaliMark); // phinthu ◌ฺ
         assert_eq!(cls('\u{0E4D}'), ThaiCharClass::PaliMark); // nikhahit ◌ํ
-        // Sara am now occupies the vowel slot
-        assert_eq!(cls('\u{0E33}'), ThaiCharClass::UpperVowel); // ำ
-        // Tone marks
+        // Sara am is its own class now (not UpperVowel)
+        assert_eq!(cls('\u{0E33}'), ThaiCharClass::SaraAm); // ำ
+        // Tone marks (only the 4 mai marks, NOT thanthakhat)
         assert_eq!(cls('\u{0E48}'), ThaiCharClass::Tone); // mai ek
-        assert_eq!(cls('\u{0E4C}'), ThaiCharClass::Tone); // thanthakhat
+        assert_eq!(cls('\u{0E49}'), ThaiCharClass::Tone); // mai tho
+        assert_eq!(cls('\u{0E4A}'), ThaiCharClass::Tone); // mai tri
+        assert_eq!(cls('\u{0E4B}'), ThaiCharClass::Tone); // mai chattawa
+        // Karan (thanthakhat — separate from Tone)
+        assert_eq!(cls('\u{0E4C}'), ThaiCharClass::Karan); // thanthakhat ์
         // Diacritic (maitaikhu only)
         assert_eq!(cls('\u{0E47}'), ThaiCharClass::Diacritic); // maitaikhu ◌็
         // Leading vowels
@@ -475,6 +701,8 @@ mod tests {
         assert_eq!(tcb("กำ"), vec!['ก', '\u{0E33}']);
         // Consonant + sara_i + sara_am: two vowels — invalid TCB, returns empty.
         assert_eq!(tcb("กิำ"), Vec::<char>::new());
+        // Consonant + tone + sara_am: valid 3-char TCB (canonical Thai order).
+        assert_eq!(tcb("ก้ำ"), vec!['ก', '\u{0E49}', '\u{0E33}']);
         // After a space the TCB resets.
         assert_eq!(tcb("ข ก"), vec!['ก']);
         // Latin text: no TCB.
@@ -537,11 +765,8 @@ mod tests {
             other => panic!("expected Replace at 6, got {other:?}"),
         }
 
-        // Diacritic replacing existing tone.
-        match action(full, maitaikhu) {
-            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
-            other => panic!("expected Replace at 6, got {other:?}"),
-        }
+        // Diacritic after cons+vowel+tone: rejected (prev-prev = UpperVowel).
+        assert_eq!(action(full, maitaikhu), ThaiInputAction::Reject);
 
         // Tone replacing existing diacritic.
         // กิ็ = ก(0) + sara_i(3) + maitaikhu(6)
@@ -565,6 +790,10 @@ mod tests {
             ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
             other => panic!("upper vowel must replace vowel at 3, got {other:?}"),
         }
+
+        // ── Typing diacritic after cons+vowel+tone: structurally invalid → Reject ──
+        // กี้ = ก(0) + sara_ii(3) + mai_tho(6); prev-prev of TCB tail = UpperVowel → Reject.
+        assert_eq!(action("กี้", maitaikhu), ThaiInputAction::Reject);
 
         // ── No-consonant rejection ───────────────────────────────────────────────
 
@@ -722,8 +951,8 @@ mod tests {
         let sara_u = '\u{0E38}'; // sara u  (lower vowel)
         let sara_am = '\u{0E33}'; // ำ
 
-        // ำ now occupies the vowel slot.
-        assert_eq!(cls(sara_am), ThaiCharClass::UpperVowel);
+        // ำ is now its own class (SaraAm), not UpperVowel.
+        assert_eq!(cls(sara_am), ThaiCharClass::SaraAm);
 
         // กำ = ก(0,3) + ำ(3,3); caret at 6.
         // Typing sara_i REPLACES ำ at offset 3 (sara_am is the vowel occupant).
@@ -775,29 +1004,88 @@ mod tests {
             other => panic!("maitaikhu must replace sara_u at 3, got {other:?}"),
         }
 
-        // Maitaikhu after consonant+sara_am: replaces sara_am (UpperVowel).
+        // Maitaikhu after consonant+sara_am: replaces sara_am (vowel slot).
         match action("กำ", maitaikhu) {
             ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
             other => panic!("maitaikhu must replace sara_am at 3, got {other:?}"),
         }
 
-        // Maitaikhu after consonant+vowel+tone: replaces the tone (slot 2, not the vowel).
+        // Maitaikhu after consonant+vowel+tone: rejected (prev-prev = UpperVowel).
         // กิ้ = ก(0,3) + ิ(3,3) + ้(6,3); caret at 9.
-        match action("กิ้", maitaikhu) {
-            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
-            other => panic!("maitaikhu must replace existing tone at 6, got {other:?}"),
-        }
+        assert_eq!(action("กิ้", maitaikhu), ThaiInputAction::Reject);
 
-        // Maitaikhu after consonant+vowel+diac: replaces the diac.
-        match action("กิ็", maitaikhu) {
-            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
-            other => panic!("maitaikhu must replace existing diac at 6, got {other:?}"),
-        }
+        // Maitaikhu after consonant+vowel+diac: rejected too.
+        assert_eq!(action("กิ็", maitaikhu), ThaiInputAction::Reject);
 
         // Other tones still use only slot-2 replacement (no vowel fallback).
         // กิ = ก(0,3) + ิ(3,3); mai_ek has no slot-2 occupant → Accept.
         assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
 
         let _ = (sara_i, sara_u, sara_am);
+    }
+
+    #[test]
+    fn tone_and_sara_am_interaction() {
+        let maiek = '\u{0E48}'; // ่ mai ek
+        let maitho = '\u{0E49}'; // ้ mai tho
+        let sara_am = '\u{0E33}'; // ำ
+
+        // cons + sara_am + type tone: insert before sara_am (slot_bytes = 0).
+        // "กำ" = ก(0,3) + ำ(3,3); caret at 6.
+        match action("กำ", maiek) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 0, cons_swap: None, replacement: None } => {}
+            other => panic!("expected insert before sara_am at 3, got {other:?}"),
+        }
+
+        // cons + tone + sara_am + type new tone: replace old tone (2 back).
+        // "ก้ำ" = ก(0,3) + ้(3,3) + ำ(6,3); caret at 9.
+        match action("ก้ำ", maitho) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected Replace ้ at 3, got {other:?}"),
+        }
+
+        let _ = sara_am;
+    }
+
+    #[test]
+    fn karan_rules() {
+        let karan = '\u{0E4C}'; // ์ thanthakhat
+        let sara_i = '\u{0E34}'; // ิ sara i
+        let sara_u = '\u{0E38}'; // ุ sara u
+        let sara_ii = '\u{0E35}'; // ี sara ii
+
+        // consonant alone: accept
+        assert_eq!(action("ก", karan), ThaiInputAction::Accept);
+
+        // กิ์ and กุ์: karan appends after SARA_I and SARA_U
+        assert_eq!(action("กิ", karan), ThaiInputAction::Accept);
+        assert_eq!(action("กุ", karan), ThaiInputAction::Accept);
+
+        // other vowels: karan replaces
+        // กี + type ์ → replace ี at offset 3
+        match action("กี", karan) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("karan must replace sara_ii at 3, got {other:?}"),
+        }
+
+        // karan replaces tone
+        // ก้ = ก(0,3) + ้(3,3); type ์ → replace ้ at 3
+        match action("ก้", karan) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("karan must replace tone at 3, got {other:?}"),
+        }
+
+        // กิ้ + type ์ → replace ้ at 6, keep ิ
+        // กิ้ = ก(0,3) + ิ(3,3) + ้(6,3); caret at 9
+        match action("กิ้", karan) {
+            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("karan must replace tone at 6, got {other:?}"),
+        }
+
+        // no TCB: reject
+        assert_eq!(action("", karan), ThaiInputAction::Reject);
+        assert_eq!(action("hello", karan), ThaiInputAction::Reject);
+
+        let _ = (sara_i, sara_u, sara_ii);
     }
 }
