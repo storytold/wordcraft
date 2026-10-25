@@ -15,6 +15,7 @@
 
 /// One item of a menu.
 #[derive(Clone, Copy, Debug)]
+#[allow(dead_code)]
 pub(crate) enum Entry {
     /// A registered command, run with no parameters, under its registry label.
     Cmd(&'static str),
@@ -501,7 +502,11 @@ mod bar {
                         }
                     }
                     Action::Minimize => ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true)),
-                    Action::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+                    Action::Quit => {
+                        if app.close_requested() {
+                            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        }
+                    }
                     Action::Input(kind) => {
                         let events = input_events(kind);
                         if events.is_empty() {
