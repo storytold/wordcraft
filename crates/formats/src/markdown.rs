@@ -1056,7 +1056,9 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                     push_text(&mut nodes, "\n", base);
                     i += inner.len() + 2;
                     text_start = i;
-                } else if lower.starts_with("a ") && rest.get(inner.len() + 1..).is_some_and(|r| r.to_ascii_lowercase().starts_with("</a>")) {
+                } else if lower.starts_with("a ")
+                    && rest.get(inner.len() + 1..).and_then(|r| r.get(..4)).is_some_and(|p| p.eq_ignore_ascii_case("</a>"))
+                {
                     flush!();
                     if let Some(name) = tag_attr(inner, "id").or_else(|| tag_attr(inner, "name")) {
                         nodes.push(Node::Inl(Inline::Anchor(name)));
@@ -1633,6 +1635,17 @@ mod tests {
         assert_eq!(spans("**unclosed"), vec![("**unclosed".into(), false, false)]);
         let s = inl("~~gone~~");
         assert!(matches!(&s[0], Inline::Text(t, f) if t == "gone" && f.strike));
+    }
+
+    /// An empty `<a id>` or `<a name>` is an anchor whatever the case of its `</a>` (#3715).
+    #[test]
+    fn empty_html_anchor() {
+        let anchors = |s: &str| inl(s).into_iter().filter_map(|i| if let Inline::Anchor(a) = i { Some(a) } else { None }).collect::<Vec<_>>();
+        assert_eq!(anchors(r#"x <a id="n"></a> y"#), vec!["n"]);
+        assert_eq!(anchors(r#"x <a name="m"></A> y"#), vec!["m"]);
+        assert_eq!(anchors(r#"<A id="p"></a>"#), vec!["p"]);
+        assert!(anchors(r#"<a id="n">text</a>"#).is_empty());
+        assert!(anchors(r#"<a id="n"></"#).is_empty());
     }
 
     #[test]
