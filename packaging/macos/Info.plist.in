@@ -32,6 +32,14 @@
   <string>WordCraft</string>
   <key>LSApplicationCategoryType</key>
   <string>public.app-category.productivity</string>
+  <!-- macOS asks before an app reads these folders (File > Open > This computer lists them);
+       this is the reason its question shows. A document picked in the system dialog needs none. -->
+  <key>NSDocumentsFolderUsageDescription</key>
+  <string>WordCraft lists the documents in your Documents folder on its Open page and opens the ones you choose.</string>
+  <key>NSDesktopFolderUsageDescription</key>
+  <string>WordCraft lists the documents on your Desktop on its Open page and opens the ones you choose.</string>
+  <key>NSDownloadsFolderUsageDescription</key>
+  <string>WordCraft lists the documents in your Downloads folder on its Open page and opens the ones you choose.</string>
   <!-- Must match MACOSX_DEPLOYMENT_TARGET in package.sh. Big Sur is the first release on
        Apple silicon and has the Metal feature set wgpu targets. -->
   <key>LSMinimumSystemVersion</key>

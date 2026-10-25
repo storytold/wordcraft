@@ -1031,9 +1031,13 @@ dependencies = [
 [[package]]
 name = "craft-ui"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=25da1314d443171b4adeaad2cd9454b273f35c6f#25da1314d443171b4adeaad2cd9454b273f35c6f"
+source = "git+https://github.com/brzuchal/craft-libs?rev=e47d0a4c4eab30fc0b6352515922f85c250d858f#e47d0a4c4eab30fc0b6352515922f85c250d858f"
 dependencies = [
  "egui",
+ "log",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
