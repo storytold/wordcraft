@@ -1129,7 +1129,7 @@ impl Exporter<'_> {
                 s.draw_path(&p);
                 s.set_stroke(None);
             }
-            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner, dash, cap } => {
+            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner, pattern, dash, cap } => {
                 let Some(p) = shape_path(*kind, rect, *corner) else { return };
                 let can_fill = *kind != ShapeKind::Line;
                 let fx = effects.sanitized();
@@ -1140,16 +1140,28 @@ impl Exporter<'_> {
                 if let (Some(rad), Some(c), true) = (fx.soft_edge, f.as_ref(), can_fill) {
                     let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
                     s.set_stroke(None);
-                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                    for (g, paint) in c.soft_bands(rad) {
                         if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0), *corner) {
-                            s.set_fill(Some(paint_fill(&c.faded(a))));
+                            s.set_fill(Some(paint_fill(&paint)));
                             s.draw_path(&p);
                         }
                     }
                     s.set_fill(None);
                     return;
                 }
-                s.set_fill(f.as_ref().filter(|_| can_fill).map(paint_fill));
+                if let Some(pattern) = pattern.filter(|_| can_fill) {
+                    s.push_clip_path(&p, &FillRule::NonZero);
+                    s.set_stroke(None);
+                    for (band, paint) in pattern.bands(*rect) {
+                        if let Some(band) = rect_path(&band) {
+                            s.set_fill(Some(fill(paint.color, paint.opacity())));
+                            s.draw_path(&band);
+                        }
+                    }
+                    s.set_fill(None);
+                    s.pop();
+                }
+                s.set_fill(f.as_ref().filter(|_| can_fill && pattern.is_none()).map(paint_fill));
                 s.set_stroke(stroke.map(|c| Stroke {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),
                     width: if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
@@ -1937,3 +1949,6 @@ fn pdf_line_cap(cap: wordcraft_doc::connector::LineCap) -> LineCap {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;

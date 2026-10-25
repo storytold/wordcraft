@@ -44,6 +44,16 @@ impl Paint {
             Paint::Radial { c, r, stops } => Paint::Radial { c: *c, r: *r, stops: fade(stops) },
         }
     }
+    /// Inset soft-edge paints. Solid bands composite to the fill's target opacity.
+    pub fn soft_bands(&self, radius: f32) -> Vec<(f32, Paint)> {
+        match self {
+            Paint::Solid(color, alpha) => {
+                let alpha = if alpha.is_finite() { alpha.clamp(0.0, 1.0) } else { 1.0 };
+                wordcraft_doc::effects::bands(-radius, 0.0, alpha).into_iter().map(|(grow, band)| (grow, Paint::Solid(*color, band))).collect()
+            }
+            _ => wordcraft_doc::effects::bands(-radius, 0.0, 1.0).into_iter().map(|(grow, alpha)| (grow, self.faded(alpha))).collect(),
+        }
+    }
     /// The colour and opacity this paint gives the point (`x`, `y`): stops blended, padded past
     /// the ends.
     pub fn at(&self, x: f32, y: f32) -> (Rgb, f32) {
@@ -202,6 +212,7 @@ pub enum Draw {
         effects: wordcraft_doc::effects::ShapeEffects,
         /// A rounded rectangle's corner ([`wordcraft_doc::connector::ShapeExtra::corner`]).
         corner: Option<u32>,
+        pattern: Option<wordcraft_doc::pattern::PatternFill>,
     },
     /// An ink stroke: a line through `pts` (page points) with round ends and joins, `width`
     /// wide, in `color` at opacity `alpha`.
@@ -1321,6 +1332,7 @@ fn lines(
             let Some(st) = pl.styles.get(c.style as usize) else { continue };
             let rect = Rect::new(x + left + e.x, base - st.shift - e.top, e.w, e.h);
             out.push(Draw::Shape {
+                pattern: None,
                 rect,
                 kind: e.kind,
                 fill: None,
@@ -1547,6 +1559,7 @@ fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32) -> Vec<Dra
     for it in &g.items {
         match it {
             GraphicItem::Shape { rect: r, kind, fill, stroke, stroke_width } => out.push(Draw::Shape {
+                pattern: None,
                 rect: inside(r),
                 kind: *kind,
                 fill: fill.map(Paint::solid),
@@ -1652,6 +1665,7 @@ fn shape_draws(
             stroke_width,
             effects,
             corner: extra.corner,
+            pattern: extra.pattern.as_deref().copied(),
             dash: extra.dash.pattern(stroke_width),
             cap: extra.cap,
         });
@@ -1760,6 +1774,7 @@ fn line_draws(
             out.push(Draw::Path { segs, fill: None, stroke, stroke_width: width, dash: extra.dash.pattern(width), cap: extra.cap });
         }
         None => out.push(Draw::Shape {
+            pattern: None,
             rect,
             kind,
             fill: None,
@@ -1875,6 +1890,7 @@ pub fn check_box(frame: Rect, checked: bool, color: Rgb, alpha: f32, out: &mut V
         |x0: f32, y0: f32, x1: f32, y1: f32, width: f32| Draw::Line { x0, y0, x1, y1, width, color, stroke: Stroke::Solid, alpha, text_bg: None };
     let (l, t, r, b) = (sq.x, sq.y, sq.x + sq.w, sq.y + sq.h);
     out.push(Draw::Shape {
+        pattern: None,
         rect: sq,
         kind: ShapeKind::Rectangle,
         fill: None,
@@ -2008,6 +2024,7 @@ pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f
 /// A Drawing Canvas's background and outline over its frame `rect`.
 fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
     Draw::Shape {
+        pattern: None,
         rect,
         kind: ShapeKind::Rectangle,
         fill: c.fill.as_ref().and_then(|f| paint_for(f, rect)),
@@ -2106,3 +2123,7 @@ fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
     }
     out
 }
+
+#[cfg(test)]
+#[path = "fill_alpha_tests.rs"]
+mod fill_alpha_tests;

@@ -1093,7 +1093,19 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
+        if let Some(pattern) = extra.pattern.as_deref().filter(|_| !ink && !kind.is_open()) {
+            w.open("a:pattFill", &[("prst", pattern.kind.ooxml())]);
+            for (tag, color) in [("a:fgClr", pattern.foreground), ("a:bgClr", pattern.background)] {
+                w.open(tag, &[]);
+                w.open("a:srgbClr", &[("val", &color.color.hex())]);
+                w.empty("a:alpha", &[("val", &color.alpha.min(wordcraft_doc::pattern::ALPHA_SCALE).to_string())]);
+                w.close("a:srgbClr");
+                w.close(tag);
+            }
+            w.close("a:pattFill");
+        } else {
+            write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
+        }
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));

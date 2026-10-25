@@ -1555,6 +1555,7 @@ impl Reader<'_> {
             dash: super::shape_style::line_dash(ln),
             cap: wordcraft_doc::connector::LineCap::from_ooxml(ln.and_then(|e| e.attr("cap")).unwrap_or("flat")),
             outline_fill: paint.outline_fill,
+            pattern: paint.pattern.map(Box::new),
             ..ShapeExtra::default()
         };
         // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as

@@ -1965,6 +1965,64 @@ mod tests {
     }
 
     #[test]
+    fn solid_fill_replaces_pattern() {
+        use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+        let pattern = PatternFill {
+            kind: PatternKind::LightVertical,
+            foreground: PatternColor { color: Rgb::BLACK, alpha: 80_000 },
+            background: PatternColor { color: Rgb::WHITE, alpha: 40_000 },
+        };
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.shape", &json!({"kind":"rectangle"})).unwrap();
+        with_obj(&mut s, |o| {
+            if let InlineObject::Shape { extra, .. } = o {
+                extra.pattern = Some(Box::new(pattern));
+            }
+        })
+        .unwrap();
+        s.run("shape.fill", &json!({"color":"FF0000"})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert!(
+            matches!(o,InlineObject::Shape{fill:Some(wordcraft_doc::fill::Fill::Solid { color: Rgb(255,0,0), .. }),extra,..} if extra.pattern.is_none())
+        );
+        s.run("edit.undo", &json!({})).unwrap();
+        let (_, o) = selected(&s).unwrap();
+        assert!(matches!(o,InlineObject::Shape{extra,..} if extra.pattern.as_deref()==Some(&pattern)));
+    }
+
+    #[test]
+    fn other_fills_replace_pattern() {
+        use wordcraft_doc::pattern::{PatternColor, PatternFill, PatternKind};
+        let pattern = PatternFill {
+            kind: PatternKind::LightVertical,
+            foreground: PatternColor { color: Rgb::BLACK, alpha: 80_000 },
+            background: PatternColor { color: Rgb::WHITE, alpha: 40_000 },
+        };
+        for params in [json!({"color": null}), json!({"gradient": {"stops": [{"pos": 0, "color": "FF0000"}, {"pos": 100, "color": "0000FF"}]}})] {
+            let mut s = Session::new(wordcraft_doc::Document::new());
+            s.run("insert.shape", &json!({"kind": "rectangle"})).unwrap();
+            with_obj(&mut s, |o| {
+                if let InlineObject::Shape { extra, .. } = o {
+                    extra.pattern = Some(Box::new(pattern));
+                }
+            })
+            .unwrap();
+            let before = selected(&s).unwrap().1;
+            s.run("shape.fill", &params).unwrap();
+            let (_, o) = selected(&s).unwrap();
+            let InlineObject::Shape { fill, extra, .. } = o else { panic!("expected shape") };
+            assert!(extra.pattern.is_none());
+            if params.get("gradient").is_some() {
+                assert!(matches!(fill, Some(wordcraft_doc::fill::Fill::Gradient(_))));
+            } else {
+                assert!(fill.is_none());
+            }
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(selected(&s).unwrap().1, before);
+        }
+    }
+
+    #[test]
     fn shapes_can_be_clicked_resized_and_dragged() {
         for kind in ["rectangle", "ellipse", "star", "arrow"] {
             click_resize_and_drag("insert.shape", json!({"kind": kind}));
