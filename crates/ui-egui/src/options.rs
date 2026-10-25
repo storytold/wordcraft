@@ -730,12 +730,16 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
 fn display_server_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::DisplayServer;
     let name = |d: DisplayServer| if d == DisplayServer::Auto { tl!(d.label()) } else { d.label() };
-    egui::ComboBox::from_id_salt("display_server").selected_text(name(app.ui.display_server)).width(220.0).show_ui(ui, |ui| {
-        for d in DisplayServer::ALL {
-            if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
-                let _ = app.run("ui.displayServer", json!({"value": d.code()}));
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Display server:"));
+        let combo = egui::ComboBox::from_id_salt("display_server").selected_text(name(app.ui.display_server)).width(220.0).show_ui(ui, |ui| {
+            for d in DisplayServer::ALL {
+                if ui.selectable_label(app.ui.display_server == d, name(d)).clicked() {
+                    let _ = app.run("ui.displayServer", json!({"value": d.code()}));
+                }
             }
-        }
+        });
+        combo.response.labelled_by(label.id);
     });
     note(ui, "Applies the next time WordCraft starts.");
 }
