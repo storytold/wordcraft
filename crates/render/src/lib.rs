@@ -685,6 +685,28 @@ pub fn background_at(doc: &Document, page: &Page, opts: &RenderOptions, x: f32, 
     Rgb(c(bg[0]), c(bg[1]), c(bg[2]))
 }
 
+// Sample the same inset silhouettes and paints used by the raster and PDF.
+fn soft_fill_alpha(
+    rect: wordcraft_geom::Rect,
+    kind: ShapeKind,
+    corner: Option<u32>,
+    radius: f32,
+    fill: &wordcraft_layout::display::Paint,
+    p: wordcraft_geom::Point,
+) -> f32 {
+    let radius = radius.min(rect.w.min(rect.h) / 2.0).max(0.0);
+    let frame = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
+    let point = kurbo::Point::new(p.x as f64, p.y as f64);
+    let mut opacity = 0.0;
+    for (grow, paint) in fill.soft_bands(radius) {
+        let inset = frame.inflate(grow as f64, grow as f64);
+        if inset.width() > 0.0 && inset.height() > 0.0 && kurbo::Shape::contains(&shape_path(kind, inset, corner), point) {
+            opacity += (1.0 - opacity) * paint.at(p.x, p.y).1;
+        }
+    }
+    opacity
+}
+
 fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOptions, bg: &mut [f32; 3], depth: u32) {
     if depth > 16 {
         return;
@@ -694,13 +716,15 @@ fn blend_backgrounds(items: &[Draw], p: wordcraft_geom::Point, opts: &RenderOpti
             Draw::Fill { rect, color, alpha, .. } if rect.contains(p) => (*color, *alpha),
             // The shape's own outline (an ellipse's corners are not inside it), in its fill's
             // colour and opacity there (#1500: gradients and transparency).
-            Draw::Shape { rect, kind, fill: Some(fill), corner, .. }
+            Draw::Shape { rect, kind, fill: Some(fill), corner, effects, .. }
                 if *kind != ShapeKind::Line && rect.contains(p) && {
                     let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
                     kurbo::Shape::contains(&shape_path(*kind, r, *corner), kurbo::Point::new(p.x as f64, p.y as f64))
                 } =>
             {
-                fill.at(p.x, p.y)
+                let (color, alpha) = fill.at(p.x, p.y);
+                let alpha = effects.sanitized().soft_edge.map_or(alpha, |radius| soft_fill_alpha(*rect, *kind, *corner, radius, fill, p));
+                (color, alpha)
             }
             Draw::Clip { rect, items } if rect.contains(p) => {
                 blend_backgrounds(items, p, opts, bg, depth + 1);
@@ -1135,10 +1159,10 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             // Soft edges: the fill fades out toward the outline (which fades with it).
             if let (Some(rad), Some(f), true) = (fx.soft_edge, fill, can_fill) {
                 let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
-                for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                for (g, paint) in f.soft_bands(rad) {
                     let rr = r.inflate(g as f64, g as f64);
                     if rr.width() > 0.0 && rr.height() > 0.0 {
-                        set_paint(ctx, &f.faded(a), opts);
+                        set_paint(ctx, &paint, opts);
                         ctx.fill_path(&shape_path(*kind, rr, *corner));
                     }
                 }
@@ -2565,3 +2589,6 @@ mod tests {
 mod cache_tests;
 #[cfg(test)]
 mod tests_color_glyphs;
+
+#[cfg(test)]
+mod fill_alpha_tests;

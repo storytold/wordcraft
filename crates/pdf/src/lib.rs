@@ -1140,9 +1140,9 @@ impl Exporter<'_> {
                 if let (Some(rad), Some(c), true) = (fx.soft_edge, f.as_ref(), can_fill) {
                     let rad = rad.min(rect.w.min(rect.h) / 2.0).max(0.0);
                     s.set_stroke(None);
-                    for (g, a) in wordcraft_doc::effects::bands(-rad, 0.0, 1.0) {
+                    for (g, paint) in c.soft_bands(rad) {
                         if let Some(p) = shape_path(*kind, &grown(rect, g, 0.0, 0.0), *corner) {
-                            s.set_fill(Some(paint_fill(&c.faded(a))));
+                            s.set_fill(Some(paint_fill(&paint)));
                             s.draw_path(&p);
                         }
                     }
@@ -1937,3 +1937,6 @@ fn pdf_line_cap(cap: wordcraft_doc::connector::LineCap) -> LineCap {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod fill_alpha_tests;

@@ -3902,6 +3902,30 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+/// A fill's `a:alpha` is its opacity: a translucent white wash over a picture stayed opaque and
+/// hid the picture.
+#[test]
+fn a_shape_fill_keeps_its_transparency() {
+    let fill =
+        r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom><a:solidFill><a:srgbClr val="FFFFFF"><a:alpha val="30980"/></a:srgbClr></a:solidFill>"#;
+    let d = read_body(&format!("<w:p>{}</w:p>", anchored_wsp("Wash", 1270000, 635000, fill, "", "<wps:cNvSpPr/>")));
+    let transparency = |d: &Document| match &paras(d)[0].objects[0] {
+        InlineObject::Shape { fill: Some(wordcraft_doc::fill::Fill::Solid { color, transparency }), .. } => (Some(*color), *transparency),
+        o => panic!("{o:?}"),
+    };
+    const FILL_ALPHA: u32 = 30_980;
+    const ALPHA_SCALE: f32 = 100_000.0;
+    // Canonical Fill stores the percentage computed from opacity, including f32 rounding.
+    let expected = 100.0 - (FILL_ALPHA as f32 / ALPHA_SCALE) * 100.0;
+    assert_eq!(transparency(&d), (Some(Rgb(255, 255, 255)), expected));
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let parts = unzip(&bytes);
+    let xml = String::from_utf8_lossy(parts.get("word/document.xml").unwrap());
+    assert!(xml.contains(&format!("<a:alpha val=\"{FILL_ALPHA}\"/>")), "{xml}");
+    let again = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(transparency(&again), (Some(Rgb(255, 255, 255)), expected));
+}
+
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
 /// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
 /// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the
