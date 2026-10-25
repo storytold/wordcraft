@@ -84,12 +84,22 @@ pub(crate) fn parse_baht_token(s: &str) -> Option<f64> {
         None => return s.parse().ok(), // integer or scientific — no decimal point
     };
 
+    // Only use the decimal path when both halves are purely ASCII digits and the
+    // whole part is non-empty.  Fall back to f64 for scientific notation ("1.5e3")
+    // or malformed input ("1.2.3") so those values are not silently mis-rounded.
+    if whole_str.is_empty()
+        || !whole_str.bytes().all(|b| b.is_ascii_digit())
+        || !frac_str.bytes().all(|b| b.is_ascii_digit())
+    {
+        return s.parse().ok();
+    }
+
+    // Fractional digits are now guaranteed ASCII digits; no filter needed.
     let digit_at = |i: usize| -> u32 {
         frac_str
             .as_bytes()
             .get(i)
             .copied()
-            .filter(|b| b.is_ascii_digit())
             .map(|b| u32::from(b - b'0'))
             .unwrap_or(0)
     };
@@ -101,7 +111,9 @@ pub(crate) fn parse_baht_token(s: &str) -> Option<f64> {
     let satang_raw = d0 * 10 + d1 + u32::from(d2 >= 5);
     let (satang, carry) = if satang_raw >= 100 { (satang_raw - 100, 1u64) } else { (satang_raw, 0u64) };
 
-    let baht: u64 = whole_str.parse::<u64>().ok()? + carry;
+    // Use checked_add: overflow cannot occur with real amounts, but protect
+    // against adversarial input (e.g. "18446744073709551615.995").
+    let baht: u64 = whole_str.parse::<u64>().ok()?.checked_add(carry)?;
     let magnitude = baht as f64 + satang as f64 / 100.0;
     Some(if negative && magnitude > 0.0 { -magnitude } else { magnitude })
 }
@@ -197,5 +209,10 @@ mod tests {
         assert_eq!(bt("1.999"), "สองบาทถ้วน");
         // Non-parseable → None.
         assert!(parse_baht_token("abc").is_none());
+        // Scientific notation falls back to f64 (1500.0), not mis-rounded via string path.
+        let v = parse_baht_token("1.5e3").unwrap();
+        assert!((v - 1500.0).abs() < 1e-9);
+        // Malformed decimal ("1.2.3") falls back to f64 parse, which fails → None.
+        assert!(parse_baht_token("1.2.3").is_none());
     }
 }
