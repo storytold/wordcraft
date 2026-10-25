@@ -16,6 +16,9 @@
   already installed") or silently uninstall the other. packaging-lint.yml checks this.
 -->
 <Wix xmlns="http://wixtoolset.org/schemas/v4/wxs" xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <?ifndef HasCraftFontLicences ?>
+  <?define HasCraftFontLicences=0 ?>
+  <?endif ?>
   <Package
       Name="WordCraft"
       Manufacturer="Learning Machines LLC"
@@ -60,11 +63,23 @@
     <StandardDirectory Id="ProgramMenuFolder" />
 
     <Feature Id="Main" Title="WordCraft" Level="1">
+      <ComponentGroupRef Id="AppNotices" />
+      <?if $(var.HasCraftFontLicences) = 1 ?>
+      <ComponentGroupRef Id="CraftFontLicences" />
+      <?endif ?>
       <ComponentGroupRef Id="WordcraftFiles" />
     </Feature>
   </Package>
 
   <Fragment>
+    <ComponentGroup Id="AppNotices" Directory="INSTALLFOLDER">
+      <Files Include="$(var.AppNoticesDir)\**" />
+    </ComponentGroup>
+    <?if $(var.HasCraftFontLicences) = 1 ?>
+    <ComponentGroup Id="CraftFontLicences" Directory="INSTALLFOLDER">
+      <Files Include="$(var.DocsDir)\**" />
+    </ComponentGroup>
+    <?endif ?>
     <ComponentGroup Id="WordcraftFiles" Directory="INSTALLFOLDER">
       <Component Id="WordcraftApp" Guid="855DCEC6-9285-444F-9382-9654B83B34F6">
         <File Id="WordcraftExe" Source="$(var.BinDir)\wordcraft.exe" KeyPath="yes">

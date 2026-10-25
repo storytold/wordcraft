@@ -1243,7 +1243,7 @@ impl FontDb {
                     stack.push(p);
                     continue;
                 }
-                let ext = p.extension().and_then(std::ffi::OsStr::to_str).map(|e| e.to_ascii_lowercase());
+                let ext = p.extension().and_then(std::ffi::OsStr::to_str).map(str::to_ascii_lowercase);
                 if !matches!(ext.as_deref(), Some("ttf" | "otf" | "ttc" | "otc")) {
                     continue;
                 }
@@ -2008,6 +2008,23 @@ mod tests {
         let thai_bundled = crate::CRAFT_FONTS.iter().any(|f| f.scripts.contains(&"Thai"));
         assert_eq!(bundled.fallback_for('น', 0).is_some(), thai_bundled);
         assert_eq!(bundled.fallback_for_run(&chars, latin.id(), false, false).is_some(), thai_bundled);
+    }
+
+    /// With only bundled Latin faces and no system fallback, a Thai run has no single covering face,
+    /// so run-level fallback declines. This test asserts that `fallback_for_run` returns `None`; the
+    /// caller's per-character path is not exercised here.
+    #[test]
+    fn a_run_without_a_covering_face_keeps_the_per_character_path() {
+        // Use only this repository's Latin faces. Optional craft-fonts inputs can contain a
+        // complete Thai face even when system font loading is disabled.
+        let bundled = FontDb::with_font_dirs(Vec::new());
+        bundled.faces.write().unwrap().retain(|face| BUNDLED.iter().any(|bytes| std::ptr::eq(face.data(), *bytes)));
+        bundled.set_system_fallback(false);
+        let latin = bundled.face(FALLBACK_FAMILY, "Regular");
+        let chars: Vec<char> = THAI_RUN.chars().filter(|c| !c.is_whitespace()).collect();
+        assert!(!bundled.faces.read().unwrap().is_empty(), "the negative fixture retains real Latin faces");
+        assert!(bundled.faces.read().unwrap().iter().all(|face| !face.covers('น')));
+        assert!(bundled.fallback_for_run(&chars, latin.id(), false, false).is_none());
     }
 
     #[test]

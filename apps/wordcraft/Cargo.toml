@@ -19,7 +19,7 @@ wordcraft-fonts = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The control key file's location (shared with the MCP bridge).
 wordcraft-control-key = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "wayland", "x11", "links"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -83,3 +83,6 @@ pollster = "0.4"
 arboard = { workspace = true, features = ["image-data"] }
 # The control server's random key.
 getrandom = "0.3"
+
+[target.'cfg(windows)'.dependencies]
+craft-update = { workspace = true }

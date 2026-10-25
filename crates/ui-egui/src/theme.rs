@@ -920,6 +920,20 @@ mod tests {
         }
     }
 
+    /// The test root declares egui's `default_fonts` and `monochrome_emoji_fonts` features
+    /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
+    /// the front and SourceSans after egui's complete default fallback block, including the
+    /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
+    #[test]
+    fn interface_font_order_keeps_test_default_fonts_explicit() {
+        let defs = super::font_definitions(false, false);
+        let prop = &defs.families[&egui::FontFamily::Proportional];
+        assert_eq!(
+            prop.iter().take(6).map(String::as_str).collect::<Vec<_>>(),
+            ["Inter", "Ubuntu-Light", "egui-icons", "NotoEmoji-Regular", "emoji-icon-font", "SourceSans"]
+        );
+    }
+
     /// #565: the composition of an input method (Bangla through ibus) drew as boxes because only the
     /// interface fonts were used. Faces found for the uncovered characters are added as fallbacks,
     /// once, and not for characters the interface fonts draw.
