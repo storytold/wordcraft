@@ -1518,7 +1518,7 @@ impl Ctx {
             }
             segs_rows.push(segs.into_iter().map(hcat).collect());
         }
-        let ncols = segs_rows.iter().map(|r| r.len()).max().unwrap_or(1);
+        let ncols = segs_rows.iter().map(Vec::len).max().unwrap_or(1);
         // Rows without `&` are centred below, so they don't widen the aligned columns.
         let mut col_w = vec![0.0f32; ncols];
         let mut lone_w = 0.0f32;
@@ -1829,7 +1829,7 @@ impl Ctx {
             }
             cells.push(row);
         }
-        let ncols = cells.iter().map(|r| r.len()).max().unwrap_or(0);
+        let ncols = cells.iter().map(Vec::len).max().unwrap_or(0);
         let mut col_w = vec![0.0f32; ncols];
         for r in &cells {
             for (i, b) in r.iter().enumerate() {

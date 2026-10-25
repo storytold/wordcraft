@@ -16,12 +16,14 @@ use wordcraft_layout::display::paint_for;
 use crate::WordApp;
 use crate::theme::Tokens;
 
+/// Stable storage id for a fill drag's undo mark.
 fn mark_id() -> Id {
-    Id::new("format_shape.drag_mark")
+    Id::unique("format_shape.drag_mark")
 }
 
+/// Stable storage id for the gradient stop being edited.
 fn stop_id() -> Id {
-    Id::new("format_shape.stop")
+    Id::unique("format_shape.stop")
 }
 
 /// Forgets a drag's undo mark: called while the pane is closed, so a drag cut short by closing
@@ -35,8 +37,9 @@ pub fn forget_drag(ctx: &egui::Context) {
 #[derive(Clone)]
 struct Variation(wordcraft_doc::Pos, Fill, Rgb);
 
+/// Stable storage id for the gradient variation remembered for the last object.
 fn variation_id() -> Id {
-    Id::new("format_shape.variation")
+    Id::unique("format_shape.variation")
 }
 
 /// The colour Shape Fill › Gradient builds from for the object at `pos` filled with `fill`:
@@ -126,9 +129,11 @@ pub fn pane(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Draws a solid fill's colour field and transparency slider, applying each changed fill as a
+/// whole.
 fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency: f32) {
     let mut c = color;
-    if color_field(ui, theme, Id::new("format_shape.solid_color"), &mut c) {
+    if color_field(ui, theme, Id::unique("format_shape.solid_color"), &mut c) {
         apply(app, ui, Some(&Fill::Solid { color: c, transparency }), None);
     }
     let mut t = transparency;
@@ -140,8 +145,8 @@ fn solid(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], color: Rgb, transparency
 /// A labelled 0–100% slider with its value box; the response when it changed.
 fn percent(ui: &mut Ui, label: &str, v: &mut f32) -> Option<Response> {
     ui.horizontal(|ui| {
-        ui.label(label);
-        let s = ui.add(egui::Slider::new(v, 0.0..=100.0).suffix("%").fixed_decimals(0));
+        let label = ui.label(label);
+        let s = ui.add(egui::Slider::new(v, 0.0..=100.0).suffix("%").fixed_decimals(0)).labelled_by(label.id);
         (s.changed()).then_some(s)
     })
     .inner
@@ -211,6 +216,9 @@ fn kind_of(t: usize, focus: [f32; 4], angle: f32, scaled: bool) -> GradientKind 
     }
 }
 
+/// Draws the gradient preset gallery and type, direction and angle controls, the stop bar with
+/// add and remove, and the selected stop's colour, position, transparency and rotate-with-shape
+/// controls.
 fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
     egui::Grid::new("format_shape.gradient").num_columns(2).spacing(vec2(8.0, 6.0)).show(ui, |ui| {
         ui.label(tl!("Preset gradients"));
@@ -289,7 +297,7 @@ fn gradient(app: &mut WordApp, ui: &mut Ui, theme: &[Rgb], g: &Gradient) {
     let Some(stop) = g.stops.get(sel).copied() else { return };
     let set = |s: GradStop| with(g, |g| g.stops[sel] = s);
     let mut c = stop.color;
-    if color_field(ui, theme, Id::new("format_shape.stop_color"), &mut c) {
+    if color_field(ui, theme, Id::unique("format_shape.stop_color"), &mut c) {
         apply(app, ui, Some(&set(GradStop { color: c, ..stop })), None);
     }
     ui.horizontal(|ui| {
@@ -360,7 +368,7 @@ fn stops_bar(app: &mut WordApp, ui: &mut Ui, g: &Gradient, sel: usize) {
     };
     let Some(p) = resp.interact_pointer_pos() else { return };
     // Whether the drag in progress began on a handle: only then does it move a stop.
-    let grab_id = Id::new("format_shape.grabbed");
+    let grab_id = Id::unique("format_shape.grabbed");
     if resp.drag_started() || resp.clicked() {
         resp.request_focus();
         let hit = near(p);
@@ -436,7 +444,7 @@ pub fn swatch(ui: &mut Ui, fill: &Fill, tip: &str) -> bool {
     let ring = if resp.hovered() { Stroke::new(2.0, t.accent) } else { Stroke::new(1.0, t.border) };
     ui.painter().rect_stroke(r.shrink(2.0), 0.0, ring, egui::StrokeKind::Outside);
     let name = tl!(tip);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, name));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, name));
     resp.on_hover_text(name).clicked()
 }
 

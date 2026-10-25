@@ -49,6 +49,40 @@ fn read_body(body: &str) -> Document {
 }
 
 #[test]
+fn repeated_style_ids_use_last() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+        <w:style w:type="paragraph" w:styleId="Repeated"><w:name w:val="First"/>
+          <w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:smallCaps/><w:sz w:val="28"/></w:rPr>
+        </w:style>
+        <w:style w:type="paragraph" w:styleId="Repeated"><w:name w:val="Last"/>
+          <w:pPr><w:spacing w:before="120"/></w:pPr><w:rPr><w:i/><w:caps/><w:sz w:val="20"/></w:rPr>
+        </w:style></w:styles>"#
+    );
+    let bytes = docx(
+        r#"<w:p><w:pPr><w:pStyle w:val="Repeated"/></w:pPr><w:r><w:t>Original style probe</w:t></w:r></w:p>"#,
+        &[("styles", "styles", "styles.xml")],
+        &[("word/styles.xml", &styles)],
+    );
+    let mut document = wordcraft_docx::read(&bytes).unwrap();
+    for round in 0..=2 {
+        let style = document.styles.get("Repeated").unwrap();
+        assert_eq!(style.name, "Last");
+        assert_eq!(style.chr.size, Some(10.0));
+        assert_eq!(style.chr.italic, Some(true));
+        assert_eq!(style.chr.bold, None);
+        assert_eq!(style.chr.caps, Some(true));
+        assert_eq!(style.chr.small_caps, None);
+        assert_eq!(style.para.space_before, Some(6.0));
+        assert_eq!(style.para.space_after, None);
+        assert_eq!(document.styles.styles.iter().filter(|style| style.id == "Repeated").count(), 1);
+        if round < 2 {
+            document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
 fn paragraph_default_presence_survives_repeated_saves() {
     // Omission leaves paragraph defaults application-defined (ISO 29500 pPrDefault).
     // An explicitly empty container must therefore remain distinct from omission.
@@ -337,6 +371,18 @@ fn pcl6_symbol_roundtrip() {
         assert_eq!(p.props_of_char(0).sym_font.as_deref(), Some("Symbol (PCL6)"));
         assert_eq!(p.shown_text(), "≥");
     }
+}
+
+#[test]
+fn sym_hex_prefixes_and_break_type_casing() {
+    let body = r##"
+<w:p>
+ <w:r><w:sym w:font="Wingdings" w:char="0xF0FC"/><w:sym w:font="Symbol" w:char="U+F061"/><w:sym w:font="Webdings" w:char="#xF061"/></w:r>
+ <w:r><w:br w:type="Page"/><w:br w:type="Column"/><w:br w:type="textWrapping"/></w:r>
+</w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let p = paras(&d);
+    assert_eq!(p[0].plain_text(), "\u{F0FC}\u{F061}\u{F061}\u{C}\u{E}\n");
 }
 
 #[test]
@@ -3569,6 +3615,22 @@ fn html_auto_spacing_off_is_read_and_kept() {
         (d.settings.sum_paragraph_spacing, again.settings.sum_paragraph_spacing)
     };
     assert_eq!(settings("<w:doNotUseHTMLParagraphAutoSpacing/>"), (true, true));
+    assert_eq!(settings(""), (false, false));
+}
+
+/// `w:doNotExpandShiftReturn` in the settings' `w:compat`: justified lines ending in a manual line
+/// break keep their spacing (#3924).
+#[test]
+fn do_not_expand_shift_return_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
+    };
+    assert_eq!(settings("<w:doNotExpandShiftReturn/>"), (true, true));
+    assert_eq!(settings(r#"<w:doNotExpandShiftReturn w:val="0"/>"#), (false, false));
     assert_eq!(settings(""), (false, false));
 }
 

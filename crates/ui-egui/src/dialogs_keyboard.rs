@@ -23,6 +23,9 @@ pub struct KeyboardForm {
     pub category: String,
     /// The selected command id.
     pub command: String,
+    /// Filter-as-you-type query for the command list (#1845); UI-only dialog state, ignored
+    /// while empty. Never persisted and never a command parameter.
+    pub filter: String,
     /// The key picked in "Keys for this command" (for Remove).
     pub current: String,
     /// The key combination pressed in "New shortcut", canonical (`Mod+Shift+K`).
@@ -72,6 +75,32 @@ pub(crate) fn commands(app: &WordApp, category: &str) -> Vec<(&'static str, Stri
     out
 }
 
+/// The commands to list for `category`, narrowed by `query` (#1845): an empty query keeps the
+/// category scope; any other text searches every registered command by its id and its English or
+/// translated label, case-insensitive (the id lets "file.save" or "save" find Save). Sorted as
+/// [`commands`].
+pub(crate) fn matching_commands(app: &WordApp, category: &str, query: &str) -> Vec<(String, String)> {
+    let q = crate::i18n::lowercase(query.trim());
+    if q.is_empty() {
+        return commands(app, category).into_iter().map(|(id, l)| (id.to_string(), l)).collect();
+    }
+    let mut out: Vec<(String, String)> = app
+        .session
+        .registry
+        .all()
+        .iter()
+        .filter(|s| s.id.to_lowercase().contains(&q) || s.label.to_lowercase().contains(&q) || crate::i18n::lowercase(tl!(s.label)).contains(&q))
+        .map(|s| (s.id.to_string(), tl!(s.label).to_string()))
+        .collect();
+    out.sort_by(|a, b| a.1.to_lowercase().cmp(&b.1.to_lowercase()).then(a.0.cmp(&b.0)));
+    out
+}
+
+/// Keep `wanted` when it is still listed, else fall back to the first row (#1845).
+pub(crate) fn select_in(rows: &[(String, String)], wanted: &str) -> String {
+    if rows.iter().any(|(id, _)| id == wanted) { wanted.to_string() } else { rows.first().map(|(id, _)| id.clone()).unwrap_or_default() }
+}
+
 /// Only combinations with Mod, Ctrl or Alt, or function keys, can be assigned from the dialog
 /// (plain letters and Shift+letter type text).
 fn assignable(key: &str) -> bool {
@@ -111,7 +140,9 @@ pub(crate) fn list(ui: &mut Ui, id: &str, size: egui::Vec2, rows: &[(String, Str
             ui.centered_and_justified(|ui| ui.label(egui::RichText::new(tl!("(none)")).weak()));
             return;
         }
-        let row_h = ui.text_style_height(&egui::TextStyle::Body) + 4.0;
+        // Virtual rows must include the button's padding and minimum interaction height;
+        // otherwise the last row can extend beyond the scroll area's declared content height.
+        let row_h = (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y);
         // Bring the selected row into view when the selection (or the list) changes, so the row
         // an action targets is never off-screen; scrolling by hand doesn't change the selection.
         let seen = ui.make_persistent_id(("scrolled_to", id));
@@ -161,15 +192,21 @@ pub fn customize_keyboard(app: &mut WordApp, ui: &mut Ui, f: &mut KeyboardForm) 
     let (left, right) = (170.0, 300.0);
 
     heading(ui, "Choose a command");
+    ui.add(egui::TextEdit::singleline(&mut f.filter).hint_text(tl!("Search")).desired_width(left + right + 8.0));
     let mut cats: Vec<(String, String)> = categories(app).into_iter().map(|c| (c.clone(), tl!(&c).to_string())).collect();
     cats.push((ALL.to_string(), tl!("All Commands").to_string()));
-    let cmds: Vec<(String, String)> = commands(app, &f.category).into_iter().map(|(id, l)| (id.to_string(), l)).collect();
+    let cmds: Vec<(String, String)> = matching_commands(app, &f.category, &f.filter);
+    f.command = select_in(&cmds, &f.command);
+    if cmds.is_empty() {
+        ui.label(egui::RichText::new(tl!("No matching commands")).weak());
+    }
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.label(tl!("Categories:"));
             if let Some(c) = list(ui, "kb_categories", vec2(left, 170.0), &cats, &f.category) {
                 f.category = c;
-                f.command = commands(app, &f.category).first().map(|(id, _)| (*id).to_string()).unwrap_or_default();
+                f.filter.clear();
+                f.command = matching_commands(app, &f.category, &f.filter).first().map(|(id, _)| id.clone()).unwrap_or_default();
                 f.current.clear();
             }
         });
@@ -432,6 +469,7 @@ mod tests {
                     delta: egui::vec2(0.0, dy),
                     phase: egui::TouchPhase::Move,
                     modifiers: Default::default(),
+                    source: egui::MouseWheelSource::Unknown,
                 });
                 h.step();
             }
@@ -449,5 +487,37 @@ mod tests {
         settle(&mut h);
         assert_eq!(h.state().1.command, first_of_home.0);
         assert!(row_in_view(&h, &first_of_home.1), "the new selection {} is in view", first_of_home.0);
+    }
+
+    /// #1845: the command filter searches every command by label or id, ignoring the category.
+    #[test]
+    fn command_filter_searches_all_commands() {
+        use super::{matching_commands, select_in};
+
+        let app = || WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        let a = app();
+        // Empty query keeps the category scope.
+        let file_cmds = matching_commands(&a, "File", "");
+        assert!(!file_cmds.is_empty());
+        assert!(
+            file_cmds
+                .iter()
+                .all(|(id, _)| crate::i18n::location(a.session.registry.get(id).map(|s| s.location).unwrap_or_default()).starts_with("File"))
+        );
+        assert!(file_cmds.iter().any(|(id, _)| id == "file.save"));
+        // A label finds its command from another category's scope.
+        let bold = matching_commands(&a, "File", "bold");
+        assert!(bold.iter().any(|(id, _)| id == "format.bold"));
+        // Matching is case-insensitive and covers ids.
+        assert!(matching_commands(&a, "File", "SAVE").iter().any(|(id, _)| id == "file.save"));
+        assert!(matching_commands(&a, "File", "format.b").iter().any(|(id, _)| id == "format.bold"));
+        // Nothing matches: empty rows and an empty selection.
+        let none = matching_commands(&a, "File", "zzz-no-such-command");
+        assert!(none.is_empty());
+        assert_eq!(select_in(&none, "file.save"), "");
+        // The selection survives when still listed, else falls back to the first row.
+        assert_eq!(select_in(&bold, "format.bold"), "format.bold");
+        let first = bold.first().map(|(id, _)| id.clone()).unwrap_or_default();
+        assert_eq!(select_in(&bold, "file.save"), first);
     }
 }

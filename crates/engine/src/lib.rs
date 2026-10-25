@@ -28,8 +28,38 @@ pub use io::Password;
 pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;
 pub use session::{
-    CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document, set_system_locale,
+    CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document,
+    next_math_session, set_system_locale,
 };
+/// The outcome a command reports for IME receipt classification.
+///
+/// A command that can be called by an input method must classify its committed effects. Only a
+/// classified content change without an automatic rewrite may mint an IME receipt; any other
+/// committed state change still advances the IME state revision and therefore makes a mixed
+/// frame `Other` rather than certifying it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ImeEditOutcome {
+    /// The handler explicitly classified the committed effects.
+    pub classified: bool,
+    /// IME-visible content changed. Only this gates an IME receipt.
+    pub content_changed: bool,
+    /// Any committed document state changed, including style or representation changes.
+    pub state_changed: bool,
+    /// An automatic engine rewrite was applied (AutoCorrect, build-up, AutoFormat).
+    pub transformed: bool,
+    /// The caret or selection changed. Filled in by [`Session::run`].
+    pub selection_changed: bool,
+}
+
+/// The largest text one `equation.type` call inserts, in characters. The engine truncates to this
+/// in both linear and built-up modes; the UI refuses an IME commit above it instead of inserting a
+/// prefix.
+pub const MAX_EQUATION_TYPE_CHARS: usize = 10_000;
+
+/// The largest number of unit steps one `equation.deleteSurrounding` request may take on either
+/// side of the caret. A hostile IME count must not become an unbounded command.
+pub const MAX_EQUATION_DELETE_UNITS: usize = 64;
+
 pub use wordcraft_doc as doc;
 pub use wordcraft_geom::Region;
 pub use wordcraft_layout as layout;
@@ -171,6 +201,8 @@ mod tests;
 mod tests_bidi;
 #[cfg(test)]
 mod tests_fonts;
+#[cfg(test)]
+mod tests_ime_noop;
 #[cfg(test)]
 mod tests_revision_checks;
 #[cfg(test)]
