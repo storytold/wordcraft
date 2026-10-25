@@ -1,0 +1,347 @@
+{
+  "source_head": "cbcee3deaf2edca7772587320c47a55bd79d97d5",
+  "word": "16.113.2 (26092012)",
+  "units": "pt",
+  "error_definition": "CLI minus Word, points. No baseline/pitch snapping or tolerance enlargement.",
+  "coordinate_quantum_pt": 0.24,
+  "tolerance_policy": "No new pass/fail tolerance is introduced. One observed coordinate quantum is reported only as context.",
+  "summary": {
+    "eligible_cases": 19,
+    "excluded_cases": [
+      "E4"
+    ],
+    "max_abs_automatic_pitch_error_pt": 0.18175499999995282,
+    "exact_cjk_first_baseline_error_range_pt": [
+      -5.024699999999939,
+      -2.0246799999999894
+    ],
+    "max_abs_exact_pitch_error_pt": 5.684341886080802e-14,
+    "cases_first_error_exceeds_one_coordinate_quantum": [
+      "E3",
+      "Z2",
+      "Z4",
+      "Z6",
+      "Z8"
+    ],
+    "all_native_positive_hhea_gaps_zero": true
+  },
+  "rows": [
+    {
+      "id": "D1",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "ArialMT"
+      ],
+      "metadata_positive": false,
+      "hhea_gap": 67,
+      "native_pitch": 20.879999999999995,
+      "cli_pitch": 20.698245000000043,
+      "pitch_error": -0.18175499999995282,
+      "native_first_from_label": 18.480000000000018,
+      "cli_first_from_label": 18.57910000000004,
+      "first_from_label_error": 0.09910000000002128
+    },
+    {
+      "id": "D2",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "ArialUnicodeMS"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 31.440000000000055,
+      "cli_pitch": 31.352340000000027,
+      "pitch_error": -0.08766000000002805,
+      "native_first_from_label": 24.719999999999914,
+      "cli_first_from_label": 24.552155999999968,
+      "first_from_label_error": -0.16784399999994548
+    },
+    {
+      "id": "D3",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "STSongti-SC-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 32.879999999999995,
+      "cli_pitch": 32.760009999999966,
+      "pitch_error": -0.1199900000000298,
+      "native_first_from_label": 24.479999999999905,
+      "cli_first_from_label": 24.55532000000005,
+      "first_from_label_error": 0.07532000000014705
+    },
+    {
+      "id": "D4",
+      "point_size": 36.0,
+      "rule": "auto",
+      "native_face": [
+        "STSongti-SC-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 65.51999999999998,
+      "cli_pitch": 65.52001999999999,
+      "pitch_error": 2.0000000006348273e-05,
+      "native_first_from_label": 47.27999999999997,
+      "cli_first_from_label": 47.415320000000065,
+      "first_from_label_error": 0.13532000000009248
+    },
+    {
+      "id": "D5",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "AppleSDGothicNeo-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 28.079999999999984,
+      "cli_pitch": 28.079999999999984,
+      "pitch_error": 0.0,
+      "native_first_from_label": 21.120000000000005,
+      "cli_first_from_label": 21.13530000000003,
+      "first_from_label_error": 0.015300000000024738
+    },
+    {
+      "id": "D6",
+      "point_size": 36.0,
+      "rule": "auto",
+      "native_face": [
+        "AppleSDGothicNeo-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 56.160000000000025,
+      "cli_pitch": 56.16003000000006,
+      "pitch_error": 3.000000003794412e-05,
+      "native_first_from_label": 40.80000000000001,
+      "cli_first_from_label": 40.57532999999995,
+      "first_from_label_error": -0.2246700000000601
+    },
+    {
+      "id": "E1",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "ArialMT"
+      ],
+      "metadata_positive": false,
+      "hhea_gap": 67,
+      "native_pitch": 20.879999999999995,
+      "cli_pitch": 20.698245000000043,
+      "pitch_error": -0.18175499999995282,
+      "native_first_from_label": 18.480000000000018,
+      "cli_first_from_label": 18.57910000000004,
+      "first_from_label_error": 0.09910000000002128
+    },
+    {
+      "id": "E2",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "BrushScriptMT"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 28.559999999999945,
+      "cli_pitch": 28.701569999999947,
+      "pitch_error": 0.14157000000000153,
+      "native_first_from_label": 21.120000000000005,
+      "cli_first_from_label": 21.003125999999952,
+      "first_from_label_error": -0.11687400000005255
+    },
+    {
+      "id": "E3",
+      "point_size": 72.0,
+      "rule": "auto",
+      "native_face": [
+        "BrushScriptMT"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 114.72000000000003,
+      "cli_pitch": 114.80625000000003,
+      "pitch_error": 0.08625000000000682,
+      "native_first_from_label": 79.19999999999993,
+      "cli_first_from_label": 78.9265499999999,
+      "first_from_label_error": -0.2734500000000253
+    },
+    {
+      "id": "Z1",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "STSongti-SC-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 32.639999999999986,
+      "cli_pitch": 32.76000500000009,
+      "pitch_error": 0.12000500000010561,
+      "native_first_from_label": 24.719999999999914,
+      "cli_first_from_label": 24.555312999999956,
+      "first_from_label_error": -0.16468699999995806
+    },
+    {
+      "id": "Z2",
+      "point_size": 18.0,
+      "rule": "exact",
+      "native_face": [
+        "STSongti-SC-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 18.0,
+      "cli_pitch": 18.0,
+      "pitch_error": 0.0,
+      "native_first_from_label": 16.079999999999927,
+      "cli_first_from_label": 13.575314999999932,
+      "first_from_label_error": -2.504684999999995
+    },
+    {
+      "id": "Z3",
+      "point_size": 36.0,
+      "rule": "auto",
+      "native_face": [
+        "STSongti-SC-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 65.51999999999998,
+      "cli_pitch": 65.52001000000007,
+      "pitch_error": 1.0000000088439265e-05,
+      "native_first_from_label": 47.51999999999998,
+      "cli_first_from_label": 47.41531999999995,
+      "first_from_label_error": -0.1046800000000303
+    },
+    {
+      "id": "Z4",
+      "point_size": 36.0,
+      "rule": "exact",
+      "native_face": [
+        "STSongti-SC-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 35.99999999999994,
+      "cli_pitch": 36.0,
+      "pitch_error": 5.684341886080802e-14,
+      "native_first_from_label": 30.480000000000018,
+      "cli_first_from_label": 25.45530000000008,
+      "first_from_label_error": -5.024699999999939
+    },
+    {
+      "id": "Z5",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "AppleSDGothicNeo-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 28.079999999999927,
+      "cli_pitch": 28.08001999999999,
+      "pitch_error": 2.0000000063191692e-05,
+      "native_first_from_label": 21.120000000000005,
+      "cli_first_from_label": 21.13531999999998,
+      "first_from_label_error": 0.015319999999974243
+    },
+    {
+      "id": "Z6",
+      "point_size": 18.0,
+      "rule": "exact",
+      "native_face": [
+        "AppleSDGothicNeo-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 18.0,
+      "cli_pitch": 18.0,
+      "pitch_error": 0.0,
+      "native_first_from_label": 16.319999999999993,
+      "cli_first_from_label": 14.295320000000004,
+      "first_from_label_error": -2.0246799999999894
+    },
+    {
+      "id": "Z7",
+      "point_size": 36.0,
+      "rule": "auto",
+      "native_face": [
+        "AppleSDGothicNeo-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 56.16000000000008,
+      "cli_pitch": 56.16003999999998,
+      "pitch_error": 3.999999989900971e-05,
+      "native_first_from_label": 40.559999999999945,
+      "cli_first_from_label": 40.575279999999964,
+      "first_from_label_error": 0.01528000000001839
+    },
+    {
+      "id": "Z8",
+      "point_size": 36.0,
+      "rule": "exact",
+      "native_face": [
+        "AppleSDGothicNeo-Regular"
+      ],
+      "metadata_positive": true,
+      "hhea_gap": 0,
+      "native_pitch": 36.0,
+      "cli_pitch": 36.0,
+      "pitch_error": 0.0,
+      "native_first_from_label": 30.479999999999905,
+      "cli_first_from_label": 26.89530000000002,
+      "first_from_label_error": -3.5846999999998843
+    },
+    {
+      "id": "Z9",
+      "point_size": 18.0,
+      "rule": "auto",
+      "native_face": [
+        "ArialMT"
+      ],
+      "metadata_positive": false,
+      "hhea_gap": 67,
+      "native_pitch": 20.639999999999986,
+      "cli_pitch": 20.698260000000005,
+      "pitch_error": 0.05826000000001841,
+      "native_first_from_label": 18.720000000000027,
+      "cli_first_from_label": 18.579099999999926,
+      "first_from_label_error": -0.1409000000001015
+    },
+    {
+      "id": "Z10",
+      "point_size": 18.0,
+      "rule": "exact",
+      "native_face": [
+        "ArialMT"
+      ],
+      "metadata_positive": false,
+      "hhea_gap": 67,
+      "native_pitch": 18.0,
+      "cli_pitch": 18.0,
+      "pitch_error": 0.0,
+      "native_first_from_label": 16.08000000000004,
+      "cli_first_from_label": 15.880899999999997,
+      "first_from_label_error": -0.19910000000004402
+    }
+  ],
+  "excluded": {
+    "E4": "Requested Hiragino Sans GB, actual Word face Cambria. Not evidence for Hiragino or nonzero CJK gap."
+  },
+  "scope": "Measured faces only. Brush Script is metadata-positive; Arial is negative. All native-positive hhea gaps are zero; nonzero positive-gap branch remains synthetic-only. First-baseline discrepancies remain unresolved. No font binaries, PDF bytes, private paths or original glyph outlines included.",
+  "binding": {
+    "cli_sha256": "9975e5bf802f54f7e4117ab4a5e86d1d4bb6588fd9f252c352adeb23c5fa83d0",
+    "root_cargo_sha256": "e7594df0f5f9556f465586bf752eef7fe743740422b6b7d5c4c4f7a97c8146c8",
+    "cargo_lock_sha256": "ece0a03e437dd7448d681dbf76f4c21480990ea7f0f552636e0be608e1539383",
+    "linux_image": "sha256:a73a4fc5ad235979b698ea8c9afb36e41e9f6e78723bb25f6922737f15c2177e",
+    "craft_fonts_rev": "b076417b5880bd4154bd22f00695b1d28c6bea83",
+    "rustc": "1.99.0 (b940084d7 2026-09-28)",
+    "cargo": "1.99.0 (5f94df478 2026-08-27)"
+  }
+}
