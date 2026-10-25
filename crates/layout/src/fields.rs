@@ -149,6 +149,7 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
                 v if v.eq_ignore_ascii_case("ChineseNum1") => NumFormat::ChineseCountingThousand,
                 v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
                 v if v.eq_ignore_ascii_case("ChineseNum3") => NumFormat::IdeographDigital,
+                v if v.eq_ignore_ascii_case("BahtText") => NumFormat::BahtText,
                 _ => continue,
             };
             return Some(fmt);
@@ -311,11 +312,45 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         }
         // ASK and SET only assign text to a bookmark: they never show a result (ECMA-376 §17.16.5).
         "ASK" | "SET" => (String::new(), false),
+        // BAHTTEXT expr: the numeric expression (a literal for now) in Thai Baht words.
+        "BAHTTEXT" => {
+            // The second whitespace token after the field name is the numeric literal.
+            let val = instr.split_whitespace().nth(1).and_then(|t| t.parse::<f64>().ok());
+            match val.and_then(wordcraft_doc::section::baht_text_f64) {
+                Some(s) => (s, false),
+                None => (result.to_string(), false),
+            }
+        }
         "STYLEREF" => match &ctx.styleref {
             Some((ix, at)) => (apply_case_switch(instr, ix.eval(instr, *at)), true),
             None => (result.to_string(), false),
         },
-        _ => (result.to_string(), false),
+        _ => {
+            // Apply a \* format switch when a numeric value is available.
+            // Resolution order:
+            //   1. Stored result (already computed, e.g. a Word-cached value or after update).
+            //   2. Field name itself  (`{ 12345 \* BahtText }` — number as field name).
+            //   3. First token after `=` (`{ = 12345 \* BahtText }` — expression field).
+            if let Some(fmt) = fmt {
+                let x = result.trim().parse::<f64>().ok()
+                    .or_else(|| name.parse::<f64>().ok())
+                    .or_else(|| {
+                        let after_eq = instr.trim_start().strip_prefix('=')?;
+                        after_eq.split_whitespace().next()?.parse().ok()
+                    });
+                if let Some(x) = x {
+                    if fmt == NumFormat::BahtText {
+                        let text = wordcraft_doc::section::baht_text_f64(x)
+                            .unwrap_or_else(|| result.to_string());
+                        return (text, false);
+                    }
+                    if x >= 0.0 && x <= f64::from(u32::MAX) {
+                        return (fmt.format(x as u32), false);
+                    }
+                }
+            }
+            (result.to_string(), false)
+        }
     }
 }
 
