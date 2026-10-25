@@ -228,3 +228,20 @@ fn type_text_paragraphs_reports_a_refusal_and_types_nothing_after_it() {
     assert_eq!(calls[0].0, "text.insert");
     assert_eq!(calls[0].1["text"], "one\rtwo", "the line break is a paragraph break");
 }
+
+/// #3685: an over-long request line gets an error reply and the server keeps serving.
+#[test]
+fn over_long_request_line_is_rejected_and_serving_continues() {
+    let mut s = Server::new(Box::new(Headless::default()));
+    let mut input = vec![b'a'; (1 << 20) + 10];
+    input.push(b'\n');
+    input.extend_from_slice(br#"{"jsonrpc":"2.0","id":5,"method":"ping"}"#);
+    input.push(b'\n');
+    let mut out = Vec::new();
+    s.serve(std::io::Cursor::new(input), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 2, "{text}");
+    assert!(lines[0].contains("too long"), "{}", lines[0]);
+    assert!(lines[1].contains(r#""id":5"#), "{}", lines[1]);
+}

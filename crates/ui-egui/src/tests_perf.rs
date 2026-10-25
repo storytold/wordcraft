@@ -34,6 +34,7 @@ fn harness(doc: Document) -> egui_kittest::Harness<'static, WordApp> {
     )
 }
 
+/// Queues a pointer move to (720, 500) and a vertical point-unit wheel event.
 fn wheel(h: &mut egui_kittest::Harness<'static, WordApp>, dy: f32) {
     h.input_mut().events.push(egui::Event::PointerMoved(egui::pos2(720.0, 500.0)));
     h.input_mut().events.push(egui::Event::MouseWheel {
@@ -41,6 +42,7 @@ fn wheel(h: &mut egui_kittest::Harness<'static, WordApp>, dy: f32) {
         delta: egui::vec2(0.0, dy),
         phase: egui::TouchPhase::Move,
         modifiers: egui::Modifiers::NONE,
+        source: egui::MouseWheelSource::Unknown,
     });
 }
 
