@@ -39,7 +39,7 @@ use krilla::outline::{Outline, OutlineNode};
 use krilla::page::PageSettings;
 use krilla::paint::{Fill, FillRule, LineCap, LineJoin, Stroke, StrokeDash};
 use krilla::surface::Surface;
-use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
+use krilla::tagging::{Artifact, ArtifactType, ContentTag, Identifier, ListNumbering, Node, SpanTag, Tag, TagGroup, TagKind, TagTree};
 use krilla::text::{Font, GlyphId, KrillaGlyph};
 use wordcraft_doc::graphic::GraphicKind;
 use wordcraft_doc::para::{InlineObject, ShapeKind};
@@ -187,6 +187,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        inline_owner: None,
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };
@@ -723,6 +724,97 @@ fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Option<Path> {
 struct TagEntry {
     kind: TagKind,
     children: Vec<Node>,
+    /// A list item's place in its list; its content goes in the item's `LBody`.
+    list: Option<ListPlace>,
+    /// A list item's number or bullet, for the item's `Lbl`.
+    label: Vec<Node>,
+}
+
+impl TagEntry {
+    fn new(kind: TagKind, children: Vec<Node>) -> Self {
+        Self { kind, children, list: None, label: Vec::new() }
+    }
+}
+
+/// Where a list paragraph sits: consecutive paragraphs of the same story and container (body,
+/// cell, note…) are items of one list, nested by their list level.
+#[derive(Clone, PartialEq)]
+struct ListPlace {
+    story: StoryRef,
+    /// The path of the paragraph's container (its own path without the last index).
+    container: Vec<u32>,
+    /// The paragraph's index in its container.
+    block: u32,
+    /// The list (numbering instance) it belongs to: a different list right after it starts a new
+    /// `L`, as in Word.
+    num: u32,
+    level: u8,
+    numbering: ListNumbering,
+}
+
+/// A list item being assembled: its label and its body (the paragraph's content, then any
+/// deeper list nested in it).
+struct ListItem {
+    label: Vec<Node>,
+    body: Vec<Node>,
+}
+
+/// The list items in `items` from `*i` on at `level` or deeper, as one `L`; deeper items are
+/// nested lists inside the body of the item before them (an item with no item before it at
+/// this level gets an item of its own with no label).
+fn list_group(items: &mut Vec<Option<(u32, u8, ListNumbering, Vec<Node>, Vec<Node>)>>, i: &mut usize, list: (u32, u8, ListNumbering)) -> Node {
+    let (num, level, numbering) = list;
+    let mut out: Vec<ListItem> = Vec::new();
+    while let Some(Some((m, l, n, _, _))) = items.get(*i) {
+        let (m, l, n) = (*m, *l, *n);
+        if l < level {
+            break;
+        }
+        if l == level {
+            // Another list (or another kind of numbering) at this level: a list of its own.
+            if (m, n) != (num, numbering) {
+                break;
+            }
+            let Some((_, _, _, label, body)) = items.get_mut(*i).and_then(Option::take) else { break };
+            out.push(ListItem { label, body });
+            *i += 1;
+        } else {
+            let nested = list_group(items, i, (m, l, n));
+            match out.last_mut() {
+                Some(item) => item.body.push(nested),
+                None => out.push(ListItem { label: Vec::new(), body: vec![nested] }),
+            }
+        }
+    }
+    let lis = out
+        .into_iter()
+        .map(|item| {
+            let mut parts = Vec::new();
+            if !item.label.is_empty() {
+                parts.push(Node::Group(TagGroup::with_children(Tag::Lbl, item.label)));
+            }
+            // An item with a number but no text has no body.
+            if !item.body.is_empty() {
+                parts.push(Node::Group(TagGroup::with_children(Tag::LBody, item.body)));
+            }
+            Node::Group(TagGroup::with_children(Tag::LI, parts))
+        })
+        .collect();
+    Node::Group(TagGroup::with_children(Tag::L(numbering), lis))
+}
+
+/// The PDF list numbering for a list level's number format.
+fn list_numbering(format: wordcraft_doc::section::NumFormat) -> ListNumbering {
+    use wordcraft_doc::section::NumFormat as F;
+    match format {
+        F::Bullet => ListNumbering::Disc,
+        F::Decimal | F::DecimalZero | F::DecimalFullWidth | F::DecimalHalfWidth | F::DecimalFullWidth2 => ListNumbering::Decimal,
+        F::LowerRoman => ListNumbering::LowerRoman,
+        F::UpperRoman => ListNumbering::UpperRoman,
+        F::LowerLetter => ListNumbering::LowerAlpha,
+        F::UpperLetter => ListNumbering::UpperAlpha,
+        _ => ListNumbering::None,
+    }
 }
 
 struct Exporter<'a> {
@@ -742,6 +834,9 @@ struct Exporter<'a> {
     vectors: HashMap<String, Option<Arc<Vector>>>,
     tags: Vec<TagEntry>,
     tag_index: HashMap<(StoryRef, DocPath), usize>,
+    /// The structure entry of the paragraph whose lines are being drawn: a picture inline in a
+    /// list item is tagged inside the item, not after it.
+    inline_owner: Option<usize>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
     links: Vec<(f32, f32, f32, f32, String)>,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
@@ -755,6 +850,8 @@ struct Exporter<'a> {
 enum Role {
     /// Paragraph content of the structure entry at this index.
     Para(usize),
+    /// The number or bullet of the list item at this index.
+    Label(usize),
     /// Header/footer, decorations: not part of the structure.
     Artifact(ArtifactType),
     /// A floating picture (its own Figure).
@@ -852,13 +949,30 @@ impl Exporter<'_> {
                     e.children.push(Node::Leaf(id));
                 }
             }
+            Role::Label(i) => {
+                let id = s.start_tagged(ContentTag::Span(SpanTag::empty()));
+                f(self, s);
+                s.end_tagged();
+                if let Some(e) = self.tags.get_mut(i) {
+                    // A numbered heading is no list item: its number reads as part of its text.
+                    if e.list.is_some() {
+                        e.label.push(Node::Leaf(id));
+                    } else {
+                        e.children.push(Node::Leaf(id));
+                    }
+                }
+            }
             Role::Figure => {
                 let id: Identifier = s.start_tagged(ContentTag::Other);
                 f(self, s);
                 s.end_tagged();
                 let alt = alt.map(str::to_string).filter(|a| !a.is_empty()).or_else(|| Some("picture".to_string()));
                 let g = TagGroup::with_children(Tag::Figure(alt), vec![Node::Leaf(id)]);
-                self.tags.push(TagEntry { kind: Tag::Div.into(), children: vec![Node::Group(g)] });
+                // Inline in a list item: part of the item's body, so the list goes on after it.
+                match self.inline_owner.and_then(|i| self.tags.get_mut(i)).filter(|e| e.list.is_some()) {
+                    Some(item) => item.children.push(Node::Group(g)),
+                    None => self.tags.push(TagEntry::new(Tag::Div.into(), vec![Node::Group(g)])),
+                }
             }
         }
     }
@@ -888,6 +1002,36 @@ impl Exporter<'_> {
             }),
             _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
         }
+    }
+
+    /// Turned lines of the paragraph at structure entry `idx`, drawn in their turned frame: a list
+    /// item's number or bullet is its label, a picture a Figure (an artifact when decorative), the
+    /// rest the paragraph's content, as before.
+    fn turned_lines(&mut self, s: &mut Surface, d: &Draw, idx: usize) {
+        let Draw::Turned { x, y, turn, items } = d else {
+            self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d));
+            return;
+        };
+        if !ok(*x) || !ok(*y) {
+            return;
+        }
+        let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
+        s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+        for it in items {
+            match it {
+                Draw::Glyphs { list_label: true, .. } => self.tagged(s, Role::Label(idx), None, |me, s| me.draw(s, it)),
+                Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, it)),
+                Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, it)),
+                Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, it),
+                Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
+                    for d in inner {
+                        me.draw(s, d);
+                    }
+                }),
+                _ => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, it)),
+            }
+        }
+        s.pop();
     }
 
     fn page(&mut self, s: &mut Surface, page: &Page, w: f32, h: f32) {
@@ -931,9 +1075,15 @@ impl Exporter<'_> {
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
+                    self.inline_owner = Some(idx);
                     for d in &draws {
                         match d {
-                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // A list item's number or bullet: its label, apart from its text.
+                            Draw::Glyphs { list_label: true, .. } => self.tagged(s, Role::Label(idx), None, |me, s| me.draw(s, d)),
+                            Draw::Glyphs { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
+                            // Turned text (a table cell's text direction): turned as a whole, its
+                            // label, text and pictures tagged as in straight lines (see `turned_lines`).
+                            Draw::Turned { .. } => self.turned_lines(s, d, idx),
                             // A picture marked decorative: an artifact screen readers skip.
                             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
@@ -949,6 +1099,7 @@ impl Exporter<'_> {
                             _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
                         }
                     }
+                    self.inline_owner = None;
                 }
                 Placed::Image { story, path, off, .. } => {
                     let obj = self.doc.para(*story, path).and_then(|p| p.object_at(*off));
@@ -1018,14 +1169,29 @@ impl Exporter<'_> {
         if let Some(i) = self.tag_index.get(&(story, path.clone())) {
             return *i;
         }
-        let kind: TagKind = match self.doc.para(story, path).map(|p| self.doc.styles.resolve_para(&p.props).outline_level) {
-            Some(Some(l)) if l < 6 => {
+        // The outline level as layout resolved it (a table style's paragraph formatting included),
+        // the same one that decides below whether a numbered paragraph is a list item.
+        let kind: TagKind = match pl.rp.outline_level {
+            Some(l) if l < 6 => {
                 let title = self.doc.para(story, path).map(|p| self.title_text(p, pl).trim().chars().take(200).collect::<String>());
                 Tag::Hn(NonZeroU16::new(u16::from(l) + 1).unwrap_or(NonZeroU16::MIN), title).into()
             }
             _ => Tag::P.into(),
         };
-        self.tags.push(TagEntry { kind, children: Vec::new() });
+        // A numbered or bulleted paragraph that shows its label is a list item (a numbered
+        // heading stays a heading).
+        let list = match (pl.rp.outline_level, pl.rp.numbering) {
+            (None, Some(num)) if num.num != 0 && pl.label.is_some() => path.0.split_last().map(|(block, container)| ListPlace {
+                story,
+                container: container.to_vec(),
+                block: *block,
+                num: num.num,
+                level: num.level,
+                numbering: self.doc.numbering.level(num.num, num.level).map_or(ListNumbering::None, |l| list_numbering(l.format)),
+            }),
+            _ => None,
+        };
+        self.tags.push(TagEntry { list, ..TagEntry::new(kind, Vec::new()) });
         let i = self.tags.len() - 1;
         self.tag_index.insert((story, path.clone()), i);
         i
@@ -1033,12 +1199,44 @@ impl Exporter<'_> {
 
     fn tag_tree(&mut self) -> TagTree {
         let mut tree = TagTree::new().with_lang(self.doc.styles.default_chr.lang.clone());
+        // Consecutive list items of one container, waiting to be grouped into a list.
+        let mut run: Vec<Option<(u32, u8, ListNumbering, Vec<Node>, Vec<Node>)>> = Vec::new();
+        let mut last: Option<ListPlace> = None;
+        let flush = |run: &mut Vec<Option<(u32, u8, ListNumbering, Vec<Node>, Vec<Node>)>>, tree: &mut TagTree| {
+            let mut i = 0;
+            while i < run.len() {
+                let Some(Some((num, level, numbering, _, _))) = run.get(i) else { break };
+                let list = (*num, *level, *numbering);
+                if let Node::Group(g) = list_group(run, &mut i, list) {
+                    tree.push(g);
+                }
+            }
+            run.clear();
+        };
         for e in std::mem::take(&mut self.tags) {
-            if e.children.is_empty() {
+            // A list item with a number but no text still counts: it keeps its list together.
+            if e.children.is_empty() && e.label.is_empty() {
                 continue;
             }
-            tree.push(TagGroup::with_children(e.kind, e.children));
+            match e.list {
+                Some(place) => {
+                    let follows = last
+                        .as_ref()
+                        .is_some_and(|p| p.story == place.story && p.container == place.container && p.block.checked_add(1) == Some(place.block));
+                    if !follows {
+                        flush(&mut run, &mut tree);
+                    }
+                    run.push(Some((place.num, place.level, place.numbering, e.label, e.children)));
+                    last = Some(place);
+                }
+                None => {
+                    flush(&mut run, &mut tree);
+                    last = None;
+                    tree.push(TagGroup::with_children(e.kind, e.children));
+                }
+            }
         }
+        flush(&mut run, &mut tree);
         tree
     }
 

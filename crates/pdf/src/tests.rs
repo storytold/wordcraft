@@ -1342,6 +1342,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        inline_owner: None,
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };
@@ -2410,4 +2411,229 @@ fn only_safe_link_targets_become_annotations() {
         })
         .collect();
     assert_eq!(uris, ["https://example.com/", "mailto:ada@example.com"]);
+}
+
+/// The structure tree of a tagged PDF, as nested element types: `Document(P L(LI(Lbl LBody)))`.
+/// Marked content and object references are left out.
+fn structure(bytes: &[u8]) -> String {
+    use hayro_syntax::object::{Dict, Name, Object};
+    fn walk(o: Object<'_>, depth: usize, out: &mut String) {
+        if depth > 64 {
+            return;
+        }
+        match o {
+            Object::Array(a) => {
+                for k in a.iter::<Object<'_>>() {
+                    walk(k, depth + 1, out);
+                }
+            }
+            Object::Dict(d) => {
+                let Some(s) = d.get::<Name<'_>>(b"S") else { return };
+                if !out.is_empty() && !out.ends_with('(') {
+                    out.push(' ');
+                }
+                out.push_str(s.as_str());
+                let mut inner = String::new();
+                if let Some(k) = d.get::<Object<'_>>(b"K") {
+                    walk(k, depth + 1, &mut inner);
+                }
+                if !inner.is_empty() {
+                    out.push('(');
+                    out.push_str(&inner);
+                    out.push(')');
+                }
+            }
+            _ => {}
+        }
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    let catalog = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()).expect("catalog");
+    let root = catalog.get::<Dict<'_>>(b"StructTreeRoot").expect("a structure tree");
+    let mut out = String::new();
+    if let Some(k) = root.get::<Object<'_>>(b"K") {
+        walk(k, 0, &mut out);
+    }
+    out
+}
+
+/// Lists are `L` → `LI` → `Lbl` (the number or bullet) + `LBody` (the text), as Word writes
+/// them; a deeper level is a list nested in its item's body, and paragraphs around a list stay
+/// outside it. Numbered lists only: on `main`, exporting a bulleted list before
+/// `right_to_left_glyphs_stay_where_layout_put_them` in the same run moves its glyphs by 0.2 pt
+/// (font fallback state shared between tests); `list_numbering_follows_the_number_format` covers
+/// bullets.
+#[test]
+fn lists_are_tagged_as_lists_with_labels_and_nesting() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let numbers = d.numbering.add_list(ListKind::Numbered);
+    let item = |text: &str, num: u32, level: u8| {
+        let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level });
+        para_block(p)
+    };
+    d.body = vec![
+        para_block(Paragraph::with_text("Before the lists", CharProps::default())),
+        item("Apples", list, 0),
+        item("Pears", list, 0),
+        item("Green pears", list, 1),
+        item("Plums", list, 0),
+        para_block(Paragraph::with_text("Between the lists", CharProps::default())),
+        item("First step", numbers, 0),
+        item("Second step", numbers, 0),
+    ];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    let nested = "L(LI(Lbl LBody) LI(Lbl LBody(L(LI(Lbl LBody)))) LI(Lbl LBody))";
+    let numbered = "L(LI(Lbl LBody) LI(Lbl LBody))";
+    assert!(tree.contains(&format!("P {nested} P {numbered}")), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("/ListNumbering /Decimal") || raw.contains("/ListNumbering/Decimal"), "numbers are decimal");
+    assert!(raw.contains("/ListNumbering /LowerAlpha") || raw.contains("/ListNumbering/LowerAlpha"), "the second level is lettered");
+    // The text still reads in order, labels included.
+    let text = squash(&extract_text(&bytes).concat());
+    for w in ["Apples", "Green pears", "Plums", "Second step"] {
+        assert!(text.contains(w), "{w} missing from {text}");
+    }
+}
+
+/// Two lists one right after the other are two `L`s, as in Word, and an item with a number but no
+/// text keeps its list together (it has a `Lbl` and no `LBody`).
+#[test]
+fn adjacent_lists_stay_apart_and_empty_items_stay_in() {
+    let mut d = Document::new();
+    let first = d.numbering.add_list(ListKind::Numbered);
+    let second = d.numbering.add_list(ListKind::Numbered);
+    let item = |text: &str, num: u32| {
+        let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level: 0 });
+        para_block(p)
+    };
+    d.body = vec![item("One", first), item("", first), item("Three", first), item("Again one", second), item("Again two", second)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("L(LI(Lbl LBody) LI(Lbl) LI(Lbl LBody)) L(LI(Lbl LBody) LI(Lbl LBody))"), "{tree}");
+}
+
+/// A picture inline in a list item is a Figure in the item's body, so the list goes on after it
+/// as one list.
+#[test]
+fn a_picture_in_a_list_item_stays_inside_the_list() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let item = |text: &str| {
+        let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num: list, level: 0 });
+        p
+    };
+    let mut pictured = item("A red square: ");
+    let n = pictured.len();
+    let obj = InlineObject::Image { media, w: 40.0, h: 40.0, alt: "A red square".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+    pictured.insert_object(n, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(item("First")), para_block(pictured), para_block(item("Last"))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("L(LI(Lbl LBody) LI(Lbl LBody(Figure)) LI(Lbl LBody))"), "{tree}");
+    assert!(String::from_utf8_lossy(&bytes).contains("/Alt(A red square)"), "the picture keeps its alt text");
+}
+
+/// In turned cell text (Table Layout › Text Direction) a list item keeps its label apart from its
+/// text, and pictures are tagged as in straight lines: a Figure with its alt text, or an artifact
+/// when marked decorative.
+#[test]
+fn turned_cell_text_tags_list_labels_and_pictures() {
+    use wordcraft_doc::para::AltText;
+    for dir in [wordcraft_doc::props::TextDirection::Down, wordcraft_doc::props::TextDirection::Up] {
+        let mut d = Document::new();
+        let list = d.numbering.add_list(ListKind::Numbered);
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let item = |text: &str| {
+            let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+            p.props.numbering = Some(NumRef { num: list, level: 0 });
+            para_block(p)
+        };
+        let picture = |alt: &str, decorative: bool| {
+            let mut p = Paragraph::with_text("Pic ", CharProps::default());
+            let n = p.len();
+            let float = wordcraft_doc::para::Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() };
+            let obj = InlineObject::Image { media: media.clone(), w: 30.0, h: 30.0, alt: alt.into(), float, crop: [0.0; 4], ole: None };
+            p.insert_object(n, obj, &CharProps::default()).unwrap();
+            para_block(p)
+        };
+        let mut t = Table::new(1, 1, 300.0);
+        t.rows[0].cells[0].blocks = vec![item("Up one"), item("Up two"), picture("A red square", false), picture("A decorative border", true)];
+        t.rows[0].cells[0].props.text_direction = dir;
+        d.body = vec![Arc::new(Block::Table(t))];
+        let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+        let tree = structure(&bytes);
+        assert!(tree.contains("L(LI(Lbl LBody) LI(Lbl LBody))"), "{dir:?}: {tree}");
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.contains("/Alt(A red square)"), "{dir:?}: a described picture is a Figure with its alt text");
+        assert!(!raw.contains("A decorative border"), "{dir:?}: a decorative picture has no Figure and no alt text");
+        assert_eq!(raw.matches("/Alt(").count(), 1, "{dir:?}: one Figure");
+    }
+}
+
+/// A list's `ListNumbering` follows its level's number format: bullets are discs.
+#[test]
+fn list_numbering_follows_the_number_format() {
+    use wordcraft_doc::section::NumFormat;
+    for (format, want) in [
+        (NumFormat::Bullet, ListNumbering::Disc),
+        (NumFormat::Decimal, ListNumbering::Decimal),
+        (NumFormat::DecimalZero, ListNumbering::Decimal),
+        (NumFormat::LowerRoman, ListNumbering::LowerRoman),
+        (NumFormat::UpperRoman, ListNumbering::UpperRoman),
+        (NumFormat::LowerLetter, ListNumbering::LowerAlpha),
+        (NumFormat::UpperLetter, ListNumbering::UpperAlpha),
+        (NumFormat::Ordinal, ListNumbering::None),
+        (NumFormat::None, ListNumbering::None),
+    ] {
+        assert_eq!(list_numbering(format), want, "{format:?}");
+    }
+}
+
+/// A numbered heading's number is part of the heading (it is no list item): "1. Introduction"
+/// reads whole, and the number's marked content has a place in the tree. The same goes for any
+/// numbered paragraph with an outline level.
+#[test]
+fn a_numbered_headings_number_stays_in_the_heading() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let mut h = Paragraph::with_text("Introduction", CharProps::default()).styled("Heading1");
+    h.props.numbering = Some(NumRef { num: list, level: 0 });
+    d.body = vec![para_block(h), para_block(Paragraph::with_text("Body text", CharProps::default()))];
+    // Before, the number's marked content had no element and the export failed outright.
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert_eq!(tree, "Document(H1 P)");
+    let text = squash(&extract_text(&bytes).concat());
+    assert!(text.contains("1.") && text.contains("Introduction"), "{text}");
+}
+
+/// A paragraph made a heading by its table's style (the style's paragraph formatting sets an
+/// outline level) is a heading, as layout resolves it, numbered or not.
+#[test]
+fn a_heading_by_table_style_is_a_heading() {
+    let mut d = Document::new();
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "HeadingCells".into(),
+        name: "Heading Cells".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        para: wordcraft_doc::ParaProps { outline_level: Some(0), ..Default::default() },
+        ..Default::default()
+    });
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let mut t = Table::new(1, 2, 400.0);
+    t.props.style = Some("HeadingCells".into());
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Plain cell heading", CharProps::default()))];
+    let mut numbered = Paragraph::with_text("Numbered cell heading", CharProps::default());
+    numbered.props.numbering = Some(NumRef { num: list, level: 0 });
+    t.rows[0].cells[1].blocks = vec![para_block(numbered)];
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert_eq!(tree.matches("H1").count(), 2, "{tree}");
+    assert!(!tree.contains("LI"), "a numbered heading is no list item: {tree}");
 }
