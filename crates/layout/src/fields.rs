@@ -367,7 +367,7 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
                         let text = dollar_text(x).unwrap_or_else(|| result.to_string());
                         return (apply_case_switch(instr, text), false);
                     }
-                    if x >= 0.0 && x <= f64::from(u32::MAX) {
+                    if x >= 0.0 && x <= f64::from(u32::MAX) && x.fract() == 0.0 {
                         return (field_number(instr, fmt, x as u32), false);
                     }
                 }
