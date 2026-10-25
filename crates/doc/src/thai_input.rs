@@ -1,5 +1,8 @@
 //! Thai input sequence checking — Thai Character Block (TCB) rules.
 //!
+//! Character name constants (e.g. [`crate::thai_char::NIKHAHIT`]) and type-class flags
+//! are defined in [`crate::thai_char`].
+//!
 //! A TCB is the unit of Thai composition: one base consonant, optionally followed by
 //! combining marks.  The valid forms are:
 //!
@@ -23,6 +26,12 @@
 //! - Typing a vowel/tone/diac when a pali mark is present → replaces the pali mark.
 //! - Typing a consonant always starts a new TCB.
 //! - Typing a combining character with no preceding consonant → rejected.
+
+use crate::thai_char::{
+    MAIHUNAKAT, MAITAIKHU, MAIEK, MAITHO, MAITRI, MAICHATTAWA, THANTHAKHAT,
+    NIKHAHIT, PHINTHU, SARA_AM, SARA_I, SARA_II, SARA_UE, SARA_UEE, SARA_U, SARA_UU,
+    SARA_E, SARA_AE, SARA_O, MAIMUAN, MAIMALAI,
+};
 
 /// Classification of a Unicode Thai character for input-sequence purposes.
 /// Derived from `TBL_CHTYPE` in the original THAIFUNC.CPP (Algorithms Co., 2001).
@@ -106,57 +115,61 @@ pub enum ThaiInputAction {
 pub fn thai_char_class(c: char) -> ThaiCharClass {
     match u32::from(c) {
         // Consonants — normal (TCT_THAICONS)
-        0x0E01..=0x0E0D  // ก–ญ
-        | 0x0E10..=0x0E1A  // ฐ–น
-        | 0x0E1C | 0x0E1E  // ผ พ
-        | 0x0E20..=0x0E23  // ภ–ร
-        | 0x0E25  // ล
-        | 0x0E27..=0x0E2E  // ว–ฮ
+        // Consonants — normal (TCT_THAICONS): ก–ญ ฐ–น ผ พ ภ–ร ล ว–ฮ
+        0x0E01..=0x0E0D
+        | 0x0E10..=0x0E1A
+        | 0x0E1C | 0x0E1E
+        | 0x0E20..=0x0E23
+        | 0x0E25
+        | 0x0E27..=0x0E2E
         => ThaiCharClass::Consonant,
 
-        // Consonants — lower tail (TCT_THAICONSLOWER): ฎ ฏ ฤ ฦ
+        // Consonants — lower tail (TCT_THAICONSLOWER): ฎ ฏ ฤ ฦ  (DOCHADA TOPATAK RU LU)
         0x0E0E | 0x0E0F | 0x0E24 | 0x0E26
         => ThaiCharClass::Consonant,
 
-        // Consonants — upper tail (TCT_THAICONSUPPER): ป ฝ ฟ
+        // Consonants — upper tail (TCT_THAICONSUPPER): ป ฝ ฟ  (POPLA FOFA FOFAN)
         0x0E1B | 0x0E1D | 0x0E1F
         => ThaiCharClass::Consonant,
 
         // Above vowels (TCT_THAIUPPERVOWEL): ◌ั ◌ิ ◌ี ◌ึ ◌ื
-        0x0E31 | 0x0E34..=0x0E37
+        // MAIHUNAKAT | SARA_I SARA_II SARA_UE SARA_UEE
+        _ if c == MAIHUNAKAT
+          || c == SARA_I || c == SARA_II || c == SARA_UE || c == SARA_UEE
         => ThaiCharClass::UpperVowel,
 
-        // Below vowels (TCT_THAILOWERVOWEL): ◌ุ ◌ู
-        // Note: phinthu (U+0E3A) is a Pali mark, not a vowel.
-        0x0E38 | 0x0E39
+        // Below vowels (TCT_THAILOWERVOWEL): ◌ุ ◌ู  (SARA_U SARA_UU)
+        // Note: PHINTHU (U+0E3A) is a Pali mark, not a vowel, despite TBL_CHTYPE.
+        _ if c == SARA_U || c == SARA_UU
         => ThaiCharClass::LowerVowel,
 
-        // Pali marks: phinthu ◌ฺ (U+0E3A) and nikhahit ◌ํ (U+0E4D).
-        // These are used in Sanskrit/Pali loanwords and cannot co-exist with vowels,
-        // tone marks, or diacritics in the same TCB.
-        0x0E3A | 0x0E4D
+        // Pali marks: PHINTHU ◌ฺ and NIKHAHIT ◌ํ — Sanskrit/Pali loanword markers.
+        _ if c == PHINTHU || c == NIKHAHIT
         => ThaiCharClass::PaliMark,
 
-        // Sara am ำ (U+0E33): occupies the vowel slot — same as UpperVowel.
-        // Nikhahit (◌ํ) + sara_aa (า) combination still produces ำ via input logic.
-        0x0E33
+        // SARA_AM ำ: occupies the vowel slot — same class as UpperVowel.
+        // (Nikhahit + sara_aa combination still produces ำ via input logic.)
+        _ if c == SARA_AM
         => ThaiCharClass::UpperVowel,
 
-        // Diacritic (TCT_THAIDIAC): ◌็ (maitaikhu U+0E47) — occupies slot 2.
-        0x0E47
+        // Diacritic (TCT_THAIDIAC): MAITAIKHU ◌็ — occupies slot 2.
+        _ if c == MAITAIKHU
         => ThaiCharClass::Diacritic,
 
-        // Tone marks (TCT_THAITONE): ◌้ ◌่ ◌๊ ◌๋ ◌์
-        0x0E48..=0x0E4C
+        // Tone marks (TCT_THAITONE): ◌่ ◌้ ◌๊ ◌๋ ◌์
+        // MAIEK MAITHO MAITRI MAICHATTAWA THANTHAKHAT
+        _ if c == MAIEK || c == MAITHO || c == MAITRI || c == MAICHATTAWA || c == THANTHAKHAT
         => ThaiCharClass::Tone,
 
         // Leading vowels (TCT_LEADINGVOWEL): เ แ โ ใ ไ
-        0x0E40..=0x0E44
+        // SARA_E SARA_AE SARA_O MAIMUAN MAIMALAI
+        _ if c == SARA_E || c == SARA_AE || c == SARA_O || c == MAIMUAN || c == MAIMALAI
         => ThaiCharClass::LeadingVowel,
 
         _ => ThaiCharClass::Other,
     }
 }
+
 
 /// Extract the current TCB — up to 3 chars immediately before `caret_off` in `text`
 /// that form a valid Thai Character Block (consonant + optional combining marks).

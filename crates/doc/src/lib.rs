@@ -46,6 +46,7 @@ pub mod smart_art;
 pub mod styles;
 pub mod symbol_fonts;
 pub mod table;
+pub mod thai_char;
 pub mod thai_input;
 pub mod wordart;
 pub mod wrap;
