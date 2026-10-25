@@ -466,6 +466,10 @@ pub struct Session {
     ime_state_seen: Option<ImeCaretState>,
     /// The current command's explicit IME effect classification.
     ime_edit_outcome: ImeEditOutcome,
+    /// Whether a dispatch is active; nested calls preserve their parent's local classification.
+    ime_dispatch_active: bool,
+    /// Successful nested effects in the current dispatch, separate from its handler's outcome.
+    ime_nested_outcome: Option<ImeEditOutcome>,
     /// Simulation of a globally exhausted IME revision allocator for front-end producer tests.
     /// Only [`Self::exhaust_ime_state_revision`] sets it; production builds do not compile it,
     /// and it only makes receipt classification fail closed.
@@ -807,6 +811,8 @@ impl Session {
             ime_state_revision: None,
             ime_state_seen: None,
             ime_edit_outcome: ImeEditOutcome::default(),
+            ime_dispatch_active: false,
+            ime_nested_outcome: None,
             #[cfg(any(test, feature = "test-support"))]
             ime_state_exhausted: false,
             pending_ime_application_change: false,
@@ -1571,6 +1577,8 @@ impl Session {
             ime_state_revision: _,
             ime_state_seen: _,
             ime_edit_outcome: _,
+            ime_dispatch_active: _,
+            ime_nested_outcome: _,
             #[cfg(any(test, feature = "test-support"))]
                 ime_state_exhausted: _,
             pending_ime_application_change: _,
@@ -1726,6 +1734,18 @@ impl Session {
         self.ime_edit_outcome
     }
 
+    /// Combine nested effects without certifying the transaction as one directly classified edit.
+    fn merge_ime_outcomes(first: ImeEditOutcome, second: ImeEditOutcome) -> ImeEditOutcome {
+        ImeEditOutcome {
+            // Effects from multiple dispatches cannot certify one direct IME edit.
+            classified: false,
+            content_changed: first.content_changed || second.content_changed,
+            state_changed: first.state_changed || second.state_changed,
+            transformed: first.transformed || second.transformed,
+            selection_changed: first.selection_changed || second.selection_changed,
+        }
+    }
+
     /// Set the effect classification from a command handler. [`Session::run`] fills
     /// `selection_changed` and enforces the content/state invariant after the command.
     pub(crate) fn set_ime_edit_outcome(&mut self, outcome: ImeEditOutcome) {
@@ -1815,6 +1835,29 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        let parent_active = std::mem::replace(&mut self.ime_dispatch_active, true);
+        let parent_outcome = std::mem::take(&mut self.ime_edit_outcome);
+        let parent_nested = self.ime_nested_outcome.take();
+        let result = self.run_command(id, params);
+        let outcome = self.ime_edit_outcome;
+        self.ime_dispatch_active = parent_active;
+        self.ime_nested_outcome = parent_nested;
+        if parent_active {
+            self.ime_edit_outcome = parent_outcome;
+            // Failed children roll back their edits. Read-only/no-op children contribute no
+            // effect and must not invalidate the parent's otherwise direct classification.
+            if result.is_ok() && (outcome.content_changed || outcome.state_changed || outcome.transformed || outcome.selection_changed) {
+                self.ime_nested_outcome = Some(match parent_nested {
+                    Some(previous) => Self::merge_ime_outcomes(previous, outcome),
+                    None => outcome,
+                });
+            }
+        }
+        result
+    }
+
+    /// Execute one dispatch with rollback and fold its nested effects into the published outcome.
+    fn run_command(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
         // Every dispatch starts from an unclassified outcome. Early returns (unknown, disabled,
         // protected) leave it at the default.
         self.ime_edit_outcome = ImeEditOutcome::default();
@@ -2029,6 +2072,9 @@ impl Session {
                 }
                 self.clamp_selection();
                 let mut ime_outcome = self.ime_edit_outcome;
+                if let Some(nested) = self.ime_nested_outcome {
+                    ime_outcome = Self::merge_ime_outcomes(ime_outcome, nested);
+                }
                 if ime_outcome.content_changed {
                     ime_outcome.state_changed = true;
                 }
@@ -2270,6 +2316,33 @@ mod ime_revision_tests {
         assert!(!s.take_pending_ime_application_change(), "an IME transaction is not an application change");
         s.run("text.insert", &json!({"text": "y"})).unwrap();
         assert!(s.take_pending_ime_application_change());
+    }
+
+    /// A macro retains earlier transformed edits; subsequent top-level dispatches start fresh.
+    #[test]
+    fn nested_macro_keeps_earlier_content_and_transformation_outcomes() {
+        let mut s = Session::new(Document::new());
+        s.prefs.autocorrect.enabled = true;
+        s.prefs.autocorrect.smart_quotes = true;
+        s.run(
+            "tools.macros",
+            &json!({"define": {"name": "quoted", "steps": [
+                {"command": "text.insert", "params": {"text": "\""}},
+                {"command": "text.insert", "params": {"text": "x"}},
+                {"command": "caret.left", "params": {}}
+            ]}}),
+        )
+        .unwrap();
+        s.run_ime("tools.macros", &json!({"run": "quoted"})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).contains('“'));
+        let outcome = s.ime_edit_outcome();
+        assert!(outcome.content_changed && outcome.state_changed && outcome.transformed, "{outcome:?}");
+        assert!(!outcome.classified, "a macro is not one directly classified IME edit");
+        assert!(s.run("no.such.command", &json!({})).is_err());
+        assert_eq!(s.ime_edit_outcome(), ImeEditOutcome::default(), "the next top-level dispatch starts fresh");
+        s.run_ime("text.insert", &json!({"text": "z"})).unwrap();
+        let outcome = s.ime_edit_outcome();
+        assert!(outcome.classified && outcome.content_changed && !outcome.transformed, "{outcome:?}");
     }
 
     /// Unknown and refused IME commands restore the normal origin without signalling an application
