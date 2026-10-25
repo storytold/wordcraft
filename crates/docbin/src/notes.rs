@@ -93,6 +93,11 @@ pub(crate) fn parse_bookmarks(table: &[u8], fib: &crate::fib::Fib) -> Vec<(u32, 
 /// (1-byte length and Windows-1252 chars). `cbExtra` bytes after each string are skipped.
 /// Names are kept to 40 characters, but the reader always advances by the stored length.
 fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
+    sttb_strings_max(table, fc, lcb, 40)
+}
+
+/// [`sttb_strings`] keeping up to `max_chars` characters of each string.
+pub(crate) fn sttb_strings_max(table: &[u8], fc: u32, lcb: u32, max_chars: usize) -> Option<Vec<String>> {
     let b = table.get(fc as usize..(fc as usize).saturating_add(lcb as usize))?;
     let extended = b.get(0..2)? == [0xFF, 0xFF];
     let head = if extended { 2 } else { 0 };
@@ -125,9 +130,9 @@ fn sttb_strings(table: &[u8], fc: u32, lcb: u32) -> Option<Vec<String>> {
         }
         at += cb_extra;
         let s: String = if extended {
-            chars.as_chunks::<2>().0.iter().take(40).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
+            chars.as_chunks::<2>().0.iter().take(max_chars).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
         } else {
-            chars.iter().take(40).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
+            chars.iter().take(max_chars).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
         };
         out.push(s);
     }

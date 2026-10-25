@@ -40,6 +40,8 @@ pub(crate) mod pair {
     pub(crate) const PLCF_END_TXT: usize = 47;
     /// `fcDggInfo`: the OfficeArt drawing content (BLIP store, shapes).
     pub(crate) const DGG_INFO: usize = 50;
+    /// `fcSttbfRMark`: the author names of tracked changes.
+    pub(crate) const STTBF_RMARK: usize = 51;
     /// `fcPlcftxbxTxt` / `fcPlcfHdrtxbxTxt`: text box stories of the main document / headers.
     pub(crate) const PLCF_TXBX_TXT: usize = 56;
     pub(crate) const PLCF_HDR_TXBX_TXT: usize = 58;
