@@ -117,12 +117,13 @@ pub(crate) fn header(ui: &mut Ui, title: &str) -> bool {
     close
 }
 
+/// Draws the Navigation pane: search box and tabs, page list, find results and heading outline.
 fn nav(app: &mut WordApp, ui: &mut Ui) {
     if header(ui, "Navigation") {
         let _ = app.run("view.navigationPane", json!({"value": false}));
         return;
     }
-    let qid = egui::Id::new("nav_query");
+    let qid = egui::Id::unique("nav_query");
     let mut q = ui.data(|d| d.get_temp::<String>(qid)).unwrap_or_default();
     // Ctrl+F with text selected searches for it, as Word does (a selection within one line).
     let focus = std::mem::take(&mut app.nav_search_focus);
@@ -431,6 +432,8 @@ fn styles(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Draws the Comments pane: New Comment and scrollable comment and reply cards with edit, go-to,
+/// reply, resolve or reopen, and delete actions.
 fn comments(app: &mut WordApp, ui: &mut Ui) {
     if header(ui, "Comments") {
         let _ = app.run("view.commentsPane", json!({"value": false}));
@@ -461,7 +464,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                 });
                 // Editable comment text (one undo step per edit, like the balloons).
                 comment_editor(app, ui, id as u32, None, false);
-                let open_key = egui::Id::new(("comment_reply_open", id));
+                let open_key = egui::Id::unique(("comment_reply_open", id));
                 let mut replying = ui.data(|d| d.get_temp::<bool>(open_key)).unwrap_or(false);
                 ui.horizontal(|ui| {
                     if ui.small_button(tl!("Go to")).clicked()
@@ -472,7 +475,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     if ui.small_button(tl!("Reply")).clicked() {
                         replying = true;
                         ui.data_mut(|d| d.insert_temp(open_key, true));
-                        ui.data_mut(|d| d.insert_temp(egui::Id::new(("comment_reply_focus", id)), true));
+                        ui.data_mut(|d| d.insert_temp(egui::Id::unique(("comment_reply_focus", id)), true));
                     }
                     let resolved = c.get("resolved").and_then(Value::as_bool).unwrap_or(false);
                     if ui.small_button(if resolved { tl!("Reopen") } else { tl!("Resolve") }).clicked() {
@@ -483,7 +486,7 @@ fn comments(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
                 if replying {
-                    let focus = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::new(("comment_reply_focus", id)))).unwrap_or(false);
+                    let focus = ui.data_mut(|d| d.remove_temp::<bool>(egui::Id::unique(("comment_reply_focus", id)))).unwrap_or(false);
                     if reply_editor(app, ui, id as u32, None, focus) {
                         ui.data_mut(|d| d.remove::<bool>(open_key));
                     }
@@ -575,7 +578,7 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
 /// A comment field's widget id, per document: egui's own state for the field (its cursor and
 /// undo history) never carries over to another document's comment with the same id.
 fn field_id(app: &WordApp, ui: &Ui, kind: &str, id: u32) -> egui::Id {
-    ui.id().with((kind, app.session.document_id(), id))
+    ui.scope_id().with((kind, app.session.document_id(), id))
 }
 
 /// Write a comment's draft text back, when it has one that differs from the comment. The draft

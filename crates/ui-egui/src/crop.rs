@@ -285,7 +285,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// it can't be decoded (then the cropped-away area is just dimmed).
 fn source(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<egui::TextureHandle> {
     let bytes = app.session.doc.media.get(media)?;
-    let id = egui::Id::new(("crop_source", media, bytes.len()));
+    let id = egui::Id::unique(("crop_source", media, bytes.len()));
     if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return t;
     }

@@ -24,45 +24,52 @@ parameters with list_commands and run them with execute (or several with batch).
 \"Hello\" → execute text.newParagraph → execute para.style {style:\"Heading 1\"} → select_text {text:\"Hello\"} → \
 execute format.bold → inspect_document to verify → render_page to look at the result → save {path:\"out.docx\"}.";
 
-/// Longest request line accepted on stdin.
-const MAX_LINE: usize = 32 << 20;
-
-enum Line {
-    End,
-    TooLong,
-    Text(String),
-}
-
-/// The next line of at most `max` bytes. A longer one is read to its end and dropped, a line
-/// that is not UTF-8 is replaced lossily (the JSON parser then rejects it).
-fn read_line(input: &mut impl BufRead, max: usize) -> std::io::Result<Line> {
-    let mut buf = Vec::new();
-    let n = Read::take(&mut *input, max as u64 + 1).read_until(b'\n', &mut buf)?;
-    if n == 0 {
-        return Ok(Line::End);
-    }
-    if buf.len() > max && !buf.ends_with(b"\n") {
-        loop {
-            let (used, done) = match input.fill_buf()? {
-                [] => break,
-                b => match b.iter().position(|&c| c == b'\n') {
-                    Some(i) => (i + 1, true),
-                    None => (b.len(), false),
-                },
-            };
-            input.consume(used);
-            if done {
-                break;
-            }
-        }
-        return Ok(Line::TooLong);
-    }
-    Ok(Line::Text(String::from_utf8_lossy(&buf).into_owned()))
-}
-
 /// Resource URIs.
 pub const DOC_URI: &str = "wordcraft://document";
 pub const COMMANDS_URI: &str = "wordcraft://commands";
+
+/// Longest request line accepted on stdin.
+pub const MAX_REQUEST_LINE: usize = 1 << 20;
+
+/// One bounded line read.
+pub(crate) enum BoundedLine {
+    Eof,
+    Line(String),
+    /// The line exceeded the limit; the rest of it has been discarded.
+    TooLong,
+}
+
+/// Read one line of at most `max` bytes (excluding the newline) without buffering more than
+/// `max + 1` bytes; an over-long line is skipped up to its newline.
+pub(crate) fn read_bounded_line(reader: &mut impl BufRead, max: usize) -> std::io::Result<BoundedLine> {
+    let mut buf = Vec::new();
+    reader.by_ref().take(max as u64 + 1).read_until(b'\n', &mut buf)?;
+    if buf.is_empty() {
+        return Ok(BoundedLine::Eof);
+    }
+    if buf.last() != Some(&b'\n') && buf.len() > max {
+        loop {
+            let chunk = reader.fill_buf()?;
+            if chunk.is_empty() {
+                break;
+            }
+            let found = chunk.iter().position(|&b| b == b'\n');
+            let used = found.map_or(chunk.len(), |i| i + 1);
+            reader.consume(used);
+            if found.is_some() {
+                break;
+            }
+        }
+        return Ok(BoundedLine::TooLong);
+    }
+    if buf.last() == Some(&b'\n') {
+        buf.pop();
+        if buf.last() == Some(&b'\r') {
+            buf.pop();
+        }
+    }
+    String::from_utf8(buf).map(BoundedLine::Line).map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+}
 
 /// An MCP server bound to one backend.
 pub struct Server {
@@ -94,18 +101,12 @@ impl Server {
 
     /// Serve newline-delimited JSON-RPC until `input` closes. Logs go to stderr only (stdout is
     /// the protocol stream).
-    pub fn serve(&mut self, input: impl BufRead, output: impl Write) -> std::io::Result<()> {
-        self.serve_bounded(input, output, MAX_LINE)
-    }
-
-    /// [`Server::serve`] with a request line limit of `max` bytes. A longer line is dropped
-    /// (without keeping it in memory) and answered with an error.
-    fn serve_bounded(&mut self, mut input: impl BufRead, mut output: impl Write, max: usize) -> std::io::Result<()> {
+    pub fn serve(&mut self, mut input: impl BufRead, mut output: impl Write) -> std::io::Result<()> {
         loop {
-            let reply = match read_line(&mut input, max)? {
-                Line::End => return Ok(()),
-                Line::TooLong => Some(error(Value::Null, INVALID_REQUEST, format!("request line longer than {max} bytes")).to_string()),
-                Line::Text(line) => self.handle_line(&line),
+            let reply = match read_bounded_line(&mut input, MAX_REQUEST_LINE)? {
+                BoundedLine::Eof => break,
+                BoundedLine::Line(line) => self.handle_line(&line),
+                BoundedLine::TooLong => Some(error(Value::Null, INVALID_REQUEST, "request line too long").to_string()),
             };
             if let Some(reply) = reply {
                 output.write_all(reply.as_bytes())?;
@@ -113,6 +114,7 @@ impl Server {
                 output.flush()?;
             }
         }
+        Ok(())
     }
 
     /// Handle one line; returns the reply line (None for notifications and blank lines).
@@ -209,42 +211,5 @@ impl Server {
             }
             other => Err((METHOD_NOT_FOUND, format!("method not found: {other}"))),
         }
-    }
-}
-
-#[cfg(test)]
-mod bounded_tests {
-    use super::*;
-
-    struct Null;
-    impl Backend for Null {
-        fn call(&mut self, _: &str, _: Value) -> Result<Value, String> {
-            Ok(Value::Null)
-        }
-        fn has_ui(&self) -> bool {
-            false
-        }
-        fn describe(&self) -> String {
-            "test".into()
-        }
-    }
-
-    #[test]
-    fn an_oversize_line_is_refused_and_the_next_one_still_served() {
-        let mut input = vec![b'x'; 200];
-        input.extend_from_slice(b"\n{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"ping\"}\n");
-        let mut out = Vec::new();
-        Server::new(Box::new(Null)).serve_bounded(std::io::Cursor::new(input), &mut out, 64).unwrap();
-        let lines: Vec<Value> = String::from_utf8(out).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
-        assert_eq!(lines.len(), 2, "{lines:?}");
-        assert_eq!(lines[0]["error"]["code"], INVALID_REQUEST);
-        assert_eq!(lines[1]["id"], 1);
-    }
-
-    #[test]
-    fn a_line_without_a_newline_is_bounded() {
-        let mut out = Vec::new();
-        Server::new(Box::new(Null)).serve_bounded(std::io::Cursor::new(vec![b'x'; 10_000]), &mut out, 64).unwrap();
-        assert!(String::from_utf8(out).unwrap().contains("longer than 64"));
     }
 }

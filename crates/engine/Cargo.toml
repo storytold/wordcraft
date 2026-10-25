@@ -8,6 +8,12 @@ description = "WordCraft engine: session, selection, undo, the command registry 
 [lints]
 workspace = true
 
+[features]
+# Front-end producer tests need to simulate a globally exhausted IME revision allocator. It only
+# ever makes receipt classification fail closed. Never enable this for a production build; the
+# UI's dev-dependencies enable it for its tests.
+test-support = []
+
 [dependencies]
 wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
@@ -35,6 +41,10 @@ js-sys = "0.3"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 getrandom = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+# O_NONBLOCK, so a path swapped for a named pipe can't block `open` (#3666).
+libc = { workspace = true }
 
 [dev-dependencies]
 encoding_rs = { workspace = true }

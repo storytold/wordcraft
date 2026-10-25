@@ -2,7 +2,7 @@
 
 WordCraft uses `craft-pdf` with default features disabled and `write` enabled. Both that dependency
 and the required root Krilla patch use the immutable `storytold/craft-libs` revision
-`9f75d3dc19b4b514c4f3d4847ed1ec1b0e86b4ef`. Rust 1.95 or newer is required. The revision must be
+`17744430be327d0257496a6a31c8d38fe20a6756`. Rust 1.95 or newer is required. The revision must be
 available from the remote before a fresh checkout can resolve it. The shared writer checks a
 backend marker at compile time so an unpatched Krilla cannot replace the required backend.
 

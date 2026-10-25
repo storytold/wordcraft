@@ -1,11 +1,16 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufRead, BufReader, Read, Write};
+use std::io::{BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+use crate::server::{BoundedLine, read_bounded_line};
+
+/// Longest reply line accepted from the app (screenshots and `document.inspect` are large).
+const MAX_REPLY_LINE: usize = 256 << 20;
 
 /// Something that answers control-channel methods (`engine.execute`, `document.inspect`,
 /// `ui.pointer`, `ui.render`, …). See `wordcraft_ui_egui::control` for the full list.
@@ -165,8 +170,11 @@ impl Remote {
         out.extend_from_slice(line.as_bytes());
         out.push(b'\n');
         writer.write_all(&out).and_then(|()| writer.flush()).map_err(Failure::NotSent)?;
-        let reply = read_bounded_line(reader, MAX_REPLY).map_err(Failure::Unknown)?;
-        String::from_utf8(reply).map_err(|_| Failure::Unknown(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply is not UTF-8")))
+        match read_bounded_line(reader, MAX_REPLY_LINE).map_err(Failure::Unknown)? {
+            BoundedLine::Line(reply) => Ok(reply),
+            BoundedLine::Eof => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"))),
+            BoundedLine::TooLong => Err(Failure::Unknown(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long"))),
+        }
     }
 
     /// One request and its reply. A request that was not sent, or one that only reads, is tried
@@ -191,6 +199,13 @@ impl Remote {
                 Ok(r) => break r,
                 Err(f) => {
                     self.conn = None;
+                    // A reply that arrived but can't be read (too long, not UTF-8): the app has
+                    // run the request, so sending it again could run a state-changing one twice.
+                    if let Failure::Unknown(e) = &f
+                        && e.kind() == std::io::ErrorKind::InvalidData
+                    {
+                        return Err(format!("bad reply from app: {e}"));
+                    }
                     if let Failure::Unknown(e) = &f
                         && !is_read_only(method)
                     {
@@ -226,26 +241,9 @@ impl Failure {
     }
 }
 
-/// Longest reply line accepted from the app (screenshots and renders come as base64).
-const MAX_REPLY: usize = 128 << 20;
-
 /// Methods that only read: sending them twice does no harm.
 fn is_read_only(method: &str) -> bool {
     matches!(method, "document.inspect" | "engine.commands" | "ui.inspect" | "ui.parity" | "ui.render" | "ui.screenshot")
-}
-
-/// One line (with its newline) of at most `max` bytes. An end of stream before any byte, or a
-/// longer line, is an error.
-fn read_bounded_line(r: &mut impl BufRead, max: usize) -> std::io::Result<Vec<u8>> {
-    let mut buf = Vec::new();
-    let n = Read::take(&mut *r, max as u64 + 1).read_until(b'\n', &mut buf)?;
-    if n == 0 {
-        return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
-    }
-    if buf.len() > max && !buf.ends_with(b"\n") {
-        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, format!("reply line longer than {max} bytes")));
-    }
-    Ok(buf)
 }
 
 impl Backend for Remote {
@@ -294,6 +292,7 @@ impl Backend for Remote {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
     use std::net::{SocketAddr, TcpListener};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -381,6 +380,37 @@ mod tests {
             }
         });
         (port, rx)
+    }
+
+    #[test]
+    fn an_unreadable_reply_is_not_retried() {
+        // The app answered something that can't be read (here not UTF-8; an over-long reply
+        // takes the same path): the request ran, so it must not be sent again.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let n = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let n = n.clone();
+                std::thread::spawn(move || {
+                    let mut out = stream.try_clone().unwrap();
+                    for line in BufReader::new(stream).lines() {
+                        if line.is_err() {
+                            return;
+                        }
+                        n.fetch_add(1, Ordering::SeqCst);
+                        if out.write_all(b"\xff\xfe\n").is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
+        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
+        assert!(e.contains("bad reply"), "{e}");
+        assert_eq!(seen.load(Ordering::SeqCst), 1, "the request was sent once");
     }
 
     fn fixed_key(key: &'static str) -> KeyFinder {
@@ -497,15 +527,5 @@ mod tests {
         r.conn = None;
         assert_eq!(r.call("engine.execute", json!({"command": "file.new"})).unwrap(), json!(1));
         assert_eq!(seen.try_iter().count(), 1);
-    }
-
-    #[test]
-    fn a_reply_line_is_bounded() {
-        let mut ok = std::io::Cursor::new(b"abc\nrest".to_vec());
-        assert_eq!(read_bounded_line(&mut ok, 8).unwrap(), b"abc\n");
-        let mut long = std::io::Cursor::new(vec![b'x'; 100]);
-        assert!(read_bounded_line(&mut long, 8).is_err());
-        let mut empty = std::io::Cursor::new(Vec::new());
-        assert!(read_bounded_line(&mut empty, 8).is_err());
     }
 }

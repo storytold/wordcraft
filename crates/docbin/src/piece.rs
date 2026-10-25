@@ -113,7 +113,7 @@ impl PieceTable {
             }
             PrmRef::Sprm0 { isprm, val: (p.prm >> 8) as u8 }
         } else {
-            PrmRef::Grpprl(self.prc_grpprls.get((p.prm >> 1) as usize).map(|v| v.as_slice()))
+            PrmRef::Grpprl(self.prc_grpprls.get((p.prm >> 1) as usize).map(Vec::as_slice))
         }
     }
 

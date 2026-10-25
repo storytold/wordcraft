@@ -3303,3 +3303,86 @@ fn highlight_partial_column_ignores_unselected_marks() {
         assert_eq!(p.mark.highlight, Some(Highlight::Yellow));
     }
 }
+
+#[test]
+fn tab_with_a_whole_paragraph_selected_indents_it() {
+    let mut s = typed("Hello world");
+    run(&mut s, "select.paragraph", json!({}));
+    run(&mut s, "text.tab", json!({}));
+    assert_eq!(paras(&s), vec![para("Hello world", None)]);
+    assert_eq!(indents(&s).0, Some(36.0));
+}
+
+#[test]
+fn tab_with_a_partial_selection_still_inserts_a_tab() {
+    let mut s = typed("Hello world");
+    run(&mut s, "select.text", json!({"text": "ello"}));
+    run(&mut s, "text.tab", json!({}));
+    assert_eq!(paras(&s), vec![para("H\t world", None)]);
+}
+
+/// Tab with a whole paragraph selected indents it as one Undo step: the selection stays while
+/// the indent is applied, and Undo restores both the indentation and that same selection. A
+/// partial selection still types a tab character (the test above), and Tab in a table cell still
+/// navigates (the table tests above).
+#[test]
+fn tab_with_a_whole_paragraph_selected_undoes_indent_and_selection_together() {
+    let mut s = typed("Hello world");
+    run(&mut s, "select.paragraph", json!({}));
+    let selected = s.sel.clone();
+    let depth = s.undo_depth();
+    run(&mut s, "text.tab", json!({}));
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "Hello world", "Tab indents, it types no tab");
+    assert_eq!(s.sel, selected, "the whole paragraph stays selected");
+    assert_eq!(indents(&s), (Some(36.0), None));
+    assert_eq!(s.undo_depth(), depth + 1, "one paragraph, one Undo step");
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(indents(&s), (None, None), "Undo takes the indent back");
+    assert_eq!(s.sel, selected, "and restores the selection the indent was applied to");
+    assert_eq!(paras(&s), vec![para("Hello world", None)]);
+}
+
+/// #2848: "Add a period with double-space" (an AutoFormat As You Type switch, off by default):
+/// a second Space after a word, a number or a closing bracket or quote turns the first into a
+/// period. Undo puts the two spaces back; other punctuation, a lone space and a run of three
+/// spaces are left as typed.
+#[test]
+fn double_space_adds_a_period_when_asked() {
+    let with_option = |keys: &str| {
+        let mut s = s();
+        run(&mut s, "tools.autocorrect", json!({"doubleSpacePeriod": true}));
+        typ(&mut s, keys);
+        s
+    };
+    let text = |s: &Session| s.doc.plain_text(StoryRef::Body);
+    // Off unless asked for.
+    assert_eq!(text(&typed("Hello  world")), "Hello  world");
+    assert!(!s().prefs.autocorrect.double_space_period);
+    // On: the second space makes the period, and the next sentence starts with a capital.
+    assert_eq!(text(&with_option("Hello  world")), "Hello. world");
+    assert_eq!(text(&with_option("Hello  world ")), "Hello. World ");
+    assert_eq!(text(&with_option("See page 5  Then")), "See page 5. Then");
+    assert_eq!(text(&with_option("(it is done)  Next")), "(it is done). Next");
+    assert_eq!(text(&with_option("He said \"stop\"  Next")), "He said “stop”. Next");
+    // Undo brings the two spaces back, in one step.
+    let mut t = with_option("Hello  ");
+    assert_eq!(text(&t), "Hello. ");
+    run(&mut t, "edit.undo", json!({}));
+    assert_eq!(text(&t), "Hello  ");
+    // Left alone: other punctuation before the spaces, a lone space, spaces at the start of a
+    // paragraph or after a tab, and a third space.
+    for keys in ["Hello.  x", "Hello,  x", "Hello?  x", "Hello;  x", "Hello:  x", "Hello x", "  x", "\n  x", "a\t  x"] {
+        let want = typed(keys);
+        assert_eq!(text(&with_option(keys)), text(&want), "{keys:?}");
+    }
+    assert_eq!(text(&with_option("Hello   x")), "Hello.  x");
+    // A selection typed over, and the master switch.
+    let mut t = with_option("Hello world");
+    run(&mut t, "select.all", json!({}));
+    run(&mut t, "text.insert", json!({"text": " "}));
+    assert_eq!(text(&t), " ");
+    let mut t = s();
+    run(&mut t, "tools.autocorrect", json!({"doubleSpacePeriod": true, "enabled": false}));
+    typ(&mut t, "Hello  world");
+    assert_eq!(text(&t), "Hello  world");
+}
