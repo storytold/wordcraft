@@ -75,6 +75,8 @@ pub struct CanvasState {
     /// The first press of the current run of presses moved header/footer editing into another
     /// header/footer; the double-click it starts doesn't select a word there.
     hf_press_switched: bool,
+    /// A press that entered a turned text box (drawn straight from then on): where it was.
+    turned_press: Option<Pos2>,
     /// A drag after a double-click, triple-click or Ctrl/⌘+click: the unit it extends by, the
     /// unit first selected, and the last position the pointer hit.
     unit_drag: Option<UnitDrag>,
@@ -276,6 +278,7 @@ impl Default for CanvasState {
             dragging: false,
             column_drag: None,
             last_press: None,
+            turned_press: None,
             hf_press_switched: false,
             unit_drag: None,
             last_highlight: "yellow".into(),
@@ -797,13 +800,14 @@ pub fn sync_fit_zoom(app: &mut WordApp, scale: f32) {
 /// marks and markup, dark mode, the page colour and watermark, header/body dimming, the media,
 /// and (while a drag lasts) the object left out of the page.
 /// Taken once per frame.
-fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>) -> u64 {
+fn view_key(app: &WordApp, dim_body: bool, hidden: Option<&Pos>, straight: Option<u32>) -> u64 {
     let mut h = std::collections::hash_map::DefaultHasher::new();
     let v = &app.session.view;
     (v.marks, app.session.prefs.marks, v.show_markup, v.dark_mode, wordcraft_render::DARK_PAPER, v.hide_ink, v.draw.replay).hash(&mut h);
     (v.read_mode, v.read_page_color).hash(&mut h);
     app.session.prefs.markup.hash(&mut h);
     dim_body.hash(&mut h);
+    straight.hash(&mut h);
     format!("{:?}{:?}{:?}", app.session.doc.settings.page_color, app.session.doc.settings.page_picture, app.session.doc.settings.watermark)
         .hash(&mut h);
     app.session.doc.media.len().hash(&mut h);
@@ -837,6 +841,7 @@ fn page_content_key(page: &Page) -> u64 {
                     format!("{spin:?}").hash(&mut h)
                 }
                 Placed::Clip { rect, spin, items } => format!("{rect:?}{spin:?}{items:?}").hash(&mut h),
+                Placed::Spun { rect, spin, part, open } => format!("{rect:?}{spin:?}{part}{open}").hash(&mut h),
                 Placed::Cell { .. } | Placed::Object { .. } => {}
             }
         }
@@ -1331,7 +1336,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         // The object a move has taken off its page: the page is drawn again without it (or it
         // would be on the page where it was and under the pointer at once).
         let hidden = app.canvas.dragged_off_page();
-        let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p));
+        let view = view_key(app, dim_body, hidden.as_ref().map(|(_, p)| p), straight_box(app, &layout));
         for (i, pr) in geo.rects.iter().enumerate() {
             let sr = pr.translate(content_origin.to_vec2());
             let Some(page) = layout.pages.get(i) else { continue };
@@ -1356,7 +1361,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             // Render before placing the page: a page re-rendered in this frame (a zoom step, an
             // edit) then sits on the pixel grid in this frame too, rather than a frame later.
             if visible && !tiled && !fresh && (forced || rendered < 2 || !app.canvas.textures.contains_key(&i) && rendered < 4) {
-                let mut opts = page_render_options(app, dim_body);
+                let mut opts = page_render_options(app, &layout, dim_body);
                 // Only on the page it is on: the `Pos` can't match an object of another page.
                 opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                 let img = wordcraft_render::render_page(page_doc(app), page, scale_px, &opts);
@@ -1420,7 +1425,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     visible_tile_keys.insert(id);
                     let fresh = app.canvas.tiles.get(&id).is_some_and(|(k, _)| *k == key);
                     if !fresh && rendered < 4 {
-                        let mut opts = page_render_options(app, dim_body);
+                        let mut opts = page_render_options(app, &layout, dim_body);
                         // Only on the page it is on: the `Pos` can't match an object of another page.
                         opts.display.hide_object = hidden.as_ref().filter(|(page, _)| *page == i).map(|(_, p)| p.clone());
                         // The tiny subtraction avoids a 1px overshoot from round-tripping f32
@@ -1981,7 +1986,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         && (resp.hovered() || resp.dragged())
         && let Some(p) = ui.input(|i| i.pointer.latest_pos())
     {
-        let opts = page_render_options(app, dim_body);
+        let opts = page_render_options(app, &layout, dim_body);
         let bg = if on_visible_page(&rects, &geo.bands, p) {
             opts.paper_of(&app.session.doc)
         } else {
@@ -2629,8 +2634,8 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             let is_box = |s: StoryRef| part_kind(app, s) == Some(PartKind::TextBox);
             let host = if is_box(story) { text_box_host(app, layout).unwrap_or(StoryRef::Body) } else { story };
             let in_hf = matches!(part_kind(app, host), Some(PartKind::Header | PartKind::Footer));
-            let hf_box = if in_hf { layout.header_footer_text_box_at(page, x, y).map(StoryRef::Part) } else { None };
-            match (hf_box, layout.story_at(page, x, y)) {
+            let hf_box = if in_hf { layout.header_footer_box_shown(page, x, y, straight_box(app, layout)).map(StoryRef::Part) } else { None };
+            match (hf_box, layout.story_at_shown(page, x, y, straight_box(app, layout))) {
                 (Some(b), _) => b,
                 (None, Some(s)) if is_note(s) => s,
                 (None, Some(s)) if is_box(s) && !in_hf => s,
@@ -2715,7 +2720,9 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             app.canvas.dragging = true;
             return;
         }
-        let Some(pos) = layout.hit(page, x, y, story) else { return };
+        // A turned text box not being edited is drawn turned: the click is taken into its frame.
+        let straight = straight_box(app, layout);
+        let Some(pos) = layout.hit_shown(page, x, y, story, straight) else { return };
         // Ctrl/⌘+click follows a hyperlink.
         if mods.command
             && let Some(link) = link_under(app, layout, page, x, y, &pos)
@@ -2743,6 +2750,10 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         }
         app.canvas.column_drag = None;
         let _ = app.run("caret.set", json!({"pos": pj, "extend": mods.shift}));
+        // Clicking into a turned text box draws it straight under the pointer: holding still
+        // mustn't then select from where the pointer is on the straight box.
+        let now = app.session.layout();
+        app.canvas.turned_press = (straight_box(app, &now) != straight).then_some(p);
         // Double-click selects a word, triple-click a paragraph, Ctrl/⌘+click a sentence; holding
         // the button and dragging then extends by whole units (Word, #549).
         let unit = match clicks {
@@ -2791,7 +2802,13 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
+    } else if app.canvas.dragging
+        && ui.input(|i| i.pointer.primary_down())
+        && app.canvas.turned_press.is_some_and(|p0| p0.distance(p) < ui.ctx().options(|o| o.input_options.max_click_dist))
+    {
+        // Pressed into a turned text box (now drawn straight) and not yet dragged: nothing to extend.
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
+        app.canvas.turned_press = None;
         // Through the command, so from one table cell into another the drag takes whole cells
         // (Word); straight to the session, as the app's `run` would scroll on every frame.
         if let Some(pos) = layout.hit(page, x, y, story)
@@ -2806,6 +2823,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         // content under it, this hit-test keeps the selection growing (#688).
     } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_released()) {
         app.canvas.dragging = false;
+        app.canvas.turned_press = None;
         app.canvas.column_drag = None;
         app.canvas.unit_drag = None;
         if app.session.painter.is_some() && !app.session.sel.is_collapsed() {
@@ -3226,6 +3244,37 @@ pub fn page_to_screen(app: &mut WordApp, page: usize, x: f32, y: f32) -> Option<
     Some(to_screen(pos2(0.0, 0.0), *r, scale, x, y))
 }
 
+/// The text box story being edited: a turned text box showing it is drawn straight (Word).
+pub(crate) fn edited_box(app: &WordApp) -> Option<u32> {
+    match app.session.sel.focus.story {
+        StoryRef::Part(id) if in_text_box(app) => Some(id),
+        _ => None,
+    }
+}
+
+/// The edited text box story the page is drawn with straight: the caret's text box, when it is
+/// turned (an unturned one looks the same either way, so the page isn't redrawn for it).
+pub(crate) fn straight_box(app: &WordApp, layout: &DocLayout) -> Option<u32> {
+    edited_box(app).filter(|id| {
+        !app.session.doc.parts.get(id).is_some_and(|part| part.body.upright)
+            && layout.text_box(*id, app.session.page_hint).is_some_and(|o| {
+                turned(&o)
+                    && layout.pages.get(o.page).is_some_and(|page| {
+                        page.items
+                            .iter()
+                            .chain(&page.header)
+                            .chain(&page.footer)
+                            .any(|item| matches!(item, Placed::Spun { part, rect, open: true, .. } if *part == *id && *rect == o.rect))
+                    })
+            })
+    })
+}
+
+/// Whether object `o` is turned (flips alone don't turn a text box's text).
+pub(crate) fn turned(o: &wordcraft_layout::hit::ObjectHit) -> bool {
+    !wordcraft_geom::Spin::new(o.spin.deg, false, false).is_identity()
+}
+
 /// Whether the caret is in a text box's story.
 pub fn in_text_box(app: &WordApp) -> bool {
     part_kind(app, app.session.sel.focus.story) == Some(PartKind::TextBox)
@@ -3533,7 +3582,7 @@ fn field_showing_code(app: &WordApp, pos: &wordcraft_doc::Pos) -> Option<wordcra
 }
 
 /// Render options for this view's page rasters: marks, markup, dark page, header/body dimming.
-fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::RenderOptions {
+fn page_render_options(app: &WordApp, layout: &DocLayout, dim_body: bool) -> wordcraft_render::RenderOptions {
     let mut opts = screen_render_options();
     opts.display.marks = app.session.view.marks;
     opts.display.always = app.session.prefs.marks;
@@ -3553,6 +3602,7 @@ fn page_render_options(app: &WordApp, dim_body: bool) -> wordcraft_render::Rende
     }
     opts.display.dim_header = !dim_body;
     opts.display.dim_body = dim_body;
+    opts.display.straight = straight_box(app, layout);
     opts
 }
 
@@ -3612,7 +3662,7 @@ fn caret_color_at(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, page: u
         return c;
     }
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
-    let bg = wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dim_body), x, y);
+    let bg = wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, layout, dim_body), x, y);
     let c = caret_contrast(bg);
     app.canvas.caret_bg = Some((key, c));
     c
@@ -3622,7 +3672,7 @@ fn caret_color_at(app: &mut WordApp, layout: &std::sync::Arc<DocLayout>, page: u
 /// dragging, such as an inline picture's insertion cursor.
 pub(crate) fn caret_color_on(app: &WordApp, layout: &DocLayout, page: usize, x: f32, y: f32) -> Color32 {
     let Some(p) = layout.pages.get(page) else { return Color32::BLACK };
-    caret_contrast(wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, dims_body(app, layout)), x, y))
+    caret_contrast(wordcraft_render::background_at(&app.session.doc, p, &page_render_options(app, layout, dims_body(app, layout)), x, y))
 }
 
 /// Render options for page rasters shown on screen: on macOS, text is darkened the way the system
@@ -3671,6 +3721,36 @@ fn is_followable_link(url: &str) -> bool {
 mod tests {
     use super::*;
     use crate::table_resize::tests::{H, cell, screen, steps, table_window};
+
+    /// The page image is redrawn when the edited turned box changes (so it never shows a box
+    /// straight that should be turned, or turned while edited), and not for an unturned box.
+    #[test]
+    fn the_page_image_follows_the_edited_turned_box() {
+        use crate::objects::rotation_control::{H, edit, turned_box_window};
+        let (mut h, id) = turned_box_window();
+        let key = |h: &H| h.state().canvas.textures.get(&0).map(|(k, _)| *k).expect("page 1 is drawn");
+        let turned = key(&h);
+        edit(&mut h, id);
+        let straight = key(&h);
+        assert_ne!(straight, turned, "entering the turned box redraws the page");
+        h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+        for _ in 0..3 {
+            h.step();
+        }
+        assert_eq!(key(&h), turned, "leaving it redraws it turned");
+        // An unturned box: entering it changes nothing on the page.
+        let pos = h.state_mut().session.layout().text_box(id, 0).unwrap().pos();
+        let end = Pos { off: pos.off + 3, ..pos.clone() };
+        h.state_mut().run("select.range", json!({"anchor": pos, "focus": end})).unwrap();
+        h.state_mut().run("arrange.rotation", json!({"degrees": 0})).unwrap();
+        h.state_mut().session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 10));
+        for _ in 0..3 {
+            h.step();
+        }
+        let flat = key(&h);
+        edit(&mut h, id);
+        assert_eq!(key(&h), flat, "entering an unturned box keeps the page image");
+    }
 
     /// #3931: while Insert › Table's grid asks for a preview the page is laid out with that
     /// table; the document, its revision and undo history stay as they were, and without a
@@ -3789,7 +3869,7 @@ mod tests {
                 let layout = app.session.layout();
                 for dark in [false, true] {
                     app.session.view.dark_mode = dark;
-                    let opts = page_render_options(&app, dims_body(&app, &layout));
+                    let opts = page_render_options(&app, &layout, dims_body(&app, &layout));
                     let draws = page_display(&app.session.doc, &layout.pages[0], &opts.display);
                     for marker in ["Body", "Note", "Header"] {
                         let alphas: Vec<f32> = draws
@@ -4016,7 +4096,7 @@ mod tests {
         let at = |a: &mut WordApp, off: usize| {
             let layout = a.session.layout();
             let c = layout.caret_on(&Pos::body(0, off), 0).unwrap();
-            let view = view_key(a, false, None);
+            let view = view_key(a, false, None, straight_box(a, &layout));
             caret_color_at(a, &layout, c.page, c.x, c.top + c.height / 2.0, view, false)
         };
         assert_eq!(at(&mut a, 2), Color32::BLACK, "white paper");
@@ -4034,6 +4114,47 @@ mod tests {
         assert_eq!(at(&mut a, 2), Color32::WHITE, "again, from the cache");
     }
 
+    #[test]
+    fn caret_in_straight_box() {
+        use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
+        use wordcraft_doc::props::Rgb;
+        use wordcraft_doc::{Document, Paragraph, Path, TextBody, para_block};
+        let mut doc = Document::from_text("Host");
+        let id = doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Text", Default::default()))]);
+        doc.parts.get_mut(&id).unwrap().body = TextBody::default();
+        doc.insert_object(
+            &Pos::body(0, 0),
+            InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w: 180.0,
+                h: 60.0,
+                fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::BLACK)),
+                stroke: None,
+                stroke_width: 0.0,
+                float: Float { wrap: Wrap::InFrontOfText, rot: 90.0, ..Default::default() },
+                story: Some(id),
+                effects: Default::default(),
+                freeform: None,
+                extra: Default::default(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+        let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        app.session.sel = wordcraft_engine::Selection::caret(Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 });
+        let layout = app.session.layout();
+        let object = layout.text_box(id, 0).unwrap();
+        let (x, y) = (object.rect.x + 5.0, object.rect.y + 5.0);
+        let mut turned = screen_render_options();
+        turned.display.dim_header = true;
+        assert_eq!(wordcraft_render::background_at(&app.session.doc, &layout.pages[0], &turned, x, y), Rgb::WHITE);
+        let mut opts = turned.clone();
+        opts.display.straight = Some(id);
+        assert_eq!(wordcraft_render::background_at(&app.session.doc, &layout.pages[0], &opts, x, y), Rgb::BLACK);
+        let view = view_key(&app, false, None, straight_box(&app, &layout));
+        assert_eq!(caret_color_at(&mut app, &layout, 0, x, y, view, false), Color32::WHITE);
+    }
+
     /// Read Mode › View › Page Color: the reading columns are drawn on white, sepia or a dark
     /// page, in place of the document's page color; other views keep the page color.
     #[test]
@@ -4041,37 +4162,38 @@ mod tests {
         use wordcraft_doc::props::Rgb;
         let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello WordCraft")), Default::default());
         a.run("design.pageColor", json!({"color": "#102040"})).unwrap();
-        let paper = |a: &WordApp| page_render_options(a, false).paper_of(&a.session.doc);
+        let layout = a.session.layout();
+        let paper = |a: &WordApp| page_render_options(a, &layout, false).paper_of(&a.session.doc);
         assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "Print Layout shows the page color");
-        let print_key = view_key(&a, false, None);
+        let print_key = view_key(&a, false, None, None);
         a.run("view.readMode", json!({})).unwrap();
         assert_eq!(paper(&a), Rgb::WHITE, "None: white, the page color ignored");
-        let none_key = view_key(&a, false, None);
+        let none_key = view_key(&a, false, None, None);
         a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
         assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
-        assert!(!page_render_options(&a, false).dark, "Sepia keeps the text's colors");
-        let sepia_key = view_key(&a, false, None);
+        assert!(!page_render_options(&a, &layout, false).dark, "Sepia keeps the text's colors");
+        let sepia_key = view_key(&a, false, None, None);
         a.run("view.readPageColor", json!({"value": "inverse"})).unwrap();
-        assert!(page_render_options(&a, false).dark);
+        assert!(page_render_options(&a, &layout, false).dark);
         let d = wordcraft_render::DARK_PAPER;
         assert_eq!(paper(&a), Rgb(d, d, d));
-        let inverse_key = view_key(&a, false, None);
+        let inverse_key = view_key(&a, false, None, None);
         let keys = [print_key, none_key, sepia_key, inverse_key];
         for (i, k) in keys.iter().enumerate() {
             assert!(!keys[..i].contains(k), "each paper has its own view key");
         }
         a.run("view.printLayout", json!({})).unwrap();
         assert_eq!(paper(&a), Rgb(0x10, 0x20, 0x40), "leaving Read Mode brings the page color back");
-        assert!(!page_render_options(&a, false).dark);
+        assert!(!page_render_options(&a, &layout, false).dark);
         // With Switch Modes on, Read Mode's paper still follows the Page color: None is white and Sepia is sepia.
         a.session.view.dark_mode = true;
         a.run("view.readMode", json!({})).unwrap();
-        assert!(!page_render_options(&a, false).dark);
+        assert!(!page_render_options(&a, &layout, false).dark);
         assert_eq!(paper(&a), Rgb::WHITE);
         a.run("view.readPageColor", json!({"value": "sepia"})).unwrap();
         assert_eq!(paper(&a), wordcraft_render::SEPIA_PAPER);
         a.run("view.printLayout", json!({})).unwrap();
-        assert!(page_render_options(&a, false).dark, "Print Layout keeps Switch Modes");
+        assert!(page_render_options(&a, &layout, false).dark, "Print Layout keeps Switch Modes");
     }
 
     /// #299: the caret's colour is worked out only when the caret is drawn: with text selected
@@ -8503,8 +8625,8 @@ mod tests {
         let doc = wordcraft_doc::Document::from_text("Hello WordCraft");
         let app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
         let object = Pos::body(0, 5);
-        let hidden = view_key(&app, false, Some(&object));
-        assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
-        assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+        let hidden = view_key(&app, false, Some(&object), None);
+        assert_ne!(hidden, view_key(&app, false, None, None), "the page without the dragged object is rendered again");
+        assert_eq!(hidden, view_key(&app, false, Some(&object), None), "the same drag keeps the key: no re-render every frame");
     }
 }

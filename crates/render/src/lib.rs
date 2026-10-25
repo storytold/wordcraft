@@ -1538,6 +1538,55 @@ mod tests {
         assert!(reddish(x1 + 2, (y0 + y1) / 2) && reddish(x0 - 2, (y0 + y1) / 2), "glow on both sides");
     }
 
+    /// Gap 10: text in a text box turned 30° is painted turned with the box (its right end lower
+    /// than its left), and straight while the box is edited.
+    #[test]
+    fn text_in_a_rotated_text_box_is_painted_turned() {
+        use wordcraft_doc::para::{Float, InlineObject, Wrap};
+        let slope = |straight: bool| {
+            let mut d = Document::from_text("x");
+            let text = wordcraft_doc::Paragraph::with_text("WWWWWWWWWWWWWWWW", Default::default());
+            let id = d.add_part(wordcraft_doc::PartKind::TextBox, vec![wordcraft_doc::para_block(text)]);
+            let float = Float { wrap: Wrap::InFrontOfText, rot: 30.0, x: 100.0, y: 250.0, ..Default::default() };
+            let shape = InlineObject::Shape {
+                kind: ShapeKind::TextBox,
+                w: 220.0,
+                h: 40.0,
+                fill: None,
+                stroke: None,
+                stroke_width: 0.0,
+                float,
+                story: Some(id),
+                freeform: None,
+                effects: Default::default(),
+                extra: Default::default(),
+            };
+            let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Body, path: wordcraft_doc::Path::top(0), off: 0 };
+            d.insert_object(&at, shape, &Default::default()).unwrap();
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            let mut opts = RenderOptions::default();
+            opts.display.straight = straight.then_some(id);
+            let img = render_page(&d, &l.pages[0], 1.0, &opts);
+            // Dark pixels below the body's line: the box's text.
+            let px: Vec<(f32, f32)> = (0..612u32)
+                .flat_map(|x| (150..792u32).map(move |y| (x, y)))
+                .filter(|(x, y)| img.pixel(*x, *y)[0] < 128)
+                .map(|(x, y)| (x as f32, y as f32))
+                .collect();
+            assert!(px.len() > 100, "the box's text is painted: {}", px.len());
+            let mid = px.iter().map(|p| p.0).sum::<f32>() / px.len() as f32;
+            let mean_y = |left: bool| {
+                let v: Vec<f32> = px.iter().filter(|p| (p.0 < mid) == left).map(|p| p.1).collect();
+                v.iter().sum::<f32>() / v.len().max(1) as f32
+            };
+            mean_y(false) - mean_y(true)
+        };
+        let turned = slope(false);
+        assert!(turned > 20.0, "the line runs down to the right, turned 30°: {turned}");
+        let straight = slope(true);
+        assert!(straight.abs() < 3.0, "edited, it is painted straight: {straight}");
+    }
+
     /// #1500: gradient fills shade across the shape, circular ones from the centre out, and a
     /// transparent fill lets what is behind show through.
     #[test]

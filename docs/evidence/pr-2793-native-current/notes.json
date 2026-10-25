@@ -1,0 +1,32 @@
+{
+  "scope": "Synthetic Latin root body/header/footer ordinary/upright boxes; gestures start in text editing",
+  "limits": [
+    "Linux X11 software rendering at1x UI scale and100% document zoom only. No Word, macOS, Windows, Wayland, real-GPU or other-scale qualification.",
+    "Groups, cells, independently nested boxes, linked boxes, complex scripts and selected-only gestures are outside this native evidence. Atomic row-group splitting is not implemented.",
+    "No general secondary-click or hover-link acceptance. One ordinary body turned-link PDF was activated.",
+    "Exact ee28fe88 source after merging7ef2633a. Later upstream changes have not been executed in this native session."
+  ],
+  "diagnostics": [
+    {
+      "tool": "pdfinfo",
+      "message": "Suspects object is wrong type (boolean)",
+      "attribution": "Not attributed to this source. The PDF rendered and its turned link activated."
+    },
+    {
+      "tool": "startup update",
+      "message": "Offline GitHub DNS failure",
+      "effect": "No blocking UI observed during the matrix."
+    }
+  ],
+  "environment_corrections": [
+    "Old-font lint was superseded after focused controls; currentb076 lint passed.",
+    "Asset checker required an exact copied Git index because host worktree metadata was not mounted.",
+    "First native launch stopped before execution because the copied binary lacked execute permission. Mode corrected without changing bytes or rebuilding. No gesture-coordinate retry was needed."
+  ],
+  "sanitization": [
+    "Synthetic content only. No host paths, host identifiers, customer data, Word exports or vendor UI assets.",
+    "Native WordCraft PNG and generated PDF bytes copied unchanged. PNGs have no text metadata.",
+    "Event times are relative; window IDs are placeholders; paths are generic; RPC replies reduced to status. Full numeric paragraph states and selection are retained separately.",
+    "Evince UI screenshots remain private."
+  ]
+}

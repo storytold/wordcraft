@@ -1,0 +1,13 @@
+{"sequence":0,"elapsed_ms":0,"kind":"XTest","data":["xdotool","windowactivate","--sync","<native-window>"]}
+{"sequence":1,"elapsed_ms":33,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":2,"elapsed_ms":329,"kind":"XTest","data":["xdotool","mousemove","--window","<native-window>","100","100"]}
+{"sequence":3,"elapsed_ms":331,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":4,"elapsed_ms":456,"kind":"XTest","data":["xdotool","click","--repeat","1","--delay","120","1"]}
+{"sequence":5,"elapsed_ms":581,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":6,"elapsed_ms":1707,"kind":"XTest","data":["xdotool","key","--clearmodifiers","Home"]}
+{"sequence":7,"elapsed_ms":1723,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":8,"elapsed_ms":2400,"kind":"XTest","data":["xdotool","mousemove","--window","<native-window>","736","438"]}
+{"sequence":9,"elapsed_ms":2402,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":10,"elapsed_ms":2589,"kind":"XTest","data":["xdotool","click","1"]}
+{"sequence":11,"elapsed_ms":2695,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":12,"elapsed_ms":10880,"kind":"result","data":{"negative_screen":[100,100],"negative_uri_unchanged":true,"expected":"http://127.0.0.1:8799/native-2793/body-ordinary","positive_screen":[736,438],"pdf_sha256":"42bb689614e9b991dab5936060c494f3113633a638b35c0295cd88ba4a945095","uri_events":[],"positive_target_activated":false,"status":"failed"}}

@@ -1,0 +1,46 @@
+{
+  "bound_to": "40e60513624a42babcc8760b729a677373fd2e16",
+  "not_current_upstream_qualification": true,
+  "completeness": {
+    "six_host_upright_combinations": true,
+    "native_enter_and_leave": true,
+    "edited_frame_gestures": true,
+    "full_paragraph_undo_equality": true,
+    "unchanged_final_blocks_and_text": true,
+    "actual_viewer_uri_activation": true
+  },
+  "limits": [
+    "Linux software-rendered X11 at1x only; no macOS, Windows, Wayland, real-GPU or Word pixel parity claim.",
+    "One600x450pt synthetic Latin page with one root box per case, initial30degree rotation.",
+    "Gestures began in text editing. Independent selected-only gesture matrices, groups, cells, nested/linked boxes, complex scripts, secondary-click and hover-link paths are not qualified.",
+    "Evidence remains tied to40e60513 and its egui0.36 base. Current upstream7ef2633a includes egui0.37 and requires separate merge/build/control qualification."
+  ],
+  "retained_failures": [
+    {
+      "kind": "viewer setup",
+      "observation": "Initial CLI launch showed Recent Documents. Final viewer-only D-Bus/local GIO setup and omission of new-window loaded the PDF. Individual cause not isolated."
+    },
+    {
+      "kind": "invalid test coordinates",
+      "observation": "Presentation navigation changed the viewer to610x610; first positive coordinates lay outside it. One corrected normal-view click succeeded."
+    }
+  ],
+  "diagnostics": [
+    {
+      "tool": "pdfinfo",
+      "message": "Syntax Error: Suspects object is wrong type (boolean)",
+      "attribution": "Not attributed to this PR. PDF rendered and activated its link in Evince."
+    },
+    {
+      "tool": "wgpu",
+      "message": "Software rasterizer; missing SHADER_F16_IN_F32 downlevel flag",
+      "scope": "Covered native presentation and interaction completed."
+    }
+  ],
+  "sanitization": [
+    "Only synthetic content is included. No customer material or host paths/identifiers.",
+    "Captures and synthetic fixture/PDF bytes are unchanged; PNGs contain no textual metadata.",
+    "Logs retain input coordinates and order; times are relative, X window IDs are placeholders, output paths are generic, RPC reply bodies are replaced by status. Structural states are supplied separately.",
+    "Third-party viewer UI screenshots and raw machine/container logs remain outside this public bundle."
+  ]
+}

@@ -188,6 +188,7 @@ fn write_attempt(doc: &Document, lay: &DocLayout, opts: &PdfOptions, pages: &[us
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
+        link_transform: kurbo::Affine::IDENTITY,
         bookmarks: std::cell::OnceCell::new(),
     };
     if let Some(o) = ex.outline(pages) {
@@ -744,6 +745,8 @@ struct Exporter<'a> {
     tag_index: HashMap<(StoryRef, DocPath), usize>,
     /// Link rectangles on the current page: (x0, y0, x1, y1, target).
     links: Vec<(f32, f32, f32, f32, String)>,
+    /// Composed display transform, before paper Fit, for link rectangles.
+    link_transform: kurbo::Affine,
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
     /// link up by walking the whole document made a long document with a linked table of contents
     /// take seconds to export.
@@ -874,14 +877,17 @@ impl Exporter<'_> {
                 }
                 let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                let prior = self.link_transform;
+                self.link_transform = prior * kurbo::Affine::new([a, b, c, d, e, f].map(f64::from));
                 for it in items {
                     self.rotated_pictures(s, it);
                 }
+                self.link_transform = prior;
                 s.pop();
             }
             Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
             Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
-            Draw::Figure { alt, draws, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| {
+            Draw::Figure { alt, kind, draws } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
                 for d in draws {
                     me.draw(s, d);
                 }
@@ -918,35 +924,33 @@ impl Exporter<'_> {
             placeholders: false,
             ..Default::default()
         };
+        // The turned text boxes an item is inside (see `Placed::Spun`): it is drawn turned with them.
+        let mut turns: Vec<Placed> = Vec::new();
         for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = self.draws(page, it, &dopts);
+            if within(&mut turns, it) {
+                continue;
+            }
+            let draws = self.draws(page, &turns, it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
                 for d in &draws {
                     me.draw(s, d);
                 }
             });
         }
+        turns.clear();
         for it in &page.items {
-            let draws = self.draws(page, it, &dopts);
+            if within(&mut turns, it) {
+                continue;
+            }
+            let draws = self.draws(page, &turns, it, &dopts);
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
                     for d in &draws {
-                        match d {
-                            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, d)),
-                            // A picture marked decorative: an artifact screen readers skip.
-                            Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
-                            Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, d)),
-                            // A rotated inline picture, or a rotated group holding pictures: turned as a
-                            // whole, each picture tagged on its own (see `rotated_pictures`).
-                            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, d),
-                            // An inline chart, diagram or described shape: its text is part of the figure, not the paragraph.
-                            Draw::Figure { alt, kind, draws: inner } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
-                                for d in inner {
-                                    me.draw(s, d);
-                                }
-                            }),
-                            _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, d)),
+                        if turns.is_empty() {
+                            self.line_draw(s, d, idx);
+                        } else {
+                            self.spun_line(s, d, idx);
                         }
                     }
                 }
@@ -989,9 +993,9 @@ impl Exporter<'_> {
         }
     }
 
-    /// Display items for one placed item.
-    fn draws(&self, page: &Page, it: &Placed, dopts: &DisplayOptions) -> Vec<Draw> {
-        let mut items = vec![it.clone()];
+    /// Display items for one placed item, inside the turned text boxes `turns` it is in.
+    fn draws(&self, page: &Page, turns: &[Placed], it: &Placed, dopts: &DisplayOptions) -> Vec<Draw> {
+        let mut items: Vec<Placed> = turns.iter().cloned().chain(std::iter::once(it.clone())).collect();
         // Lines in a cell cut off at its edge are drawn inside its clip: `page_display` finds the
         // cell among the items (cells themselves draw nothing).
         if matches!(it, Placed::Lines { .. }) {
@@ -1205,9 +1209,12 @@ impl Exporter<'_> {
                 }
                 let [a, b, c, d, e, f] = Draw::turn_matrix(*turn, *x, *y);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                let prior = self.link_transform;
+                self.link_transform = prior * kurbo::Affine::new([a, b, c, d, e, f].map(f64::from));
                 for it in items {
                     self.draw(s, it);
                 }
+                self.link_transform = prior;
                 s.pop();
             }
             Draw::Rotated { cx, cy, spin, items } => {
@@ -1216,11 +1223,64 @@ impl Exporter<'_> {
                 }
                 let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
                 s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                let prior = self.link_transform;
+                self.link_transform = prior * kurbo::Affine::new([a, b, c, d, e, f].map(f64::from));
                 for it in items {
                     self.draw(s, it);
                 }
+                self.link_transform = prior;
                 s.pop();
             }
+        }
+    }
+
+    /// A line's leaf roles stay separate inside a text box's rotation wrappers.
+    fn spun_line(&mut self, s: &mut Surface, draw: &Draw, idx: usize) {
+        enum Step<'a> {
+            Items(std::slice::Iter<'a, Draw>),
+            Restore(kurbo::Affine),
+        }
+        let mut stack = vec![Step::Items(std::slice::from_ref(draw).iter())];
+        while let Some(step) = stack.pop() {
+            match step {
+                Step::Items(mut remaining) => {
+                    let Some(draw) = remaining.next() else { continue };
+                    stack.push(Step::Items(remaining));
+                    let Draw::Rotated { cx, cy, spin, items } = draw else {
+                        self.line_draw(s, draw, idx);
+                        continue;
+                    };
+                    if !ok(*cx) || !ok(*cy) {
+                        continue;
+                    }
+                    let [a, b, c, d, e, f] = spin.matrix(*cx, *cy);
+                    s.push_transform(&Transform::from_row(a, b, c, d, e, f));
+                    let prior = self.link_transform;
+                    self.link_transform = prior * kurbo::Affine::new([a, b, c, d, e, f].map(f64::from));
+                    stack.push(Step::Restore(prior));
+                    stack.push(Step::Items(items.iter()));
+                }
+                Step::Restore(prior) => {
+                    self.link_transform = prior;
+                    s.pop();
+                }
+            }
+        }
+    }
+
+    fn line_draw(&mut self, s: &mut Surface, draw: &Draw, idx: usize) {
+        match draw {
+            Draw::Glyphs { .. } | Draw::Turned { .. } => self.tagged(s, Role::Para(idx), None, |me, s| me.draw(s, draw)),
+            Draw::Image { decorative: true, .. } => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, draw)),
+            Draw::Image { alt, .. } => self.tagged(s, Role::Figure, Some(alt), |me, s| me.draw(s, draw)),
+            Draw::Rotated { items, .. } if items.iter().any(holds_picture) => self.rotated_pictures(s, draw),
+            // Chart text belongs to its figure. Cell clips retain their existing artifact role.
+            Draw::Figure { alt, kind, draws } => self.tagged(s, Role::Figure, Some(figure_alt(alt, *kind)), |me, s| {
+                for d in draws {
+                    me.draw(s, d);
+                }
+            }),
+            _ => self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| me.draw(s, draw)),
         }
     }
 
@@ -1527,9 +1587,16 @@ impl Exporter<'_> {
         if ![x0, x1, y0, y1].iter().all(|v| ok(*v)) {
             return;
         }
+        // Annotation rectangles live in page coordinates, outside the drawing transform stack.
+        let bounds = self.link_transform.transform_rect_bbox(kurbo::Rect::new(x0 as f64, y0 as f64, x1 as f64, y1 as f64));
+        let (x0, y0, x1, y1) = (bounds.x0 as f32, bounds.y0 as f32, bounds.x1 as f32, bounds.y1 as f32);
+        if ![x0, y0, x1, y1].iter().all(|v| ok(*v)) {
+            return;
+        }
         if let Some(prev) = self.links.last_mut()
             && prev.4 == link
             && (prev.1 - y0).abs() < 0.5
+            && (prev.3 - y1).abs() < 0.5
             && x0 - prev.2 < size
         {
             prev.0 = prev.0.min(x0);
@@ -1924,6 +1991,19 @@ fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Image> {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
     Some(Image::from_rgba8(dec.into_rgba8().into_raw(), w, h))
+}
+
+/// Keep `turns`, the turned text boxes the walk is in, up to date with item `it`; true when `it`
+/// is one of their ends (drawn nothing itself).
+fn within(turns: &mut Vec<Placed>, it: &Placed) -> bool {
+    match it {
+        Placed::Spun { open: true, .. } => turns.push(it.clone()),
+        Placed::Spun { open: false, .. } => {
+            turns.pop();
+        }
+        _ => return false,
+    }
+    true
 }
 
 /// Map the document cap to the PDF backend for both shape and path outlines.

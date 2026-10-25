@@ -1,0 +1,14 @@
+{"sequence":0,"elapsed_ms":0,"kind":"XTest","data":["xdotool","windowactivate","--sync","<native-window>"]}
+{"sequence":1,"elapsed_ms":35,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":2,"elapsed_ms":282,"kind":"handler-control","data":{"returncode":0,"stdout":"","stderr":""}}
+{"sequence":3,"elapsed_ms":889,"kind":"actual-viewer-geometry","data":{"client_pixels":[610,610]}}
+{"sequence":4,"elapsed_ms":931,"kind":"XTest","data":["xdotool","mousemove","--window","<native-window>","40","400"]}
+{"sequence":5,"elapsed_ms":934,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":6,"elapsed_ms":1060,"kind":"XTest","data":["xdotool","click","--repeat","1","--delay","120","1"]}
+{"sequence":7,"elapsed_ms":1183,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":8,"elapsed_ms":2293,"kind":"XTest","data":["xdotool","mousemove","--window","<native-window>","280","219"]}
+{"sequence":9,"elapsed_ms":2295,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":10,"elapsed_ms":2425,"kind":"actual-pointer","data":{"client_point_recorded":true,"note":"Root coordinates and X window identifier omitted."}}
+{"sequence":11,"elapsed_ms":2461,"kind":"XTest","data":["xdotool","click","1"]}
+{"sequence":12,"elapsed_ms":2569,"kind":"XTest-result","data":{"code":0,"stdout":"","stderr":""}}
+{"sequence":13,"elapsed_ms":2615,"kind":"result","data":{"status":"passed","expected":"http://127.0.0.1:8799/native-2793/body-ordinary","handler_control":[{"uri":["http://127.0.0.1:8799/native-2793/handler-control"],"utc":"2026-10-25T17:30:31.961943+00:00"}],"negative_uri_unchanged":true,"negative_screen":[40,400],"positive_screen":[280,219],"page_pixel_rect":[13,58,584,439],"calibration":"Actual native normal-view capture, page aspect600x450; click on displayed turned text","geometry":"WINDOW=<native-window>\nX=0\nY=590\nWIDTH=610\nHEIGHT=610\nSCREEN=0\n","new_uri_events":[{"uri":["http://127.0.0.1:8799/native-2793/body-ordinary"],"utc":"2026-10-25T17:30:34.158263+00:00"}],"pdf_sha256":"42bb689614e9b991dab5936060c494f3113633a638b35c0295cd88ba4a945095"}}

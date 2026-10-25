@@ -985,6 +985,7 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 | Placed::Shape { rect, .. }
                 | Placed::Graphic { rect, .. }
                 | Placed::Clip { rect, .. }
+                | Placed::Spun { rect, .. }
                 | Placed::Object { rect, .. } => {
                     if fits(rect.bottom()) {
                         a.push(it.clone());

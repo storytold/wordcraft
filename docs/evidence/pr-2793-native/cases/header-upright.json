@@ -1,0 +1,2151 @@
+{
+  "source_commit": "40e60513624a42babcc8760b729a677373fd2e16",
+  "host": "header",
+  "upright_expected": true,
+  "upright_roundtrip_matches": true,
+  "input_route": "XTest through xdotool into native winit window",
+  "gesture_start_state": "text editing; ordinary boxes show straight editing handles",
+  "initial": {
+    "selection": {
+      "anchor": {
+        "off": 0,
+        "path": [
+          0
+        ],
+        "story": "body"
+      },
+      "focus": {
+        "off": 0,
+        "path": [
+          0
+        ],
+        "story": "body"
+      },
+      "text": ""
+    },
+    "host_paragraph": {
+      "paragraph": {
+        "objects": [
+          {
+            "fill": [
+              238,
+              247,
+              238
+            ],
+            "float": {
+              "dist": 0.0,
+              "distBottom": 0.0,
+              "distTop": 0.0,
+              "effect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "hRel": "page",
+              "rot": 30.0,
+              "vRel": "page",
+              "wrap": "inFrontOfText",
+              "x": 200.0,
+              "y": 50.0,
+              "z": 1
+            },
+            "h": 60.0,
+            "kind": "textBox",
+            "story": 2,
+            "stroke": [
+              34,
+              136,
+              34
+            ],
+            "stroke_width": 1.0,
+            "type": "shape",
+            "w": 200.0
+          }
+        ],
+        "props": {
+          "spaceAfter": 0.0,
+          "spaceBefore": 0.0
+        },
+        "runs": [
+          {
+            "len": 3
+          },
+          {
+            "len": 22,
+            "props": {
+              "font": "Arial",
+              "size": 12.0
+            }
+          }
+        ],
+        "text": "\ufffcHeader native control."
+      },
+      "resolved": {
+        "afterAuto": false,
+        "align": "left",
+        "autoSpaceDe": true,
+        "autoSpaceDn": true,
+        "beforeAuto": false,
+        "bidi": false,
+        "borders": null,
+        "contextualSpacing": false,
+        "dropCap": 0,
+        "dropCapDistance": 0.0,
+        "dropCapMargin": false,
+        "indentChars": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "indentFirst": 0.0,
+        "indentLeft": 0.0,
+        "indentRight": 0.0,
+        "keepLines": false,
+        "keepNext": false,
+        "kinsoku": true,
+        "lineSpacing": {
+          "rule": "multiple",
+          "value": 1.149999976158142
+        },
+        "mirrorIndents": false,
+        "numbering": null,
+        "outlineLevel": null,
+        "overflowPunct": true,
+        "pageBreakBefore": false,
+        "shading": null,
+        "snapToGrid": true,
+        "spaceAfter": 0.0,
+        "spaceBefore": 0.0,
+        "style": "Normal",
+        "suppressHyphens": false,
+        "suppressLineNumbers": false,
+        "tabs": [],
+        "topLinePunct": false,
+        "widowControl": true,
+        "wordWrap": true
+      }
+    },
+    "body_blocks": [
+      {
+        "index": 0,
+        "len": 20,
+        "props": {
+          "spaceAfter": 0.0,
+          "spaceBefore": 0.0
+        },
+        "runs": [
+          {
+            "end": 20,
+            "props": {
+              "font": "Arial",
+              "size": 12.0
+            },
+            "start": 0
+          }
+        ],
+        "style": "Normal",
+        "text": "Body native control.",
+        "type": "paragraph"
+      }
+    ],
+    "parts": [
+      {
+        "id": 1,
+        "kind": "header",
+        "text": "Header native control."
+      },
+      {
+        "id": 2,
+        "kind": "textBox",
+        "text": "Native turned link"
+      }
+    ],
+    "can_undo": false,
+    "can_redo": false,
+    "client_points": [
+      1440.0,
+      920.0
+    ],
+    "page_rects": [
+      [
+        324.0,
+        202.0,
+        800.0,
+        600.0
+      ]
+    ],
+    "canvas_scale": 1.3333333730697632,
+    "document_zoom": 1.0,
+    "interface_scale": "auto"
+  },
+  "entered": {
+    "selection": {
+      "anchor": {
+        "off": 5,
+        "path": [
+          0
+        ],
+        "story": {
+          "part": 2
+        }
+      },
+      "focus": {
+        "off": 5,
+        "path": [
+          0
+        ],
+        "story": {
+          "part": 2
+        }
+      },
+      "text": ""
+    },
+    "host_paragraph": {
+      "paragraph": {
+        "objects": [
+          {
+            "fill": [
+              238,
+              247,
+              238
+            ],
+            "float": {
+              "dist": 0.0,
+              "distBottom": 0.0,
+              "distTop": 0.0,
+              "effect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "hRel": "page",
+              "rot": 30.0,
+              "vRel": "page",
+              "wrap": "inFrontOfText",
+              "x": 200.0,
+              "y": 50.0,
+              "z": 1
+            },
+            "h": 60.0,
+            "kind": "textBox",
+            "story": 2,
+            "stroke": [
+              34,
+              136,
+              34
+            ],
+            "stroke_width": 1.0,
+            "type": "shape",
+            "w": 200.0
+          }
+        ],
+        "props": {
+          "spaceAfter": 0.0,
+          "spaceBefore": 0.0
+        },
+        "runs": [
+          {
+            "len": 3
+          },
+          {
+            "len": 22,
+            "props": {
+              "font": "Arial",
+              "size": 12.0
+            }
+          }
+        ],
+        "text": "\ufffcHeader native control."
+      },
+      "resolved": {
+        "afterAuto": false,
+        "align": "left",
+        "autoSpaceDe": true,
+        "autoSpaceDn": true,
+        "beforeAuto": false,
+        "bidi": false,
+        "borders": null,
+        "contextualSpacing": false,
+        "dropCap": 0,
+        "dropCapDistance": 0.0,
+        "dropCapMargin": false,
+        "indentChars": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "indentFirst": 0.0,
+        "indentLeft": 0.0,
+        "indentRight": 0.0,
+        "keepLines": false,
+        "keepNext": false,
+        "kinsoku": true,
+        "lineSpacing": {
+          "rule": "multiple",
+          "value": 1.149999976158142
+        },
+        "mirrorIndents": false,
+        "numbering": null,
+        "outlineLevel": null,
+        "overflowPunct": true,
+        "pageBreakBefore": false,
+        "shading": null,
+        "snapToGrid": true,
+        "spaceAfter": 0.0,
+        "spaceBefore": 0.0,
+        "style": "Normal",
+        "suppressHyphens": false,
+        "suppressLineNumbers": false,
+        "tabs": [],
+        "topLinePunct": false,
+        "widowControl": true,
+        "wordWrap": true
+      }
+    },
+    "body_blocks": [
+      {
+        "index": 0,
+        "len": 20,
+        "props": {
+          "spaceAfter": 0.0,
+          "spaceBefore": 0.0
+        },
+        "runs": [
+          {
+            "end": 20,
+            "props": {
+              "font": "Arial",
+              "size": 12.0
+            },
+            "start": 0
+          }
+        ],
+        "style": "Normal",
+        "text": "Body native control.",
+        "type": "paragraph"
+      }
+    ],
+    "parts": [
+      {
+        "id": 1,
+        "kind": "header",
+        "text": "Header native control."
+      },
+      {
+        "id": 2,
+        "kind": "textBox",
+        "text": "Native turned link"
+      }
+    ],
+    "can_undo": false,
+    "can_redo": false,
+    "client_points": [
+      1440.0,
+      920.0
+    ],
+    "page_rects": [
+      [
+        324.0,
+        202.0,
+        800.0,
+        600.0
+      ]
+    ],
+    "canvas_scale": 1.3333333730697632,
+    "document_zoom": 1.0,
+    "interface_scale": "auto"
+  },
+  "left": {
+    "selection": {
+      "anchor": {
+        "off": 3,
+        "path": [
+          0
+        ],
+        "story": "body"
+      },
+      "focus": {
+        "off": 3,
+        "path": [
+          0
+        ],
+        "story": "body"
+      },
+      "text": ""
+    },
+    "host_paragraph": {
+      "paragraph": {
+        "objects": [
+          {
+            "fill": [
+              238,
+              247,
+              238
+            ],
+            "float": {
+              "dist": 0.0,
+              "distBottom": 0.0,
+              "distTop": 0.0,
+              "effect": [
+                0.0,
+                0.0,
+                0.0,
+                0.0
+              ],
+              "hRel": "page",
+              "rot": 30.0,
+              "vRel": "page",
+              "wrap": "inFrontOfText",
+              "x": 200.0,
+              "y": 50.0,
+              "z": 1
+            },
+            "h": 60.0,
+            "kind": "textBox",
+            "story": 2,
+            "stroke": [
+              34,
+              136,
+              34
+            ],
+            "stroke_width": 1.0,
+            "type": "shape",
+            "w": 200.0
+          }
+        ],
+        "props": {
+          "spaceAfter": 0.0,
+          "spaceBefore": 0.0
+        },
+        "runs": [
+          {
+            "len": 3
+          },
+          {
+            "len": 22,
+            "props": {
+              "font": "Arial",
+              "size": 12.0
+            }
+          }
+        ],
+        "text": "\ufffcHeader native control."
+      },
+      "resolved": {
+        "afterAuto": false,
+        "align": "left",
+        "autoSpaceDe": true,
+        "autoSpaceDn": true,
+        "beforeAuto": false,
+        "bidi": false,
+        "borders": null,
+        "contextualSpacing": false,
+        "dropCap": 0,
+        "dropCapDistance": 0.0,
+        "dropCapMargin": false,
+        "indentChars": [
+          0.0,
+          0.0,
+          0.0
+        ],
+        "indentFirst": 0.0,
+        "indentLeft": 0.0,
+        "indentRight": 0.0,
+        "keepLines": false,
+        "keepNext": false,
+        "kinsoku": true,
+        "lineSpacing": {
+          "rule": "multiple",
+          "value": 1.149999976158142
+        },
+        "mirrorIndents": false,
+        "numbering": null,
+        "outlineLevel": null,
+        "overflowPunct": true,
+        "pageBreakBefore": false,
+        "shading": null,
+        "snapToGrid": true,
+        "spaceAfter": 0.0,
+        "spaceBefore": 0.0,
+        "style": "Normal",
+        "suppressHyphens": false,
+        "suppressLineNumbers": false,
+        "tabs": [],
+        "topLinePunct": false,
+        "widowControl": true,
+        "wordWrap": true
+      }
+    },
+    "body_blocks": [
+      {
+        "index": 0,
+        "len": 20,
+        "props": {
+          "spaceAfter": 0.0,
+          "spaceBefore": 0.0
+        },
+        "runs": [
+          {
+            "end": 20,
+            "props": {
+              "font": "Arial",
+              "size": 12.0
+            },
+            "start": 0
+          }
+        ],
+        "style": "Normal",
+        "text": "Body native control.",
+        "type": "paragraph"
+      }
+    ],
+    "parts": [
+      {
+        "id": 1,
+        "kind": "header",
+        "text": "Header native control."
+      },
+      {
+        "id": 2,
+        "kind": "textBox",
+        "text": "Native turned link"
+      }
+    ],
+    "can_undo": false,
+    "can_redo": false,
+    "client_points": [
+      1440.0,
+      920.0
+    ],
+    "page_rects": [
+      [
+        324.0,
+        202.0,
+        800.0,
+        600.0
+      ]
+    ],
+    "canvas_scale": 1.3333333730697632,
+    "document_zoom": 1.0,
+    "interface_scale": "auto"
+  },
+  "gestures": {
+    "move": {
+      "before": {
+        "selection": {
+          "anchor": {
+            "off": 5,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 2
+            }
+          },
+          "focus": {
+            "off": 5,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 2
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 30.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": false,
+        "can_redo": false,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "after": {
+        "selection": {
+          "anchor": {
+            "off": 0,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "focus": {
+            "off": 3,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "column",
+                  "rot": 30.0,
+                  "vRel": "paragraph",
+                  "wrap": "inFrontOfText",
+                  "x": 174.25,
+                  "y": 57.5,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": true,
+        "can_redo": false,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "undo": {
+        "selection": {
+          "anchor": {
+            "off": 0,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "focus": {
+            "off": 3,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 30.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": false,
+        "can_redo": true,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "full_paragraph_restored": true,
+      "intended_property_changed": true
+    },
+    "resize": {
+      "before": {
+        "selection": {
+          "anchor": {
+            "off": 5,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 2
+            }
+          },
+          "focus": {
+            "off": 5,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 2
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 30.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": false,
+        "can_redo": true,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "after": {
+        "selection": {
+          "anchor": {
+            "off": 0,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "focus": {
+            "off": 3,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "column",
+                  "rot": 30.0,
+                  "vRel": "paragraph",
+                  "wrap": "inFrontOfText",
+                  "x": 158.3798065185547,
+                  "y": 41.046630859375,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 224.1865234375
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": true,
+        "can_redo": false,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "undo": {
+        "selection": {
+          "anchor": {
+            "off": 0,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "focus": {
+            "off": 3,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 30.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": false,
+        "can_redo": true,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "full_paragraph_restored": true,
+      "intended_property_changed": true
+    },
+    "rotate": {
+      "before": {
+        "selection": {
+          "anchor": {
+            "off": 5,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 2
+            }
+          },
+          "focus": {
+            "off": 5,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 2
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 30.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": false,
+        "can_redo": true,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "after": {
+        "selection": {
+          "anchor": {
+            "off": 0,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "focus": {
+            "off": 3,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 50.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": true,
+        "can_redo": false,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "undo": {
+        "selection": {
+          "anchor": {
+            "off": 0,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "focus": {
+            "off": 3,
+            "path": [
+              0
+            ],
+            "story": {
+              "part": 1
+            }
+          },
+          "text": ""
+        },
+        "host_paragraph": {
+          "paragraph": {
+            "objects": [
+              {
+                "fill": [
+                  238,
+                  247,
+                  238
+                ],
+                "float": {
+                  "dist": 0.0,
+                  "distBottom": 0.0,
+                  "distTop": 0.0,
+                  "effect": [
+                    0.0,
+                    0.0,
+                    0.0,
+                    0.0
+                  ],
+                  "hRel": "page",
+                  "rot": 30.0,
+                  "vRel": "page",
+                  "wrap": "inFrontOfText",
+                  "x": 200.0,
+                  "y": 50.0,
+                  "z": 1
+                },
+                "h": 60.0,
+                "kind": "textBox",
+                "story": 2,
+                "stroke": [
+                  34,
+                  136,
+                  34
+                ],
+                "stroke_width": 1.0,
+                "type": "shape",
+                "w": 200.0
+              }
+            ],
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "len": 3
+              },
+              {
+                "len": 22,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                }
+              }
+            ],
+            "text": "\ufffcHeader native control."
+          },
+          "resolved": {
+            "afterAuto": false,
+            "align": "left",
+            "autoSpaceDe": true,
+            "autoSpaceDn": true,
+            "beforeAuto": false,
+            "bidi": false,
+            "borders": null,
+            "contextualSpacing": false,
+            "dropCap": 0,
+            "dropCapDistance": 0.0,
+            "dropCapMargin": false,
+            "indentChars": [
+              0.0,
+              0.0,
+              0.0
+            ],
+            "indentFirst": 0.0,
+            "indentLeft": 0.0,
+            "indentRight": 0.0,
+            "keepLines": false,
+            "keepNext": false,
+            "kinsoku": true,
+            "lineSpacing": {
+              "rule": "multiple",
+              "value": 1.149999976158142
+            },
+            "mirrorIndents": false,
+            "numbering": null,
+            "outlineLevel": null,
+            "overflowPunct": true,
+            "pageBreakBefore": false,
+            "shading": null,
+            "snapToGrid": true,
+            "spaceAfter": 0.0,
+            "spaceBefore": 0.0,
+            "style": "Normal",
+            "suppressHyphens": false,
+            "suppressLineNumbers": false,
+            "tabs": [],
+            "topLinePunct": false,
+            "widowControl": true,
+            "wordWrap": true
+          }
+        },
+        "body_blocks": [
+          {
+            "index": 0,
+            "len": 20,
+            "props": {
+              "spaceAfter": 0.0,
+              "spaceBefore": 0.0
+            },
+            "runs": [
+              {
+                "end": 20,
+                "props": {
+                  "font": "Arial",
+                  "size": 12.0
+                },
+                "start": 0
+              }
+            ],
+            "style": "Normal",
+            "text": "Body native control.",
+            "type": "paragraph"
+          }
+        ],
+        "parts": [
+          {
+            "id": 1,
+            "kind": "header",
+            "text": "Header native control."
+          },
+          {
+            "id": 2,
+            "kind": "textBox",
+            "text": "Native turned link"
+          }
+        ],
+        "can_undo": false,
+        "can_redo": true,
+        "client_points": [
+          1440.0,
+          920.0
+        ],
+        "page_rects": [
+          [
+            324.0,
+            202.0,
+            800.0,
+            600.0
+          ]
+        ],
+        "canvas_scale": 1.3333333730697632,
+        "document_zoom": 1.0,
+        "interface_scale": "auto"
+      },
+      "full_paragraph_restored": true,
+      "intended_property_changed": true
+    }
+  },
+  "final_blocks_and_text_unchanged": true
+}

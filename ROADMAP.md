@@ -210,6 +210,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-20 | Restrict Editing holds for the file commands too: the privacy options, the properties and the inspector's removals are refused on a protected document, and restoring a stored version keeps the protection and its password instead of the snapshot's stale ones |
 | 2026-10-17 | Ribbon hints' reasons for a greyed-out control are translated in every interface language; a test fails if a reason it finds in the command sources, or the "Open a document first" hint, has no translation (#2678). |
 | 2026-10-17 | Ribbon hover hints: a disabled control says why (the command's own reason), split-button arrows, menu buttons and the font, size and outline boxes have hints, and hints show on keyboard focus (#1086). |
+| 2026-10-17 | Standalone text-box text follows shape rotation in screen rendering, PDF and drag previews. Upright text stays flat; header/footer clicks follow the edited frame. Based on #1518. Group text rotation remains incomplete. |
 | 2026-10-14 | DOCX row table border exceptions render and survive saving. Explicit cell borders win; a row exception does not change other rows. |
 | 2026-10-14 | Tab stops edited on the ruler: the corner selector picks Left/Center/Right/Decimal/Bar, a click sets a stop (Alt skips the snap), dragging moves it with a guide line and position tooltip, dragging off the ruler clears it; markers draw per kind and mirror for RTL; one `para.tabs` call and one undo step per gesture |
 | 2026-10-12 | Fields keep `w:dirty` through DOCX saves (#877): a begin marker flagged by a generator that couldn't compute a result (pandoc-style TOC placeholders) keeps the flag on open/save — as a buffered field or a range field — so Word still refreshes it on open; computing a result (Update Field, Update Table) clears it, like Word's F9 |
@@ -784,6 +785,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-17 | minor | Progress log: Scale to paper size on File › Print, #2108 |
 | 2026-10-17 | trivial | Non-overlapping body floating tables clear header tables; overlapping tables keep their requested position |
 | 2026-10-15 | trivial | Progress log: caret inside ligatures (#1974) |
+| 2026-10-17 | trivial | Standalone text-box glyphs rotate with their shape; upright text, header editing and drag previews keep their shown frame. Based on #1518. |
 | 2026-10-17 | trivial | Progress log: the ribbon's paste choices in the context menu (#2583) |
 | 2026-10-16 | trivial | Progress log: live rotation preview while dragging (#2277); readiness estimates unchanged |
 | 2026-10-16 | trivial | Progress log: a text frame in the paragraph defaults frames nothing (#2360) |

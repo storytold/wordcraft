@@ -1,0 +1,263 @@
+{
+  "source_commit": "ee28fe88afc381b41362cc7780854db989c2d89e",
+  "font_snapshot": "b076417b5880bd4154bd22f00695b1d28c6bea83",
+  "checks": [
+    {
+      "label": "clean",
+      "command": [
+        "cargo",
+        "clean",
+        "-p",
+        "wordcraft-fonts"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "ff9682ca1fdb62bd65f6a017709493fd2b5d03d2d2a28cdfc706575d261bbd6f"
+    },
+    {
+      "label": "fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "label": "layout",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-layout",
+        "--lib",
+        "vertical_spun",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "1c00769a1a09147578cf18539e846a1556385886b0eb8982353c01c668f7b2f9"
+    },
+    {
+      "label": "render",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-render",
+        "--lib",
+        "text_in_a_rotated_text_box_is_painted_turned",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "0b7831f8e24e7a57f805d276d4b95ae66403b2ba76449ef81e8ffb0f5cc2264c"
+    },
+    {
+      "label": "pdf",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-pdf",
+        "--lib",
+        "spun",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "e637122da71711e8564f62bba460ce57dcd6498db95c7f7726d362791667d3a9"
+    },
+    {
+      "label": "ui-turned",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-ui-egui",
+        "--lib",
+        "turned_box",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "b754aa4a88d91733b6e5561d9793f1b423b22222d1315461cd011cdbdf0f7393"
+    },
+    {
+      "label": "ui-straight",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-ui-egui",
+        "--lib",
+        "straight_box",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "b1c66efec07d9a2874f5c3bb2ba9c8a894996a249eeec28918f8661f5ab8d3ea"
+    },
+    {
+      "label": "ui-upright",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-ui-egui",
+        "--lib",
+        "upright_editor",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "405564bbff75901442f501bfb36889154dd9f83c6b6fc251c3a51062e5284cc1"
+    },
+    {
+      "label": "ui-header",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-ui-egui",
+        "--lib",
+        "header_box_second_click",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "d154d494ca85d57779bfda8e3df8ae4f2ade3964612d50f9242b20d4ce5b1092"
+    },
+    {
+      "label": "ui-entry",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-ui-egui",
+        "--lib",
+        "text_box_straightens",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "cfb334fab5d433438f01614a0086a07a84f76a1f2df0f5fa5de340d8fa923969"
+    },
+    {
+      "label": "lint",
+      "command": [
+        "cargo",
+        "clippy",
+        "--locked",
+        "-p",
+        "wordcraft-layout",
+        "-p",
+        "wordcraft-render",
+        "-p",
+        "wordcraft-pdf",
+        "-p",
+        "wordcraft-ui-egui",
+        "--all-targets",
+        "--",
+        "-D",
+        "warnings"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "864da8ec26b3cbdbd8bfd95704c85c932ac5fa4a84b477339758c84a9fcb6a9e"
+    },
+    {
+      "label": "layout-rotated",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-layout",
+        "--lib",
+        "rotated",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "4cd7d9907e8f36d5987e042fdcbc23b5f1ef8262aa2ea2d9fcf034f164bffa9d"
+    },
+    {
+      "label": "layout-turned",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-layout",
+        "--lib",
+        "turned",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "02aa953d15db4afb912e539c61ea534558b76ee6222a65b5d5d1ea09a9774462"
+    },
+    {
+      "label": "pdf-turned",
+      "command": [
+        "cargo",
+        "test",
+        "--locked",
+        "-p",
+        "wordcraft-pdf",
+        "--lib",
+        "text_in_a_rotated_text_box_is_turned_in_the_pdf",
+        "--",
+        "--test-threads=1"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "e47c2cfec799030778d9d8d16b00f9905b39732b10c7e1473a93f894db12e44a"
+    },
+    {
+      "label": "assets-r2",
+      "command": [
+        "cargo",
+        "xtask",
+        "assets"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "3a24e2760c5023ed698d0f10ac96fc3dd27d196c819ab4a15017b41b42162123"
+    },
+    {
+      "label": "layers",
+      "command": [
+        "cargo",
+        "xtask",
+        "layers"
+      ],
+      "returncode": 0,
+      "zero_match_or_missing_result": false,
+      "log_sha256": "f4693fe0c391e9ed34b40339de424ff626295a22a5996f0a1dc98ee93da7cbf9"
+    }
+  ]
+}

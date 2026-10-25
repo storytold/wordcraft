@@ -1343,6 +1343,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
         tags: Vec::new(),
         tag_index: HashMap::new(),
         links: Vec::new(),
+        link_transform: kurbo::Affine::IDENTITY,
         bookmarks: std::cell::OnceCell::new(),
     };
     let (page, x, y) = ex.bookmark("target").unwrap();
@@ -2195,6 +2196,278 @@ fn pages_print_scaled_to_other_paper() {
     for paper in [(f32::NAN, 1.0), (0.0, 0.0), (-5.0, f32::INFINITY)] {
         let bytes = export(&d, &PdfOptions { paper: Some(paper), ..Default::default() }).unwrap();
         assert_eq!(size(&bytes), size(&plain));
+    }
+}
+
+/// Text in a text box turned 30° is drawn turned with it (gap 10): its glyphs' transforms carry
+/// the turn, while the body's stay upright.
+#[test]
+fn text_in_a_rotated_text_box_is_turned_in_the_pdf() {
+    use hayro_interpret::font::Glyph;
+    use hayro_interpret::{
+        BlendMode, ClipPath, Context, Device, GlyphDrawMode, Image, InterpreterCache, InterpreterSettings, Paint, PathDrawMode, SoftMask,
+        interpret_page,
+    };
+    use wordcraft_doc::para::{ShapeKind, Wrap};
+    use wordcraft_doc::{PartKind, Path, Pos, StoryRef};
+    let mut d = Document::from_text("Body words around it.");
+    let id = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Turned", Default::default()))]);
+    let mut float = wordcraft_doc::para::Float { wrap: Wrap::Square, rot: 30.0, ..Default::default() };
+    float.y = 100.0;
+    let shape = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 180.0,
+        h: 60.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 1.0,
+        float,
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    d.insert_object(&Pos { story: StoryRef::Body, path: Path::top(0), off: 0 }, shape, &Default::default()).unwrap();
+    let bytes = export(&d, &PdfOptions::default()).unwrap();
+    // (character, the angle its glyph is drawn at, degrees).
+    struct Ex(Vec<(String, f64)>);
+    impl Device<'_> for Ex {
+        fn set_soft_mask(&mut self, _: Option<SoftMask<'_>>) {}
+        fn set_blend_mode(&mut self, _: BlendMode) {}
+        fn draw_path(&mut self, _: &kurbo::BezPath, _: kurbo::Affine, _: &Paint<'_>, _: &PathDrawMode) {}
+        fn push_clip_path(&mut self, _: &ClipPath) {}
+        fn push_transparency_group(&mut self, _: f32, _: Option<SoftMask<'_>>, _: BlendMode) {}
+        fn draw_glyph(&mut self, g: &Glyph<'_>, t: kurbo::Affine, gt: kurbo::Affine, _: &Paint<'_>, mode: &GlyphDrawMode) {
+            if matches!(mode, GlyphDrawMode::Stroke(_)) {
+                return;
+            }
+            let c = match g.as_unicode() {
+                Some(hayro_cmap::BfString::Char(c)) => c.to_string(),
+                Some(hayro_cmap::BfString::String(s)) => s.to_string(),
+                None => String::new(),
+            };
+            let [a, b, ..] = (t * gt).as_coeffs();
+            self.0.push((c, b.atan2(a).to_degrees()));
+        }
+        fn draw_image(&mut self, _: Image<'_, '_>, _: kurbo::Affine) {}
+        fn pop_clip_path(&mut self) {}
+        fn pop_transparency_group(&mut self) {}
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes).expect("parse");
+    let cache = InterpreterCache::new();
+    let page = pdf.pages().iter().next().expect("a page");
+    let mut ctx = Context::new(kurbo::Affine::IDENTITY, kurbo::Rect::new(0.0, 0.0, 1.0, 1.0), &cache, pdf.xref(), InterpreterSettings::default());
+    let mut ex = Ex(Vec::new());
+    interpret_page(page, &mut ctx, &mut ex);
+    let angle = |ch: &str| ex.0.iter().find(|(c, _)| c == ch).map(|(_, a)| *a);
+    let body = angle("B").expect("the body's B");
+    let turned = angle("T").expect("the box's T");
+    assert!(body.abs() < 0.5, "body text is upright: {body}");
+    assert!((turned.abs() - 30.0).abs() < 0.5, "the box's text is drawn at 30°: {turned}");
+}
+
+fn linked_spun_doc(nested: Option<f32>) -> Document {
+    use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
+    use wordcraft_doc::{PartKind, Path, Pos, StoryRef};
+    let mut doc = Document::from_text("Previous page\nHost");
+    let Block::Para(host) = Arc::make_mut(&mut doc.body[1]) else {
+        panic!("host paragraph");
+    };
+    host.props.page_break_before = Some(true);
+    let linked = Paragraph::with_text("Linked words", CharProps { link: Some("https://example.com/spun".into()), ..Default::default() });
+    let inner = doc.add_part(PartKind::TextBox, vec![para_block(linked)]);
+    let shape = |id, rot, rect: Rect, h_rel, v_rel| InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: rect.w,
+        h: rect.h,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::InFrontOfText, rot, x: rect.x, y: rect.y, h_rel, v_rel, ..Default::default() },
+        story: Some(id),
+        effects: Default::default(),
+        freeform: None,
+        extra: Default::default(),
+    };
+    let (outer, angle) = if let Some(angle) = nested {
+        let outer = doc.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Parent", CharProps::default()))]);
+        let child = shape(inner, angle, Rect::new(12.0, 24.0, 100.0, 45.0), Anchor::Column, Anchor::Paragraph);
+        doc.insert_object(&Pos { story: StoryRef::Part(outer), path: Path::top(0), off: 0 }, child, &CharProps::default()).unwrap();
+        (outer, 25.0)
+    } else {
+        (inner, 90.0)
+    };
+    let parent = shape(outer, angle, Rect::new(120.0, 180.0, 220.0, 120.0), Anchor::Page, Anchor::Page);
+    doc.insert_object(&Pos::body(1, 0), parent, &CharProps::default()).unwrap();
+    doc
+}
+
+fn pdf_link_rects(bytes: Vec<u8>) -> Vec<(usize, [f32; 4])> {
+    use hayro_syntax::object::{Array, Dict};
+    let pdf = hayro_syntax::Pdf::new(bytes).unwrap();
+    pdf.pages()
+        .iter()
+        .enumerate()
+        .flat_map(|(page, p)| {
+            p.raw()
+                .get::<Array>(b"Annots")
+                .into_iter()
+                .flat_map(|a| a.iter::<Dict>().collect::<Vec<_>>())
+                .map(move |a| {
+                    let coords = a.get::<Array>(b"Rect").unwrap().iter::<f32>().collect::<Vec<_>>();
+                    (page, coords.try_into().unwrap())
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect()
+}
+
+#[test]
+fn spun_links_follow_page_fit() {
+    for nested in [None, Some(35.0)] {
+        let doc = linked_spun_doc(nested);
+        let lay = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+        assert_eq!(lay.pages.len(), 2);
+        let mut flat = lay.clone();
+        for page in &mut flat.pages {
+            page.items.retain(|p| !matches!(p, Placed::Spun { .. }));
+        }
+        let base = pdf_link_rects(export_layout(&doc, &flat, &PdfOptions::default()).unwrap());
+        assert_eq!(base.len(), 1);
+        assert_eq!(base[0].0, 1, "the link is on the second output page");
+        let mut active = Vec::new();
+        let mut frames = None;
+        for item in &lay.pages[1].items {
+            match item {
+                Placed::Spun { open: true, rect, spin, .. } => active.push((*rect, *spin)),
+                Placed::Spun { open: false, .. } => {
+                    active.pop();
+                }
+                Placed::Lines { story, path, .. } if doc.para(*story, path).is_some_and(|p| p.text.contains("Linked words")) => {
+                    frames = Some(active.clone())
+                }
+                _ => {}
+            }
+        }
+        let frames = frames.unwrap();
+        assert_eq!(frames.len(), 1, "nested text inherits only its allowed outer turn");
+        assert_eq!(frames[0].1.deg, if nested.is_some() { 25.0 } else { 90.0 });
+        if let Some(angle) = nested {
+            let child = lay.find_object(1, |object| matches!(object.story, wordcraft_doc::StoryRef::Part(_)) && object.text_box.is_some()).unwrap();
+            assert_eq!(child.spin.deg, angle, "the nested frame retains main's stored angle");
+        }
+        let [x0, y0, x1, y1] = base[0].1;
+        let height = lay.pages[1].h;
+        let mut corners = [(x0, height - y0), (x0, height - y1), (x1, height - y0), (x1, height - y1)];
+        for (frame, spin) in frames.iter().rev() {
+            let (sin, cos) = spin.deg.to_radians().sin_cos();
+            let (cx, cy) = (frame.x + frame.w / 2.0, frame.y + frame.h / 2.0);
+            for (x, y) in &mut corners {
+                let (dx, dy) = (*x - cx, *y - cy);
+                (*x, *y) = (cx + cos * dx - sin * dy, cy + sin * dx + cos * dy);
+            }
+        }
+        for paper in [None, Some((400.0, 500.0))] {
+            let (w, h) = paper.unwrap_or((lay.pages[1].w, height));
+            let scale = (w / lay.pages[1].w).min(h / height);
+            let (dx, dy) = ((w - lay.pages[1].w * scale) / 2.0, (h - height * scale) / 2.0);
+            let mut expected = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+            for (x, y) in corners {
+                let (x, y) = (x * scale + dx, h - (y * scale + dy));
+                expected[0] = expected[0].min(x);
+                expected[1] = expected[1].min(y);
+                expected[2] = expected[2].max(x);
+                expected[3] = expected[3].max(y);
+            }
+            let actual = pdf_link_rects(export_layout(&doc, &lay, &PdfOptions { paper, ..Default::default() }).unwrap());
+            assert_eq!(actual.len(), 1);
+            assert_eq!(actual[0].0, 1);
+            for (a, e) in actual[0].1.iter().zip(expected) {
+                assert!((a - e).abs() < 0.05, "nested={nested:?} paper={paper:?}: actual={actual:?} expected={expected:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn nested_spun_text_keeps_tags() {
+    let doc = linked_spun_doc(Some(35.0));
+    let lay = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+    let mut flat = lay.clone();
+    for page in &mut flat.pages {
+        page.items.retain(|p| !matches!(p, Placed::Spun { .. }));
+    }
+    let opts = PdfOptions { compress: false, ..Default::default() };
+    let flat_pdf = export_layout(&doc, &flat, &opts).unwrap();
+    let spun_pdf = export_layout(&doc, &lay, &opts).unwrap();
+    assert_eq!(extract_text(&spun_pdf), extract_text(&flat_pdf));
+    let flat_raw = String::from_utf8_lossy(&flat_pdf);
+    let spun_raw = String::from_utf8_lossy(&spun_pdf);
+    assert!(spun_raw.contains("/StructTreeRoot"));
+    let marked = flat_raw.matches("/MCID").count();
+    assert!(marked >= 4, "all four source paragraphs are tagged");
+    assert_eq!(spun_raw.matches("/MCID").count(), marked, "nested rotated glyphs keep their paragraph MCIDs");
+}
+
+#[test]
+fn spun_mixed_roles() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem, GraphicKind, TextAlign};
+    use wordcraft_doc::props::{Rgb, Underline};
+    use wordcraft_doc::{Path, Pos, StoryRef};
+    for nested in [None, Some(35.0)] {
+        let mut doc = linked_spun_doc(nested);
+        let id = *doc
+            .parts
+            .iter()
+            .find(|(_, part)| part.blocks.iter().any(|b| matches!(b.as_ref(), Block::Para(p) if p.text.contains("Linked words"))))
+            .unwrap()
+            .0;
+        let at = Pos { story: StoryRef::Part(id), path: Path::top(0), off: 0 };
+        let media = doc.add_media(png(), "png");
+        let image =
+            InlineObject::Image { media, w: 16.0, h: 8.0, alt: "Original gradient".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+        doc.insert_object(&at, image, &Default::default()).unwrap();
+        let graphic = Graphic {
+            kind: GraphicKind::Chart,
+            items: vec![GraphicItem::Text {
+                rect: [0.0, 0.0, 40.0, 12.0],
+                text: "Q1".into(),
+                size: 10.0,
+                color: Rgb::BLACK,
+                bold: false,
+                align: TextAlign::Center,
+                font: None,
+            }],
+            ..Default::default()
+        };
+        doc.insert_object(
+            &at,
+            InlineObject::Graphic { w: 40.0, h: 16.0, alt: "Original chart".into(), float: Default::default(), graphic: Arc::new(graphic) },
+            &Default::default(),
+        )
+        .unwrap();
+        let p = doc.para_mut(at.story, &at.path).unwrap();
+        for run in &mut p.runs {
+            run.props.underline = Some(Underline::Single);
+        }
+        let lay = layout(&doc, &mut LayoutCache::new(), &LayoutOptions::default());
+        let mut flat = lay.clone();
+        for page in &mut flat.pages {
+            page.items.retain(|p| !matches!(p, Placed::Spun { .. }));
+        }
+        let opts = PdfOptions { compress: false, ..Default::default() };
+        let flat_pdf = export_layout(&doc, &flat, &opts).unwrap();
+        let spun_pdf = export_layout(&doc, &lay, &opts).unwrap();
+        let base = String::from_utf8_lossy(&flat_pdf);
+        let actual = String::from_utf8_lossy(&spun_pdf);
+        for alt in ["/Alt(Original gradient)", "/Alt(Original chart)"] {
+            assert!(base.contains(alt), "flat control: {alt}");
+            assert!(actual.contains(alt), "nested={nested:?}: {alt}");
+        }
+        for role in ["/Figure", "/Artifact", "/MCID"] {
+            assert_eq!(actual.matches(role).count(), base.matches(role).count(), "nested={nested:?}: {role}");
+        }
+        assert_eq!(extract_text(&spun_pdf), extract_text(&flat_pdf));
     }
 }
 

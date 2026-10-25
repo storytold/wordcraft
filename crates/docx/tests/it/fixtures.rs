@@ -3902,6 +3902,28 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+#[test]
+fn upright_text_box_roundtrips() {
+    for (value, expected) in [("1", true), ("true", true), ("0", false), ("false", false)] {
+        let shape = anchored_wsp(
+            "Original upright probe",
+            2286000,
+            762000,
+            r#"<a:prstGeom prst="rect"><a:avLst/></a:prstGeom>"#,
+            "",
+            r#"<wps:cNvSpPr txBox="1"/><wps:txbx><w:txbxContent><w:p><w:r><w:t>Original rotation probe</w:t></w:r></w:p></w:txbxContent></wps:txbx>"#,
+        )
+        .replace("<wps:bodyPr/>", &format!(r#"<wps:bodyPr upright="{value}"/>"#));
+        let mut document = read_body(&format!("<w:p>{shape}</w:p>"));
+        for _ in 0..2 {
+            let bytes = wordcraft_docx::write(&document).unwrap();
+            let xml = text(&unzip(&bytes), "word/document.xml");
+            assert_eq!(xml.contains(r#"upright="1""#), expected, "upright={value}");
+            document = wordcraft_docx::read(&bytes).unwrap();
+        }
+    }
+}
+
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
 /// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
 /// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the

@@ -1,0 +1,118 @@
+{
+  "qualified_commit": "ee28fe88afc381b41362cc7780854db989c2d89e",
+  "qualified_tree": "12dc76118c719bb89bdea5a354ee74d759b40629",
+  "merged_upstream": "7ef2633a7e84956522d1ca47b99fe6feef16c1db",
+  "old_evidence_commit": "40e60513624a42babcc8760b729a677373fd2e16",
+  "source_tree_and_build_blobs": {
+    "crates": "78d420ccd2bf0a79aa2e3c6088baf5bf610356bd",
+    "apps": "272b2b700a48071c9ea41878579abac03e60e138",
+    "assets": "675ecc54849f2690fcbdb8781a4545ae4be02901",
+    "xtask": "69717e2eb69e0f1b4c188a7b7a641d3e80ab922c",
+    ".cargo": "0c4075fefb8e5cf974a5fdd2614125de1331ee58",
+    "contributors": "a27e71985121f78325a510afb676bfa7db145fbd",
+    "Cargo.toml": "bedb555373c09ba3d81dda871165000a79a15208",
+    "Cargo.lock": "ed1d6710d1df2ee84c26a965449dc3de729a1682",
+    "craft-i18n.rev": "fd264c675ed6cdea2fec45372367e7d467c0167f"
+  },
+  "source_blobs": {
+    "Cargo.toml": "bedb555373c09ba3d81dda871165000a79a15208",
+    "Cargo.lock": "ed1d6710d1df2ee84c26a965449dc3de729a1682",
+    "apps/wordcraft/src/main.rs": "2486960195e3aac5087077599cb6eb7acea0d543",
+    "apps/wordcraft/Cargo.toml": "f1d27bc589c9f5c8b41af977d503dc25c906c494",
+    "apps/wordcraft/build.rs": "d025b2f8921c58b5389a09cff24324fafce82b83",
+    "crates/doc/src/lib.rs": "b140feb5b0a80a874d2f345f881eb1ba9626b7b7",
+    "crates/docx/src/read/story.rs": "1348aaf5c4bf06f30f9c3540341eaeb2fec4f07b",
+    "crates/layout/src/lib.rs": "3714176c1190a9b07758d87546085b4c2b9ef831",
+    "crates/layout/src/hit.rs": "33c9f94aff07904e3c814f8e68290f65559ac4b7",
+    "crates/layout/src/display.rs": "fd1fb07b363364421ad8d49b934a71d4e04ade73",
+    "crates/layout/src/table.rs": "0157099854804c1a4b77c97fd5236516fb4949e5",
+    "crates/layout/src/textbox.rs": "321f7608418e876ce8c669c85f2806d909b474f5",
+    "crates/layout/src/vertical.rs": "7368c671fe4610c77336798a13fba292f78f09f4",
+    "crates/render/src/lib.rs": "ce352a2eb77d751304dae273f9351e2ad294b6d8",
+    "crates/pdf/src/lib.rs": "883dda9de05fc61015770667100bddd82671132d",
+    "crates/ui-egui/src/canvas.rs": "b41219ebf5569de7b16e310740068dade890d177",
+    "crates/ui-egui/src/objects.rs": "e5990a38d3f0604ff451d90a6469d670b701a01a",
+    "crates/ui-egui/src/frame.rs": "7b4ce265f81c4ce03747872ea0007f8ccd37e3f1"
+  },
+  "app_version": "wordcraft0.11.0(ee28fe88)",
+  "app_binary_sha256": "ff604ae01337a9ca65314eb1ef2b8826fd785c9c49735462df0cfa4f1c6bfba6",
+  "app_source_key": "e815905d5f69c87c65fcf2025df7832c8f43da63dfde54c647fdfac8db562c4b",
+  "build": {
+    "command": [
+      "cargo",
+      "build",
+      "--locked",
+      "-p",
+      "wordcraft",
+      "--bin",
+      "wordcraft"
+    ],
+    "returncode": 0,
+    "image": "sha256:07ded5ad7327601f5b587c90f9dec1f2b909a005e98022d4d644d405e154486f",
+    "base_image": "sha256:a73a4fc5ad235979b698ea8c9afb36e41e9f6e78723bb25f6922737f15c2177e",
+    "rustc": "1.99.0(b940084d7 2026-09-28)",
+    "cargo": "1.99.0(5f94df478 2026-08-27)",
+    "profile": "dev optimized, debug0, incremental0",
+    "font_snapshot": "b076417b5880bd4154bd22f00695b1d28c6bea83",
+    "font_tree": "e81f32412e09de47f8e7aa14dc4e3600a7e6acd5",
+    "fonts_required": true,
+    "translation_assets": "English-only development build",
+    "bounds": {
+      "cpus": 2,
+      "memory": "3GiB",
+      "jobs": 1
+    },
+    "build_count": 1
+  },
+  "runtime": {
+    "os": "Debian12 aarch64",
+    "display": "X11 Xvfb1600x1200x24 at96dpi; Openbox",
+    "client_pixels": [
+      1440,
+      920
+    ],
+    "client_points": [
+      1440,
+      920
+    ],
+    "winit_scale": 1,
+    "document_zoom": 1,
+    "ui_scale": "auto",
+    "renderer": "wgpu30 Vulkan; Mesa22.3.6 llvmpipe LLVM15 CPU",
+    "network": "none",
+    "startup_update": "Enabled, offline GitHub DNS failure logged, no blocking modal observed through native input sequence",
+    "input": "XTest into actual apps/wordcraft executable; no egui harness or RPC UI input"
+  },
+  "cases": [
+    {
+      "case": "body-ordinary",
+      "states": "cases/body-ordinary.json",
+      "events": "logs/body-ordinary.jsonl"
+    },
+    {
+      "case": "body-upright",
+      "states": "cases/body-upright.json",
+      "events": "logs/body-upright.jsonl"
+    },
+    {
+      "case": "header-ordinary",
+      "states": "cases/header-ordinary.json",
+      "events": "logs/header-ordinary.jsonl"
+    },
+    {
+      "case": "header-upright",
+      "states": "cases/header-upright.json",
+      "events": "logs/header-upright.jsonl"
+    },
+    {
+      "case": "footer-ordinary",
+      "states": "cases/footer-ordinary.json",
+      "events": "logs/footer-ordinary.jsonl"
+    },
+    {
+      "case": "footer-upright",
+      "states": "cases/footer-upright.json",
+      "events": "logs/footer-upright.jsonl"
+    }
+  ]
+}
