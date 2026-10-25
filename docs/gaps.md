@@ -127,6 +127,10 @@ The Language dialog reads effective character formatting, including document def
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
 
+Merged-cell continuation bottom strokes no longer duplicate after f32 rounding (#2498). Synthetic coverage only; other pagination gaps remain open.
+
+Merged-edge deduplication retains rules with different Border style, width, color or spacing at the same geometry. Equal Borders still deduplicate using the existing coordinate bits. Original synthetic emitter controls; no new native comparison or border precedence policy.
+
 Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 
 - Convert Table to Text has no "Convert nested tables" check box; nested tables always stay tables, which is Word's default (#4155).
@@ -147,6 +151,9 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 |---|---|---|
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |
 | 2026-10-17 | trivial | Gap 9 narrowed: Standard (Word 2007, AES-ECB) encrypted packages open with a password under any Word extension; AES headers in Word 97-2003 files are outside the public spec and refused with a clear message; estimate 3–5 → 0 h, since the remaining AES-in-`.doc` case is refused by design |
+| 2026-10-25 | trivial | Merge published #2498 finite-rule enclosure and its regression; retain qualified paragraph ownership, centered groups and reviewer scope limits. No new runtime or native qualification. |
+| 2026-10-21 | trivial | Preserve distinct Border values during merged-edge deduplication. Original synthetic emitter controls; geometry bit policy unchanged. No new native comparison. |
+| 2026-10-21 | trivial | Use exact continuation bottom-rule coordinates for bitwise merged-edge deduplication (#2498). Original synthetic split/place proof; no new native comparison. |
 | 2026-10-25 | trivial | Small follow-ups from the field, table and AutoFormat batch (#4232) |
 | 2026-10-25 | trivial | Highlight decisions include fully selected paragraph marks in whole cells and ordinary ranges, including empty paragraphs; partial text columns exclude unselected marks (#4085). |
 | 2026-10-25 | trivial | Highlight toggle checks the full target beyond 10,000 runs without collecting resolved formatting; mixed and inherited tails and Undo/Redo covered (#4085). |

@@ -142,6 +142,9 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 - 2026-10-25: Interface catalogs are still the shared storytold/craft-i18n ones embedded from `craft-i18n.rev` (`9205108c…`): 27 WordCraft languages with English fallback for missing strings, and the equation “Delete Around Caret in Equation” translation preserved. Native-speaker review remains human.
 - 2026-10-25: Input methods (egui 0.37): character- and byte-counted surrounding deletions, a fresh composition after body/equation replacement, rejection of queued stale replacements before mutation, transactional equation deletes and one undo group, with tracked and placeholder length mapping. Synthetic regressions document these paths; managed CI passed, and native IME acceptance (#155–#164) plus browser IME behavior remain open.
+- 2026-10-21: Merged-edge deduplication retains rules with different Border style, width, color or spacing at the same geometry. Equal Borders still deduplicate using the existing coordinate bits. Original synthetic emitter controls; no new native comparison or border precedence policy.
+- 2026-10-21: Split merged-cell continuations use the exact bottom-edge coordinate, preventing duplicate strokes after f32 rounding (#2498). Original synthetic split/place controls; no new native comparison.
+
 - 2026-10-25: Text Highlight Color shows the last colour as the button's bar in the ribbon and mini toolbar; after No Color it shows the pen without a misleading yellow bar, and the button removes highlighting (#4087).
 - 2026-10-23: cu20we: DrawingML flat, square and round line caps are imported, saved, displayed and exported to PDF; absent or unknown caps default to flat. VML end caps (including shapetype inheritance) are preserved through DOCX save. Ink and metafile stroke handling remain separate. Synthetic DOCX, raster and PDF regressions cover the change; no new native Word comparison.
 - 2026-10-23: cu20we: paragraph-relative box floats start above effective space before; header, footer, cell and text-box layout regressions pass. Framed paragraph positioning is unchanged; no new native Word comparison.
@@ -639,6 +642,9 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 |---|---|---|
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
+| 2026-10-25 | trivial | Merge published #2498 finite-rule enclosure and its regression; retain qualified paragraph ownership, centered groups and reviewer scope limits. No new runtime or native qualification. |
+| 2026-10-21 | trivial | Preserve distinct Border values during merged-edge deduplication. Original synthetic emitter controls; geometry bit policy unchanged. No new native comparison. |
+| 2026-10-21 | trivial | Use exact continuation bottom-rule coordinates for bitwise merged-edge deduplication (#2498). Original synthetic split/place proof; no new native comparison. |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
 | 2026-10-23 | minor | A command that changes nothing is not an edit: no undo step, no unsaved changes, no relayout, and the redo stack survives it. |
 | 2026-10-23 | trivial | cu20we: preserve and render outline caps across DOCX/VML, screen and PDF; synthetic regressions; readiness estimates unchanged |
