@@ -199,6 +199,7 @@ fn word_segmenter() -> &'static icu_segmenter::WordSegmenterBorrowed<'static> {
     S.get_or_init(|| icu_segmenter::WordSegmenter::new_auto(icu_segmenter::options::WordBreakInvariantOptions::default()))
 }
 
+/// Returns the shared ICU4X dictionary `LineSegmenter`, built once on first use.
 fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
     static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
     S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
