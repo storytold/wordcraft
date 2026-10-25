@@ -395,15 +395,14 @@ impl Placed {
                     *t = turn;
                 }
             }
-            Placed::Fill { rect, .. }
-            | Placed::Image { rect, .. }
-            | Placed::Shape { rect, .. }
-            | Placed::Graphic { rect, .. }
-            | Placed::Cell { rect, .. } => {
+            Placed::Fill { rect, .. } | Placed::Cell { rect, .. } => {
                 *rect = turn_rect(turn, x, y, *rect);
             }
-            Placed::Object { rect, origin, .. } => {
-                *rect = turn_rect(turn, x, y, *rect);
+            Placed::Image { rect, spin, .. } | Placed::Shape { rect, spin, .. } | Placed::Graphic { rect, spin, .. } => {
+                turn_drawing(rect, spin, turn, x, y);
+            }
+            Placed::Object { rect, spin, origin, .. } => {
+                turn_drawing(rect, spin, turn, x, y);
                 (origin.x, origin.y) = turn_point(turn, x, y, origin.x, origin.y);
             }
             Placed::Clip { rect, items, .. } => {
@@ -418,6 +417,18 @@ impl Placed {
             }
         }
     }
+}
+
+// A drawing keeps its unrotated frame; carry its centre and compose the frame's turn.
+fn turn_drawing(rect: &mut Rect, spin: &mut Spin, turn: TextDirection, x: f32, y: f32) {
+    let (cx, cy) = turn_point(turn, x, y, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+    let degrees = match turn {
+        TextDirection::Horizontal => 0.0,
+        TextDirection::Down => 90.0,
+        TextDirection::Up => 270.0,
+    };
+    *rect = Rect::new(cx - rect.w / 2.0, cy - rect.h / 2.0, rect.w, rect.h);
+    *spin = spin.within(Spin::new(degrees, false, false));
 }
 
 /// Where point (`u`, `v`) of a frame turned `turn` lands on the page, the frame's origin being
@@ -3553,24 +3564,38 @@ fn place_objects(
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
             });
-            // Its text (a group: its text boxes', each where the group's turn carries it; the
-            // text itself stays upright), unless the box budget says no (a box inside itself,
-            // too deep, too many).
+            // A group's turn carries each box; group and member spins also turn its text.
+            // Upright text stays upright, and shape flips don't mirror the lettering.
             let centre = Point::new(rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
-            let boxes: Vec<(u32, Rect)> = match obj {
+            let boxes: Vec<(u32, Rect, Spin)> = match obj {
                 InlineObject::Group { .. } => group_members(obj, rect)
                     .into_iter()
                     .filter_map(|(r, c)| {
-                        c.text_box()
-                            .filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox))
-                            .map(|id| (id, carried(r, float.spin(), centre)))
+                        c.text_box().filter(|id| ctx.doc.parts.get(id).is_some_and(|p| p.kind == wordcraft_doc::PartKind::TextBox)).map(|id| {
+                            (id, carried(r, float.spin(), centre), c.frame().map_or(Spin::default(), |(_, _, f)| f.spin()).within(float.spin()))
+                        })
                     })
                     .collect(),
-                _ => text_box.map(|id| (id, rect)).into_iter().collect(),
+                _ => text_box.map(|id| (id, rect, float.spin())).into_iter().collect(),
             };
-            for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+            for (id, rect, spin) in boxes {
+                let mut items = textbox::box_items(ctx, id, rect, depth);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
+                let upright = ctx.doc.parts.get(&id).is_some_and(|part| part.body.upright);
+                let turn = if (spin.deg - 90.0).abs() < 0.01 {
+                    TextDirection::Down
+                } else if (spin.deg - 270.0).abs() < 0.01 {
+                    TextDirection::Up
+                } else {
+                    TextDirection::Horizontal
+                };
+                if !upright && turn.is_turned() {
+                    let (cx, cy) = (rect.x + rect.w / 2.0, rect.y + rect.h / 2.0);
+                    let (ox, oy) = if turn == TextDirection::Down { (cx + cy, cy - cx) } else { (cx - cy, cy + cx) };
+                    for item in &mut items {
+                        item.turn(turn, ox, oy);
+                    }
+                }
                 layer.extend(items);
             }
             // Placed on the page from a header or footer cell: drawn with the header, once.
