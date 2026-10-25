@@ -510,6 +510,18 @@ fn margin_sides(e: &El) -> [Option<f32>; 4] {
 }
 
 impl PropCtx {
+    pub fn row_tblpr(&self, e: &El) -> TableProps {
+        let mut props = self.tblpr(e);
+        if let Some(margins) = e.child("w:tblCellMar") {
+            let sides = margin_sides(margins);
+            if sides.iter().any(Option::is_none) {
+                props.cell_margins = None;
+                props.partial_cell_margins = Some(sides);
+            }
+        }
+        props
+    }
+
     pub fn tblpr(&self, e: &El) -> TableProps {
         let mut t = TableProps::default();
         for k in e.els() {

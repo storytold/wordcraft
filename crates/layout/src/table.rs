@@ -109,14 +109,23 @@ fn default_margins(t: &Table, style: Option<&TableStyleProps>) -> [f32; 4] {
     t.props.cell_margins.or(style.and_then(|s| s.parts.cell_margins)).unwrap_or(DEFAULT_MARGINS)
 }
 
+fn row_margins(row: &wordcraft_doc::Row, defaults: [f32; 4]) -> [f32; 4] {
+    let Some(props) = row.props.exceptions.as_ref() else { return defaults };
+    props
+        .cell_margins
+        .unwrap_or_else(|| props.partial_cell_margins.map_or(defaults, |sides| std::array::from_fn(|i| sides[i].unwrap_or(defaults[i]))))
+}
+
 /// The margins (top, left, bottom, right; points) of cell `cell` of row `row`: its own, else the
-/// table's defaults. The layout uses the left and right ones as they are (the app's ruler
+/// row's exceptions, else the table's defaults. The layout uses the left and right ones as they are (the app's ruler
 /// measures a cell's indents from them) but gives every cell in a row the row's largest top and
 /// bottom margins.
 pub fn cell_margins(doc: &wordcraft_doc::Document, t: &Table, row: usize, cell: usize) -> [f32; 4] {
     let style = t.props.style.as_deref().and_then(|id| doc.styles.table_style(id));
     let defaults = default_margins(t, style.as_ref());
-    t.rows.get(row).and_then(|r| r.cells.get(cell)).map_or(defaults, |cell| cell.props.resolved_margins(defaults))
+    let Some(row) = t.rows.get(row) else { return defaults };
+    let defaults = row_margins(row, defaults);
+    row.cells.get(cell).map_or(defaults, |cell| cell.props.resolved_margins(defaults))
 }
 
 /// The most paragraphs [`measure_table_columns`] lays out: a huge table is measured by its first
@@ -181,10 +190,12 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
     let ncols = t.cols().clamp(1, wordcraft_doc::table::MAX_COLS);
     let fields = crate::FieldCtx::default();
     let mut cols = vec![(0.0f32, 0.0f32); ncols];
+    let mut measured = vec![false; ncols];
     // Cells spanning several columns: (first column, span, min, max), applied after the others.
     let mut spanned: Vec<(usize, usize, f32, f32)> = Vec::new();
     let mut budget = MEASURE_BUDGET;
     'rows: for (ri, row) in t.rows.iter().enumerate() {
+        let margins_def = row_margins(row, margins_def);
         let mut g = row.first_grid();
         for cell in &row.cells {
             let span = cell.span();
@@ -234,6 +245,9 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 }
             }
             let (min, max) = ((min + side).min(1584.0), (max + side).min(1584.0));
+            if let Some(covered) = measured.get_mut(g..(g + span).min(ncols)) {
+                covered.fill(true);
+            }
             if span == 1 {
                 if let Some(c) = cols.get_mut(g) {
                     c.0 = c.0.max(min);
@@ -259,12 +273,14 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
             c.1 = c.1.max(c.0);
         }
     }
-    // A column no cell starts in still needs room for its margins.
+    // Columns outside completed cell measurements retain the default margin floor.
     let floor = margins_def[1].max(0.0) + margins_def[3].max(0.0) + EMPTY_TEXT;
-    cols.iter_mut().for_each(|c| {
-        c.0 = c.0.max(floor);
-        c.1 = c.1.max(c.0);
-    });
+    for (column, measured) in cols.iter_mut().zip(measured) {
+        if !measured {
+            column.0 = column.0.max(floor);
+        }
+        column.1 = column.1.max(column.0);
+    }
     cols
 }
 
@@ -294,7 +310,9 @@ pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
 }
 
 fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
-    t.rows.first().and_then(|r| r.cells.first()).map_or(def, |cell| cell.props.resolved_margins(def))[1]
+    let Some(row) = t.rows.first() else { return def[1] };
+    let def = row_margins(row, def);
+    row.cells.first().map_or(def, |cell| cell.props.resolved_margins(def))[1]
 }
 
 /// What a table style gives the cells in one set of parts: shading, vertical alignment and each
@@ -480,6 +498,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     let mut bottoms: Vec<f32> = Vec::with_capacity(nrows);
     let mut edges: Vec<f32> = Vec::with_capacity(nrows);
     for (ri, row) in t.rows.iter().enumerate() {
+        let margins_def = row_margins(row, margins_def);
         let mut g = row.first_grid();
         let mut cells = Vec::with_capacity(row.cells.len());
         let mut rh = 0.0f32;
@@ -1126,6 +1145,7 @@ fn column_content(ctx: &mut Ctx, t: &Table, style: Option<&TableStyleProps>, dep
     let mut spanning = Vec::new();
     let mut any = false;
     for (ri, row) in t.rows.iter().enumerate() {
+        let margins_def = row_margins(row, margins_def);
         let mut g = row.first_grid();
         for cell in &row.cells {
             let span = cell.span();
@@ -1317,6 +1337,71 @@ fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
 #[cfg(test)]
 mod width_tests {
     use super::*;
+
+    fn span_floor_table() -> Table {
+        let mut table = Table::new(1, 2, 100.0);
+        table.props.style = None;
+        table.props.cell_margins = Some([0.0, 20.0, 0.0, 20.0]);
+        table.rows[0].props.exceptions = Some(Box::new(wordcraft_doc::props::TableProps { cell_margins: Some([0.0; 4]), ..Default::default() }));
+        table.rows[0].cells.truncate(1);
+        table.rows[0].cells[0].props.span = 2;
+        table.rows[0].cells[0].blocks.clear();
+        table
+    }
+
+    #[test]
+    fn span_minima_share_cell_floor() {
+        let table = span_floor_table();
+        assert_eq!(measure_table_columns(&wordcraft_doc::Document::new(), &table), vec![(6.0, 6.0); 2]);
+    }
+
+    #[test]
+    fn span_minima_keep_uncovered() {
+        let mut table = span_floor_table();
+        table.grid.resize(4, 25.0);
+        let mut sibling = wordcraft_doc::table::Cell::empty();
+        sibling.blocks.clear();
+        sibling.props.margins = Some([0.0, 3.0, 0.0, 7.0]);
+        table.rows[0].cells.push(sibling);
+        assert_eq!(measure_table_columns(&wordcraft_doc::Document::new(), &table), vec![(6.0, 6.0), (6.0, 6.0), (22.0, 22.0), (52.0, 52.0)]);
+    }
+
+    #[test]
+    fn span_minima_cover_clamped_grid() {
+        let mut table = span_floor_table();
+        let mut leading = wordcraft_doc::table::Cell::empty();
+        leading.blocks.clear();
+        table.rows[0].cells.insert(0, leading);
+        table.rows[0].cells[1].props.span = u32::MAX;
+        let columns = measure_table_columns(&wordcraft_doc::Document::new(), &table);
+        assert_eq!(columns.len(), wordcraft_doc::table::MAX_COLS);
+        assert_eq!(columns[0], (12.0, 12.0));
+        let share = 12.0 / (wordcraft_doc::table::MAX_COLS - 1) as f32;
+        assert_eq!(columns[1..], vec![(share, share); wordcraft_doc::table::MAX_COLS - 1]);
+    }
+
+    #[test]
+    fn span_minima_keep_budget_tail() {
+        let mut table = span_floor_table();
+        table.grid.resize(5, 20.0);
+        let mut spent = wordcraft_doc::table::Cell::empty();
+        spent.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()); MEASURE_BUDGET];
+        table.rows[0].cells.push(spent);
+        let mut tail = wordcraft_doc::table::Cell::empty();
+        tail.props.span = 2;
+        table.rows[0].cells.push(tail);
+        assert_eq!(
+            measure_table_columns(&wordcraft_doc::Document::new(), &table),
+            vec![(6.0, 6.0), (6.0, 6.0), (12.0, 12.0), (52.0, 52.0), (52.0, 52.0)]
+        );
+    }
+
+    #[test]
+    fn span_minima_skip_partial_cell() {
+        let mut table = span_floor_table();
+        table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::new()); MEASURE_BUDGET + 1];
+        assert_eq!(measure_table_columns(&wordcraft_doc::Document::new(), &table), vec![(52.0, 52.0); 2]);
+    }
 
     #[test]
     fn autofit_shares_donor_loss() {
