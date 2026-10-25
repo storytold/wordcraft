@@ -3502,6 +3502,7 @@ fn context_menu(app: &mut WordApp, ui: &mut Ui) {
         item(ui, app, "Change Picture…", "ui.changePicture", json!({}));
         item(ui, app, "Reset Picture", "picture.reset", json!({}));
         item(ui, app, "Size and Crop…", "ui.tab", json!({"tab": "Picture Format"}));
+        item(ui, app, "Crop", "ui.crop", json!({}));
     }
     if picture || object {
         // A numbered caption under (or over) the picture, shape, text box or chart (#1230).
@@ -7174,6 +7175,63 @@ mod tests {
         h.step();
         assert_eq!(h.state().canvas.ime_preedit_range, None, "the commit clears the range");
         assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("にほん"));
+    }
+
+    #[test]
+    fn context_menu_crop_item_activates_crop_mode() {
+        use egui_kittest::kittest::Queryable;
+        use wordcraft_doc::para::{InlineObject, OBJ};
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let pic =
+            InlineObject::Image { media: "m".into(), w: 200.0, h: 100.0, alt: String::new(), float: Default::default(), crop: [0.0; 4], ole: None };
+        app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
+        let end = Pos::body(0, OBJ.len_utf8());
+        app.run("select.range", json!({"anchor": Pos::body(0, 0), "focus": end})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..6 {
+            h.step();
+        }
+        let (page, rect) = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).map(|o| (o.page, o.rect)).expect("laid out");
+        let at = page_to_screen(h.state_mut(), page, rect.x + rect.w / 2.0, rect.y + rect.h / 2.0).expect("on screen");
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        h.step();
+        assert!(h.state().canvas.context_menu_open, "context menu is open on image");
+        h.get_by_label("Crop ").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(crate::crop::active(h.state()).is_some(), "crop mode is active after clicking Crop in context menu");
+    }
+
+    #[test]
+    fn crop_is_disabled_when_cursor_is_adjacent_without_selection() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
+        let pic = wordcraft_doc::para::InlineObject::Image {
+            media: "m".into(),
+            w: 200.0,
+            h: 100.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
+        app.session.doc.insert_object(&Pos::body(0, 0), pic, &Default::default()).unwrap();
+        // Caret is collapsed right at pos 0 (adjacent to the picture).
+        app.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
+        assert!(crate::ribbon::has_picture_selected(&app.session), "adjacent caret sees picture in ribbon");
+        assert!(!crate::widgets::enabled(&app, "ui.crop"), "ui.crop is disabled when not selected as object");
+        assert!(crate::crop::active(&app).is_none());
     }
 
     fn page_at_index(rects: &[Rect], p: Pos2) -> Option<usize> {
