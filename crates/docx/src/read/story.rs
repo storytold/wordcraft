@@ -732,11 +732,8 @@ impl Reader<'_> {
                 };
                 self.emit_text(sc, pb, c, props);
             }
-            "w:cr" => {
-                if !sc.fields.iter().any(|f| f.phase == Phase::Instr) {
-                    self.emit_text(sc, pb, "\n", props);
-                }
-            }
+            "w:cr" if !sc.fields.iter().any(|f| f.phase == Phase::Instr) => self.emit_text(sc, pb, "\n", props),
+            "w:cr" => {}
             "w:noBreakHyphen" => self.emit_text(sc, pb, "\u{2011}", props),
             "w:softHyphen" => self.emit_text(sc, pb, "\u{00AD}", props),
             "w:sym" => {

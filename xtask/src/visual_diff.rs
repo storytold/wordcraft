@@ -37,7 +37,7 @@ pub fn run(args: &[&str]) -> Result<(), String> {
         None => 100,
     };
     let pos: Vec<&str> =
-        args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && !(*i > 0 && args[i - 1] == "--dpi")).map(|(_, a)| *a).collect();
+        args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && (*i == 0 || args[i - 1] != "--dpi")).map(|(_, a)| *a).collect();
     let [reference, test, out] = pos.as_slice() else {
         return Err("usage: cargo xtask visual-diff REF.pdf TEST.pdf OUTDIR [--private] [--dpi N]".into());
     };

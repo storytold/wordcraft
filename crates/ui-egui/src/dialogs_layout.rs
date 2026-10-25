@@ -952,13 +952,13 @@ fn alert(ui: &mut Ui, text: &Option<String>) {
 
 fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsForm) -> bool {
     // Several cells split one by one keep their rows.
-    let rows_on = !(f.cells > 1 && !f.merge_first);
+    let rows_on = f.cells <= 1 || f.merge_first;
     egui::Grid::new("split_cells").num_columns(2).show(ui, |ui| {
-        ui.label(tl!("Number of columns:"));
-        ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));
+        let label = ui.label(tl!("Number of columns:"));
+        ui.add(egui::DragValue::new(&mut f.columns).range(1..=63)).labelled_by(label.id);
         ui.end_row();
-        ui.label(tl!("Number of rows:"));
-        ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63));
+        let label = ui.label(tl!("Number of rows:"));
+        ui.add_enabled(rows_on, egui::DragValue::new(&mut f.rows).range(1..=63)).labelled_by(label.id);
         ui.end_row();
     });
     let mut merge = f.merge_first;
@@ -1824,6 +1824,55 @@ mod tests {
         let mut a = app();
         a.run("ui.dialog", json!({"name": "splitCells"})).unwrap();
         assert!(a.dialog.is_none(), "no dialog outside a table");
+    }
+
+    /// The row control follows merge-before-split, and OK applies its typed value once.
+    #[test]
+    fn split_cells_row_control_follows_merge_checkbox() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::NodeT;
+        use egui_kittest::kittest::Queryable;
+        let mut a = table_app(2, &["A", "B", "C", "D"]);
+        a.run("ui.language", json!({"value": "en"})).unwrap();
+        let cell = |r: u32, c: u32| json!({"story": "body", "path": [0, r, c, 0], "off": 0});
+        a.run("select.range", json!({"anchor": cell(0, 0), "focus": cell(1, 1)})).unwrap();
+        let before = a.session.doc.clone();
+        a.run("table.split", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(3);
+        h.get_by_label("Merge cells before split").click();
+        h.run_steps(2);
+        assert!(h.get_by_role_and_label(Role::SpinButton, "Number of rows:").accesskit_node().is_disabled());
+        h.get_by_label("Merge cells before split").click();
+        h.run_steps(2);
+        let rows = h.get_by_role_and_label(Role::SpinButton, "Number of rows:");
+        assert!(!rows.accesskit_node().is_disabled());
+        rows.click();
+        h.run_steps(2);
+        h.get_by_role_and_label(Role::SpinButton, "Number of rows:").type_text("1");
+        h.key_press(egui::Key::Enter);
+        h.run_steps(2);
+        assert_eq!(h.state().session.doc, before);
+        h.get_by_role_and_label(Role::Button, "OK").click();
+        h.run_steps(2);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(table_shape(h.state()), [4, 4], "four columns span the two original physical rows");
+        let t = h.state().session.doc.body.iter().find_map(|b| b.as_table()).unwrap();
+        assert!(t.rows[0].cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::Restart));
+        assert!(
+            t.rows[1].cells.iter().all(|c| c.props.vmerge == wordcraft_doc::props::VMerge::Continue),
+            "typing one changes the default two logical rows"
+        );
+        assert_ne!(h.state().session.doc, before);
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_eq!(h.state().session.doc, before);
     }
 
     /// #2592, as Word does: for a merged cell the dialog's message says the row count must

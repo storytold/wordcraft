@@ -773,7 +773,7 @@ pub fn logic(app: &mut WordApp, ctx: &egui::Context) {
             }
             // Alt off while an Alt key is still down (AltGr on Linux turns Level 3 Shift on, not
             // Alt): the key's release ends the press, not this.
-            egui::Event::ModifiersChanged(modifiers) if !(app.ui.alt_key_down && !modifiers.alt) => {
+            egui::Event::ModifiersChanged(modifiers) if !app.ui.alt_key_down || modifiers.alt => {
                 alt_released |= alt_transition(app, modifiers.alt, *modifiers);
             }
             egui::Event::PointerButton { pressed: true, .. } => {

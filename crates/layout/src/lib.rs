@@ -4445,7 +4445,7 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
                 && !pb.at_top()
                 && !fresh
                 && rest.is_none()
-                && !ri.checked_sub(1).and_then(|prev| kept.get(prev)).is_some_and(|&(end, _)| end >= ri)
+                && ri.checked_sub(1).and_then(|prev| kept.get(prev)).is_none_or(|&(end, _)| end < ri)
                 && kept.get(ri).is_some_and(|&(end, height)| {
                     if end == ri {
                         return false;
