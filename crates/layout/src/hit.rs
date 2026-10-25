@@ -1,5 +1,7 @@
 //! Hit testing and caret geometry.
 
+use std::sync::{Arc, Weak};
+
 use wordcraft_doc::para::Wrap;
 use wordcraft_doc::props::TextDirection;
 use wordcraft_doc::{Document, Path, Pos, StoryRef};
@@ -18,6 +20,36 @@ pub struct Caret {
     pub top: f32,
     pub height: f32,
     pub width: f32,
+}
+
+/// A transient edge of an atomic result on a visual line.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisualEdge {
+    Leading,
+    Trailing,
+}
+
+/// A legal document position with optional affinity to one layout snapshot.
+/// It is deliberately excluded from document and selection serialization.
+#[derive(Clone, Debug)]
+pub struct VisualPos {
+    pos: Pos,
+    owner: Weak<DocLayout>,
+    line: Option<(usize, usize)>,
+    edge: Option<VisualEdge>,
+}
+
+impl VisualPos {
+    /// The source position. Affinity never introduces additional source offsets.
+    pub fn position(&self) -> &Pos {
+        &self.pos
+    }
+}
+
+impl PartialEq for VisualPos {
+    fn eq(&self, other: &Self) -> bool {
+        self.pos == other.pos && Weak::ptr_eq(&self.owner, &other.owner) && self.line == other.line && self.edge == other.edge
+    }
 }
 
 /// An equation as [`DocLayout::equation_box`] finds it, in page coordinates: its left edge
@@ -297,9 +329,19 @@ fn band_dist(v: f32, top: f32, h: f32) -> f32 {
 impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
+        self.hit_target(page, x, y, story).map(|(pos, _)| pos)
+    }
+
+    /// Hit a source position while retaining the selected line in this snapshot.
+    pub fn hit_visual(self: &Arc<Self>, page: usize, x: f32, y: f32, story: StoryRef) -> Option<VisualPos> {
+        let (pos, line) = self.hit_target(page, x, y, story)?;
+        Some(self.visual_pos(pos, line.map(|li| (page, li)), None))
+    }
+
+    fn hit_target(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, Option<usize>)> {
         let p = self.pages.get(page)?;
         if let Some(pos) = turned_hit(p, story, x, y) {
-            return Some(pos);
+            return Some((pos, None));
         }
         // Like Word, a click outside a floating table doesn't land in its cells while there's
         // other text on the page: below one, it goes to the text beside or after it (#2038).
@@ -308,12 +350,12 @@ impl DocLayout {
         let lines = page_lines(p, story);
         if lines.is_empty() {
             // A page of turned text (a vertical section): the nearest turned line.
-            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false));
+            return nearest_turned(p, story, x, y, &away).or_else(|| nearest_turned(p, story, x, y, &|_: &Path| false)).map(|pos| (pos, None));
         }
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
         let off = best.para.off_at_x(best.li, x - best.x);
-        Some(Pos { story: best.story, path: best.path.clone(), off })
+        Some((Pos { story: best.story, path: best.path.clone(), off }, Some(best.li)))
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
@@ -474,23 +516,42 @@ impl DocLayout {
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
-            let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
+            let Placed::Lines { para, l0, l1, .. } = it else { continue };
             let li = para.line_of(pos.off);
-            if li < *l0 || li >= *l1 {
+            if li >= *l0 && li < *l1 {
+                return caret_piece(pi, it, li, pos.off, None);
+            }
+        }
+        None
+    }
+
+    /// Resolve valid snapshot affinity, or use canonical source-position geometry.
+    pub fn caret_visual(self: &Arc<Self>, pos: &Pos, hint: Option<&VisualPos>, page_hint: usize) -> Option<Caret> {
+        if let Some((page, item, li, edge)) = self.visual_line(pos, hint) {
+            return caret_piece(page, item, li, pos.off, edge);
+        }
+        self.caret_on(pos, page_hint)
+    }
+
+    fn visual_pos(self: &Arc<Self>, pos: Pos, line: Option<(usize, usize)>, edge: Option<VisualEdge>) -> VisualPos {
+        VisualPos { pos, owner: Arc::downgrade(self), line, edge }
+    }
+
+    fn visual_line<'a>(self: &'a Arc<Self>, pos: &Pos, hint: Option<&VisualPos>) -> Option<(usize, &'a Placed, usize, Option<VisualEdge>)> {
+        let hint = hint?;
+        if hint.pos != *pos || !Weak::ptr_eq(&hint.owner, &Arc::downgrade(self)) {
+            return None;
+        }
+        let (page, li) = hint.line?;
+        for (pi, item) in self.pieces(pos.story, &pos.path, page) {
+            let Placed::Lines { para, l0, l1, turn: TextDirection::Horizontal, .. } = item else { continue };
+            if pi != page || li < *l0 || li >= *l1 {
                 continue;
             }
-            let first = para.lines.get(*l0)?;
-            let l = para.lines.get(li)?;
-            let cx = para.x_of(li, pos.off)?;
-            let cx = para.caret_limit(li).map_or(cx, |m| cx.min(m));
-            // In the lines' own frame (turned text turns it onto the page).
-            let top = l.top - first.top;
-            // Caret spans the text height (ascent + descent), not the full line spacing.
-            let (asc, desc) = para.caret_metrics(li);
-            let base = top + (l.baseline - l.top);
-            let ctop = (base - asc).max(top);
-            let r = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
-            return Some(Caret { page: pi, x: r.x, top: r.y, height: r.h, width: r.w });
+            let line = para.lines.get(li)?;
+            if pos.off >= line.start && pos.off <= line.stop {
+                return Some((page, item, li, hint.edge));
+            }
         }
         None
     }
@@ -498,6 +559,24 @@ impl DocLayout {
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
         let c = self.caret_on(pos, page_hint)?;
+        self.vertical_target(pos, c, goal_x, dir).map(|(pos, _, _, gx)| (pos, gx))
+    }
+
+    /// Move from the selected visual line, retaining the target line and horizontal goal.
+    pub fn vertical_visual(
+        self: &Arc<Self>,
+        pos: &Pos,
+        hint: Option<&VisualPos>,
+        goal_x: Option<f32>,
+        dir: i32,
+        page_hint: usize,
+    ) -> Option<(VisualPos, f32)> {
+        let c = self.caret_visual(pos, hint, page_hint)?;
+        let (pos, page, li, gx) = self.vertical_target(pos, c, goal_x, dir)?;
+        Some((self.visual_pos(pos, Some((page, li)), None), gx))
+    }
+
+    fn vertical_target(&self, pos: &Pos, c: Caret, goal_x: Option<f32>, dir: i32) -> Option<(Pos, usize, usize, f32)> {
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
@@ -531,7 +610,7 @@ impl DocLayout {
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);
-            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx));
+            return Some((Pos { story: l.story, path: l.path.clone(), off }, c.page, l.li, gx));
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
@@ -539,7 +618,7 @@ impl DocLayout {
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
-        Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+        Some((Pos { story: l.story, path: l.path.clone(), off }, np, l.li, gx))
     }
 
     /// Start and end of the visual line holding `pos` (Home / End).
@@ -550,20 +629,34 @@ impl DocLayout {
             if li < *l0 || li >= *l1 {
                 continue;
             }
-            let l = para.lines.get(li)?;
-            let mut end = l.stop;
-            // Don't put the caret after a trailing break on that line, nor past wrap spaces.
-            if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > l.start {
-                end = para.clusters.get(l.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
-            } else if l.end == crate::LineEnd::Wrap {
-                // Before the wrapped line's trailing space: its last reachable offset, in logical
-                // order (the far edge is the left one in right-to-left text).
-                end = para.line_offsets(li).into_iter().max().unwrap_or(end);
-            }
+            let (start, end) = line_bounds_at(para, li)?;
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
-            return Some((mk(l.start), mk(end)));
+            return Some((mk(start), mk(end)));
         }
         None
+    }
+
+    /// Home/End on the selected line. Atomic results keep legal source boundaries.
+    pub fn line_edge_visual(self: &Arc<Self>, pos: &Pos, hint: Option<&VisualPos>, page_hint: usize, edge: VisualEdge) -> Option<VisualPos> {
+        if let Some((page, Placed::Lines { para, .. }, li, _)) = self.visual_line(pos, hint) {
+            let (start, end) = atomic_line(para, li).or_else(|| line_bounds_at(para, li))?;
+            let off = match edge {
+                VisualEdge::Leading => start,
+                VisualEdge::Trailing => end,
+            };
+            let pos = Pos { off, ..pos.clone() };
+            let edge = atomic_line(para, li).map(|_| edge);
+            return Some(self.visual_pos(pos, Some((page, li)), edge));
+        }
+        let (start, end) = self.line_bounds(pos, page_hint)?;
+        Some(self.visual_pos(
+            match edge {
+                VisualEdge::Leading => start,
+                VisualEdge::Trailing => end,
+            },
+            None,
+            None,
+        ))
     }
 
     /// Word's selection bar (#856): when (x, y) is in the page margin beside the text column,
@@ -831,4 +924,48 @@ fn score(l: &LineHit, x: f32, y: f32) -> f32 {
         0.0
     };
     dy * 4.0 + dx
+}
+
+fn caret_piece(page: usize, item: &Placed, li: usize, off: usize, edge: Option<VisualEdge>) -> Option<Caret> {
+    let Placed::Lines { para, l0, x, y, turn, .. } = item else { return None };
+    let first = para.lines.get(*l0)?;
+    let line = para.lines.get(li)?;
+    let cx = match edge {
+        Some(VisualEdge::Leading) => line.xs.first().copied()?,
+        Some(VisualEdge::Trailing) => line.end_x(),
+        None => para.x_of(li, off)?,
+    };
+    let cx = para.caret_limit(li).map_or(cx, |limit| cx.min(limit));
+    let top = line.top - first.top;
+    // Share text metrics and the placed frame transform with canonical carets.
+    let (asc, desc) = para.caret_metrics(li);
+    let base = top + (line.baseline - line.top);
+    let ctop = (base - asc).max(top);
+    let rect = crate::turn_rect(*turn, *x, *y, Rect::new(cx, ctop, 0.0, (base + desc - ctop).max(4.0)));
+    Some(Caret { page, x: rect.x, top: rect.y, height: rect.h, width: rect.w })
+}
+
+fn atomic_line(para: &ParaLayout, li: usize) -> Option<(usize, usize)> {
+    let line = para.lines.get(li)?;
+    let clusters = para.clusters.get(line.c0..line.c1)?;
+    let first = clusters.first()?;
+    if first.start == first.end || !clusters.iter().all(|c| c.start == first.start && c.end == first.end) {
+        return None;
+    }
+    para.lines
+        .iter()
+        .enumerate()
+        .any(|(i, line)| i != li && para.clusters.get(line.c0).is_some_and(|c| c.start == first.start && c.end == first.end))
+        .then_some((first.start, first.end))
+}
+
+fn line_bounds_at(para: &ParaLayout, li: usize) -> Option<(usize, usize)> {
+    let line = para.lines.get(li)?;
+    let mut end = line.stop;
+    if matches!(line.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > line.start {
+        end = para.clusters.get(line.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
+    } else if line.end == crate::LineEnd::Wrap {
+        end = para.line_offsets(li).into_iter().max().unwrap_or(end);
+    }
+    Some((line.start, end))
 }
