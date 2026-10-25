@@ -150,6 +150,13 @@ pub struct Cluster {
     pub obj_d: f32,
     /// The cluster is a decimal separator (decimal tabs align on it).
     pub dot: bool,
+    /// A visible inline drawing eligible for picture-only fitting.
+    picture: bool,
+}
+
+#[cfg(test)]
+pub(super) fn word_cluster(kind: ClKind, adv: f32) -> Cluster {
+    Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false, picture: false }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +176,8 @@ pub enum LineEnd {
 pub struct Line {
     pub top: f32,
     pub height: f32,
+    /// Height needed at the page bottom, excluding extra automatic leading.
+    pub(crate) fit_height: f32,
     pub baseline: f32,
     /// The text's own ascent and descent on this line, without line-spacing leading (the caret's extent).
     pub text_asc: f32,
@@ -1151,6 +1160,7 @@ impl<'a> Builder<'a> {
                     obj_h: 0.0,
                     obj_d: 0.0,
                     dot: s == "." || s == ",",
+                    picture: false,
                 });
             }
             if matches!(dir, Dir::Para) {
@@ -1223,6 +1233,7 @@ impl<'a> Builder<'a> {
                 obj_h: 0.0,
                 obj_d: 0.0,
                 dot: false,
+                picture: false,
             });
             return;
         };
@@ -1256,7 +1267,20 @@ impl<'a> Builder<'a> {
         let style = first.style;
         let g1 = added.last().map(|c| c.g1).unwrap_or(g0);
         self.shown.push((self.clusters.len(), text.to_string(), ranges));
-        self.clusters.push(Cluster { start, end, adv: x, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv: x,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            picture: false,
+        });
     }
 
     /// Shape `texts` on top of one another as one cluster for `start..end`: each aligned within
@@ -1309,7 +1333,20 @@ impl<'a> Builder<'a> {
         if !text.is_empty() {
             self.shown.push((k, text, ranges));
         }
-        self.clusters.push(Cluster { start, end, adv, kind: ClKind::Text, style, g0, g1, break_after: false, obj_h: 0.0, obj_d: 0.0, dot: false });
+        self.clusters.push(Cluster {
+            start,
+            end,
+            adv,
+            kind: ClKind::Text,
+            style,
+            g0,
+            g1,
+            break_after: false,
+            obj_h: 0.0,
+            obj_d: 0.0,
+            dot: false,
+            picture: false,
+        });
         Some(k)
     }
 }
@@ -1568,6 +1605,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                     obj_h: 0.0,
                     obj_d: 0.0,
                     dot: false,
+                    picture: false,
                 });
             }
             continue;
@@ -1616,7 +1654,20 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
             let si = b.style(&rc, None, false);
             let g = b.glyphs.len() as u32;
             let push = |b: &mut Builder, kind: ClKind, adv: f32, h: f32| {
-                b.clusters.push(Cluster { start, end, adv, kind, style: si, g0: g, g1: g, break_after: false, obj_h: h, obj_d: 0.0, dot: false })
+                b.clusters.push(Cluster {
+                    start,
+                    end,
+                    adv,
+                    kind,
+                    style: si,
+                    g0: g,
+                    g1: g,
+                    break_after: false,
+                    obj_h: h,
+                    obj_d: 0.0,
+                    dot: false,
+                    picture: false,
+                })
             };
             match c {
                 '\t' => push(&mut b, ClKind::Tab, 0.0, 0.0),
@@ -1646,6 +1697,15 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 let [el, et, er, eb] = float.effect_extent();
                                 let (px, py) = float.spin_pad(w * s, h * s);
                                 push(&mut b, ClKind::Object(k), w * s + el + er + 2.0 * px, h * s + et + eb + 2.0 * py);
+                                if let Some(c) = b.clusters.last_mut() {
+                                    c.picture = match o {
+                                        InlineObject::Image { .. } | InlineObject::Graphic { .. } | InlineObject::Group { .. } => true,
+                                        InlineObject::Shape { kind, story, .. } => {
+                                            *kind != wordcraft_doc::para::ShapeKind::TextBox && story.is_none()
+                                        }
+                                        _ => false,
+                                    };
+                                }
                             } else {
                                 push(&mut b, ClKind::Object(k), 0.0, 0.0);
                             }
@@ -1671,6 +1731,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                     obj_h: a.max(0.01),
                                     obj_d: d,
                                     dot: false,
+                                    picture: false,
                                 });
                             } else if let Some(text) = form.as_ref().and_then(|f| f.shown_text()) {
                                 // A drop-down shows its selected entry, whatever result was saved.
@@ -1735,6 +1796,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                                 obj_h: ml.ascent.max(a).max(0.01),
                                 obj_d: ml.descent.max(d),
                                 dot: false,
+                                picture: false,
                             });
                             if *display {
                                 displays.push((b.clusters.len() - 1, math.jc));
@@ -2023,6 +2085,7 @@ fn collapse(pl: &mut ParaLayout) {
     for l in &mut pl.lines {
         l.top = 0.0;
         l.height = 0.0;
+        l.fit_height = 0.0;
         l.baseline = 0.0;
     }
     pl.height = 0.0;
@@ -2577,6 +2640,13 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };
 
+        let fit_height = if !centred && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m > 1.0) {
+            let desc = if obj_asc > asc && (!first || pl.label.is_none()) && picture_clusters_only(pl, c0, c1) { 0.0 } else { desc };
+            (baseline - top + desc).min(height)
+        } else {
+            height
+        };
+
         // Alignment / justification (trailing spaces hang).
         let mut content_end = xs.last().copied().unwrap_or(line_start_x);
         for k in (c0..c1).rev() {
@@ -2663,6 +2733,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         let mut line = Line {
             top,
             height,
+            fit_height,
             baseline,
             text_asc,
             text_desc,
@@ -2711,6 +2782,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 lines.push(Line {
                     top,
                     height: h,
+                    fit_height: if grid.is_none() && matches!(rp.line_spacing, LineSpacing::Multiple(m) if m > 1.0) { natural } else { h },
                     baseline: top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
                     text_asc: asc,
                     text_desc: desc,
@@ -2773,6 +2845,7 @@ fn even_row(row: &mut [Line]) -> f32 {
     let h = row.iter().map(|l| l.height).fold(0.0f32, f32::max);
     for l in row {
         l.baseline += h - l.height;
+        l.fit_height += h - l.height;
         l.height = h;
     }
     h
@@ -2857,6 +2930,17 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
         LineSpacing::Multiple(m) => asc * m.min(1.0),
         LineSpacing::AtLeast(_) | LineSpacing::Exactly(_) => height - desc,
     }
+}
+
+fn picture_clusters_only(pl: &ParaLayout, c0: usize, c1: usize) -> bool {
+    pl.clusters.get(c0..c1).is_some_and(|cs| {
+        cs.iter().all(|c| match c.kind {
+            // Hidden and floating anchors have no inline extent or font height.
+            ClKind::Object(_) => c.picture || (c.adv == 0.0 && c.obj_h == 0.0),
+            ClKind::Space | ClKind::Tab | ClKind::Marker => true,
+            _ => false,
+        })
+    })
 }
 
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around

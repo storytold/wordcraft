@@ -1688,6 +1688,8 @@ struct PageBuilder<'a> {
     carry: Vec<NoteBox>,
     /// Page bottom before footnotes took space.
     orig_bottom: f32,
+    /// The physical page body ends above the margin because of its footer.
+    footer_limited: bool,
     /// The paragraph above: its style, contextual spacing, space after, whether that is automatic
     /// and whether it is a list item.
     prev: Option<(String, bool, f32, bool, bool)>,
@@ -2180,6 +2182,7 @@ impl PageBuilder<'_> {
         self.top = body_top;
         self.bottom = if self.web { f32::MAX / 8.0 } else { bottom };
         self.orig_bottom = self.bottom;
+        self.footer_limited = !self.web && bottom < s.page_h - s.margin_bottom;
         self.y = self.top;
         // Notes continued from the page before come first in this page's note area.
         // (`cap_columns` below keeps the columns above them.)
@@ -2402,6 +2405,7 @@ fn layout_pass(
         notes: Vec::new(),
         carry: Vec::new(),
         orig_bottom: 0.0,
+        footer_limited: false,
         prev: None,
         after_break_mark: false,
         next_starts_page: false,
@@ -2888,6 +2892,20 @@ fn place_endnotes(ctx: &mut Ctx, pb: &mut PageBuilder, ids: Vec<u32>, block: usi
             pb.advance(block, pb.top);
             added += 1;
         }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum FitSpace {
+    Margin,
+    Reserved,
+}
+
+// Multiple spacing above single may leave its extra leading in the bottom margin.
+fn line_fit_height(line: &para::Line, space: FitSpace) -> f32 {
+    match space {
+        FitSpace::Margin => line.fit_height,
+        FitSpace::Reserved => line.height,
     }
 }
 
@@ -3642,8 +3660,10 @@ fn place_para(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block: usize, 
         // Its (empty) line stays where the text ended, even at the bottom of a full column.
         let (y, prev, bottom, content_bottom, at) = (pb.y, pb.prev.clone(), pb.bottom, pb.content_bottom, (pb.pages.len(), pb.col));
         pb.bottom = f32::MAX / 4.0;
+        let footer_limited = std::mem::replace(&mut pb.footer_limited, false);
         place_para_in_flow(ctx, pb, p, block, body_top);
         pb.bottom = bottom;
+        pb.footer_limited = footer_limited;
         if (pb.pages.len(), pb.col) == at {
             (pb.y, pb.prev, pb.content_bottom) = (y, prev, content_bottom);
         }
@@ -3795,12 +3815,21 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     // Keep lines together: if it doesn't fit but would on an empty column, move it. Keep with
     // next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
     // that doesn't breaks as usual, its last lines going over with the next paragraph.
-    let height = pl.height + top_room + bottom_room;
-    if pl.rp.keep_lines || (pl.rp.keep_next && pb.y + height <= pb.bottom + 0.01) {
+    let has_notes = !pb.notes.is_empty()
+        || ((pl.rp.keep_lines || pl.rp.keep_next)
+            && para_notes(ctx.doc, p, &pl)
+                .iter()
+                .any(|(_, id)| ctx.doc.parts.get(id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Footnote)));
+    // Only the final line's extra leading may pass the margin. Notes and physical footers
+    // still reserve full boxes; a balanced column cut is not the physical footer floor.
+    let fit_space = if has_notes { FitSpace::Reserved } else { FitSpace::Margin };
+    let height = pl.lines.last().map_or(pl.height, |line| pl.height - line.height + line_fit_height(line, fit_space)) + top_room + bottom_room;
+    let footer_over = pb.footer_limited && pb.y + pl.height + top_room + bottom_room > pb.orig_bottom + 0.01;
+    if pl.height > 0.0 && (pl.rp.keep_lines || (pl.rp.keep_next && pb.y + height <= pb.bottom + 0.01 && !footer_over)) {
         let need = height + if pl.rp.keep_next { next_first_line(ctx, block, width, 0, &mut ctx.counters.clone()) } else { 0.0 };
         // (Against the whole column: balanced columns grow to hold it.)
         // With the 0.01 pt of slack the other fit checks take.
-        if pb.y + need > pb.bottom + 0.01 && !pb.at_top() && need <= pb.uncapped_bottom() - pb.top {
+        if (pb.y + need > pb.bottom + 0.01 || footer_over) && !pb.at_top() && need <= pb.uncapped_bottom() - pb.top {
             pb.advance(block, body_top);
             pb.y += pl.rp.space_before.min(0.0);
             applied_before = pl.rp.space_before.min(0.0);
@@ -3879,6 +3908,11 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
         let Some(first) = pl.lines.get(l0) else { break };
         // A paragraph's first line may start below its top (pushed down by a floating object).
         let lead = if l0 == 0 { first.top.max(0.0) + top_room } else { 0.0 };
+        // A continuous section's local top can already be at the physical footer.
+        let footer_rejects_first = pb.footer_limited
+            && pb.at_top()
+            && pb.pages.last().is_some_and(|page| pb.y > page.body.y + 0.01)
+            && item_bottom(pb.y + lead, &pl, l0, l0 + 1).is_some_and(|box_bottom| box_bottom > pb.orig_bottom + 0.01);
         let mut l1 = l0;
         let mut forced_break = None;
         // A page break followed only by the paragraph mark: the mark's (empty) line stays on this
@@ -3910,34 +3944,23 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 - new_notes.iter().map(|n| n.h).sum::<f32>()
                 - if pb.notes.is_empty() && !new_notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 }
                 - extra;
-            // Multiple spacing above single puts its extra leading below the text (see
-            // `baseline_offset`), and Word lets that leading of a page's last line run into the
-            // bottom margin: only the text has to fit (observed: a double-spaced 12pt line stays on
-            // the page while its text ends above the margin, about half a line lower than when the
-            // whole line must fit). Only the bottom margin takes that leading: a footer taller than
-            // the margin, or footnotes, keep the whole line clear of them.
-            let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
-            let fit_h = match pl.rp.line_spacing {
-                wordcraft_doc::props::LineSpacing::Multiple(m)
-                    if m > 1.0 && at_margin && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
-                {
-                    // `baseline` is from the paragraph's top; the text ends a descent below it.
-                    (l.baseline - l.top + l.text_desc).clamp(0.0, l.height)
-                }
-                _ => l.height,
-            };
-            let bottom = pb.y + lead + (l.top + fit_h - first.top);
+            let has_notes = !pb.notes.is_empty() || !new_notes.is_empty() || !line_notes.is_empty();
+            let fit_space = if has_notes { FitSpace::Reserved } else { FitSpace::Margin };
+            let height = line_fit_height(l, fit_space);
+            let bottom = pb.y + lead + (l.top + height - first.top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
             // the bottom margin as usual.
-            let has_notes = !pb.notes.is_empty() || !new_notes.is_empty() || !line_notes.is_empty();
             let tail = if has_notes && l1 + 1 == n {
                 *after_on_page.get_or_insert_with(|| space_after_kept(ctx, block, &pl.rp, label.is_some()))
             } else {
                 0.0
             };
-            let over = bottom + tail > limit + 0.01;
+            // Automatic leading may enter the margin, but not the physical footer boundary.
+            let footer_over =
+                pb.footer_limited && item_bottom(pb.y + lead, &pl, l0, l1 + 1).is_some_and(|box_bottom| box_bottom > pb.orig_bottom + 0.01);
+            let over = pl.height > 0.0 && (bottom + tail > limit + 0.01 || footer_over);
             // Notes too long for the rest of the page continue on the next one: the line still
             // fits if the notes before its last one, and that one's first line, fit below it.
             // The notes then take the rest of the page.
@@ -3960,7 +3983,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // An empty paragraph closing a section before a new page: measured in Word, it stays
             // on a full page instead of starting one of its own.
             let closing_mark = pb.next_starts_page && p.section.is_some() && p.text.is_empty();
-            if over && l1 == l0 && !pb.at_top() && !split && !only_break && !closing_mark {
+            if over && l1 == l0 && (!pb.at_top() || footer_rejects_first) && !split && !only_break && !closing_mark {
                 break;
             }
             new_notes.extend(line_notes);
@@ -3994,7 +4017,7 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             l1 -= 1;
         }
         if l1 == l0 {
-            if pb.at_top() {
+            if pb.at_top() && !footer_rejects_first {
                 l1 = l0 + 1; // can't fit even one line on an empty page: overflow
             } else {
                 pb.advance(block, body_top);
