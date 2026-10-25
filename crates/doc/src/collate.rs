@@ -6,7 +6,8 @@
 //! Polish puts `ą` right after `a` and `ż` after `ź` after `z`, Swedish puts `å ä ö` after `z`,
 //! Czech puts `ch` after `h`, Spanish `ñ` after `n`, Hungarian `cs`, `gy`, `sz`… after their
 //! first letter. The per-language tables follow the published alphabets of those languages.
-//! Text without diacritics sorts exactly as a case-insensitive code-point compare.
+//! Turkish and Azerbaijani pair `I` with `ı` and `İ` with `i`; other languages use Unicode's
+//! default lowercase mapping.
 
 use std::cmp::Ordering;
 
@@ -177,8 +178,8 @@ pub fn language(lang: Option<&str>) -> String {
     lang.and_then(|l| l.split(['-', '_']).next()).unwrap_or("").trim().to_ascii_lowercase()
 }
 
-fn tailoring(lang: Option<&str>) -> &'static [Tailor] {
-    match language(lang).as_str() {
+fn tailoring(lang: &str) -> &'static [Tailor] {
+    match lang {
         "pl" => PL,
         "cs" => CS,
         "sk" => SK,
@@ -337,9 +338,37 @@ const COMPOSE: &[(char, char, char)] = &[
 ];
 
 /// `s` lowercased, with each letter + combining mark that has a single-letter form composed.
-fn lower_composed(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for c in s.to_lowercase().chars() {
+fn lower_composed(s: &str, lang: &str) -> String {
+    let lower = if matches!(lang, "tr" | "az") && s.contains(['I', 'İ']) {
+        let mut lower = String::with_capacity(s.len());
+        let mut chars = s.chars().peekable();
+        while let Some(c) = chars.next() {
+            match c {
+                'I' if chars.peek() == Some(&'\u{307}') => {
+                    chars.next();
+                    lower.push('i');
+                }
+                'I' => {
+                    // Compose supported accented I pairs before the bare-I mapping, so
+                    // decomposed I + circumflex still has the same key as precomposed Î.
+                    if let Some((_, _, composed)) = chars.peek().and_then(|m| COMPOSE.iter().find(|(b, mark, _)| *b == 'i' && mark == m)) {
+                        chars.next();
+                        lower.push(*composed);
+                    } else {
+                        lower.push('ı');
+                    }
+                }
+                'İ' => lower.push('i'),
+                _ => lower.push(c),
+            }
+        }
+        // Keep whole-string lowercasing for contextual mappings such as Greek final sigma.
+        lower.to_lowercase()
+    } else {
+        s.to_lowercase()
+    };
+    let mut out = String::with_capacity(lower.len());
+    for c in lower.chars() {
         if let Some(prev) = out.chars().next_back()
             && let Some((_, _, composed)) = COMPOSE.iter().find(|(b, m, _)| *b == prev && *m == c)
         {
@@ -396,8 +425,9 @@ pub struct SortKey {
 /// The sort key of `s` for language `lang` (a BCP 47 tag such as `pl-PL`; `None` sorts like
 /// English).
 pub fn sort_key(s: &str, lang: Option<&str>) -> SortKey {
-    let text = lower_composed(s);
-    let rules = tailoring(lang);
+    let lang = language(lang);
+    let text = lower_composed(s, &lang);
+    let rules = tailoring(&lang);
     let mut key = SortKey::default();
     let mut i = 0;
     while let Some(rest) = text.get(i..).filter(|r| !r.is_empty()) {
@@ -424,10 +454,12 @@ pub fn collate(a: &str, b: &str, lang: Option<&str>) -> Ordering {
 }
 
 /// The index heading letter `s` files under in language `lang`: `Ł` for `Łódź` in Polish, `L`
-/// in English; `Ch` for `chata` in Czech; `A` for `Äpfel` in German, `Ä` in Swedish.
+/// in English; `Ch` for `chata` in Czech; `A` for `Äpfel` in German, `Ä` in Swedish;
+/// `İ` for `izmir` and `I` for `Isparta` in Turkish and Azerbaijani.
 pub fn heading_letter(s: &str, lang: Option<&str>) -> Option<String> {
-    let low = lower_composed(s.trim_start());
-    let (e, _) = next_elem(&low, tailoring(lang))?;
+    let lang = language(lang);
+    let low = lower_composed(s.trim_start(), &lang);
+    let (e, _) = next_elem(&low, tailoring(&lang))?;
     let shown = if e.own || e.sec == 0 {
         e.text.to_string()
     } else {
@@ -435,6 +467,9 @@ pub fn heading_letter(s: &str, lang: Option<&str>) -> Option<String> {
     };
     let mut cs = shown.chars();
     let first = cs.next()?;
+    if first == 'i' && matches!(lang.as_str(), "tr" | "az") {
+        return Some(std::iter::once('İ').chain(cs).collect());
+    }
     Some(first.to_uppercase().chain(cs).collect())
 }
 
@@ -446,6 +481,58 @@ mod tests {
         let mut v: Vec<String> = words.iter().map(|w| w.to_string()).collect();
         v.sort_by(|a, b| collate(a, b, Some(lang)));
         v
+    }
+
+    #[test]
+    fn turkic_case_pairs_sort_together_and_keep_separate_index_headings() {
+        for lang in ["tr", "tr-TR", "TR_tr", "az", "az-Latn-AZ", " AZ_az "] {
+            for (upper, lower) in [("I", "ı"), ("İ", "i"), ("I\u{307}", "i"), ("IĞDIR", "ığdır"), ("İZMİR", "izmir")] {
+                assert_eq!(sort_key(upper, Some(lang)), sort_key(lower, Some(lang)));
+                assert_eq!(collate(upper, lower, Some(lang)), Ordering::Equal);
+            }
+            assert_eq!(collate("I", "i", Some(lang)), Ordering::Less);
+            assert_eq!(sorted(&["Jale", "İzmir", "Isparta", "Hopa"], lang), ["Hopa", "Isparta", "İzmir", "Jale"]);
+            for word in ["izmir", "İzmir", "I\u{307}zmir"] {
+                assert_eq!(heading_letter(word, Some(lang)).as_deref(), Some("İ"));
+            }
+            for word in ["Isparta", "ısparta", "  Isparta"] {
+                assert_eq!(heading_letter(word, Some(lang)).as_deref(), Some("I"));
+            }
+            assert_eq!(collate("S\u{327}", "ş", Some(lang)), Ordering::Equal);
+            assert_eq!(heading_letter("S\u{327}ehir", Some(lang)).as_deref(), Some("Ş"));
+        }
+    }
+
+    #[test]
+    fn turkic_casing_preserves_every_supported_accented_i_composition() {
+        for lang in ["tr", "tr-TR", "TR_tr", "az", "az-Latn-AZ"] {
+            for (_, mark, composed) in COMPOSE.iter().filter(|(base, _, _)| *base == 'i') {
+                let upper = composed.to_uppercase().collect::<String>();
+                let decomposed_upper = format!("I{mark}");
+                let lower = composed.to_string();
+                let decomposed_lower = format!("i{mark}");
+                for text in [&upper, &decomposed_upper, &decomposed_lower] {
+                    assert_eq!(sort_key(text, Some(lang)), sort_key(&lower, Some(lang)), "{lang}: {text}");
+                    assert_eq!(collate(text, &lower, Some(lang)), Ordering::Equal);
+                    assert_eq!(heading_letter(text, Some(lang)), heading_letter(&lower, Some(lang)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn locale_casing_preserves_contextual_sigma_and_default_i_mapping() {
+        for lang in [None, Some("en-US"), Some("de"), Some("el"), Some("tr"), Some("az-AZ")] {
+            assert_eq!(sort_key("ΟΣ", lang), sort_key("ος", lang));
+            let lower = if matches!(language(lang).as_str(), "tr" | "az") { "ıος" } else { "iος" };
+            assert_eq!(sort_key("IΟΣ", lang), sort_key(lower, lang));
+        }
+        for lang in [None, Some("en-US"), Some("de"), Some("el")] {
+            assert_eq!(collate("I", "i", lang), Ordering::Equal);
+            assert_eq!(sort_key("İ", lang), sort_key("i\u{307}", lang));
+            assert_ne!(sort_key("I", lang), sort_key("ı", lang));
+            assert_eq!(heading_letter("izmir", lang).as_deref(), Some("I"));
+        }
     }
 
     #[test]

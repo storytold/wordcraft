@@ -176,6 +176,15 @@ formatting. Interface lists (styles, fonts) still sort by code point.
 
 Russian (`ru`) sorting keeps ё with е (a secondary diaeresis difference), before ж. Composed and decomposed ё and й have the same keys and index headings; the stored text is unchanged. Tests cover Russian locale aliases, case, representative words and these two canonical pairs. This is a narrow Cyrillic correction, not full Unicode normalization or CLDR collation. Ordering reference: [Unicode CLDR Russian collation chart](https://unicode.org/cldr/charts/42/collation/ru.html).
 
+Turkish (`tr`) and Azerbaijani (`az`) sorting and index headings pair `I` with `ı` and `İ` with
+`i`, including `I` followed by a combining dot above. Dotless I sorts before dotted i; their
+index headings are `I` and `İ`. Region/script tags, uppercase tags and underscore aliases use
+the same mapping. Other locales retain Unicode's default casing. Whole-string lowercasing
+still handles contextual Greek final sigma, including mixed Turkic/Greek text. Supported
+accented-I pairs compose before mapping a bare `I` to `ı`, so `Î` and `I` + circumflex retain
+the same key and heading. The existing Latin and Russian composition tables are unchanged.
+This is not full Unicode normalization or full language-sensitive Unicode casing.
+
 ## Region conventions (#838)
 
 As in Word, a new blank document takes its paper from the system **region**, not the interface
@@ -223,6 +232,7 @@ WordCraft keeps 2,54 cm).
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | Turkish and Azerbaijani collation uses dotted/dotless I case pairs and separate index headings; public API regressions cover order, equivalence, tags, combining dots, every supported accented-I composition and contextual Greek final sigma; broader parity estimates unchanged |
 | 2026-10-24 | minor | Preserved “Delete Around Caret in Equation” in all 27 shared WordCraft catalogs; the native/release pin and Flatpak source advance together. |
 | 2026-10-23 | minor | Interface catalogs moved to storytold/craft-i18n (`locales/<locale>/wordcraft.tsv`), looked up through craft-libs' `craft-i18n` crate and embedded from the pinned commit (`craft-i18n.rev`); strings other Crafting Apps already translate in the shared catalog now show translated; the "Open" paragraph-spacing preset no longer shows the file verb |
 | 2026-10-23 | trivial | Lookup, context, template, style-name and command-search tests use inline fixture catalogs or the pseudo-language; tests that asserted one language's catalog wording removed |

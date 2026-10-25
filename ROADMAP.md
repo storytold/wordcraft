@@ -232,6 +232,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-19 | Insert Caption picks the label used last, as Word does, and keeps it between runs (#3120). |
 | 2026-10-19 | Save As, Export and Open no longer do nothing on Linux desktops whose file chooser portal fails to show its dialog (#2999): a "cancel" quicker than anyone could make one asks again without the parent window, then opens the built-in file browser. |
 | 2026-10-20 | Russian sorting keeps ё with е and recognises decomposed ё/й: case-insensitive words and index headings share the corrected collation, with regressions and no new dependencies. |
+| 2026-10-22 | Turkish and Azerbaijani sorting pairs `I`/`ı` and `İ`/`i`, including a decomposed dotted capital I; index headings keep `I` and `İ` separate. Contextual Greek final sigma, ordinary locales and existing Russian composition/tailoring are preserved. |
 | 2026-10-18 | Long navigation headings wrap onto further lines inside the resizable pane instead of ending in an ellipsis: the row grows with the text and the pane keeps its width (#759, #3015). |
 | 2026-10-18 | Clearing a font query with no matches keeps Recently Used Fonts visible at the top of a scrollable list. The initial scroll position no longer skips its heading; measured keyboard scrolling is unchanged (#2068). |
 | 2026-10-19 | Centred numbered headings after a leading page break keep their number before the text (#2964). The label uses the alignment of the line it is drawn on; heading text positions and page count stay the same. |
@@ -637,6 +638,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-22 | trivial | Progress log: Turkish and Azerbaijani dotted/dotless I pairs in sorting and index headings; readiness estimates unchanged |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
