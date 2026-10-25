@@ -8104,7 +8104,17 @@ fn footer_page_total_needs_one_body_pass() {
     d.last_section.footers.default = Some(id);
     let first = |d: &Document| {
         let totals = Totals::first_guess(d.sections().len());
-        layout_pass(d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, true, (&EarlyFloats::new(), true))
+        layout_pass(
+            d,
+            &mut LayoutCache::new(),
+            &LayoutOptions::default(),
+            &HashMap::new(),
+            &totals,
+            true,
+            &PriorBodyWraps::new(),
+            &mut BackBodyWraps::new(),
+            (&EarlyFloats::new(), true),
+        )
     };
     assert!(matches!(first(&d), Pass::Done(l) if l.pages.len() == 3), "the footer's total asked for another pass");
     // The same field in the body is only known once every page is laid out.
@@ -11252,7 +11262,17 @@ fn last_rewrap_pass_keeps_early_floats_clear_of_text() {
     let one_page = picture_above_anchor(&"Earlier text flows beside the picture placed above its anchor. ".repeat(3), 4, 72.0);
     for d in [one_page, early_float_across_pages()] {
         let totals = Totals::first_guess(d.sections().len());
-        let pass = layout_pass(&d, &mut LayoutCache::new(), &LayoutOptions::default(), &HashMap::new(), &totals, false, (&EarlyFloats::new(), false));
+        let pass = layout_pass(
+            &d,
+            &mut LayoutCache::new(),
+            &LayoutOptions::default(),
+            &HashMap::new(),
+            &totals,
+            false,
+            &PriorBodyWraps::new(),
+            &mut BackBodyWraps::new(),
+            (&EarlyFloats::new(), false),
+        );
         let Pass::Done(l) = pass else { panic!("a last pass is done") };
         let (under, n) = text_under_shapes(&l);
         assert_eq!(under, None);

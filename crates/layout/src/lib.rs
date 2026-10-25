@@ -23,7 +23,7 @@ mod textbox;
 mod vertical;
 pub mod wordart;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -513,6 +513,9 @@ struct Key {
     table: u64,
     notes: u64,
     excl: u64,
+    split: Vec<usize>,
+    /// Continuation areas cannot change rows before this paragraph-relative top.
+    relay: Option<u32>,
     eq: u32,
     read_spacing: Option<u32>,
     grid: (u32, u32, u32, bool),
@@ -732,14 +735,24 @@ struct Ctx<'a> {
     /// Cache-key hashes of the table-style text formatting cells were laid out with
     /// ([`Ctx::table_key`]).
     table_keys: Vec<(para::CellText, u64)>,
+    prior_wraps: &'a PriorBodyWraps,
+    back_wraps: &'a mut BackBodyWraps,
     /// While a header or footer with tables is laid out: its page, for floats in its cells placed
     /// on the page (see [`with_pin`]).
     pin: Option<Pin>,
     footer_wraps: HashMap<(usize, u32, bool), Vec<WrapArea>>,
     header_tables: HashMap<(usize, u32, bool), Vec<Rect>>,
+    /// Extents of source-stable outer floating boxes for this pass.
+    frames: textbox::FrameCache,
     /// Heights of text boxes that resize to fit their text, by (story, width), worked out once
     /// per layout ([`textbox::fitted_height`]).
     fitted: HashMap<(u32, u32), Option<f32>>,
+    /// Insertion order permits rolling back speculative fitted heights without copying the cache.
+    fitted_order: Vec<(u32, u32)>,
+    /// Monotonic speculative work within one outer box, independent of placement allowance.
+    measure_left: usize,
+    measure_depth: usize,
+    measure_exhausted: bool,
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
@@ -873,8 +886,34 @@ impl Ctx<'_> {
         exclusions: &[para::Exclusion],
         label: Option<(String, Level)>,
     ) -> Arc<ParaLayout> {
+        self.para_with_wrap(p, width, table, exclusions, label, &[])
+    }
+
+    fn para_with_wrap(
+        &mut self,
+        p: &Paragraph,
+        width: f32,
+        table: Option<&para::CellText>,
+        exclusions: &[para::Exclusion],
+        label: Option<(String, Level)>,
+        split: &[usize],
+    ) -> Arc<ParaLayout> {
+        self.para_relay(p, width, table, exclusions, label, split, None)
+    }
+
+    fn para_relay(
+        &mut self,
+        p: &Paragraph,
+        width: f32,
+        table: Option<&para::CellText>,
+        exclusions: &[para::Exclusion],
+        label: Option<(String, Level)>,
+        split: &[usize],
+        relay: Option<f32>,
+    ) -> Arc<ParaLayout> {
         let fitted = self.fitted_boxes(p);
-        let (key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref(), &fitted);
+        let (mut key, eq_number) = self.para_key(p, width, table, exclusions, label.as_ref(), &fitted, split);
+        key.relay = relay.map(f32::to_bits);
         self.cache.used.insert(key.clone());
         if let Some(pl) = self.cache.paras.get(&key) {
             self.cache.hits += 1;
@@ -882,7 +921,7 @@ impl Ctx<'_> {
         }
         self.cache.misses += 1;
         let typing = key.typing;
-        let pl = Arc::new(para::layout_para(p, &self.para_env(width, label, table, exclusions, eq_number, typing, &fitted)));
+        let pl = Arc::new(para::layout_para_relay(p, &self.para_env(width, label, table, exclusions, eq_number, typing, &fitted), split, relay));
         self.cache.paras.insert(key, pl.clone());
         pl
     }
@@ -899,7 +938,7 @@ impl Ctx<'_> {
         measure: impl FnOnce(&ParaLayout) -> (f32, f32),
     ) -> (f32, f32) {
         let fitted = self.fitted_boxes(p);
-        let (key, eq_number) = self.para_key(p, width, table, &[], label.as_ref(), &fitted);
+        let (key, eq_number) = self.para_key(p, width, table, &[], label.as_ref(), &fitted, &[]);
         self.cache.used.insert(key.clone());
         if let Some(m) = self.cache.measures.get(&key) {
             self.cache.hits += 1;
@@ -925,8 +964,12 @@ impl Ctx<'_> {
             let h = match self.fitted.get(&key) {
                 Some(h) => *h,
                 None => {
+                    let fresh = self.measure_depth == 0 && !self.boxes.inside();
                     let h = textbox::fitted_height(self, *id, *w);
-                    self.fitted.insert(key, h);
+                    if fresh || !self.measure_exhausted {
+                        self.fitted.insert(key, h);
+                        self.fitted_order.push(key);
+                    }
                     h
                 }
             };
@@ -947,6 +990,7 @@ impl Ctx<'_> {
         exclusions: &[para::Exclusion],
         label: Option<&(String, Level)>,
         fitted: &[(usize, f32)],
+        split: &[usize],
     ) -> (Key, u32) {
         let page = if has_page_fields(p) { Some(self.fields.page_key()) } else { None };
         if self.track_totals && !self.uses_totals && has_total_fields(p) {
@@ -972,6 +1016,8 @@ impl Ctx<'_> {
             table: table.map(|t| self.table_key(t)).unwrap_or(0),
             notes: if p.objects.iter().any(|o| matches!(o, InlineObject::NoteRef { .. })) { self.notes_hash } else { 0 },
             excl: if exclusions.is_empty() { 0 } else { hash_of(&format!("{exclusions:?}")) },
+            split: split.to_vec(),
+            relay: None,
             eq: if eq_here > 0 { eq_number } else { 0 },
             read_spacing: if self.opts.view == ViewMode::Read { self.opts.read_line_spacing.map(f32::to_bits) } else { None },
             grid: self.grid.key(),
@@ -1288,6 +1334,7 @@ fn layout_box(
                     if left_out(oi) {
                         continue;
                     }
+                    let (w, h) = textbox::fit_size(ctx, o, w, h, depth);
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
                         pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
@@ -2249,13 +2296,51 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
     let mut totals = Totals::first_guess(doc.sections().len());
     let mut passes = 0;
     let (mut early, mut rewraps) = (EarlyFloats::new(), 0);
+    let mut back_passes = 0;
+    let mut back_wraps = BackBodyWraps::new();
     let mut l = loop {
-        match layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, (&early, rewraps < MAX_REWRAP_PASSES)) {
+        #[cfg(test)]
+        REPLAY_STATS.with(|c| c.borrow_mut().passes += 1);
+        let mut prior = PriorBodyWraps::new();
+        for (&(block, _), (page, area)) in &back_wraps {
+            prior.entry(*page).or_default().push((block, area.clone()));
+        }
+        let mut found = BackBodyWraps::new();
+        let pass =
+            layout_pass(doc, cache, opts, &note_pages, &totals, passes < MAX_TOTAL_PASSES, &prior, &mut found, (&early, rewraps < MAX_REWRAP_PASSES));
+        #[cfg(test)]
+        if found != back_wraps && back_passes == MAX_BACK_WRAP_PASSES {
+            REPLAY_STATS.with(|c| c.borrow_mut().cap_fallbacks += 1);
+        }
+        if found != back_wraps && back_passes < MAX_BACK_WRAP_PASSES {
+            #[cfg(test)]
+            REPLAY_STATS.with(|c| c.borrow_mut().back_retries += 1);
+            back_wraps = found;
+            back_passes += 1;
+            if let Pass::Rewrap(found) = &pass {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().early_with_back += 1);
+                merge_early(&mut early, found.clone());
+                rewraps += 1;
+            }
+            if let Pass::Again(t) = pass {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().totals_with_back += 1);
+                totals = t;
+                passes += 1;
+            }
+            continue;
+        }
+        match pass {
             Pass::Again(t) => {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().total_retries += 1);
                 totals = t;
                 passes += 1;
             }
             Pass::Rewrap(found) => {
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().early_retries += 1);
                 merge_early(&mut early, found);
                 rewraps += 1;
             }
@@ -2264,6 +2349,8 @@ pub fn layout(doc: &Document, cache: &mut LayoutCache, opts: &LayoutOptions) -> 
                     // Number each page's footnotes from where the pass before placed them, until they stay.
                     let placed = footnote_pages(doc, &l.pages);
                     if placed != note_pages {
+                        #[cfg(test)]
+                        REPLAY_STATS.with(|c| c.borrow_mut().note_retries += 1);
                         note_pages = placed;
                         note_passes += 1;
                         continue;
@@ -2288,6 +2375,8 @@ fn layout_pass(
     note_pages: &HashMap<u32, usize>,
     totals: &Totals,
     may_repeat: bool,
+    prior_wraps: &PriorBodyWraps,
+    back_wraps: &mut BackBodyWraps,
     (early, may_rewrap): (&EarlyFloats, bool),
 ) -> Pass {
     let env = env_hash(doc, opts);
@@ -2335,7 +2424,14 @@ fn layout_pass(
         quiet_marks: Vec::new(),
         mirror: false,
         table_keys: Vec::new(),
+        prior_wraps,
+        back_wraps,
+        frames: Default::default(),
         fitted: HashMap::new(),
+        fitted_order: Vec::new(),
+        measure_left: 0,
+        measure_depth: 0,
+        measure_exhausted: false,
         header_tables: HashMap::new(),
         footer_wraps: HashMap::new(),
         pin: None,
@@ -3091,6 +3187,32 @@ fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: f32, h: f32
     Rect::new(align_in(hx, float.x, w, h_align), align_in(vy, float.y, h, v_align), w, h)
 }
 
+const MODERN_FLOAT_MODE: u32 = 15;
+
+/// Native boundary proof covers unturned body textboxes; absolute modern anchors may overflow.
+fn body_float_bounds(doc: &Document, o: &InlineObject, sect: &SectionProps, float: &Float) -> Option<(f32, f32)> {
+    let is_box = o.text_box().and_then(|id| doc.parts.get(&id)).is_some_and(|part| part.kind == wordcraft_doc::PartKind::TextBox);
+    if !is_box || float.spin().deg != 0.0 || matches!(float.wrap, Wrap::Inline | Wrap::BehindText | Wrap::InFrontOfText) {
+        return None;
+    }
+    let bounds = if doc.settings.compat_mode < MODERN_FLOAT_MODE {
+        (0.0, sect.page_h)
+    } else if matches!(float.v_rel, Anchor::Paragraph | Anchor::Line) {
+        (sect.margin_top, sect.page_h - sect.margin_bottom)
+    } else {
+        return None;
+    };
+    (bounds.0.is_finite() && bounds.1.is_finite() && bounds.1 >= bounds.0).then_some(bounds)
+}
+
+fn oversized_body_float(doc: &Document, o: &InlineObject, h: f32, sect: &SectionProps) -> bool {
+    if doc.settings.compat_mode < MODERN_FLOAT_MODE {
+        return false;
+    }
+    let Some((_, _, float)) = floating(o) else { return false };
+    body_float_bounds(doc, o, sect, float).is_some_and(|(top, bottom)| h.clamp(1.0, 4000.0) > bottom - top)
+}
+
 /// Where an object of `size` starts on one axis of `area` (start, extent): at `offset` from the
 /// area's start, or aligned in it when `align` is set.
 fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<FloatAlign>) -> f32 {
@@ -3182,6 +3304,59 @@ fn merge_early(early: &mut EarlyFloats, found: EarlyFloats) {
                 Some(_) => {}
                 None => have.push((b, k, area)),
             }
+        }
+    }
+}
+
+// A corrected frame reaching earlier body text is supplied before that text on the next pass.
+type BackBodyWraps = BTreeMap<(usize, usize), (usize, WrapArea)>;
+type PriorBodyWraps = HashMap<usize, Vec<(usize, WrapArea)>>;
+const MAX_BACK_WRAP_PASSES: usize = 4;
+
+#[cfg(test)]
+#[derive(Clone, Debug, Default)]
+struct ReplayStats {
+    passes: usize,
+    back_retries: usize,
+    total_retries: usize,
+    early_retries: usize,
+    early_with_back: usize,
+    totals_with_back: usize,
+    note_retries: usize,
+    cap_fallbacks: usize,
+    wrap_attempts: usize,
+    wrap_accepted: usize,
+    wrap_rejected: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    static REPLAY_STATS: std::cell::RefCell<ReplayStats> = const { std::cell::RefCell::new(ReplayStats {
+        passes: 0, back_retries: 0, total_retries: 0, early_retries: 0, early_with_back: 0, totals_with_back: 0, note_retries: 0,
+        cap_fallbacks: 0, wrap_attempts: 0, wrap_accepted: 0, wrap_rejected: 0,
+    }) };
+}
+
+/// Per-paragraph replay policy travels with its geometry, including through continuation.
+#[derive(Clone, Debug, Default, PartialEq)]
+struct BodyExclusions {
+    areas: Vec<para::Exclusion>,
+    split: Vec<usize>,
+}
+
+impl BodyExclusions {
+    fn wait(areas: Vec<para::Exclusion>) -> Self {
+        Self { areas, split: Vec::new() }
+    }
+
+    fn append_wait(&mut self, areas: impl IntoIterator<Item = para::Exclusion>) {
+        self.areas.extend(areas);
+    }
+
+    fn append_split(&mut self, areas: impl IntoIterator<Item = para::Exclusion>) {
+        for area in areas {
+            self.split.push(self.areas.len());
+            self.areas.push(area);
         }
     }
 }
@@ -3335,7 +3510,7 @@ fn anchor_floats(
     excl_mark: usize,
     label: &Option<(String, Level)>,
     place: bool,
-) -> (HashMap<usize, Rect>, Arc<ParaLayout>, Vec<para::Exclusion>) {
+) -> (HashMap<usize, Rect>, Arc<ParaLayout>, BodyExclusions) {
     ctx.fields.page = pb.number;
     let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
@@ -3348,29 +3523,67 @@ fn anchor_floats(
         let top = y0 - before;
         let text_before = top > pb.top + 0.5 || pb.col > 0;
         let frame = PageFrame { sect: pb.sect, origin: (0.0, 0.0), number: pb.number, mirror: ctx.mirror };
+        let mut anchor_height = None;
         // An object left out of the layout (hidden, or deleted in the final text) is not placed, so
         // it takes no room either.
         let left_out = left_out_objects(ctx.doc, p, None, ctx.opts.show_hidden, ctx.hide_deleted);
         for (oi, o) in p.objects.iter().enumerate() {
+            ctx.back_wraps.remove(&(block, oi));
             let Some((w, h, float)) = floating(o) else { continue };
             if left_out(oi) {
                 continue;
             }
+            let (w, h) = textbox::fit_size(ctx, o, w, h, 0);
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
+            let original_y = r.y;
+            if ctx.opts.view == ViewMode::Print
+                && let Some((top, bottom)) = body_float_bounds(ctx.doc, o, pb.sect, float)
+            {
+                r.y = if oversized_body_float(ctx.doc, o, r.h, pb.sect) {
+                    let height = *anchor_height.get_or_insert_with(|| {
+                        let eq_start = ctx.eq_count;
+                        let pl = ctx.para_labelled(p, width, None, &[], label.clone());
+                        ctx.eq_count = eq_start;
+                        pl.lines.first().map_or(0.0, |line| line.top.max(0.0) + line.height)
+                    });
+                    y0 - before + height
+                } else {
+                    r.y.max(top).min((bottom - r.h).max(top))
+                };
+            }
+            // Bounded frame corrections keep their own replay and split policy at the retry cap.
+            let corrected = (r.y - original_y).abs() > 0.01;
             let outline = ctx.wrap_outline(o);
             let outline = outline.as_deref().map(Vec::as_slice);
             let mut area = wrap_area(r, float, outline);
-            if pb.settle && text_before {
+            if pb.settle && text_before && !corrected {
                 let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
                 (r, area) = settle_early(r, area, seed, top, |r| wrap_area(r, float, outline));
             }
             rects.insert(oi, r);
             // Above the paragraph, beside text laid out before it: the page is laid out again
             // with it known from the start (#2048).
-            let above = area.as_ref().filter(|a| text_before && a.0.y < top - 0.5).map(|a| (page, a.clone()));
+            let above = area.as_ref().filter(|a| !corrected && text_before && a.0.y < top - 0.5).map(|a| (page, a.clone()));
             ctx.floats_above.insert((block, oi), above);
             if let Some(area) = area {
+                if corrected
+                    && area.0.y < y0 - before - 0.01
+                    && area.0.x < col_x + width
+                    && area.0.right() > col_x
+                    && pb.pages.last().is_some_and(|page| {
+                        page.items.iter().any(|item| {
+                            matches!(item, Placed::Lines { story: StoryRef::Body, path, .. } if path.0.first().is_some_and(|i| (*i as usize) < block))
+                                && {
+                                    let (top, bottom) = v_span(item);
+                                    top < area.0.bottom() && bottom > area.0.y
+                                }
+                        })
+                    })
+                {
+                    ctx.back_wraps.insert((block, oi), (pb.pages.len().saturating_sub(1), area.clone()));
+                }
+
                 match early.and_then(|v| v.iter().position(|(b, k, _)| (*b, *k) == (block, oi))).filter(|k| *k < pb.seeded) {
                     Some(k) => {
                         if let Some(slot) = pb.excl.get_mut(k) {
@@ -3382,9 +3595,26 @@ fn anchor_floats(
             }
         }
     }
-    let rel = rel_exclusions(&body_wraps(ctx, pb), col_x, y0);
-    let pl = ctx.para_labelled(p, width, None, &rel, label.clone());
+    let rel = body_exclusions(ctx, pb, block, y0);
+    let pl = ctx.para_with_wrap(p, width, None, &rel.areas, label.clone(), &rel.split);
     (rects, pl, rel)
+}
+
+/// Page areas include later anchors discovered by the bounded backward replay.
+fn body_exclusions(ctx: &mut Ctx, pb: &PageBuilder, block: usize, y0: f32) -> BodyExclusions {
+    let col_x = pb.col_x();
+    let mut rel = BodyExclusions::wait(rel_exclusions(&body_wraps(ctx, pb), col_x, y0));
+    if let Some(areas) = ctx.prior_wraps.get(&pb.pages.len().saturating_sub(1)) {
+        for (_, area) in areas.iter().filter(|(owner, _)| *owner > block) {
+            let earlier = rel_exclusions(std::slice::from_ref(area), col_x, y0);
+            if area.0.h > pb.sect.page_h {
+                rel.append_split(earlier);
+            } else {
+                rel.append_wait(earlier);
+            }
+        }
+    }
+    rel
 }
 
 /// Footer page tables wrap only the intersecting body lines, which resume below them.
@@ -3524,7 +3754,10 @@ fn place_objects(
             let rect = if let Some(r) = pinned {
                 r
             } else if floating {
-                floats.get(&oi).copied().unwrap_or_else(|| float_rect(at.page, at.col, at.para_y, w, h, float))
+                floats.get(&oi).copied().unwrap_or_else(|| {
+                    let (w, h) = textbox::fit_size(ctx, obj, w, h, depth);
+                    float_rect(at.page, at.col, at.para_y, w, h, float)
+                })
             } else {
                 let cx = x + line.cl_left(k).unwrap_or(0.0);
                 display::inline_rect(Some(obj), cx, y + (line.baseline - fl.top), c.adv, c.obj_h)
@@ -3569,7 +3802,8 @@ fn place_objects(
                 _ => text_box.map(|id| (id, rect)).into_iter().collect(),
             };
             for (id, rect) in boxes {
-                let items = textbox::box_items(ctx, id, rect, depth);
+                let parent = if text_box == Some(id) { Some(obj) } else { None };
+                let items = textbox::box_items(ctx, id, rect, depth, parent);
                 let layer = if float.wrap == Wrap::BehindText { &mut behind } else { &mut front };
                 layer.extend(items);
             }
@@ -3678,19 +3912,51 @@ thread_local! {
 }
 
 /// The wrap areas for a paragraph laid out against `rel` (relative to its top) whose lines from the
-/// one at `t` (relative to its top) on go into the column starting at `x0`, that line at `y` on
-/// the page, which has the wrap areas `excl` (#1374). The areas the lines before were broken
+/// one at `t` (relative to its top) on go into a new column, with `here` already relative to
+/// the paragraph (#1374). The areas the lines before were broken
 /// around end at `t`; the column's start there (one reaching above `t` with an outline keeps its
 /// whole outline, so it may change a line before, and the paragraph is then not broken again).
 /// Areas well clear of the column (outside `-width..2 * width`, room for negative indents) can't
 /// touch its lines and are left out.
-fn continued_exclusions(rel: &[para::Exclusion], excl: &[WrapArea], x0: f32, y: f32, t: f32, width: f32) -> Vec<para::Exclusion> {
-    let before = rel.iter().filter(|e| e.top < t).map(|e| para::Exclusion { bottom: e.bottom.min(t), ..e.clone() });
-    let here = rel_exclusions(excl, x0, y - t)
-        .into_iter()
-        .filter(|e| e.bottom > t && e.right > -width && e.left < 2.0 * width)
-        .map(|e| if e.top < t && e.contour.is_none() { para::Exclusion { top: t, ..e } } else { e });
-    before.chain(here).collect()
+fn continued_exclusions(rel: &BodyExclusions, here: &BodyExclusions, t: f32, width: f32) -> BodyExclusions {
+    let mut out = BodyExclusions::default();
+    for (index, area) in rel.areas.iter().enumerate().filter(|(_, e)| e.top < t) {
+        let clipped = para::Exclusion { bottom: area.bottom.min(t), ..area.clone() };
+        if rel.split.binary_search(&index).is_ok() {
+            out.append_split(std::iter::once(clipped));
+        } else {
+            out.append_wait(std::iter::once(clipped));
+        }
+    }
+    for (index, area) in here.areas.iter().enumerate() {
+        if !(area.bottom > t && area.right > -width && area.left < 2.0 * width) {
+            continue;
+        }
+        let area = if area.top < t && area.contour.is_none() { para::Exclusion { top: t, ..area.clone() } } else { area.clone() };
+        if here.split.binary_search(&index).is_ok() {
+            out.append_split(std::iter::once(area));
+        } else {
+            out.append_wait(std::iter::once(area));
+        }
+    }
+    out
+}
+
+/// Commit a wrap relay only when the continuation starts at the same byte and height.
+fn accept_wrap_relay(
+    pl: &mut Arc<ParaLayout>,
+    rel: &mut BodyExclusions,
+    relaid: Arc<ParaLayout>,
+    here: BodyExclusions,
+    resume: usize,
+    top: f32,
+) -> Option<usize> {
+    let k = relaid.lines.iter().position(|l| l.start == resume)?;
+    if !relaid.lines.get(k).is_some_and(|l| (l.top - top).abs() < 0.01) {
+        return None;
+    }
+    (*pl, *rel) = (relaid, here);
+    Some(k)
 }
 
 /// Run `f` with `map` as the field context's page map (`FieldCtx::page_from`), then take it back.
@@ -3730,6 +3996,13 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
     let broke_before = pl.rp.page_break_before && !pb.at_top() && !pb.web;
     if broke_before {
         pb.new_page(block, body_top);
+    }
+    // A frame taller than the body starts on a fresh column, after its anchor line.
+    if ctx.opts.view == ViewMode::Print
+        && !pb.at_top()
+        && float_rects.iter().any(|(&i, rect)| p.objects.get(i).is_some_and(|o| oversized_body_float(ctx.doc, o, rect.h, pb.sect)))
+    {
+        pb.advance(block, body_top);
     }
     // Same-style contextual spacing removes this paragraph's before-space, or subtracts the
     // previous paragraph's after-space from the merged gap (ISO/IEC 29500-1 §17.3.1.9).
@@ -3826,22 +4099,28 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             && wrap_relays < MAX_WRAP_RELAYS
             && let Some((resume, t)) = pl.lines.get(l0).map(|l| (l.start, l.top))
         {
-            let here = continued_exclusions(&rel, &body_wraps(ctx, pb), pb.col_x(), pb.y, t, laid_width);
+            let areas = body_exclusions(ctx, pb, block, pb.y - t);
+            let here = continued_exclusions(&rel, &areas, t, laid_width);
             if here != rel {
                 wrap_relays += 1;
                 ctx.fields.page = laid_page;
                 #[cfg(test)]
                 WRAP_RELAYS.with(|c| c.set(c.get() + 1));
-                let relaid =
-                    with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &here, label.clone())));
+                #[cfg(test)]
+                REPLAY_STATS.with(|c| c.borrow_mut().wrap_attempts += 1);
+                let relaid = with_page_map(ctx, &mut page_map, |ctx| {
+                    again(ctx, eq_start, |ctx| ctx.para_relay(p, laid_width, None, &here.areas, label.clone(), &here.split, Some(t)))
+                });
                 // Only if the rest still starts at the same line, at the same height (an outline
                 // reaching above it could move the lines before down, and the column's areas with them).
-                if let Some(k) = relaid.lines.iter().position(|l| l.start == resume)
-                    && relaid.lines.get(k).is_some_and(|l| (l.top - t).abs() < 0.01)
-                {
-                    (pl, rel) = (relaid, here);
+                if let Some(k) = accept_wrap_relay(&mut pl, &mut rel, relaid, here, resume, t) {
+                    #[cfg(test)]
+                    REPLAY_STATS.with(|c| c.borrow_mut().wrap_accepted += 1);
                     n = pl.lines.len();
                     l0 = k;
+                } else {
+                    #[cfg(test)]
+                    REPLAY_STATS.with(|c| c.borrow_mut().wrap_rejected += 1);
                 }
             }
         }
@@ -3860,8 +4139,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             page_relays += 1;
             page_map.push((resume, pb.number));
             ctx.fields.page = laid_page;
-            let relaid =
-                with_page_map(ctx, &mut page_map, |ctx| again(ctx, eq_start, |ctx| ctx.para_labelled(p, laid_width, None, &rel, label.clone())));
+            let relaid = with_page_map(ctx, &mut page_map, |ctx| {
+                again(ctx, eq_start, |ctx| ctx.para_with_wrap(p, laid_width, None, &rel.areas, label.clone(), &rel.split))
+            });
             match relaid.lines.iter().position(|l| l.start == resume) {
                 Some(k) => {
                     pl = relaid;
@@ -4946,3 +5226,6 @@ mod tests_table_contact;
 mod tests_textbox;
 #[cfg(test)]
 mod tests_vertical;
+
+#[cfg(test)]
+mod tests_body_wrap;
