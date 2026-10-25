@@ -361,8 +361,16 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
                 let x = if fmt == NumFormat::BahtText {
                     // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
                     let parse = wordcraft_doc::section::parse_baht_token;
-                    parse(&name)
-                        .filter(|v| v.is_finite())
+                    // For `= expr` fields the field name is "=" (or "=token" with no space);
+                    // do not parse it as the amount — use literal_after_eq instead so
+                    // multi-operand expressions (`{ = 100 + 50 \* BahtText }`) fall through
+                    // to the cached result.
+                    let from_name = if !instr.trim_start().starts_with('=') {
+                        parse(&name).filter(|v| v.is_finite())
+                    } else {
+                        None
+                    };
+                    from_name
                         .or_else(|| literal_after_eq(instr).and_then(parse))
                         .or_else(|| parse(result.trim()))
                 } else {
