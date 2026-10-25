@@ -9,7 +9,9 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f" }
+# The Slider and ZoomBar from https://github.com/storytold/craft-libs/pull/33, pinned to its branch in
+# a fork until it merges; the branch carries the craft-ui of main's rev (25da131) too.
+craft-ui = { git = "https://github.com/brzuchal/craft-libs", rev = "61f7ab83b8bab760a431e921a845c7011c6dfbf8" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
 # `craft-i18n.rev`). Its own rev, ahead of craft-ui's: lazy per-locale parsing

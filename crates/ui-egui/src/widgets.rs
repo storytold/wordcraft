@@ -22,6 +22,25 @@ const _: () = assert!(BIG_ICON_Y + 16.0 <= BIG_LABEL_Y);
 
 /// Shortcut text for a command (`⌘B` on macOS, `Ctrl+B` elsewhere): its first key in effect,
 /// custom keys included (Customize Keyboard).
+/// The colours of the shared slider (`craft_ui::slider`): track, accent fill and thumb from the
+/// WordCraft tokens.
+pub fn slider_style(t: &Tokens) -> craft_ui::slider::SliderStyle {
+    craft_ui::slider::SliderStyle {
+        track: t.border_strong,
+        fill: t.accent,
+        thumb: t.panel,
+        thumb_stroke: Stroke::new(1.0, t.border_strong),
+        dot: t.accent,
+        mark: t.text_dim,
+        focus_stroke: Stroke::new(1.0, t.accent),
+    }
+}
+
+/// The shared zoom bar's colours (`craft_ui::slider::ZoomBar`) from the WordCraft tokens.
+pub fn zoom_bar_style(t: &Tokens) -> craft_ui::slider::ZoomBarStyle {
+    craft_ui::slider::ZoomBarStyle { slider: slider_style(t), icon: t.icon, hover: t.hover, text: t.text_dim, font: 11.5 }
+}
+
 pub fn shortcut_text(app: &WordApp, id: &str) -> String {
     let keys = app.session.keymap.keys_for(&app.session.registry, id);
     keys.first().map(|k| key_text(k)).unwrap_or_default()
