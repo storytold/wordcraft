@@ -327,17 +327,34 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         },
         _ => {
             // Apply a \* format switch when a numeric value is available.
-            // Resolution order:
-            //   1. Stored result (already computed, e.g. a Word-cached value or after update).
-            //   2. Field name itself  (`{ 12345 \* BahtText }` — number as field name).
-            //   3. First token after `=` (`{ = 12345 \* BahtText }` — expression field).
+            //
+            // For BahtText the instruction literal takes precedence over the cached result
+            // because the cache may hold a stale "0" while the literal carries the true
+            // amount.  Resolution order for BahtText:
+            //   1. Field name itself  (`{ 12345 \* BahtText }` — number as field name).
+            //   2. First token after `=` (`{ = 12345 \* BahtText }` — expression field).
+            //   3. Stored result (fallback).
+            // For all other switches the stored result retains its existing first-place
+            // priority so that Word-computed values are preserved.
             if let Some(fmt) = fmt {
-                let x = result.trim().parse::<f64>().ok()
-                    .or_else(|| name.parse::<f64>().ok())
-                    .or_else(|| {
-                        let after_eq = instr.trim_start().strip_prefix('=')?;
-                        after_eq.split_whitespace().next()?.parse().ok()
-                    });
+                let x = if fmt == NumFormat::BahtText {
+                    // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
+                    let parse = wordcraft_doc::section::parse_baht_token;
+                    parse(&name)
+                        .filter(|v| v.is_finite())
+                        .or_else(|| {
+                            let after_eq = instr.trim_start().strip_prefix('=')?;
+                            parse(after_eq.split_whitespace().next()?)
+                        })
+                        .or_else(|| parse(result.trim()))
+                } else {
+                    result.trim().parse::<f64>().ok()
+                        .or_else(|| name.parse::<f64>().ok())
+                        .or_else(|| {
+                            let after_eq = instr.trim_start().strip_prefix('=')?;
+                            after_eq.split_whitespace().next()?.parse().ok()
+                        })
+                };
                 if let Some(x) = x {
                     if fmt == NumFormat::BahtText {
                         let text = wordcraft_doc::section::baht_text_f64(x)
