@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 
 use crate::WordApp;
 use crate::dialogs::Dialog;
-use crate::dialogs_keyboard::{categories, commands, list};
+use crate::dialogs_keyboard::{categories, commands, list, matching_commands, select_in};
 use crate::theme::semibold;
 
 /// The dialog's two pages.
@@ -39,6 +39,9 @@ pub struct RibbonForm {
     /// The left list: a category (empty for All Commands) and the command picked in it.
     pub category: String,
     pub command: String,
+    /// Filter-as-you-type query for the command list (#1845); UI-only dialog state, ignored
+    /// while empty. Never persisted and never a command parameter.
+    pub filter: String,
     /// The item picked in the ribbon tree.
     pub selected: TreeItem,
     /// The command picked in the Quick Access Toolbar list.
@@ -97,16 +100,22 @@ pub fn customize_ribbon(app: &mut WordApp, ui: &mut Ui, f: &mut RibbonForm) -> b
     });
     ui.separator();
     let (left, right, h) = (150.0, 230.0, 300.0);
+    ui.add(egui::TextEdit::singleline(&mut f.filter).hint_text(tl!("Search")).desired_width(left + right + 8.0));
     let mut cats: Vec<(String, String)> = categories(app).into_iter().map(|c| (c.clone(), tl!(&c).to_string())).collect();
     cats.push((String::new(), tl!("All Commands").to_string()));
-    let cmds: Vec<(String, String)> = commands(app, &f.category).into_iter().map(|(id, l)| (id.to_string(), l)).collect();
+    let cmds: Vec<(String, String)> = matching_commands(app, &f.category, &f.filter);
+    f.command = select_in(&cmds, &f.command);
+    if cmds.is_empty() {
+        ui.label(egui::RichText::new(tl!("No matching commands")).weak());
+    }
     ui.horizontal_top(|ui| {
         ui.vertical(|ui| {
             ui.label(egui::RichText::new(tl!("Choose a command")).font(semibold(12.5)));
             ui.horizontal_top(|ui| {
                 if let Some(c) = list(ui, "rb_categories", vec2(left, h), &cats, &f.category) {
                     f.category = c;
-                    f.command = commands(app, &f.category).first().map(|(id, _)| (*id).to_string()).unwrap_or_default();
+                    f.filter.clear();
+                    f.command = matching_commands(app, &f.category, &f.filter).first().map(|(id, _)| id.clone()).unwrap_or_default();
                 }
                 if let Some(c) = list(ui, "rb_commands", vec2(right, h), &cmds, &f.command) {
                     f.command = c;
@@ -464,6 +473,40 @@ mod tests {
         a.ui.tab = "Home".into();
         frame(&ctx, &mut n, vec![], |ui| crate::ribbon::show(&mut a, ui));
         assert_eq!(a.ui.tab, "Insert", "a hidden tab isn't shown");
+    }
+
+    /// #1845: the shared command picker (Ribbon and Quick Access Toolbar pages) filters
+    /// as you type, and Add works from a filtered selection.
+    #[test]
+    fn command_filter_narrows_the_picker_and_add_works() {
+        use crate::dialogs_keyboard::{matching_commands, select_in};
+
+        let mut a = app();
+        a.run("tools.customizeRibbon", json!({})).unwrap();
+        assert!(matches!(a.dialog, Some(Dialog::CustomizeRibbon { .. })));
+        if let Some(Dialog::CustomizeRibbon { form }) = &mut a.dialog {
+            form.filter = "bold".to_string();
+        }
+        let (category, filter, current) = match &a.dialog {
+            Some(Dialog::CustomizeRibbon { form }) => (form.category.clone(), form.filter.clone(), form.command.clone()),
+            _ => panic!("expected the Customize Ribbon dialog"),
+        };
+        // Empty filter keeps the category scope.
+        let unfiltered = matching_commands(&a, &category, "");
+        assert!(!unfiltered.is_empty());
+        // Typing searches every command, ignoring the category.
+        let cmds = matching_commands(&a, &category, &filter);
+        assert!(cmds.iter().any(|(id, _)| id == "format.bold"));
+        assert!(cmds.len() < a.session.registry.all().len());
+        // The dialog's Add >> adds the filtered pick to the Quick Access Toolbar.
+        let picked = select_in(&cmds, &current);
+        assert!(!picked.is_empty());
+        if let Some(Dialog::CustomizeRibbon { form }) = &mut a.dialog {
+            form.command = picked.clone();
+        }
+        a.run("tools.customizeRibbon", json!({"qatAdd": picked})).unwrap();
+        assert!(a.session.ribbon.qat().contains(&picked.as_str()));
+        assert!(a.session.ribbon.qat().contains(&"format.bold"));
     }
 
     /// #376: the Quick Access Toolbar's … button opens its menu, and the toolbar shows the user's

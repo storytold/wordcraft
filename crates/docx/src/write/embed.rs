@@ -68,7 +68,7 @@ impl<'d> EmbedWriter<'d> {
             "[content_types].xml",
         ]
         .iter()
-        .map(|s| s.to_string())
+        .map(ToString::to_string)
         .collect();
         taken.insert(VBA_PROJECT_PART.to_ascii_lowercase());
         // The bibliography writer uses these names when sources are present (#532).

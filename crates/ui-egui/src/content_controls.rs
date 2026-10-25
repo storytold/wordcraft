@@ -163,7 +163,7 @@ pub fn popup(app: &mut WordApp, ctx: &egui::Context) {
     let t = Tokens::get(ctx);
     let at_json = serde_json::to_value(&at).unwrap_or_default();
     let mut close = false;
-    let area = egui::Area::new(egui::Id::new("content_control_popup"))
+    let area = egui::Area::new(egui::Id::unique("content_control_popup"))
         .order(egui::Order::Foreground)
         .fixed_pos(pos2(anchor.max.x - 180.0, anchor.max.y + 2.0));
     let shown = area.show(ctx, |ui| {

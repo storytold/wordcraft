@@ -419,7 +419,7 @@ impl AffixDict {
             }
             stems.push((word, flags));
         }
-        AffixDict::build(rules, stems, comments.iter().map(|s| s.to_string()).collect())
+        AffixDict::build(rules, stems, comments.iter().map(ToString::to_string).collect())
     }
 
     fn build(rules: Rules, mut stems: Vec<(String, String)>, comments: Vec<String>) -> Result<AffixDict, String> {
