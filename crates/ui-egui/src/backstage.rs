@@ -562,7 +562,7 @@ fn open_list(app: &mut WordApp, ui: &mut Ui) {
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 13.0), Align2::LEFT_CENTER, name, medium(13.0), t.text);
         ui.painter().text(pos2(r.min.x + 40.0, r.min.y + 29.0), Align2::LEFT_CENTER, p, regular(11.0), t.text_dim);
         let xr = Rect::from_min_max(pos2(r.max.x + 2.0, r.min.y + 4.0), pos2(r.max.x + REMOVE_W, r.max.y - 4.0));
-        let xresp = ui.interact(xr, ui.id().with(("recent-remove", &p)), Sense::click());
+        let xresp = ui.interact(xr, ui.scope_id().with(("recent-remove", &p)), Sense::click());
         xresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), tl!("Remove from list")));
         // The × shows (dimmed) as soon as the row or the × is hovered or focused, so the Remove can
         // be found; only the × itself gets the stronger fill and full-strength glyph.
