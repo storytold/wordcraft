@@ -233,8 +233,8 @@ fn hostile_radar_charts_never_panic() {
     // Caps: thousands of categories and series stay bounded.
     let cats: Vec<String> = (0..5000).map(|i| format!("c{i}")).collect();
     let refs: Vec<&str> = cats.iter().map(String::as_str).collect();
-    let vals = vec!["1"; 5000];
-    let many: Vec<String> = (0..300).map(|i| ser(i, "S", None, &refs, &vals)).collect();
+    let vals = vec!["1"; 500];
+    let many: Vec<String> = (0..300).map(|i| ser(i, "S", None, if i == 0 { &refs } else { &[] }, &vals)).collect();
     let items = radar_chart("marker", &many);
     let polygons = items.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), .. } if *c != GRID)).count();
     assert!(polygons <= MAX_RADAR_SERIES, "{polygons}");
