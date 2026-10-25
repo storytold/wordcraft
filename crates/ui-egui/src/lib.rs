@@ -4599,6 +4599,7 @@ mod tests {
         frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
         let wheel = egui::Event::MouseWheel {
             unit: egui::MouseWheelUnit::Line,
+            source: egui::MouseWheelSource::Unknown,
             delta: egui::vec2(0.0, 1.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::COMMAND,

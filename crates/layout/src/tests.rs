@@ -6947,14 +6947,13 @@ fn an_at_least_row_taller_than_a_page_splits_from_the_top_of_the_next_page() {
 /// on, keeps all 80 cell paragraphs, and pagination terminates.
 #[test]
 fn an_at_least_row_at_the_top_of_a_page_splits_instead_of_moving_on() {
-    crate::test_fonts();
     use wordcraft_doc::props::HeightRule;
     // At the top of a page (or under the header rows repeated there) moving on gains nothing: a
     // row taller than the room splits, and pagination ends.
     let (l, pages) = at_least_rows(648.0, 1, |t| {
         t.rows[0].props.height = Some(700.0);
         t.rows[0].props.height_rule = HeightRule::AtLeast;
-        t.rows[0].cells[0].blocks = lines_in_cell(60, "Line");
+        t.rows[0].cells[0].blocks = lines_in_cell(80, "Line");
     });
     assert!(
         pages.len() >= 2 && pages.iter().all(|p| p == &vec![0]),

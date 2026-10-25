@@ -188,7 +188,6 @@ fn own_margins_and_resize_to_fit_keep_the_text_in_view() {
 /// later pages.
 #[test]
 fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
-    crate::test_fonts();
     // #2791: an inline box with Resize shape to fit text, saved 10 cm tall around three short
     // lines, shrinks to them as in Word; the page break after it stays on the first page.
     let brk = wordcraft_doc::para::PAGE_BREAK;
@@ -298,4 +297,4 @@ fn inline_box_that_resizes_to_fit_takes_its_texts_height() {
 
 /// Filler paragraphs before the box in [`inline_box_that_resizes_to_fit_takes_its_texts_height`]:
 /// enough that a 10 cm box no longer leaves room for the page break on the first page.
-const FILLER: usize = 16;
+const FILLER: usize = 22;
