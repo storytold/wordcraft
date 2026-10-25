@@ -2007,6 +2007,63 @@ fn hostile_tab_operands_are_safe() {
     assert_eq!(iter.next().map(|p| p.op), Some(0x2403), "the next sprm is still read");
 }
 
+fn raw_style(istd_base: u16, name: &str, papx: Vec<u8>) -> crate::stsh::RawStyle {
+    crate::stsh::RawStyle { stk: 1, istd_base, name: name.into(), papx, chpx: Vec::new() }
+}
+
+/// A base style whose papx piles up tab sprms, under thousands of styles based on it (#3707):
+/// every style used to apply the whole chain again, and every added stop scanned all the others.
+/// A paragraph keeps at most 64 stops, and the base chain is applied once.
+#[test]
+fn many_tab_sprms_in_a_base_style_read_in_bounded_time() {
+    // 330 sprms adding 64 distinct stops each (21,120 before the cap), and 64 removals every
+    // other sprm, which leave `Clear` stops.
+    let mut papx = Vec::new();
+    for s in 0..330i16 {
+        let add: Vec<(i16, u8)> = (0..64).map(|k| (s * 64 + k, 0)).collect();
+        papx.extend(grpprl(&[(0xC60D, &tabs_papx(&[], &add))]));
+        if s % 2 == 0 {
+            let del: Vec<i16> = (0..64).map(|k| -(s * 64 + k) - 1).collect();
+            papx.extend(grpprl(&[(0xC60D, &tabs_papx(&del, &[]))]));
+        }
+    }
+    let mut raw = vec![raw_style(0x0FFF, "Normal", papx)];
+    raw.extend((1..4096).map(|i| raw_style(0, &format!("Style {i}"), grpprl(&[(0xC60D, &tabs_papx(&[], &[(30_000, 0)]))]))));
+    let started = std::time::Instant::now();
+    let sheet = crate::fmt::stylesheet(&raw, &["Calibri".to_string()]);
+    assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
+    assert_eq!(sheet.styles.len(), 4096);
+    for s in &sheet.styles {
+        assert!(s.para.tabs.as_ref().is_some_and(|t| !t.is_empty() && t.len() <= 64), "{}", s.name);
+    }
+}
+
+/// Styles read from their parent's resolved properties inherit as they did when each applied its
+/// whole chain: stops added and removed down a chain, and a cycle in a corrupt file.
+#[test]
+fn style_tab_stops_inherit_down_the_chain() {
+    use wordcraft_doc::props::TabAlign;
+    let tabs = |add: &[(i16, u8)], del: &[i16]| grpprl(&[(0xC60D, &tabs_papx(del, add))]);
+    let raw = vec![
+        raw_style(0x0FFF, "Normal", tabs(&[(720, 0)], &[])),
+        raw_style(0, "Mid", tabs(&[(1440, 2)], &[])),
+        raw_style(1, "Child", tabs(&[], &[720])),
+        // A and B name each other as their base.
+        raw_style(4, "A", tabs(&[(2880, 0)], &[])),
+        raw_style(3, "B", tabs(&[(4320, 0)], &[])),
+    ];
+    let sheet = crate::fmt::stylesheet(&raw, &["Calibri".to_string()]);
+    let stops = |name: &str| {
+        let s = sheet.styles.iter().find(|s| s.name == name).expect(name);
+        s.para.tabs.iter().flatten().map(|t| (t.pos, t.align)).collect::<Vec<_>>()
+    };
+    assert_eq!(stops("Normal"), [(36.0, TabAlign::Left)]);
+    assert_eq!(stops("Mid"), [(36.0, TabAlign::Left), (72.0, TabAlign::Right)]);
+    assert_eq!(stops("Child"), [(36.0, TabAlign::Clear), (72.0, TabAlign::Right)]);
+    assert_eq!(stops("A"), [(144.0, TabAlign::Left), (216.0, TabAlign::Left)]);
+    assert_eq!(stops("B"), [(144.0, TabAlign::Left), (216.0, TabAlign::Left)]);
+}
+
 /// A section mark (0x0C) at a section's end is the section's last paragraph mark, not a page
 /// break inside a paragraph: the section's properties (here continuous) land on that paragraph.
 /// Before, every section of such a file was lost and each section mark became a page break.
