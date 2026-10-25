@@ -1342,6 +1342,12 @@ fn bookmark_destination_is_the_page_of_its_start() {
         vectors: HashMap::new(),
         tags: Vec::new(),
         tag_index: HashMap::new(),
+        inline_owner: None,
+        anchor: None,
+        drawn_lines: HashSet::new(),
+        link_owner: None,
+        open_link: None,
+        link_runs: HashMap::new(),
         links: Vec::new(),
         bookmarks: std::cell::OnceCell::new(),
     };
@@ -2410,4 +2416,518 @@ fn only_safe_link_targets_become_annotations() {
         })
         .collect();
     assert_eq!(uris, ["https://example.com/", "mailto:ada@example.com"]);
+}
+
+/// The structure tree of a tagged PDF, as nested element types: `Document(P L(LI(Lbl LBody)))`.
+/// Marked content and object references are left out.
+fn structure(bytes: &[u8]) -> String {
+    use hayro_syntax::object::{Dict, Name, Object};
+    fn walk(o: Object<'_>, depth: usize, out: &mut String) {
+        if depth > 64 {
+            return;
+        }
+        match o {
+            Object::Array(a) => {
+                for k in a.iter::<Object<'_>>() {
+                    walk(k, depth + 1, out);
+                }
+            }
+            Object::Dict(d) => {
+                if !out.is_empty()
+                    && !out.ends_with('(')
+                    && (d.contains_key(b"S") || d.get::<Name<'_>>(b"Type").is_some_and(|t| t.as_str() == "OBJR"))
+                {
+                    out.push(' ');
+                }
+                // An annotation in the tree (a link's), shown as `OBJR`.
+                if d.get::<Name<'_>>(b"Type").is_some_and(|t| t.as_str() == "OBJR") {
+                    out.push_str("OBJR");
+                    return;
+                }
+                let Some(s) = d.get::<Name<'_>>(b"S") else { return };
+                out.push_str(s.as_str());
+                let mut inner = String::new();
+                if let Some(k) = d.get::<Object<'_>>(b"K") {
+                    walk(k, depth + 1, &mut inner);
+                }
+                if !inner.is_empty() {
+                    out.push('(');
+                    out.push_str(&inner);
+                    out.push(')');
+                }
+            }
+            _ => {}
+        }
+    }
+    let pdf = hayro_syntax::Pdf::new(bytes.to_vec()).expect("parse");
+    let catalog = pdf.xref().get::<Dict<'_>>(pdf.xref().root_id()).expect("catalog");
+    let root = catalog.get::<Dict<'_>>(b"StructTreeRoot").expect("a structure tree");
+    let mut out = String::new();
+    if let Some(k) = root.get::<Object<'_>>(b"K") {
+        walk(k, 0, &mut out);
+    }
+    out
+}
+
+/// Lists are `L` → `LI` → `Lbl` (the number or bullet) + `LBody` (the text), as Word writes
+/// them; a deeper level is a list nested in its item's body, and paragraphs around a list stay
+/// outside it. Numbered lists only: on `main`, exporting a bulleted list before
+/// `right_to_left_glyphs_stay_where_layout_put_them` in the same run moves its glyphs by 0.2 pt
+/// (font fallback state shared between tests); `list_numbering_follows_the_number_format` covers
+/// bullets.
+#[test]
+fn lists_are_tagged_as_lists_with_labels_and_nesting() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let numbers = d.numbering.add_list(ListKind::Numbered);
+    let item = |text: &str, num: u32, level: u8| {
+        let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level });
+        para_block(p)
+    };
+    d.body = vec![
+        para_block(Paragraph::with_text("Before the lists", CharProps::default())),
+        item("Apples", list, 0),
+        item("Pears", list, 0),
+        item("Green pears", list, 1),
+        item("Plums", list, 0),
+        para_block(Paragraph::with_text("Between the lists", CharProps::default())),
+        item("First step", numbers, 0),
+        item("Second step", numbers, 0),
+    ];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    let nested = "L(LI(Lbl LBody) LI(Lbl LBody(L(LI(Lbl LBody)))) LI(Lbl LBody))";
+    let numbered = "L(LI(Lbl LBody) LI(Lbl LBody))";
+    assert!(tree.contains(&format!("P {nested} P {numbered}")), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("/ListNumbering /Decimal") || raw.contains("/ListNumbering/Decimal"), "numbers are decimal");
+    assert!(raw.contains("/ListNumbering /LowerAlpha") || raw.contains("/ListNumbering/LowerAlpha"), "the second level is lettered");
+    // The text still reads in order, labels included.
+    let text = squash(&extract_text(&bytes).concat());
+    for w in ["Apples", "Green pears", "Plums", "Second step"] {
+        assert!(text.contains(w), "{w} missing from {text}");
+    }
+}
+
+/// Two lists one right after the other are two `L`s, as in Word, and an item with a number but no
+/// text keeps its list together (it has a `Lbl` and no `LBody`).
+#[test]
+fn adjacent_lists_stay_apart_and_empty_items_stay_in() {
+    let mut d = Document::new();
+    let first = d.numbering.add_list(ListKind::Numbered);
+    let second = d.numbering.add_list(ListKind::Numbered);
+    let item = |text: &str, num: u32| {
+        let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num, level: 0 });
+        para_block(p)
+    };
+    d.body = vec![item("One", first), item("", first), item("Three", first), item("Again one", second), item("Again two", second)];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("L(LI(Lbl LBody) LI(Lbl) LI(Lbl LBody)) L(LI(Lbl LBody) LI(Lbl LBody))"), "{tree}");
+}
+
+/// A picture inline in a list item is a Figure in the item's body, so the list goes on after it
+/// as one list.
+#[test]
+fn a_picture_in_a_list_item_stays_inside_the_list() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let item = |text: &str| {
+        let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num: list, level: 0 });
+        p
+    };
+    let mut pictured = item("A red square: ");
+    let n = pictured.len();
+    let obj = InlineObject::Image { media, w: 40.0, h: 40.0, alt: "A red square".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+    pictured.insert_object(n, obj, &CharProps::default()).unwrap();
+    d.body = vec![para_block(item("First")), para_block(pictured), para_block(item("Last"))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("L(LI(Lbl LBody) LI(Lbl LBody(Figure)) LI(Lbl LBody))"), "{tree}");
+    assert!(String::from_utf8_lossy(&bytes).contains("/Alt(A red square)"), "the picture keeps its alt text");
+}
+
+/// In turned cell text (Table Layout › Text Direction) a list item keeps its label apart from its
+/// text, and pictures are tagged as in straight lines: a Figure with its alt text, or an artifact
+/// when marked decorative.
+#[test]
+fn turned_cell_text_tags_list_labels_and_pictures() {
+    use wordcraft_doc::para::AltText;
+    for dir in [wordcraft_doc::props::TextDirection::Down, wordcraft_doc::props::TextDirection::Up] {
+        let mut d = Document::new();
+        let list = d.numbering.add_list(ListKind::Numbered);
+        let media = d.add_media(red_right_half_emf(), "emf");
+        let item = |text: &str| {
+            let mut p = Paragraph::with_text(text, CharProps::default()).styled("ListParagraph");
+            p.props.numbering = Some(NumRef { num: list, level: 0 });
+            para_block(p)
+        };
+        let picture = |alt: &str, decorative: bool| {
+            let mut p = Paragraph::with_text("Pic ", CharProps::default());
+            let n = p.len();
+            let float = wordcraft_doc::para::Float { alt: AltText { decorative, ..Default::default() }, ..Default::default() };
+            let obj = InlineObject::Image { media: media.clone(), w: 30.0, h: 30.0, alt: alt.into(), float, crop: [0.0; 4], ole: None };
+            p.insert_object(n, obj, &CharProps::default()).unwrap();
+            para_block(p)
+        };
+        let mut t = Table::new(1, 1, 300.0);
+        t.rows[0].cells[0].blocks = vec![item("Up one"), item("Up two"), picture("A red square", false), picture("A decorative border", true)];
+        t.rows[0].cells[0].props.text_direction = dir;
+        d.body = vec![Arc::new(Block::Table(t))];
+        let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+        let tree = structure(&bytes);
+        assert!(tree.contains("L(LI(Lbl LBody) LI(Lbl LBody))"), "{dir:?}: {tree}");
+        let raw = String::from_utf8_lossy(&bytes);
+        assert!(raw.contains("/Alt(A red square)"), "{dir:?}: a described picture is a Figure with its alt text");
+        assert!(!raw.contains("A decorative border"), "{dir:?}: a decorative picture has no Figure and no alt text");
+        assert_eq!(raw.matches("/Alt(").count(), 1, "{dir:?}: one Figure");
+    }
+}
+
+/// A list's `ListNumbering` follows its level's number format: bullets are discs.
+#[test]
+fn list_numbering_follows_the_number_format() {
+    use wordcraft_doc::section::NumFormat;
+    for (format, want) in [
+        (NumFormat::Bullet, ListNumbering::Disc),
+        (NumFormat::Decimal, ListNumbering::Decimal),
+        (NumFormat::DecimalZero, ListNumbering::Decimal),
+        (NumFormat::LowerRoman, ListNumbering::LowerRoman),
+        (NumFormat::UpperRoman, ListNumbering::UpperRoman),
+        (NumFormat::LowerLetter, ListNumbering::LowerAlpha),
+        (NumFormat::UpperLetter, ListNumbering::UpperAlpha),
+        (NumFormat::Ordinal, ListNumbering::None),
+        (NumFormat::None, ListNumbering::None),
+    ] {
+        assert_eq!(list_numbering(format), want, "{format:?}");
+    }
+}
+
+/// A numbered heading's number is part of the heading (it is no list item): "1. Introduction"
+/// reads whole, and the number's marked content has a place in the tree. The same goes for any
+/// numbered paragraph with an outline level.
+#[test]
+fn a_numbered_headings_number_stays_in_the_heading() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let mut h = Paragraph::with_text("Introduction", CharProps::default()).styled("Heading1");
+    h.props.numbering = Some(NumRef { num: list, level: 0 });
+    d.body = vec![para_block(h), para_block(Paragraph::with_text("Body text", CharProps::default()))];
+    // Before, the number's marked content had no element and the export failed outright.
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert_eq!(tree, "Document(H1 P)");
+    let text = squash(&extract_text(&bytes).concat());
+    assert!(text.contains("1.") && text.contains("Introduction"), "{text}");
+}
+
+/// A paragraph made a heading by its table's style (the style's paragraph formatting sets an
+/// outline level) is a heading, as layout resolves it, numbered or not.
+#[test]
+fn a_heading_by_table_style_is_a_heading() {
+    let mut d = Document::new();
+    d.styles.upsert(wordcraft_doc::Style {
+        id: "HeadingCells".into(),
+        name: "Heading Cells".into(),
+        kind: wordcraft_doc::StyleKind::Table,
+        para: wordcraft_doc::ParaProps { outline_level: Some(0), ..Default::default() },
+        ..Default::default()
+    });
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let mut t = Table::new(1, 2, 400.0);
+    t.props.style = Some("HeadingCells".into());
+    t.rows[0].cells[0].blocks = vec![para_block(Paragraph::with_text("Plain cell heading", CharProps::default()))];
+    let mut numbered = Paragraph::with_text("Numbered cell heading", CharProps::default());
+    numbered.props.numbering = Some(NumRef { num: list, level: 0 });
+    t.rows[0].cells[1].blocks = vec![para_block(numbered)];
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert_eq!(tree.matches("H1").count(), 2, "{tree}");
+    assert!(!tree.contains("LI"), "a numbered heading is no list item: {tree}");
+}
+
+/// A table cell holding `s`.
+fn text_cell(s: &str) -> Vec<Arc<Block>> {
+    vec![para_block(Paragraph::with_text(s, CharProps::default()))]
+}
+
+/// A table is a Table: its header row in THead with TH cells scoped to their column, the other
+/// rows in TBody with TD cells, merged cells one cell with their span, empty cells kept.
+#[test]
+fn tables_are_tagged_with_header_rows_merges_and_empty_cells() {
+    use wordcraft_doc::props::VMerge;
+    let mut d = Document::new();
+    let mut t = Table::new(4, 3, 450.0);
+    t.rows[0].props.header = true;
+    for (c, s) in ["Name", "Role", "Year"].into_iter().enumerate() {
+        t.rows[0].cells[c].blocks = text_cell(s);
+    }
+    // Row 1: "Wide" across the first two columns.
+    t.rows[1].cells.remove(1);
+    t.rows[1].cells[0].props.span = 2;
+    t.rows[1].cells[0].blocks = text_cell("Wide");
+    t.rows[1].cells[1].blocks = text_cell("2024");
+    // Rows 2 and 3: "Tall" down the first column; row 3's last cell is empty.
+    t.rows[2].cells[0].props.vmerge = VMerge::Restart;
+    t.rows[2].cells[0].blocks = text_cell("Tall");
+    t.rows[3].cells[0].props.vmerge = VMerge::Continue;
+    t.rows[2].cells[1].blocks = text_cell("Lead");
+    t.rows[2].cells[2].blocks = text_cell("2025");
+    t.rows[3].cells[1].blocks = text_cell("Chair");
+    d.body = vec![
+        para_block(Paragraph::with_text("Before", CharProps::default())),
+        Arc::new(Block::Table(t)),
+        para_block(Paragraph::with_text("After", CharProps::default())),
+    ];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    let expected = "P Table(THead(TR(TH(P) TH(P) TH(P))) TBody(TR(TD(P) TD(P)) TR(TD(P) TD(P) TD(P)) TR(TD(P) TD))) P";
+    assert!(tree.contains(expected), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    let has = |k: &str, v: &str| raw.contains(&format!("/{k} /{v}")) || raw.contains(&format!("/{k}/{v}")) || raw.contains(&format!("/{k} {v}"));
+    assert!(has("Scope", "Column"), "header cells are scoped to their column");
+    assert!(has("ColSpan", "2"), "the wide cell spans two columns");
+    assert!(has("RowSpan", "2"), "the tall cell spans two rows");
+    let text = squash(&extract_text(&bytes).concat());
+    for w in ["Name", "Wide", "Tall", "Chair", "After"] {
+        assert!(text.contains(w), "{w} missing from {text}");
+    }
+}
+
+/// A header row repeated at the top of each page is drawn on each page but read once, and a row
+/// whose cell runs onto the next page is still one row.
+#[test]
+fn a_table_across_pages_reads_its_header_once_and_keeps_its_rows_whole() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 2, 400.0);
+    t.rows[0].props.header = true;
+    t.rows[0].cells[0].blocks = text_cell("Item");
+    t.rows[0].cells[1].blocks = text_cell("Note");
+    t.rows[1].cells[0].blocks = (0..80).map(|i| para_block(Paragraph::with_text(&format!("Line {i}"), CharProps::default()))).collect();
+    t.rows[1].cells[1].blocks = text_cell("Beside");
+    t.rows[2].cells[0].blocks = text_cell("Last");
+    t.rows[2].cells[1].blocks = text_cell("End");
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let text = squash(&extract_text(&bytes).concat());
+    assert!(text.matches("Item").count() >= 2, "the header row is repeated on the next page: {text}");
+    let tree = structure(&bytes);
+    assert_eq!(tree.matches("THead").count(), 1, "{tree}");
+    assert_eq!(tree.matches("TH(").count(), 2, "the repeated header is an artifact: {tree}");
+    assert_eq!(tree.matches("TR(").count(), 3, "the long row is one row: {tree}");
+    assert_eq!(tree.matches("TD(").count(), 4, "{tree}");
+}
+
+/// What a cell holds stays in the cell: a list, a picture inline in its text, a nested table.
+#[test]
+fn lists_pictures_and_tables_in_a_cell_stay_in_the_cell() {
+    let mut d = Document::new();
+    let list = d.numbering.add_list(ListKind::Numbered);
+    let media = d.add_media(red_right_half_emf(), "emf");
+    let item = |s: &str| {
+        let mut p = Paragraph::with_text(s, CharProps::default()).styled("ListParagraph");
+        p.props.numbering = Some(NumRef { num: list, level: 0 });
+        para_block(p)
+    };
+    let mut pictured = Paragraph::with_text("See: ", CharProps::default());
+    let n = pictured.len();
+    let obj = InlineObject::Image { media, w: 30.0, h: 30.0, alt: "A red square".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+    pictured.insert_object(n, obj, &CharProps::default()).unwrap();
+    let mut inner = Table::new(1, 1, 120.0);
+    inner.rows[0].cells[0].blocks = text_cell("Inner");
+    let mut t = Table::new(1, 3, 450.0);
+    t.rows[0].cells[0].blocks = vec![item("First"), item("Second")];
+    t.rows[0].cells[1].blocks = vec![para_block(pictured)];
+    t.rows[0].cells[2].blocks = vec![Arc::new(Block::Table(inner)), para_block(Paragraph::new())];
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    let expected = "Table(TBody(TR(TD(L(LI(Lbl LBody) LI(Lbl LBody))) TD(P Div(Figure)) TD(Table(TBody(TR(TD(P))))))))";
+    assert!(tree.contains(expected), "{tree}");
+}
+
+/// When every cell of a row continues a merge from above, the row has no cells of its own and
+/// no `TR`, and the merged cells' `RowSpan` leaves it out, so the spans match the rows there are.
+#[test]
+fn a_row_merged_away_is_left_out_of_row_spans() {
+    use wordcraft_doc::props::VMerge;
+    let mut d = Document::new();
+    let mut t = Table::new(3, 2, 400.0);
+    for c in 0..2 {
+        t.rows[0].cells[c].props.vmerge = VMerge::Restart;
+        t.rows[1].cells[c].props.vmerge = VMerge::Continue;
+    }
+    t.rows[0].cells[0].blocks = text_cell("Both rows");
+    t.rows[0].cells[1].blocks = text_cell("Also both");
+    t.rows[2].cells[0].blocks = text_cell("Below");
+    t.rows[2].cells[1].blocks = text_cell("Below too");
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("Table(TBody(TR(TD(P) TD(P)) TR(TD(P) TD(P))))"), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(!raw.contains("/RowSpan"), "no cell spans more rows than there are");
+}
+
+/// Rows that leave grid columns out (`w:gridBefore`, a row shorter than the table) get an empty
+/// cell standing for them, so every row spans the same columns (PDF/UA 7.2); a table of header
+/// rows alone is a TBody, since a THead needs a TBody after it.
+#[test]
+fn every_table_row_spans_the_same_columns() {
+    let mut d = Document::new();
+    let mut t = Table::new(3, 3, 450.0);
+    t.rows[0].props.header = true;
+    for (r, c, s) in [(0, 0, "A"), (0, 1, "B"), (0, 2, "C"), (2, 0, "Short")] {
+        t.rows[r].cells[c].blocks = text_cell(s);
+    }
+    // Row 1 starts one grid column in; row 2 has one cell only.
+    t.rows[1].props.grid_before = 1;
+    t.rows[1].cells.truncate(2);
+    t.rows[1].cells[0].blocks = text_cell("Indented");
+    t.rows[2].cells.truncate(1);
+    let mut heads = Table::new(1, 2, 300.0);
+    heads.rows[0].props.header = true;
+    heads.rows[0].cells[0].blocks = text_cell("Only");
+    d.body = vec![Arc::new(Block::Table(t)), para_block(Paragraph::new()), Arc::new(Block::Table(heads))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("Table(THead(TR(TH(P) TH(P) TH(P))) TBody(TR(TD TD(P) TD) TR(TD(P) TD)))"), "{tree}");
+    assert!(tree.contains("Table(TBody(TR(TH(P) TH)))"), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("/ColSpan 2") || raw.contains("/ColSpan/2"), "the short row's gap spans the two columns it leaves out");
+}
+
+/// A cell marked as continuing a vertical merge with no merge above it to continue (malformed,
+/// but found in real files) is a cell of its own, so its row keeps all its columns.
+#[test]
+fn an_orphan_merge_continuation_is_a_cell_of_its_own() {
+    use wordcraft_doc::props::VMerge;
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 300.0);
+    t.rows[0].cells[0].blocks = text_cell("Top");
+    t.rows[1].cells[1].props.vmerge = VMerge::Continue;
+    t.rows[1].cells[1].blocks = text_cell("Orphan");
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    // Both rows have both columns (before, the second row had one cell). Layout doesn't draw
+    // what a continuation holds, so its cell is empty here, as on the page.
+    assert!(tree.contains("Table(TBody(TR(TD(P) TD) TR(TD TD)))"), "{tree}");
+    let text = squash(&extract_text(&bytes).concat());
+    assert!(text.contains("Top") && !text.contains("Orphan"), "{text}");
+}
+
+/// A row that leaves a grid column out and whose only cell continues a merge keeps its `TR` (the
+/// empty cell standing for the left-out column), and the merged cell spans it.
+#[test]
+fn a_row_with_a_grid_gap_and_a_merge_continuation_keeps_its_row() {
+    use wordcraft_doc::props::VMerge;
+    let mut d = Document::new();
+    let mut t = Table::new(2, 2, 300.0);
+    t.rows[0].cells[0].blocks = text_cell("Left");
+    t.rows[0].cells[1].props.vmerge = VMerge::Restart;
+    t.rows[0].cells[1].blocks = text_cell("Tall");
+    t.rows[1].props.grid_before = 1;
+    t.rows[1].cells.truncate(1);
+    t.rows[1].cells[0].props.vmerge = VMerge::Continue;
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("Table(TBody(TR(TD(P) TD(P)) TR(TD)))"), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert!(raw.contains("/RowSpan 2") || raw.contains("/RowSpan/2"), "the merged cell spans both rows");
+}
+
+/// A link is a `Link` element holding its text and its annotation (an `OBJR`), as Word writes
+/// it: a link across formatting changes is one link, a link wrapped over two lines is one link
+/// with an annotation per line, and a link to an unsafe target stays plain text.
+#[test]
+fn links_are_link_elements_with_their_annotations() {
+    let mut d = Document::new();
+    let site = CharProps { link: Some("https://example.com/".into()), ..Default::default() };
+    let mut p = Paragraph::with_text("Visit ", CharProps::default());
+    let n = p.len();
+    p.insert_text(n, "the ", &site).unwrap();
+    let n = p.len();
+    p.insert_text(n, "site", &CharProps { bold: Some(true), ..site.clone() }).unwrap();
+    let n = p.len();
+    p.insert_text(n, " now", &CharProps::default()).unwrap();
+    let mut top = Paragraph::with_text("Start", CharProps::default()).styled("Heading1");
+    let n = top.len();
+    top.insert_object(n, InlineObject::BookmarkStart { name: "top".into() }, &CharProps::default()).unwrap();
+    let mut back = Paragraph::with_text("Go ", CharProps::default());
+    let n = back.len();
+    back.insert_text(n, "back to the start", &CharProps { link: Some("#top".into()), ..Default::default() }).unwrap();
+    let long = "a link long enough to wrap onto a second line of the page, with plenty of words in it to be sure that it does, and then some more words after that to be really sure of it";
+    let unsafe_link = Paragraph::with_text("Do not click", CharProps { link: Some("javascript:alert(1)".into()), ..Default::default() });
+    d.body = vec![
+        para_block(top),
+        para_block(p),
+        para_block(back),
+        para_block(Paragraph::with_text(long, CharProps { link: Some("https://example.org/long".into()), ..Default::default() })),
+        para_block(unsafe_link),
+    ];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let tree = structure(&bytes);
+    assert!(tree.contains("H1 P(Link(OBJR)) P(Link(OBJR)) P(Link(OBJR OBJR)) P"), "{tree}");
+    let raw = String::from_utf8_lossy(&bytes);
+    assert_eq!(raw.matches("/StructParent ").count() + raw.matches("/StructParent/").count(), 4, "each annotation points back to its Link");
+    let text = squash(&extract_text(&bytes).concat());
+    for w in ["Visit the site now", "back to the start", "Do not click"] {
+        assert!(text.contains(&squash(w)), "{w} missing from {text}");
+    }
+}
+
+/// A link in a header row repeated at the top of later pages stays one link: each repeat's
+/// annotation joins the `Link` element of the first time, while the repeated text is an
+/// artifact (PDF/UA 7.18.5: every link annotation is in a `Link`).
+#[test]
+fn a_link_in_a_repeated_header_row_is_one_link() {
+    let mut d = Document::new();
+    let mut t = Table::new(70, 2, 400.0);
+    t.rows[0].props.header = true;
+    t.rows[0].cells[0].blocks =
+        vec![para_block(Paragraph::with_text("Source", CharProps { link: Some("https://example.com/".into()), ..Default::default() }))];
+    for r in 1..70 {
+        t.rows[r].cells[0].blocks = text_cell(&format!("Row {r}"));
+    }
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let pages = hayro_syntax::Pdf::new(bytes.clone()).unwrap().pages().len();
+    assert!(pages >= 2, "the table runs onto another page");
+    let tree = structure(&bytes);
+    let objr = vec!["OBJR"; pages].join(" ");
+    assert!(tree.contains(&format!("TH(P(Link({objr})))")), "one Link, an annotation per page: {tree}");
+    assert_eq!(tree.matches("Link(").count(), 1, "{tree}");
+}
+
+/// Two separate links to the same target in a repeated header row stay two links: each repeat's
+/// annotation joins its own run's `Link`, not the first one with that target.
+#[test]
+fn same_target_links_in_a_repeated_header_row_stay_apart() {
+    let mut d = Document::new();
+    let mut t = Table::new(70, 2, 400.0);
+    t.rows[0].props.header = true;
+    let site = CharProps { link: Some("https://example.com/".into()), ..Default::default() };
+    let mut p = Paragraph::with_text("Home", site.clone());
+    let n = p.len();
+    p.insert_text(n, " and ", &CharProps::default()).unwrap();
+    let n = p.len();
+    p.insert_text(n, "home again", &site).unwrap();
+    t.rows[0].cells[0].blocks = vec![para_block(p)];
+    for r in 1..70 {
+        t.rows[r].cells[0].blocks = text_cell(&format!("Row {r}"));
+    }
+    d.body = vec![Arc::new(Block::Table(t))];
+    let bytes = export(&d, &PdfOptions { compress: false, tagged: true, ..Default::default() }).unwrap();
+    let pages = hayro_syntax::Pdf::new(bytes.clone()).unwrap().pages().len();
+    assert!(pages >= 2, "the table runs onto another page");
+    let tree = structure(&bytes);
+    let objr = vec!["OBJR"; pages].join(" ");
+    assert!(tree.contains(&format!("TH(P(Link({objr}) Link({objr})))")), "each link an annotation per page: {tree}");
 }
