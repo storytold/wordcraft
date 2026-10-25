@@ -818,6 +818,114 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
     TableLayout { x, width: total, rows: out }
 }
 
+// Only recognize the unambiguous horizontal push_para fill inside one plain body cell.
+const PARA_FILL_EPS: f32 = 0.01;
+const DEFAULT_SHADE_PAD: f32 = 4.0;
+const BODY_CELL_PARA_DEPTH: usize = 4;
+
+fn shade_cell<'a>(items: &'a [Placed], part: &CellPart, row_height: f32) -> Option<&'a Placed> {
+    if part.end.is_none_or(|end| !end.is_finite()) || !row_height.is_finite() || row_height <= 0.0 {
+        return None;
+    }
+    let mut own = None;
+    for it in items {
+        match it {
+            Placed::Cell { rect, story: StoryRef::Body, table, covered: false, clip: false, .. }
+                if table.0.len() == 1 && rect.y >= -PARA_FILL_EPS && rect.bottom() <= row_height + PARA_FILL_EPS =>
+            {
+                if own.is_some() {
+                    return None;
+                }
+                own = Some(it);
+            }
+            Placed::Cell { .. } | Placed::Clip { .. } => return None,
+            Placed::Lines { turn, .. } if turn.is_turned() => return None,
+            _ => {}
+        }
+    }
+    own
+}
+
+fn para_fill_owner(items: &[Placed], index: usize, cell: &Placed) -> Option<usize> {
+    let Placed::Cell { rect: bounds, table, row, cell, story, .. } = cell else { return None };
+    let Placed::Fill { rect, color } = items.get(index)? else { return None };
+    let owner = index.checked_add(1)?;
+    let Placed::Lines { story: actual, path, para, l0, l1, x, y, turn: TextDirection::Horizontal } = items.get(owner)? else { return None };
+    if actual != story
+        || path.0.len() != BODY_CELL_PARA_DEPTH
+        || path.0.first() != table.0.first()
+        || path.0.get(1).copied() != u32::try_from(*row).ok()
+        || path.0.get(2).copied() != u32::try_from(*cell).ok()
+        || para.rp.shading != Some(*color)
+        || para.rp.bidi
+        || l0 >= l1
+    {
+        return None;
+    }
+    let lines = para.lines.get(*l0..*l1)?;
+    let (first, last) = (lines.first()?, lines.last()?);
+    // No container width is stored. A consistent available right edge must match the fill.
+    if lines.iter().any(|line| {
+        line.beside
+            || ![line.right, line.top, line.height].iter().all(|n| n.is_finite())
+            || line.height <= 0.0
+            || line.top < first.top - PARA_FILL_EPS
+            || line.top + line.height > last.top + last.height + PARA_FILL_EPS
+            || (line.right - first.right).abs() >= PARA_FILL_EPS
+    }) {
+        return None;
+    }
+    let pad = para.rp.borders.as_ref().map_or(0.0, |b| b.left.map_or(DEFAULT_SHADE_PAD, |l| l.space));
+    let left = x + para.rp.indent_left.min(para.rp.indent_left + para.rp.indent_first) - pad;
+    let right = x + first.right + pad;
+    let height = last.top + last.height - first.top;
+    if ![pad, left, right, *y, height, rect.x, rect.y, rect.w, rect.h, bounds.x, bounds.y, bounds.w, bounds.h].iter().all(|n| n.is_finite())
+        || pad < 0.0
+        || height <= 0.0
+        || right <= left
+        || ![(rect.x, left), (rect.y, *y), (rect.right(), right), (rect.h, height)].iter().all(|(a, b)| (a - b).abs() < PARA_FILL_EPS)
+        || rect.x < bounds.x - PARA_FILL_EPS
+        || rect.y < bounds.y - PARA_FILL_EPS
+        || rect.right() > bounds.right() + PARA_FILL_EPS
+        || rect.bottom() > bounds.bottom() + PARA_FILL_EPS
+    {
+        return None;
+    }
+    // A cell-sized fill or duplicate prefix has no unique paragraph owner.
+    if [(rect.x, bounds.x), (rect.y, bounds.y), (rect.w, bounds.w), (rect.h, bounds.h)].iter().all(|(a, b)| (a - b).abs() < PARA_FILL_EPS)
+        || index
+            .checked_sub(1)
+            .and_then(|i| items.get(i))
+            .is_some_and(|it| matches!(it, Placed::Fill {rect: other,color: other_color} if other == rect && other_color == color))
+    {
+        return None;
+    }
+    Some(owner)
+}
+
+fn split_para_fill(rect: Rect, item: &Placed, split: usize, shift: f32) -> Option<(Option<Rect>, Option<Rect>)> {
+    let Placed::Lines { para, l0, l1, y, .. } = item else { return None };
+    if split < *l0 || split > *l1 || !shift.is_finite() {
+        return None;
+    }
+    let first = para.lines.get(*l0)?;
+    let above = if split > *l0 {
+        let last = para.lines.get(split.checked_sub(1)?)?;
+        let bottom = if split == *l1 { rect.bottom() } else { y + last.top + last.height - first.top };
+        Some(Rect::new(rect.x, rect.y, rect.w, (bottom - rect.y).max(0.0)))
+    } else {
+        None
+    };
+    let below = if split < *l1 {
+        let line = para.lines.get(split)?;
+        let top = if split == *l0 { rect.y } else { y + line.top - first.top };
+        Some(Rect::new(rect.x, top - shift, rect.w, (rect.bottom() - top).max(0.0)))
+    } else {
+        None
+    };
+    Some((above, below))
+}
+
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.
 /// Paragraph lines break between lines; fills, vertical rules and cell areas are cut; the
 /// rest moves up to the top of the continuation. `None` when no line fits above the cut.
@@ -941,7 +1049,8 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
     let mut parts = Vec::with_capacity(cells.len());
     for (((c, items), splits), &shift) in row.cells.iter().zip(&cells).zip(&splits).zip(&shifts) {
         let start = b.len();
-        for (it, &split) in items.iter().zip(splits) {
+        let shade_cell = shade_cell(items, c, row.height);
+        for (index, (it, &split)) in items.iter().zip(splits).enumerate() {
             if let Some(r) = it.turned_bounds() {
                 let mut it = it.clone();
                 if fits(r.bottom()) {
@@ -997,6 +1106,14 @@ pub fn split_row(row: &RowLayout, cut: f32) -> Option<(RowLayout, RowLayout)> {
                 // Shading and cell areas: the part above the cut stays, the rest moves up with the
                 // continuation (a nested table's cell below the cut moves whole).
                 Placed::Fill { rect, color } => {
+                    if let Some(owner) = shade_cell.and_then(|cell| para_fill_owner(items, index, cell))
+                        && let (Some(item), Some(&split)) = (items.get(owner), splits.get(owner))
+                        && let Some((above, below)) = split_para_fill(*rect, item, split, shift)
+                    {
+                        a.extend(above.map(|rect| Placed::Fill { rect, color: *color }));
+                        b.extend(below.map(|rect| Placed::Fill { rect, color: *color }));
+                        continue;
+                    }
                     let (above, below) = split_rect(*rect, cut, geo_shift(rect.bottom(), shift));
                     a.extend(above.map(|rect| Placed::Fill { rect, color: *color }));
                     b.extend(below.map(|rect| Placed::Fill { rect, color: *color }));
@@ -1341,5 +1458,100 @@ mod width_tests {
         let mut grid = [30.0, 40.0, 50.0];
         autofit(&mut grid, &[(10.0, 10.0), (20.0, 20.0), (30.0, 30.0)], &table, 120.0);
         assert_eq!(grid, [30.0, 40.0, 50.0]);
+    }
+}
+#[cfg(test)]
+mod shade_owner_tests {
+    use super::*;
+    use std::sync::Arc;
+    use wordcraft_doc::{Document, para_block};
+
+    fn shade_items() -> Vec<Placed> {
+        let mut d = Document::new();
+        let mut p = Paragraph::with_text("Original shade", Default::default());
+        p.props.shading = Some(Rgb(45, 105, 165));
+        let mut t = Table::new(1, 1, 200.0);
+        t.props.style = None;
+        t.props.cell_margins = Some([4.0, 6.0, 4.0, 6.0]);
+        t.rows[0].cells[0].blocks = vec![para_block(p)];
+        d.body = vec![Arc::new(Block::Table(t))];
+        let mut l = crate::layout(&d, &mut crate::LayoutCache::new(), &crate::LayoutOptions::default());
+        l.pages.remove(0).items
+    }
+
+    fn plain_part(items: &[Placed]) -> CellPart {
+        CellPart { top: 4.0, items: 0..items.len(), end: Some(1000.0) }
+    }
+
+    #[test]
+    fn shade_owner_requires_emitter() {
+        let base = shade_items();
+        let index = base.iter().position(|it| matches!(it, Placed::Fill { .. })).unwrap();
+        let owner = index + 1;
+        let cell = shade_cell(&base, &plain_part(&base), 1000.0).unwrap();
+        assert_eq!(para_fill_owner(&base, index, cell), Some(owner));
+
+        let mut items = base.clone();
+        let Placed::Lines { para, .. } = &mut items[owner] else { panic!() };
+        Arc::make_mut(para).rp.shading = None;
+        assert_eq!(para_fill_owner(&items, index, cell), None);
+
+        let mut items = base.clone();
+        let Placed::Fill { rect, .. } = &mut items[index] else { panic!() };
+        rect.w += 1.0;
+        assert_eq!(para_fill_owner(&items, index, cell), None);
+
+        let mut items = base.clone();
+        let Placed::Cell { rect: bounds, .. } = cell else { panic!() };
+        let Placed::Fill { rect, .. } = &mut items[index] else { panic!() };
+        *rect = *bounds;
+        assert_eq!(para_fill_owner(&items, index, cell), None);
+
+        let mut items = base.clone();
+        items.insert(index, items[index].clone());
+        assert_eq!(para_fill_owner(&items, index + 1, cell), None);
+    }
+
+    #[test]
+    fn shade_owner_rejects_contexts() {
+        let base = shade_items();
+        let index = base.iter().position(|it| matches!(it, Placed::Fill { .. })).unwrap();
+        let owner = index + 1;
+        let mut items = base.clone();
+        let Placed::Lines { path, .. } = &mut items[owner] else { panic!() };
+        path.0.push(0);
+        let cell = shade_cell(&items, &plain_part(&items), 1000.0).unwrap();
+        assert_eq!(para_fill_owner(&items, index, cell), None);
+
+        let mut items = base.clone();
+        let Placed::Lines { turn, .. } = &mut items[owner] else { panic!() };
+        *turn = TextDirection::Down;
+        assert!(shade_cell(&items, &plain_part(&items), 1000.0).is_none());
+
+        let mut items = base.clone();
+        let Placed::Cell { clip, .. } = items.iter_mut().find(|it| matches!(it, Placed::Cell { .. })).unwrap() else { panic!() };
+        *clip = true;
+        assert!(shade_cell(&items, &plain_part(&items), 1000.0).is_none());
+
+        let mut part = plain_part(&base);
+        part.end = None;
+        assert!(shade_cell(&base, &part, 1000.0).is_none());
+
+        let mut items = base.clone();
+        let Placed::Cell { covered, .. } = items.iter_mut().find(|it| matches!(it, Placed::Cell { .. })).unwrap() else { panic!() };
+        *covered = true;
+        assert!(shade_cell(&items, &plain_part(&items), 1000.0).is_none());
+
+        let mut items = base.clone();
+        for item in &mut items {
+            match item {
+                Placed::Lines { story, .. } | Placed::Cell { story, .. } => *story = StoryRef::Part(1),
+                _ => {}
+            }
+        }
+        assert!(shade_cell(&items, &plain_part(&items), 1000.0).is_none());
+
+        let bounds = base.iter().find_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None }).unwrap();
+        assert!(shade_cell(&base, &plain_part(&base), bounds.bottom() - 1.0).is_none());
     }
 }
