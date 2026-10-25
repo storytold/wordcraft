@@ -53,6 +53,8 @@ Set Proofing Language › Set As Default now persists in user preferences and ap
 
 Text context menus now include the existing formatting mini toolbar (#2959), including at a caret. Object, equation and whole-cell menus keep their own controls; Read Mode and the mini-toolbar preference suppress it. The toolbar reuses the selection toolbar's commands; additional controls from Word's toolbar are not added. Context-menu paste choices remain tracked by #2583 / PR #2599.
 
+Personal template tiles in File › New now render a first-page preview (#2852 follow-up). Previews use an isolated session, are bounded to one visible template per frame and a 64-entry cache, and fall back to the document-template icon when the file cannot be previewed. Upstream PR #3133 explicitly left thumbnails out; workgroup templates remain unimplemented.
+
 ## Ranked
 
 | # | Gap | B | Evidence | Impact | Hours | Doc |

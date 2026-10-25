@@ -6,6 +6,8 @@ use serde_json::json;
 use crate::theme::{Tokens, medium, regular, semibold};
 use crate::{WordApp, icons};
 
+mod personal_preview;
+
 /// The side menu: page id, label and icon (#1714).
 const PAGES: [(&str, &str, &str); 11] = [
     ("home", "Home", "homeFolder"),
@@ -323,6 +325,7 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
 /// New: the whole template gallery with a search box, then the personal templates (#2852); no
 /// Recent list (that is on Home and Open). The search covers both.
 fn new_page(app: &mut WordApp, ui: &mut Ui) {
+    personal_preview::gallery_visit(ui.ctx());
     let t = Tokens::get(ui.ctx());
     heading(ui, "New");
     let id = egui::Id::new("backstage_template_search");
@@ -452,6 +455,7 @@ fn personal_templates(app: &WordApp, ui: &Ui) -> (Option<std::path::PathBuf>, Ve
 /// Read the templates folder again on the next pass (File › New › Personal's Refresh).
 fn refresh_personal_templates(ctx: &egui::Context) {
     ctx.data_mut(|d| d.remove::<PersonalListing>(personal_listing_id()));
+    personal_preview::invalidate(ctx);
     ctx.request_repaint();
 }
 
@@ -463,8 +467,7 @@ fn matching_personal(query: &str, list: &[PersonalTemplate]) -> Vec<PersonalTemp
     list.iter().filter(|p| q.is_empty() || has(&p.label) || has(&p.category) || p.title.as_deref().is_some_and(has)).cloned().collect()
 }
 
-/// A personal template's tile: a page with the template mark (no thumbnail) and its name; a
-/// click makes a new document from it.
+/// A personal template's tile: a first-page preview and its name; a click makes a new document.
 fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
     let t = Tokens::get(ui.ctx());
     ui.vertical(|ui| {
@@ -478,8 +481,21 @@ fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
             Stroke::new(if resp.hovered() { 2.0 } else { 1.0 }, if resp.hovered() { t.accent } else { t.border_strong }),
             egui::StrokeKind::Inside,
         );
-        let mark = egui::Color32::from_gray(150);
-        icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(44.0, 44.0)), "documentTemplate", mark, t.accent);
+        let preview = personal_preview::get(
+            ui.ctx(),
+            &p.path,
+            p.modified.as_deref(),
+            &app.session.region(),
+            ui.ctx().pixels_per_point(),
+            r.intersects(ui.clip_rect()),
+        );
+        if let Some(preview) = preview {
+            let page = fit_page(r.shrink(1.0), preview.aspect);
+            ui.painter().image(preview.texture.id(), page, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), egui::Color32::WHITE);
+        } else {
+            let mark = egui::Color32::from_gray(150);
+            icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(44.0, 44.0)), "documentTemplate", mark, t.accent);
+        }
         let resp = resp.on_hover_text(&p.path);
         let caption = ui.add(egui::Label::new(egui::RichText::new(&p.label).font(regular(12.5))).truncate().sense(Sense::click()));
         if resp.clicked() || caption.clicked() {
@@ -487,6 +503,15 @@ fn personal_tile(ui: &mut Ui, app: &mut WordApp, p: &PersonalTemplate) {
             ui.ctx().data_mut(|d| d.insert_temp(personal_error_id(), failed.unwrap_or_default()));
         }
     });
+}
+
+/// Centre a page of `aspect` (width / height) in the white tile without changing its proportions.
+fn fit_page(tile: Rect, aspect: f32) -> Rect {
+    if !aspect.is_finite() || aspect <= 0.0 {
+        return tile;
+    }
+    let (w, h) = if tile.width() / tile.height() > aspect { (tile.height() * aspect, tile.height()) } else { (tile.width(), tile.width() / aspect) };
+    Rect::from_center_size(tile.center(), vec2(w, h))
 }
 
 /// Make a new document from the personal template at `path` and close File; a template that
@@ -1082,11 +1107,16 @@ mod tests {
         wordcraft_engine::io::save_path(path, &s.doc).unwrap();
     }
 
-    fn new_page_harness(templates: Option<std::path::PathBuf>) -> egui_kittest::Harness<'static, WordApp> {
+    fn write_blank_template(path: &std::path::Path) {
+        let s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        wordcraft_engine::io::save_path(path, &s.doc).unwrap();
+    }
+
+    fn new_page_harness_at(templates: Option<std::path::PathBuf>, width: f32, height: f32) -> egui_kittest::Harness<'static, WordApp> {
         let services = Services { templates_dir: templates, ..Default::default() };
         let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
         a.run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 1100.0)).build_ui_state(
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(width, height)).build_ui_state(
             |ui, app: &mut WordApp| {
                 let ctx = ui.ctx().clone();
                 app.logic(&ctx);
@@ -1096,6 +1126,10 @@ mod tests {
         );
         h.run_steps(4);
         h
+    }
+
+    fn new_page_harness(templates: Option<std::path::PathBuf>) -> egui_kittest::Harness<'static, WordApp> {
+        new_page_harness_at(templates, 1440.0, 1100.0)
     }
 
     /// File › New lists the user templates folder's templates under Personal (#2852), by
@@ -1132,6 +1166,207 @@ mod tests {
         assert_eq!(a.session.path, None, "an untitled document");
         assert_eq!(a.session.doc.settings.attached_template.as_deref(), Some(memo.to_string_lossy().as_ref()));
         assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Memo from the template"));
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn personal_previews_render_distinct_pages_and_blank_templates() {
+        let dir = personal_dir("pixels");
+        let first = dir.join("First.dotx");
+        let second = dir.join("Second.dotx");
+        let blank = dir.join("Blank.dotx");
+        write_template(&first, "Northwind quarterly report");
+        write_template(&second, "Southwind expense worksheet");
+        write_blank_template(&blank);
+        let region = wordcraft_geom::Region::default();
+        let render = |path: &std::path::Path| super::personal_preview::render_for_test(&path.to_string_lossy(), &region, 2.0).unwrap();
+        let (first_image, _) = render(&first);
+        let (second_image, _) = render(&second);
+        assert!(first_image.pixels.iter().any(|pixel| *pixel != egui::Color32::WHITE), "text leaves visible ink");
+        assert!(second_image.pixels.iter().any(|pixel| *pixel != egui::Color32::WHITE), "text leaves visible ink");
+        assert_ne!(first_image.pixels, second_image.pixels, "different documents have different pixels");
+        let (blank_image, blank_aspect) = render(&blank);
+        assert!(!blank_image.pixels.is_empty());
+        assert!(blank_image.pixels.iter().all(|pixel| *pixel == egui::Color32::WHITE), "a blank template is a white page");
+        assert!(blank_aspect.is_finite() && blank_aspect > 0.0);
+        drop((first_image, second_image, blank_image));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn personal_preview_render_rejects_invalid_dimensions_without_panicking() {
+        let mut doc = wordcraft_doc::Document::new();
+        doc.last_section.page_w = f32::NAN;
+        let err = super::personal_preview::render_document_for_test(doc, &wordcraft_geom::Region::default(), 2.0).unwrap_err();
+        assert!(err.contains("invalid dimensions") || err.contains("cannot be rendered"), "{err}");
+    }
+
+    #[test]
+    fn personal_preview_failures_are_bounded_and_fall_back() {
+        let dir = personal_dir("failures");
+        let corrupt = dir.join("Corrupt.dotx");
+        let encrypted = dir.join("Encrypted.dotx");
+        let oversized = dir.join("Oversized.dotx");
+        std::fs::write(&corrupt, b"not a Word package").unwrap();
+        let mut session = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+        session.run("document.setText", &json!({"text": "Password protected"})).unwrap();
+        let encrypted_bytes =
+            wordcraft_engine::io::save_bytes_with(&encrypted.to_string_lossy(), &session.doc, Some("preview-password"), &Default::default()).unwrap();
+        std::fs::write(&encrypted, encrypted_bytes).unwrap();
+        std::fs::write(&oversized, vec![0_u8; (16 << 20) + 1]).unwrap();
+        let region = wordcraft_geom::Region::default();
+        for path in [&corrupt, &encrypted, &oversized] {
+            let result = super::personal_preview::render_for_test(&path.to_string_lossy(), &region, 2.0);
+            assert!(result.is_err(), "{} falls back to its generic icon", path.display());
+        }
+
+        let gallery = personal_dir("corrupt-gallery");
+        let invalid = gallery.join("Corrupt.dotx");
+        std::fs::write(&invalid, b"not a Word package").unwrap();
+        let mut h = new_page_harness(Some(gallery.clone()));
+        assert!(h.query_by_label("Corrupt").is_some(), "the tile remains listed");
+        assert_eq!(super::personal_preview::stats(&h.ctx).1, 1, "the failed preview is cached");
+        h.run_steps(8);
+        assert_eq!(super::personal_preview::stats(&h.ctx).1, 1, "the failure is reused on later frames");
+        h.get_by_label("Corrupt").click();
+        h.run_steps(2);
+        assert!(h.state().ui.backstage, "a failed open keeps the gallery open");
+        drop(h);
+        let _ = std::fs::remove_dir_all(&gallery);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn denied_personal_preview_access_is_cached_before_metadata_or_file_reads() {
+        let root = personal_dir("read-root");
+        let outside = personal_dir("outside-read-root");
+        let path = outside.join("Denied.dotx");
+        write_template(&path, "Outside the automation read root");
+        let roots = wordcraft_engine::file_access::AutomationRoots::new(Some(&root), None).unwrap().unwrap();
+        let region = wordcraft_geom::Region::default();
+        let ctx = egui::Context::default();
+        let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            wordcraft_engine::file_access::confine(Some(&roots), || {
+                for _ in 0..3 {
+                    let _ = super::personal_preview::get(ui.ctx(), &path.to_string_lossy(), None, &region, 1.0, true);
+                }
+                assert!(wordcraft_engine::file_access::check_read(&path.to_string_lossy()).is_err());
+            });
+        });
+        out.textures_delta.clear();
+        let (entries, attempts, paths) = super::personal_preview::stats(&ctx);
+        assert_eq!(entries, 1, "the denied path caches a failure");
+        assert_eq!(attempts, 1, "repeated frames in this pass do not retry the denied preview");
+        assert_eq!(paths, [path.to_string_lossy().into_owned()]);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
+    }
+
+    #[test]
+    fn personal_preview_cache_reuses_success_and_failure_and_invalidates_by_dpi_and_revision() {
+        let dir = personal_dir("cache");
+        let path = dir.join("Preview.dotx");
+        write_template(&path, "A cached preview");
+        let region = wordcraft_geom::Region::default();
+        let ctx = egui::Context::default();
+        let frame = |ctx: &egui::Context, source: &std::path::Path, ppp: f32| {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                super::personal_preview::gallery_visit(ui.ctx());
+                let _ = super::personal_preview::get(ui.ctx(), &source.to_string_lossy(), None, &region, ppp, true);
+            });
+            out.textures_delta.clear();
+        };
+        frame(&ctx, &path, 1.0);
+        assert_eq!(super::personal_preview::stats(&ctx).1, 1);
+        for _ in 0..6 {
+            frame(&ctx, &path, 1.0);
+        }
+        assert_eq!(super::personal_preview::stats(&ctx).1, 1, "cached success is reused");
+        frame(&ctx, &path, 2.0);
+        assert_eq!(super::personal_preview::stats(&ctx).1, 2, "a DPI change gets its own raster");
+        write_template(&path, "A revised preview with different content and length");
+        frame(&ctx, &path, 2.0);
+        assert_eq!(super::personal_preview::stats(&ctx).1, 3, "a file revision gets a new raster");
+
+        let broken = dir.join("Broken.dotx");
+        std::fs::write(&broken, b"broken package").unwrap();
+        for _ in 0..6 {
+            frame(&ctx, &broken, 2.0);
+        }
+        assert_eq!(super::personal_preview::stats(&ctx).1, 4, "the failed preview is also reused");
+        assert!(super::personal_preview::stats(&ctx).0 <= 64, "the cache is bounded");
+        drop(ctx);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn personal_preview_refresh_and_gallery_visit_invalidate_cached_tiles() {
+        let dir = personal_dir("invalidate");
+        let path = dir.join("Memo.dotx");
+        write_template(&path, "Original preview text");
+        let mut h = new_page_harness(Some(dir.clone()));
+        assert_eq!(super::personal_preview::stats(&h.ctx).1, 1);
+        let first_pixels = super::personal_preview::rendered_pixel_hashes(&h.ctx)[0];
+        write_template(&path, "Updated preview has different content and a new file revision");
+        h.run_steps(2);
+        assert_eq!(super::personal_preview::stats(&h.ctx).1, 2, "the file revision is detected");
+        let updated_pixels = super::personal_preview::rendered_pixel_hashes(&h.ctx);
+        assert_eq!(updated_pixels.len(), 2);
+        assert_ne!(updated_pixels[0], updated_pixels[1], "the changed file has different preview pixels");
+        h.get_by_label("Refresh").click();
+        h.run_steps(3);
+        assert_eq!(super::personal_preview::stats(&h.ctx).1, 3, "Refresh invalidates the cached preview");
+        let rendered = super::personal_preview::rendered_pixel_hashes(&h.ctx);
+        assert_eq!(rendered.len(), 3);
+        assert_eq!(rendered[0], first_pixels);
+        assert_eq!(rendered[1], updated_pixels[1]);
+        assert_eq!(rendered[2], updated_pixels[1], "Refresh re-renders the current template");
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "open"})).unwrap();
+        h.run_steps(2);
+        h.state_mut().run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
+        h.run_steps(3);
+        assert_eq!(super::personal_preview::stats(&h.ctx).1, 4, "a new gallery visit invalidates cached previews");
+        assert_eq!(super::personal_preview::rendered_pixel_hashes(&h.ctx)[3], rendered[1], "the new visit renders the current template");
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn offscreen_personal_templates_are_not_read_for_previews() {
+        let dir = personal_dir("offscreen");
+        for n in 0..32 {
+            write_template(&dir.join(format!("Template {n:02}.dotx")), &format!("Synthetic template {n}"));
+        }
+        let mut h = new_page_harness_at(Some(dir.clone()), 1440.0, 480.0);
+        h.run_steps(30);
+        let (_, attempts, paths) = super::personal_preview::stats(&h.ctx);
+        assert!(attempts > 0, "visible templates are previewed");
+        assert!(attempts < 32, "offscreen templates aren't read: {attempts} attempts, {} paths", paths.len());
+        assert_eq!(paths.len(), attempts);
+        drop(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn personal_preview_does_not_mutate_the_active_document_session() {
+        let dir = personal_dir("isolation");
+        write_template(&dir.join("Memo.dotx"), "Template content");
+        let mut h = new_page_harness(Some(dir.clone()));
+        h.state_mut().run("document.setText", json!({"text": "Active unsaved work"})).unwrap();
+        h.state_mut().session.path = Some(dir.join("active.docx"));
+        let before_text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        let before_path = h.state().session.path.clone();
+        let before_dirty = h.state().session.dirty;
+        let before_sel = h.state().session.sel.clone();
+        let before_undo = h.state().session.undo_depth();
+        h.run_steps(8);
+        let active = h.state();
+        assert_eq!(active.session.doc.plain_text(wordcraft_doc::StoryRef::Body), before_text);
+        assert_eq!(active.session.path, before_path);
+        assert_eq!(active.session.dirty, before_dirty);
+        assert_eq!(active.session.sel, before_sel);
+        assert_eq!(active.session.undo_depth(), before_undo);
         drop(h);
         let _ = std::fs::remove_dir_all(&dir);
     }
