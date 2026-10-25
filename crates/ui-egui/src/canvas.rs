@@ -35,6 +35,21 @@ const EDGE_MAX_DT: f32 = 0.1;
 /// are rendered again when they come back.
 const TEXTURE_KEEP_SCREENS: f32 = 3.0;
 
+fn math_screen_clip(page: Rect, scale: f32, cell: Option<wordcraft_geom::Rect>) -> Option<Rect> {
+    cell.map(|r| Rect::from_min_size(pos2(page.min.x + r.x * scale, page.min.y + r.y * scale), vec2(r.w.max(0.0) * scale, r.h.max(0.0) * scale)))
+}
+
+fn math_clip_painter(painter: &egui::Painter, cell: Option<Rect>) -> egui::Painter {
+    cell.map_or_else(|| painter.clone(), |clip| painter.with_clip_rect(clip))
+}
+
+fn math_ime_rect(rect: Rect, cell: Option<Rect>) -> Rect {
+    let Some(cell) = cell else { return rect };
+    // Clamp endpoints so an off-cell cursor retains a valid zero-size edge rectangle.
+    let rect = Rect::from_two_pos(rect.min, rect.max);
+    Rect::from_min_max(rect.min.max(cell.min).min(cell.max), rect.max.max(cell.min).min(cell.max))
+}
+
 pub struct CanvasState {
     textures: HashMap<usize, (u64, TextureHandle)>,
     /// Visible full-resolution tiles of pages too tall for one GPU texture.
@@ -825,8 +840,14 @@ fn page_content_key(page: &Page) -> u64 {
                 Placed::Lines { para, l0, l1, x, y, turn, .. } => {
                     (std::sync::Arc::as_ptr(para) as usize, l0, l1, x.to_bits(), y.to_bits(), turn).hash(&mut h);
                 }
-                Placed::Fill { rect, color } => format!("{rect:?}{color:?}").hash(&mut h),
-                Placed::Rule { x0, y0, x1, y1, border } => format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h),
+                Placed::Fill { rect, color, source } => {
+                    format!("{rect:?}{color:?}").hash(&mut h);
+                    source.hash(&mut h);
+                }
+                Placed::Rule { x0, y0, x1, y1, border, source } => {
+                    format!("{x0}{y0}{x1}{y1}{border:?}").hash(&mut h);
+                    source.hash(&mut h);
+                }
                 Placed::Image { rect, media, spin, .. } => format!("{rect:?}{media}{spin:?}").hash(&mut h),
                 Placed::Shape { rect, kind, fill, stroke, stroke_width, effects, freeform, spin, extra, .. } => {
                     format!("{rect:?}{kind:?}{fill:?}{stroke:?}{stroke_width}{effects:?}{spin:?}{extra:?}").hash(&mut h);
@@ -1633,7 +1654,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         {
             math_caret = true;
             let (pi, ex, base, ml) = (bx.page, bx.x, bx.base, bx.math.clone());
-            let s = geo.scale;
+            let s = layout.pages.get(pi).map_or(geo.scale, |page| page_screen_scale(*pr, page, geo.scale));
+            let cell_clip = math_screen_clip(*pr, s, layout.equation_clip(&m.at, app.session.page_hint));
+            let math_painter = math_clip_painter(&painter, cell_clip);
             let frame = equation_frame(*pr, &bx, s);
             // The argument the caret is in (a numerator, a radicand…) is shaded.
             if !m.pos.path.is_empty()
@@ -1643,26 +1666,31 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     pos2(pr.min.x + (ex + x0) * s, pr.min.y + (base - up) * s),
                     pos2(pr.min.x + (ex + x1) * s, pr.min.y + (base + down) * s),
                 );
-                painter.rect_filled(arg.expand(1.0), 0.0, Color32::from_black_alpha(26));
+                math_painter.rect_filled(arg.expand(1.0), 0.0, Color32::from_black_alpha(26));
             }
-            painter.rect_filled(frame.strip, 0.0, t.equation_box.gamma_multiply(0.35));
+            math_painter.rect_filled(frame.strip, 0.0, t.equation_box.gamma_multiply(0.35));
             let (c, w) = (frame.strip.center(), frame.strip.width() * 0.3);
-            painter.add(egui::Shape::convex_polygon(
+            math_painter.add(egui::Shape::convex_polygon(
                 vec![pos2(c.x - w, c.y - w * 0.6), pos2(c.x + w, c.y - w * 0.6), pos2(c.x, c.y + w * 0.6)],
                 t.equation_box,
                 Stroke::NONE,
             ));
-            painter.rect_stroke(frame.outline, 2.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
-            painter.rect_filled(frame.grip, 1.0, Color32::WHITE);
-            painter.rect_stroke(frame.grip, 1.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
+            math_painter.rect_stroke(frame.outline, 2.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
+            math_painter.rect_filled(frame.grip, 1.0, Color32::WHITE);
+            math_painter.rect_stroke(frame.grip, 1.0, Stroke::new(1.0, t.equation_box), egui::StrokeKind::Inside);
             for k in 0..3 {
-                painter.circle_filled(
+                math_painter.circle_filled(
                     pos2(frame.grip.center().x, frame.grip.min.y + frame.grip.height() * (k as f32 + 1.0) / 4.0),
                     0.9,
                     t.equation_box,
                 );
             }
-            app.canvas.eq_options = Some(frame);
+            // Invisible frame portions must not accept clicks outside the cell.
+            app.canvas.eq_options = Some(cell_clip.map_or(frame, |clip| EquationFrame {
+                outline: frame.outline.intersect(clip),
+                grip: frame.grip.intersect(clip),
+                strip: frame.strip.intersect(clip),
+            }));
             if let Some(slot) = ml.slot(&m.pos.path, m.pos.off) {
                 let x = (pr.min.x + (ex + slot.x) * s).round() + 0.5;
                 let y0 = pr.min.y + (base - slot.y - slot.a) * s;
@@ -1673,11 +1701,11 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 let look = crate::caret_glide::look(app, ui, content_origin, &geo, [pos2(x, y0), pos2(x, y1)], focused, since, on);
                 if look.opacity > 0.0 && focused {
                     let caret_color = caret_color_at(app, &layout, pi, ex + slot.x, base - slot.y + (slot.d - slot.a) / 2.0, view, dim_body);
-                    painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
+                    math_painter.line_segment(look.bar, Stroke::new(1.5, caret_color.gamma_multiply(look.opacity)));
                 }
                 if focused {
                     ui.ctx().request_repaint_after(std::time::Duration::from_millis(530 - (since as u64 % 530)));
-                    let cr = Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1));
+                    let cr = math_ime_rect(Rect::from_min_max(pos2(x, y0), pos2(x + 1.0, y1)), cell_clip);
                     ime_geometry = Some((cr, cr));
                 }
             }
@@ -8506,5 +8534,123 @@ mod tests {
         let hidden = view_key(&app, false, Some(&object));
         assert_ne!(hidden, view_key(&app, false, None), "the page without the dragged object is rendered again");
         assert_eq!(hidden, view_key(&app, false, Some(&object)), "the same drag keeps the key: no re-render every frame");
+    }
+}
+
+#[cfg(test)]
+mod math_clip_tests {
+    use super::*;
+
+    fn cell() -> Rect {
+        Rect::from_min_max(pos2(40.0, 60.0), pos2(140.0, 80.0))
+    }
+
+    #[test]
+    fn math_padding_and_glide_clip() {
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(Pos2::ZERO, vec2(300.0, 200.0));
+        let cell = cell();
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            let painter =
+                ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("math clip control"))).with_clip_rect(viewport);
+            let math = math_clip_painter(&painter, Some(cell));
+            math.rect_filled(cell.expand(2.0), 2.0, Color32::BLACK);
+            math.line_segment([pos2(50.0, 30.0), pos2(50.0, 110.0)], Stroke::new(1.5, Color32::BLACK));
+        });
+        let shapes = std::mem::take(&mut output.shapes);
+        output.drop_without_applying_deltas();
+        assert_eq!(shapes.len(), 2);
+        for shape in shapes {
+            assert_eq!(shape.clip_rect, cell, "padding and animated caret must share the physical scissor");
+        }
+    }
+
+    #[test]
+    fn math_clip_meets_viewport() {
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_max(pos2(100.0, 50.0), pos2(200.0, 70.0));
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(viewport);
+        assert_eq!(math_clip_painter(&painter, Some(cell())).clip_rect(), viewport.intersect(cell()));
+        assert_eq!(math_clip_painter(&painter, None).clip_rect(), viewport);
+    }
+
+    #[test]
+    fn math_ime_partial_and_hidden() {
+        let cell = cell();
+        for target in [
+            Rect::from_min_max(pos2(50.0, 70.0), pos2(51.0, 100.0)),
+            Rect::from_min_max(pos2(50.0, 100.0), pos2(51.0, 110.0)),
+            Rect::from_min_max(pos2(20.0, 10.0), pos2(30.0, 20.0)),
+            Rect::from_min_max(pos2(160.0, 100.0), pos2(170.0, 120.0)),
+        ] {
+            let result = math_ime_rect(target, Some(cell));
+            assert!(!result.is_negative());
+            assert!(cell.contains_rect(result), "{target:?} => {result:?}");
+        }
+        let right = Rect::from_min_max(pos2(160.0, 65.0), pos2(170.0, 75.0));
+        assert_eq!(math_ime_rect(right, Some(cell)), Rect::from_min_max(pos2(140.0, 65.0), pos2(140.0, 75.0)));
+        let caret = Rect::from_min_max(pos2(50.0, 100.0), pos2(50.0, 110.0));
+        assert_eq!(math_ime_rect(caret, Some(cell)), Rect::from_min_max(pos2(50.0, 80.0), pos2(50.0, 80.0)));
+    }
+
+    #[test]
+    fn math_screen_and_empty_clip() {
+        let page = Rect::from_min_size(pos2(10.0, 20.0), vec2(600.0, 800.0));
+        let original = wordcraft_geom::Rect::new(40.0, 60.0, 100.0, 20.0);
+        let scale = page_screen_scale(page, &Page { w: 400.0, ..Default::default() }, 1.0);
+        assert_eq!(scale, 1.5);
+        assert_eq!(math_screen_clip(page, scale, Some(original)), Some(Rect::from_min_max(pos2(70.0, 110.0), pos2(220.0, 140.0))));
+        let empty = math_screen_clip(page, 1.5, Some(wordcraft_geom::Rect::new(40.0, 60.0, -10.0, -20.0))).unwrap();
+        assert_eq!(empty.size(), egui::Vec2::ZERO);
+        assert_eq!(math_ime_rect(cell(), Some(empty)), empty);
+    }
+
+    #[test]
+    fn math_offscreen_ime_is_valid() {
+        let offscreen = Rect::from_min_max(pos2(1000.0, 1000.0), pos2(1100.0, 1020.0));
+        let caret = Rect::from_min_max(pos2(1020.0, 1100.0), pos2(1021.0, 1120.0));
+        let clamped = math_ime_rect(caret, Some(offscreen));
+        assert_eq!(clamped, Rect::from_min_max(pos2(1020.0, 1020.0), pos2(1021.0, 1020.0)));
+        assert!(!clamped.is_negative());
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 100.0));
+        let painter = ctx.layer_painter(egui::LayerId::background()).with_clip_rect(viewport);
+        assert!(!math_clip_painter(&painter, Some(offscreen)).clip_rect().is_positive());
+    }
+
+    #[test]
+    fn whole_math_ime_unchanged() {
+        let target = Rect::from_min_max(pos2(50.0, 65.0), pos2(51.0, 75.0));
+        assert_eq!(math_ime_rect(target, Some(cell())), target);
+        assert_eq!(math_ime_rect(target, None), target);
+        for edge in [Rect::from_min_max(pos2(50.0, 65.0), pos2(50.0, 75.0)), Rect::from_min_max(pos2(50.0, 65.0), pos2(51.0, 65.0))] {
+            assert_eq!(math_ime_rect(edge, Some(cell())), edge);
+        }
+    }
+
+    #[test]
+    fn decoration_owner_changes_key() {
+        use wordcraft_doc::props::{Border, Rgb};
+        use wordcraft_doc::{Path, StoryRef};
+        let rect = wordcraft_geom::Rect::new(0.0, 0.0, 40.0, 60.0);
+        for item in [
+            Placed::Fill { rect, color: Rgb::BLACK, source: None },
+            Placed::Rule { x0: 0.0, y0: 0.0, x1: 0.0, y1: 60.0, border: Border::single(1.0), source: None },
+        ] {
+            let original = Page { items: vec![item], ..Default::default() };
+            let key = page_content_key(&original);
+            let mut keys = vec![key];
+            for source in [(StoryRef::Body, Path::top(0)), (StoryRef::Body, Path::top(1)), (StoryRef::Part(0), Path::top(0))] {
+                let mut changed = original.clone();
+                match &mut changed.items[0] {
+                    Placed::Fill { source: owner, .. } | Placed::Rule { source: owner, .. } => *owner = Some(source),
+                    _ => panic!("decoration fixture"),
+                }
+                let next = page_content_key(&changed);
+                assert!(!keys.contains(&next), "owner-only mutation must invalidate cell paint");
+                keys.push(next);
+            }
+            assert_eq!(key, page_content_key(&original), "unchanged source retains the paint cache");
+        }
     }
 }
