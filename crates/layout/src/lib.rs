@@ -3085,10 +3085,15 @@ fn float_rect(frame: Option<PageFrame>, col: (f32, f32), y0: f32, w: f32, h: f32
     let hx = frame.and_then(|f| page_x(&f).map(|(a, e)| (a - f.origin.0, e))).unwrap_or(col);
     let vy = frame.and_then(|f| page_y(f.sect).map(|(a, e)| (a - f.origin.1, e))).unwrap_or((y0, 0.0));
     let h_align = PageFrame::h_align(frame.as_ref(), float.h_align);
+    let mut x = align_in(hx, float.x, w, h_align);
+    if matches!(h_align, Some(FloatAlign::End | FloatAlign::Outside)) && float.spin().deg == 0.0 {
+        // Right alignment includes the unrotated object's right effect extent.
+        x -= float.effect_extent()[2];
+    }
     // Without a frame (a cell) `vy` has no height to align in: the object starts at the anchor
     // line instead of being pushed up by half its height or more.
     let v_align = if frame.is_none() { None } else { float.v_align };
-    Rect::new(align_in(hx, float.x, w, h_align), align_in(vy, float.y, h, v_align), w, h)
+    Rect::new(x, align_in(vy, float.y, h, v_align), w, h)
 }
 
 /// Where an object of `size` starts on one axis of `area` (start, extent): at `offset` from the
