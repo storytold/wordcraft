@@ -155,14 +155,20 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
             .unwrap();
     let roots = roots.unwrap();
     assert_eq!(left, args(&["--author", "Claude"]));
-    assert!(roots.read_root().is_some() && roots.write_root().is_some());
+    assert!(roots.read_roots().len() == 1 && roots.write_roots().len() == 1);
     assert!(validate_options("mcp", &left, MCP_OPTIONS).is_ok());
 
     // A root left out grants none of its access.
     let (roots, _) = automation_roots("mcp", &args(&["--automation-read-root", &read])).unwrap();
     let roots = roots.unwrap();
-    assert!(roots.write_root().is_none());
+    assert!(roots.write_roots().is_empty());
     assert!(roots.check(&format!("{write}/x.docx"), wordcraft_engine::file_access::Access::Write).unwrap_err().contains("write authority is absent"));
+
+    // A flag given again adds a folder.
+    let (roots, _) = automation_roots("mcp", &args(&["--automation-read-root", &read, &format!("--automation-read-root={write}")])).unwrap();
+    let roots = roots.unwrap();
+    assert_eq!(roots.read_roots().len(), 2);
+    assert_eq!(roots.check(&format!("{write}/x.docx"), wordcraft_engine::file_access::Access::Read), Ok(()));
 
     // No flags: nothing is confined and the arguments pass through.
     let (roots, left) = automation_roots("mcp", &args(&["--connect", "127.0.0.1:9"])).unwrap();
@@ -173,12 +179,7 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
 
 #[test]
 fn automation_root_flags_reject_bad_operands_and_missing_folders() {
-    for bad in [
-        args(&["--automation-read-root"]),
-        args(&["--automation-read-root", "--author"]),
-        args(&["--automation-write-root="]),
-        args(&["--automation-read-root", "a", "--automation-read-root=b"]),
-    ] {
+    for bad in [args(&["--automation-read-root"]), args(&["--automation-read-root", "--author"]), args(&["--automation-write-root="])] {
         assert!(automation_roots("mcp", &bad).is_err(), "{bad:?}");
     }
     let e = automation_roots("mcp", &args(&["--automation-read-root", "/definitely/not/a/folder"])).err().unwrap();

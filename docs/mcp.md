@@ -92,8 +92,11 @@ config works across the suite) keep the agent to the folders you give it:
 - A refused path is an ordinary tool error the agent can read and correct, for example
   `automation path rejected: outside the write root /work/project/out: /etc/x.docx` or
   `automation filesystem access is not granted: write authority is absent: /work/project/out/x.docx`.
-- The roots must be existing folders; a missing one stops the server with an error. Each flag is
-  given once (`--flag <dir>` or `--flag=<dir>`).
+- Give a flag again for each further folder (`--flag <dir>` or `--flag=<dir>`): a path is allowed
+  when it lies inside any of the roots of its kind, for example
+  `--automation-read-root /work/project --automation-read-root /work/assets`. A refused path names
+  them all (`outside the read roots /work/project, /work/assets: ...`).
+- The roots must be existing folders; a missing one stops the server with an error.
 
 The flags confine the headless server; `--connect` with them is an error, since the server would
 otherwise talk to an app that isn't confined. WordCraft's desktop app has no equivalent flags yet,

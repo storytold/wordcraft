@@ -49,8 +49,9 @@ USAGE:
                                               the files the agent's commands read (open, insert text
                                               or picture, mail-merge data, templates…) and write (save,
                                               export, merge output…) to DIR, links followed; a root left
-                                              out grants none of its access. They apply to the headless
-                                              server and are an error with --connect.
+                                              out grants none of its access. Repeat a flag for several
+                                              folders. They apply to the headless server and are an
+                                              error with --connect.
   wordcraft-cli zotero <command> <file> [--cmd 'id={json}' …] [--save OUT] [--trace] [--port P]
                                               run a Zotero command on a document (Zotero must be
                                               running): addEditCitation, addEditBibliography,
@@ -272,13 +273,13 @@ fn validate_options(command: &str, args: &[String], specs: &[OptionSpec]) -> Res
 }
 
 /// Take `--automation-read-root` / `--automation-write-root` (each `--flag DIR` or `--flag=DIR`,
-/// once) out of `args`, and open the roots, which must be existing folders. Returns the arguments
+/// once per folder) out of `args`, and open the roots, which must be existing folders. Returns the arguments
 /// that are left. A malformed root flag is an error, never a root silently left out.
 fn automation_roots(
     command: &str,
     args: &[String],
 ) -> Result<(Option<std::sync::Arc<wordcraft_engine::file_access::AutomationRoots>>, Vec<String>), String> {
-    let mut found = automation_args::AutomationArgs::new(None, None);
+    let mut found = automation_args::AutomationArgs::new(vec![], vec![]);
     let mut left = Vec::new();
     let mut it = args.iter().cloned();
     while let Some(arg) = it.next() {
@@ -286,8 +287,9 @@ fn automation_roots(
             left.push(arg);
         }
     }
-    let roots = wordcraft_engine::file_access::AutomationRoots::new(found.read_root.as_deref(), found.write_root.as_deref())
-        .map_err(|e| format!("{command}: {e}"))?;
+    let read: Vec<&std::path::Path> = found.read_roots.iter().map(std::path::PathBuf::as_path).collect();
+    let write: Vec<&std::path::Path> = found.write_roots.iter().map(std::path::PathBuf::as_path).collect();
+    let roots = wordcraft_engine::file_access::AutomationRoots::with_roots(&read, &write).map_err(|e| format!("{command}: {e}"))?;
     Ok((roots, left))
 }
 
@@ -639,8 +641,12 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     if let Some(roots) = roots {
                         // Every thread of this process, not only the server's: nothing reaches past the roots.
                         wordcraft_engine::file_access::confine_process(roots.clone());
-                        let show = |root: Option<&std::path::Path>| root.map_or_else(|| "none".to_string(), |r| r.display().to_string());
-                        eprintln!("wordcraft-cli: files confined: read root {}, write root {}", show(roots.read_root()), show(roots.write_root()));
+                        let show = |roots: Vec<&std::path::Path>| {
+                            let shown = roots.iter().map(|r| r.display().to_string()).collect::<Vec<_>>();
+                            let plural = if shown.len() > 1 { "s" } else { "" };
+                            if shown.is_empty() { " none".to_string() } else { format!("{plural} {}", shown.join(", ")) }
+                        };
+                        eprintln!("wordcraft-cli: files confined: read root{}, write root{}", show(roots.read_roots()), show(roots.write_roots()));
                         headless = headless.with_automation_roots(Some(roots));
                     }
                     if let Some(name) = author {
