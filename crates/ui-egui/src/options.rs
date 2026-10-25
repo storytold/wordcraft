@@ -590,6 +590,14 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
     {
         let _ = app.run("ui.caretAnimation", json!({"value": caret}));
     }
+    let mut ribbon = app.ui.ribbon_animation.enabled;
+    if ui
+        .checkbox(&mut ribbon, tl!("Animate ribbon tab switching (cross-fade)"))
+        .on_hover_text(tl!("On: switching ribbon tabs fades the old tab out and the new one in. Off: the new tab appears at once."))
+        .changed()
+    {
+        let _ = app.run("ui.ribbonAnimation", json!({"value": ribbon}));
+    }
     // The web app has no folders to name.
     if !cfg!(target_arch = "wasm32") {
         ui.add_space(8.0);

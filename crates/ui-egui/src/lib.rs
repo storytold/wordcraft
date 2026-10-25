@@ -74,6 +74,7 @@ pub mod print_page;
 pub mod printing;
 pub mod read_aloud;
 pub mod ribbon;
+pub mod ribbon_fade;
 pub mod ribbon_fit;
 pub mod ruler_tabs;
 pub mod scroll;
@@ -338,6 +339,10 @@ pub struct UiState {
     /// fades, as Word's does on Windows (on, the default), or it jumps and blinks on and off
     /// (off).
     pub caret_animation: bool,
+    /// File › Options › Advanced › Animation: switching ribbon tabs cross-fades their content and
+    /// slides the underline (on, the default), and how long and along which curves
+    /// (`ui.ribbonAnimation`, [`ribbon_fade`]).
+    pub ribbon_animation: ribbon_fade::FadeConfig,
     /// Custom keyboard shortcuts (Customize Keyboard, #368); the session owns them while running.
     pub keyboard: wordcraft_engine::KeyMap,
     /// Custom ribbon tabs and groups, hidden tabs and the Quick Access Toolbar (Customize Ribbon,
@@ -426,6 +431,7 @@ impl Default for UiState {
             dark_page: false,
             check_spelling: true,
             caret_animation: true,
+            ribbon_animation: ribbon_fade::FadeConfig::default(),
             keyboard: wordcraft_engine::KeyMap::default(),
             ribbon: wordcraft_engine::RibbonLayout::default(),
             caption_labels: Vec::new(),
@@ -1614,6 +1620,13 @@ impl WordApp {
         self.ui.animations.enabled(self.system_animations)
     }
 
+    /// The ribbon's tab animation in force: the setting, off when animation effects are off.
+    pub fn ribbon_animation(&self) -> ribbon_fade::FadeConfig {
+        let mut config = self.ui.ribbon_animation.clone();
+        config.enabled &= self.animations_on();
+        config
+    }
+
     /// What the system last said about its animation effects (`None`: it doesn't say).
     pub fn system_animations(&self) -> Option<bool> {
         self.system_animations
@@ -1882,6 +1895,55 @@ impl WordApp {
                     Some(_) => return Some(Err("`value` must be true or false".into())),
                 }
                 json!({"caretAnimation": self.ui.caret_animation})
+            }
+            "ui.ribbonAnimation" => {
+                // File › Options › Advanced › Animation: `value` true or false turns the ribbon's
+                // tab cross-fade on or off; `ms` (0–2000) sets its length, `easing` and
+                // `exitEasing` the incoming and outgoing tabs' curves (a name from
+                // `ribbon_fade::EASINGS` or `[x1, y1, x2, y2]`), `exitShare` (0.1–1) the part of
+                // the fade the outgoing tab takes, `slideIndicator` whether the tab's underline
+                // glides. No params reads it; a rejected param changes nothing.
+                let mut next = self.ui.ribbon_animation.clone();
+                for (key, v) in p.as_object().into_iter().flatten() {
+                    match key.as_str() {
+                        "value" => match v {
+                            Value::Bool(on) => next.enabled = *on,
+                            _ => return Some(Err("`value` must be true or false".into())),
+                        },
+                        "ms" => match v.as_f64().filter(|ms| ms.is_finite() && (0.0..=f64::from(ribbon_fade::MAX_MS)).contains(ms)) {
+                            Some(ms) => next.duration_ms = ms.round() as u32,
+                            None => return Some(Err(format!("`ms` must be a number from 0 to {}", ribbon_fade::MAX_MS))),
+                        },
+                        "easing" | "exitEasing" => match ribbon_fade::Easing::parse(v) {
+                            Some(e) if key == "easing" => next.easing = e,
+                            Some(e) => next.exit_easing = e,
+                            None => {
+                                let names: Vec<&str> = ribbon_fade::EASINGS.iter().map(|(n, _)| *n).collect();
+                                return Some(Err(format!("`{key}` must be one of {} or [x1, y1, x2, y2]", names.join(", "))));
+                            }
+                        },
+                        "exitShare" => match v.as_f64().filter(|f| f.is_finite() && (0.1..=1.0).contains(f)) {
+                            Some(f) => next.exit_share = f as f32,
+                            None => return Some(Err("`exitShare` must be a number from 0.1 to 1".into())),
+                        },
+                        "slideIndicator" => match v {
+                            Value::Bool(on) => next.slide_indicator = *on,
+                            _ => return Some(Err("`slideIndicator` must be true or false".into())),
+                        },
+                        _ => {}
+                    }
+                }
+                self.ui.ribbon_animation = next;
+                let c = &self.ui.ribbon_animation;
+                json!({
+                    "ribbonAnimation": c.enabled,
+                    "ms": c.duration_ms,
+                    "easing": c.easing.to_json(),
+                    "exitEasing": c.exit_easing.to_json(),
+                    "exitShare": c.exit_share(),
+                    "slideIndicator": c.slide_indicator,
+                    "animating": c.enabled && c.duration_ms > 0 && self.animations_on(),
+                })
             }
             "ui.alignmentGuides" => {
                 // File › Options › Advanced › Editing: `value` true or false turns snapping to
@@ -3017,6 +3079,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.makeDefaultApp"
             | "ui.discord"
             | "ui.caretAnimation"
+            | "ui.ribbonAnimation"
             | "ui.startScreen"
     ) || id.starts_with("help.")
 }
@@ -3621,6 +3684,51 @@ mod tests {
         let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
         assert!(old.caret_animation && old.tab == "Insert");
         assert_eq!(a.run("ui.caretAnimation", json!({"value": true})).unwrap()["caretAnimation"], true);
+    }
+
+    /// File › Options › Advanced › Animation: the ribbon's tab cross-fade is a UI command, its
+    /// duration and curves configurable, kept between runs; junk changes nothing.
+    #[test]
+    fn ribbon_animation_is_a_ui_command_and_survives_a_restart() {
+        let mut a = app();
+        let read = a.run("ui.ribbonAnimation", json!({})).unwrap();
+        assert_eq!(read["ribbonAnimation"], true, "on by default; no params reads it");
+        assert_eq!((read["ms"].clone(), read["easing"].clone()), (json!(200), json!("decelerateMin")));
+        let set = a.run("ui.ribbonAnimation", json!({"ms": 150, "easing": "decelerateMid", "exitEasing": [0.4, 0, 1, 1], "exitShare": 0.6})).unwrap();
+        assert_eq!(set["ms"], 150);
+        assert_eq!(set["easing"], "decelerateMid");
+        assert_eq!(set["exitEasing"], json!([0.4, 0.0, 1.0, 1.0]));
+        for junk in [
+            json!({"value": "yes"}),
+            json!({"ms": -1}),
+            json!({"ms": 1e9}),
+            json!({"ms": "fast"}),
+            json!({"easing": "bouncy"}),
+            json!({"exitEasing": [1, 2]}),
+            json!({"exitShare": 0}),
+            json!({"slideIndicator": 1}),
+            json!({"ms": 100, "easing": null}),
+        ] {
+            assert!(a.run("ui.ribbonAnimation", junk.clone()).is_err(), "{junk}");
+        }
+        assert_eq!(a.ui.ribbon_animation.duration_ms, 150, "a rejected request changes nothing, not even its good params");
+        a.run("ui.ribbonAnimation", json!({"value": false})).unwrap();
+        let saved = serde_json::to_string(&a.prefs()).unwrap();
+        assert!(saved.contains(r#""ribbonAnimation":{"enabled":false,"ms":150"#), "{saved}");
+        let mut b = app();
+        b.apply_prefs(serde_json::from_str(&saved).unwrap());
+        assert_eq!(b.ui.ribbon_animation, a.ui.ribbon_animation);
+        assert!(!b.ribbon_animation().enabled);
+        // Settings saved before the option existed leave it on; a hand-edited one is tamed.
+        let old: UiState = serde_json::from_str(r#"{"tab":"Insert"}"#).unwrap();
+        assert!(old.ribbon_animation.enabled);
+        let edited: UiState = serde_json::from_str(r#"{"ribbonAnimation":{"ms":-3,"easing":7,"exitShare":null}}"#).unwrap();
+        assert_eq!(edited.ribbon_animation.duration_ms, 0);
+        // Animation effects off turns it off whatever it says.
+        a.run("ui.ribbonAnimation", json!({"value": true})).unwrap();
+        a.run("ui.animations", json!({"value": "off"})).unwrap();
+        assert!(!a.ribbon_animation().enabled);
+        assert_eq!(a.run("ui.ribbonAnimation", json!({})).unwrap()["animating"], false);
     }
 
     /// #1945: showing or hiding the Quick Access Toolbar is a UI command (no value toggles it),

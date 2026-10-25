@@ -401,6 +401,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     });
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                        let animation = app.ribbon_animation();
+                        // The tabs on the strip, in order: the arrow keys move between them.
+                        let on_strip: Vec<&str> = tabs.iter().zip(&plan.fits).filter(|(_, fits)| **fits).map(|((tab, _), _)| tab.as_str()).collect();
                         // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
                         for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
                             let (tab, custom) = (tab.as_str(), *custom);
@@ -409,7 +412,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             let shown = if custom { tab } else { tl!(tab) };
                             let w = plan.widths.get(i).copied().unwrap_or(0.0) - 2.0;
                             let cut = specs.get(i).is_some_and(|sp| sp.text_w + plan.pad > w + 0.5);
-                            let (r, resp) = ui.allocate_exact_size(vec2(w, 30.0), Sense::click());
+                            // Known by name, so the arrow keys can hand the focus to a tab.
+                            let (_, r) = ui.allocate_space(vec2(w, 30.0));
+                            let resp = ui.interact(r, tab_id(tab), Sense::click());
                             if app.ui.keytips == crate::keytips::Phase::Tabs {
                                 crate::keytips::record_tab(r, tab, &app.ui.keytip_prefix, &mut app.keytip_rects);
                             } else if app.ui.keytips == crate::keytips::Phase::Legacy {
@@ -446,8 +451,21 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             }
                             let resp = if cut { resp.on_hover_text(shown) } else { resp };
                             if active {
+                                // The underline glides here from the tab selected before (`ribbon_fade`).
                                 let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
+                                let u = crate::ribbon_fade::indicator(ui, "ribbon_tabs", tab, u, &animation);
                                 ui.painter().rect_filled(u, 2.0, t.accent);
+                            }
+                            if resp.has_focus() {
+                                ui.painter().rect_stroke(r.shrink2(vec2(1.0, 3.0)), 4.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
+                                if let Some(next) = arrow_to_tab(ui, &resp, &on_strip, tab) {
+                                    // Arrowing onto a tab shows it, as in Word; File only takes the
+                                    // focus (Enter opens it).
+                                    if next != "File" {
+                                        let _ = app.run("ui.tab", json!({"tab": next}));
+                                    }
+                                    ui.memory_mut(|m| m.request_focus(tab_id(next)));
+                                }
                             }
                             if resp.clicked() {
                                 let _ = app.run("ui.tab", json!({"tab": tab}));
@@ -512,81 +530,116 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
             let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
-            let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
-            crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
-            // 0.37 keeps the scroll offset private: an edge-chevron click leaves a one-frame
-            // request here and the next scroll area is built at that offset.
-            let pending_id = ui.scope_id().with("ribbon_scroll_pending");
-            let pending = ui.data(|d| d.get_temp::<f32>(pending_id));
-            let mut area = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
-            if let Some(x) = pending {
-                area = area.horizontal_scroll_offset(x);
+            // Switching tabs cross-fades the old tab's groups into the new one's (`ribbon_fade`).
+            let (key, animation) = (app.ui.tab.clone(), app.ribbon_animation());
+            crate::ribbon_fade::show(ui, "ribbon", key, &animation, |ui| tab_content(app, ui, &user_tabs, &t));
+        });
+}
+
+/// The selected tab's groups, scrolled sideways when they don't fit.
+fn tab_content(app: &mut WordApp, ui: &mut Ui, user_tabs: &[wordcraft_engine::ribbon::TabEntry], t: &Tokens) {
+    let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
+    crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
+    // 0.37 keeps the scroll offset private: an edge-chevron click leaves a one-frame
+    // request here and the next scroll area is built at that offset.
+    let pending_id = ui.scope_id().with("ribbon_scroll_pending");
+    let pending = ui.data(|d| d.get_temp::<f32>(pending_id));
+    let mut area = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+    if let Some(x) = pending {
+        area = area.horizontal_scroll_offset(x);
+    }
+    let scroll = area.show(ui, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+            match entry {
+                // Every tab hidden: nothing to show.
+                Some(e) if e.hidden => return,
+                Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
+                _ => {}
             }
-            let scroll = area.show(ui, |ui| {
-                ui.horizontal_top(|ui| {
-                    ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
-                    match entry {
-                        // Every tab hidden: nothing to show.
-                        Some(e) if e.hidden => return,
-                        Some(e) if e.custom => return custom_groups(app, ui, &e.groups),
-                        _ => {}
-                    }
-                    match app.ui.tab.as_str() {
-                        "Home" => home(app, ui),
-                        "Insert" => insert(app, ui),
-                        "Draw" => draw(app, ui),
-                        "Design" => design(app, ui),
-                        "Layout" => layout(app, ui),
-                        "References" => references(app, ui),
-                        "Mailings" => mailings(app, ui),
-                        "Review" => review(app, ui),
-                        "View" => view(app, ui),
-                        "Developer" => developer(app, ui),
-                        "Zotero" => zotero(app, ui),
-                        "Help" => help(app, ui),
-                        "Table Design" => table_design(app, ui),
-                        "Table Layout" => table_layout(app, ui),
-                        "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
-                        "Picture Format" => picture_format(app, ui),
-                        "Shape Format" => shape_format(app, ui),
-                        "SmartArt Design" => smart_art_design(app, ui),
-                        "Outlining" => outlining(app, ui),
-                        "Chart Design" => chart_design(app, ui),
-                        _ => home(app, ui),
-                    }
-                    if let Some(e) = entry {
-                        custom_groups(app, ui, &e.groups);
-                    }
-                });
-            });
-            if pending.is_some() {
-                let _ = ui.data_mut(|d| d.remove_temp::<f32>(pending_id));
+            match app.ui.tab.as_str() {
+                "Home" => home(app, ui),
+                "Insert" => insert(app, ui),
+                "Draw" => draw(app, ui),
+                "Design" => design(app, ui),
+                "Layout" => layout(app, ui),
+                "References" => references(app, ui),
+                "Mailings" => mailings(app, ui),
+                "Review" => review(app, ui),
+                "View" => view(app, ui),
+                "Developer" => developer(app, ui),
+                "Zotero" => zotero(app, ui),
+                "Help" => help(app, ui),
+                "Table Design" => table_design(app, ui),
+                "Table Layout" => table_layout(app, ui),
+                "Equation" if app.session.math.is_some() => crate::equation_tab::show(app, ui),
+                "Picture Format" => picture_format(app, ui),
+                "Shape Format" => shape_format(app, ui),
+                "SmartArt Design" => smart_art_design(app, ui),
+                "Outlining" => outlining(app, ui),
+                "Chart Design" => chart_design(app, ui),
+                _ => home(app, ui),
             }
-            crate::ribbon_fit::end(ui.ctx());
-            // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
-            // where more is and scroll it on click. Every command also stays reachable through Search Commands.
-            let r = scroll.inner_rect;
-            let overflow = scroll.content_size.x - r.width();
-            let offset = scroll.state.clamped_offset().x;
-            let step = 160.0;
-            let mut next = None;
-            if offset > 1.0 {
-                let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
-                if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), &t) {
-                    next = Some(offset - step);
-                }
-            }
-            if overflow - offset > 1.0 {
-                let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
-                if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), &t) {
-                    next = Some(offset + step);
-                }
-            }
-            if let Some(x) = next {
-                ui.data_mut(|d| d.insert_temp(pending_id, x.clamp(0.0, overflow.max(0.0))));
-                ui.ctx().request_repaint();
+            if let Some(e) = entry {
+                custom_groups(app, ui, &e.groups);
             }
         });
+    });
+    if pending.is_some() {
+        let _ = ui.data_mut(|d| d.remove_temp::<f32>(pending_id));
+    }
+    crate::ribbon_fit::end(ui.ctx());
+    // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
+    // where more is and scroll it on click. Every command also stays reachable through Search Commands.
+    let r = scroll.inner_rect;
+    let overflow = scroll.content_size.x - r.width();
+    let offset = scroll.state.clamped_offset().x;
+    let step = 160.0;
+    let mut next = None;
+    if offset > 1.0 {
+        let left = Rect::from_min_max(r.left_top(), pos2(r.left() + 18.0, r.bottom()));
+        if edge_cue(ui, left, "‹", tl!("Scroll ribbon left"), t) {
+            next = Some(offset - step);
+        }
+    }
+    if overflow - offset > 1.0 {
+        let right = Rect::from_min_max(pos2(r.right() - 18.0, r.top()), r.right_bottom());
+        if edge_cue(ui, right, "›", tl!("Scroll ribbon right"), t) {
+            next = Some(offset + step);
+        }
+    }
+    if let Some(x) = next {
+        ui.data_mut(|d| d.insert_temp(pending_id, x.clamp(0.0, overflow.max(0.0))));
+        ui.ctx().request_repaint();
+    }
+}
+
+/// A ribbon tab's widget id, by the tab's name.
+fn tab_id(tab: &str) -> egui::Id {
+    egui::Id::unique(("ribbon_tab", tab))
+}
+
+/// The tab the arrow keys, Home or End move to from the focused tab `tab` (`resp`) among the
+/// tabs on the strip, in order; Left and Right wrap around. The arrows are kept from egui's
+/// own focus moves while a tab has the focus.
+fn arrow_to_tab<'a>(ui: &Ui, resp: &egui::Response, on_strip: &[&'a str], tab: &str) -> Option<&'a str> {
+    ui.memory_mut(|m| m.set_focus_lock_filter(resp.id, egui::EventFilter { horizontal_arrows: true, ..Default::default() }));
+    let here = on_strip.iter().position(|t| *t == tab)?;
+    let last = on_strip.len().checked_sub(1)?;
+    let to = ui.input_mut(|i| {
+        if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) {
+            Some(if here >= last { 0 } else { here + 1 })
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) {
+            Some(if here == 0 { last } else { here - 1 })
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Home) {
+            Some(0)
+        } else if i.consume_key(egui::Modifiers::NONE, egui::Key::End) {
+            Some(last)
+        } else {
+            None
+        }
+    })?;
+    on_strip.get(to).copied().filter(|t| *t != tab)
 }
 
 /// Custom groups (Customize Ribbon, #379): up to three commands as large buttons, more as small
@@ -3531,6 +3584,89 @@ mod tests {
 
     /// #897: the tabs that didn't fit were drawn under Comments / Editing / Share, so at 1280 pt
     /// in Polish the table tabs were out of reach. They stay on the strip and a click opens them.
+    #[test]
+    fn switching_tabs_cross_fades_the_ribbon_and_only_the_new_tab_answers() {
+        use egui_kittest::kittest::Queryable;
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).with_step_dt(1.0 / 60.0).build_ui_state(
+            |ui, app: &mut WordApp| {
+                // The harness turns egui's animations off; this test is about one.
+                ui.style_mut().animation_time = 1.0 / 12.0;
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        assert!(!crate::ribbon_fade::is_fading(&h.ctx, "ribbon"), "at rest on Home");
+        assert!(h.query_by_label_contains(tl!("Paste")).is_some());
+        h.get_by_label(tl!("Insert")).click();
+        h.step();
+        h.step();
+        assert_eq!(h.state().ui.tab, "Insert");
+        assert!(crate::ribbon_fade::is_fading(&h.ctx, "ribbon"), "the switch fades");
+        // Home's groups are only pixels while they fade: nothing to click or read out.
+        assert!(h.query_by_label_contains(tl!("Paste")).is_none(), "the old tab doesn't answer");
+        assert!(h.query_by_label_contains(tl!("Table")).is_some(), "the new tab answers from its first frame");
+        h.run_steps(16);
+        assert!(!crate::ribbon_fade::is_fading(&h.ctx, "ribbon"), "and it settles in 200 ms");
+        // Turned off: the next switch is instant.
+        h.state_mut().run("ui.ribbonAnimation", json!({"value": false})).unwrap();
+        h.get_by_label(tl!("Layout")).click();
+        h.step();
+        h.step();
+        assert_eq!(h.state().ui.tab, "Layout");
+        assert!(!crate::ribbon_fade::is_fading(&h.ctx, "ribbon"));
+        // So does Animation effects off (the system's reduce-motion setting).
+        h.state_mut().run("ui.ribbonAnimation", json!({"value": true})).unwrap();
+        h.state_mut().run("ui.animations", json!({"value": "off"})).unwrap();
+        h.get_by_label(tl!("View")).click();
+        h.step();
+        h.step();
+        assert_eq!(h.state().ui.tab, "View");
+        assert!(!crate::ribbon_fade::is_fading(&h.ctx, "ribbon"));
+    }
+
+    /// With a tab focused, Left and Right move to the next tab and show it, as Word does; Home and
+    /// End go to the ends; File only takes the focus. The document's caret stays put.
+    #[test]
+    fn arrow_keys_move_between_ribbon_tabs() {
+        use egui_kittest::kittest::Queryable;
+        let app = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Text")), crate::Services::default());
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        h.run_steps(3);
+        let caret = h.state().session.sel.clone();
+        let text = h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
+        h.get_by_label(tl!("Home")).focus();
+        h.run_steps(2);
+        let press = |h: &mut egui_kittest::Harness<'_, WordApp>, key: egui::Key| {
+            h.key_press(key);
+            h.run_steps(2);
+            h.state().ui.tab.clone()
+        };
+        assert_eq!(press(&mut h, egui::Key::ArrowRight), "Insert");
+        assert_eq!(press(&mut h, egui::Key::ArrowRight), "Draw");
+        assert_eq!(press(&mut h, egui::Key::ArrowLeft), "Insert");
+        let last = press(&mut h, egui::Key::End);
+        assert_ne!(last, "Insert", "End goes to the last tab");
+        assert_eq!(press(&mut h, egui::Key::ArrowRight), last, "wrapping onto File only moves the focus");
+        assert!(!h.state().ui.backstage, "File isn't opened by an arrow");
+        assert_eq!(press(&mut h, egui::Key::ArrowRight), "Home", "and on from File");
+        assert_eq!(press(&mut h, egui::Key::Home), "Home", "Home focuses File");
+        assert!(!h.state().ui.backstage);
+        assert_eq!(h.state().session.sel, caret, "the caret didn't move");
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), text, "nothing was typed");
+        assert!(h.query_by_label(tl!("File")).is_some_and(|n| n.is_focused()));
+    }
+
     #[test]
     fn table_tabs_stay_clickable_when_the_tab_strip_overflows() {
         if !crate::i18n::catalogs_embedded() {
