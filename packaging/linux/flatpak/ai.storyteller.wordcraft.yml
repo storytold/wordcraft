@@ -50,6 +50,9 @@ modules:
       - cargo --offline build --release --locked -p wordcraft -p wordcraft-cli
       - install -Dm755 target/release/wordcraft /app/bin/wordcraft
       - install -Dm644 NOTICE /app/share/doc/wordcraft/NOTICE
+      - install -Dm644 ATTRIBUTION.md /app/share/doc/wordcraft/ATTRIBUTION.md
+      - install -Dm644 LICENSE-MIT /app/share/doc/wordcraft/LICENSE-MIT
+      - install -Dm644 LICENSE-APACHE /app/share/doc/wordcraft/LICENSE-APACHE
       - install -Dm755 target/release/wordcraft-cli /app/bin/wordcraft-cli
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.desktop /app/share/applications/ai.storyteller.wordcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.mime.xml /app/share/mime/packages/ai.storyteller.wordcraft.xml
