@@ -566,14 +566,23 @@ fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptio
     for items in stories {
         let warps = warped_boxes(doc, items);
         let clips = clipped_cells(items);
+        let page_objects: Vec<_> = items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Object { story, path, off, page_placed: true, .. } => Some((*story, path, *off)),
+                _ => None,
+            })
+            .collect();
         let mut done: Vec<u32> = Vec::new();
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
             }
-            if let Placed::Lines { story, path, .. } = it
-                && let Some(rect) = cell_clip(&clips, *story, &path.0)
+            if !clips.is_empty()
+                && let Some((story, path, off)) = it.source()
+                && !off.is_some_and(|off| page_objects.contains(&(story, path, off)) && it.owns_object(story, path, off))
+                && let Some(rect) = cell_clip(&clips, story, &path.0)
             {
                 let mut inner = Vec::new();
                 item(doc, it, opts, a, &mut inner);
@@ -796,7 +805,7 @@ fn item(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, out: &mu
 /// effects follow all the turns it is drawn inside.
 fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, alpha: f32, outer: Spin, out: &mut Vec<Draw>) {
     match it {
-        Placed::Fill { rect, color } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
+        Placed::Fill { rect, color, .. } => out.push(Draw::Fill { rect: *rect, color: *color, alpha, text_bg: false }),
         Placed::Rule { x0, y0, x1, y1, border } => out.push(rule(*x0, *y0, *x1, *y1, border, alpha)),
         Placed::Image { rect, media, crop, spin, .. } => spun(
             *spin,

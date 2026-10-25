@@ -107,7 +107,7 @@ fn all_objects(page: &Page, index: usize) -> impl Iterator<Item = ObjectHit> + '
 
 fn objects_in(items: &[Placed], index: usize) -> impl Iterator<Item = ObjectHit> + '_ {
     items.iter().rev().filter_map(move |it| match it {
-        Placed::Object { rect, spin, story, path, off, text_box, wrap, origin } => Some(ObjectHit {
+        Placed::Object { rect, spin, story, path, off, text_box, wrap, origin, .. } => Some(ObjectHit {
             page: index,
             rect: *rect,
             spin: *spin,

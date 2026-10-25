@@ -2054,12 +2054,12 @@ fn turned_lines(l: &DocLayout) -> &Placed {
     l.pages[0].items.iter().find(|it| matches!(it, Placed::Lines { path, .. } if path.0 == [1, 0, 1, 0])).unwrap()
 }
 
-/// Table Layout › Text Direction (#226): turned cell text runs along the cell's height, the row
-/// grows to fit it, and caret, clicks and drawing follow the turn.
+/// Table Layout › Text Direction (#226): turned cell text runs along a fixed-height cell,
+/// and caret, clicks and drawing follow the turn.
 #[test]
 fn turned_cell_text_runs_down_the_cell() {
     let text = "Turned cell text";
-    let d = turned_table(TextDirection::Down, text, None);
+    let d = turned_table(TextDirection::Down, text, Some(120.0));
     let l = lay(&d);
     let it = turned_lines(&l);
     assert!(matches!(it, Placed::Lines { turn: TextDirection::Down, l0: 0, l1: 1, .. }), "one unwrapped line: {it:?}");
@@ -2067,7 +2067,7 @@ fn turned_cell_text_runs_down_the_cell() {
     // Tall and narrow, against the cell's right edge (cell 2 spans x 228..384, 5.4pt margins).
     assert!(b.h > 60.0 && b.w < 20.0, "{b:?}");
     assert!((b.right() - (72.0 + 312.0 - 5.4)).abs() < 1.0 && b.x > 72.0 + 156.0, "{b:?}");
-    // The row grew to hold the text: the next paragraph starts below it.
+    // The next paragraph starts below the fixed-height row.
     let after = l.caret(&Pos::body(2, 0)).unwrap();
     assert!(after.top > b.bottom(), "{after:?} vs {b:?}");
     let cell = l.pages[0].items.iter().find_map(|i| if let Placed::Cell { rect, cell: 1, .. } = i { Some(*rect) } else { None }).unwrap();
@@ -2088,7 +2088,14 @@ fn turned_cell_text_runs_down_the_cell() {
     assert!(sel.iter().all(|(_, r)| r.h > r.w && r.x >= b.x - 1.0 && r.right() <= b.right() + 1.0), "{sel:?}");
     // Drawn in a turned frame.
     let draws = display::page_display(&d, &l.pages[0], &Default::default());
-    let turned = draws.iter().find_map(|x| if let display::Draw::Turned { turn, items, .. } = x { Some((*turn, items)) } else { None });
+    fn turned_draw(draws: &[display::Draw]) -> Option<(TextDirection, &[display::Draw])> {
+        draws.iter().find_map(|draw| match draw {
+            display::Draw::Turned { turn, items, .. } => Some((*turn, items.as_slice())),
+            display::Draw::Clip { items, .. } => turned_draw(items),
+            _ => None,
+        })
+    }
+    let turned = turned_draw(&draws);
     let (turn, items) = turned.expect("turned draw");
     assert_eq!(turn, TextDirection::Down);
     assert!(items.iter().any(|x| matches!(x, display::Draw::Glyphs { text, .. } if text.contains("Turned"))), "{items:?}");
@@ -2097,7 +2104,7 @@ fn turned_cell_text_runs_down_the_cell() {
 #[test]
 fn turned_up_cell_text_reads_bottom_to_top() {
     let text = "Bottom to top";
-    let d = turned_table(TextDirection::Up, text, None);
+    let d = turned_table(TextDirection::Up, text, Some(120.0));
     let l = lay(&d);
     let b = turned_lines(&l).turned_bounds().unwrap();
     // Against the cell's left edge; the text starts at the bottom and climbs.
@@ -4227,7 +4234,7 @@ fn row_bands_shade_only_with_a_band_size() {
         let mut rows: Vec<usize> = l.pages[0]
             .items
             .iter()
-            .filter_map(|i| if let Placed::Fill { rect, color } = i { (*color == band).then_some(*rect) } else { None })
+            .filter_map(|i| if let Placed::Fill { rect, color, .. } = i { (*color == band).then_some(*rect) } else { None })
             .filter_map(|f| cells.iter().find(|(_, c)| c.y <= f.y + f.h / 2.0 && f.y + f.h / 2.0 <= c.bottom()).map(|(r, _)| *r))
             .collect();
         rows.dedup();
@@ -6915,7 +6922,11 @@ fn a_split_row_moves_shading_below_the_cut_with_it() {
         };
         Placed::Lines { story, path, para, l0: 0, l1: 1, x: 0.0, y, turn: TextDirection::Horizontal }
     };
-    let fill = |y: f32, h: f32| Placed::Fill { rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h), color: wordcraft_doc::props::Rgb(200, 0, 0) };
+    let fill = |y: f32, h: f32| Placed::Fill {
+        rect: wordcraft_geom::Rect::new(0.0, y, 100.0, h),
+        color: wordcraft_doc::props::Rgb(200, 0, 0),
+        source: None,
+    };
     // The row's own shading (from its top) and a nested cell's shading starting below the cut.
     let row = RowLayout {
         edge: 0.0,
@@ -10136,6 +10147,7 @@ fn split_cell_moves_image_frame() {
             text_box: None,
             wrap: Wrap::Square,
             origin: wordcraft_geom::Point::new(3.0, 145.0),
+            page_placed: false,
         };
         let mut kept = image.clone();
         kept.translate(0.0, top - 150.0);
@@ -11158,6 +11170,184 @@ fn caret_height_ignores_line_spacing() {
     }
 }
 
+#[test]
+fn automatic_turned_rows_wrap() {
+    // Word for Mac16.113.2: automatic rows wrap turned text at the horizontal
+    // neighbor's height, even when the resulting columns overflow the cell.
+    for turn in [TextDirection::Up, TextDirection::Down] {
+        for count in [1, 3] {
+            let mut d = Document::new();
+            let mut t = Table::new(1, 2, 160.0);
+            t.props.style = None;
+            t.props.fixed = true;
+            t.props.cell_margins = Some([0.0; 4]);
+            let paragraph = |text| {
+                let mut p = Paragraph::with_text(
+                    text,
+                    wordcraft_doc::CharProps { font: Some("Source Sans 3".into()), size: Some(11.0), ..Default::default() },
+                );
+                p.props = ParaProps {
+                    space_before: Some(0.0),
+                    space_after: Some(0.0),
+                    line_spacing: Some(wordcraft_doc::props::LineSpacing::Exactly(16.0)),
+                    ..Default::default()
+                };
+                wordcraft_doc::para_block(p)
+            };
+            t.rows[0].cells[0].blocks = (0..count).map(|_| paragraph("A")).collect();
+            t.rows[0].cells[1].props.text_direction = turn;
+            t.rows[0].cells[1].blocks = vec![paragraph("Compensation pad type")];
+            d.body = vec![Arc::new(Block::Table(t))];
+            let l = lay(&d);
+            let cell = l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Cell { rect, cell: 1, .. } => Some(rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((cell.h - count as f32 * 16.0).abs() < 0.01, "{turn:?}, {count}: {cell:?}");
+            let lines = l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Lines { path, l0, l1, .. } if path.0 == [0, 0, 1, 0] => Some(l1 - l0),
+                    _ => None,
+                })
+                .unwrap();
+            assert!(lines > 1, "turned text wraps at the row height");
+            assert!(l.pages[0].items.iter().any(|it| matches!(it, Placed::Cell { cell: 1, clip: true, .. })), "columns clip to the cell");
+        }
+    }
+}
+
+#[test]
+fn automatic_turned_only_height() {
+    for turn in [TextDirection::Up, TextDirection::Down] {
+        for height in [16.0, 24.0] {
+            let mut d = Document::new();
+            let mut t = Table::new(1, 1, 60.0);
+            t.props.style = None;
+            t.props.fixed = true;
+            t.props.cell_margins = Some([0.0; 4]);
+            let mut p = Paragraph::with_text("Compensation pad type", Default::default());
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(height));
+            t.rows[0].cells[0].props.text_direction = turn;
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+            d.body = vec![Arc::new(Block::Table(t))];
+            let l = lay(&d);
+            let cell = l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Cell { rect, clip: true, .. } => Some(rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((cell.h - height).abs() < 0.01, "{turn:?}, {height}: {cell:?}");
+        }
+    }
+}
+
+#[test]
+fn turned_rows_keep_minimum() {
+    for turn in [TextDirection::Up, TextDirection::Down] {
+        for (width, height) in [(20.0, 20.0), (60.0, 80.0)] {
+            let mut d = Document::new();
+            let mut t = Table::new(1, 1, width);
+            t.props.style = None;
+            t.props.fixed = true;
+            t.props.cell_margins = Some([0.0; 4]);
+            t.rows[0].props.height = Some(height);
+            t.rows[0].props.height_rule = wordcraft_doc::props::HeightRule::AtLeast;
+            t.rows[0].cells[0].props.text_direction = turn;
+            let mut p = Paragraph::with_text("Compensation pad type", Default::default());
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+            d.body = vec![Arc::new(Block::Table(t))];
+            let l = lay(&d);
+            let cell = l.pages[0]
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Cell { rect, clip: true, .. } => Some(rect),
+                    _ => None,
+                })
+                .unwrap();
+            assert!((cell.h - height).abs() < 0.01, "{turn:?}, {height}: {cell:?}");
+            assert!(l.pages[0].items.iter().any(|it| matches!(it, Placed::Lines { l0, l1, .. } if l1 - l0 > 1)));
+        }
+    }
+}
+
+/// Soft wrapping in the bounded turned-text pass must not set an automatic row's height.
+#[test]
+fn automatic_turn_long_height() {
+    for turn in [TextDirection::Up, TextDirection::Down] {
+        for height in [16.0, 24.0] {
+            for paragraphs in [1, 2] {
+                for text in ["Short".to_owned(), "word ".repeat(500)] {
+                    let mut d = Document::new();
+                    let mut t = Table::new(2, 1, 60.0);
+                    t.props.style = None;
+                    t.props.fixed = true;
+                    t.props.cell_margins = Some([0.0; 4]);
+                    t.rows[0].cells[0].props.text_direction = turn;
+                    t.rows[0].cells[0].blocks = (0..paragraphs)
+                        .map(|_| {
+                            let mut p = Paragraph::with_text(&text, Default::default());
+                            p.props.space_before = Some(0.0);
+                            p.props.space_after = Some(0.0);
+                            p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(height));
+                            wordcraft_doc::para_block(p)
+                        })
+                        .collect();
+                    d.body = vec![Arc::new(Block::Table(t))];
+                    let l = lay(&d);
+                    assert_eq!(l.pages.len(), 1, "{turn:?}, {height}, {paragraphs}");
+                    let cells: Vec<_> = l.pages[0]
+                        .items
+                        .iter()
+                        .filter_map(|it| match it {
+                            Placed::Cell { rect, row, clip, .. } => Some((*row, *rect, *clip)),
+                            _ => None,
+                        })
+                        .collect();
+                    let first = cells.iter().find(|(row, _, _)| *row == 0).unwrap();
+                    let next = cells.iter().find(|(row, _, _)| *row == 1).unwrap();
+                    let expected = height * paragraphs as f32;
+                    assert!((first.1.h - expected).abs() < 0.01, "{turn:?}, {height}, {paragraphs}, {} bytes: {first:?}", text.len());
+                    assert!((next.1.y - first.1.bottom()).abs() < 0.01, "next row follows the measured row: {cells:?}");
+                    assert!(first.2, "turned overflow remains clipped");
+                    for paragraph in 0..paragraphs {
+                        let (para, l0, l1) = l.pages[0]
+                            .items
+                            .iter()
+                            .find_map(|it| match it {
+                                Placed::Lines { path, para, l0, l1, turn: actual, .. } if path.0 == [0, 0, 0, paragraph] && *actual == turn => {
+                                    Some((para, *l0, *l1))
+                                }
+                                _ => None,
+                            })
+                            .unwrap();
+                        assert_eq!(l0, 0);
+                        assert_eq!(l1, para.lines.len(), "all final wrapped lines are retained");
+                        assert_eq!(para.lines[l0].start, 0);
+                        assert_eq!(para.lines[l1 - 1].stop, text.len(), "no text is lost to height measurement");
+                        if text.len() > 648 {
+                            assert!(l1 > 1, "final text still wraps at the row height");
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// #2048: a picture anchored in a later paragraph but placed higher up the page (fixed on the
 /// page, or moved up from its paragraph) keeps the text of the paragraphs above its anchor clear
 /// too, as in Word, not just its own paragraph's.
@@ -11629,5 +11819,433 @@ fn a_row_leaves_room_for_the_border_below_it() {
                 .fold(0.0f32, f32::max);
             assert!(end + border <= bottom + 0.02, "border {border}, {fill} filler lines: the last row ends at {end}, the margin at {bottom}");
         }
+    }
+}
+
+#[test]
+fn cell_float_draws_are_clipped() {
+    use wordcraft_doc::graphic::{Graphic, GraphicItem};
+    use wordcraft_doc::para::{Anchor, CanvasStyle, Float, GroupChild, Wrap};
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+    for turn in [TextDirection::Down, TextDirection::Up] {
+        let float = Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, ..Default::default() };
+        let mut shape = picture(100.0, 100.0, float.clone());
+        if let InlineObject::Shape { fill, .. } = &mut shape {
+            *fill = Some(Fill::solid(Rgb(17, 33, 49)));
+        }
+        let canvas = InlineObject::Group {
+            w: 100.0,
+            h: 100.0,
+            float: float.clone(),
+            ch_w: 100.0,
+            ch_h: 100.0,
+            children: vec![GroupChild { x: 0.0, y: 0.0, obj: shape.clone() }],
+            canvas: Some(CanvasStyle { fill: None, stroke: None, stroke_width: 0.0 }),
+        };
+        let objects = vec![
+            canvas,
+            shape,
+            InlineObject::Image {
+                media: "synthetic".into(),
+                w: 100.0,
+                h: 100.0,
+                alt: String::new(),
+                float: float.clone(),
+                crop: [0.0; 4],
+                ole: None,
+            },
+            InlineObject::Graphic {
+                w: 100.0,
+                h: 100.0,
+                alt: String::new(),
+                float,
+                graphic: Arc::new(Graphic {
+                    w: 100.0,
+                    h: 100.0,
+                    items: vec![GraphicItem::Image { rect: [0.0, 0.0, 100.0, 100.0], media: "synthetic".into() }],
+                    ..Default::default()
+                }),
+            },
+        ];
+        for object in objects {
+            let mut d = Document::new();
+            let mut table = Table::new(1, 1, 40.0);
+            table.props.style = None;
+            table.props.fixed = true;
+            table.props.cell_margins = Some([0.0; 4]);
+            table.props.borders = Some(Borders::all(Border::single(1.0)));
+            table.rows[0].props.height = Some(20.0);
+            table.rows[0].props.height_rule = HeightRule::Exact;
+            table.rows[0].cells[0].props.text_direction = turn;
+            let mut p = Paragraph::with_text("One\nTwo\nThree\nFour", Default::default());
+            p.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+            p.props.space_after = Some(0.0);
+            p.insert_object(0, object, &Default::default()).unwrap();
+            table.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+            d.body = vec![Arc::new(Block::Table(table))];
+            let l = lay(&d);
+            let page = &l.pages[0];
+            let cell = page
+                .items
+                .iter()
+                .find_map(|it| match it {
+                    Placed::Cell { rect, clip: true, .. } => Some(*rect),
+                    _ => None,
+                })
+                .unwrap();
+            let draws = display::page_display(&d, page, &Default::default());
+            let mut count = 0;
+            fn check(draws: &[display::Draw], clip: Option<wordcraft_geom::Rect>, cell: wordcraft_geom::Rect, count: &mut usize) {
+                for draw in draws {
+                    match draw {
+                        display::Draw::Clip { rect, items } => check(items, clip.or(Some(*rect)), cell, count),
+                        display::Draw::Turned { items, .. } | display::Draw::Rotated { items, .. } => check(items, clip, cell, count),
+                        display::Draw::Image { .. } | display::Draw::Shape { .. } => {
+                            assert_eq!(clip, Some(cell), "floating drawable escapes its physical cell");
+                            *count += 1;
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            check(&draws, None, cell, &mut count);
+            assert!(count > 0);
+            assert!(draws.iter().any(|d| matches!(d, display::Draw::Line { .. })), "cell borders stay outside the content clip");
+        }
+    }
+}
+
+#[cfg(test)]
+mod review2590 {
+    use super::*;
+    use wordcraft_doc::PartKind;
+    use wordcraft_doc::para::{Anchor, CanvasStyle, Float, GroupChild, Wrap};
+    use wordcraft_doc::props::{HeightRule, LineSpacing};
+
+    const PARA_FILL: Rgb = Rgb(23, 71, 131);
+    const CELL_FILL: Rgb = Rgb(181, 211, 157);
+    const OBJECT_EDGE: f32 = 100.0;
+    const SYNTHETIC_MEDIA: &str = "synthetic";
+
+    fn objects(float: Float) -> Vec<InlineObject> {
+        let mut shape = rect_shape(OBJECT_EDGE, OBJECT_EDGE, float.clone());
+        if let InlineObject::Shape { fill, .. } = &mut shape {
+            *fill = Some(Fill::solid(PARA_FILL));
+        }
+        let group = InlineObject::Group {
+            w: OBJECT_EDGE,
+            h: OBJECT_EDGE,
+            float: float.clone(),
+            ch_w: OBJECT_EDGE,
+            ch_h: OBJECT_EDGE,
+            children: vec![GroupChild { x: 0.0, y: 0.0, obj: shape.clone() }],
+            canvas: None,
+        };
+        let mut canvas = group.clone();
+        if let InlineObject::Group { canvas, .. } = &mut canvas {
+            *canvas = Some(CanvasStyle { fill: None, stroke: None, stroke_width: 0.0 });
+        }
+        vec![
+            shape,
+            group,
+            canvas,
+            InlineObject::Image {
+                media: SYNTHETIC_MEDIA.into(),
+                w: OBJECT_EDGE,
+                h: OBJECT_EDGE,
+                alt: String::new(),
+                float: float.clone(),
+                crop: [0.0; 4],
+                ole: None,
+            },
+            InlineObject::Graphic {
+                w: OBJECT_EDGE,
+                h: OBJECT_EDGE,
+                alt: String::new(),
+                float,
+                graphic: Arc::new(wordcraft_doc::graphic::Graphic {
+                    w: OBJECT_EDGE,
+                    h: OBJECT_EDGE,
+                    items: vec![wordcraft_doc::graphic::GraphicItem::Image {
+                        rect: [0.0, 0.0, OBJECT_EDGE, OBJECT_EDGE],
+                        media: SYNTHETIC_MEDIA.into(),
+                    }],
+                    ..Default::default()
+                }),
+            },
+        ]
+    }
+
+    fn cell_table(turn: TextDirection, shade: Option<Rgb>) -> Table {
+        let mut t = Table::new(1, 1, 40.0);
+        t.props.style = None;
+        t.props.fixed = true;
+        t.props.cell_margins = Some([0.0; 4]);
+        t.props.borders = Some(Borders::all(Border::single(1.0)));
+        t.rows[0].props.height = Some(20.0);
+        t.rows[0].props.height_rule = HeightRule::Exact;
+        t.rows[0].cells[0].props.text_direction = turn;
+        t.rows[0].cells[0].props.shading = Some(CELL_FILL);
+        let mut para = Paragraph::with_text("One\nTwo\nThree\nFour\nFive\nSix", Default::default());
+        para.props.shading = shade;
+        para.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+        para.props.space_after = Some(0.0);
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(para)];
+        t
+    }
+
+    fn document(table: Table, part: Option<PartKind>) -> Document {
+        let mut d = Document::from_text("Body");
+        d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+        let block = Arc::new(Block::Table(table));
+        if let Some(part) = part {
+            let id = d.add_part(part, vec![block]);
+            match part {
+                PartKind::Header => d.last_section.headers.default = Some(id),
+                PartKind::Footer => d.last_section.footers.default = Some(id),
+                _ => panic!("fixture part"),
+            }
+        } else {
+            d.body = vec![block];
+        }
+        d
+    }
+
+    fn cell_rect(layout: &DocLayout) -> Rect {
+        let page = &layout.pages[0];
+        page.items
+            .iter()
+            .chain(&page.header)
+            .chain(&page.footer)
+            .find_map(|it| if let Placed::Cell { rect, .. } = it { Some(*rect) } else { None })
+            .unwrap()
+    }
+
+    fn object_clips(draws: &[display::Draw], cell: Rect, clip: Option<Rect>, out: &mut Vec<bool>) {
+        for draw in draws {
+            match draw {
+                display::Draw::Clip { rect, items } => object_clips(items, cell, clip.or((*rect == cell).then_some(*rect)), out),
+                display::Draw::Turned { items, .. } | display::Draw::Rotated { items, .. } => object_clips(items, cell, clip, out),
+                display::Draw::Shape { .. } | display::Draw::Image { .. } => out.push(clip.is_some()),
+                _ => {}
+            }
+        }
+    }
+
+    fn float_clips(part: Option<PartKind>, turn: TextDirection, float: Float) -> Vec<Vec<bool>> {
+        objects(float)
+            .into_iter()
+            .map(|object| {
+                let mut t = cell_table(turn, None);
+                t.rows[0].cells[0].blocks[0] = wordcraft_doc::para_block({
+                    let mut p = Paragraph::with_text("Cell", Default::default());
+                    p.insert_object(0, object, &Default::default()).unwrap();
+                    p
+                });
+                let d = document(t, part);
+                let l = lay(&d);
+                let mut found = Vec::new();
+                object_clips(&display::page_display(&d, &l.pages[0], &Default::default()), cell_rect(&l), None, &mut found);
+                assert!(!found.is_empty(), "must inspect an actual drawable");
+                found
+            })
+            .collect()
+    }
+
+    #[test]
+    fn pinned_float_skips_cell_clip() {
+        let mut failures = Vec::new();
+        for part in [PartKind::Header, PartKind::Footer] {
+            for turn in [TextDirection::Down, TextDirection::Up] {
+                for wrap in [Wrap::BehindText, Wrap::InFrontOfText] {
+                    let f = Float { wrap, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 200.0, y: 200.0, outside_cell: true, ..Default::default() };
+                    let clips = float_clips(Some(part), turn, f);
+                    if clips.iter().flatten().any(|v| *v) {
+                        failures.push(format!("{part:?} {turn:?} {wrap:?}: {clips:?}"));
+                    }
+                }
+            }
+        }
+        assert!(failures.is_empty(), "page-placed floats must escape cell clipping: {failures:?}");
+    }
+
+    #[test]
+    fn unpinned_float_keeps_cell_clip() {
+        for part in [None, Some(PartKind::Header), Some(PartKind::Footer)] {
+            for turn in [TextDirection::Down, TextDirection::Up] {
+                let mut cases = vec![
+                    Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, outside_cell: false, ..Default::default() },
+                    Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, outside_cell: true, ..Default::default() },
+                ];
+                if part.is_none() {
+                    cases.push(Float {
+                        wrap: Wrap::InFrontOfText,
+                        h_rel: Anchor::Page,
+                        v_rel: Anchor::Page,
+                        outside_cell: true,
+                        ..Default::default()
+                    });
+                }
+                for f in cases {
+                    let clips = float_clips(part, turn, f);
+                    assert!(clips.iter().flatten().all(|v| *v), "in-cell placement must remain clipped: {part:?} {turn:?} {clips:?}");
+                }
+            }
+        }
+    }
+
+    fn fills(draws: &[display::Draw], cell: Rect, clip: Option<Rect>, out: &mut Vec<(Rgb, Rect, bool)>) {
+        for draw in draws {
+            match draw {
+                display::Draw::Clip { rect, items } => fills(items, cell, clip.or((*rect == cell).then_some(*rect)), out),
+                display::Draw::Turned { items, .. } | display::Draw::Rotated { items, .. } => fills(items, cell, clip, out),
+                display::Draw::Fill { color, rect, .. } if *color == PARA_FILL || *color == CELL_FILL => out.push((*color, *rect, clip.is_some())),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn turned_para_fill_is_clipped() {
+        let mut failures = Vec::new();
+        for turn in [TextDirection::Down, TextDirection::Up] {
+            let d = document(cell_table(turn, Some(PARA_FILL)), None);
+            let l = lay(&d);
+            let cell = cell_rect(&l);
+            let mut found = Vec::new();
+            fills(&display::page_display(&d, &l.pages[0], &Default::default()), cell, None, &mut found);
+            let para: Vec<_> = found.iter().filter(|f| f.0 == PARA_FILL).collect();
+            assert!(!para.is_empty());
+            assert!(para.iter().any(|(_, r, _)| r.x < cell.x - 0.01 || r.right() > cell.right() + 0.01), "fixture must overflow: {cell:?} {para:?}");
+            if para.iter().any(|f| !f.2) {
+                failures.push(format!("{turn:?}: cell={cell:?}, fills={para:?}"));
+            }
+        }
+        assert!(failures.is_empty(), "paragraph shading must share the physical clip: {failures:?}");
+    }
+
+    #[test]
+    fn cell_background_has_no_clip() {
+        for turn in [TextDirection::Horizontal, TextDirection::Down, TextDirection::Up] {
+            let d = document(cell_table(turn, Some(PARA_FILL)), None);
+            let l = lay(&d);
+            let cell = cell_rect(&l);
+            let mut found = Vec::new();
+            fills(&display::page_display(&d, &l.pages[0], &Default::default()), cell, None, &mut found);
+            let bg: Vec<_> = found.iter().filter(|f| f.0 == CELL_FILL).collect();
+            assert_eq!(bg.len(), 1);
+            assert_eq!((bg[0].1, bg[0].2), (cell, false), "table background has no paragraph ownership");
+        }
+    }
+
+    #[test]
+    fn fill_owner_survives_cuts() {
+        use crate::table::{CellPart, RowLayout, split_row};
+        let mut d = Document::new();
+        let mut p = Paragraph::with_text("One\nTwo\nThree\nFour\nFive\nSix", Default::default());
+        p.props.shading = Some(PARA_FILL);
+        p.props.line_spacing = Some(LineSpacing::Exactly(10.0));
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let top = first_line_top(&l.pages[0].items);
+        let mut items = l.pages[0].items.clone();
+        for it in &mut items {
+            it.translate(0.0, -top);
+        }
+        let check = |items: &[Placed]| {
+            let fills: Vec<_> = items.iter().filter(|it| matches!(it, Placed::Fill { color, .. } if *color == PARA_FILL)).collect();
+            assert!(!fills.is_empty());
+            for it in fills {
+                assert_eq!(it.source(), Some((StoryRef::Body, &Path::top(0), None)));
+            }
+        };
+        check(&items);
+        let fitted = fit_box(items.clone(), 20.0);
+        check(&fitted);
+        assert!(fitted.iter().any(|it| matches!(it, Placed::Fill { rect, .. } if rect.h < 30.0)));
+        let note = NoteBox { id: 0, items: items.clone(), h: 60.0, cont: false };
+        let (a, b) = note.split(20.0);
+        check(&a.items);
+        check(&b.items);
+        let row = RowLayout { height: 60.0, bottom: 0.0, edge: 0.0, cells: vec![CellPart { top: 0.0, items: 0..items.len(), end: None }], items };
+        let (a, b) = split_row(&row, 20.0).expect("shaded row splits");
+        check(&a.items);
+        check(&b.items);
+    }
+
+    #[test]
+    fn pinned_float_retains_identity() {
+        let f = Float {
+            wrap: Wrap::InFrontOfText,
+            h_rel: Anchor::Page,
+            v_rel: Anchor::Page,
+            x: 200.0,
+            y: 200.0,
+            outside_cell: true,
+            ..Default::default()
+        };
+        let mut t = cell_table(TextDirection::Down, None);
+        let mut p = Paragraph::with_text("Cell", Default::default());
+        p.insert_object(0, objects(f).remove(0), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        let d = document(t, Some(PartKind::Header));
+        let l = lay(&d);
+        let pos = l.pages[0]
+            .header
+            .iter()
+            .find_map(|it| match it {
+                Placed::Object { story, path, off, page_placed: true, .. } => Some(Pos { story: *story, path: path.clone(), off: *off }),
+                _ => None,
+            })
+            .expect("actual pinned object");
+        assert!(d.para(pos.story, &pos.path).and_then(|p| p.object_at(pos.off)).is_some());
+        let opts = display::DisplayOptions { hide_object: Some(pos), ..Default::default() };
+        let mut found = Vec::new();
+        object_clips(&display::page_display(&d, &l.pages[0], &opts), cell_rect(&l), None, &mut found);
+        assert!(found.is_empty(), "pinned paint retains the source used to hide a dragged object");
+    }
+    #[test]
+    fn mixed_clip_keeps_cell_clip() {
+        let float = Float {
+            wrap: Wrap::InFrontOfText,
+            h_rel: Anchor::Page,
+            v_rel: Anchor::Page,
+            x: 200.0,
+            y: 200.0,
+            outside_cell: true,
+            ..Default::default()
+        };
+        let mut t = cell_table(TextDirection::Down, None);
+        let mut p = Paragraph::with_text("Cell", Default::default());
+        p.insert_object(0, objects(float).remove(3), &Default::default()).unwrap();
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+        let d = document(t, Some(PartKind::Header));
+        let l = lay(&d);
+        let cell = cell_rect(&l);
+        let original = &l.pages[0];
+        let index = original.header.iter().position(|it| matches!(it, Placed::Image { .. })).unwrap();
+        let pinned = original.header[index].clone();
+        let frame = if let Placed::Image { rect, .. } = &pinned { *rect } else { panic!("pinned image fixture") };
+        assert_ne!(frame, cell, "the canvas frame must not mimic the physical cell clip");
+        let mut other = pinned.clone();
+        if let Placed::Image { off, .. } = &mut other {
+            *off = 3;
+        }
+        let unknown = Placed::Fill { rect: cell, color: PARA_FILL, source: None };
+        let empty = Placed::Clip { rect: cell, spin: Spin::default(), items: Vec::new() };
+        let mut failures = Vec::new();
+        for (label, child) in [("other object", other), ("unknown fill", unknown), ("empty clip", empty)] {
+            let mut page = original.clone();
+            let clip = Placed::Clip { rect: frame, spin: Spin::default(), items: vec![pinned.clone(), child] };
+            assert_eq!(clip.source(), pinned.source(), "ordinary cell ownership still uses its first owned descendant");
+            page.header[index] = clip;
+            let mut found = Vec::new();
+            object_clips(&display::page_display(&d, &page, &Default::default()), cell, None, &mut found);
+            assert!(!found.is_empty());
+            if found.iter().any(|v| !v) {
+                failures.push(label);
+            }
+        }
+        assert!(failures.is_empty(), "mixed or unknown canvas descendants must not exempt the whole clip: {failures:?}");
     }
 }

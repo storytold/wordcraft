@@ -295,9 +295,9 @@ fn from_y(items: Vec<Placed>, top: f32) -> Vec<Placed> {
                 let ky = para.lines.get(k).map_or(y, |l| y + l.top - first.top);
                 out.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn });
             }
-            Placed::Fill { rect, color } if rect.bottom() > lim => {
+            Placed::Fill { rect, color, source } if rect.bottom() > lim => {
                 let y0 = rect.y.max(top);
-                out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color });
+                out.push(Placed::Fill { rect: Rect::new(rect.x, y0, rect.w, rect.bottom() - y0), color, source });
             }
             Placed::Rule { y0, y1, .. } if y0.max(y1) >= lim => out.push(it),
             Placed::Image { rect, .. }
@@ -343,4 +343,20 @@ fn fit_flow(items: Vec<Placed>, across: f32) -> (Vec<Placed>, Option<Cut>) {
         }
     }
     (fit_box(items, across), cut.map(|(_, c)| c))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shading_cut_keeps_owner() {
+        for source in [None, Some((StoryRef::Body, Path::top(0)))] {
+            let fill = Placed::Fill { rect: Rect::new(0.0, 0.0, 40.0, 30.0), color: wordcraft_doc::props::Rgb::BLACK, source: source.clone() };
+            let out = from_y(vec![fill], 20.0);
+            let [Placed::Fill { rect, source: actual, .. }] = out.as_slice() else { panic!("remaining fill") };
+            assert_eq!(rect.h, 10.0, "the fill is cut at the continuation");
+            assert_eq!(actual, &source, "paragraph ownership stays; backgrounds stay source-less");
+        }
+    }
 }

@@ -244,6 +244,8 @@ pub enum Placed {
     Fill {
         rect: Rect,
         color: Rgb,
+        /// Paragraph shading owns its source; table and page backgrounds do not.
+        source: Option<(StoryRef, Path)>,
     },
     Rule {
         x0: f32,
@@ -309,8 +311,7 @@ pub enum Placed {
         row: usize,
         cell: usize,
         story: StoryRef,
-        /// Its row is exactly as tall as it says and the content is taller: what runs past the
-        /// cell is cut off when drawn, as in Word.
+        /// Overflow in an exact-height or turned cell is cut off at its edges when drawn.
         clip: bool,
     },
     /// The area of a picture, shape or text box, for hit testing, selection handles and dragging
@@ -328,10 +329,44 @@ pub enum Placed {
         /// Its paragraph's column left and top: where offsets relative to the column and the
         /// paragraph (`Anchor::Column` / `Anchor::Paragraph`) start.
         origin: wordcraft_geom::Point,
+        /// A header/footer cell float placed on the page, outside its anchor cell.
+        page_placed: bool,
     },
 }
 
 impl Placed {
+    /// Source ownership survives group and canvas placement. Object offsets identify pinned
+    /// page placement; paragraph shading has no object offset, backgrounds and borders no source.
+    fn source(&self) -> Option<(StoryRef, &Path, Option<usize>)> {
+        let mut pending = vec![self];
+        while let Some(item) = pending.pop() {
+            match item {
+                Placed::Lines { story, path, .. } => return Some((*story, path, None)),
+                Placed::Fill { source: Some((story, path)), .. } => return Some((*story, path, None)),
+                Placed::Image { story, path, off, .. } | Placed::Graphic { story, path, off, .. } => return Some((*story, path, Some(*off))),
+                Placed::Shape { object: Some(pos), .. } => return Some((pos.story, &pos.path, Some(pos.off))),
+                Placed::Clip { items, .. } => pending.extend(items.iter().rev()),
+                _ => {}
+            }
+        }
+        None
+    }
+
+    // A whole canvas may escape its cell only when every leaf belongs to the pinned object.
+    fn owns_object(&self, story: StoryRef, path: &Path, off: usize) -> bool {
+        let mut pending = vec![self];
+        while let Some(item) = pending.pop() {
+            match item {
+                Placed::Clip { items, .. } if !items.is_empty() => pending.extend(items),
+                Placed::Image { story: s, path: p, off: o, .. } | Placed::Graphic { story: s, path: p, off: o, .. }
+                    if (*s, p, *o) == (story, path, off) => {}
+                Placed::Shape { object: Some(pos), .. } if (pos.story, &pos.path, pos.off) == (story, path, off) => {}
+                _ => return false,
+            }
+        }
+        true
+    }
+
     fn translate(&mut self, dx: f32, dy: f32) {
         match self {
             Placed::Lines { x, y, .. } => {
@@ -1554,8 +1589,8 @@ fn fit_box(items: Vec<Placed>, height: f32) -> Vec<Placed> {
                     out.push(Placed::Lines { story, path, para, l0, l1: end, x, y, turn });
                 }
             }
-            Placed::Fill { rect, color } if rect.y < limit => {
-                out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color });
+            Placed::Fill { rect, color, source } if rect.y < limit => {
+                out.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, rect.h.min(limit - rect.y)), color, source });
             }
             Placed::Rule { x0, y0, x1, y1, border } if y0.min(y1) < limit => {
                 out.push(Placed::Rule { x0, y0: y0.min(limit), x1, y1: y1.min(limit), border });
@@ -1644,7 +1679,11 @@ fn push_para(
     let (top, bottom) = (y - e.top - e.up, y + h + e.bottom);
     if let Some(c) = pl.rp.shading {
         let pad = pl.rp.borders.as_ref().map(|b| b.left.map(|l| l.space).unwrap_or(4.0)).unwrap_or(0.0);
-        items.push(Placed::Fill { rect: Rect::new(left - pad, top, right - left + pad * 2.0, bottom - top), color: c });
+        items.push(Placed::Fill {
+            rect: Rect::new(left - pad, top, right - left + pad * 2.0, bottom - top),
+            color: c,
+            source: Some((story, Path(path.to_vec()))),
+        });
     }
     items.push(Placed::Lines { story, path: Path(path.to_vec()), para: pl.clone(), l0, l1, x, y, turn: TextDirection::Horizontal });
     if let Some(b) = &pl.rp.borders {
@@ -1915,9 +1954,9 @@ impl NoteBox {
                         tail.push(Placed::Lines { story, path, para, l0: k, l1, x, y: ky, turn });
                     }
                 }
-                Placed::Fill { rect, color } => {
-                    head.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, cut - rect.y), color });
-                    tail.push(Placed::Fill { rect: Rect::new(rect.x, cut, rect.w, rect.y + rect.h - cut), color });
+                Placed::Fill { rect, color, source } => {
+                    head.push(Placed::Fill { rect: Rect::new(rect.x, rect.y, rect.w, cut - rect.y), color, source: source.clone() });
+                    tail.push(Placed::Fill { rect: Rect::new(rect.x, cut, rect.w, rect.y + rect.h - cut), color, source });
                 }
                 Placed::Rule { x0, y0, x1, y1, border } => {
                     head.push(Placed::Rule { x0, y0: y0.min(cut), x1, y1: y1.min(cut), border });
@@ -3552,6 +3591,7 @@ fn place_objects(
                 text_box: shown,
                 wrap: float.wrap,
                 origin: Point::new(at.col.0, at.para_y),
+                page_placed: pinned.is_some(),
             });
             // Its text (a group: its text boxes', each where the group's turn carries it; the
             // text itself stays upright), unless the box budget says no (a box inside itself,

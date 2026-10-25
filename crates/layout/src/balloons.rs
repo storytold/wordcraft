@@ -220,8 +220,8 @@ pub(crate) fn add(ctx: &mut Ctx, lay: &mut DocLayout) {
             page.items.push(Placed::Rule { x0: pw, y0: c.ay, x1: x0, y1: top + 8.0, border: line(BorderStyle::Single, 0.5) });
             // The card: white, outlined and striped in the author's colour.
             let card = Rect::new(x0, top, card_w, h);
-            page.items.push(Placed::Fill { rect: card, color: Rgb(0xFF, 0xFF, 0xFF) });
-            page.items.push(Placed::Fill { rect: Rect::new(x0, top, STRIPE, h), color: c.color });
+            page.items.push(Placed::Fill { rect: card, color: Rgb(0xFF, 0xFF, 0xFF), source: None });
+            page.items.push(Placed::Fill { rect: Rect::new(x0, top, STRIPE, h), color: c.color, source: None });
             let (l, r, b) = (card.x, card.right(), card.bottom());
             for (ax, ay, bx, by) in [(l, top, r, top), (r, top, r, b), (l, b, r, b), (l, top, l, b)] {
                 page.items.push(Placed::Rule { x0: ax, y0: ay, x1: bx, y1: by, border: line(BorderStyle::Single, 0.5) });
