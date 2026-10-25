@@ -2392,3 +2392,31 @@ fn paragraph_borders_read_from_both_forms() {
     assert_eq!((top.style, top.width, top.space), (wordcraft_doc::props::BorderStyle::Single, 1.0, 2.0));
     assert_eq!(top.color, Some(wordcraft_doc::Rgb(0xFF, 0, 0)));
 }
+
+#[test]
+fn text_languages_come_from_their_language_ids() {
+    // #4190: Normal is Czech (sprmCRgLid0), Chinese for East Asian text (sprmCRgLid1) and Arabic
+    // for complex script (sprmCLidBi); the second word is English (sprmCRgLid0_80) and not
+    // proofed; the third's 0x0400 (the user's default) names no language and keeps Normal's.
+    let normal = grpprl(&[(0x4873, &[0x05, 0x04]), (0x4874, &[0x04, 0x08]), (0x485F, &[0x01, 0x04])]);
+    let spec = RichSpec {
+        text: "Ahoj Hello svete\r",
+        styles: vec![(1, 0x0FFF, "Normal", Vec::new(), normal)],
+        fonts: vec!["Times New Roman"],
+        chpx_runs: vec![(0, Vec::new()), (5, grpprl(&[(0x486D, &[0x09, 0x04]), (0x0875, &[0x01])])), (11, grpprl(&[(0x4873, &[0x00, 0x04])]))],
+        papx_entries: vec![(0, 0, Vec::new())],
+    };
+    let doc = read(&rich_doc(&spec)).expect("opens");
+    let normal = doc.styles.styles.iter().find(|s| s.name == "Normal").expect("Normal");
+    let c = &normal.chr;
+    assert_eq!((c.lang.as_deref(), c.lang_ea.as_deref(), c.lang_bidi.as_deref()), (Some("cs-CZ"), Some("zh-CN"), Some("ar-SA")));
+    let p = para0(&doc);
+    let lang = |off: usize| {
+        let c = doc.styles.resolve_char(p.props.style.as_deref(), p.props_of_char(off));
+        (c.lang, c.no_proof)
+    };
+    let s = |t: &str| Some(t.to_string());
+    assert_eq!(lang(0), (s("cs-CZ"), false));
+    assert_eq!(lang(5), (s("en-US"), true));
+    assert_eq!(lang(11), (s("cs-CZ"), false));
+}

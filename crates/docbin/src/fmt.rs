@@ -23,6 +23,14 @@ const C_HPS_POS: u16 = 0x4845; // super/subscript by half-points
 const C_FTC0: u16 = 0x4A4F; // font index
 const C_HIGHLIGHT: u16 = 0x2A0C;
 const C_ISTD: u16 = 0x4A30; // character style
+const C_NO_PROOF: u16 = 0x0875; // sprmCFNoProof
+// Language IDs ([MS-LCID]): sprmCRgLid0_80 / sprmCRgLid0 (text), sprmCRgLid1_80 / sprmCRgLid1
+// (East Asian text), sprmCLidBi (right-to-left and complex-script text).
+const C_LID0_80: u16 = 0x486D;
+const C_LID0: u16 = 0x4873;
+const C_LID1_80: u16 = 0x486E;
+const C_LID1: u16 = 0x4874;
+const C_LID_BI: u16 = 0x485F;
 
 // Paragraph sprms ([MS-DOC] §2.6.2).
 const P_JC: u16 = 0x2461;
@@ -257,6 +265,18 @@ pub(crate) fn apply_char(p: &mut CharProps, prl: &Prl, base: &CharProps, fonts: 
         C_HIGHLIGHT => {
             if let Some(h) = HL.get(prl.operand.first().copied().unwrap_or(0) as usize) {
                 p.highlight = Some(*h);
+            }
+        }
+        C_NO_PROOF => set(&mut p.no_proof, sprm::toggle(prl), base.no_proof.unwrap_or(false)),
+        // An ID that names no language (the user's default, 0x0400) leaves the inherited one.
+        C_LID0_80 | C_LID0 | C_LID1_80 | C_LID1 | C_LID_BI => {
+            if let Some(tag) = u16_of(prl).and_then(wordcraft_doc::lcid::tag) {
+                let lang = match op {
+                    C_LID1_80 | C_LID1 => &mut p.lang_ea,
+                    C_LID_BI => &mut p.lang_bidi,
+                    _ => &mut p.lang,
+                };
+                *lang = Some(tag.to_string());
             }
         }
         C_ISTD => {} // resolved separately through the style table

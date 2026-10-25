@@ -37,6 +37,13 @@ pub struct Fmt {
     pub font: Option<String>,
     /// Background (highlight / shading).
     pub background: Option<Rgb>,
+    /// Language tags (`w:lang`) of the text, of its East Asian characters and of its
+    /// right-to-left and complex-script characters (formats that name them: RTF).
+    pub lang: Option<String>,
+    pub lang_ea: Option<String>,
+    pub lang_bidi: Option<String>,
+    /// Excluded from spelling and grammar checks (RTF `\noproof`).
+    pub no_proof: bool,
     /// Tracked insertion of this text (formats that keep revisions: RTF).
     pub ins: Option<RevMark>,
     /// Tracked deletion of this text. Only [`from_doc_tracked`] keeps deleted text in a flow.
@@ -436,6 +443,10 @@ pub fn char_props(f: &Fmt) -> CharProps {
         size: f.size.filter(|s| s.is_finite() && *s >= 1.0 && *s <= 1638.0),
         font: if f.code { Some(MONO_FONT.to_string()) } else { f.font.clone().filter(|s| !s.is_empty()) },
         shading: f.background,
+        lang: f.lang.clone(),
+        lang_ea: f.lang_ea.clone(),
+        lang_bidi: f.lang_bidi.clone(),
+        no_proof: on(f.no_proof),
         ..Default::default()
     }
 }
@@ -891,6 +902,11 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
         size: e.size,
         font: if code || in_code { None } else { e.shown_font().map(str::to_string) },
         background: e.highlight.and_then(|h| h.rgb()).or(e.shading),
+        // No writer gives the language yet; leaving it out keeps runs merged as before.
+        lang: None,
+        lang_ea: None,
+        lang_bidi: None,
+        no_proof: false,
         ins: None,
         del: None,
         fmt_change: None,

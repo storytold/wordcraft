@@ -1116,6 +1116,9 @@ struct Reader {
     ansicpg: u16,
     /// The default font (`\deff`), whose charset applies before any `\f`.
     deff: i32,
+    /// The default languages (`\deflang`, `\deflangfe`, `\adeflang`): text, East Asian text,
+    /// right-to-left and complex-script text.
+    deflang: [Option<&'static str>; 3],
     /// The document's page (`\paperw`, `\margl`…) and the current section's formatting.
     page: PageGeom,
     sec: SecFmt,
@@ -2215,6 +2218,22 @@ impl Reader {
             "pc" if self.ansicpg == 0 => self.ansicpg = 437,
             "pca" if self.ansicpg == 0 => self.ansicpg = 850,
             "deff" => self.deff = pv,
+            // Language IDs ([MS-LCID]); one that names no language (1024, the user's default)
+            // leaves the language as it was. `\langnp` and `\langfenp` repeat `\lang` and `\langfe`.
+            "lang" | "langnp" => set_lang(&mut self.st.fmt.lang, pv),
+            "langfe" | "langfenp" => set_lang(&mut self.st.fmt.lang_ea, pv),
+            "alang" => set_lang(&mut self.st.fmt.lang_bidi, pv),
+            "noproof" => self.st.fmt.no_proof = on,
+            "deflang" | "deflangfe" | "adeflang" => {
+                let i = match w {
+                    "deflang" => 0,
+                    "deflangfe" => 1,
+                    _ => 2,
+                };
+                if let (Some(d), Some(tag)) = (self.deflang.get_mut(i), lang_tag(pv)) {
+                    *d = Some(tag);
+                }
+            }
             "f" => {
                 self.st.cp = self.font_cps.get(&pv).copied();
                 let name = self.fonts.get(&pv).cloned();
@@ -2419,6 +2438,17 @@ fn drop_style_formatting(kind: Kind, base: &Fmt, f: &mut Fmt) {
     }
 }
 
+/// The language tag of an RTF language ID (`1029` → `cs-CZ`).
+fn lang_tag(pv: i32) -> Option<&'static str> {
+    u16::try_from(pv).ok().and_then(wordcraft_doc::lcid::tag)
+}
+
+fn set_lang(lang: &mut Option<String>, pv: i32) {
+    if let Some(tag) = lang_tag(pv) {
+        *lang = Some(tag.to_string());
+    }
+}
+
 /// A character or paragraph formatting word: what old formatting (`\oldcprops`,
 /// `\oldpprops`) may hold.
 fn is_format_word(w: &str) -> bool {
@@ -2442,6 +2472,12 @@ fn is_format_word(w: &str) -> bool {
             | "chcbpat"
             | "cb"
             | "v"
+            | "lang"
+            | "langnp"
+            | "langfe"
+            | "langfenp"
+            | "alang"
+            | "noproof"
             | "pard"
             | "ql"
             | "qc"
@@ -2490,6 +2526,12 @@ fn is_char_format_word(w: &str) -> bool {
             | "chcbpat"
             | "cb"
             | "v"
+            | "lang"
+            | "langnp"
+            | "langfe"
+            | "langfenp"
+            | "alang"
+            | "noproof"
     ) || (w.starts_with("ul") && w.len() <= 8)
 }
 
@@ -2604,6 +2646,8 @@ struct Parsed {
     /// The last section's properties (the others are on the paragraphs that end them).
     last_section: wordcraft_doc::SectionProps,
     default_font: Option<String>,
+    /// The default languages (`\deflang`, `\deflangfe`, `\adeflang`).
+    default_lang: [Option<&'static str>; 3],
     /// Each section's headers and footers, in order, the last section's last.
     headers_footers: Vec<Vec<(HeaderFooter, Vec<FBlock>)>>,
 }
@@ -2808,7 +2852,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
         blocks.push(FBlock::Para(Para::default()));
     }
     let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).cloned();
-    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
+    Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, default_lang: r.deflang, headers_footers })
 }
 
 /// The column grid of a table from its rows' cell right edges: every distinct edge starts a grid
@@ -2850,7 +2894,7 @@ fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
 
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
-    let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
+    let Parsed { flow, last_section, default_font, default_lang, headers_footers, .. } = parse_full(bytes)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
     let mut sets = Vec::with_capacity(headers_footers.len());
@@ -2890,6 +2934,12 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     dp.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
     if default_font.is_some() {
         doc.styles.default_chr.font = default_font;
+    }
+    let dc = &mut doc.styles.default_chr;
+    for (lang, default) in [&mut dc.lang, &mut dc.lang_ea, &mut dc.lang_bidi].into_iter().zip(default_lang) {
+        if let Some(tag) = default {
+            *lang = Some(tag.to_string());
+        }
     }
     Ok(doc)
 }
@@ -3042,6 +3092,46 @@ mod tests {
         // No font table: our default stays.
         let d = import(br"{\rtf1\ansi x\par}").unwrap();
         assert_eq!(d.styles.default_chr.font, wordcraft_doc::StyleSheet::builtin().default_chr.font);
+    }
+
+    #[test]
+    fn languages_come_from_their_language_ids() {
+        // #4190: \deflang, \deflangfe and \adeflang are the defaults; \lang (and \langnp),
+        // \langfe and \alang a run's, \noproof keeps it from being checked, and \plain goes
+        // back to the defaults. 1024 (the user's default) names no language and changes nothing.
+        let d = import(
+            br"{\rtf1\ansi\deflang1029\deflangfe2052\adeflang1025 Ahoj {\lang1033\langnp1033\noproof Hello} {\langfe1041\alang1037 svete}{\lang1024 x}\par}",
+        )
+        .unwrap();
+        let dc = &d.styles.default_chr;
+        assert_eq!((dc.lang.as_deref(), dc.lang_ea.as_deref(), dc.lang_bidi.as_deref()), (Some("cs-CZ"), Some("zh-CN"), Some("ar-SA")));
+        let p = d.body.first().and_then(|b| b.as_para()).unwrap();
+        let at = |t: &str| p.props_of_char(p.text.find(t).unwrap()).clone();
+        let s = |t: &str| Some(t.to_string());
+        assert_eq!((at("Ahoj").lang, at("Ahoj").no_proof), (None, None), "the default applies");
+        assert_eq!((at("Hello").lang, at("Hello").no_proof), (s("en-US"), Some(true)));
+        assert_eq!((at("svete").lang_ea, at("svete").lang_bidi), (s("ja-JP"), s("he-IL")));
+        assert_eq!(at("x").lang, None);
+        // No \deflang: our default stays.
+        let d = import(br"{\rtf1\ansi x\par}").unwrap();
+        assert_eq!(d.styles.default_chr.lang, wordcraft_doc::StyleSheet::builtin().default_chr.lang);
+    }
+
+    #[test]
+    fn tracked_language_changes_keep_the_old_languages() {
+        // #4190: `\oldcprops` holds the language words that changed (`\noproof0` turns No
+        // Proofing back off); Reject puts the old languages and proofing back.
+        let d = import(
+            br"{\rtf1\ansi\deflang1029{\*\revtbl {Unknown;}{Alice;}} {\lang1033\langfe1041\alang1037\noproof{\*\oldcprops \lang1029\langfe2052\alang1025\noproof0\crauth1}Hello}\par}",
+        )
+        .unwrap();
+        let p = d.body.first().and_then(|b| b.as_para()).unwrap();
+        let now = p.props_of_char(p.text.find("Hello").unwrap());
+        let s = |t: &str| Some(t.to_string());
+        assert_eq!((now.lang.clone(), now.lang_ea.clone(), now.lang_bidi.clone(), now.no_proof), (s("en-US"), s("ja-JP"), s("he-IL"), Some(true)));
+        let old = &now.fmt_change.as_deref().expect("the change").old;
+        assert_eq!((old.lang.clone(), old.lang_ea.clone(), old.lang_bidi.clone()), (s("cs-CZ"), s("zh-CN"), s("ar-SA")), "{old:?}");
+        assert_ne!(old.no_proof, Some(true), "{old:?}");
     }
 
     #[test]
