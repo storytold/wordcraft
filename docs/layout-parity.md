@@ -16,6 +16,8 @@ Additive paragraph spacing retains the full before-space after a section page br
 
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Synthetic control: `layout::tests::exact_math_keeps_run_baseline`.
 
+Paragraph-anchored floating tables recheck header wrap clearance after a page or column retry. Synthetic first/default-header controls cover square and top-and-bottom wrapping, with behind-text and foreground controls. Fixed page or margin anchors retain their placement policy.
+
 ## Checklist
 
 ✅ matches Word as far as our tests show · 🟡 implemented, differs or untested against Word · ❌ missing
@@ -235,6 +237,8 @@ Footer flow-table strokes reserve their drawn top edge, including the half-width
 
 Page-relative footer tables keep their physical wrap bounds without adding to footer text height. Body text resumes below the table. Original native controls cover empty, text-bearing and minimum-height tables. Body textbox boundaries and nested footer painting remain separate gaps.
 
+Body paragraphs and tables avoid positioned header objects. Every flow-table row, including repeated header rows, clears header exclusions. Non-overlapping floating tables include header objects in their initial obstacle list. Header totals affecting exclusions trigger bounded repagination. Pictures inside header table cells remain outside this change. Synthetic controls cover these fixes; no new native Word comparison.
+
 ## Validation fonts
 
 The deleted/hidden-text wrapping, ellipse wrapping and widow-control regressions request Source Sans 3 explicitly. Their fixed widths and word counts use that font's metrics. This changes test inputs only, not renderer font substitution or Word parity claims.
@@ -265,6 +269,8 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | #1990 follow-up: header totals reflow exclusions; repeated rows and initial non-overlapping floating tables clear header objects. Synthetic controls; no new native comparison. |
+| 2026-10-25 | trivial | #1990: Paragraph-anchored floating tables recheck header wrap clearance after a page or column retry. |
 | 2026-10-25 | trivial | Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`) |
 | 2026-10-24 | trivial | Preserve grapheme edit/wrap boundaries across independently drawn font/style pieces; original emoji regression retained, new mixed-style/bundled-font LTR/bidi controls pending managed validation |
 | 2026-10-24 | trivial | Exact-spacing table contact uses the specified line height in row selection and word skipping; large/small mark regressions in modes 11/12/14/15 (#3977); shape estimates unchanged |
@@ -290,6 +296,8 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-15 | trivial | A float placed above its anchor paragraph (fixed on the page, or moved up from it) has the text of the paragraphs above the anchor on its page wrap around it, as in Word, instead of running behind it (#2048) |
 | 2026-10-20 | trivial | A picture cropped to a sliver of its source (under 5% of an axis) is drawn at the size the file gives, on screen and in PDF, bitmap or metafile, and Tight/Through wrapping follows the part drawn; it was widened to 5%, so a header bar that is 2.7% of a page-sized WMF came out half as tall and the text box over it fell below it (#1899) |
 | 2026-10-19 | trivial | An object dragged near the bottom of a page lands where it is dropped: its paragraph's place is measured with the object already there, not at the paragraph's top, where it could push the paragraph onto the next page (#3169) |
+| 2026-10-19 | trivial | Header wrap clearance is recomputed after collapsed paragraph spacing and a table header-row move. Synthetic regressions prepared; no new native observation. |
+| 2026-10-15 | trivial | Body paragraphs and tables avoid positioned header objects; original regressions cover continuation, first/even selection and nonwrapping pictures |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-19 | trivial | #2964: a centred or end-aligned list label after a leading page break uses its text line's alignment. Synthetic LTR/RTL numbered/bulleted controls and the issue's DOCX export; broader pagination gaps and readiness estimates unchanged |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |

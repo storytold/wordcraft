@@ -637,6 +637,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | #1990 follow-up: header totals reflow exclusions; repeated rows and initial non-overlapping floating tables clear header objects. Synthetic controls; no new native comparison. |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
@@ -696,6 +697,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-19 | trivial | A right, centre or decimal tab whose text doesn't fit, or a left tab past the right indent, starts the next line with its text instead of ending the line (a TOC entry's page number keeps its leader); a left tab still past the right indent there takes no room (#1840) |
 | 2026-10-19 | trivial | Progress log: a picture dragged near the bottom of a page lands there (#3169) |
 | 2026-10-19 | trivial | Progress log: a Thai run with Latin finds one installed font covering it all on Linux too (#1549) |
+| 2026-10-15 | trivial | Body paragraphs and tables avoid positioned header objects; original regressions cover continuation, first/even selection and nonwrapping pictures |
 | 2026-10-19 | trivial | Progress log: forms protection keeps its content controls: no inserting, Properties or Remove Content Control |
 | 2026-10-19 | trivial | Progress log: text typed into a content control takes the control's formatting; localized placeholder styles recognised |
 | 2026-10-17 | trivial | Progress log: #2048 entry covers anchors pushed onto the next page |
