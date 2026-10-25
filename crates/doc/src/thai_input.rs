@@ -333,6 +333,27 @@ pub fn thai_input_action(
                     replacement: None,
                 };
             }
+
+            // Nikhahit (◌ํ) typed after Sara_I or Sara_II fuses into Sara_UE / Sara_UEE.
+            // Any slot-2 character (tone/karan/diac) that follows the vowel stays in place.
+            //   [cons, Sara_I]        + ◌ํ → [cons, ◌ึ]
+            //   [cons, Sara_I, Tone]  + ◌ํ → [cons, ◌ึ, Tone]
+            //   [cons, Sara_II]       + ◌ํ → [cons, ◌ื]
+            //   [cons, Sara_II, Tone] + ◌ํ → [cons, ◌ื, Tone]
+            if new_char == NIKHAHIT {
+                if let Some(&(sara_off, sara_ch)) =
+                    tcb.iter().find(|(_, c)| *c == SARA_I || *c == SARA_II)
+                {
+                    let fused = if sara_ch == SARA_I { SARA_UE } else { SARA_UEE };
+                    return ThaiInputAction::Replace {
+                        slot_offset: sara_off,
+                        slot_bytes: sara_ch.len_utf8(),
+                        cons_swap: None,
+                        replacement: Some(fused),
+                    };
+                }
+            }
+
             // Pali marks cannot co-exist with vowels, tone, diacritics, karan, or sara_am.
             // If any are present, delete them all and place the pali mark in their stead.
             let first_incompat = tcb.iter().find(|(_, c)| {
@@ -518,12 +539,56 @@ pub fn thai_input_action(
                     }
                 }
 
-                // After tone, sara_am, diacritic, karan, or pali mark: replace.
-                ThaiCharClass::Tone
-                | ThaiCharClass::SaraAm
-                | ThaiCharClass::Diacritic
-                | ThaiCharClass::Karan
-                | ThaiCharClass::PaliMark => ThaiInputAction::Replace {
+                // After tone, diacritic, or another karan: look at what precedes in the TCB.
+                // - If the preceding vowel is Sara_I or Sara_U, กิ์/กุ์ pattern with a slot-2
+                //   mark — replace only the slot-2 mark (keep Sara_I/Sara_U).
+                // - Otherwise delete both the vowel and the slot-2 mark together.
+                // - If there is no vowel before (e.g. [cons, tone]), just replace the tone.
+                ThaiCharClass::Tone | ThaiCharClass::Diacritic | ThaiCharClass::Karan => {
+                    if tcb.len() >= 2 {
+                        let (vowel_cand_off, vowel_cand_ch) = tcb[tcb.len() - 2];
+                        match thai_char_class(vowel_cand_ch) {
+                            ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel => {
+                                if vowel_cand_ch == SARA_I || vowel_cand_ch == SARA_U {
+                                    // กิ้์ pattern: keep Sara_I/Sara_U, replace slot-2 mark.
+                                    ThaiInputAction::Replace {
+                                        slot_offset: prev_off,
+                                        slot_bytes: prev_ch.len_utf8(),
+                                        cons_swap: None,
+                                        replacement: None,
+                                    }
+                                } else {
+                                    // Other vowel + slot-2 mark: delete both, insert Karan.
+                                    let delete_bytes =
+                                        prev_off + prev_ch.len_utf8() - vowel_cand_off;
+                                    ThaiInputAction::Replace {
+                                        slot_offset: vowel_cand_off,
+                                        slot_bytes: delete_bytes,
+                                        cons_swap: None,
+                                        replacement: None,
+                                    }
+                                }
+                            }
+                            // [cons, tone/diac/karan] without a vowel: replace slot-2 mark.
+                            _ => ThaiInputAction::Replace {
+                                slot_offset: prev_off,
+                                slot_bytes: prev_ch.len_utf8(),
+                                cons_swap: None,
+                                replacement: None,
+                            },
+                        }
+                    } else {
+                        ThaiInputAction::Replace {
+                            slot_offset: prev_off,
+                            slot_bytes: prev_ch.len_utf8(),
+                            cons_swap: None,
+                            replacement: None,
+                        }
+                    }
+                }
+
+                // After sara_am or pali mark: replace.
+                ThaiCharClass::SaraAm | ThaiCharClass::PaliMark => ThaiInputAction::Replace {
                     slot_offset: prev_off,
                     slot_bytes: prev_ch.len_utf8(),
                     cons_swap: None,
@@ -878,17 +943,44 @@ mod tests {
         assert_eq!(action("ก", nikhahit), ThaiInputAction::Accept);
         assert_eq!(action("ก", phinthu), ThaiInputAction::Accept);
 
-        // ── Pali mark after consonant+vowel → replaces vowel (and any tone/diac) ─
-        // กิ = ก(0) + ิ(3); nikhahit should delete ิ and go to offset 3
+        // ── Nikhahit after Sara_I / Sara_II fuses into Sara_UE / Sara_UEE ──────────
+        let sara_ii   = '\u{0E35}'; // ี  sara ii (upper vowel)
+        let sara_ue   = '\u{0E36}'; // ึ  sara ue
+        let sara_uee  = '\u{0E37}'; // ื  sara uee
+
+        // กิ + ํ → replace ิ with ึ at offset 3 (fuse: Sara_I + Nikhahit = Sara_UE)
         match action("กิ", nikhahit) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
-            other => panic!("pali mark must replace vowel at 3, got {other:?}"),
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
+                if r == sara_ue => {}
+            other => panic!("nikhahit after sara_i must fuse to sara_ue, got {other:?}"),
         }
 
-        // กิ้ = ก(0) + ิ(3) + ้(6); nikhahit must delete ิ+้ (6 bytes) starting at 3
+        // กิ้ + ํ → replace ิ(3,3) with ึ; tone ้ at offset 6 stays untouched
         match action("กิ้", nikhahit) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 6, cons_swap: None, replacement: None } => {}
-            other => panic!("pali mark must replace vowel+tone (6 B) at 3, got {other:?}"),
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
+                if r == sara_ue => {}
+            other => panic!("nikhahit after sara_i+tone must fuse sara_i→sara_ue, keep tone; got {other:?}"),
+        }
+
+        // กี + ํ → replace ี with ื at offset 3 (Sara_II fuses to Sara_UEE)
+        match action("กี", nikhahit) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
+                if r == sara_uee => {}
+            other => panic!("nikhahit after sara_ii must fuse to sara_uee, got {other:?}"),
+        }
+
+        // กี้ + ํ → replace ี with ื, keep ้
+        match action("กี้", nikhahit) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
+                if r == sara_uee => {}
+            other => panic!("nikhahit after sara_ii+tone must fuse sara_ii→sara_uee, keep tone; got {other:?}"),
+        }
+
+        // ── Pali mark after other upper/lower vowels → replaces vowel (and any tone/diac) ─
+        // กั = ก(0) + ั(3); nikhahit must delete ั (3 bytes) and insert nikhahit at 3
+        match action("กั", nikhahit) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("nikhahit must replace maihunakat at 3, got {other:?}"),
         }
 
         // กิ็ = ก(0) + ิ(3) + ็(6); phinthu must delete ิ+็ (6 bytes) starting at 3
@@ -896,6 +988,8 @@ mod tests {
             ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 6, cons_swap: None, replacement: None } => {}
             other => panic!("phinthu must replace vowel+diac (6 B) at 3, got {other:?}"),
         }
+
+        let _ = (sara_ii, sara_ue, sara_uee);
 
         // ก้ = ก(0) + ้(3) (tone with no vowel); pali mark replaces tone
         match action("ก้", nikhahit) {
@@ -1075,11 +1169,33 @@ mod tests {
             other => panic!("karan must replace tone at 3, got {other:?}"),
         }
 
-        // กิ้ + type ์ → replace ้ at 6, keep ิ
+        // กิ้ + type ์ → replace ้ at 6, keep ิ  (Sara_I is special: กิ์ is valid)
         // กิ้ = ก(0,3) + ิ(3,3) + ้(6,3); caret at 9
         match action("กิ้", karan) {
             ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
-            other => panic!("karan must replace tone at 6, got {other:?}"),
+            other => panic!("karan must replace tone at 6 (keep sara_i), got {other:?}"),
+        }
+
+        // กุ้ + type ์ → replace ้ at 6, keep ุ  (Sara_U is special: กุ์ is valid)
+        // กุ้ = ก(0,3) + ุ(3,3) + ้(6,3)
+        match action("กุ้", karan) {
+            ThaiInputAction::Replace { slot_offset: 6, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("karan must replace tone at 6 (keep sara_u), got {other:?}"),
+        }
+
+        // กั่ + type ์ → delete ั+่ (6 bytes) at offset 3, insert ์
+        // MAIHUNAKAT is not sara_i/sara_u, so both vowel and tone are removed.
+        // กั่ = ก(0,3) + ั(3,3) + ่(6,3)
+        match action("กั่", karan) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 6, cons_swap: None, replacement: None } => {}
+            other => panic!("karan must delete maihunakat+tone (6 B) at 3, got {other:?}"),
+        }
+
+        // กี้ + type ์ → delete ี+้ (6 bytes) at offset 3, insert ์
+        // กี้ = ก(0,3) + ี(3,3) + ้(6,3)
+        match action("กี้", karan) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 6, cons_swap: None, replacement: None } => {}
+            other => panic!("karan must delete sara_ii+tone (6 B) at 3, got {other:?}"),
         }
 
         // no TCB: reject
