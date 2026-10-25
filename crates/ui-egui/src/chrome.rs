@@ -26,7 +26,7 @@ pub(crate) fn dictionary_problem(lang: &str, unreadable: &Option<(std::path::Pat
 
 /// The Quick Access Toolbar's button for command `id`.
 pub(crate) fn qat_button_id(id: &str) -> egui::Id {
-    egui::Id::new(("qat_button", id))
+    egui::Id::unique(("qat_button", id))
 }
 
 fn qat_button(ui: &mut Ui, app: &mut WordApp, icon: &str, tip: &str, id: &str, enabled: bool) -> egui::Response {
@@ -101,12 +101,12 @@ fn quick_access(ui: &mut Ui, app: &mut WordApp) {
 
 /// The Undo button's drop-down arrow (#701), which opens [`undo_list`].
 pub(crate) fn undo_list_button_id() -> egui::Id {
-    egui::Id::new("qat_undo_list")
+    egui::Id::unique("qat_undo_list")
 }
 
 /// The status bar's message, the one that says what went wrong (#2402).
 pub(crate) fn status_message_id() -> egui::Id {
-    egui::Id::new("status_message")
+    egui::Id::unique("status_message")
 }
 
 /// Row `i` of the Undo list (0 = the newest step).
@@ -203,7 +203,7 @@ fn undo_list(ui: &mut Ui, app: &mut WordApp) {
 
 /// The Quick Access Toolbar's menu button (…), which opens [`qat_menu`].
 pub(crate) fn qat_menu_button_id() -> egui::Id {
-    egui::Id::new("qat_menu_button")
+    egui::Id::unique("qat_menu_button")
 }
 
 /// The Quick Access Toolbar's menu: common commands to show or hide, and More Commands…
@@ -275,6 +275,8 @@ impl MacTitleBar {
     }
 }
 
+/// Draws the title bar with window dragging, AutoSave, quick access, account, community and search
+/// controls, and the centred clickable document title.
 pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     // macOS: shorter, so the system's traffic lights are centred in it; the tallest controls
@@ -289,7 +291,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
         .show(ui, |ui| {
             let full = ui.max_rect();
             // Drag the window by the title bar (integrated title bar on macOS).
-            let drag = ui.interact(full, ui.id().with("title_drag"), Sense::click_and_drag());
+            let drag = ui.interact(full, ui.scope_id().with("title_drag"), Sense::click_and_drag());
             if drag.drag_started() {
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
@@ -347,7 +349,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                     // Account / community.
                     let (r, resp) = ui.allocate_exact_size(vec2(control_h, control_h), Sense::click());
                     ui.painter().circle_filled(r.center(), control_h / 2.0 - 1.0, t.accent);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Account")));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Account")));
                     let initials: String = app.session.user_initials().chars().take(2).collect();
                     ui.painter().text(r.center(), Align2::CENTER_CENTER, initials, semibold(10.5), t.on_accent);
                     if resp.on_hover_text(format!("{} — set your name in File › Options", app.session.author)).clicked() {
@@ -405,8 +407,8 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
             let w = text_width(ui.painter(), &shown, &font, track, t.text);
             if available > 24.0 {
                 let rect = Rect::from_center_size(pos2(cx, full.center().y), vec2(w + 8.0, control_h));
-                let response = ui.interact(rect, ui.id().with("document_name"), Sense::click()).on_hover_text(tl!("Rename Document"));
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, &title));
+                let response = ui.interact(rect, ui.scope_id().with("document_name"), Sense::click()).on_hover_text(tl!("Rename Document"));
+                response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, &title));
                 if response.clicked() {
                     let _ = app.run("file.rename", json!({}));
                 }
@@ -430,7 +432,7 @@ fn search_box(app: &mut WordApp, ui: &mut Ui, control_h: f32) {
     let t = Tokens::get(ui.ctx());
     let (r, resp) = ui.allocate_exact_size(vec2(260.0, control_h), Sense::click());
     let ph = tl!("Search commands and help");
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, ph));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, ph));
     ui.painter().rect(r, 6.0, if resp.hovered() { t.input } else { t.ribbon }, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     icons::paint(ui.painter(), Rect::from_center_size(pos2(r.min.x + 16.0, r.center().y), vec2(16.0, 16.0)), "search", t.text_dim, t.accent);
     let pfont = TypeRung::Control.regular();
@@ -506,7 +508,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
             let shade = if resp.hovered() || app.focus_ribbon { egui::Color32::from_gray(70) } else { egui::Color32::from_gray(40) };
             ui.painter().rect_filled(r, 4.0, shade);
             icons::paint(ui.painter(), Rect::from_center_size(r.center(), vec2(14.0, 14.0)), "more", egui::Color32::from_gray(220), t.accent);
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Show the ribbon")));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Show the ribbon")));
             if resp.on_hover_text(tl!("Show the ribbon")).clicked() {
                 let _ = app.run("ui.focusRibbon", json!({}));
             }
@@ -522,7 +524,7 @@ pub fn screen_bar(app: &mut WordApp, ui: &mut Ui, screen: Screen) {
 /// click on the page puts it away; Focus stays on.
 pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     let width = ctx.content_rect().width();
-    egui::Area::new(egui::Id::new("focus_ribbon")).fixed_pos(pos2(0.0, SCREEN_BAR_HEIGHT)).order(egui::Order::Middle).show(ctx, |ui| {
+    egui::Area::new(egui::Id::unique("focus_ribbon")).fixed_pos(pos2(0.0, SCREEN_BAR_HEIGHT)).order(egui::Order::Middle).show(ctx, |ui| {
         ui.set_width(width);
         ui.set_max_width(width);
         crate::ribbon::show(app, ui);
@@ -536,6 +538,8 @@ pub fn focus_ribbon(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
+/// Draws the status bar's page, word count, zoom and status controls, fitting a status message
+/// with a tooltip; without a document the bar is empty.
 pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Panel::bottom("status")
@@ -568,7 +572,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let w = text_width(ui.painter(), s, &font, track, t.text_dim);
                     let (r, resp) = ui.allocate_exact_size(vec2(w + 1.0, TypeRung::Caption.line_height()), Sense::click());
                     paint_text(ui.painter(), pos2(r.min.x, r.min.y), Align2::LEFT_TOP, s, &font, track, t.text_dim);
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, s));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, s));
                     resp
                 };
                 if st(ui, &crate::i18n::fmt(tl!("Page {page} of {pages}"), &[("page", &page.to_string()), ("pages", &l.pages.len().to_string())]))
@@ -652,7 +656,11 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                     let mut v = if reading { app.session.view.read_zoom } else { app.canvas.scale / crate::canvas::PX_PER_PT };
                     let slider = egui::Slider::new(&mut v, if reading { 0.75..=1.5 } else { 0.1..=5.0 }).logarithmic(!reading).show_value(false);
                     ui.spacing_mut().slider_width = 110.0;
-                    if ui.add(slider).changed() {
+                    let response = ui.add(slider);
+                    response.widget_info(|| {
+                        egui::WidgetInfo::labeled(egui::Role::Slider, ui.is_enabled(), if reading { tl!("Text Size") } else { tl!("Zoom") })
+                    });
+                    if response.changed() {
                         let command = if reading { "view.readTextSize" } else { "view.zoom" };
                         let _ = app.run(command, json!({"value": (v * 100.0).round()}));
                     }
@@ -678,7 +686,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                             ui.painter().rect_filled(r, 3.0, t.hover);
                         }
                         icons::paint(ui.painter(), r.shrink(3.0), icon, t.icon, t.accent);
-                        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, name));
+                        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, name));
                         if resp.on_hover_text(name).clicked() {
                             let _ = app.run(id, json!({}));
                         }
@@ -705,7 +713,7 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                         ftrack,
                         t.text_dim,
                     );
-                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, focus));
+                    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, focus));
                     if resp.clicked() {
                         let _ = app.run("view.focus", json!({}));
                     }

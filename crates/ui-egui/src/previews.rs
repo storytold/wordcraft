@@ -217,7 +217,7 @@ impl Previews {
         self.east_asian = None;
         ctx.data_mut(|d| {
             for f in families {
-                d.remove::<TextureHandle>(egui::Id::new(format!("font:{f}")));
+                d.remove::<TextureHandle>(egui::Id::unique(format!("font:{f}")));
             }
         });
     }
@@ -226,9 +226,9 @@ impl Previews {
     pub fn font_preview_fn(&mut self) -> Box<dyn Fn(&mut Ui, &str) -> Response> {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
-            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::new(&key)));
+            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(&key)));
             let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
@@ -237,7 +237,7 @@ impl Previews {
                 // Context accessors share a lock: read input before taking the data write lock.
                 let now = ui.input(|i| i.time);
                 let n = ui.ctx().data_mut(|d| {
-                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
+                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::unique("font_preview_budget"));
                     if c.0 != now {
                         *c = (now, 0);
                     }
@@ -252,7 +252,7 @@ impl Previews {
                 let mut img = font_entry_image(name, ppp);
                 ink_mask(&mut img);
                 let h = ui.ctx().load_texture(&key, img, egui::TextureOptions::LINEAR);
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(&key), h.clone()));
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(&key), h.clone()));
                 Some(h)
             });
             match tex {
@@ -517,7 +517,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let rev = app.session.rev();
     let skey = app.previews.styles_key(&app.session.doc, rev);
     let ppp = ui.ctx().pixels_per_point();
-    let start = ui.data(|d| d.get_temp::<usize>(egui::Id::new("gallery_start"))).unwrap_or(0).min(styles.len().saturating_sub(1));
+    let start = ui.data(|d| d.get_temp::<usize>(egui::Id::unique("gallery_start"))).unwrap_or(0).min(styles.len().saturating_sub(1));
     // A compact ribbon group (#662, #1285) trims the gallery to fewer tiles before it folds.
     let visible = if crate::ribbon_fit::compact(ui.ctx()) { STYLE_TILES_COMPACT } else { STYLE_TILES };
     crate::ribbon_fit::add_saving(ui.ctx(), (STYLE_TILES - STYLE_TILES_COMPACT) as f32 * 76.0);
@@ -525,9 +525,9 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     ui.painter().rect(area.shrink(1.0), 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     for (k, (id, name)) in styles.iter().skip(start).take(visible).enumerate() {
         let r = Rect::from_min_size(pos2(area.min.x + 3.0 + k as f32 * 76.0, area.min.y + 3.0), vec2(74.0, area.height() - 6.0));
-        let resp = ui.interact(r, ui.id().with(("style_tile", id)), Sense::click());
+        let resp = ui.interact(r, ui.scope_id().with(("style_tile", id)), Sense::click());
         let active = *id == current;
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, name));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, name));
         if active {
             ui.painter().rect(r, 3.0, t.checked, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
         } else if resp.hovered() {
@@ -580,7 +580,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let thirds = ar.height() / 3.0;
     for (i, (icon, delta)) in [("chevronUp", -1i32), ("chevronDown", 1), ("more", 0)].iter().enumerate() {
         let br = Rect::from_min_size(pos2(ar.min.x, ar.min.y + thirds * i as f32), vec2(ar.width(), thirds));
-        let resp = ui.interact(br, ui.id().with(("gal_arrow", i)), Sense::click());
+        let resp = ui.interact(br, ui.scope_id().with(("gal_arrow", i)), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }
@@ -590,7 +590,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
                 let _ = app.run("view.stylesPane", json!({"value": true}));
             } else {
                 let n = if *delta < 0 { start.saturating_sub(visible) } else { (start + visible).min(styles.len().saturating_sub(1)) };
-                ui.data_mut(|d| d.insert_temp(egui::Id::new("gallery_start"), n));
+                ui.data_mut(|d| d.insert_temp(egui::Id::unique("gallery_start"), n));
             }
         }
     }
@@ -783,6 +783,8 @@ mod tests {
         assert!(dim.r() < 0xE0 && dim.r() > 0xA0, "{dim:?}");
     }
 
+    /// Font-menu previews defer over budget, render on a later frame, and reuse cached entries
+    /// without consuming budget or deadlocking.
     #[test]
     fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
         // A nested Context lock used to hang the first uncached menu entry. Bound the wait so
@@ -791,9 +793,9 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let ctx = egui::Context::default();
             let preview = Previews::default().font_preview_fn();
-            let budget_id = egui::Id::new("font_preview_budget");
-            let sans_id = egui::Id::new("font:Source Sans 3");
-            let inter_id = egui::Id::new("font:Inter");
+            let budget_id = egui::Id::unique("font_preview_budget");
+            let sans_id = egui::Id::unique("font:Source Sans 3");
+            let inter_id = egui::Id::unique("font:Inter");
             ctx.data_mut(|d| d.insert_temp(budget_id, (1.0_f64, 11_u32)));
 
             for time in [1.0, 2.0, 3.0] {

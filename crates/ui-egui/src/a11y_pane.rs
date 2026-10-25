@@ -65,7 +65,7 @@ pub fn accessibility(app: &mut WordApp, ui: &mut Ui) {
 
 /// The checker's findings, kept until the document changes.
 fn issues(app: &mut WordApp, ui: &Ui) -> Vec<Value> {
-    let key = egui::Id::new("a11y_issues");
+    let key = egui::Id::unique("a11y_issues");
     let stamp = (app.session.document_id(), app.session.rev());
     if let Some((s, v)) = ui.data(|d| d.get_temp::<((u64, u64), Vec<Value>)>(key))
         && s == stamp
@@ -140,7 +140,7 @@ fn still_selected(app: &WordApp, pos: &Pos) -> bool {
 /// A text box editing `current`; the draft lives in egui memory while it has focus (frame-local
 /// buffers lose keystrokes). Returns the new text when editing ends with a change.
 fn draft_box(ui: &mut Ui, key: impl std::hash::Hash + std::fmt::Debug, current: &str, enabled: bool, multiline: bool) -> Option<String> {
-    let key = egui::Id::new(key);
+    let key = egui::Id::unique(key);
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| current.to_string());
     let edit = if multiline { egui::TextEdit::multiline(&mut text).desired_rows(5) } else { egui::TextEdit::singleline(&mut text) };
     let r = ui.add_enabled(enabled, edit.desired_width(f32::INFINITY));

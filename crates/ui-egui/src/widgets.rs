@@ -85,7 +85,7 @@ fn show_hint(resp: &Response, title: &str, notes: &[String]) {
     let ctx = &resp.ctx;
     let since_key = id_since_focus(resp);
     // The pass on which the pointer was last over any hinted control (see the focus hint below).
-    let hover_key = egui::Id::new("hint_pointer_over_a_control");
+    let hover_key = egui::Id::unique("hint_pointer_over_a_control");
     let pass = ctx.cumulative_pass_nr();
     // A disabled response never reports hover, so test the pointer against its rectangle, as
     // `Tooltip::for_disabled` does.
@@ -291,7 +291,7 @@ pub fn small(ui: &mut Ui, app: &mut WordApp, icon: &str, label: Option<&str>, ti
     if resp.clicked() && on {
         run_from_ribbon(app, id, params);
     }
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     resp
 }
 
@@ -332,10 +332,10 @@ pub fn split(
     }
     let (arrow_title, _) = tooltip_lines(&crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]), "", "", None);
     show_hint(&aresp, &arrow_title, &[]);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     // The arrow opens the choices beside the button: it says whose, so it is not just "button"
     // (#3172).
-    aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, &arrow_title));
+    aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, &arrow_title));
     if !on {
         return;
     }
@@ -401,7 +401,7 @@ pub fn menu_button(
     let reason = if on { None } else { Some(app.session.why_disabled(id).unwrap_or("")) };
     let (title, notes) = tooltip_lines(tip, &shortcut_text(app, id), "", reason);
     show_hint(&resp, &title, &notes);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, on, tip));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, on, tip));
     if !on {
         return;
     }
@@ -476,7 +476,7 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
     ui.painter().text(pos2(r.center().x, title_y), Align2::CENTER_CENTER, title, regular(11.0), t.group_label);
     if let Some(cmd) = launcher {
         let lr = Rect::from_center_size(pos2(r.max.x - 6.0, title_y), vec2(11.0, 11.0));
-        let resp = ui.interact(lr, ui.id().with(("launch", id_title)), Sense::click());
+        let resp = ui.interact(lr, ui.scope_id().with(("launch", id_title)), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(lr.expand(2.0), 2.0, t.hover);
         }
@@ -489,7 +489,7 @@ fn title_row(ui: &mut Ui, r: Rect, id_title: &str, title: &str, launcher: Option
 
 /// Where a collapsed group remembers whether its drop-down is open.
 fn collapsed_open_id(ui: &Ui, id_title: &str, position: usize) -> egui::Id {
-    ui.id().with(("collapsed_group", id_title, position))
+    ui.scope_id().with(("collapsed_group", id_title, position))
 }
 
 /// A group folded into one drop-down button (the window is too narrow, #662): the button, as tall
@@ -509,7 +509,7 @@ fn collapsed_group(
     let t = Tokens::get(ui.ctx());
     let text_w = ui.ctx().fonts_mut(|f| f.layout_no_wrap(title.to_string(), regular(11.5), t.text).size().x);
     let (r, resp) = ui.allocate_exact_size(vec2((text_w + DROPDOWN + 14.0).max(48.0), CONTENT_H + LABEL_H), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let open_id = collapsed_open_id(ui, id_title, position);
     let was_open = ui.data(|d| d.get_temp::<bool>(open_id)).unwrap_or(false);
     bg(ui, r, &resp, was_open, &t);
@@ -522,7 +522,7 @@ fn collapsed_group(
     );
     label_line(ui, r.center().x, r.min.y + BIG_LABEL_Y, title, regular(11.5), t.text, true);
     let resp = resp.on_hover_text(title);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, title));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, title));
     let mut open = was_open;
     if resp.clicked() {
         open = !open;
@@ -748,7 +748,7 @@ pub fn font_combo(
     items: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, &[], preview, true, "")
+    combo_impl(ui, id, width, current, items, &[], preview, true, tl!("Font"))
 }
 
 /// [`font_combo`] with the `recent` families (most recent first) in a Recently Used Fonts
@@ -765,7 +765,7 @@ pub fn font_combo_with_recent(
     recent: &[String],
     preview: Option<&dyn Fn(&mut Ui, &str) -> Response>,
 ) -> Option<String> {
-    combo_impl(ui, id, width, current, items, recent, preview, true, "")
+    combo_impl(ui, id, width, current, items, recent, preview, true, tl!("Font"))
 }
 
 /// [`font_combo_with_recent`] with a hover hint `tip` (already translated).
@@ -829,6 +829,9 @@ struct ComboSearch {
     view_h: f32,
 }
 
+/// Draws an editable or searchable combo box: keeps temporary text and search state, supports
+/// keyboard selection, popup rows with recent and preview sections, an arrow and hint, and
+/// returns the chosen or committed text.
 fn combo_impl(
     ui: &mut Ui,
     id: &str,
@@ -841,9 +844,9 @@ fn combo_impl(
     tip: &str,
 ) -> Option<String> {
     let mut out = None;
-    let edit_id = ui.id().with(("combo_text", id));
-    let te_id = ui.id().with(("combo_edit", id));
-    let search_id = ui.id().with(("combo_search", id));
+    let edit_id = ui.scope_id().with(("combo_text", id));
+    let te_id = ui.scope_id().with(("combo_edit", id));
+    let search_id = ui.scope_id().with(("combo_search", id));
     let mut text = ui.data_mut(|d| d.get_temp::<String>(edit_id)).unwrap_or_else(|| current.to_string());
     let mut s: ComboSearch = if search { ui.data_mut(|d| d.get_temp(search_id)).unwrap_or_default() } else { ComboSearch::default() };
     let mut focused = false;
@@ -877,7 +880,7 @@ fn combo_impl(
         // The field says what it is: without a name a screen reader has only "edit" to say
         // (#3172). The arrow says whose options it opens, as the split buttons' arrow does.
         if !tip.is_empty() {
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::TextEdit, ui.is_enabled(), tip));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::TextInput, ui.is_enabled(), tip));
         }
         keytip_badge(ui, resp.rect, "combo", id);
         focused = resp.has_focus();
@@ -933,7 +936,7 @@ fn combo_impl(
         let (ar, aresp) = ui.allocate_exact_size(vec2(16.0, resp.rect.height()), Sense::click());
         if !tip.is_empty() {
             let arrow_name = crate::i18n::fmt(tl!("{name} options"), &[("name", tip)]);
-            aresp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), &arrow_name));
+            aresp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), &arrow_name));
         }
         // It reaches one border width under the field, so the field's right border is the only line
         // between them: two borders side by side read as a double-width divider.
@@ -1157,7 +1160,7 @@ fn list_rows<'a>(
             }
         }
     });
-    (out, shown.state.offset.y, shown.inner_rect.height())
+    (out, shown.state.clamped_offset().y, shown.inner_rect.height())
 }
 
 /// How a drawn button looks this frame. Hover fades in over egui's animation time and the
@@ -1247,6 +1250,8 @@ fn icon_text_button_size(ui: &Ui, text_w: f32, marker: bool, show_text: bool) ->
     pad.x + 16.0 + gap + text_w + marker_w + pad.x
 }
 
+/// Allocates and paints a themed icon button with optional text, marker and accessible label, and
+/// returns its response.
 fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId, marker: bool, show_text: bool) -> Response {
     let t = Tokens::get(ui.ctx());
     let galley = ui.painter().layout_no_wrap(text.to_string(), font, Color32::PLACEHOLDER);
@@ -1255,7 +1260,7 @@ fn icon_text_button_with(ui: &mut Ui, icon: &str, text: &str, font: egui::FontId
     let text_w = if show_text { galley.size().x } else { 0.0 };
     let size = vec2(icon_text_button_size(ui, text_w, marker, show_text), galley.size().y.max(icon_w) + 2.0 * pad.y);
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, true);
     let r = r.expand(st.expansion);
     ui.painter().rect(r, ui.visuals().widgets.inactive.corner_radius, st.fill, st.stroke, egui::StrokeKind::Inside);
@@ -1288,7 +1293,7 @@ pub fn icon_menu_item(ui: &mut Ui, icon: &str, text: &str, shortcut: &str, min_w
     let sc_w = sc.as_ref().map_or(0.0, |g| g.size().x + 3.0 * pad.x);
     let w = (pad.x + icon_w + 6.0 + galley.size().x + sc_w + pad.x).max(min_w).max(ui.available_width());
     let (r, resp) = ui.allocate_exact_size(vec2(w, galley.size().y.max(icon_w) + 2.0 * pad.y), Sense::click());
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), text));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), text));
     let st = drawn_state(ui, &resp, false);
     ui.painter().rect_filled(r, ui.visuals().widgets.inactive.corner_radius, st.fill);
     let (line, accent) = if ui.is_enabled() { (t.icon, t.accent) } else { (t.text_disabled, t.text_disabled) };
@@ -1321,8 +1326,8 @@ pub fn dialog_tabs(ui: &mut Ui, labels: &[String], selected: usize) -> Option<us
         let galley = ui.painter().layout_no_wrap(label.clone(), regular(12.5), t.text);
         let w = galley.size().x + 28.0;
         let r = Rect::from_min_max(pos2(x, origin.y + 2.0), pos2(x + w, base_y));
-        let resp = ui.interact(r, ui.id().with(("dialog_tab", i)), Sense::click());
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, on, label));
+        let resp = ui.interact(r, ui.scope_id().with(("dialog_tab", i)), Sense::click());
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, on, label));
         let hover = ui.ctx().animate_bool_responsive(resp.id.with("hover"), resp.hovered());
         let fill = if on { page } else { page.lerp_to_gamma(t.border, 0.14 + 0.1 * hover) };
         let p = ui.painter();
@@ -1631,7 +1636,7 @@ mod tests {
         for (n, events) in frames.into_iter().enumerate() {
             ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 if n == 0 {
-                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "f"))));
+                    ui.memory_mut(|m| m.request_focus(ui.scope_id().with(("combo_edit", "f"))));
                 }
                 let v = if search { font_combo_with_recent(ui, "f", 150.0, "", items, recent, None) } else { combo(ui, "f", 150.0, "", items, None) };
                 out = out.take().or(v);
@@ -1692,9 +1697,9 @@ mod tests {
         for (n, events) in frames.into_iter().enumerate() {
             ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
                 if n == 0 {
-                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "f"))));
+                    ui.memory_mut(|m| m.request_focus(ui.scope_id().with(("combo_edit", "f"))));
                 }
-                area = Some(ui.id().with(("combo_search", "f")).with("list"));
+                area = Some(ui.scope_id().with(("combo_search", "f")).with("list"));
                 font_combo_with_recent(ui, "f", 150.0, "", &fonts, &recent, None);
             })
             .drop_without_applying_deltas();
@@ -1733,7 +1738,7 @@ mod tests {
             (vec![egui::Event::Text("ar".into())], "Arial Black"),
         ];
         ctx.run_ui(egui::RawInput::default(), |ui| {
-            ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "f"))));
+            ui.memory_mut(|m| m.request_focus(ui.scope_id().with(("combo_edit", "f"))));
             font_combo_with_recent(ui, "f", 150.0, "", &fonts, &recent, None);
         })
         .drop_without_applying_deltas();
@@ -1812,7 +1817,7 @@ mod tests {
             crate::theme::apply(&ctx, appearance);
             let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
                 if focused {
-                    ui.memory_mut(|m| m.request_focus(ui.id().with(("combo_edit", "f"))));
+                    ui.memory_mut(|m| m.request_focus(ui.scope_id().with(("combo_edit", "f"))));
                 }
                 combo(ui, "f", 150.0, "12", &sizes, None);
             });

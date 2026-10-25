@@ -5,6 +5,9 @@ use wordcraft_engine::Session;
 use wordcraft_ui_egui::printing::{Duplex, Feedback, Printer};
 use wordcraft_ui_egui::{Services, WordApp};
 
+/// Print command metadata lists engine and app commands, exposes the settings and status fields,
+/// and keeps submission disabled until a printer is selected. It never discovers printers,
+/// submits, opens a dialog or Print page, or dirties the document.
 #[test]
 fn control_print_discovery_reports_metadata_without_host_side_effects() {
     use std::cell::Cell;
@@ -42,7 +45,7 @@ fn control_print_discovery_reports_metadata_without_host_side_effects() {
             assert!(command["params"].as_str().unwrap().contains(field), "{id}: {field}");
         }
     }
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
     let Outcome::Done(reply) = handle(&mut app, &ctx, &request) else { panic!("metadata replies immediately") };
     for id in ["ui.printSubmit", "ui.print"] {
@@ -55,6 +58,8 @@ fn control_print_discovery_reports_metadata_without_host_side_effects() {
     assert!(!app.printing.busy() && !app.session.dirty);
 }
 
+/// Submission passes the current grayscale setting and collates by default; a spool failure
+/// becomes Failed feedback and a status message.
 #[test]
 fn native_print_uses_selected_settings_and_reports_spool_errors() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
@@ -69,7 +74,7 @@ fn native_print_uses_selected_settings_and_reports_spool_errors() {
     }));
     assert!(app.run("ui.print", json!({})).is_err());
     assert!(jobs.borrow().is_empty(), "opening settings/exporting does not spool");
-    app.printing.printers.push(Printer { name: "Chosen queue".into(), default: false });
+    app.printing.printers.push(Printer { name: "Chosen queue".into(), label: String::new(), default: false });
     let configured = app.run("ui.printSettings", json!({"printer":"Chosen queue", "copies":3,"duplex":"shortEdge","grayscale":true})).unwrap();
     assert_eq!(configured["ready"], true);
     assert_eq!(configured["printers"][0]["name"], "Chosen queue");
@@ -89,6 +94,8 @@ fn native_print_uses_selected_settings_and_reports_spool_errors() {
     assert!(app.status_msg.as_ref().unwrap().0.contains("printer is offline"));
 }
 
+/// At 800 by 700 the print page keeps Refresh printers and Grayscale enabled; toggling Grayscale
+/// updates the settings and readiness.
 #[test]
 fn print_settings_are_visible_in_a_narrow_window() {
     use egui_kittest::kittest::{NodeT, Queryable};
@@ -98,7 +105,7 @@ fn print_settings_are_visible_in_a_narrow_window() {
     app.run("text.insert", json!({"text": "A document to print"})).unwrap();
     app.services.printers = Some(Box::new(|| {
         let (sender, receiver) = std::sync::mpsc::channel();
-        sender.send(vec![Printer { name: "Test queue".into(), default: true }]).unwrap();
+        sender.send(vec![Printer { name: "Test queue".into(), label: String::new(), default: true }]).unwrap();
         receiver
     }));
     app.services.print_native = Some(Box::new(|_, _, _, _| {
@@ -124,10 +131,11 @@ fn print_settings_are_visible_in_a_narrow_window() {
     assert!(harness.state().printing.ready());
 }
 
+/// Every invalid settings payload is rejected and leaves the previous settings unchanged.
 #[test]
 fn invalid_print_settings_are_rejected_without_partial_changes() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     let before = app.run("ui.printSettings", json!({})).unwrap();
     for params in [
         json!({"printer":"Missing"}),
@@ -147,10 +155,11 @@ fn invalid_print_settings_are_rejected_without_partial_changes() {
     }
 }
 
+/// Two fast jobs each surface the same receipt, and consuming it clears the status.
 #[test]
 fn repeated_fast_jobs_each_surface_an_identical_receipt() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
     app.services.print_native = Some(Box::new(|_, _, _, _| {
         let (sender, receiver) = std::sync::mpsc::channel();
@@ -170,6 +179,8 @@ fn repeated_fast_jobs_each_surface_an_identical_receipt() {
     }
 }
 
+/// Invalid range, parity, copy and collate values send nothing; odd pages from 1-3 appear once in
+/// one PDF, while three uncollated copies are delegated to the spooler.
 #[test]
 fn native_ranges_and_parity_do_not_duplicate_spooler_copies() {
     // A fixed creation date: without one each PDF is stamped with the current time, and the two
@@ -184,7 +195,7 @@ fn native_ranges_and_parity_do_not_duplicate_spooler_copies() {
         }
     }
     assert_eq!(app.session.export_layout().pages.len(), 3);
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue","copies":3})).unwrap();
     let jobs = Rc::new(RefCell::new(Vec::new()));
     let observed = jobs.clone();
@@ -210,11 +221,13 @@ fn native_ranges_and_parity_do_not_duplicate_spooler_copies() {
     assert!(!jobs[0].2, "uncollated copies reach the spooler");
 }
 
+/// Default or auto orientation sends `orientation-requested=3`, landscape sends 4 plus
+/// `landscape=true`, and portrait sends 3.
 #[test]
 fn native_print_passes_orientation_options_to_spooler() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
     app.run("text.insert", json!({"text": "Test orientation"})).unwrap();
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
     let jobs = Rc::new(RefCell::new(Vec::new()));
     let observed = jobs.clone();
@@ -251,7 +264,7 @@ fn native_print_passes_orientation_options_to_spooler() {
 fn native_print_scales_to_the_chosen_paper() {
     let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
     app.run("text.insert", json!({"text": "Scale me"})).unwrap();
-    app.printing.printers.push(Printer { name: "Queue".into(), default: true });
+    app.printing.printers.push(Printer { name: "Queue".into(), label: String::new(), default: true });
     app.run("ui.printSettings", json!({"printer":"Queue"})).unwrap();
     let jobs = Rc::new(RefCell::new(Vec::new()));
     let observed = jobs.clone();
