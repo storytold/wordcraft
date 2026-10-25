@@ -129,7 +129,8 @@ pub enum ClKind {
     Marker,
 }
 
-/// The smallest unit of layout: a grapheme cluster (or object, tab, break).
+/// One drawing segment of a grapheme cluster (or object, tab, break).
+/// Font/style changes may split its drawing; paragraph edit/wrap boundaries keep it atomic.
 #[derive(Clone, Debug)]
 pub struct Cluster {
     pub start: usize,
@@ -357,6 +358,9 @@ pub struct ParaLayout {
     /// Sum of line heights (without space before/after).
     pub height: f32,
     pub text_len: usize,
+    /// Drawing segments that start inside a whole-paragraph grapheme/complex-script cluster.
+    /// Font or run formatting can split the drawing, but cannot introduce an edit/wrap stop.
+    joined_cluster_starts: Vec<usize>,
     /// Paragraph contains fields whose text depends on the page.
     pub has_page_fields: bool,
     /// Note references (part id) in this paragraph, by cluster index.
@@ -588,6 +592,16 @@ pub struct Exclusion {
     pub contour: Option<Arc<crate::contour::Contour>>,
     /// The sides of the object text may go on (Square, Tight, Through).
     pub side: WrapText,
+    /// A floating table counts a line touching its top as overlapping; shapes do not (#3977).
+    pub table: bool,
+}
+
+impl Exclusion {
+    /// Whether this area keeps text out of the row, including exact top contact for tables.
+    fn intersects_row(&self, top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> bool {
+        let reaches = if self.table { self.top <= top + table_h } else { self.top < top + h };
+        self.bottom > top && reaches && self.right > lo && self.left < hi
+    }
 }
 
 struct Builder<'a> {
@@ -1056,6 +1070,10 @@ impl<'a> Builder<'a> {
                 let d = show(c);
                 if d != c {
                     d
+                } else if c == '\u{a0}' {
+                    // Word sets a no-break space as wide as a space; some fonts draw their own
+                    // U+00A0 glyph wider. Only the shaping changes: line breaking reads the text.
+                    ' '
                 } else if upper {
                     upper_char(c)
                 } else {
@@ -1507,6 +1525,8 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let math_props = doc.settings.math.clone().unwrap_or_default();
     // The byte ranges of runs left out of the layout, in order, adjacent runs merged.
     let mut left: Vec<std::ops::Range<usize>> = Vec::new();
+    // The byte ranges of objects with nothing to show (bookmarks, comment anchors), in order.
+    let mut bare: Vec<std::ops::Range<usize>> = Vec::new();
     // Each run's proofing language and whether it is checked (spelling, grammar, hyphenation).
     let mut runs: Vec<ProofRun> = Vec::new();
     for (range, props) in p.run_ranges() {
@@ -1742,7 +1762,10 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                             push(&mut b, ClKind::Tab, 0.0, 0.0);
                             ptabs.push((b.clusters.len() - 1, *align, *relative_to, *leader));
                         }
-                        _ => push(&mut b, ClKind::Marker, 0.0, 0.0),
+                        _ => {
+                            bare.push(start..end);
+                            push(&mut b, ClKind::Marker, 0.0, 0.0)
+                        }
                     }
                 }
             }
@@ -1759,15 +1782,19 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         if rp.snap_to_grid && env.grid.chars.is_some() { Vec::new() } else { auto_space(&mut b, &p.text, rp.auto_space_de, rp.auto_space_dn) };
     // Break opportunities and hyphenation points come from the text as laid out: hidden text that is
     // not shown and, without markup, tracked deletions are left out, so a space or soft hyphen there
-    // is no place to break, and words are hyphenated as they read.
+    // is no place to break, and words are hyphenated as they read. An object with nothing to show
+    // is left out too: its U+FFFC has the line-break class CB, but a bookmark never moves a break.
+    let mut skip = left.clone();
+    skip.extend(bare);
+    skip.sort_unstable_by_key(|r| r.start);
     // The text and, for each char of it, its end there and in `p.text`.
-    let (text, ends): (std::borrow::Cow<str>, Vec<(usize, usize)>) = if left.is_empty() {
+    let (text, ends): (std::borrow::Cow<str>, Vec<(usize, usize)>) = if skip.is_empty() {
         (p.text.as_str().into(), Vec::new())
     } else {
         let (mut text, mut ends) = (String::new(), Vec::new());
-        let mut next = left.iter().peekable();
+        let mut next = skip.iter().peekable();
         for (i, c) in p.text.char_indices() {
-            // `left` is in order: skip the ranges that end here, then is `i` in the next one?
+            // `skip` is in order: skip the ranges that end here, then is `i` in the next one?
             while next.next_if(|r| r.end <= i).is_some() {}
             if next.peek().is_some_and(|r| r.start <= i) {
                 continue;
@@ -1779,7 +1806,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     };
     // The end of a char in `text` → the same place in `p.text`.
     let to_para = |i: usize| -> Option<usize> {
-        if left.is_empty() { Some(i) } else { ends.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| ends.get(k)).map(|e| e.1) }
+        if skip.is_empty() { Some(i) } else { ends.binary_search_by_key(&i, |e| e.0).ok().and_then(|k| ends.get(k)).map(|e| e.1) }
     };
     let mut found = Vec::new();
     for (i, o) in unicode_linebreak::linebreaks(&text) {
@@ -1893,6 +1920,19 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         Label { text: shown(text), ascent, style, glyphs, runs, x: 0.0, width: x }
     });
 
+    // Shaping happens separately per font/style segment. Segment-local grapheme starts can
+    // therefore land inside a paragraph grapheme (e.g. an emoji whose components use different
+    // fallback faces). Retain the drawing segments and record only those illegal edit stops.
+    let joined_cluster_starts = if p.text.is_ascii() {
+        Vec::new()
+    } else {
+        let boundaries = wordcraft_doc::cluster::cluster_starts(&p.text);
+        let mut joined: Vec<usize> =
+            b.clusters.iter().filter_map(|c| (c.start < p.text.len() && boundaries.binary_search(&c.start).is_err()).then_some(c.start)).collect();
+        joined.sort_unstable();
+        joined.dedup();
+        joined
+    };
     let mut pl = ParaLayout {
         rp,
         styles: b.styles,
@@ -1903,6 +1943,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         label,
         height: 0.0,
         text_len: p.text.len(),
+        joined_cluster_starts,
         has_page_fields,
         notes,
         issues: env.proofing.map(|o| proof_issues(p, &runs, &o, env.typing_word, is_list_item(doc, p))).unwrap_or_default(),
@@ -1927,6 +1968,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
     let mark_left_out = env.hide_deleted.hides(doc, mark_rc.del) || (mark_rc.hidden && !env.show_hidden);
     let gone = mark_left_out && (p.text.is_empty() || left.first() == Some(&(0..p.text.len())));
     pl.left_out = left;
+    // Neither ordinary nor hyphenated wrapping may split a drawing group inside a grapheme.
+    for c in &mut pl.clusters {
+        c.break_after &= pl.joined_cluster_starts.binary_search(&c.end).is_err();
+    }
+    pl.hyph_after.retain(|&k| pl.clusters.get(k as usize).is_some_and(|c| pl.joined_cluster_starts.binary_search(&c.end).is_err()));
     for k in pl.hyph_after.clone() {
         if let Some(c) = pl.clusters.get_mut(k as usize) {
             c.break_after = true;
@@ -2039,6 +2085,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     // Word 2013+ (compatibility mode 15) fits more text on a justified line by shrinking its
     // spaces (`space_room`); never on lines with tabs.
     let shrink_spaces = rp.align == Align::Justify && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+    // Word stretches a justified line ending in a manual line break unless the document says not to.
+    let expand_break = !env.doc.settings.do_not_expand_shift_return;
     let hanging_at = if rp.indent_first < 0.0 { Some(rp.indent_left) } else { None };
     // Hyphenation Options: the zone, and how many lines in a row may end with a hyphen.
     let zone = Some(env.doc.settings.hyphenation_zone).filter(|z| z.is_finite() && *z >= 0.0).unwrap_or(HYPHENATION_ZONE).min(1584.0);
@@ -2093,6 +2141,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         .map(|st| (st.ascent + st.descent) * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 })
         .unwrap_or(14.0)
         .max(1.0);
+    // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
+    // Keep the existing estimate for shapes and for non-exact spacing.
+    let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h };
     // The rest of the current row: spans on the far side of floating objects, left to right.
     let mut row_rest: VecDeque<(f32, f32)> = VecDeque::new();
     let mut row_first = 0usize;
@@ -2119,7 +2170,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 {
                     lo = first_left.max(rp.indent_left) + dw;
                 }
-                match row_spans(exclusions, top, est_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
+                match row_spans(exclusions, top, est_h, table_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
                     Ok((Some((a, b)), rest)) => {
                         narrowed = !rest.is_empty() || a > lo || b < base_right;
                         row_rest = rest;
@@ -2253,24 +2304,27 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 end = LineEnd::Wrap;
                 break;
             }
+            // A grapheme can have several drawing segments; fit it as one unit while keeping
+            // each segment's font, glyphs and position for painting.
+            let advance = pl.atomic_advance(j);
             // Text after a right/centre tab grows leftwards into the tab's space first.
             let absorbs = pending_tab.is_some_and(|(tj, stop, _)| {
                 let room = pl.clusters.get(tj).map(|t| t.adv).unwrap_or(0.0);
                 match stop.align {
-                    TabAlign::Right | TabAlign::Decimal => room >= c.adv,
-                    TabAlign::Center => room >= c.adv / 2.0 && x + c.adv / 2.0 <= right_edge + 0.01,
+                    TabAlign::Right | TabAlign::Decimal => room >= advance,
+                    TabAlign::Center => room >= advance / 2.0 && x + advance / 2.0 <= right_edge + 0.01,
                     _ => false,
                 }
             });
-            let shrink = if shrink_spaces && !has_tab { space_room(space_w, x + c.adv - pl.auto_space_after(j) - word_from) } else { 0.0 };
+            let shrink = if shrink_spaces && !has_tab { space_room(space_w, x + advance - pl.auto_space_after(j) - word_from) } else { 0.0 };
             let fits =
-                absorbs || x + c.adv - pl.auto_space_after(j) <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
+                absorbs || x + advance - pl.auto_space_after(j) <= right_edge + shrink + 0.01 || c.kind == ClKind::Space || c.kind == ClKind::Marker;
             // A line's first item stays on it even when it doesn't fit; markers before it
             // (a content control's start, a bookmark) and floating objects' anchors take no room
             // and don't count (Word: a picture a little wider than the line, after an anchor,
             // stays on the first line rather than leaving the anchor a line of its own).
             let takes_room = |c: &Cluster| c.kind != ClKind::Marker && !(matches!(c.kind, ClKind::Object(_)) && c.adv == 0.0 && c.obj_h == 0.0);
-            if !fits && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
+            if !fits && pl.is_edit_boundary(c.start) && (c0..j).any(|k| pl.clusters.get(k).is_some_and(takes_room)) {
                 // Wrap: back up to the last break opportunity on this line.
                 end = LineEnd::Wrap;
                 // Hyphenate only when the plain break leaves more than the hyphenation zone empty.
@@ -2305,11 +2359,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     // hyphenation point.
                     let full = base_right - row_lo;
                     skip = narrowed && skipped < 50 && widths.get(c0).is_some_and(|w| *w <= full + 0.01);
-                    // Never split a ligature's letters across lines: the glyph sits on the first
-                    // letter, so back up to it (unless it starts the line).
+                    // Never split a ligature's letters or a grapheme's drawing segments across
+                    // lines: back up to their first segment (unless it starts the line).
                     let glyphless = |k: usize| pl.clusters.get(k).is_some_and(|c| c.kind == ClKind::Text && c.g1 <= c.g0);
                     let mut b = j;
-                    while b > c0 + 1 && glyphless(b) {
+                    while b > c0 + 1 && (glyphless(b) || pl.clusters.get(b).is_some_and(|c| !pl.is_edit_boundary(c.start))) {
+                        b -= 1;
+                    }
+                    while b > c0 && pl.clusters.get(b).is_some_and(|c| !pl.is_edit_boundary(c.start)) {
                         b -= 1;
                     }
                     if b < j
@@ -2403,7 +2460,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     // Nothing on this row: go below the first object that ends, as when no span is wide enough.
                     exclusions
                         .iter()
-                        .filter(|e| e.bottom > top && e.top < top + est_h && e.right > row_lo && e.left < base_right)
+                        .filter(|e| e.intersects_row(top, est_h, table_h, row_lo, base_right))
                         .map(|e| e.bottom)
                         .reduce(f32::min)
                         .unwrap_or(top + est_h)
@@ -2557,7 +2614,9 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 *label_shift = shift;
             }
         }
-        let justify = display.is_none() && ((rp.align == Align::Justify && end == LineEnd::Wrap) || rp.align == Align::Distribute);
+        // A line ending in a manual line break is stretched too, unless `doNotExpandShiftReturn` says not to.
+        let stretch_end = end == LineEnd::Wrap || (end == LineEnd::LineBreak && expand_break);
+        let justify = display.is_none() && ((rp.align == Align::Justify && stretch_end) || rp.align == Align::Distribute);
         // A line that only fits with shrunk spaces is shrunk, the last line of the paragraph too.
         let shrink = display.is_none() && shrink_spaces && slack < 0.0 && last_tab.is_none();
         if shrink {
@@ -2803,8 +2862,8 @@ fn baseline_offset(spacing: LineSpacing, asc: f32, height: f32, desc: f32) -> f3
 /// The spans of a row at `top` (about `h` tall) between `lo` and `hi` that text can use around
 /// the exclusions, left to right (Square wrapping uses both sides of an object). `Err(y)`: none
 /// here, try again at `y` (below what's in the way).
-fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
-    let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.bottom > top && e.top < top + h && e.right > lo && e.left < hi).collect();
+fn row_spans(exclusions: &[Exclusion], top: f32, h: f32, table_h: f32, lo: f32, hi: f32) -> Result<VecDeque<(f32, f32)>, f32> {
+    let here: Vec<&Exclusion> = exclusions.iter().filter(|e| e.intersects_row(top, h, table_h, lo, hi)).collect();
     if let Some(below) = here.iter().filter(|e| e.top_bottom).map(|e| e.bottom).reduce(f32::max) {
         return Err(below);
     }
@@ -3001,6 +3060,29 @@ fn resolve_tab(pl: &mut ParaLayout, pending: &mut Option<(usize, TabStop, f32)>,
 }
 
 impl ParaLayout {
+    /// Returns whether `off` is a legal caret and edit boundary, that is, not the interior start of a
+    /// joined grapheme cluster.
+    fn is_edit_boundary(&self, off: usize) -> bool {
+        self.joined_cluster_starts.binary_search(&off).is_err()
+    }
+
+    /// At a legal group start, include every following drawing segment of that grapheme.
+    /// Interior segments keep their own advance; they are never independent wrap candidates.
+    fn atomic_advance(&self, k: usize) -> f32 {
+        let Some(c) = self.clusters.get(k) else { return 0.0 };
+        let mut advance = c.adv;
+        if self.joined_cluster_starts.is_empty() || !self.is_edit_boundary(c.start) {
+            return advance;
+        }
+        for next in self.clusters.get(k + 1..).into_iter().flatten() {
+            if self.is_edit_boundary(next.start) {
+                break;
+            }
+            advance += next.adv;
+        }
+        advance
+    }
+
     /// The automatic space in cluster `k`'s advance ([`auto_space`]), 0 without one.
     fn auto_space_after(&self, k: usize) -> f32 {
         self.auto_space.binary_search_by_key(&k, |a| a.0).ok().and_then(|i| self.auto_space.get(i)).map_or(0.0, |a| a.1)
@@ -3018,6 +3100,13 @@ impl ParaLayout {
     /// x of byte offset `off` within line `li` (clamped to the line).
     pub fn x_of(&self, li: usize, off: usize) -> Option<f32> {
         let l = self.lines.get(li)?;
+        let off = if self.is_edit_boundary(off) {
+            off
+        } else {
+            // Explicit offsets at a font boundary inside a grapheme use its leading edge too.
+            let k = self.clusters.partition_point(|c| c.start < off);
+            self.clusters.get(..k).into_iter().flatten().rev().find(|c| self.is_edit_boundary(c.start)).map_or(0, |c| c.start)
+        };
         if !l.vis.is_empty() {
             return self.x_of_bidi(l, off);
         }
@@ -3095,11 +3184,12 @@ impl ParaLayout {
         }
     }
 
-    /// Caret offsets a click or arrow key can reach on line `li`: each cluster start and the line
-    /// end, except after a line-ending break or past a wrapped line's trailing space.
+    /// Caret offsets a click or arrow key can reach on line `li`: whole-grapheme starts and the
+    /// line end, except after a line-ending break or past a wrapped line's trailing space.
     pub fn line_offsets(&self, li: usize) -> Vec<usize> {
         let Some(l) = self.lines.get(li) else { return Vec::new() };
-        let mut v: Vec<usize> = (l.c0..l.c1).filter_map(|k| self.clusters.get(k).map(|c| c.start)).collect();
+        let mut v: Vec<usize> =
+            (l.c0..l.c1).filter_map(|k| self.clusters.get(k).filter(|c| self.is_edit_boundary(c.start)).map(|c| c.start)).collect();
         let last_break =
             l.c1 > l.c0 && self.clusters.get(l.c1 - 1).is_some_and(|c| matches!(c.kind, ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak));
         let wrapped = l.c1 > l.c0 && l.end == LineEnd::Wrap && self.lines.get(li + 1).is_some();
@@ -3127,6 +3217,9 @@ impl ParaLayout {
         for k in l.c0..=l.c1 {
             let Some(cx) = l.xs.get(k - l.c0) else { break };
             let off = if k < l.c1 { self.clusters.get(k).map(|c| c.start).unwrap_or(l.stop) } else { l.stop };
+            if !self.is_edit_boundary(off) {
+                continue;
+            }
             // Don't place the caret after a line-ending break or wrap-trailing space on a wrapped line.
             if k == l.c1 && k > l.c0 {
                 let lastc = self.clusters.get(k - 1);

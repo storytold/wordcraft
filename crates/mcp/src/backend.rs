@@ -1,11 +1,16 @@
 //! Where MCP tool calls end up: a control-channel method call.
 
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufReader, Write};
 use std::net::{IpAddr, SocketAddr, TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
 use serde_json::{Value, json};
+
+use crate::server::{BoundedLine, read_bounded_line};
+
+/// Longest reply line accepted from the app (screenshots and `document.inspect` are large).
+const MAX_REPLY_LINE: usize = 256 << 20;
 
 /// Something that answers control-channel methods (`engine.execute`, `document.inspect`,
 /// `ui.pointer`, `ui.render`, …). See `wordcraft_ui_egui::control` for the full list.
@@ -26,6 +31,8 @@ pub struct Remote {
     addr: String,
     conn: Option<(BufReader<TcpStream>, TcpStream)>,
     next_id: u64,
+    /// Whether a connection ever succeeded (`lazy` starts without one; the app may open later).
+    connected: bool,
     /// The connection leads to a loopback address: requests carry the control key.
     send_key: bool,
     /// The control key, looked up once per connection (the app picks a new one at every start).
@@ -83,12 +90,18 @@ impl Remote {
     }
 
     fn connect_with(addr: &str, find_key: KeyFinder) -> std::io::Result<Self> {
-        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, send_key: false, key: None, find_key };
+        let mut r = Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key };
         r.reconnect()?;
         if let Some(w) = r.key_warning() {
             log::warn!("{w}");
         }
         Ok(r)
+    }
+
+    /// A remote that connects on first use: the app may start after the MCP server, and a
+    /// server that exits at once reads as failed for the client's whole session (#4078).
+    pub fn lazy(addr: &str) -> Self {
+        Self { addr: addr.to_string(), conn: None, next_id: 1, connected: false, send_key: false, key: None, find_key: Box::new(find_key) }
     }
 
     pub fn addr(&self) -> &str {
@@ -97,6 +110,10 @@ impl Remote {
 
     /// Why requests go without the control key (the address is not loopback), if they do.
     pub fn key_warning(&self) -> Option<String> {
+        // Nothing is known about the address until a connection succeeds.
+        if !self.connected {
+            return None;
+        }
         (!self.send_key).then(|| {
             format!(
                 "{} is not a loopback address, so the control key is not sent (it only goes to 127.0.0.0/8, ::1 and localhost) and the app refuses requests; reach the app through 127.0.0.1, for example with an SSH tunnel",
@@ -118,6 +135,7 @@ impl Remote {
                     self.send_key = may_send_key(&self.addr, s.peer_addr().ok());
                     let read = s.try_clone()?;
                     self.conn = Some((BufReader::new(read), s));
+                    self.connected = true;
                     return Ok(());
                 }
                 Err(e) => last = e,
@@ -148,17 +166,20 @@ impl Remote {
         writer.write_all(line.as_bytes())?;
         writer.write_all(b"\n")?;
         writer.flush()?;
-        let mut reply = String::new();
-        if reader.read_line(&mut reply)? == 0 {
-            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed"));
+        match read_bounded_line(reader, MAX_REPLY_LINE)? {
+            BoundedLine::Line(reply) => Ok(reply),
+            BoundedLine::Eof => Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "control channel closed")),
+            BoundedLine::TooLong => Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "reply from app too long")),
         }
-        Ok(reply)
     }
 
     /// One request and its reply, with one retry on a new connection (the app may have
     /// restarted; a new connection also reads the key again).
     fn exchange(&mut self, id: u64, method: &str, params: &Value) -> Result<Value, String> {
-        let unreachable = |addr: &str, e: std::io::Error| format!("WordCraft app at {addr} is not reachable: {e}");
+        let unreachable = |addr: &str, e: std::io::Error, connected: bool| {
+            let retry = if connected { String::new() } else { "; will retry on each call".to_string() };
+            format!("WordCraft app at {addr} is not reachable: {e}{retry}")
+        };
         let mut first = true;
         let reply = loop {
             let tried = if self.conn.is_some() { Ok(()) } else { self.reconnect() };
@@ -173,8 +194,13 @@ impl Remote {
                 Ok(r) => break r,
                 Err(e) => {
                     self.conn = None;
+                    // A reply that arrived but can't be read (too long, not UTF-8): the app has
+                    // run the request, so sending it again could run a state-changing one twice.
+                    if e.kind() == std::io::ErrorKind::InvalidData {
+                        return Err(format!("bad reply from app: {e}"));
+                    }
                     if !first {
-                        return Err(unreachable(&self.addr, e));
+                        return Err(unreachable(&self.addr, e, self.connected));
                     }
                     first = false;
                 }
@@ -219,13 +245,18 @@ impl Backend for Remote {
     }
 
     fn describe(&self) -> String {
-        format!("connected to the WordCraft app at {}", self.addr)
+        if self.connected {
+            format!("connected to the WordCraft app at {}", self.addr)
+        } else {
+            format!("will connect to the WordCraft app at {} when it opens", self.addr)
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::BufRead;
     use std::net::{SocketAddr, TcpListener};
     use std::sync::Arc;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -315,6 +346,37 @@ mod tests {
         (port, rx)
     }
 
+    #[test]
+    fn an_unreadable_reply_is_not_retried() {
+        // The app answered something that can't be read (here not UTF-8; an over-long reply
+        // takes the same path): the request ran, so it must not be sent again.
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let seen = Arc::new(AtomicUsize::new(0));
+        let n = seen.clone();
+        std::thread::spawn(move || {
+            for stream in listener.incoming().flatten() {
+                let n = n.clone();
+                std::thread::spawn(move || {
+                    let mut out = stream.try_clone().unwrap();
+                    for line in BufReader::new(stream).lines() {
+                        if line.is_err() {
+                            return;
+                        }
+                        n.fetch_add(1, Ordering::SeqCst);
+                        if out.write_all(b"\xff\xfe\n").is_err() {
+                            return;
+                        }
+                    }
+                });
+            }
+        });
+        let mut r = Remote::connect_with(&format!("127.0.0.1:{port}"), fixed_key("k1")).unwrap();
+        let e = r.call("engine.execute", json!({"command": "text.insert", "params": {"text": "x"}})).unwrap_err();
+        assert!(e.contains("bad reply"), "{e}");
+        assert_eq!(seen.load(Ordering::SeqCst), 1, "the request was sent once");
+    }
+
     fn fixed_key(key: &'static str) -> KeyFinder {
         Box::new(move |_| Ok(key.to_string()))
     }
@@ -330,6 +392,23 @@ mod tests {
             assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(7));
             assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "k1", "{host}");
         }
+    }
+
+    #[test]
+    fn a_lazy_remote_serves_once_the_app_opens() {
+        // Nothing is listening: the call fails, but the server stays up and says it will retry.
+        let mut r = Remote::lazy("127.0.0.1:1");
+        r.find_key = fixed_key("k1");
+        let e = r.call("document.inspect", json!({})).unwrap_err();
+        assert!(e.contains("not reachable") && e.contains("will retry"), "{e}");
+        assert!(r.describe().contains("will connect to"));
+        // The app opens later: the next call connects and answers.
+        let (port, seen) = fake_app(|_| Some((json!({"ok": true, "result": 7}), false)));
+        r.addr = format!("127.0.0.1:{port}");
+        assert_eq!(r.call("document.inspect", json!({})).unwrap(), json!(7));
+        assert!(r.key_warning().is_none());
+        assert_eq!(seen.recv_timeout(WAIT).unwrap()["key"], "k1");
+        assert!(r.describe().contains("connected to"));
     }
 
     #[test]

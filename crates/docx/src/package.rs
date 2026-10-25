@@ -258,6 +258,14 @@ impl Package {
         self.files.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v)
     }
 
+    /// [`Package::xml`] for the main document part: malformed XML is an error, not a truncated read.
+    pub fn xml_strict(&self, name: &str) -> Result<Option<El>, DocxError> {
+        match self.get(name) {
+            Some(b) => xml::parse_strict(b).map(Some),
+            None => Ok(None),
+        }
+    }
+
     pub fn xml(&self, name: &str) -> Result<Option<El>, DocxError> {
         match self.get(name) {
             Some(b) => xml::parse(b).map(Some),

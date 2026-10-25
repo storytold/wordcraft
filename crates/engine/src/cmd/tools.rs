@@ -93,6 +93,9 @@ pub struct AutoCorrectPrefs {
     pub fractions: bool,
     /// Ordinals (1st) with superscript.
     pub ordinals: bool,
+    /// *Bold* and _italic_ with real formatting: the marks are removed and the text between them
+    /// is made bold or italic. Off unless the user turns it on.
+    pub bold_italic: bool,
     /// Hyphens (--) with dashes.
     pub dashes: bool,
     /// Internet addresses with hyperlinks.
@@ -103,6 +106,17 @@ pub struct AutoCorrectPrefs {
     pub numbering: bool,
     /// Border lines.
     pub border_lines: bool,
+    /// Set left- and first-indent with tabs and backspaces: Tab at the start of a line of a
+    /// paragraph with text indents it instead of typing a tab, and Backspace at its start takes
+    /// the indent back. Off by default.
+    pub tab_indent: bool,
+    /// Built-in Heading styles: a second Enter after a line of five or fewer words that ends in a
+    /// letter or digit makes it Heading 1 (Heading 2 or 3 after one or two leading tabs).
+    /// Off by default.
+    pub heading_styles: bool,
+    /// A second Space after a word, number or closing bracket or quote turns the first into a
+    /// period (macOS's "Add period with double-space"); off by default.
+    pub double_space_period: bool,
     /// The user's entries: added, or replacing a built-in one.
     pub entries: Vec<(String, String)>,
     /// Built-in entries the user deleted.
@@ -133,11 +147,15 @@ impl Default for AutoCorrectPrefs {
             smart_quotes: true,
             fractions: true,
             ordinals: true,
+            bold_italic: false,
             dashes: true,
             links: true,
             bullets: true,
             numbering: true,
             border_lines: true,
+            tab_indent: false,
+            heading_styles: false,
+            double_space_period: false,
             entries: Vec::new(),
             removed: Vec::new(),
             exceptions: Vec::new(),
@@ -322,11 +340,15 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         ("smartQuotes", &mut ac.smart_quotes),
         ("fractions", &mut ac.fractions),
         ("ordinals", &mut ac.ordinals),
+        ("boldItalic", &mut ac.bold_italic),
         ("dashes", &mut ac.dashes),
         ("links", &mut ac.links),
         ("bullets", &mut ac.bullets),
         ("numbering", &mut ac.numbering),
         ("borderLines", &mut ac.border_lines),
+        ("tabIndent", &mut ac.tab_indent),
+        ("headingStyles", &mut ac.heading_styles),
+        ("doubleSpacePeriod", &mut ac.double_space_period),
         ("autoAddFirstLetter", &mut ac.auto_add_first_letter),
         ("autoAddInitialCaps", &mut ac.auto_add_initial_caps),
     ] {
@@ -395,11 +417,15 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
         "smartQuotes": ac.smart_quotes,
         "fractions": ac.fractions,
         "ordinals": ac.ordinals,
+        "boldItalic": ac.bold_italic,
         "dashes": ac.dashes,
         "links": ac.links,
         "bullets": ac.bullets,
         "numbering": ac.numbering,
         "borderLines": ac.border_lines,
+        "tabIndent": ac.tab_indent,
+        "headingStyles": ac.heading_styles,
+        "doubleSpacePeriod": ac.double_space_period,
         "autoAddFirstLetter": ac.auto_add_first_letter,
         "autoAddInitialCaps": ac.auto_add_initial_caps,
         "entries": ac.list().into_iter().map(|(a, b, builtin)| json!({"from": a, "to": b, "builtIn": builtin})).collect::<Vec<_>>(),
@@ -409,6 +435,11 @@ fn autocorrect_options(s: &mut Session, v: &Value) -> CmdResult {
     }))
 }
 
+/// Builds the tools, review, file and insertion command table: Repeat and macros; AutoCorrect,
+/// keyboard and ribbon customization and search; Compare, accessibility, inspection, protection,
+/// versions, recovery, templates and autosave; compatibility, sharing, Quick Parts, fields,
+/// signatures, objects and spreadsheets; header/footer, table and numbering settings; language,
+/// markup, editor and selection commands; and design and view options.
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("edit.repeat", "Repeat", "Quick Access Toolbar", |s, _| {
@@ -437,7 +468,7 @@ pub fn specs() -> Vec<CommandSpec> {
             .pure(),
         CommandSpec::new("tools.autocorrect", "AutoCorrect Options", "File › Options › Proofing", autocorrect_options)
             .params(
-                r#"{"enabled"?: bool (all of AutoCorrect), "replaceText"|"twoInitialCaps"|"capSentences"|"capCells"|"capDays"|"capsLock"|"smartQuotes"|"fractions"|"ordinals"|"dashes"|"links"|"bullets"|"numbering"|"borderLines"?: bool, "autoAddFirstLetter"|"autoAddInitialCaps"?: bool (Automatically add words to the exception lists when an automatic capital is undone; default true), "add"?: {"from": string, "to": string} (adds or replaces an entry), "delete"?: string (an entry's "from", built in or added), "addException"?: string, "deleteException"?: string, "addInitialCapsException"?: string (keeps TWo INitial CApitals, like "IDs"), "deleteInitialCapsException"?: string} → options, entries and exceptions"#,
+                r#"{"enabled"?: bool (all of AutoCorrect), "replaceText"|"twoInitialCaps"|"capSentences"|"capCells"|"capDays"|"capsLock"|"smartQuotes"|"fractions"|"ordinals"|"dashes"|"links"|"bullets"|"numbering"|"borderLines"?: bool, "boldItalic"?: bool (*bold* and _italic_ with real formatting; default false), "tabIndent"?: bool (Set left- and first-indent with tabs and backspaces; default false), "headingStyles"?: bool (Built-in Heading styles; default false), "doubleSpacePeriod"?: bool (Add a period with double-space; default false), "autoAddFirstLetter"|"autoAddInitialCaps"?: bool (Automatically add words to the exception lists when an automatic capital is undone; default true), "add"?: {"from": string, "to": string} (adds or replaces an entry), "delete"?: string (an entry's "from", built in or added), "addException"?: string, "deleteException"?: string, "addInitialCapsException"?: string (keeps TWo INitial CApitals, like "IDs"), "deleteInitialCapsException"?: string} → options, entries and exceptions"#,
             )
             .pure(),
         CommandSpec::new("tools.customizeKeyboard", "Customize Keyboard", "File › Options", customize_keyboard)
@@ -466,18 +497,30 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"mode": "none|readOnly|comments|trackedChanges"} (starting enforcement; "none" doesn't stop a protected document — use review.restrict {"stop": true})"#),
         CommandSpec::new("file.versions", "Version History", "File › Info", |s, v| {
+            // Validate a restore before anything is saved: a rejected command must leave the
+            // version list as it was. A `restore` that is there but not a non-negative integer
+            // is refused, not read as absent.
+            let restore = if v.get("restore").is_some_and(|x| !x.is_null()) {
+                let i = p::u64(v, "restore").ok_or_else(|| CmdError::Params("restore (non-negative integer) is required".into()))?;
+                // A `u64` that doesn't fit in `usize` names no version: `as usize` would wrap it
+                // to a small index on a 32-bit target and restore the wrong document.
+                let i = usize::try_from(i).map_err(|_| CmdError::Params("no such version".into()))?;
+                let version = s.versions.get(i).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
+                // The restore replaces the whole document, including the content the protection
+                // kept read-only, so the protection is stopped first (with its password, when it
+                // has one) — a restore must not go around it.
+                super::protect::check_version_restore(s)?;
+                Some(version)
+            } else {
+                None
+            };
             if let Some(label) = p::str(v, "save") {
                 s.versions.push((label.to_string(), super::now_iso(), s.doc.clone()));
                 if s.versions.len() > 50 {
                     s.versions.remove(0);
                 }
             }
-            if let Some(i) = p::u64(v, "restore") {
-                let (_, _, d) = s.versions.get(i as usize).cloned().ok_or_else(|| CmdError::Params("no such version".into()))?;
-                // The restore replaces the whole document, including the content the protection
-                // kept read-only, so the protection is stopped first (with its password, when it
-                // has one) — a restore must not go around it.
-                super::protect::check_version_restore(s)?;
+            if let Some((_, _, d)) = restore {
                 s.checkpoint("Restore Version");
                 // A snapshot's own protection is stale: it was taken at some earlier moment, and
                 // restoring it must not bring a protection back that the live document doesn't
@@ -489,6 +532,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.doc.settings.protection = protection;
                 s.doc.settings.protect_hash = protect_hash;
                 s.doc.settings.protect_formatting = protect_formatting;
+                // The restored document reuses the open document's id; the body and any equation
+                // editing session are replaced.
+                s.note_body_replaced();
+                s.math = None;
                 s.touch();
                 s.clamp_selection();
             }
@@ -861,6 +908,8 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     if !s.prefs.autocorrect.enabled {
         return Ok(());
     }
+    // The word without its marks goes on through the steps below ("*teh* " → "The ").
+    let outside = emphasis_autoformat(s, on_enter)?;
     let ac = s.prefs.autocorrect.clone();
     let mut f = s.sel.focus.clone();
     let Some(text) = s.doc.para_at(&f).map(|p| p.text.clone()) else { return Ok(()) };
@@ -871,10 +920,21 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
     }
     let trigger = if on_enter { 0 } else { last.len_utf8() };
     let Some(body) = before.get(..before.len() - trigger) else { return Ok(()) };
-    let start = body.rfind(char::is_whitespace).map(|i| i + 1).unwrap_or(0);
+    // The word starts after the last white-space character, whatever its width (a no-break
+    // space is two bytes and an ideographic space is three).
+    let mut start = body.char_indices().rev().find(|(_, c)| c.is_whitespace()).map(|(i, c)| i + c.len_utf8()).unwrap_or(0);
     let Some(mut word) = body.get(start..).map(str::to_string) else { return Ok(()) };
     if word.is_empty() {
         return Ok(());
+    }
+    // The opening mark of a `*bold*` or `_italic_` span is not part of the word, so the first
+    // word of a span of several words is corrected as it is typed ("*teh end*" → "*the end*").
+    let mark = word.chars().next().filter(|c| ac.bold_italic && (*c == '*' || *c == '_'));
+    let mut opened = false;
+    if let Some(rest) = mark.and_then(|m| word.get(1..).filter(|r| !r.is_empty() && !r.contains(m))) {
+        start += 1;
+        word = rest.to_string();
+        opened = true;
     }
     // The word's language (run, paragraph style, document default) picks the replacement list
     // (#835) and the case mapping (#1923). Text with no language at all is in the editing
@@ -960,14 +1020,16 @@ pub fn autocorrect_word(s: &mut Session, on_enter: bool) -> Result<(), CmdError>
             c.link = Some(href.clone());
             c.style = Some("Hyperlink".into());
         })?;
-        // Typing after the link isn't part of it (but keeps the text's other formatting).
-        let mut after = s.doc.para_at(&f).map(|p| p.props_of_char(start).clone()).unwrap_or_default();
+        // Typing after the link isn't part of it (but keeps the text's other formatting, or
+        // the formatting outside a `*bold*` or `_italic_` span).
+        let mut after = outside.unwrap_or_else(|| s.doc.para_at(&f).map(|p| p.props_of_char(start).clone()).unwrap_or_default());
         after.link = None;
         after.style = None;
         s.pending = Some(after);
         return Ok(());
     }
-    let before_word = text.get(..start).unwrap_or("");
+    // A sentence starts before the opening mark, as for the word without it.
+    let before_word = text.get(..start - usize::from(opened)).unwrap_or("");
     // The first word in a table cell follows its own option; other sentences the sentence one.
     let sentence_on = if before_word.trim().is_empty() && f.path.cell().is_some() { ac.cap_cells } else { ac.cap_sentences };
     let exceptions = ac.exception_list();
@@ -1097,6 +1159,87 @@ fn case_fix(caps: &AutoCorrectPrefs, word: &str, turkic: bool) -> Option<(usize,
     None
 }
 
+/// *Bold* and _italic_ with real formatting, for the word ending at the caret (`on_enter` as for
+/// [`autocorrect_word`]): the two marks are removed and the text between them is made bold or
+/// italic, for plain and complex-script text. Returns the closing mark's formatting, which is
+/// the formatting outside the span, when anything changed.
+pub fn emphasis_autoformat(s: &mut Session, on_enter: bool) -> Result<Option<wordcraft_doc::props::CharProps>, CmdError> {
+    let Some((open, close, bold)) = emphasis_at_caret(s, on_enter) else { return Ok(None) };
+    let f = s.sel.focus.clone();
+    let para = s.doc.para_mut(f.story, &f.path)?;
+    let outside = para.props_of_char(close).clone();
+    para.delete(close, close + 1)?;
+    para.delete(open, open + 1)?;
+    para.format(open, close - 1, &|c| {
+        if bold {
+            c.bold = Some(true);
+            c.bold_cs = Some(true);
+        } else {
+            c.italic = Some(true);
+            c.italic_cs = Some(true);
+        }
+    })?;
+    s.sel = Selection::caret(Pos { off: f.off.saturating_sub(2), ..f });
+    Ok(Some(outside))
+}
+
+/// Would [`emphasis_autoformat`] change the word ending at the caret?
+pub fn has_emphasis(s: &Session, on_enter: bool) -> bool {
+    emphasis_at_caret(s, on_enter).is_some()
+}
+
+/// The `*bold*` or `_italic_` span ending at the caret (see [`emphasis_span`]) when the option is
+/// on. With Track Changes on, only the current author's tracked insertions are converted, since
+/// removing the marks from other text would not be tracked. Nothing is converted while the
+/// document limits formatting to its styles.
+fn emphasis_at_caret(s: &Session, on_enter: bool) -> Option<(usize, usize, bool)> {
+    // Formatting limited to the document's styles allows no direct bold or italic.
+    let styles_only = super::protect::enforced(&s.doc) && s.doc.settings.protect_formatting;
+    if !(s.prefs.autocorrect.enabled && s.prefs.autocorrect.bold_italic) || styles_only {
+        return None;
+    }
+    let f = &s.sel.focus;
+    let para = s.doc.para_at(f)?;
+    let before = para.text.get(..f.off)?;
+    let trigger = match before.chars().next_back() {
+        _ if on_enter => 0,
+        Some(c) if c == ' ' || ",.;:!?".contains(c) => c.len_utf8(),
+        _ => return None,
+    };
+    let span = before.get(..before.len() - trigger).and_then(emphasis_span)?;
+    let tracked = |(open, close, _): &(usize, usize, bool)| {
+        !s.doc.settings.track_changes
+            || para
+                .run_ranges()
+                .filter(|(r, _)| r.start <= *close && r.end > *open)
+                .all(|(_, p)| p.del.is_none() && p.ins.and_then(|i| s.doc.revisions.get(i as usize)).is_some_and(|rv| rv.author == s.author))
+    };
+    Some(span).filter(tracked)
+}
+
+/// The marks of a `*bold*` or `_italic_` span that `text` ends with: the byte offsets of the
+/// opening and closing mark, and whether it is bold. The opening mark starts a word (it follows
+/// the paragraph start, white space or an opening bracket or quote), the text between the marks
+/// holds a letter or digit and neither starts nor ends with white space, so `2*3*`, `file_name_`
+/// and `*?!*` stay as typed. Text holding an object (a picture, field or content control) is left
+/// alone.
+fn emphasis_span(text: &str) -> Option<(usize, usize, bool)> {
+    let mark = text.chars().next_back().filter(|c| *c == '*' || *c == '_')?;
+    let close = text.len() - 1;
+    let open = text.get(..close)?.rfind(mark)?;
+    let inner = text.get(open + 1..close)?;
+    let edge_ok = |c: Option<char>| c.is_some_and(|c| !c.is_whitespace());
+    if !edge_ok(inner.chars().next())
+        || !edge_ok(inner.chars().next_back())
+        || !inner.chars().any(char::is_alphanumeric)
+        || inner.contains(wordcraft_doc::para::OBJ)
+    {
+        return None;
+    }
+    let starts_word = text.get(..open)?.chars().next_back().is_none_or(|c| c.is_whitespace() || "([{\"'“‘".contains(c));
+    starts_word.then_some((open, close, mark == '*'))
+}
+
 /// Byte length of an ordinal suffix to superscript ("1st" → 2), if `word` is a correct ordinal.
 fn ordinal_suffix(word: &str) -> Option<usize> {
     let digits = word.find(|c: char| !c.is_ascii_digit())?;
@@ -1204,6 +1347,8 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
         let doc = crate::io::open_path(std::path::Path::new(path)).map_err(CmdError::Failed)?;
         s.doc = doc;
         s.doc.ensure_nonempty();
+        s.note_body_replaced();
+        s.math = None;
     }
     let level = p::str(v, "level").unwrap_or("word");
     let opts = CompareOptions {
@@ -1227,7 +1372,8 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
         // Tables match as a whole, by their text.
         Block::Table(_) => format!("\u{0}table\u{0}{}", opts.key(&block_text(b, 0))),
     };
-    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>());
+    let mut budget = MAX_COMPARE_CELLS;
+    let ops = lcs_ops(&old.iter().map(key).collect::<Vec<_>>(), &new.iter().map(key).collect::<Vec<_>>(), &mut budget);
     let mut out: Vec<Arc<Block>> = Vec::new();
     let (mut i, mut j) = (0usize, 0usize);
     let mut changes = 0usize;
@@ -1263,7 +1409,7 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
                 for x in 0..dels.max(inss) {
                     let (a, b) = (if x < dels { old.get(i + x) } else { None }, if x < inss { new.get(j + x) } else { None });
                     match (a.map(|x| &**x), b.map(|x| &**x)) {
-                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(pa, pb, ins, del, &opts))),
+                        (Some(Block::Para(pa)), Some(Block::Para(pb))) => out.push(para_block(word_diff(pa, pb, ins, del, &opts, &mut budget))),
                         _ => {
                             if let Some(x) = a {
                                 out.push(Arc::new(mark_block(x, &|c| c.del = Some(del), 0)));
@@ -1284,6 +1430,8 @@ fn compare(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.doc.body = out;
     s.doc.ensure_nonempty();
+    s.note_body_replaced();
+    s.math = None;
     if show_in != "original" || p::str(v, "original").is_some() {
         // The result is a new, untitled document: saving it never overwrites either file.
         s.path = None;
@@ -1339,15 +1487,26 @@ enum Op {
 /// compared as deleted and inserted, never dropped.
 const MAX_LCS: usize = 4000;
 
+/// Comparison table cells one compare may fill over all its tables (blocks and every changed
+/// paragraph pair); once spent, the remaining middles are compared as deleted and inserted.
+const MAX_COMPARE_CELLS: u64 = 50_000_000;
+
 /// LCS edit script between two sequences: the common start and end are matched first, then the
-/// middle (bounded size).
-fn lcs_ops<T: PartialEq>(a: &[T], b: &[T]) -> Vec<Op> {
+/// middle (bounded size). The middle's table is charged to `budget`; when it doesn't fit, the
+/// middle is deleted and inserted whole.
+fn lcs_ops<T: PartialEq>(a: &[T], b: &[T], budget: &mut u64) -> Vec<Op> {
     let pre = a.iter().zip(b).take_while(|(x, y)| x == y).count();
     let (ra, rb) = (a.get(pre..).unwrap_or_default(), b.get(pre..).unwrap_or_default());
     let suf = ra.iter().rev().zip(rb.iter().rev()).take_while(|(x, y)| x == y).count();
     let (a, b) = (ra.get(..ra.len() - suf).unwrap_or_default(), rb.get(..rb.len() - suf).unwrap_or_default());
     let mut ops = vec![Op::Same; pre];
-    let (n, m) = (a.len().min(MAX_LCS), b.len().min(MAX_LCS));
+    let (mut n, mut m) = (a.len().min(MAX_LCS), b.len().min(MAX_LCS));
+    let cells = (n as u64).saturating_mul(m as u64);
+    if cells > *budget {
+        (n, m) = (0, 0);
+    } else {
+        *budget -= cells;
+    }
     let mut t = vec![vec![0u32; m + 1]; n + 1];
     for i in (0..n).rev() {
         for j in (0..m).rev() {
@@ -1461,11 +1620,11 @@ fn tokens(s: &str, characters: bool) -> Vec<String> {
     v
 }
 
-fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOptions) -> Paragraph {
+fn word_diff(a: &Paragraph, b: &Paragraph, ins: u32, del: u32, opts: &CompareOptions, budget: &mut u64) -> Paragraph {
     let (at, bt) = (a.plain_text(), b.plain_text());
     let chars = opts.characters && at.chars().count().max(bt.chars().count()) <= MAX_CHAR_DIFF;
     let (ta, tb) = (tokens(&at, chars), tokens(&bt, chars));
-    let ops = lcs_ops(&ta.iter().map(|t| opts.key(t)).collect::<Vec<_>>(), &tb.iter().map(|t| opts.key(t)).collect::<Vec<_>>());
+    let ops = lcs_ops(&ta.iter().map(|t| opts.key(t)).collect::<Vec<_>>(), &tb.iter().map(|t| opts.key(t)).collect::<Vec<_>>(), budget);
     // Only at character granularity: a matched whole word almost never happens by coincidence,
     // but a matched single character very often does (digits, punctuation), so only there does
     // a short interior match need folding back into its surrounding edit.
@@ -2114,12 +2273,12 @@ mod tests {
     fn collapse_noise_matches_merges_short_interior_runs_but_keeps_prefix_suffix() {
         // "01.09" vs "19.10": a pure LCS finds a scrambled chain of single-character matches
         // ('1', '.', '0') threaded through what a reader expects to be one clean replacement.
-        let ops = lcs_ops(&['0', '1', '.', '0', '9'], &['1', '9', '.', '1', '0']);
+        let ops = lcs_ops(&['0', '1', '.', '0', '9'], &['1', '9', '.', '1', '0'], &mut { u64::MAX });
         assert!(ops.contains(&Op::Same), "the raw LCS does find spurious matches here, or this test proves nothing");
         assert_eq!(collapse_noise_matches(&ops), vec![Op::Del, Op::Del, Op::Del, Op::Del, Op::Del, Op::Ins, Op::Ins, Op::Ins, Op::Ins, Op::Ins]);
         // A plain single-character replacement flanked by a real common prefix and suffix has no
         // interior match to begin with (the DP's middle is pure delete/insert), so it's untouched.
-        let ops = lcs_ops(&['a', 'b', 'c', 'x', 'd', 'e', 'f'], &['a', 'b', 'c', 'y', 'd', 'e', 'f']);
+        let ops = lcs_ops(&['a', 'b', 'c', 'x', 'd', 'e', 'f'], &['a', 'b', 'c', 'y', 'd', 'e', 'f'], &mut { u64::MAX });
         assert_eq!(collapse_noise_matches(&ops), ops);
     }
 
@@ -2135,6 +2294,39 @@ mod tests {
             p.run_ranges().any(|(r, c)| c.del.is_none() && c.ins.is_none() && p.text[r].trim() == "cat"),
             "the unchanged word must survive as plain text"
         );
+    }
+
+    #[test]
+    fn compare_bounds_total_diff_work() {
+        // Many long, slightly different paragraphs: each pair alone fits one comparison table,
+        // but the work over all pairs must stay bounded. Pairs past the budget are compared
+        // whole (deleted and inserted), and every pair still counts as a change.
+        let words = 3000;
+        let paras = 12;
+        let doc = |rev: bool| -> String {
+            (0..paras)
+                .map(|p| (0..words).map(|w| if w % 10 == 0 && rev { format!("x{p}w{w}") } else { format!("p{p}w{w}") }).collect::<Vec<_>>().join(" "))
+                .collect::<Vec<_>>()
+                .join("\n")
+        };
+        let (original, revised) = (doc(false), doc(true));
+        let mut s = Session::new(Document::from_text(&original));
+        let r = s.run("review.compare", &json!({"text": revised})).unwrap();
+        assert_eq!(r["changes"], paras);
+        // A pair diffed word by word keeps most of its text unmarked; one replaced whole keeps
+        // only its common start and end.
+        let word_diffed = |b: &Arc<Block>| {
+            let p = b.as_para().unwrap();
+            let same: usize = p.run_ranges().filter(|(_, c)| c.ins.is_none() && c.del.is_none()).map(|(r, _)| r.len()).sum();
+            same * 2 > p.text.len()
+        };
+        assert!(word_diffed(&s.doc.body[0]));
+        let diffed = s.doc.body.iter().filter(|b| word_diffed(b)).count() as u64;
+        let cells = (words as u64) * (words as u64);
+        assert!(diffed * cells <= 50_000_000 + cells, "{diffed} pairs diffed word by word");
+        assert!(!word_diffed(s.doc.body.last().unwrap()));
+        s.run("review.acceptAll", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), revised);
     }
 
     #[test]

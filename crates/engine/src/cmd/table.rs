@@ -4,7 +4,7 @@ use super::table_formula::parse_number;
 use serde_json::{Value, json};
 use wordcraft_doc::collate::{SortKey, sort_key};
 use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, HeightRule, Rgb, TextDirection, VAlign};
-use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, RevisionKind, StoryRef, Table, para_block};
+use wordcraft_doc::{Block, Document, InlineObject, Paragraph, Path, Pos, RevisionKind, StoryRef, Table, para_block};
 
 use super::sel_result;
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
@@ -171,7 +171,8 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"text"?: string, "title"?: string} (empty clears)"#)),
         t(CommandSpec::new("table.sort", "Sort", "Table Layout › Data", sort_table)
             .params(r#"{"column"?: n, "descending"?: bool, "header"?: bool}"#)),
-        t(CommandSpec::new("table.toText", "Convert to Text", "Table Layout › Data", to_text).params(r#"{"separator"?: "tab|comma|paragraph"}"#)),
+        t(CommandSpec::new("table.toText", "Convert to Text", "Table Layout › Data", to_text)
+            .params(r#"{"separator"?: "tab|comma|paragraph|other", "char"?: string (with other)} (the selected rows, or the whole table)"#)),
         t(CommandSpec::new("table.formula", "Formula", "Table Layout › Data", formula).params(r#"{"formula"?: "=SUM(ABOVE)"}"#)),
         t(CommandSpec::new("table.selectTable", "Select Table", "Table Layout › Table › Select", |s, _| {
             let (tp, _, _) = cell(s)?;
@@ -243,14 +244,15 @@ fn autofit(s: &mut Session, v: &Value) -> CmdResult {
 pub(crate) fn sync_cell_widths(t: &mut Table) {
     let grid = t.grid.clone();
     for row in &mut t.rows {
-        let mut g = 0usize;
+        // A row's cells start after the grid columns it skips (`w:gridBefore`).
+        let mut g = row.first_grid();
         for c in &mut row.cells {
             let span = c.span();
             let w: f32 = grid.get(g..g.saturating_add(span).min(grid.len())).unwrap_or(&[]).iter().sum();
             if w > 0.0 {
                 c.props.width = Some(w);
             }
-            g += span;
+            g = g.saturating_add(span);
         }
     }
 }
@@ -516,6 +518,9 @@ pub(super) fn col(s: &mut Session, right: bool) -> CmdResult {
         let k = before / total;
         t.grid.iter_mut().for_each(|w| *w *= k);
     }
+    // The inserted cells carry the pre-scale column width, and the layout prefers a cell width
+    // over the grid: sync them, or the shrink never reaches the layout or the saved `w:tcW`.
+    sync_cell_widths(t);
     fix_caret(s, &tp, r, if right { c + 1 } else { c })
 }
 
@@ -840,11 +845,7 @@ fn split_table(s: &mut Session, _: &Value) -> CmdResult {
     }
     let story = s.sel.focus.story;
     let t = s.doc.table_mut(story, &tp)?;
-    let tail_rows = t.rows.split_off(r);
-    // Content controls closing after the table now close after its second part.
-    let close = std::mem::take(&mut t.controls.close);
-    let controls = wordcraft_doc::ControlWrap { open: Vec::new(), close };
-    let tail = Table { props: t.props.clone(), grid: t.grid.clone(), rows: tail_rows, controls };
+    let tail = t.split_off(r);
     let after = tp.with_last(tp.last() + 1);
     s.doc.insert_block(story, &after, Block::Para(Paragraph::new()))?;
     s.doc.insert_block(story, &after.with_last(after.last() + 1), Block::Table(tail))?;
@@ -944,26 +945,153 @@ fn sort_table(s: &mut Session, v: &Value) -> CmdResult {
     })
 }
 
+/// Table Layout › Data › Convert to Text: the selected rows, or the whole table with the caret
+/// in one cell, become paragraphs. Each row is one paragraph with its cells set apart by the
+/// separator (a tab, a comma or another character); with `paragraph` each cell paragraph
+/// stays a separate paragraph. The text keeps its formatting and objects, a table nested in a cell stays
+/// a table, and rows above and below the selected ones stay a table each.
 fn to_text(s: &mut Session, v: &Value) -> CmdResult {
     let (tp, _, _) = cell(s)?;
-    let sep = match p::str(v, "separator").unwrap_or("tab") {
-        "comma" => ",",
-        "paragraph" => "\n",
-        _ => "\t",
+    let sep = match p::str(v, "separator") {
+        None | Some("tab") => Some('\t'),
+        Some("comma") => Some(','),
+        Some("paragraph") => None,
+        Some("other") => match p::str(v, "char").and_then(|c| c.chars().next()) {
+            // U+FFFC marks an object in the text, so it cannot set the cells apart.
+            Some(c) if c != '\n' && c != '\r' && c != wordcraft_doc::para::OBJ => Some(c),
+            _ => return Err(CmdError::Params("`char` (the separating character) is required with `other`".into())),
+        },
+        Some(x) => return Err(CmdError::Params(format!("unknown separator `{x}`"))),
     };
     let story = s.sel.focus.story;
-    let t = s.doc.table(story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
+    let mut t = s.doc.table(story, &tp).cloned().ok_or_else(|| CmdError::Failed("no table".into()))?;
+    // Several cells selected: their rows. A caret (or a selection inside one cell): every row.
+    let cells = selected_cells(s);
+    let (r0, r1) = match (cells.iter().map(|x| x.0).min(), cells.iter().map(|x| x.0).max()) {
+        (Some(a), Some(b)) if cells.len() > 1 || s.cell_range().is_some() => (a, b.min(t.rows.len().saturating_sub(1))),
+        _ => (0, t.rows.len().saturating_sub(1)),
+    };
+    // `split_off` ends the vertical merges and row content controls that a cut crosses, and opens
+    // them again (without their ids) below it.
+    let mut tail = t.split_off(r1 + 1);
+    let rows = t.split_off(r0).rows;
+    t.controls.close = std::mem::take(&mut tail.controls.close);
+    let mut blocks = Vec::new();
+    if !t.rows.is_empty() {
+        let mut head = Table { props: t.props.clone(), grid: t.grid.clone(), rows: std::mem::take(&mut t.rows), controls: Default::default() };
+        head.controls.open = std::mem::take(&mut t.controls.open);
+        blocks.push(Block::Table(head));
+    }
+    let text_from = blocks.len();
+    for row in rows {
+        row_to_text(row, sep, &mut blocks);
+    }
+    // Rows without cells (only from a damaged file) still leave a paragraph in their place.
+    if blocks.len() == text_from {
+        blocks.push(Block::Para(Paragraph::new()));
+    }
+    // The caret goes to the first converted paragraph (into a nested table when there is none).
+    let caret = match blocks.iter().enumerate().skip(text_from).find(|(_, b)| matches!(b, Block::Para(_))) {
+        Some((k, _)) => tp.with_last(tp.last() + k),
+        None => Path(tp.with_last(tp.last() + text_from).0.into_iter().chain([0, 0, 0]).collect()),
+    };
+    if !tail.rows.is_empty() {
+        tail.controls.close = std::mem::take(&mut t.controls.close);
+        // A floating table keeps its position in the part above; the part below goes in the text
+        // flow.
+        if text_from > 0 {
+            tail.props.float = None;
+        }
+        blocks.push(Block::Table(tail));
+    }
+    // A content control around the table keeps both ends: on the text where no table part is
+    // left to carry them.
+    let (open, close) = (std::mem::take(&mut t.controls.open), std::mem::take(&mut t.controls.close));
+    match blocks.get_mut(text_from) {
+        Some(Block::Para(p)) => {
+            for (k, mut control) in open.into_iter().enumerate() {
+                control.block = true;
+                let start = InlineObject::ControlStart { control: Box::new(control) };
+                p.insert_object(k * wordcraft_doc::para::OBJ.len_utf8(), start, &Default::default())?;
+            }
+        }
+        Some(Block::Table(x)) => {
+            let inner = std::mem::replace(&mut x.controls.open, open);
+            x.controls.open.extend(inner);
+        }
+        None => {}
+    }
+    match blocks.last_mut() {
+        Some(Block::Para(p)) => {
+            // The count is read from the file; at most 1,024 ends go onto the text.
+            for _ in 0..close.min(1024) {
+                let end = p.len();
+                p.insert_object(end, InlineObject::ControlEnd, &Default::default())?;
+            }
+        }
+        Some(Block::Table(x)) => x.controls.close = x.controls.close.saturating_add(close),
+        None => {}
+    }
     s.doc.remove_block(story, &tp)?;
-    let mut i = tp.last();
-    for row in &t.rows {
-        let text: Vec<String> = row.cells.iter().map(cell_text).collect();
-        for line in text.join(sep).split('\n') {
-            s.doc.insert_block(story, &tp.with_last(i), Block::Para(Paragraph::with_text(line, Default::default())))?;
-            i += 1;
+    for (k, b) in blocks.into_iter().enumerate() {
+        s.doc.insert_block(story, &tp.with_last(tp.last() + k), b)?;
+    }
+    s.sel = Selection::caret(s.doc.clamp(&Pos { story, path: caret, off: 0 }));
+    sel_result(s)
+}
+
+/// One row of Convert to Text as blocks: a paragraph per row (and per further paragraph in a
+/// cell) with the cells set apart by `sep`, or each cell's blocks as they are without one.
+fn row_to_text(row: wordcraft_doc::Row, sep: Option<char>, out: &mut Vec<Block>) {
+    let Some(sep) = sep else {
+        for b in row.cells.into_iter().flat_map(|c| c.blocks) {
+            out.push(match std::sync::Arc::unwrap_or_clone(b) {
+                Block::Para(mut para) => {
+                    para.section = None;
+                    para.touch();
+                    Block::Para(para)
+                }
+                other => other,
+            });
+        }
+        return;
+    };
+    let mut line: Option<Paragraph> = None;
+    for (ci, cell) in row.cells.into_iter().enumerate() {
+        if ci > 0 {
+            // The separator takes no formatting from the text before it.
+            line.get_or_insert_with(Paragraph::new).append(Paragraph::with_text(sep.encode_utf8(&mut [0; 4]), Default::default()));
+        }
+        let mut first = true;
+        for b in cell.blocks {
+            match std::sync::Arc::unwrap_or_clone(b) {
+                Block::Para(mut para) => {
+                    para.section = None;
+                    match line.as_mut() {
+                        Some(p) if first => p.append(para),
+                        _ => {
+                            if let Some(done) = line.take() {
+                                out.push(Block::Para(done));
+                            }
+                            para.touch();
+                            line = Some(para);
+                        }
+                    }
+                }
+                other => {
+                    // A nested table stays a table between the row's paragraphs.
+                    if let Some(done) = line.take() {
+                        out.push(Block::Para(done));
+                    }
+                    out.push(other);
+                }
+            }
+            first = false;
         }
     }
-    s.sel = Selection::caret(Pos { story, path: tp, off: 0 });
-    sel_result(s)
+    if let Some(done) = line {
+        out.push(Block::Para(done));
+    }
 }
 
 /// Table Layout › Data › Formula: inserts a formula field at the caret, evaluated now and again
@@ -994,8 +1122,8 @@ fn formula(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"result": text, "formula": instr}))
 }
 
-/// A formula as a field stores it: upper case, with one leading `=`. A `\#` numeric picture is
-/// kept as typed.
+/// A formula as a field stores it: upper case, with one leading `=`. The `\#` numeric picture and
+/// the `\*` switches are kept as typed.
 pub(crate) fn formula_instr(raw: &str) -> String {
     let body = raw.trim();
     let body = body.strip_prefix('=').unwrap_or(body);

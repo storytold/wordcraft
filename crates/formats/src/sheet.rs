@@ -724,7 +724,8 @@ fn number(x: f64) -> String {
         return x.to_string();
     }
     if x.fract() == 0.0 && x.abs() < 1e15 {
-        return format!("{x:.0}");
+        // `+ 0.0` turns negative zero into positive zero, which would print as "-0".
+        return format!("{:.0}", x + 0.0);
     }
     let rounded: f64 = format!("{x:.14e}").parse().unwrap_or(x);
     if rounded.abs() >= 1e15 || rounded.abs() < 1e-9 { format!("{rounded:E}") } else { rounded.to_string() }
@@ -1005,6 +1006,11 @@ fn ods_value(c: &OCell) -> String {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn negative_zero_formats_as_zero() {
+        assert_eq!(number(-0.0), "0");
+    }
 
     fn zip(entries: &[(&str, &str)]) -> Vec<u8> {
         let mut z = zip::ZipWriter::new(Cursor::new(Vec::new()));

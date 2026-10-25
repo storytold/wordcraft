@@ -9,6 +9,10 @@
 //! a verifier that tells a wrong password apart; an HMAC over the encrypted stream checks that it
 //! hasn't been damaged or tampered with.
 //!
+//! Older packages (Word 2007) use the *Standard* method (§2.3.4.5–§2.3.4.9): a binary
+//! `EncryptionInfo`, one AES key derived from the password with SHA-1 and 50,000 spins, and the
+//! whole package AES-ECB encrypted. [`decrypt`] reads both; [`encrypt`] writes agile only.
+//!
 //! Files are hostile: every stream read is capped, every length is checked before slicing, and the
 //! spin count is bounded by the specification's maximum. Passwords and keys are wiped from memory
 //! when dropped ([`Zeroizing`]) and never logged.
@@ -47,6 +51,20 @@ const BK_KEY_VALUE: [u8; 8] = [0x14, 0x6e, 0x0b, 0xe7, 0xab, 0xac, 0xd0, 0xd6];
 const BK_HMAC_KEY: [u8; 8] = [0x5f, 0xb2, 0xad, 0x01, 0x0c, 0xb9, 0xe1, 0xf6];
 const BK_HMAC_VALUE: [u8; 8] = [0xa0, 0x67, 0x7f, 0x02, 0xb2, 0x2c, 0x84, 0x33];
 
+/// Standard encryption (§2.3.2, §2.3.4.5–§2.3.4.7): `EncryptionHeader.Flags` bits, the AES and
+/// SHA-1 algorithm ids, the provider type, the fixed spin count and the SHA-1 size.
+const F_CRYPTO_API: u32 = 0x04;
+const F_EXTERNAL: u32 = 0x10;
+const F_AES: u32 = 0x20;
+const STANDARD_FLAGS: u32 = F_CRYPTO_API | F_AES;
+const ALG_AES_128: u32 = 0x660E;
+const ALG_AES_192: u32 = 0x660F;
+const ALG_AES_256: u32 = 0x6610;
+const ALG_SHA1: u32 = 0x8004;
+const PROV_RSA_AES: u32 = 0x18;
+const STANDARD_SPIN_COUNT: u32 = 50_000;
+const SHA1_SIZE: usize = 20;
+
 /// An OLE compound file starts with these bytes ([MS-CFB] §2.2).
 const CFB_MAGIC: [u8; 8] = [0xD0, 0xCF, 0x11, 0xE0, 0xA1, 0xB1, 0x1A, 0xE1];
 
@@ -72,6 +90,9 @@ pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxErro
     let mut comp = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
     let info = stream(&mut comp, "/EncryptionInfo", MAX_INFO)?;
     let package = stream(&mut comp, "/EncryptedPackage", bytes.len() as u64)?;
+    if matches!(info.get(..4), Some([2..=4, 0, 2, 0])) {
+        return decrypt_standard(&info, &package, password);
+    }
     let info = parse_info(&info)?;
     let Some(password) = password else { return Err(DocxError::PasswordRequired) };
     let pe = &info.password;
@@ -92,17 +113,18 @@ pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxErro
     let key_key = derive_key(pe.hash, &hn, &BK_KEY_VALUE, pe.key_bytes);
     let key = Zeroizing::new(cbc_decrypt(&key_key, &iv, &pe.key_value)?);
     let key = Zeroizing::new(key.get(..info.key_bytes).ok_or_else(|| bad("the encrypted key is too short"))?.to_vec());
-    // Data integrity (§2.3.4.14): an HMAC of the whole EncryptedPackage stream.
-    if let Some((enc_key, enc_value)) = &info.integrity {
-        let hmac_key = Zeroizing::new(cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_KEY), info.block_size), enc_key)?);
-        // The key is the salt, zero-padded to the block size; HMAC pads short keys with zeros
-        // anyway, so the padded key gives the same HMAC.
-        let hmac_key = hmac_key.get(..hmac_key.len().min(info.hash.size())).unwrap_or(&[]);
-        let expected = cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_VALUE), info.block_size), enc_value)?;
-        let expected = expected.get(..info.hash.size()).ok_or_else(|| bad("the integrity check value is too short"))?;
-        if !same(&info.hash.hmac(hmac_key, &package)?, expected) {
-            return Err(bad("the document is damaged (its integrity check failed)"));
-        }
+    // Data integrity (§2.3.4.14): an HMAC of the whole EncryptedPackage stream. It is required:
+    // a file that could drop it would let altered ciphertext, or an altered StreamSize, through
+    // unauthenticated (`parse_info` refuses a file without it).
+    let (enc_key, enc_value) = &info.integrity;
+    let hmac_key = Zeroizing::new(cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_KEY), info.block_size), enc_key)?);
+    // The key is the salt, zero-padded to the block size; HMAC pads short keys with zeros
+    // anyway, so the padded key gives the same HMAC.
+    let hmac_key = hmac_key.get(..hmac_key.len().min(info.hash.size())).unwrap_or(&[]);
+    let expected = cbc_decrypt(&key, &make_iv(info.hash, &info.salt, Some(&BK_HMAC_VALUE), info.block_size), enc_value)?;
+    let expected = expected.get(..info.hash.size()).ok_or_else(|| bad("the integrity check value is too short"))?;
+    if !same(&info.hash.hmac(hmac_key, &package)?, expected) {
+        return Err(bad("the document is damaged (its integrity check failed)"));
     }
     // The package itself (§2.3.4.15): StreamSize, then 4096-byte segments, each with its own IV.
     let size = package
@@ -122,6 +144,92 @@ pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxErro
     }
     out.truncate(size);
     Ok(out)
+}
+
+/// [`decrypt`] for Standard encryption (§2.3.4.5–§2.3.4.9): one AES key from the password,
+/// checked with the verifier, and the whole package AES-ECB encrypted after its 8-byte size.
+fn decrypt_standard(info: &[u8], package: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxError> {
+    let s = parse_standard(info)?;
+    let Some(password) = password else { return Err(DocxError::PasswordRequired) };
+    let key = standard_key(s.salt, password, s.key_bytes);
+    // The verifier (§2.3.4.9): a random value and its SHA-1, both encrypted with the key.
+    let verifier = Zeroizing::new(ecb(&key, s.verifier, false)?);
+    let hash = Zeroizing::new(ecb(&key, s.verifier_hash, false)?);
+    let hash = hash.get(..SHA1_SIZE).ok_or_else(|| bad("the password verifier hash is too short"))?;
+    if !same(&Hash::Sha1.hash(&[&verifier]), hash) {
+        return Err(DocxError::WrongPassword);
+    }
+    // The package (§2.3.4.4): StreamSize, then the data; bytes past the last block are ignored.
+    let size = package
+        .get(..8)
+        .and_then(|b| <[u8; 8]>::try_from(b).ok())
+        .map(u64::from_le_bytes)
+        .ok_or_else(|| bad("the encrypted package is truncated"))?;
+    let data = package.get(8..).unwrap_or(&[]);
+    let size = usize::try_from(size).ok().filter(|s| *s <= data.len()).ok_or_else(|| bad("the encrypted package is truncated"))?;
+    let needed = size.div_ceil(BLOCK).saturating_mul(BLOCK);
+    let data = data.get(..needed).ok_or_else(|| bad("the encrypted package is truncated"))?;
+    let mut out = ecb(&key, data, false)?;
+    out.truncate(size);
+    Ok(out)
+}
+
+/// What a Standard `EncryptionInfo` stream says (§2.3.4.5): the key size, and the verifier's salt
+/// and encrypted values.
+struct Standard<'a> {
+    key_bytes: usize,
+    salt: &'a [u8],
+    verifier: &'a [u8],
+    verifier_hash: &'a [u8],
+}
+
+fn parse_standard(info: &[u8]) -> Result<Standard<'_>, DocxError> {
+    let short = || bad("EncryptionInfo is truncated");
+    let u32_at = |at: usize| -> Result<u32, DocxError> {
+        let b = at.checked_add(4).and_then(|end| info.get(at..end)).ok_or_else(short)?;
+        <[u8; 4]>::try_from(b).map(u32::from_le_bytes).map_err(|_| short())
+    };
+    let flags = u32_at(4)?;
+    if flags & F_EXTERNAL != 0 {
+        return Err(bad("this file uses extensible encryption, which WordCraft can't open"));
+    }
+    if flags & STANDARD_FLAGS != STANDARD_FLAGS {
+        return Err(bad("this file's encryption isn't AES, which WordCraft can't open"));
+    }
+    // EncryptionHeader (§2.3.2): Flags, SizeExtra, AlgID, AlgIDHash, KeySize, ProviderType, two
+    // reserved words, then the CSP name, which isn't needed.
+    let header_size = usize::try_from(u32_at(8)?).map_err(|_| short())?;
+    if header_size < 32 {
+        return Err(bad("the encryption header is too short"));
+    }
+    let verifier_at = header_size.checked_add(12).filter(|&v| v <= info.len()).ok_or_else(short)?;
+    // AlgID 0 and AlgIDHash 0 mean "set by the flags": AES-128 and SHA-1.
+    let bits = match u32_at(20)? {
+        0 | ALG_AES_128 => 128,
+        ALG_AES_192 => 192,
+        ALG_AES_256 => 256,
+        id => return Err(bad(format!("encryption algorithm 0x{id:X} isn't supported"))),
+    };
+    let hash_id = u32_at(24)?;
+    if !matches!(hash_id, 0 | ALG_SHA1) {
+        return Err(bad(format!("hash algorithm 0x{hash_id:X} isn't supported")));
+    }
+    if u32_at(28)? != bits {
+        return Err(bad("the key size doesn't match the encryption algorithm"));
+    }
+    // EncryptionVerifier (§2.3.3): SaltSize (16), Salt, EncryptedVerifier, VerifierHashSize (20
+    // for SHA-1), EncryptedVerifierHash (32 bytes for AES).
+    if u32_at(verifier_at)? != SALT as u32 {
+        return Err(bad("the salt isn't 16 bytes"));
+    }
+    let field = |at: usize, len: usize| verifier_at.checked_add(at).and_then(|a| info.get(a..a.checked_add(len)?)).ok_or_else(short);
+    let salt = field(4, SALT)?;
+    let verifier = field(4 + SALT, BLOCK)?;
+    if u32_at(verifier_at.saturating_add(4 + SALT + BLOCK))? != SHA1_SIZE as u32 {
+        return Err(bad("the password verifier hash isn't SHA-1"));
+    }
+    let verifier_hash = field(8 + SALT + BLOCK, 2 * BLOCK)?;
+    Ok(Standard { key_bytes: bits as usize / 8, salt, verifier, verifier_hash })
 }
 
 /// Encrypt a zip package with `password` (agile encryption: AES-256-CBC, SHA-512, Word's spin
@@ -208,6 +316,47 @@ pub fn encrypt_with_spin_count(package: &[u8], password: &str, spin_count: u32) 
         }
         comp.create_stream(path).map_err(io)?.write_all(&data).map_err(io)?;
     }
+    comp.flush().map_err(io)?;
+    Ok(comp.into_inner().into_inner())
+}
+
+/// A package encrypted with the *Standard* method (§2.3.4.5–§2.3.4.9: AES-ECB, SHA-1, 50,000
+/// spins), as Word 2007 wrote it, for tests only: WordCraft saves with the agile method
+/// ([`encrypt`]). `key_bits` is 128, 192 or 256. The compound file holds just the two streams
+/// [`decrypt`] reads.
+#[doc(hidden)]
+pub fn encrypt_standard_for_tests(package: &[u8], password: &str, key_bits: u32) -> Result<Vec<u8>, DocxError> {
+    check_password(password)?;
+    let alg_id = match key_bits {
+        128 => ALG_AES_128,
+        192 => ALG_AES_192,
+        256 => ALG_AES_256,
+        _ => return Err(bad(format!("unsupported AES key size {key_bits}"))),
+    };
+    let salt = random(SALT)?;
+    let verifier = random(SALT)?;
+    let key = standard_key(&salt, password, key_bits as usize / 8);
+    let mut header = Vec::new();
+    for v in [STANDARD_FLAGS, 0, alg_id, ALG_SHA1, key_bits, PROV_RSA_AES, 0, 0] {
+        header.extend_from_slice(&v.to_le_bytes());
+    }
+    // CSPName: an empty null-terminated UTF-16 string.
+    header.extend_from_slice(&[0, 0]);
+    let mut info = vec![3, 0, 2, 0];
+    info.extend_from_slice(&STANDARD_FLAGS.to_le_bytes());
+    info.extend_from_slice(&(header.len() as u32).to_le_bytes());
+    info.extend_from_slice(&header);
+    info.extend_from_slice(&(SALT as u32).to_le_bytes());
+    info.extend_from_slice(&salt);
+    info.extend_from_slice(&ecb(&key, &verifier, true)?);
+    info.extend_from_slice(&(SHA1_SIZE as u32).to_le_bytes());
+    info.extend_from_slice(&ecb(&key, &padded(&Hash::Sha1.hash(&[&verifier])), true)?);
+    let mut stream = (package.len() as u64).to_le_bytes().to_vec();
+    stream.extend_from_slice(&ecb(&key, &padded(package), true)?);
+    let io = |e: std::io::Error| bad(format!("couldn't write the compound file ({e})"));
+    let mut comp = cfb::CompoundFile::create_with_version(cfb::Version::V3, Cursor::new(Vec::new())).map_err(io)?;
+    comp.create_stream("/EncryptionInfo").map_err(io)?.write_all(&info).map_err(io)?;
+    comp.create_stream("/EncryptedPackage").map_err(io)?.write_all(&stream).map_err(io)?;
     comp.flush().map_err(io)?;
     Ok(comp.into_inner().into_inner())
 }
@@ -496,6 +645,45 @@ fn derive_key(hash: Hash, hn: &[u8], block_key: &[u8], len: usize) -> Zeroizing<
     k
 }
 
+/// Standard encryption's key (§2.3.4.7): the SHA-1 password hash after 50,000 iterations, hashed
+/// with block number 0; then X1 = SHA-1 of that hash XOR-ed into 64 bytes of 0x36, X2 the same
+/// with 0x5C, and the key is the first `len` bytes of X1 + X2.
+fn standard_key(salt: &[u8], password: &str, len: usize) -> Zeroizing<Vec<u8>> {
+    let hn = iterate(Hash::Sha1, salt, password, STANDARD_SPIN_COUNT);
+    let hfinal = Zeroizing::new(Hash::Sha1.hash(&[&hn, &0u32.to_le_bytes()]));
+    let x = |fill: u8| {
+        let mut buf = Zeroizing::new([fill; 64]);
+        for (b, h) in buf.iter_mut().zip(hfinal.iter()) {
+            *b ^= h;
+        }
+        Zeroizing::new(Hash::Sha1.hash(&[&buf[..]]))
+    };
+    let mut key = Zeroizing::new(x(0x36).to_vec());
+    key.extend_from_slice(&x(0x5C));
+    key.truncate(len);
+    key
+}
+
+/// AES-ECB without padding (Standard encryption, §2.3.4.7–§2.3.4.9): `data` must be whole blocks.
+fn ecb(key: &[u8], data: &[u8], encrypt: bool) -> Result<Vec<u8>, DocxError> {
+    let aes = Aes::new(key)?;
+    let (blocks, rest) = data.as_chunks::<BLOCK>();
+    if !rest.is_empty() {
+        return Err(bad("encrypted data isn't a whole number of blocks"));
+    }
+    let mut out = Vec::with_capacity(data.len());
+    for b in blocks {
+        let mut x = aes::Block::from(*b);
+        if encrypt {
+            aes.encrypt(&mut x);
+        } else {
+            aes.decrypt(&mut x);
+        }
+        out.extend_from_slice(&x);
+    }
+    Ok(out)
+}
+
 /// An initialization vector (§2.3.4.12): H(salt + blockKey), or the salt itself, truncated to
 /// the block size or padded with 0x36.
 fn make_iv(hash: Hash, salt: &[u8], block_key: Option<&[u8]>, block_size: usize) -> Vec<u8> {
@@ -610,7 +798,7 @@ struct Info {
     block_size: usize,
     key_bytes: usize,
     /// encryptedHmacKey, encryptedHmacValue.
-    integrity: Option<(Vec<u8>, Vec<u8>)>,
+    integrity: (Vec<u8>, Vec<u8>),
     password: PasswordEncryptor,
 }
 
@@ -642,7 +830,6 @@ fn parse_info(info: &[u8]) -> Result<Info, DocxError> {
     };
     match (major, minor) {
         (4, 4) => {}
-        (2..=4, 2) => return Err(bad("this file uses Standard encryption (Office 2007), which WordCraft can't open yet")),
         (3 | 4, 3) => return Err(bad("this file uses extensible encryption, which WordCraft can't open")),
         _ => return Err(bad(format!("unknown encryption version {major}.{minor}"))),
     }
@@ -652,10 +839,12 @@ fn parse_info(info: &[u8]) -> Result<Info, DocxError> {
     }
     let key_data = root.els().find(|e| e.local() == "keyData").ok_or_else(|| bad("EncryptionInfo has no keyData"))?;
     let kd = params(key_data)?;
-    let integrity = match root.els().find(|e| e.local() == "dataIntegrity") {
-        Some(di) => Some((b64_attr(di, "encryptedHmacKey")?, b64_attr(di, "encryptedHmacValue")?)),
-        None => None,
-    };
+    // The integrity check is mandatory (§2.3.4.14): a file is not trusted to opt out of it.
+    let di = root
+        .els()
+        .find(|e| e.local() == "dataIntegrity")
+        .ok_or_else(|| bad("EncryptionInfo has no dataIntegrity, so the document cannot be checked for tampering"))?;
+    let integrity = (b64_attr(di, "encryptedHmacKey")?, b64_attr(di, "encryptedHmacValue")?);
     // The password key encryptor is the `encryptedKey` with a spin count (a certificate key
     // encryptor has none).
     let encryptors = root.els().find(|e| e.local() == "keyEncryptors").ok_or_else(|| bad("EncryptionInfo has no keyEncryptors"))?;
@@ -897,6 +1086,22 @@ mod tests {
     }
 
     #[test]
+    fn a_file_without_data_integrity_is_refused() {
+        let enc = encrypt_with_spin_count(&zip_package(), "pw", 4).unwrap();
+        let mut comp = cfb::CompoundFile::open(Cursor::new(enc)).unwrap();
+        let mut info = Vec::new();
+        comp.open_stream("/EncryptionInfo").unwrap().read_to_end(&mut info).unwrap();
+        let xml = String::from_utf8(info[8..].to_vec()).unwrap();
+        let mut stripped = info[..8].to_vec();
+        stripped.extend_from_slice(xml.replacen("<dataIntegrity", "<nothing", 1).as_bytes());
+        comp.create_stream("/EncryptionInfo").unwrap().write_all(&stripped).unwrap();
+        comp.flush().unwrap();
+        let enc = comp.into_inner().into_inner();
+        assert!(matches!(decrypt(&enc, Some("pw")), Err(DocxError::Encryption(m)) if m.contains("dataIntegrity")));
+        assert!(crate::read_with_password(&enc, Some("pw")).is_err());
+    }
+
+    #[test]
     fn tampered_package_fails_the_integrity_check() {
         let pkg = zip_package();
         let enc = encrypt_with_spin_count(&pkg, "pw", 4).unwrap();
@@ -955,8 +1160,8 @@ mod tests {
         cases.push((with("ChainingModeCBC", "ChainingModeCFB"), package.clone(), true));
         cases.push((with("saltValue=\"", "saltValue=\"!!"), package.clone(), true));
         cases.push((with("encryptedKeyValue=\"", "encryptedKeyValue=\"AAAA"), package.clone(), true));
-        // Data integrity is optional; without it a good file still opens.
-        cases.push((with("<dataIntegrity", "<nothing"), package.clone(), false));
+        // Data integrity is mandatory: a file without it is refused, never opened unchecked.
+        cases.push((with("<dataIntegrity", "<nothing"), package.clone(), true));
         let mut huge = package.clone();
         huge[..8].copy_from_slice(&u64::MAX.to_le_bytes());
         cases.push((with("<dataIntegrity", "<nothing"), huge, true));
@@ -972,5 +1177,185 @@ mod tests {
         fake.extend_from_slice(&[0u8; 600]);
         assert!(!is_encrypted(&fake));
         assert!(decrypt(&fake, Some("pw")).is_err());
+    }
+
+    /// Standard encryption's key derivation (§2.3.4.7) for the password "Password1234_" and the
+    /// salt 00 01 … 0F. The expected keys were computed outside WordCraft (Python's hashlib)
+    /// following the specification's steps, so the encryptor and decryptor can't share a mistake.
+    #[test]
+    fn standard_key_matches_an_independent_derivation() {
+        let salt: Vec<u8> = (0..16).collect();
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        assert_eq!(hex(&standard_key(&salt, "Password1234_", 16)), "340fc93a8e2154db8304d055df81cebc");
+        assert_eq!(hex(&standard_key(&salt, "Password1234_", 32)), "340fc93a8e2154db8304d055df81cebcef5e89fb8e5eb520efdca76f3330e032");
+        assert_eq!(standard_key(&salt, "Password1234_", 24).len(), 24);
+        // AES-ECB against FIPS-197 Appendix C.1 and C.3.
+        let pt: Vec<u8> = (0..16u8).map(|i| i * 0x11).collect();
+        let k128: Vec<u8> = (0..16).collect();
+        let k256: Vec<u8> = (0..32).collect();
+        assert_eq!(hex(&ecb(&k128, &pt, true).unwrap()), "69c4e0d86a7b0430d8cdb78070b4c55a");
+        assert_eq!(hex(&ecb(&k256, &pt, true).unwrap()), "8ea2b7ca516745bfeafc49904b496089");
+        assert_eq!(ecb(&k256, &ecb(&k256, &pt, true).unwrap(), false).unwrap(), pt);
+        assert!(ecb(&k128, &pt[..15], false).is_err());
+    }
+
+    /// Standard encryption (Word 2007's AES-ECB method) opens with the right password, for each
+    /// AES key size, and says when the password is missing or wrong — as agile files do.
+    #[test]
+    fn standard_encryption_round_trips() {
+        let pkg = zip_package();
+        for bits in [128, 192, 256] {
+            let enc = encrypt_standard_for_tests(&pkg, "pässwörd 🔑", bits).unwrap();
+            assert!(is_encrypted(&enc));
+            assert_eq!(decrypt(&enc, Some("pässwörd 🔑")), Ok(pkg.clone()), "AES-{bits}");
+            assert_eq!(decrypt(&enc, None), Err(DocxError::PasswordRequired));
+            assert_eq!(decrypt(&enc, Some("Pässwörd 🔑")), Err(DocxError::WrongPassword));
+            assert_eq!(crate::read(&enc), Err(DocxError::PasswordRequired));
+        }
+        let enc = encrypt_standard_for_tests(&pkg, "pw", 128).unwrap();
+        let doc = crate::read_with_password(&enc, Some("pw")).unwrap();
+        assert!(doc.plain_text(wordcraft_doc::StoryRef::Body).contains("Top secret plans"));
+        // Sizes on and off the block boundary, and empty.
+        for n in [0usize, 1, 15, 16, 17, SEGMENT + 3] {
+            let data: Vec<u8> = (0..n).map(|i| (i * 7) as u8).collect();
+            assert_eq!(decrypt(&encrypt_standard_for_tests(&data, "x", 256).unwrap(), Some("x")).unwrap(), data);
+        }
+        assert!(encrypt_standard_for_tests(&pkg, "pw", 64).is_err());
+        assert!(encrypt_standard_for_tests(&pkg, "", 128).is_err());
+    }
+
+    /// A Standard-encrypted file assembled byte by byte from [MS-OFFCRYPTO] §2.3.4.5, §2.3.2, §2.3.3
+    /// and §2.3.4.4 with literal field values, without the test encryptor, so a layout mistake
+    /// shared by the encryptor and the reader can't pass. Only the key derivation and AES-ECB
+    /// (pinned by `standard_key_matches_an_independent_derivation`) are reused.
+    fn hand_built_standard(payload: &[u8], password: &str) -> Vec<u8> {
+        let salt: [u8; 16] = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7, 0xA8, 0xA9, 0xAA, 0xAB, 0xAC, 0xAD, 0xAE, 0xAF];
+        let verifier: [u8; 16] = *b"verifier-16bytes";
+        let key = standard_key(&salt, password, 16);
+        let mut hash = sha1::Sha1::digest(verifier).to_vec();
+        hash.resize(32, 0); // the hash, zero-padded to two AES blocks
+        let csp: Vec<u8> = "WordCraft test provider".encode_utf16().chain([0]).flat_map(u16::to_le_bytes).collect();
+
+        let mut header = Vec::new();
+        header.extend_from_slice(&0x24u32.to_le_bytes()); // Flags: fCryptoAPI | fAES
+        header.extend_from_slice(&0u32.to_le_bytes()); // SizeExtra
+        header.extend_from_slice(&0x660Eu32.to_le_bytes()); // AlgID: AES-128
+        header.extend_from_slice(&0x8004u32.to_le_bytes()); // AlgIDHash: SHA-1
+        header.extend_from_slice(&128u32.to_le_bytes()); // KeySize, in bits
+        header.extend_from_slice(&0x18u32.to_le_bytes()); // ProviderType: AES
+        header.extend_from_slice(&0u32.to_le_bytes()); // Reserved1
+        header.extend_from_slice(&0u32.to_le_bytes()); // Reserved2
+        header.extend_from_slice(&csp); // CSPName: UTF-16LE, NUL-terminated
+
+        let mut info = Vec::new();
+        info.extend_from_slice(&3u16.to_le_bytes()); // Version major
+        info.extend_from_slice(&2u16.to_le_bytes()); // Version minor
+        info.extend_from_slice(&0x24u32.to_le_bytes()); // Flags: fCryptoAPI | fAES
+        info.extend_from_slice(&(header.len() as u32).to_le_bytes()); // HeaderSize
+        info.extend_from_slice(&header);
+        info.extend_from_slice(&16u32.to_le_bytes()); // SaltSize
+        info.extend_from_slice(&salt); // Salt
+        info.extend_from_slice(&ecb(&key, &verifier, true).unwrap()); // EncryptedVerifier
+        info.extend_from_slice(&20u32.to_le_bytes()); // VerifierHashSize (SHA-1)
+        info.extend_from_slice(&ecb(&key, &hash, true).unwrap()); // EncryptedVerifierHash
+
+        let mut padded = payload.to_vec();
+        padded.resize(payload.len().next_multiple_of(16), 0);
+        let mut package = (payload.len() as u64).to_le_bytes().to_vec(); // StreamSize
+        package.extend_from_slice(&ecb(&key, &padded, true).unwrap());
+        package.extend_from_slice(&[0xEE, 0xEE, 0xEE]); // trailing padding the spec allows
+        cfb_with(&info, &package)
+    }
+
+    #[test]
+    fn standard_package_built_by_hand_from_the_spec_opens() {
+        let payload: Vec<u8> = (0..37u8).map(|i| i.wrapping_mul(5)).collect();
+        let file = hand_built_standard(&payload, "pw");
+        assert!(is_encrypted(&file));
+        assert_eq!(decrypt(&file, Some("pw")), Ok(payload.clone()));
+        assert_eq!(decrypt(&file, Some("PW")), Err(DocxError::WrongPassword));
+        assert_eq!(decrypt(&file, None), Err(DocxError::PasswordRequired));
+        // The test encryptor writes the same fixed fields: version and flags (bytes 0..8) and the
+        // header's eight words (12..44); HeaderSize differs with the CSP name, the rest is random.
+        let (hand, _) = streams(&file);
+        let (made, _) = streams(&encrypt_standard_for_tests(&payload, "pw", 128).unwrap());
+        assert_eq!(hand[..8], made[..8]);
+        assert_eq!(hand[12..44], made[12..44]);
+    }
+
+    /// The two streams of an encrypted package.
+    fn streams(file: &[u8]) -> (Vec<u8>, Vec<u8>) {
+        let mut comp = cfb::CompoundFile::open(Cursor::new(file)).unwrap();
+        let mut info = Vec::new();
+        comp.open_stream("/EncryptionInfo").unwrap().read_to_end(&mut info).unwrap();
+        let mut package = Vec::new();
+        comp.open_stream("/EncryptedPackage").unwrap().read_to_end(&mut package).unwrap();
+        (info, package)
+    }
+
+    #[test]
+    fn hostile_standard_encryption_info_errors_without_panicking() {
+        let data = b"a small package".to_vec();
+        let (info, package) = streams(&encrypt_standard_for_tests(&data, "pw", 128).unwrap());
+        // Layout: version 0, flags 4, header size 8, header 12 (flags, sizeExtra, algId 20,
+        // algIdHash 24, keySize 28, provider, 2 reserved, an empty CSP name), then the verifier at
+        // 46: saltSize, salt 50, encrypted verifier 66, verifierHashSize 82, its hash 86..118.
+        assert_eq!(info.len(), 118);
+        let put = |at: usize, v: u32| {
+            let mut i = info.clone();
+            i[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            i
+        };
+        let mut cases: Vec<(Vec<u8>, Vec<u8>)> = Vec::new();
+        for n in 0..info.len() {
+            cases.push((info[..n].to_vec(), package.clone()));
+        }
+        for v in [0, 4, 31, 0x1000, u32::MAX] {
+            cases.push((put(8, v), package.clone()));
+        }
+        // No AES, no CryptoAPI, an external (extensible) provider.
+        for v in [F_CRYPTO_API, F_AES, STANDARD_FLAGS | F_EXTERNAL, 0] {
+            cases.push((put(4, v), package.clone()));
+        }
+        // RC4, MD5, key sizes that don't fit the algorithm.
+        cases.push((put(20, 0x6801), package.clone()));
+        cases.push((put(24, 0x8003), package.clone()));
+        for v in [0, 64, 192, 256, u32::MAX] {
+            cases.push((put(28, v), package.clone()));
+        }
+        for v in [0, 15, 17, u32::MAX] {
+            cases.push((put(46, v), package.clone()));
+        }
+        for v in [0, 16, 32, u32::MAX] {
+            cases.push((put(82, v), package.clone()));
+        }
+        // The package: truncated, an absurd StreamSize, a StreamSize past the data, data that
+        // isn't whole blocks.
+        for n in [0, 4, 8, 9, package.len() - 1] {
+            cases.push((info.clone(), package[..n].to_vec()));
+        }
+        for size in [u64::MAX, 1 << 40, package.len() as u64] {
+            let mut p = package.clone();
+            p[..8].copy_from_slice(&size.to_le_bytes());
+            cases.push((info.clone(), p));
+        }
+        for (i, p) in cases {
+            let file = cfb_with(&i, &p);
+            assert!(decrypt(&file, Some("pw")).is_err());
+            let _ = crate::read_with_password(&file, Some("pw"));
+            assert!(crate::read(&file).is_err());
+        }
+        // Version 2.2 and 4.2 are Standard too; trailing bytes after the last block are ignored.
+        for v in [2u8, 4] {
+            let mut i = info.clone();
+            i[0] = v;
+            assert_eq!(decrypt(&cfb_with(&i, &package), Some("pw")).unwrap(), data);
+        }
+        let mut p = package.clone();
+        p.extend_from_slice(&[1, 2, 3]);
+        assert_eq!(decrypt(&cfb_with(&info, &p), Some("pw")).unwrap(), data);
+        // AlgID and AlgIDHash 0 mean "from the flags": AES-128 and SHA-1.
+        assert_eq!(decrypt(&cfb_with(&put(20, 0), &package), Some("pw")).unwrap(), data);
+        assert_eq!(decrypt(&cfb_with(&put(24, 0), &package), Some("pw")).unwrap(), data);
     }
 }

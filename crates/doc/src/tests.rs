@@ -141,6 +141,72 @@ fn clone_is_shallow() {
     assert_eq!(d.plain_text(StoryRef::Body), "a\nb");
 }
 
+/// [`Document::same_content`] is what tells the engine that a command changed nothing: it
+/// must see every change, and it must not call two different documents the same.
+#[test]
+fn same_content_sees_every_change() {
+    let d = Document::from_text("Hello\nWorld");
+    assert!(d.same_content(&d.clone()), "a copy is the same document");
+    // The text changed.
+    let mut e = d.clone();
+    e.insert_text(&Pos::body(0, 0), "x", &CharProps::default()).unwrap();
+    assert!(!d.same_content(&e), "the text changed");
+    // The formatting changed.
+    let mut e = d.clone();
+    e.format_range(&Pos::body(0, 0), &Pos::body(0, 5), &|c| c.bold = Some(true)).unwrap();
+    assert!(!d.same_content(&e), "the formatting changed");
+    // The styles changed.
+    let mut e = d.clone();
+    e.styles.get_mut("Normal").unwrap().chr.bold = Some(true);
+    assert!(!d.same_content(&e), "a style changed");
+    // The lists changed.
+    let mut e = d.clone();
+    e.numbering.add_list(ListKind::Numbered);
+    assert!(!d.same_content(&e), "a list was added");
+    // The settings changed.
+    let mut e = d.clone();
+    e.settings.track_changes = true;
+    assert!(!d.same_content(&e), "a setting changed");
+    // The metadata changed.
+    let mut e = d.clone();
+    e.core.title = "Draft".into();
+    assert!(!d.same_content(&e), "the title changed");
+    // A part changed.
+    let mut e = d.clone();
+    e.add_part(PartKind::Header, vec![para_block(Paragraph::new())]);
+    assert!(!d.same_content(&e), "a part was added");
+    // A picture changed.
+    let mut e = d.clone();
+    e.media.insert("i.png".into(), Arc::new(vec![1, 2, 3]));
+    assert!(!d.same_content(&e), "a picture was added");
+    // A revision was recorded.
+    let mut e = d.clone();
+    e.revisions.push(Revision::new(RevisionKind::Insert, "Mira", "2026-10-23T00:00:00Z"));
+    assert!(!d.same_content(&e), "a revision was recorded");
+    // A comment was added.
+    let mut e = d.clone();
+    e.comments.insert(1, Comment { author: "Mira".into(), ..Default::default() });
+    assert!(!d.same_content(&e), "a comment was added");
+    // A paragraph that was marked as changed but holds the same content is the same.
+    let mut e = d.clone();
+    e.para_mut(StoryRef::Body, &Path::top(0)).unwrap().touch();
+    assert!(d.same_content(&e), "the paragraph only changed its counter");
+    // A table copied for an edit: the same until a cell's content changes.
+    let mut d = Document::from_text("Hello");
+    d.body.insert(0, Arc::new(Block::Table(Table::new(2, 2, 200.0))));
+    let mut e = d.clone();
+    Arc::make_mut(&mut e.body[0]);
+    assert!(!Arc::ptr_eq(&d.body[0], &e.body[0]));
+    assert!(d.same_content(&e), "the table was only copied");
+    let Block::Table(t) = Arc::make_mut(&mut e.body[0]) else { panic!("a table") };
+    t.rows[1].cells[1].blocks[0] = para_block(Paragraph::with_text("x", CharProps::default()));
+    assert!(!d.same_content(&e), "a cell's text changed");
+    // A building block was added.
+    let mut e = d.clone();
+    e.glossary.push(BuildingBlock { name: "Sign-off".into(), ..Default::default() });
+    assert!(!d.same_content(&e), "a building block was added");
+}
+
 #[test]
 fn json_round_trip() {
     let mut d = Document::from_text("Hello\nWorld");

@@ -249,6 +249,21 @@ fn comments_without_durable_ids_get_unique_ones() {
     assert!(dates.iter().all(|(_, utc)| utc.is_empty()), "{dates:?}");
 }
 
+/// A local `w:date` with a `Z` (older files have no `dateUtc`) isn't saved as the UTC time either,
+/// so it doesn't shift by the user's offset after a round trip.
+#[test]
+fn a_local_date_with_a_z_is_not_saved_as_utc() {
+    let mut doc = wordcraft_docx::read(&comments_package(false)).unwrap();
+    for c in doc.comments.values_mut() {
+        c.date.push('Z');
+    }
+    let files = save(&doc);
+    let (_, dates) = written_ids(&files);
+    assert!(dates.iter().all(|(_, utc)| utc.is_empty()), "{dates:?}");
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    assert!(back.comments.values().all(|c| c.date_utc.is_none() && c.date.ends_with('Z')));
+}
+
 #[test]
 fn comment_references_use_the_documents_annotation_reference_style() {
     let files = save(&wordcraft_docx::read(&comments_package(true)).unwrap());

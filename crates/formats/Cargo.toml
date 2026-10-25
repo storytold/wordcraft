@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }

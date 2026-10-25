@@ -26,6 +26,7 @@ pub mod fields;
 pub mod fill;
 pub mod freeform;
 pub mod graphic;
+pub mod ime_text;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -177,6 +178,95 @@ impl BoxBudget {
 
 pub fn para_block(p: Paragraph) -> Arc<Block> {
     Arc::new(Block::Para(p))
+}
+
+/// The same blocks: the same content. The blocks are compared by address first — the
+/// document is copy-on-write, so a block that changed was copied and has another address —
+/// and a block that was copied but holds the same content is compared by value.
+fn same_blocks(a: &Blocks, b: &Blocks) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(x, y) || same_block(x, y))
+}
+
+/// The same block by value. A table's cells compare their blocks by address first too: an edit in
+/// one cell copies the whole table, which mustn't mean comparing every cell by value.
+fn same_block(a: &Block, b: &Block) -> bool {
+    match (a, b) {
+        (Block::Table(x), Block::Table(y)) => same_table(x, y),
+        _ => a == b,
+    }
+}
+
+/// The same table. Every field is listed, so a new one does not build until someone decides
+/// whether a change to it counts.
+fn same_table(a: &Table, b: &Table) -> bool {
+    let Table { props, grid, rows, controls } = a;
+    let Table { props: other_props, grid: other_grid, rows: other_rows, controls: other_controls } = b;
+    props == other_props
+        && grid == other_grid
+        && controls == other_controls
+        && rows.len() == other_rows.len()
+        && rows.iter().zip(other_rows).all(|(x, y)| same_row(x, y))
+}
+
+fn same_row(a: &Row, b: &Row) -> bool {
+    let Row { props, cells, controls } = a;
+    let Row { props: other_props, cells: other_cells, controls: other_controls } = b;
+    props == other_props
+        && controls == other_controls
+        && cells.len() == other_cells.len()
+        && cells.iter().zip(other_cells).all(|(x, y)| {
+            let Cell { props, blocks, controls } = x;
+            let Cell { props: other_props, blocks: other_blocks, controls: other_controls } = y;
+            props == other_props && controls == other_controls && same_blocks(blocks, other_blocks)
+        })
+}
+
+/// The same building blocks, their content compared by address first.
+fn same_glossary(a: &[BuildingBlock], b: &[BuildingBlock]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            let BuildingBlock { name, gallery, category, description, guid, style, types, behaviors, blocks } = x;
+            let BuildingBlock {
+                name: other_name,
+                gallery: other_gallery,
+                category: other_category,
+                description: other_description,
+                guid: other_guid,
+                style: other_style,
+                types: other_types,
+                behaviors: other_behaviors,
+                blocks: other_blocks,
+            } = y;
+            name == other_name
+                && gallery == other_gallery
+                && category == other_category
+                && description == other_description
+                && guid == other_guid
+                && style == other_style
+                && types == other_types
+                && behaviors == other_behaviors
+                && same_blocks(blocks, other_blocks)
+        })
+}
+
+/// The same parts: the same keys, and each part the same.
+fn same_parts(a: &BTreeMap<u32, Part>, b: &BTreeMap<u32, Part>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((k1, p1), (k2, p2))| k1 == k2 && same_part(p1, p2))
+}
+
+/// The same part: the same kind, text body and blocks. Every field is listed, so a new one
+/// does not build until someone decides whether a change to it counts.
+fn same_part(a: &Part, b: &Part) -> bool {
+    let Part { kind, blocks, body } = a;
+    let Part { kind: other_kind, blocks: other_blocks, body: other_body } = b;
+    kind == other_kind && body == other_body && same_blocks(blocks, other_blocks)
+}
+
+/// The same bytes: the same content. The bytes are compared by address first — a changed
+/// picture was copied, so it has another address — and a picture that was copied but holds
+/// the same bytes is compared by value.
+fn same_bytes(a: &BTreeMap<String, Arc<Vec<u8>>>, b: &BTreeMap<String, Arc<Vec<u8>>>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((k1, v1), (k2, v2))| k1 == k2 && (Arc::ptr_eq(v1, v2) || **v1 == **v2))
 }
 
 /// Which story a position is in.
@@ -356,7 +446,8 @@ pub struct Comment {
     /// keeps tracking the same comment. `None` for comments made here: the writer assigns one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub durable_id: Option<String>,
-    /// The comment's UTC timestamp from the file (`w16cex:dateUtc`); `date` is local time there.
+    /// The comment's UTC timestamp: from the file (`w16cex:dateUtc`, where `date` is local time),
+    /// or the time WordCraft stamped the comment with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date_utc: Option<String>,
 }
@@ -549,6 +640,10 @@ pub struct Settings {
     /// after plus the second's space before, not the larger of the two.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sum_paragraph_spacing: bool,
+    /// `w:doNotExpandShiftReturn`: a justified line that ends in a manual line break keeps its
+    /// natural spacing; by default Word stretches it to the margin like a wrapped line.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_not_expand_shift_return: bool,
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
@@ -715,6 +810,7 @@ impl Default for Settings {
             compat_mode: COMPAT_MODE_CURRENT,
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
+            do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
@@ -836,6 +932,70 @@ impl Document {
                 p.blocks.push(para_block(Paragraph::new()));
             }
         }
+    }
+
+    /// Whether the document holds the same content as `other`: the same blocks, the same
+    /// styles, lists, settings, comments and the rest.
+    ///
+    /// The blocks are compared by address first: the document is copy-on-write, so a block
+    /// that changed was copied and has another address. Comparing them by value would walk
+    /// the whole document, and this is asked after every command.
+    ///
+    /// Every field is listed, so a new one does not build until someone decides whether a
+    /// change to it counts (the same rule the session's edit snapshot follows).
+    pub fn same_content(&self, other: &Document) -> bool {
+        let Document {
+            body,
+            last_section,
+            parts,
+            styles,
+            numbering,
+            comments,
+            revisions,
+            settings,
+            core,
+            sources,
+            custom_props,
+            footnote_separators,
+            endnote_separators,
+            media,
+            passthrough,
+            glossary,
+        } = self;
+        let Document {
+            body: other_body,
+            last_section: other_section,
+            parts: other_parts,
+            styles: other_styles,
+            numbering: other_numbering,
+            comments: other_comments,
+            revisions: other_revisions,
+            settings: other_settings,
+            core: other_core,
+            sources: other_sources,
+            custom_props: other_props,
+            footnote_separators: other_footnotes,
+            endnote_separators: other_endnotes,
+            media: other_media,
+            passthrough: other_passthrough,
+            glossary: other_glossary,
+        } = other;
+        same_blocks(body, other_body)
+            && same_parts(parts, other_parts)
+            && last_section == other_section
+            && styles == other_styles
+            && numbering == other_numbering
+            && comments == other_comments
+            && revisions == other_revisions
+            && settings == other_settings
+            && core == other_core
+            && sources == other_sources
+            && custom_props == other_props
+            && footnote_separators == other_footnotes
+            && endnote_separators == other_endnotes
+            && same_bytes(media, other_media)
+            && same_bytes(passthrough, other_passthrough)
+            && same_glossary(glossary, other_glossary)
     }
 
     pub fn story(&self, s: StoryRef) -> Option<&Blocks> {

@@ -346,6 +346,9 @@ View|Window|Switch Windows|view.switchWindows
 View|Macros|Macros|tools.macros
 View|Macros|Record Macro|tools.recordMacro
 View|SharePoint|Properties|file.properties
+Read Mode|View|Column Width|view.readColumnWidth
+Read Mode|View|Page Color|view.readPageColor
+Read Mode|View|Layout|view.readLayout
 Developer|Controls|Rich Text Content Control|developer.richText
 Developer|Controls|Plain Text Content Control|developer.plainText
 Developer|Controls|Picture Content Control|developer.picture
@@ -590,5 +593,18 @@ mod tests {
         let pct = p["percent"].as_f64().unwrap();
         // The floor only ever rises.
         assert!(pct >= 90.4, "parity {pct}%");
+    }
+
+    #[test]
+    fn read_mode_view_menu_is_catalogued() {
+        let e = entries();
+        let read_mode: Vec<_> = e.iter().filter(|x| x.0 == "Read Mode").map(|x| (x.1, x.2, x.3)).collect();
+        assert_eq!(
+            read_mode,
+            [("View", "Column Width", "view.readColumnWidth"), ("View", "Page Color", "view.readPageColor"), ("View", "Layout", "view.readLayout")]
+        );
+        let reg = crate::cmd::registry();
+        assert!(reg.get("view.readColumnWidth").is_some(), "Column Width counts as live");
+        assert!(reg.get("view.readPageColor").is_some(), "Page Color counts as live");
     }
 }

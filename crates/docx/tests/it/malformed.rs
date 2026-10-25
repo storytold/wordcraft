@@ -68,6 +68,25 @@ fn missing_or_wrong_main_part() {
     assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Body), "ok");
 }
 
+fn body_zip(body: &str) -> Vec<u8> {
+    doc_zip(format!("<w:document {W_NS}><w:body>{body}</w:body></w:document>").as_bytes())
+}
+
+#[test]
+fn a_malformed_main_part_is_an_error_not_a_truncated_document() {
+    let cases = [
+        ("a less-than sign in a run", "<w:p><w:r><w:t>before a <- b after</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>"),
+        ("a paragraph left open", "<w:p><w:r><w:t>first</w:t></w:r></w:p><w:p><w:r><w:t>second</w:t></w:r><w:p><w:r><w:t>third</w:t></w:r></w:p>"),
+        ("a mismatched end tag", "<w:p><w:r><w:t>one</w:t></w:p></w:r><w:p><w:r><w:t>two</w:t></w:r></w:p>"),
+    ];
+    for (what, body) in cases {
+        assert!(matches!(read(&body_zip(body)), Err(DocxError::Xml(_))), "{what}");
+    }
+    let whole = "<w:p><w:r><w:t>a &lt;- b</w:t></w:r></w:p><w:p><w:r><w:t>last</w:t></w:r></w:p>";
+    let d = read(&body_zip(whole)).unwrap();
+    assert_eq!(d.plain_text(wordcraft_doc::StoryRef::Body), "a <- b\nlast", "well-formed text still reads whole");
+}
+
 #[test]
 fn deep_nesting_is_rejected() {
     let mut x = format!("<w:document {W_NS}><w:body>");
@@ -129,6 +148,21 @@ fn many_fields_and_huge_attribute_values() {
     x.push_str("</w:p><w:p><w:r><w:t>later</w:t></w:r></w:p></w:body></w:document>");
     let d = read(&doc_zip(x.as_bytes())).unwrap();
     assert!(d.plain_text(wordcraft_doc::StoryRef::Body).contains("later"));
+}
+
+/// A paragraph with 2,000,000 attributes deflates to ~15 KB. Opening it is refused with a
+/// limit error, or the extras are dropped and the text survives (#3702, WC-06).
+#[test]
+fn millions_of_attributes_on_one_paragraph_are_capped() {
+    let attrs: String = (0..2_000_000).map(|i| format!(" a{i}=\"\"")).collect();
+    let x = format!("<w:document {W_NS}><w:body><w:p{attrs}><w:r><w:t>kept</w:t></w:r></w:p></w:body></w:document>");
+    let start = std::time::Instant::now();
+    match read(&doc_zip(x.as_bytes())) {
+        Err(DocxError::Limit(_)) => {}
+        Ok(d) => assert!(d.plain_text(wordcraft_doc::StoryRef::Body).contains("kept")),
+        Err(e) => panic!("expected a Limit error or a document, got {e}"),
+    }
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "took {:?}", start.elapsed());
 }
 
 /// A small valid document.xml to mutate.
@@ -236,6 +270,49 @@ proptest! {
         let mut z = b"PK\x03\x04".to_vec();
         z.extend(&bytes);
         let _ = read(&z);
+    }
+}
+
+/// The streams of a Standard-encrypted package (gap 9), and a compound file holding them.
+fn standard_streams() -> (Vec<u8>, Vec<u8>) {
+    use std::io::Read;
+    let file = wordcraft_docx::encrypt_standard_for_tests(&sample(), "pw", 128).unwrap();
+    let mut comp = cfb::CompoundFile::open(std::io::Cursor::new(file)).unwrap();
+    let mut info = Vec::new();
+    comp.open_stream("/EncryptionInfo").unwrap().read_to_end(&mut info).unwrap();
+    let mut package = Vec::new();
+    comp.open_stream("/EncryptedPackage").unwrap().read_to_end(&mut package).unwrap();
+    (info, package)
+}
+
+fn compound(info: &[u8], package: &[u8]) -> Vec<u8> {
+    let mut comp = cfb::CompoundFile::create(std::io::Cursor::new(Vec::new())).unwrap();
+    comp.create_stream("/EncryptionInfo").unwrap().write_all(info).unwrap();
+    comp.create_stream("/EncryptedPackage").unwrap().write_all(package).unwrap();
+    comp.flush().unwrap();
+    comp.into_inner().into_inner()
+}
+
+proptest! {
+    // Each case that parses runs the 50,000-spin key derivation, so fewer cases.
+    #![proptest_config(ProptestConfig { cases: 48, ..ProptestConfig::default() })]
+
+    #[test]
+    fn mutated_standard_encryption_never_panics(ops in proptest::collection::vec((0u8..3, any::<prop::sample::Index>(), any::<u8>(), any::<bool>()), 1..8)) {
+        let (mut info, mut package) = standard_streams();
+        for (k, idx, byte, in_package) in ops {
+            let x = if in_package { &mut package } else { &mut info };
+            let at = idx.index(x.len() + 1);
+            match k {
+                0 => { if at < x.len() { x[at] = byte; } }
+                1 => { x.truncate(at); }
+                _ => { x.splice(at..at, std::iter::repeat_n(byte, usize::from(byte % 9))); }
+            }
+        }
+        let file = compound(&info, &package);
+        let _ = wordcraft_docx::decrypt(&file, Some("pw"));
+        let _ = wordcraft_docx::read_with_password(&file, Some("pw"));
+        prop_assert!(read(&file).is_err());
     }
 }
 

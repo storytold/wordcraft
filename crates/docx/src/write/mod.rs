@@ -720,7 +720,15 @@ fn styles_xml(doc: &Document) -> Vec<u8> {
     w.open("w:docDefaults", &[]);
     w.open("w:rPrDefault", &[]);
     w.open("w:rPr", &[]);
-    props::rpr_inner(&mut w, &s.default_chr);
+    if s.default_chr.size.is_none() {
+        // The reader reads an omitted `w:sz` as 10 pt, but the resolver falls back to
+        // DEFAULT_FONT_SIZE, so writing nothing would change the size on reopening.
+        let mut chr = s.default_chr.clone();
+        chr.size = Some(wordcraft_doc::props::DEFAULT_FONT_SIZE);
+        props::rpr_inner(&mut w, &chr);
+    } else {
+        props::rpr_inner(&mut w, &s.default_chr);
+    }
     w.close("w:rPr");
     w.close("w:rPrDefault");
     if s.default_para_present || s.default_para != wordcraft_doc::props::ParaProps::default() {
@@ -1075,6 +1083,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     }
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
+    if doc.settings.do_not_expand_shift_return {
+        w.empty("w:doNotExpandShiftReturn", &[]);
+    }
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
     }
@@ -1127,9 +1138,9 @@ fn write_comment_ids(
             },
         };
         used.insert(durable.clone());
-        // A local `w:date` with a zone designator is UTC already; otherwise only the file's own.
+        // Only a known UTC time: `w:date` is local time, often with a `Z` it doesn't mean.
         // Remove date and time on save (#1062): no comment date here either.
-        let utc = if doc.settings.remove_date_time { None } else { c.date_utc.clone().or_else(|| c.date.ends_with('Z').then(|| c.date.clone())) };
+        let utc = if doc.settings.remove_date_time { None } else { c.date_utc.clone() };
         rows.push((pid.clone(), durable, utc));
     }
     let mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";

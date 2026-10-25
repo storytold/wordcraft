@@ -398,7 +398,7 @@ pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
         };
         let para = s.doc.para_mut(a.story, &path)?;
         match num {
-            Some(n) => para.props.numbering = Some(NumRef { num: n.num, level: (n.level + 1).min(8) }),
+            Some(n) => para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) }),
             None => {
                 para.props.indent_left = Some(((left / tab).floor() + 1.0) * tab);
                 para.props.cancel_char_indents(true, false, false);
@@ -810,7 +810,7 @@ fn outline_step(s: &mut Session, promote: bool) -> CmdResult {
         let list = p.props.numbering.filter(|n| n.num != 0);
         let target = match (list, heading_level(s, &p.props)) {
             (Some(n), _) => {
-                let level = if promote { n.level.saturating_sub(1) } else { (n.level + 1).min(8) };
+                let level = if promote { n.level.saturating_sub(1) } else { n.level.saturating_add(1).min(8) };
                 if level != n.level {
                     let para = s.doc.para_mut(a.story, &path)?;
                     para.props.numbering = Some(NumRef { num: n.num, level });

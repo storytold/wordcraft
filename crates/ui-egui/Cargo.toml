@@ -9,23 +9,24 @@ description = "WordCraft egui front end (Word-style ribbon UI); swappable: nothi
 workspace = true
 
 [dependencies]
-craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "d27646a5f7c8b4fc85d9dd3213b8c88b58e0088d" }
+craft-ui = { git = "https://github.com/storytold/craft-libs", rev = "25da1314d443171b4adeaad2cd9454b273f35c6f" }
 # Interface translations: lookup, fallback, plurals and system-locale matching over the craft-i18n
 # catalogs that `build.rs` embeds from `CRAFT_I18N_DIR` (storytold/craft-i18n, pinned in
-# `craft-i18n.rev`). Its own rev: lazy per-locale parsing (storytold/craft-libs#247).
-craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "f7cc8a7df15e824b02cf73859567a6242d3a7de4" }
-wordcraft-geom = { workspace = true }
+# `craft-i18n.rev`). Its own rev, ahead of craft-ui's: lazy per-locale parsing
+# (storytold/craft-libs#247), ICU4X plural rules and bidi isolates around inserted values.
+craft-i18n = { git = "https://github.com/storytold/craft-libs", rev = "17744430be327d0257496a6a31c8d38fe20a6756" }
+wordcraft-geom = { workspace = true, features = ["image"] }
 wordcraft-doc = { workspace = true }
-unicode-bidi = { workspace = true }
 wordcraft-fonts = { workspace = true }
 wordcraft-layout = { workspace = true }
 wordcraft-render = { workspace = true }
 wordcraft-engine = { workspace = true }
 wordcraft-zotero = { workspace = true }
-egui = { workspace = true }
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 serde = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
+web-time = { workspace = true }
 # Pictures pasted from the system clipboard arrive as pixels and are inserted as PNG (#45).
 image = { workspace = true }
 # The system's preferred interface languages (#8) and region (#838). Native: OS APIs; wasm:
@@ -38,12 +39,23 @@ sys-locale = { version = "0.3", features = ["js"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "=5.19.0"
 
+# Comment times in the user's own time zone (`local_time.rs`); the web app asks the browser.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] }
+craft-update = { workspace = true }
+
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 # The browser clock (`SystemTime::now()`/`Instant::now()` panic on wasm32).
 js-sys = "0.3"
 
 [dev-dependencies]
 cfb = { workspace = true }
+# Producer tests simulate a globally exhausted IME revision allocator through the engine's
+# explicit test-support feature; production builds of this crate never enable it.
+wordcraft-engine = { workspace = true, features = ["test-support"] }
+# kittest's own dev-dependencies do not propagate their font features. Declare the fonts the
+# interface tests lay out explicitly: default faces plus monochrome emoji fallbacks.
+egui = { workspace = true, features = ["default_fonts", "monochrome_emoji_fonts"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 zip = { workspace = true }
 

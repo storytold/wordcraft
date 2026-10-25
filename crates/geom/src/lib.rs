@@ -8,6 +8,8 @@
 
 use serde::{Deserialize, Serialize};
 
+#[cfg(feature = "image")]
+pub mod picture;
 mod region;
 pub use region::Region;
 mod pixels;
