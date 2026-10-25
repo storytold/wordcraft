@@ -235,6 +235,8 @@ Footer flow-table strokes reserve their drawn top edge, including the half-width
 
 Page-relative footer tables keep their physical wrap bounds without adding to footer text height. Body text resumes below the table. Original native controls cover empty, text-bearing and minimum-height tables. Body textbox boundaries and nested footer painting remain separate gaps.
 
+New floating creation and copied content use ranks above existing floating roots. Existing moves preserve ranks. At u32 exhaustion, dense normalization preserves order and ties; protected edits that would change other regions fail. Group-child order and the separate pinned header/footer layer remain unchanged. Behind-text stacking and one-step Bring Forward/Send Backward remain outside this repair. Source controls await execution.
+
 ## Validation fonts
 
 The deleted/hidden-text wrapping, ellipse wrapping and widow-control regressions request Source Sans 3 explicitly. Their fixed widths and word counts use that font's metrics. This changes test inputs only, not renderer font substitution or Word parity claims.
@@ -265,6 +267,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | New floating drawings receive model ranks above existing drawings before layout/export (#2519). Paste preserves incoming rank order and ties. Exhaustion alone densely renumbers existing ranks without changing their order. Source regressions are prepared, not executed; no new Word comparison or behind-text ordering claim. |
 | 2026-10-25 | trivial | Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`) |
 | 2026-10-24 | trivial | Preserve grapheme edit/wrap boundaries across independently drawn font/style pieces; original emoji regression retained, new mixed-style/bundled-font LTR/bidi controls pending managed validation |
 | 2026-10-24 | trivial | Exact-spacing table contact uses the specified line height in row selection and word skipping; large/small mark regressions in modes 11/12/14/15 (#3977); shape estimates unchanged |
@@ -309,6 +312,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
 | 2026-10-16 | trivial | `w:autoSpaceDE` and `w:autoSpaceDN` are laid out: a quarter em between Asian text and Latin text or digits (#2358) |
 | 2026-10-16 | trivial | AutoFit donors lose equal widths, bounded by content minima |
+| 2026-10-16 | trivial | Foreground floats cover later inline content; relativeHeight survives DOCX import/export and orders complete frame/text groups. Synthetic regressions cover behind-text, header placement and cross-cell stacking through row splits. |
 | 2026-10-16 | trivial | Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height. |
 | 2026-10-15 | trivial | Absent or zero DrawingML effect extents remain zero on rotated pictures; contracted axes no longer reserve invented effects room. Synthetic quarter-turn import regression (`zero_effects_stay_zero_rotated`). |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |

@@ -145,6 +145,7 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | New floating drawings receive model ranks above existing drawings before layout/export (#2519). Paste preserves incoming rank order and ties. Exhaustion alone densely renumbers existing ranks without changing their order. Source regressions are prepared, not executed; no new Word comparison or behind-text ordering claim. |
 | 2026-10-25 | trivial | egui 0.37 migration: interface catalogs remain pinned by `craft-i18n.rev` (`9205108…`; 27 languages, English fallback); IME surrounding deletions and composition resets are implemented with regressions, but managed CI passed; native IME acceptance and native-speaker catalog review remain open; no gap or readiness change |
 | 2026-10-17 | trivial | Gap 9 narrowed: Standard (Word 2007, AES-ECB) encrypted packages open with a password under any Word extension; AES headers in Word 97-2003 files are outside the public spec and refused with a clear message; estimate 3–5 → 0 h, since the remaining AES-in-`.doc` case is refused by design |
 | 2026-10-25 | trivial | Small follow-ups from the field, table and AutoFormat batch (#4232) |

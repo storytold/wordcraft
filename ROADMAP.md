@@ -637,6 +637,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-19 | trivial | New floating drawings receive model ranks above existing drawings before layout/export (#2519). Paste preserves incoming rank order and ties. Exhaustion alone densely renumbers existing ranks without changing their order. Synthetic regressions cover command ranking and rollback; no new Word comparison or behind-text ordering claim. |
+| 2026-10-18 | trivial | Split Cells and Convert Text to Table dialogs (#2592), matched to Word: Split Cells starts from the selection (twice its columns, its rows; Merge cells before split offered for several cells or one cell merged across columns); `table.split` gains `rows` and `mergeFirst`, a merged cell splits into 1 to its height rows (its height or 1 × 1 unmerges it, more is refused with Word's message) and column splits make equal parts without moving other rows' grid lines. Convert Text to Table guesses columns live, shows the row count, and offers Initial column width (Auto or up to 22 in, kept as each column's preferred width), AutoFit to contents/window and Paragraphs/Commas/Tabs/Other separators; `table.fromText` gains `paragraph`/`other` + `char`, `columns`, `autofit` and `width`. |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |
