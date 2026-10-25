@@ -125,6 +125,26 @@ pub(crate) fn reference_link(instr: &str) -> Option<String> {
     None
 }
 
+/// Return the single numeric literal from `{ = <lit> \* <fmt> }`, or `None` when
+/// the expression has more than one operand (e.g. `{ = 100 + 50 \* Hex }`).
+/// Prevents F9 and the display path from picking up only the first token of a
+/// multi-operand expression and discarding a Word-computed cached result.
+pub fn literal_after_eq(instr: &str) -> Option<&str> {
+    let rest = instr.trim_start().strip_prefix('=')?;
+    // Strip everything from the first switch (`\`) onwards; switches are not operands.
+    let expr = match rest.find('\\') {
+        Some(i) => &rest[..i],
+        None => rest,
+    };
+    let mut tokens = expr.split_whitespace();
+    let lit = tokens.next()?;
+    if tokens.next().is_some() {
+        None // multi-operand: operators or extra numbers present
+    } else {
+        Some(lit)
+    }
+}
+
 /// `\* FORMAT` switch value (Arabic, roman, ROMAN, alphabetic, ALPHABETIC, CardText, Ordinal,
 /// ArabicDash, DollarText, Hex…). `{ PAGE \* ArabicDash }` shows "- 31 -".
 pub fn format_switch(instr: &str) -> Option<NumFormat> {
@@ -315,7 +335,8 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
         // BAHTTEXT expr: the numeric expression (a literal for now) in Thai Baht words.
         "BAHTTEXT" => {
             // The second whitespace token after the field name is the numeric literal.
-            let val = instr.split_whitespace().nth(1).and_then(|t| t.parse::<f64>().ok());
+            // Use parse_baht_token to avoid f64 precision loss (e.g. "1.005" → 1.01).
+            let val = instr.split_whitespace().nth(1).and_then(wordcraft_doc::section::parse_baht_token);
             match val.and_then(wordcraft_doc::section::baht_text_f64) {
                 Some(s) => (s, false),
                 None => (result.to_string(), false),
@@ -342,18 +363,12 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
                     let parse = wordcraft_doc::section::parse_baht_token;
                     parse(&name)
                         .filter(|v| v.is_finite())
-                        .or_else(|| {
-                            let after_eq = instr.trim_start().strip_prefix('=')?;
-                            parse(after_eq.split_whitespace().next()?)
-                        })
+                        .or_else(|| literal_after_eq(instr).and_then(parse))
                         .or_else(|| parse(result.trim()))
                 } else {
                     result.trim().parse::<f64>().ok()
                         .or_else(|| name.parse::<f64>().ok())
-                        .or_else(|| {
-                            let after_eq = instr.trim_start().strip_prefix('=')?;
-                            after_eq.split_whitespace().next()?.parse().ok()
-                        })
+                        .or_else(|| literal_after_eq(instr)?.parse().ok())
                 };
                 if let Some(x) = x {
                     if fmt == NumFormat::BahtText {
