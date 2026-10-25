@@ -75,6 +75,17 @@ pub fn evaluate_field_with(
 ) -> Result<String, CmdError> {
     let (formula, switch) = split_switch(instr);
     let value = evaluate_with(t, doc, default_lang, r, c, formula)?;
+    // For BahtText, prefer a decimal literal parsed with parse_baht_token so
+    // "1.005" rounds to 1.01 rather than 1.00 (f64 precision); fall back to the
+    // evaluated value when no single literal is present.
+    let switch_value = match switch.and_then(wordcraft_layout::fields::format_switch) {
+        Some(wordcraft_doc::section::NumFormat::BahtText) => {
+            wordcraft_layout::fields::literal_after_eq(formula)
+                .and_then(wordcraft_doc::section::parse_baht_token)
+                .unwrap_or(value)
+        }
+        _ => value,
+    };
     let text = match switch.and_then(picture_of) {
         Some(picture) => format_picture(value, &picture),
         None => {
@@ -100,7 +111,7 @@ pub fn evaluate_field_with(
         }
     };
     Ok(match switch {
-        Some(switch) => format_switches(switch, value, text),
+        Some(switch) => format_switches(switch, switch_value, text),
         None => text,
     })
 }
@@ -111,15 +122,20 @@ pub fn evaluate_field_with(
 /// 999,999 for CardText and OrdText, 1 to 50,000 for roman, 1 to 780 for alphabetic), in lowercase
 /// for CardText and OrdText. `\* Hex` writes a whole number from 0 to 4,294,967,295 in uppercase
 /// hexadecimal digits. `\* DollarText` writes a result from 0 to 999,999.99 in lowercase cardinal
-/// text with its first two decimals (rounded) over 100 (see
-/// [`wordcraft_layout::fields::dollar_text`]). Any other result keeps its digits. The capitalization
-/// switches (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`) then apply to the text in order. Other
-/// `\*` switches leave the text as it is. Quoted text, such as a `\#` picture, is not a switch.
+/// text with its first two decimals (rounded) over 100 (see [`wordcraft_layout::fields::dollar_text`]).
+/// `\* BahtText` writes the result in Thai Baht words. Any other result keeps its digits. The
+/// capitalization switches (`\* Upper`, `\* Lower`, `\* Caps`, `\* FirstCap`) then apply to the text
+/// in order. Other `\*` switches leave the text as it is. Quoted text, such as a `\#` picture, is
+/// not a switch.
 fn format_switches(switches: &str, value: f64, text: String) -> String {
     use wordcraft_doc::section::NumFormat;
     let unquoted = switches.split('"').step_by(2).collect::<Vec<_>>().join(" ");
     let fmt = wordcraft_layout::fields::format_switch(&unquoted).filter(|f| *f != NumFormat::Decimal);
     match fmt {
+        Some(NumFormat::BahtText) => {
+            let text = wordcraft_doc::section::baht_text_f64(value).unwrap_or(text);
+            wordcraft_layout::fields::apply_case_switch(switches, text)
+        }
         Some(NumFormat::DollarText) => {
             let text = wordcraft_layout::fields::dollar_text(value).unwrap_or(text);
             wordcraft_layout::fields::apply_case_switch(switches, text)
