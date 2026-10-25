@@ -260,6 +260,8 @@ pub fn in_table_public(app: &WordApp) -> bool {
     app.session.sel.focus.path.cell().is_some()
 }
 
+/// Draws the Read toolbar or the full ribbon, switching to and from the contextual Equation and
+/// Outlining tabs and showing the available tab strip.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     if app.session.view.read_mode {
@@ -366,7 +368,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                         if share_text {
                             ui.painter().text(pos2(r.min.x + 26.0, r.center().y), Align2::LEFT_CENTER, share, medium(12.0), t.on_accent);
                         }
-                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, share));
+                        resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, share));
                         if resp.on_hover_text(tl!("Export a copy to share (PDF, Word document)")).clicked() {
                             let _ = app.run("ui.backstage", json!({"value": true, "page": "export"}));
                         }
@@ -415,7 +417,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
                             }
                             let active = app.ui.tab == tab && !app.ui.backstage;
-                            resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, shown));
+                            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
                             if resp.hovered() && !active {
                                 ui.painter().rect_filled(r.shrink2(vec2(0.0, 4.0)), 4.0, t.hover);
                             }
@@ -478,7 +480,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                             );
                             // "»" means nothing read aloud: the button says what it holds.
                             let more = tl!("More tabs");
-                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, more));
+                            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, more));
                             let resp = resp.on_hover_text(more);
                             egui::Popup::menu(&resp).show(|ui| {
                                 for (tab, shown) in left_out {
@@ -508,11 +510,19 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             if !app.has_document() && app.ui.tab != "Help" {
                 ui.disable();
             }
-            let bg = ui.interact(ui.max_rect(), ui.id().with("ribbon_background"), Sense::click());
+            let bg = ui.interact(ui.max_rect(), ui.scope_id().with("ribbon_background"), Sense::click());
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
-            let scroll = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden).show(ui, |ui| {
+            // 0.37 keeps the scroll offset private: an edge-chevron click leaves a one-frame
+            // request here and the next scroll area is built at that offset.
+            let pending_id = ui.scope_id().with("ribbon_scroll_pending");
+            let pending = ui.data(|d| d.get_temp::<f32>(pending_id));
+            let mut area = egui::ScrollArea::horizontal().scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden);
+            if let Some(x) = pending {
+                area = area.horizontal_scroll_offset(x);
+            }
+            let scroll = area.show(ui, |ui| {
                 ui.horizontal_top(|ui| {
                     ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
                     match entry {
@@ -549,12 +559,15 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     }
                 });
             });
+            if pending.is_some() {
+                let _ = ui.data_mut(|d| d.remove_temp::<f32>(pending_id));
+            }
             crate::ribbon_fit::end(ui.ctx());
             // The bar is hidden, so a row wider than the window would be clipped with no sign. Edge chevrons show
             // where more is and scroll it on click. Every command also stays reachable through Search Commands.
             let r = scroll.inner_rect;
             let overflow = scroll.content_size.x - r.width();
-            let offset = scroll.state.offset.x;
+            let offset = scroll.state.clamped_offset().x;
             let step = 160.0;
             let mut next = None;
             if offset > 1.0 {
@@ -570,9 +583,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
             if let Some(x) = next {
-                let mut state = scroll.state;
-                state.offset.x = x.clamp(0.0, overflow.max(0.0));
-                state.store(ui.ctx(), scroll.id);
+                ui.data_mut(|d| d.insert_temp(pending_id, x.clamp(0.0, overflow.max(0.0))));
+                ui.ctx().request_repaint();
             }
         });
 }
@@ -617,7 +629,7 @@ fn two_lines(label: &str) -> String {
 
 /// A chevron over a ribbon edge that is also a button; `true` on the frame it is clicked.
 fn edge_cue(ui: &mut Ui, rect: Rect, glyph: &str, hint: &str, t: &Tokens) -> bool {
-    let resp = ui.interact(rect, ui.id().with(glyph), Sense::click()).on_hover_text(hint);
+    let resp = ui.interact(rect, ui.scope_id().with(glyph), Sense::click()).on_hover_text(hint);
     let ink = if resp.hovered() { t.text } else { t.text_dim };
     ui.painter().rect_filled(rect, 0.0, t.ribbon);
     ui.painter().text(rect.center(), Align2::CENTER_CENTER, glyph, egui::FontId::proportional(18.0), ink);
@@ -707,7 +719,7 @@ fn underline_item(ui: &mut Ui, app: &mut WordApp, style: &str, name: &str) {
     let enabled = crate::widgets::enabled(app, "format.underline");
     let resp = ui.add_enabled(enabled, egui::Button::new("").min_size(vec2(200.0, 22.0)));
     let label = tl!(name);
-    resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     let t = Tokens::get(ui.ctx());
     let color = if enabled { t.text } else { t.text_disabled };
     paint_underline(ui.painter(), resp.rect.shrink2(vec2(10.0, 0.0)), style, color);
@@ -1019,9 +1031,14 @@ fn language_checks(current: &str, listed: impl Fn(&str) -> bool) -> LanguageChec
 
 /// A menu item with a check mark when `checked` (the current choice of several).
 fn mi_check(ui: &mut Ui, app: &mut WordApp, label: &str, checked: bool, id: &str, params: Value) {
-    // An invisible mark keeps the unchecked labels aligned with the checked one.
-    let mark = egui::RichText::new("✓");
-    let mark = if checked { mark } else { mark.color(egui::Color32::TRANSPARENT) };
+    // A vector mark needs no font glyph; the empty atom keeps labels aligned.
+    let mark = egui::Atom::paint(vec2(14.0, 14.0), move |ui, args| {
+        if checked {
+            let r = args.rect;
+            let points = vec![r.min + r.size() * vec2(0.15, 0.5), r.min + r.size() * vec2(0.4, 0.75), r.min + r.size() * vec2(0.85, 0.2)];
+            ui.painter().add(egui::Shape::line(points, egui::Stroke::new(1.5, args.fallback_text_color)));
+        }
+    });
     let enabled = crate::widgets::enabled(app, id);
     let resp = ui.add_enabled(enabled, egui::Button::new((mark, tl!(label))).selected(checked).min_size(vec2(200.0, 0.0)));
     if resp.clicked() {
@@ -2114,9 +2131,9 @@ fn record_box(ui: &mut Ui, app: &mut WordApp) {
     let on = !app.session.merge.rows.is_empty();
     let shown = if on { (app.session.merge.record + 1).to_string() } else { String::new() };
     // The draft lives in temp memory while typing (frame-local text would lose keystrokes).
-    let key = egui::Id::new("merge_record_box");
+    let key = egui::Id::unique("merge_record_box");
     let mut text = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| shown.clone());
-    let r = ui.add_enabled(on, egui::TextEdit::singleline(&mut text).desired_width(36.0).horizontal_align(egui::Align::Center));
+    let r = ui.add_enabled(on, egui::TextEdit::singleline(&mut text).desired_width(36.0).align(egui::Align2::CENTER_TOP));
     let r = r.on_hover_text(tl!("Go to Record"));
     if r.changed() {
         ui.data_mut(|d| d.insert_temp(key, text.clone()));
@@ -2264,6 +2281,8 @@ fn developer(app: &mut WordApp, ui: &mut Ui) {
     });
 }
 
+/// Draws the View tab's Views, Immersive, Page Movement, Show, Zoom, Dark Mode, Window and Macros
+/// and Templates groups.
 fn view(app: &mut WordApp, ui: &mut Ui) {
     let v = app.session.view.clone();
     group(ui, "Views", None, app, |ui, app| {
@@ -2341,7 +2360,7 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         // browser has no full screen to ask for, and says so (#662).
         let on = crate::widgets::enabled(app, "view.fullScreen");
         let resp = big_toggle(ui, app, "fullScreen", "Full\nScreen", "view.fullScreen", v.full_screen);
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, on, v.full_screen, "Full Screen"));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, on, v.full_screen, "Full Screen"));
     });
     group(ui, "Macros", None, app, |ui, app| {
         big(ui, app, "macros", "Macros", "tools.macros", json!({}), false);
@@ -2412,6 +2431,7 @@ fn outlining(app: &mut WordApp, ui: &mut Ui) {
 fn help(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Help", None, app, |ui, app| {
         big(ui, app, "help", "Help", "ui.dialog", json!({"name": "about"}), false);
+        big(ui, app, "checkForUpdates", "Check for\nUpdates…", "ui.checkForUpdates", json!({}), false);
         big(ui, app, "discord", "Community\nDiscord", "ui.discord", json!({}), false);
     });
     group(ui, "Agents", None, app, |ui, app| {
@@ -2745,6 +2765,8 @@ fn shape_effects_menu(ui: &mut Ui, app: &mut WordApp, theme: &[wordcraft_doc::Rg
     });
 }
 
+/// Draws the Picture Format tab's Adjust, Picture Styles, Accessibility (Alt Text), Arrange and
+/// Size groups.
 fn picture_format(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Adjust", None, app, |ui, app| {
         menu_button(ui, app, "picture", Some("Corrections"), "Brightness, contrast and sharpness", true, "picture.corrections", |ui, app| {
@@ -2783,7 +2805,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 Some((pos, wordcraft_doc::para::InlineObject::Image { media, .. })) => (media, pos.off),
                 _ => (String::new(), 0),
             };
-            let key = egui::Id::new(("picture_transparency", media, off));
+            let key = egui::Id::unique(("picture_transparency", media, off));
             let mut v = ui.data(|d| d.get_temp::<f64>(key)).unwrap_or(0.0);
             let r = ui.add(egui::DragValue::new(&mut v).speed(1.0).range(0.0..=100.0).suffix("%"));
             if r.changed() {
@@ -2858,7 +2880,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                     ));
                     // While typing, the field reports each keystroke as a change; only a new
                     // value (Enter, Tab, a click elsewhere, a drag) resizes, and Esc cancels.
-                    let cancelled = esc_cancelled(ui, &r, egui::Id::new(("picture_size_field", key)));
+                    let cancelled = esc_cancelled(ui, &r, egui::Id::unique(("picture_size_field", key)));
                     if r.changed() && v != was && !cancelled {
                         if r.dragged() && !r.drag_started() {
                             app.session.join_next_undo();
@@ -2897,7 +2919,7 @@ fn picture_format(app: &mut WordApp, ui: &mut Ui) {
                 ui.label(egui::RichText::new(tl!("Alt:")).small());
                 // Frame-local buffers lose keystrokes; keep the draft in egui temp memory keyed
                 // by picture (same pattern as the comment editor in panes.rs).
-                let key = egui::Id::new(("picture_alt", media.clone(), off));
+                let key = egui::Id::unique(("picture_alt", media.clone(), off));
                 let mut alt = ui.data(|d| d.get_temp::<String>(key)).unwrap_or_else(|| alt0.clone());
                 let r = ui.add(egui::TextEdit::singleline(&mut alt).desired_width(120.0).hint_text(tl!("Alt text")));
                 if r.changed() {
@@ -3209,7 +3231,12 @@ mod tests {
         use wordcraft_doc::props::Underline;
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
         a.run("select.all", json!({})).unwrap();
-        let mut h = egui_kittest::Harness::builder().with_size(vec2(400.0, 700.0)).build_ui_state(|ui, app: &mut WordApp| underline_menu(ui, app), a);
+        // The app's real interface fonts carry the macOS shortcut symbols (⌘⇧⌥⌃); egui's
+        // bare test defaults do not.
+        let mut h = egui_kittest::Harness::builder()
+            .with_size(vec2(400.0, 700.0))
+            .with_context_setup(|ctx| ctx.set_fonts(crate::theme::font_definitions(false, false)))
+            .build_ui_state(|ui, app: &mut WordApp| underline_menu(ui, app), a);
         h.run_steps(2);
         let run =
             |h: &egui_kittest::Harness<'_, WordApp>| h.state().session.doc.para_at(&wordcraft_doc::Pos::body(0, 0)).unwrap().runs[0].props.clone();

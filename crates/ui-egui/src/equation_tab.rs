@@ -40,9 +40,57 @@ fn paint_math(app: &mut WordApp, ui: &Ui, r: Rect, key: &str, linear: &str, node
         }
         None => {
             let t = Tokens::get(ui.ctx());
-            ui.painter().text(r.center(), Align2::CENTER_CENTER, linear, regular(11.0), t.text_dim);
+            // Math previews are asynchronous. Interface fonts need not cover the math font's
+            // repertoire, so use readable linear commands until the actual equation is ready.
+            let placeholder = math_placeholder(ui, linear);
+            ui.painter().with_clip_rect(r).text(r.center(), Align2::CENTER_CENTER, placeholder, regular(11.0), t.text_dim);
         }
     }
+}
+
+/// Builds a readable fallback for a math preview from the interface fonts' glyph coverage:
+/// covered characters and whitespace stay, while a missing glyph becomes its UnicodeMath name
+/// or a `U+XXXX` codepoint.
+fn math_placeholder(ui: &Ui, linear: &str) -> String {
+    let font = regular(11.0);
+    math_placeholder_with(linear, |c| ui.fonts_mut(|fonts| fonts.has_glyph(&font, c)))
+}
+
+/// [`math_placeholder`] given which characters the interface fonts cover. A character they lack
+/// becomes its UnicodeMath name (`┬` → `\below`), so the same template has a different
+/// placeholder in a build without craft-fonts; the i18n audit recognizes the exact strings
+/// (`placeholder_linears`) as math input rather than interface wording.
+pub(crate) fn math_placeholder_with(linear: &str, covered: impl Fn(char) -> bool) -> String {
+    let mut result = String::new();
+    for c in linear.chars() {
+        if c.is_whitespace() || covered(c) {
+            result.push(c);
+        } else if let Some(name) = wordcraft_doc::math_symbols::name_of(c) {
+            result.push('\\');
+            result.push_str(name);
+        } else {
+            use std::fmt::Write as _;
+            let _ = write!(result, "U+{:04X}", c as u32);
+        }
+    }
+    result
+}
+
+/// The Equation tab's own big button picture.
+const EQUATION_PICTURE: &str = "∑_(i=1)^n";
+
+/// Every linear text the Equation tab can paint as a placeholder while a preview loads: the big
+/// buttons' pictures, every template and built-in equation, and every symbol tile.
+#[cfg(test)]
+pub(crate) fn placeholder_linears() -> impl Iterator<Item = String> {
+    let pictures = STRUCTURES.iter().map(|g| button_picture(g.id).to_string());
+    let templates = wordcraft_engine::math_gallery::templates().map(|t| t.linear.to_string());
+    let symbols = SYMBOL_SETS.iter().flat_map(|(_, chars)| chars.chars()).map(|c| c.to_string());
+    std::iter::once(EQUATION_PICTURE.to_string())
+        .chain(pictures)
+        .chain(templates)
+        .chain(BUILT_INS.iter().map(|(_, _, linear)| (*linear).to_string()))
+        .chain(symbols)
 }
 
 /// A big ribbon button whose picture is an equation; opens `menu`.
@@ -154,8 +202,8 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
     let (r, _) = ui.allocate_exact_size(vec2(w, CONTENT_H), Sense::hover());
     let top = Rect::from_min_max(r.min, pos2(r.max.x, r.min.y + BIG_LABEL_Y - 2.0));
     let bottom = Rect::from_min_max(pos2(r.min.x, r.min.y + BIG_LABEL_Y - 2.0), r.max);
-    let rt = ui.interact(top, ui.id().with("eq_insert_top"), Sense::click());
-    let rb = ui.interact(bottom, ui.id().with("eq_insert_bottom"), Sense::click());
+    let rt = ui.interact(top, ui.scope_id().with("eq_insert_top"), Sense::click());
+    let rb = ui.interact(bottom, ui.scope_id().with("eq_insert_bottom"), Sense::click());
     for (rr, resp) in [(top, &rt), (bottom, &rb)] {
         if resp.hovered() {
             ui.painter().rect_filled(rr, 4.0, t.hover);
@@ -178,10 +226,10 @@ pub fn insert_button(ui: &mut Ui, app: &mut WordApp) {
 
 /// The Symbols group: a strip of the current set's symbols, and a menu with every set.
 fn symbols(ui: &mut Ui, app: &mut WordApp) {
-    let id = egui::Id::new("eq_symbol_set");
+    let id = egui::Id::unique("eq_symbol_set");
     let set = ui.data(|d| d.get_temp::<usize>(id)).unwrap_or(0).min(SYMBOL_SETS.len().saturating_sub(1));
     let Some((_, chars)) = SYMBOL_SETS.get(set) else { return };
-    let start_id = egui::Id::new("eq_symbol_start");
+    let start_id = egui::Id::unique("eq_symbol_start");
     let per_row = 10usize;
     let rows = 3usize;
     let all: Vec<char> = chars.chars().collect();
@@ -247,6 +295,8 @@ fn symbols(ui: &mut Ui, app: &mut WordApp) {
     });
 }
 
+/// Draws one equation-tab symbol button, paints its preview, shows the linear name and codepoint
+/// in a tooltip, and returns whether it was clicked.
 fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
     let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
     ui.painter().rect_filled(r, 2.0, t.input);
@@ -256,14 +306,16 @@ fn symbol_button(ui: &mut Ui, app: &mut WordApp, c: char, t: &Tokens) -> bool {
     let s = c.to_string();
     let nodes = vec![wordcraft_doc::math::MNode::Run(wordcraft_doc::math::MRun { text: s.clone(), lit: true, ..Default::default() })];
     paint_math(app, ui, r, &format!("sym:{s}"), &s, Some(nodes), false, 11.0);
-    let name = wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{s}  \\{n}")).unwrap_or_else(|| format!("{s}  U+{:04X}", c as u32));
+    let display = math_placeholder(ui, &s);
+    let name =
+        wordcraft_doc::math_symbols::name_of(c).map(|n| format!("{display}  \\{n}")).unwrap_or_else(|| format!("{display}  U+{:04X}", c as u32));
     resp.on_hover_text(name).clicked()
 }
 
 /// The Equation tab.
 pub fn show(app: &mut WordApp, ui: &mut Ui) {
     group(ui, "Tools", None, app, |ui, app| {
-        math_menu_button(ui, app, "∑_(i=1)^n", "Equation", builtin_menu);
+        math_menu_button(ui, app, EQUATION_PICTURE, "Equation", builtin_menu);
         ui.vertical(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 0.0);
             let latex = app.session.math_latex;
@@ -377,4 +429,28 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             }
         });
     });
+}
+
+#[cfg(test)]
+mod placeholder_tests {
+    /// `∁` falls back to `\complement` in the placeholder while covered `x+y` is unchanged.
+    #[test]
+    fn a_missing_math_glyph_has_a_readable_linear_placeholder() {
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            assert!(!ui.fonts_mut(|fonts| fonts.has_glyph(&super::regular(11.0), '∁')));
+            assert_eq!(super::math_placeholder(ui, "x+\u{2201}"), "x+\\complement");
+            assert_eq!(super::math_placeholder(ui, "x+y"), "x+y");
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_missing_math_glyph_falls_back_to_its_linear_name() {
+        // Without craft-fonts the interface fonts may have no `┬`: the Equation button's picture
+        // then reads `lim\below(n→∞)`. That is still math input, not interface wording.
+        let covered = |c: char| c.is_ascii() || matches!(c, '∞' | '→');
+        assert_eq!(super::math_placeholder_with("lim┬(n→∞)", covered), "lim\\below(n→∞)");
+        assert!(super::placeholder_linears().any(|linear| linear == "lim┬(n→∞)"));
+    }
 }

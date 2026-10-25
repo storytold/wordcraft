@@ -175,14 +175,17 @@ pub(crate) fn clipboard_png(app: &WordApp) -> Option<Vec<u8>> {
         ClipboardPicture::Encoded(bytes) => Some(bytes),
         ClipboardPicture::Files(files) => {
             let path = files.into_iter().take(MAX_FILES).find(|p| is_picture_file(p))?;
-            let size = std::fs::metadata(&path).ok()?.len();
-            if size > MAX_FILE_BYTES.min(wordcraft_engine::cmd::paste::MAX_PICTURE_BYTES as u64 / 4 * 3) {
-                return None;
-            }
-            std::fs::read(path).ok()
+            read_picture_file(&path, MAX_FILE_BYTES.min(wordcraft_engine::cmd::paste::MAX_PICTURE_BYTES as u64 / 4 * 3))
         }
         ClipboardPicture::Unreadable(_) => None,
     }
+}
+
+/// The bytes of the regular file at `path` when it holds at most `limit` of them; `None` for
+/// anything else, such as a device like `/dev/zero` that never ends (#3692). A file that says it
+/// is larger is refused before any of it is read.
+fn read_picture_file(path: &Path, limit: u64) -> Option<Vec<u8>> {
+    wordcraft_engine::io::read_regular_file_within(path, limit)
 }
 
 /// Paste text naming copied picture files: insert the pictures when the clipboard holds those
@@ -340,5 +343,33 @@ mod tests {
         r.unwrap();
         assert_eq!(pictures(&mut a), 2, "files: both pictures are kept");
         assert!(!a.session.sel.is_collapsed() && crate::objects::selected(&a).is_some(), "files: the last picture is selected");
+    }
+
+    /// Paste Special reads a copied picture file only when it is a regular file within the limit:
+    /// a folder, a device such as `/dev/zero` (length 0, never ends) or an oversized file offers
+    /// nothing instead of reading to end of file (#3692).
+    #[test]
+    fn paste_special_reads_only_regular_picture_files() {
+        let dir = std::env::temp_dir().join(format!("wc-paste-special-3692-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("folder.png")).unwrap();
+        let png = png_from_rgba(4, 4, vec![200; 4 * 4 * 4]).unwrap();
+        std::fs::write(dir.join("ok.png"), &png).unwrap();
+        let big = std::fs::File::create(dir.join("big.png")).unwrap();
+        big.set_len(MAX_FILE_BYTES + 1).unwrap();
+        drop(big);
+        #[cfg(unix)]
+        std::os::unix::fs::symlink("/dev/zero", dir.join("zero.png")).unwrap();
+        let offered = |name: &str| {
+            let path = dir.join(name);
+            clipboard_png(&app_with(move || Some(ClipboardPicture::Files(vec![path.clone()]))))
+        };
+        assert_eq!(offered("ok.png"), Some(png.clone()));
+        assert_eq!(offered("folder.png"), None);
+        assert_eq!(offered("big.png"), None);
+        #[cfg(unix)]
+        assert_eq!(offered("zero.png"), None);
+        assert_eq!(read_picture_file(&dir.join("ok.png"), png.len() as u64 - 1), None, "one byte over the limit");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
