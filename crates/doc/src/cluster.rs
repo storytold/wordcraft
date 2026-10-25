@@ -181,6 +181,12 @@ pub fn is_thai_lao(c: char) -> bool {
     matches!(u32::from(c), 0x0E00..=0x0EFF)
 }
 
+/// Returns the shared ICU4X dictionary `LineSegmenter`, built once on first use.
+fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
+    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
+    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
+}
+
 /// Line-break opportunities within Thai and Lao text, which have no spaces between words.
 ///
 /// UAX #14 (`unicode_linebreak`) assigns class SA to these scripts and permits a break at every
@@ -190,11 +196,6 @@ pub fn is_thai_lao(c: char) -> bool {
 /// Thai/Lao spans.
 ///
 /// Returns sorted byte offsets into `text`.
-fn line_segmenter() -> &'static icu_segmenter::LineSegmenterBorrowed<'static> {
-    static S: OnceLock<icu_segmenter::LineSegmenterBorrowed<'static>> = OnceLock::new();
-    S.get_or_init(|| icu_segmenter::LineSegmenter::new_dictionary(icu_segmenter::options::LineBreakOptions::default()))
-}
-
 pub fn thai_lao_breaks(text: &str) -> Vec<usize> {
     line_segmenter()
         .segment_str(text)
@@ -301,7 +302,7 @@ mod tests {
 
     #[test]
     fn thai_wraps_at_word_boundaries() {
-        // "ภาคภูมิใจในภาษาไทย" = ภาค (9 B) + ภูมิใจ (18 B) + ใน (6 B) + ภาษาไทย (12 B) + ไทย (9 B) = 54 B.
+        // "ภาคภูมิใจในภาษาไทย" = ภาค (9 B) + ภูมิใจ (18 B) + ใน (6 B) + ภาษา (12 B) + ไทย (9 B) = 54 B.
         // ICU4X dictionary breaks: [9, 27, 33, 45] (before ภูมิ, ใน, ภาษา, ไทย).
         let thai = "ภาคภูมิใจในภาษาไทย";
         assert_eq!(thai.len(), 54);
