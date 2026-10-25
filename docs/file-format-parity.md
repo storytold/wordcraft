@@ -250,6 +250,10 @@ Original binary fixtures and actual WordApp/Session file I/O cover Save, toolbar
 
 Imported text fields use the first nonempty cached result run's formatting on their paragraph span, including character styles. Empty results retain begin-marker formatting. Synthetic fixtures cover simple and complex fields, default inheritance and repeated saves. Mixed-format results remain represented by one span; field refresh policy is unchanged.
 
+## Explicit SAVEDATE updates
+
+An explicit field update formats `docProps/core.xml` Modified metadata for SAVEDATE, including its date picture and capitalization switches. UTC `Z` timestamps with optional fractional seconds are supported. Missing, invalid or other-offset timestamps, unsupported calendar switches and locked fields retain cached text. Without a picture, the existing `M/d/yyyy` default remains. Opening and ordinary PDF conversion keep SAVEDATE cached. Local timezone and locale inference remain unsupported.
+
 ## Markdown inline code
 
 Inline code exports each LF, CR or CRLF line ending as one space, following [CommonMark code-span normalization](https://spec.commonmark.org/0.31.2/#code-spans). This keeps a following heading, list marker or HTML tag inside the code span, including code in lists and table cells (#3738). Leading and trailing spaces and backtick fences are preserved; fenced code blocks keep their line breaks. Synthetic export/reimport tests cover these cases.
@@ -264,6 +268,7 @@ Repeated DOCX style IDs use the last complete definition. The original regressio
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | trivial | Explicit SAVEDATE updates use valid UTC Modified metadata; unsupported timestamps and calendars retain cache. Default PDF conversion is unchanged. |
 | 2026-10-17 | trivial | Encryption rows: Standard (Word 2007, AES-ECB) encrypted packages open with a password, also when named `.doc`/`.dot`; AES headers in Word 97-2003 files are outside the public spec and refused (gap 9). The duplicate combined `.docx`/`.doc` row is removed; the `.doc` row reads 🟡 ~60% (it opens XOR/RC4/RC4 CryptoAPI); hours 2–4 → 1–2 and 4–6 → 1–2 (left: checks against Word-written files); total re-summed from the rows, 175–287 h |
 | 2026-10-25 | trivial | Repeated DOCX style IDs: repeated save/reopen regression for whole-definition replacement. |
 | 2026-10-25 | trivial | Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`) |

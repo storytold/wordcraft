@@ -203,6 +203,7 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-24 | #4085: Ctrl+Alt+H toggles the last chosen highlight colour; explicit colour setters remain idempotent. Mixed, inherited and pending formatting and Undo/Redo covered by command/key regressions. |
 | 2026-10-23 | Comment times show in the user's own time zone, as in Word: the Comments pane converts them (it showed the file's UTC time) and the balloons show them under each author (they showed none). The file's UTC time (Word's `w16cex:dateUtc`) wins over `w:date`, a time naming its zone is converted, and one without a zone shows as written (#2322, #2337) |
 | 2026-10-22 | Compare results opened as new or revised untitled documents start without the previous document's version snapshots. A comparison or mailing result rejected by protection keeps the snapshots and save target with the original document. |
+| 2026-10-23 | Explicit SAVEDATE uses valid UTC Modified metadata instead of today; default PDF conversion keeps its cache. |
 | 2026-10-20 | The Document Inspector's removals are refused while the document tracks changes: they delete straight from the document, so the text would go with no revision to show for it and the revision trail would be broken behind the user's back |
 | 2026-10-20 | A version snapshot belongs to the document it was taken from: the snapshots went with the document, so a restore can only ever bring back a version of the document that is open |
 | 2026-10-22 | Restrict Editing: the CLI's `--author` uses the same protection check as `file.setAuthor`, and File › Options disables the User name field while the document is protected. |
@@ -637,6 +638,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-23 | trivial | Explicit SAVEDATE updates use valid UTC Modified metadata; unsupported timestamps and calendars retain cache. Default PDF conversion is unchanged. |
 | 2026-10-25 | trivial | Progress log: egui 0.37 migration records the `craft-i18n.rev` catalog pin (9205108…; 27 languages) and the input-method handling; managed CI passed; native acceptance and native-speaker review remain open |
 | 2026-10-17 | trivial | Progress log: Standard-encrypted (AES) Word files open (gap 9) |
 | 2026-10-25 | trivial | Progress log: Text Highlight Color buttons show the remembered colour, or no colour bar after No Color (#4087) |

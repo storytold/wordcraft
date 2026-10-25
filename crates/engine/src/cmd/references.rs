@@ -1036,9 +1036,17 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             }
             let name = wordcraft_layout::fields::field_name(instr);
             match name.as_str() {
-                "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => {
+                "DATE" | "TIME" | "CREATEDATE" | "PRINTDATE" => {
                     let pic = date_picture(instr).unwrap_or_else(|| if name == "TIME" { "h:mm am/pm".into() } else { "M/d/yyyy".into() });
                     updates.push((k, text_result(instr, super::insert::format_date(&pic))));
+                }
+                "SAVEDATE" => {
+                    let pic = date_picture(instr).unwrap_or_else(|| "M/d/yyyy".into());
+                    if !['h', 's', 'u'].into_iter().any(|sw| has_switch(instr, sw))
+                        && let Some(text) = format_savedate(&s.doc.core.modified, &pic)
+                    {
+                        updates.push((k, text_result(instr, text)));
+                    }
                 }
                 "REF" | "PAGEREF" => {
                     let f = FieldCode::parse(instr);
@@ -1108,6 +1116,38 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
     }
     super::citations::update_citations(s)?;
     update_toc(s)
+}
+
+/// Explicit SAVEDATE updates use UTC metadata, never the clock. Unsupported timestamps keep
+/// their cache rather than guessing a timezone; opening and exporting still preserve SAVEDATE.
+fn format_savedate(stamp: &str, picture: &str) -> Option<String> {
+    let stamp = stamp.trim();
+    if stamp.len() > 64 {
+        return None;
+    }
+    let utc = stamp.strip_suffix('Z')?;
+    let time = if let Some((time, fraction)) = utc.split_once('.') {
+        if fraction.is_empty() || !fraction.bytes().all(|c| c.is_ascii_digit()) {
+            return None;
+        }
+        time
+    } else {
+        utc
+    };
+    if time.len() != 19 || time.get(10..11) != Some("T") || time.get(13..14) != Some(":") || time.get(16..17) != Some(":") {
+        return None;
+    }
+    if !time.bytes().enumerate().filter(|(i, _)| ![4, 7, 10, 13, 16].contains(i)).all(|(_, c)| c.is_ascii_digit()) {
+        return None;
+    }
+    let (y, m, d) = super::controls::parse_date(time)?;
+    let hh: u32 = time.get(11..13)?.parse().ok()?;
+    let mm: u32 = time.get(14..16)?.parse().ok()?;
+    let ss: u32 = time.get(17..19)?.parse().ok()?;
+    if hh > 23 || mm > 59 || ss > 59 {
+        return None;
+    }
+    Some(super::insert::format_date_parts(picture, y, m as usize, d, (hh, mm, ss), super::controls::days_from_civil(y, m, d)))
 }
 
 /// Refresh every unlocked `DATE` and `TIME` field to now, as Word does whenever it shows,

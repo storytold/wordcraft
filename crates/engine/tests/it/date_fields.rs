@@ -33,11 +33,19 @@ fn field(instr: &str, cached: &str, locked: bool) -> String {
 }
 
 fn open_body(body: &str) -> wordcraft_doc::Document {
+    open_core(body, "")
+}
+
+fn open_core(body: &str, modified: &str) -> wordcraft_doc::Document {
     let rels = r#"<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
     let doc = format!(
         r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:body>{body}</w:body></w:document>"#
     );
-    wordcraft_engine::io::open_bytes("d.docx", &zip(&[("_rels/.rels", rels), ("word/document.xml", &doc)])).expect("opens")
+    let core = format!(
+        r#"<cp:coreProperties xmlns:cp="http://schemas.openxmlformats.org/package/2006/metadata/core-properties" xmlns:dcterms="http://purl.org/dc/terms/"><dcterms:modified>{modified}</dcterms:modified></cp:coreProperties>"#
+    );
+    wordcraft_engine::io::open_bytes("d.docx", &zip(&[("_rels/.rels", rels), ("word/document.xml", &doc), ("docProps/core.xml", &core)]))
+        .expect("opens")
 }
 
 /// Every field of the body, as (code, result).
@@ -100,6 +108,70 @@ fn other_date_fields_keep_their_stored_result() {
     ));
     let results: Vec<String> = fields(&d).into_iter().map(|(_, r)| r).collect();
     assert_eq!(results, ["2019-05-05", "2019-06-06", "2019-07-07", "Ada Lovelace"]);
+}
+
+#[test]
+fn savedate_uses_modified() {
+    for stamp in ["2000-02-29T13:04:05Z", "2000-02-29T13:04:05.123Z"] {
+        let body = format!(
+            "<w:p>{}{}{}</w:p>",
+            field(r#"SAVEDATE \@ "dddd yyyy-MM-dd HH:mm:ss""#, "cached", false),
+            field("savedate \\* mergeformat", "cached", false),
+            field(r#"SAVEDATE \@ "yyyy-MM-dd""#, "locked", true),
+        );
+        let doc = open_core(&body, stamp);
+        assert_eq!(doc.core.modified, stamp);
+        assert_eq!(fields(&doc).iter().map(|(_, r)| r.as_str()).collect::<Vec<_>>(), ["cached", "cached", "locked"]);
+        let mut s = wordcraft_engine::Session::new(doc);
+        s.run("references.updateFields", &serde_json::json!({})).unwrap();
+        assert_eq!(fields(&s.doc).iter().map(|(_, r)| r.as_str()).collect::<Vec<_>>(), ["Tuesday 2000-02-29 13:04:05", "2/29/2000", "locked"]);
+        assert_eq!(s.doc.core.modified, stamp);
+    }
+}
+
+#[test]
+fn savedate_applies_case_switches() {
+    for (switches, expected) in [("Upper", "TUESDAY"), ("Lower", "tuesday"), ("Lower \\* FirstCap", "Tuesday"), ("Caps", "Tuesday")] {
+        let body = format!("<w:p>{}</w:p>", field(&format!(r#"SAVEDATE \@ "dddd" \* {switches}"#), "cached", false));
+        let mut session = wordcraft_engine::Session::new(open_core(&body, "2000-02-29T13:04:05Z"));
+        session.run("references.updateFields", &serde_json::json!({})).unwrap();
+        assert_eq!(fields(&session.doc)[0].1, expected, "{switches}");
+        assert_eq!(session.doc.core.modified, "2000-02-29T13:04:05Z");
+    }
+}
+
+#[test]
+fn savedate_keeps_bad_meta_cache() {
+    for stamp in [
+        "",
+        "missing",
+        "2001-02-29T13:04:05Z",
+        "2000-02-29",
+        "2000-02-29T24:04:05Z",
+        "2000-02-29T13:60:05Z",
+        "2000-02-29T13:04:60Z",
+        "2000-02-29T13:04:05",
+        "2000-02-29T13:04:05+01:00",
+        "2000-02-29T13:04:05.Z",
+        "2000-02-29T13:04:05.éZ",
+        "2000-02-29T13:04:05Zjunk",
+    ] {
+        let doc = open_core(&format!("<w:p>{}</w:p>", field(r#"SAVEDATE \@ "yyyy-MM-dd""#, "cached", false)), stamp);
+        let mut s = wordcraft_engine::Session::new(doc);
+        s.run("references.updateFields", &serde_json::json!({})).unwrap();
+        assert_eq!(fields(&s.doc)[0].1, "cached", "{stamp}");
+    }
+}
+
+#[test]
+fn savedate_keeps_calendar_cache() {
+    for switch in ['h', 's', 'u'] {
+        let doc =
+            open_core(&format!("<w:p>{}</w:p>", field(&format!(r#"SAVEDATE \{switch} \@ "yyyy-MM-dd""#), "cached", false)), "2000-02-29T13:04:05Z");
+        let mut s = wordcraft_engine::Session::new(doc);
+        s.run("references.updateFields", &serde_json::json!({})).unwrap();
+        assert_eq!(fields(&s.doc)[0].1, "cached", "{switch}");
+    }
 }
 
 #[test]
