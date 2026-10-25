@@ -329,6 +329,12 @@ pub fn baht_text_f64(x: f64) -> Option<String> {
     crate::thai_numbers::baht_text_f64(x)
 }
 
+/// Parse a decimal token (e.g. `"1.005"`) directly from the field instruction text,
+/// rounding to satang (2 d.p.) at the string boundary to avoid f64 precision loss.
+pub fn parse_baht_token(s: &str) -> Option<f64> {
+    crate::thai_numbers::parse_baht_token(s)
+}
+
 /// Chicago Manual of Style note marks: *, †, ‡, §, then doubled (**, ††, …) and so on.
 fn chicago(n: u32) -> String {
     const MARKS: [char; 4] = ['*', '\u{2020}', '\u{2021}', '\u{a7}'];
