@@ -83,6 +83,7 @@ pub mod table_pen;
 pub mod table_resize;
 pub mod table_ruler;
 pub mod theme;
+pub mod updates_ui;
 pub mod widgets;
 pub mod window_close;
 pub mod window_geometry;
@@ -568,11 +569,23 @@ pub struct WordApp {
     pub mac_titlebar: chrome::MacTitleBar,
     /// Focus (#1678): the ribbon is dropped down from the Focus bar, over the page.
     pub(crate) focus_ribbon: bool,
+    pub(crate) updates_rt: updates_ui::Runtime,
     control_rx: Option<std::sync::mpsc::Receiver<ControlRequest>>,
-    shot_token: u64,
-    queued_shots: Vec<(u64, f64, u32)>,
-    pending_shots: Vec<(u64, Option<String>, std::sync::mpsc::Sender<Value>, f64)>,
+    /// Admitted `ui.screenshot` requests: count/byte budgets, retries and completion slots.
+    shots: control::Shots,
+    /// Monotonic geometry epoch; any size/DPI/zoom/surface/document change increments it,
+    /// including a change back to an earlier value.
+    capture_epoch: u64,
+    /// The surface reported by the last `RawInput` hook, without a document identity.
+    surface_geometry: Option<control::SurfaceGeometry>,
+    /// The geometry `capture_epoch` describes; `None` before the first logic pass.
+    capture_geometry: Option<control::CaptureGeometry>,
+    /// Synthetic input not consumed by a real UI pass yet.
     pub(crate) synthetic: Vec<egui::Event>,
+    /// The batch offered to eframe is already in its pending RawInput; do not append it again.
+    synthetic_pending: bool,
+    /// How many events of `synthetic` the pending batch contains.
+    synthetic_injected: usize,
     /// macOS: the primary button went down with Control, so it is being read as the secondary.
     control_click: bool,
     /// Badge rects recorded during layout for the current keytip phase (cleared by `logic`, painted by `show`).
@@ -647,6 +660,9 @@ pub struct WordApp {
     pub zotero: zotero::ZoteroLink,
     /// The egui context, once the first frame has run (background work wakes the UI with it).
     pub(crate) ctx: Option<egui::Context>,
+    /// Whether the current command was entered by an input method's own transaction. The engine
+    /// uses it to keep IME commits from setting the application-change signal.
+    pub(crate) ime_origin: bool,
     /// Read Aloud: the start of the sentence the caret was last moved to, and the last error shown.
     pub(crate) read_aloud_at: Option<wordcraft_engine::doc::Pos>,
     pub(crate) read_aloud_error: Option<String>,
@@ -697,6 +713,9 @@ impl SaveChoice {
 }
 
 impl WordApp {
+    /// Creates the app: adopts the system locale, then initializes the document session, UI state,
+    /// services, printing, canvas, dialogs, previews, control and screenshot state, font and theme
+    /// tracking.
     pub fn new(session: Session, services: Services) -> Self {
         // Numeral › System follows the system locale, found here rather than in layout.
         if let Some(tag) = sys_locale::get_locale() {
@@ -718,11 +737,15 @@ impl WordApp {
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
             focus_ribbon: false,
+            updates_rt: updates_ui::Runtime::default(),
             control_rx: None,
-            shot_token: 0,
-            queued_shots: Vec::new(),
-            pending_shots: Vec::new(),
+            shots: control::Shots::default(),
+            capture_epoch: 0,
+            surface_geometry: None,
+            capture_geometry: None,
             synthetic: Vec::new(),
+            synthetic_pending: false,
+            synthetic_injected: 0,
             control_click: false,
             keytip_rects: Vec::new(),
             nav_search_focus: false,
@@ -761,6 +784,7 @@ impl WordApp {
             outline_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
+            ime_origin: false,
             read_aloud_at: None,
             read_aloud_error: None,
             autosave_path: None,
@@ -899,6 +923,17 @@ impl WordApp {
         let r = self.run(id, params);
         self.canvas.keep_view = false;
         r
+    }
+
+    /// Run a command as the input method's own transaction while preserving every normal
+    /// [`Self::run`] side effect (save prompts, clipboard, body-epoch tracking, status, …).
+    ///
+    /// The origin is restored on every return, including errors and nested commands.
+    pub(crate) fn run_ime(&mut self, id: &str, params: Value) -> Result<Value, String> {
+        let previous = std::mem::replace(&mut self.ime_origin, true);
+        let result = self.run(id, params);
+        self.ime_origin = previous;
+        result
     }
 
     /// Run a command the user asked for (ribbon, shortcut, Backstage, file drop). New, Open,
@@ -1082,8 +1117,35 @@ impl WordApp {
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));
         }
         let document = self.session.document_id();
+        let body_epoch = self.session.ime_body_epoch();
+        let math_session = self.session.math.as_ref().map(|m| m.session);
+        let composing_before = !self.canvas.ime_preedit.is_empty();
         let old_path = self.session.path.clone();
-        let r = self.session.run(id, &params).map_err(|e| e.to_string());
+        let r = if self.ime_origin {
+            self.session.run_ime(id, &params).map_err(|e| e.to_string())
+        } else {
+            self.session.run(id, &params).map_err(|e| e.to_string())
+        };
+        if self.session.ime_body_epoch() != body_epoch {
+            self.canvas.ime_interrupted_preedit |= composing_before;
+            // The body (or the whole document) was replaced under the same id — setText, a
+            // version restore, compare, Undo/Redo. A composition belongs to the old content:
+            // drop its pre-edit and ask the platform to interrupt it, even when the new bounded
+            // window happens to be identical.
+            self.canvas.ime_preedit.clear();
+            self.canvas.ime_preedit_range = None;
+            self.canvas.ime_window_cache = None;
+            self.canvas.ime_interrupt_now = true;
+        }
+        if self.session.math.as_ref().map(|m| m.session) != math_session {
+            self.canvas.ime_interrupted_preedit |= composing_before;
+            // Entering, leaving or replacing the edited equation changes the IME target's
+            // replacement epoch under the same document id. The old composition belongs to a
+            // tree this session no longer edits.
+            self.canvas.ime_preedit.clear();
+            self.canvas.ime_preedit_range = None;
+            self.canvas.ime_interrupt_now = true;
+        }
         // Copy and Cut put what they took on the system clipboard, whichever control ran them
         // (the ribbon, a context menu, the native menu, or the Cmd+C/X event). Only the key event
         // used to write it, so a Cut button deleted the words without copying them.
@@ -1569,6 +1631,10 @@ impl WordApp {
     fn ui_command(&mut self, id: &str, p: &Value) -> Option<Result<Value, String>> {
         let s = |k: &str| p.get(k).and_then(Value::as_str);
         Some(Ok(match id {
+            "ui.checkForUpdates" | "help.checkForUpdates" => {
+                crate::updates_ui::check(self);
+                Value::Null
+            }
             "ui.tab" => {
                 let tab = s("tab").unwrap_or("Home").to_string();
                 if tab == "File" {
@@ -2185,6 +2251,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        updates_ui::tick(self, ctx);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
         // New documents are written in the interface's language when WordCraft can proof it
@@ -2204,17 +2271,6 @@ impl WordApp {
         }
         options::sync(self);
         self.settle_async_saves();
-        // SmartArt Text Pane (#2701): Tab demotes and Shift+Tab promote the focused item, as Word's
-        // pane does. Consuming the key stops Tab from moving the caret to the next row, and so does
-        // resetting the focus direction: the item keeps focus after its level changes.
-        if self.session.view.smart_art_pane && self.smart_art_row_focused && self.smart_art_item.is_some() {
-            let shift_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
-            let tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
-            if shift_tab || tab {
-                ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
-                let _ = self.run(if shift_tab { "smartArt.promote" } else { "smartArt.demote" }, json!({"index": self.smart_art_item.unwrap_or(0)}));
-            }
-        }
         // Chinese text wants the Chinese face before the Japanese one (one glyph style per line).
         // An installed CJK font is read only once CJK text is shown (#241): a CJK interface, the
         // language names in Options, or a file name the caption is drawing. A file opened later
@@ -2271,6 +2327,15 @@ impl WordApp {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
+        // Capture geometry/document identity is current before control admission and completion.
+        // The epoch is monotonic: resizing back to an earlier size is still a new epoch.
+        let capture_geometry = self.surface_geometry.map(|surface| surface.with_document(self.session.document_id()));
+        if let Some(geometry) = capture_geometry
+            && self.capture_geometry != Some(geometry)
+        {
+            self.capture_geometry = Some(geometry);
+            self.capture_epoch = self.capture_epoch.wrapping_add(1);
+        }
         self.poll_printing(ctx);
         self.drain_control(ctx);
         zotero::poll(self, ctx);
@@ -2302,43 +2367,58 @@ impl WordApp {
         if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
         }
-        self.collect_screenshots(ctx);
-        self.issue_screenshots(ctx);
-        if !self.synthetic.is_empty() {
+        // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
+        // callback command belongs to `ui` (below). A queued/settling capture needs a real UI
+        // pass, and so does an injected synthetic step, even while the window is hidden.
+        control::drain_screenshots(self, ctx);
+        if self.shots.in_flight() || self.synthetic_pending || !self.synthetic.is_empty() {
+            if ctx.input(|i| i.viewport().visible()) != Some(true) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
+            }
             ctx.request_repaint();
         }
-        #[cfg(not(target_arch = "wasm32"))]
-        let mut placed_picture = false;
-        #[cfg(not(target_arch = "wasm32"))]
-        for f in ctx.input(|i| i.raw.dropped_files.clone()) {
-            {
-                let path = f.path().to_string_lossy().to_string();
-                let lp = path.to_ascii_lowercase();
-                let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
-                let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
-                let _ = if img {
-                    self.caret_after_placed_picture(placed_picture);
-                    let r = self.run("insert.picture", json!({"path": path}));
-                    placed_picture = Self::placed_in_text(&r);
-                    r
-                } else if sheet {
-                    // A spreadsheet isn't a document: it's a recipient list (#334).
-                    self.load_recipients(json!({"path": path}))
-                } else if wordcraft_fonts::is_font_file_name(&lp) {
-                    self.run("font.add", json!({"path": path}))
-                } else {
-                    self.run("file.open", json!({"path": path}))
-                };
-            }
-        }
-        // The open above may have changed the file name the caption draws.
-        self.ensure_caption_fonts();
-        self.ensure_comment_fonts();
-        self.ensure_recover_fonts();
-        self.ensure_recent_fonts();
-        self.ensure_find_fonts();
-        self.install_ui_fonts(ctx, lang);
         self.report_dirty();
+    }
+
+    /// Files dropped on the native window. Raw input is taken only in the first UI pass: a
+    /// hidden `run_logic` tick leaves the previous shown frame's events stale, and replaying a
+    /// drop would open or insert it again.
+    #[cfg(not(target_arch = "wasm32"))]
+    fn open_dropped_files(&mut self, files: Vec<egui::DroppedFileHandle>) {
+        let before = self.session.document_id();
+        let mut placed_picture = false;
+        for f in &files {
+            let path = f.path().to_string_lossy().to_string();
+            let lp = path.to_ascii_lowercase();
+            let img = [".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".wmf", ".emf"].iter().any(|e| lp.ends_with(e));
+            let sheet = wordcraft_engine::cmd::mailings::is_spreadsheet_name(&lp);
+            let _ = if img {
+                self.caret_after_placed_picture(placed_picture);
+                let r = self.run("insert.picture", json!({"path": path}));
+                placed_picture = Self::placed_in_text(&r);
+                r
+            } else if sheet {
+                // A spreadsheet isn't a document: it's a recipient list (#334).
+                self.load_recipients(json!({"path": path}))
+            } else if wordcraft_fonts::is_font_file_name(&lp) {
+                self.run("font.add", json!({"path": path}))
+            } else {
+                self.run("file.open", json!({"path": path}))
+            };
+        }
+        if self.session.document_id() != before {
+            self.autosave_path = None;
+            self.dialog = None;
+            self.ui.backstage = false;
+            self.canvas.want_focus = true;
+        }
+        if !files.is_empty() {
+            self.ensure_caption_fonts();
+            self.ensure_comment_fonts();
+            self.ensure_recover_fonts();
+            self.ensure_recent_fonts();
+            self.ensure_find_fonts();
+        }
     }
 
     /// Install the interface fonts when the language, the CJK fallback, or a caption fallback
@@ -2424,13 +2504,26 @@ impl WordApp {
         }
     }
 
-    /// Read a Control-click as the right-click on macOS, then inject synthetic input events from
-    /// the control channel (one pointer event per frame).
-    pub fn raw_input_hook(&mut self, raw: &mut egui::RawInput) {
+    /// Read a Control-click as the right-click on macOS, then offer at most one synthetic gesture
+    /// step to the host. eframe carries an unconsumed RawInput into the next pass and into hidden
+    /// logic ticks, so offering it again would duplicate input. The step stays queued until a
+    /// final (not discarded) UI pass acknowledges it, and a press/release pair stays intact.
+    pub fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        // Capture the surface from the raw input itself. `InputState::viewport_rect` and the
+        // last painted screen rect are stale in a hidden `run_logic` tick; RawInput is the host's
+        // current answer, including minimized/occluded and a Wayland `inner_rect: None`.
+        if let Some(geometry) = control::SurfaceGeometry::from_raw(raw, ctx) {
+            // A hidden resize and change back still invalidate an older capture, even if
+            // neither intermediate geometry reaches a drawing or logic pass.
+            if self.surface_geometry != Some(geometry) {
+                self.capture_epoch = self.capture_epoch.wrapping_add(1);
+            }
+            self.surface_geometry = Some(geometry);
+        }
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
-        if self.synthetic.is_empty() {
+        if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 {
             return;
         }
         let n = match self.synthetic.first() {
@@ -2450,7 +2543,9 @@ impl WordApp {
                 self.canvas.focused = ctx.memory(|m| m.has_focus(id));
             }
         }
-        raw.events.extend(self.synthetic.drain(..n));
+        raw.events.extend(self.synthetic.iter().take(n).cloned());
+        self.synthetic_pending = true;
+        self.synthetic_injected = n;
     }
 
     /// Lay out the window.
@@ -2463,6 +2558,7 @@ impl WordApp {
             let opts = ctx.options(|o| o.input_options);
             ctx.input_mut(|i| i.smooth_scroll_delta = scroll::unsmoothed_scroll(i, &opts));
         }
+        self.handle_ui_input_events(&ctx);
         // Fonts installed by `logic` take effect on the next frame.
         if self.fonts_frames < 2 {
             self.fonts_frames += 1;
@@ -2479,6 +2575,42 @@ impl WordApp {
             backstage::forget_open_error(&ctx);
             backstage::forget_save_as_error(&ctx);
         }
+        self.paint_window(ui, &ctx, t);
+        self.show_overlays(ui, &ctx);
+        self.sync_title_and_frame(&ctx, t0);
+        self.flush_shot_and_synthetic(&ctx);
+    }
+
+    /// Raw input read in the known UI phase, first pass only: dropped files and the SmartArt Text
+    /// Pane's Tab/Shift+Tab, before the font warm-up return. `logic` also runs hidden, where its
+    /// input events are from the previous shown frame.
+    fn handle_ui_input_events(&mut self, ctx: &egui::Context) {
+        // eframe does not preserve dropped files for a later frame, so a drop in the first two
+        // passes would otherwise disappear.
+        #[cfg(not(target_arch = "wasm32"))]
+        if ctx.current_pass_index() == 0 {
+            let dropped = ctx.input_mut(|i| std::mem::take(&mut i.raw.dropped_files));
+            if !dropped.is_empty() {
+                self.open_dropped_files(dropped);
+                let lang = i18n::Lang::from_pref(&self.ui.language);
+                self.install_ui_fonts(ctx, lang);
+            }
+        }
+        // SmartArt Text Pane (#2701): Tab demotes and Shift+Tab promote the focused item, as
+        // Word's pane does. This is an input action, so it runs in the first UI pass only; hidden
+        // `run_logic` ticks still see the previous shown frame's keys.
+        if ctx.current_pass_index() == 0 && self.session.view.smart_art_pane && self.smart_art_row_focused && self.smart_art_item.is_some() {
+            let shift_tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::SHIFT, egui::Key::Tab));
+            let tab = ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Tab));
+            if shift_tab || tab {
+                ctx.memory_mut(|m| m.move_focus(egui::FocusDirection::None));
+                let _ = self.run(if shift_tab { "smartArt.promote" } else { "smartArt.demote" }, json!({"index": self.smart_art_item.unwrap_or(0)}));
+            }
+        }
+    }
+
+    /// Draw the File page, the empty-window chrome, or the normal document window.
+    fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
         if self.ui.backstage {
             backstage::show(self, ui);
         } else if !self.has_document() {
@@ -2504,22 +2636,31 @@ impl WordApp {
                 canvas::show(self, ui);
             });
             if self.focus_ribbon {
-                chrome::focus_ribbon(self, &ctx);
+                chrome::focus_ribbon(self, ctx);
             }
         }
-        content_controls::popup(self, &ctx);
-        dialogs::show(self, &ctx);
+    }
+
+    /// Dialogs, panes and other overlays drawn over the window.
+    fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        content_controls::popup(self, ctx);
+        dialogs::show(self, ctx);
+        updates_ui::show(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
-        file_browser::show(self, &ctx);
-        colors::show(self, &ctx);
-        zotero::show_alert(self, &ctx);
-        read_aloud::show(self, &ctx);
-        crate::keytips::show(self, &ctx, ui);
-        keys::global_shortcuts(self, &ctx);
-        self.refocus_after_chrome_click(&ctx);
+        file_browser::show(self, ctx);
+        colors::show(self, ctx);
+        zotero::show_alert(self, ctx);
+        read_aloud::show(self, ctx);
+        crate::keytips::show(self, ctx, ui);
+        keys::global_shortcuts(self, ctx);
+        self.refocus_after_chrome_click(ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
         }
+    }
+
+    /// Keep the window title and full-screen state in sync, then record this frame's time.
+    fn sync_title_and_frame(&mut self, ctx: &egui::Context, t0: f64) {
         let title = if self.has_document() {
             format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" })
         } else {
@@ -2529,10 +2670,30 @@ impl WordApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
             self.sent_title = title;
         }
-        self.sync_full_screen(&ctx);
+        self.sync_full_screen(ctx);
         self.frame_ms = now_ms() - t0;
         // Typing and formatting land here, after `logic` has reported.
         self.report_dirty();
+    }
+
+    /// One callback command per admitted request, and the synthetic-input queue's final pass.
+    fn flush_shot_and_synthetic(&mut self, ctx: &egui::Context) {
+        // This is in `ui` so the captured frame is the layout just drawn; a discarded pass is not
+        // a layout anyone will see. The shot's `issued` flag makes repeated final passes harmless.
+        if !ctx.will_discard() {
+            control::issue_screenshots(self, ctx);
+        }
+        // The raw input was consumed by this host frame's passes; only a final UI pass proves
+        // the step is done. A discarded pass keeps the queue for the next UI frame.
+        if self.synthetic_pending && !ctx.will_discard() {
+            let n = self.synthetic_injected.min(self.synthetic.len());
+            self.synthetic.drain(..n);
+            self.synthetic_pending = false;
+            self.synthetic_injected = 0;
+            if !self.synthetic.is_empty() {
+                ctx.request_repaint();
+            }
+        }
     }
 
     /// Carry View › Full Screen (`view.fullScreen`, F11), Focus and Full Screen View (#1678) to
@@ -2582,7 +2743,7 @@ impl WordApp {
         }
         let Some(pos) = ctx.input(|i| if i.pointer.any_click() { i.pointer.interact_pos() } else { None }) else { return };
         // The ribbon dropped over the page in Focus (#1678) is chrome, though it lies over the page.
-        let on_focus_ribbon = self.focus_ribbon && ctx.layer_id_at(pos).is_some_and(|l| l.id == egui::Id::new("focus_ribbon"));
+        let on_focus_ribbon = self.focus_ribbon && ctx.layer_id_at(pos).is_some_and(|l| l.id == egui::Id::unique("focus_ribbon"));
         // The page handles its own clicks (comment balloons there take the keyboard themselves).
         if !on_focus_ribbon && (self.canvas.balloon.is_some() || self.canvas.viewport.is_some_and(|v| v.contains(pos))) {
             return;
@@ -2659,6 +2820,8 @@ impl WordApp {
         }
     }
 
+    /// Drains queued control requests, dispatches each through `control::handle`, sends its reply or
+    /// admits a screenshot, then puts the receiver back.
     fn drain_control(&mut self, ctx: &egui::Context) {
         let Some(rx) = self.control_rx.take() else { return };
         while let Ok(req) = rx.try_recv() {
@@ -2667,64 +2830,10 @@ impl WordApp {
                 control::Outcome::Done(v) => {
                     let _ = reply.send(v);
                 }
-                control::Outcome::Screenshot { path } => {
-                    self.shot_token += 1;
-                    let token = self.shot_token;
-                    self.queued_shots.push((token, now_ms() + 120.0, 0));
-                    self.pending_shots.push((token, path, reply, now_ms() + 8000.0));
-                }
+                control::Outcome::Screenshot { path } => control::admit_screenshot(self, ctx, path, reply),
             }
         }
         self.control_rx = Some(rx);
-    }
-
-    fn issue_screenshots(&mut self, ctx: &egui::Context) {
-        let now = now_ms();
-        self.queued_shots.retain_mut(|(token, at, frames)| {
-            *frames += 1;
-            if now >= *at && *frames >= 3 {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(egui::UserData::new(*token)));
-                false
-            } else {
-                true
-            }
-        });
-        if !self.queued_shots.is_empty() || !self.pending_shots.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        }
-    }
-
-    fn collect_screenshots(&mut self, ctx: &egui::Context) {
-        if self.pending_shots.is_empty() {
-            return;
-        }
-        let events: Vec<_> = ctx.input(|i| {
-            i.raw
-                .events
-                .iter()
-                .filter_map(|e| match e {
-                    egui::Event::Screenshot { user_data, image, .. } => {
-                        let token = user_data.data.as_ref().and_then(|d| d.downcast_ref::<u64>()).copied()?;
-                        Some((token, image.clone()))
-                    }
-                    _ => None,
-                })
-                .collect()
-        });
-        for (token, image) in events {
-            if let Some(i) = self.pending_shots.iter().position(|(t, ..)| *t == token) {
-                let (_, path, reply, _) = self.pending_shots.remove(i);
-                let _ = reply.send(control::save_screenshot(&image, path.as_deref()));
-            }
-        }
-        let now = now_ms();
-        self.pending_shots.retain(|(_, _, reply, deadline)| {
-            if now < *deadline {
-                return true;
-            }
-            let _ = reply.send(json!({"ok": false, "error": "no frame was presented (window hidden?); use ui.render"}));
-            false
-        });
     }
 }
 
@@ -2918,6 +3027,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "ui.discord"
             | "ui.caretAnimation"
             | "ui.startScreen"
+            | "ui.checkForUpdates"
     ) || id.starts_with("help.")
 }
 
@@ -2956,19 +3066,13 @@ pub(crate) fn discards_document(id: &str, params: &Value) -> bool {
     }
 }
 
-/// Wall-clock milliseconds since the Unix epoch: the system clock, or the browser's on the web.
+/// Monotonic milliseconds for deadlines, settling and animation. `web_time::Instant` is a real
+/// monotonic clock on native (`Instant::now`) and in the browser (`performance.now()`), so a wall
+/// clock or NTP adjustment cannot make a screenshot deadline or autosave fire early or late.
 pub fn now_ms() -> f64 {
-    #[cfg(not(target_arch = "wasm32"))]
-    {
-        use std::time::{SystemTime, UNIX_EPOCH};
-        SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs_f64() * 1000.0).unwrap_or(0.0)
-    }
-    // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
-    #[cfg(target_arch = "wasm32")]
-    {
-        let ms = js_sys::Date::now();
-        if ms.is_finite() && ms > 0.0 { ms } else { 0.0 }
-    }
+    use std::sync::OnceLock;
+    static START: OnceLock<web_time::Instant> = OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1000.0
 }
 
 /// macOS reads a Control-click as the right-click (winit reports the primary button with Control
@@ -3425,6 +3529,9 @@ mod tests {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
     }
 
+    /// All title-bar inputs have accessible names. Clicking the title opens Rename Document, the
+    /// Rename button saves a new name, Escape cancels, a long name stays clickable, and rename
+    /// leaves the document clean.
     #[test]
     fn title_and_account_buttons_work() {
         use egui_kittest::kittest::Queryable;
@@ -3437,9 +3544,12 @@ mod tests {
             app(),
         );
         h.run_steps(6);
+        assert!(h.unnamed_widgets().is_empty(), "chrome inputs have accessible names: {:?}", h.unnamed_widgets());
+        h.check_accessibility();
         h.get_by_label("Document1 — Not saved").click();
         h.run_steps(2);
         assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("renameDocument"));
+        assert!(h.unnamed_widgets().is_empty(), "the document-name field is labelled: {:?}", h.unnamed_widgets());
         h.get_by_role_and_label(egui::accesskit::Role::Button, "Rename").click();
         h.run_steps(2);
         assert!(h.state().dialog.is_none());
@@ -3851,7 +3961,7 @@ mod tests {
         for _ in 0..2 {
             frame(&mut a, Vec::new());
         }
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))), "Find what has the focus");
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("find_what"))), "Find what has the focus");
         frame(&mut a, vec![egui::Event::Text("abc".into())]);
         let Some(dialogs::Dialog::Find { query, .. }) = &a.dialog else { panic!("no Find dialog") };
         assert!(query.ends_with("abc"), "typing went into Find what: {query:?}");
@@ -3884,7 +3994,7 @@ mod tests {
             for _ in 0..2 {
                 frame(&mut a, Vec::new());
             }
-            assert!(ctx.memory(|m| m.has_focus(egui::Id::new("link_address"))), "Address has focus");
+            assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("link_address"))), "Address has focus");
             frame(&mut a, vec![event]);
             let Some(dialogs::Dialog::Link { url, text, .. }) = &a.dialog else { panic!("no Link dialog") };
             assert_eq!(url, expected, "input replaces the initial address");
@@ -3925,6 +4035,7 @@ mod tests {
             delta: egui::vec2(0.0, y),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Unknown,
         };
         frame(&mut a, vec![wheel(1.0)]);
         for _ in 0..30 {
@@ -3970,6 +4081,7 @@ mod tests {
             delta: egui::vec2(0.0, y),
             phase: egui::TouchPhase::Move,
             modifiers,
+            source: egui::MouseWheelSource::Unknown,
         };
         // Away from the caret, several pages down.
         for _ in 0..60 {
@@ -4072,7 +4184,13 @@ mod tests {
         }
         let over_page = a.canvas.canvas_rect.unwrap().center();
         frame(&mut a, vec![egui::Event::PointerMoved(over_page)]);
-        let wheel = |unit, y: f32, phase| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, y), phase, modifiers: egui::Modifiers::NONE };
+        let wheel = |unit, y: f32, phase| egui::Event::MouseWheel {
+            unit,
+            delta: egui::vec2(0.0, y),
+            phase,
+            modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
+        };
         let start = a.canvas.scroll_offset.y;
         frame(&mut a, vec![wheel(egui::MouseWheelUnit::Point, -40.0, egui::TouchPhase::Start)]);
         assert_eq!(a.canvas.scroll_offset.y, start + 40.0, "the first touchpad delta lands in the same frame");
@@ -4284,6 +4402,7 @@ mod tests {
                 delta: egui::vec2(0.0, -65.0),
                 phase: egui::TouchPhase::Start,
                 modifiers: egui::Modifiers::NONE,
+                source: egui::MouseWheelSource::Unknown,
             }],
             screen,
         );
@@ -4430,6 +4549,7 @@ mod tests {
             delta: egui::vec2(0.0, -1.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         };
         let notch = crate::scroll::notch_px(a.canvas.scale / crate::canvas::PX_PER_PT);
         let at = a.canvas.scroll_offset.y;
@@ -4485,6 +4605,7 @@ mod tests {
             delta: egui::vec2(0.0, notches),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::COMMAND,
+            source: egui::MouseWheelSource::Unknown,
         };
         let opts = egui::InputOptions::default();
         let notch_zoom = (opts.scroll_zoom_speed * opts.line_scroll_speed).exp();
@@ -4550,6 +4671,7 @@ mod tests {
                 delta: egui::vec2(0.0, delta),
                 phase: egui::TouchPhase::Move,
                 modifiers,
+                source: egui::MouseWheelSource::Unknown,
             };
             // Scroll down a little, so the pointer is well inside the document.
             frame(&mut a, vec![wheel(-3.0, egui::Modifiers::NONE)]);
@@ -4675,6 +4797,7 @@ mod tests {
             delta: egui::vec2(0.0, -3.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         };
         frame(&mut a, vec![egui::Event::PointerMoved(mid), wheel]);
         for _ in 0..30 {
@@ -4974,6 +5097,7 @@ mod tests {
                 delta: egui::vec2(0.0, -1.0),
                 phase: egui::TouchPhase::Move,
                 modifiers: Default::default(),
+                source: egui::MouseWheelSource::Unknown,
             };
             frame(&mut a, vec![egui::Event::PointerMoved(vp.center()), wheel]);
             for _ in 0..30 {
@@ -5009,6 +5133,7 @@ mod tests {
         assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Part(footer)), "Foot");
     }
 
+    /// Runs one 1280 by 800 frame through the raw input hook, logic and UI, dropping texture deltas.
     fn control_frame(a: &mut WordApp, ctx: &egui::Context, focused: bool) {
         let mut raw = egui::RawInput {
             focused,
@@ -5016,7 +5141,7 @@ mod tests {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1280.0, 800.0))),
             ..Default::default()
         };
-        a.raw_input_hook(&mut raw);
+        a.raw_input_hook(ctx, &mut raw);
         ctx.run_ui(raw, |ui| {
             a.logic(ui.ctx());
             a.ui(ui);
@@ -5064,6 +5189,9 @@ mod tests {
         }
     }
 
+    /// Synthetic control text and keys target the focused background widget (the Find field), and
+    /// Escape closes it. Closing a dirty document offers Save Changes, and Escape cancels without
+    /// losing the document.
     #[test]
     fn control_keyboard_keeps_the_background_widget_target() {
         let ctx = egui::Context::default();
@@ -5076,7 +5204,7 @@ mod tests {
         for _ in 0..2 {
             control_frame(&mut a, &ctx, true);
         }
-        assert!(ctx.memory(|m| m.has_focus(egui::Id::new("find_what"))));
+        assert!(ctx.memory(|m| m.has_focus(egui::Id::unique("find_what"))));
         for _ in 0..2 {
             control_frame(&mut a, &ctx, false);
         }
@@ -5102,6 +5230,8 @@ mod tests {
         assert_eq!(body_text(&a), "Seed", "Cancel preserves the unsaved document");
     }
 
+    /// Control input respects read-only protection, and a frame without control keys leaves the native
+    /// focus state alone.
     #[test]
     fn control_keyboard_preserves_native_focus_and_document_protection() {
         let ctx = egui::Context::default();
@@ -5124,7 +5254,7 @@ mod tests {
         assert_eq!(a.session.doc, doc, "control input respects the same protection as real keys");
         assert!(a.synthetic.is_empty());
         let mut native = egui::RawInput { focused: false, ..Default::default() };
-        a.raw_input_hook(&mut native);
+        a.raw_input_hook(&ctx, &mut native);
         assert!(!native.focused, "a frame without control keys keeps the native focus state");
         assert!(!a.canvas.focused);
     }
@@ -5171,6 +5301,7 @@ mod tests {
             delta: egui::vec2(0.0, vp.center().y - at.y),
             phase: egui::TouchPhase::Move,
             modifiers: Default::default(),
+            source: egui::MouseWheelSource::Unknown,
         };
         frame(&mut a, vec![egui::Event::PointerMoved(vp.center()), wheel]);
         for _ in 0..30 {
@@ -5266,7 +5397,7 @@ mod tests {
         let mut frame = |a: &mut WordApp| {
             t += 1.0 / 60.0;
             let mut input = egui::RawInput { time: Some(t), screen_rect: Some(screen), ..Default::default() };
-            a.raw_input_hook(&mut input);
+            a.raw_input_hook(&ctx, &mut input);
             ctx.run_ui(input, |ui| {
                 a.logic(ui.ctx());
                 a.ui(ui);
@@ -6230,7 +6361,7 @@ mod tests {
         use printing::Printer;
         for ok in [true, false] {
             let mut a = app();
-            a.printing.printers = vec![Printer { name: "Test Printer".into(), default: true }];
+            a.printing.printers = vec![Printer { name: "Test Printer".into(), label: String::new(), default: true }];
             a.printing.settings.printer = "Test Printer".into();
             a.services.print_native = Some(Box::new(move |_, _, _, _| {
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -6291,6 +6422,7 @@ mod tests {
             delta: egui::vec2(-120.0, -120.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Unknown,
         });
         h.run_steps(20);
         let moved = page(&h);
@@ -8484,7 +8616,7 @@ mod tests {
         a.services.pasted = Some(q.clone());
         a.run("ui.dialog", json!({"name": "find"})).unwrap();
         let mut h = paste_harness(a);
-        h.ctx.memory_mut(|m| m.request_focus(egui::Id::new("find_what")));
+        h.ctx.memory_mut(|m| m.request_focus(egui::Id::unique("find_what")));
         h.step();
         h.step();
         assert!(!h.state().canvas.focused);
@@ -9105,8 +9237,9 @@ mod tests {
         assert!(v["result"]["width"].as_u64().unwrap() > 0 && v["result"]["pages"].as_u64().unwrap() >= 1, "{v}");
 
         let image = egui::ColorImage::from_rgba_unmultiplied([2, 1], &[255, 0, 0, 255, 0, 0, 255, 255]);
-        let v = control::save_screenshot(&image, None);
+        let v = control::save_screenshot(&image, None, 41);
         assert_eq!(v["ok"], true, "{v}");
+        assert_eq!(v["request"], 41);
         assert!(v["result"].get("path").is_none(), "no file: {v}");
         let png = wordcraft_engine::cmd::insert::base64_decode(v["result"]["png"].as_str().expect("png")).expect("base64");
         assert_eq!(&png[..4], b"\x89PNG");
@@ -9176,7 +9309,7 @@ mod tests {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(egui::Event::Text("Kilns fire clay. Kilns cool.".into()));
         h.step();
-        let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::new("nav_query"))).unwrap_or_default();
+        let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("nav_query"))).unwrap_or_default();
         // Ctrl+F: the pane, and typing goes into its search box.
         h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
         h.step();
@@ -9226,6 +9359,530 @@ mod tests {
         h.state_mut().run("edit.advancedFind", json!({})).unwrap();
         h.step();
         assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("find"));
+    }
+
+    /// Builds a root-viewport raw input at `size`, optionally marked minimized and occluded.
+    fn shot_raw(size: egui::Vec2, hidden: bool) -> egui::RawInput {
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let mut raw = egui::RawInput { screen_rect: Some(rect), max_texture_side: Some(16_384), ..Default::default() };
+        raw.viewports.insert(
+            egui::ViewportId::ROOT,
+            egui::ViewportInfo {
+                inner_rect: Some(rect),
+                native_pixels_per_point: Some(1.0),
+                minimized: Some(hidden),
+                occluded: Some(hidden),
+                ..Default::default()
+            },
+        );
+        raw
+    }
+
+    /// Runs one screenshot frame through the raw hook, logic and UI, and clears its texture deltas.
+    fn shot_frame(app: &mut WordApp, ctx: &egui::Context, size: egui::Vec2) -> egui::FullOutput {
+        let mut raw = shot_raw(size, false);
+        app.raw_input_hook(ctx, &mut raw);
+        let mut output = ctx.run_ui(raw, |ui| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        });
+        output.textures_delta.clear();
+        output
+    }
+
+    /// Replaces each root screenshot command in the output with `ViewportCommand::Focus` and returns
+    /// its callback, so the test frame runs no real screenshot.
+    fn take_shot_callbacks(output: &mut egui::FullOutput) -> Vec<egui::ScreenshotCallback> {
+        let mut callbacks = Vec::new();
+        if let Some(viewport) = output.viewport_output.get_mut(&egui::ViewportId::ROOT) {
+            for command in &mut viewport.commands {
+                if matches!(command, egui::ViewportCommand::Screenshot(_)) {
+                    let egui::ViewportCommand::Screenshot(callback) = std::mem::replace(command, egui::ViewportCommand::Focus) else {
+                        continue;
+                    };
+                    callbacks.push(callback);
+                }
+            }
+        }
+        callbacks
+    }
+
+    /// Creates an app with text, warms four screenshot frames, and returns it with a fresh context.
+    fn screenshot_app(size: egui::Vec2) -> (WordApp, egui::Context) {
+        let mut app = app();
+        app.run("document.setText", json!({"text": "Screenshot"})).unwrap();
+        let ctx = egui::Context::default();
+        for _ in 0..4 {
+            shot_frame(&mut app, &ctx, size);
+        }
+        (app, ctx)
+    }
+
+    /// Admits a screenshot through `control::admit_screenshot` with a fresh reply channel and returns
+    /// the receiver.
+    fn admit(app: &mut WordApp, ctx: &egui::Context, path: Option<String>) -> std::sync::mpsc::Receiver<Value> {
+        let (reply, replies) = std::sync::mpsc::channel();
+        control::admit_screenshot(app, ctx, path, reply);
+        replies
+    }
+
+    /// Forces queued screenshot requests ready and runs one frame to collect their callbacks.
+    fn issue_ready(app: &mut WordApp, ctx: &egui::Context, size: egui::Vec2) -> Vec<egui::ScreenshotCallback> {
+        for shot in &mut app.shots.requests {
+            shot.ready_at = 0.0;
+            shot.frames = 3;
+        }
+        let mut output = shot_frame(app, ctx, size);
+        take_shot_callbacks(&mut output)
+    }
+
+    /// The deadline/animation clock is monotonic on native and in the browser.
+    #[test]
+    fn now_ms_never_moves_backwards() {
+        let mut last = now_ms();
+        for _ in 0..1000 {
+            let now = now_ms();
+            assert!(now >= last, "the clock went backwards: {last} -> {now}");
+            last = now;
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    #[derive(Debug)]
+    struct DroppedText(std::path::PathBuf);
+
+    #[cfg(not(target_arch = "wasm32"))]
+    impl egui::DroppedFile for DroppedText {
+        /// Exposes the dropped file's path.
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+        /// Reads the dropped file's bytes, stringifying I/O errors.
+        fn bytes(&self) -> Result<Vec<u8>, String> {
+            std::fs::read(&self.0).map_err(|e| e.to_string())
+        }
+    }
+
+    /// A file dropped in the first two font-warm-up passes is taken before the early return;
+    /// eframe does not preserve dropped files for a later frame.
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_drop_before_font_warm_up_is_not_lost() {
+        let (mut app, ctx) = (app(), egui::Context::default());
+        let path = std::env::temp_dir().join(format!("wordcraft-drop-warmup-{}.txt", std::process::id()));
+        std::fs::write(&path, b"dropped text").expect("write the dropped document");
+        let mut raw = shot_raw(egui::vec2(640.0, 480.0), false);
+        raw.dropped_files.push(std::sync::Arc::new(DroppedText(path.clone())));
+        app.raw_input_hook(&ctx, &mut raw);
+        ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(app.fonts_frames, 1, "the UI returned for font warm-up");
+        assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end_matches(['\r', '\n']), "dropped text");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// Wayland may leave `ViewportInfo::inner_rect` unknown: capture geometry then uses the same
+    /// RawInput frame's screen rect and rounds logical points to physical pixels.
+    #[test]
+    fn capture_geometry_falls_back_to_screen_rect_and_rounds_physical_pixels() {
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(320.0, 200.0));
+        let mut raw = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
+        raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
+        let surface = control::SurfaceGeometry::from_raw(&raw, &ctx).expect("screen rect fallback");
+        let geometry = surface.with_document(7);
+        assert_eq!(geometry.expected_size(), Some([480, 300]));
+        assert_eq!(geometry.expected_bytes(), Some(480 * 300 * 4));
+    }
+
+    /// A completed capture reaches its own slot, the callback never writes a file, and the
+    /// request is replied to exactly once from `logic`.
+    #[test]
+    fn screenshot_callback_completes_one_request_without_writing_from_the_callback() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let replies = admit(&mut app, &ctx, None);
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert_eq!(callbacks.len(), 1);
+        callbacks.into_iter().next().unwrap().complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        assert!(replies.try_recv().is_err(), "the callback itself sends no reply");
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let reply = replies.recv().unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["result"]["width"], 640);
+        assert_eq!(reply["result"]["height"], 480);
+        assert!(app.shots.requests.is_empty(), "the reservation is released");
+    }
+
+    /// A discarded first layout pass does not issue two callback commands: the shot's issued
+    /// flag and first-pass settle counter keep the capture one-shot across the final pass.
+    #[test]
+    fn screenshot_issue_is_one_shot_across_a_multipass_frame() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let replies = admit(&mut app, &ctx, None);
+        for shot in &mut app.shots.requests {
+            shot.ready_at = 0.0;
+            shot.frames = 3;
+        }
+        let mut passes = 0;
+        let mut output = ctx.run_ui(shot_raw(egui::vec2(640.0, 480.0), false), |ui| {
+            if passes == 0 {
+                ui.request_discard("test capture multipass");
+            }
+            app.logic(ui.ctx());
+            app.ui(ui);
+            passes += 1;
+        });
+        assert_eq!(passes, 2);
+        let callbacks = take_shot_callbacks(&mut output);
+        assert_eq!(callbacks.len(), 1, "one callback for the whole host frame");
+        callbacks.into_iter().next().unwrap().complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        output.drop_without_applying_deltas();
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert_eq!(replies.recv().unwrap()["ok"], true);
+    }
+
+    /// Two requests keep their own callbacks; a later completion does not consume the earlier
+    /// request's image or reply.
+    #[test]
+    fn screenshot_callbacks_complete_out_of_order() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let first = admit(&mut app, &ctx, None);
+        let second = admit(&mut app, &ctx, None);
+        let mut callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert_eq!(callbacks.len(), 2);
+        let first_callback = callbacks.remove(0);
+        let second_callback = callbacks.remove(0);
+        second_callback.complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let second_reply = second.recv().unwrap();
+        assert_eq!(second_reply["ok"], true, "{second_reply}");
+        assert!(first.try_recv().is_err(), "the first request is still pending");
+        assert_eq!(app.shots.requests.len(), 1);
+        first_callback.complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let first_reply = first.recv().unwrap();
+        assert_eq!(first_reply["ok"], true, "{first_reply}");
+        assert!(app.shots.requests.is_empty());
+    }
+
+    /// A deadline is checked before a completed image is written. A callback that arrives after
+    /// the timeout finds a cancelled slot and gets no second reply.
+    #[test]
+    fn a_late_screenshot_callback_never_writes_or_replies() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let path = std::env::temp_dir().join(format!("wordcraft-late-shot-{}.png", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let replies = admit(&mut app, &ctx, Some(path.to_string_lossy().to_string()));
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let callback = callbacks.into_iter().next().unwrap();
+        app.shots.requests[0].deadline = 0.0;
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert_eq!(replies.recv().unwrap()["ok"], false);
+        callback.complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert!(replies.try_recv().is_err(), "one reply only");
+        assert!(!path.exists(), "no late file was written");
+        assert!(app.shots.requests.is_empty());
+    }
+
+    /// Resizing away and back is still a new geometry epoch, so old pixels are rejected and the
+    /// request retries inside its original deadline.
+    #[test]
+    fn screenshot_epoch_changes_even_when_geometry_returns() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let replies = admit(&mut app, &ctx, None);
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let callback = callbacks.into_iter().next().unwrap();
+        shot_frame(&mut app, &ctx, egui::vec2(800.0, 600.0));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        callback.complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert!(replies.try_recv().is_err(), "stale pixels are dropped");
+        assert_eq!(app.shots.requests.len(), 1, "the request retries");
+        assert!(!app.shots.requests[0].issued);
+        app.shots.requests[0].deadline = 0.0;
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert_eq!(replies.recv().unwrap()["ok"], false);
+    }
+
+    /// A geometry change and change back still invalidates issued pixels and retries the request.
+    #[test]
+    fn screenshot_epoch_observes_a_raw_change_and_change_back() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let replies = admit(&mut app, &ctx, None);
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let callback = callbacks.into_iter().next().unwrap();
+        let issued_epoch = app.shots.requests[0].epoch;
+        let mut away = shot_raw(egui::vec2(800.0, 600.0), false);
+        app.raw_input_hook(&ctx, &mut away);
+        let mut back = shot_raw(egui::vec2(640.0, 480.0), false);
+        app.raw_input_hook(&ctx, &mut back);
+        assert!(app.capture_epoch > issued_epoch);
+        callback.complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert!(replies.try_recv().is_err(), "pixels from before the hidden change are dropped");
+        assert_eq!(app.shots.requests.len(), 1, "the request retries");
+        assert!(!app.shots.requests[0].issued);
+    }
+
+    /// Wayland can report `inner_rect: None`; a resize is still seen through the raw screen rect
+    /// and starts a new epoch instead of reusing the last painted size.
+    #[test]
+    fn screenshot_geometry_uses_the_current_raw_screen_rect_on_wayland() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let before = app.capture_epoch;
+        let mut raw = shot_raw(egui::vec2(320.0, 200.0), false);
+        raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().inner_rect = None;
+        app.raw_input_hook(&ctx, &mut raw);
+        let _ = ctx.run_logic(&raw, |ctx| app.logic(ctx));
+        assert!(app.capture_epoch > before, "a resize starts a new geometry epoch");
+        assert_eq!(app.capture_geometry.and_then(control::CaptureGeometry::expected_size), Some([320, 200]));
+    }
+
+    /// A successful capture with a path writes exactly that file, and its reply carries the
+    /// request token used to correlate admission, timeout and completion.
+    #[test]
+    fn screenshot_success_writes_the_requested_path_and_correlates_the_token() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let path = std::env::temp_dir().join(format!("wordcraft-shot-ok-{}.png", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let replies = admit(&mut app, &ctx, Some(path.to_string_lossy().to_string()));
+        let token = app.shots.requests[0].token;
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        callbacks.into_iter().next().unwrap().complete(std::sync::Arc::new(egui::ColorImage::filled([640, 480], egui::Color32::BLACK)));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let reply = replies.recv().unwrap();
+        assert_eq!(reply["ok"], true, "{reply}");
+        assert_eq!(reply["request"], token, "{reply}");
+        let png = std::fs::read(&path).expect("the requested screenshot file");
+        assert_eq!(&png[..4], b"\x89PNG", "a real PNG was written");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    /// A request admitted for document A is never rebound to document B. The slot is cancelled,
+    /// the requested path is not written and the caller gets one document-changed error.
+    #[test]
+    fn screenshot_document_switch_cancels_instead_of_rebinding() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let path = std::env::temp_dir().join(format!("wordcraft-shot-doc-switch-{}.png", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+        let replies = admit(&mut app, &ctx, Some(path.to_string_lossy().to_string()));
+        let document = app.session.document_id();
+        app.session.dirty = false; // A saved document can be replaced without the save prompt.
+        app.run("file.new", json!({})).unwrap();
+        assert_ne!(document, app.session.document_id(), "the test must actually replace the document");
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        assert!(callbacks.is_empty(), "no callback is issued for the new document");
+        let reply = replies.recv().unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert!(reply["error"].as_str().unwrap_or_default().contains("document changed"), "{reply}");
+        assert!(!path.exists(), "document B's pixels never reach document A's path");
+        assert!(app.shots.requests.is_empty());
+        assert!(replies.try_recv().is_err(), "one reply only");
+    }
+
+    /// A minimized (or fully occluded) window cannot be captured: admission/issuance cancels the
+    /// request rather than accepting the last visible surface or retrying it.
+    #[test]
+    fn screenshot_minimized_window_is_cancelled_not_retried() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let replies = admit(&mut app, &ctx, None);
+        for shot in &mut app.shots.requests {
+            shot.ready_at = 0.0;
+            shot.frames = 3;
+        }
+        let mut raw = shot_raw(egui::vec2(640.0, 480.0), true);
+        app.raw_input_hook(&ctx, &mut raw);
+        let mut output = ctx.run_ui(raw, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        });
+        let callbacks = take_shot_callbacks(&mut output);
+        output.drop_without_applying_deltas();
+        assert!(callbacks.is_empty(), "no capture is issued while minimized");
+        let reply = replies.recv().unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert!(reply["error"].as_str().unwrap_or_default().contains("minimized"), "{reply}");
+        assert!(app.shots.requests.is_empty());
+    }
+
+    /// Admission also refuses a minimized surface: the last visible size must not be captured.
+    #[test]
+    fn screenshot_admission_rejects_a_minimized_window() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let mut raw = shot_raw(egui::vec2(640.0, 480.0), true);
+        app.raw_input_hook(&ctx, &mut raw);
+        let _ = ctx.run_logic(&raw, |ctx| app.logic(ctx));
+        let replies = admit(&mut app, &ctx, None);
+        let reply = replies.recv().unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert!(reply["error"].as_str().unwrap_or_default().contains("minimized"), "{reply}");
+        assert!(app.shots.requests.is_empty());
+    }
+
+    /// A malformed completion is reported at once; it is not treated as a resize and retried.
+    #[test]
+    fn screenshot_malformed_completion_fails_without_retrying() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let replies = admit(&mut app, &ctx, None);
+        let callbacks = issue_ready(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        callbacks.into_iter().next().unwrap().complete(std::sync::Arc::new(egui::ColorImage {
+            size: [640, 480],
+            source_size: egui::vec2(640.0, 480.0),
+            pixels: Vec::new(),
+        }));
+        shot_frame(&mut app, &ctx, egui::vec2(640.0, 480.0));
+        let reply = replies.recv().unwrap();
+        assert_eq!(reply["ok"], false, "{reply}");
+        assert!(reply["error"].as_str().unwrap_or_default().contains("pixels"), "{reply}");
+        assert!(reply.get("request").is_some(), "completion errors carry the request token: {reply}");
+        assert!(app.shots.requests.is_empty(), "a malformed image is not retried");
+        assert!(replies.try_recv().is_err());
+    }
+
+    /// Admission enforces four requests, 128 MiB per image and 256 MiB aggregate, without
+    /// evicting an earlier request.
+    #[test]
+    fn screenshot_admission_bounds_count_image_and_aggregate() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        for _ in 0..control::SCREENSHOT_MAX_REQUESTS {
+            let _ = admit(&mut app, &ctx, None);
+        }
+        let (reply, replies) = std::sync::mpsc::channel();
+        control::admit_screenshot(&mut app, &ctx, None, reply);
+        assert_eq!(replies.recv().unwrap()["ok"], false);
+        assert_eq!(app.shots.requests.len(), control::SCREENSHOT_MAX_REQUESTS);
+
+        // 2300×2250 reserves about 90 MB including image, RGBA, PNG and base64 buffers:
+        // two fit the 256 MB aggregate, a third does not.
+        let mut app = self::app();
+        let ctx = egui::Context::default();
+        let mut raw = shot_raw(egui::vec2(2300.0, 2250.0), false);
+        app.raw_input_hook(&ctx, &mut raw);
+        let _ = ctx.run_logic(&raw, |ctx| app.logic(ctx));
+        let _first = admit(&mut app, &ctx, None);
+        let _second = admit(&mut app, &ctx, None);
+        let (reply, replies) = std::sync::mpsc::channel();
+        control::admit_screenshot(&mut app, &ctx, None, reply);
+        let over = replies.recv().unwrap();
+        assert!(over["error"].as_str().unwrap_or_default().contains("aggregate"), "{over}");
+
+        // 3400×3000 exceeds the per-image working set on its own.
+        let mut app = self::app();
+        let ctx = egui::Context::default();
+        let mut raw = shot_raw(egui::vec2(3400.0, 3000.0), false);
+        app.raw_input_hook(&ctx, &mut raw);
+        let _ = ctx.run_logic(&raw, |ctx| app.logic(ctx));
+        let (reply, replies) = std::sync::mpsc::channel();
+        control::admit_screenshot(&mut app, &ctx, None, reply);
+        let too_large = replies.recv().unwrap();
+        assert!(too_large["error"].as_str().unwrap_or_default().contains("image limit"), "{too_large}");
+    }
+
+    /// A queued capture on a hidden window asks for a real paint, because issuing the screenshot
+    /// is UI work even though `logic` is the only callback a hidden tick gets. The forced paint
+    /// pass must actually reach issuance: exactly one callback, and the request is marked issued.
+    #[test]
+    fn a_hidden_queued_capture_requests_a_paint_and_the_forced_pass_issues_it() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        let _replies = admit(&mut app, &ctx, None);
+        for shot in &mut app.shots.requests {
+            shot.ready_at = 0.0;
+            shot.frames = 3;
+        }
+        let mut raw = shot_raw(egui::vec2(640.0, 480.0), true);
+        app.raw_input_hook(&ctx, &mut raw);
+        let output = ctx.run_logic(&raw, |ctx| app.logic(ctx));
+        let commands = output.viewport_commands.get(&egui::ViewportId::ROOT).cloned().unwrap_or_default();
+        assert!(commands.contains(&egui::ViewportCommand::RequestPaintWhileHidden), "{commands:?}");
+        assert!(
+            output.viewport_commands.values().flatten().all(|command| !matches!(command, egui::ViewportCommand::Screenshot(_))),
+            "logic alone does not issue the capture"
+        );
+        assert!(app.shots.requests.first().is_some_and(|shot| !shot.issued), "the request is still queued");
+
+        // The paint requested above is a full UI pass. Issuing happens there, not in `logic`.
+        let mut paint = shot_raw(egui::vec2(640.0, 480.0), false);
+        app.raw_input_hook(&ctx, &mut paint);
+        let mut output = ctx.run_ui(paint, |ui| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        });
+        let callbacks = take_shot_callbacks(&mut output);
+        output.drop_without_applying_deltas();
+        assert_eq!(callbacks.len(), 1, "the forced paint pass issues exactly one capture");
+        assert!(app.shots.requests.first().is_some_and(|shot| shot.issued), "the queued request reached issuance");
+    }
+
+    /// Real RawInput is offered once, survives hidden ticks, and a multipass frame consumes it
+    /// once. The step is not drained by a pass that will be discarded.
+    #[test]
+    fn synthetic_input_is_offered_once_through_hidden_and_multipass_frames() {
+        let (mut app, ctx) = screenshot_app(egui::vec2(640.0, 480.0));
+        app.run("document.setText", json!({"text": ""})).unwrap();
+        app.synthetic = vec![egui::Event::Text("x".into())];
+        let mut first = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut first);
+        assert_eq!(first.events.len(), 1);
+        assert!(app.synthetic_pending);
+        assert_eq!(app.synthetic.len(), 1, "the step is not consumed by the hook");
+
+        // eframe keeps the unconsumed RawInput for later; a hidden logic tick must not append it
+        // again, nor offer the next step.
+        let mut hidden = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut hidden);
+        assert!(hidden.events.is_empty(), "the pending step is not appended twice");
+        app.synthetic.push(egui::Event::Text("y".into()));
+        let mut hidden_again = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut hidden_again);
+        assert!(hidden_again.events.is_empty(), "a later synthetic step waits too");
+        assert_eq!(app.synthetic.len(), 2);
+
+        // One host frame, two passes. The first is discarded, so the UI ack waits for the final
+        // pass; the input itself exists only in the first pass and must type exactly once.
+        let mut passes = 0;
+        ctx.run_ui(first, |ui| {
+            ui.request_discard("test multipass");
+            app.logic(ui.ctx());
+            app.ui(ui);
+            passes += 1;
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(passes, 2, "the discard forced a second pass");
+        assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "x");
+        assert!(!app.synthetic_pending, "the final UI pass acknowledged the step");
+        assert_eq!(app.synthetic.len(), 1, "only the offered step was removed");
+
+        // The next host frame offers y, which was waiting behind the acknowledged step.
+        let mut next = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut next);
+        assert_eq!(next.events, vec![egui::Event::Text("y".into())]);
+        ctx.run_ui(next, |ui| {
+            app.logic(ui.ctx());
+            app.ui(ui);
+        })
+        .drop_without_applying_deltas();
+        assert!(!app.synthetic_pending);
+        assert!(app.synthetic.is_empty());
+        assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "xy", "each step typed once");
+    }
+
+    /// A synthetic step waits for the font warm-up frames rather than being injected into a pass
+    /// whose layout has no usable font atlas.
+    #[test]
+    fn synthetic_input_waits_for_font_warm_up() {
+        let mut app = app();
+        app.synthetic = vec![egui::Event::Text("x".into())];
+        let ctx = egui::Context::default();
+        let mut raw = egui::RawInput::default();
+        app.raw_input_hook(&ctx, &mut raw);
+        assert!(raw.events.is_empty(), "fonts are not ready yet");
+        assert_eq!(app.synthetic.len(), 1, "the step is retained");
     }
 
     /// #991: the status bar's Focus button leaves only the page (no ribbon, status bar or panes);

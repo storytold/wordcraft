@@ -79,6 +79,10 @@ fn rename(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"name": name, "path": s.path}))
 }
 
+/// Builds the file and document command table: rename, new, open, save, save as and encryption,
+/// PDF/PNG/print output and print settings, close, properties and info, author and privacy
+/// settings, and document inspection and text access. Recovery, compatibility, sharing, autosave,
+/// `file.newFromTemplate` and `file.saveTemplate` are registered in [`super::tools::specs`].
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("file.rename", "Rename Document", "File › Info", rename).params(r#"{"name": string (document name; its extension is kept, so the name may be given with or without it)}"#).pure(),
@@ -188,6 +192,10 @@ pub fn specs() -> Vec<CommandSpec> {
             let text = p::req_str(v, "text")?;
             let d = Document::from_text(text);
             s.doc.body = d.body;
+            // The body is new even though the document id stays: a live IME composition (or an
+            // equation editing session at the same offset) belongs to the old content.
+            s.note_body_replaced();
+            s.math = None;
             s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Body));
             sel_result(s)
         })
@@ -416,15 +424,25 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
         let Some(m) = custom.as_object() else {
             return Err(CmdError::Params("`custom` must be an object of name → string or null".into()));
         };
+        // Removals first: a case-only rename sends the old spelling as null and the new one
+        // with its value, and `set_custom_prop` matches names case-insensitively, so setting
+        // first would keep the old spelling (object keys are sorted, either spelling may lead).
         for (name, val) in m {
-            if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
-                return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+            if val.is_null() {
+                s.doc.remove_custom_prop(name);
             }
+        }
+        for (name, val) in m {
             match val {
-                Value::Null => {
-                    s.doc.remove_custom_prop(name);
+                // Removals took the name as stored above: a file opened from an older Word may
+                // hold one longer than today's limit, and it must still be deletable (#2982).
+                Value::Null => {}
+                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => {
+                    if name.trim().is_empty() || name.chars().count() > MAX_CUSTOM_NAME {
+                        return Err(CmdError::Params(format!("custom property names are 1–{MAX_CUSTOM_NAME} characters")));
+                    }
+                    s.doc.set_custom_prop(name, x);
                 }
-                Value::String(x) if x.len() <= MAX_CUSTOM_VALUE => s.doc.set_custom_prop(name, x),
                 _ => return Err(CmdError::Params(format!("custom property `{name}` must be a string (≤ {MAX_CUSTOM_VALUE} bytes) or null"))),
             }
         }
@@ -436,10 +454,12 @@ fn properties(s: &mut Session, v: &Value) -> CmdResult {
     Ok(out)
 }
 
-/// Longest custom property name (Word's limit).
-const MAX_CUSTOM_NAME: usize = 255;
-/// Largest custom property value we accept from a command.
-const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
+/// Longest custom property name (Word's limit). The Custom Properties dialog validates with it
+/// too (#2982).
+pub const MAX_CUSTOM_NAME: usize = 255;
+/// Largest custom property value we accept from a command. The Custom Properties dialog
+/// validates with it too (#2982).
+pub const MAX_CUSTOM_VALUE: usize = 1024 * 1024;
 
 fn info(s: &mut Session, _: &Value) -> CmdResult {
     let l = s.layout();

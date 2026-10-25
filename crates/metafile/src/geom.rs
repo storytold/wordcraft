@@ -103,7 +103,7 @@ pub(crate) fn subpaths(pts: &[P], counts: &[usize], close: bool) -> Vec<Op> {
     let mut at = 0usize;
     for &c in counts {
         let end = at.saturating_add(c).min(pts.len());
-        let Some((first, rest)) = pts.get(at..end).and_then(|s| s.split_first()) else {
+        let Some((first, rest)) = pts.get(at..end).and_then(<[_]>::split_first) else {
             at = end;
             continue;
         };

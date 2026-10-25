@@ -288,7 +288,7 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                         }
                         if let Some(row) = f.cells.get_mut(i) {
                             for cell in row.iter_mut() {
-                                ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(cell).horizontal_align(egui::Align::Max));
+                                ui.add_sized([CELL_W, ROW_H - 4.0], value_cell(cell));
                                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                             }
                         }
@@ -337,6 +337,13 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
     }
 }
 
+/// A numeric chart-data cell. `RIGHT_TOP` preserves the old deprecated
+/// `horizontal_align(Align::Max)` behaviour: numbers are right-aligned but stay on the cell's
+/// first line, rather than becoming vertically centred.
+fn value_cell(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).align(egui::Align2::RIGHT_TOP)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -356,6 +363,30 @@ mod tests {
         assert!(p["data"]["series"][3]["values"][1].is_null());
         f.cells[1][0] = "abc".into();
         assert!(f.params().is_err());
+    }
+
+    /// The chart-data grid kept Word's top line when the deprecated `horizontal_align(Align::Max)`
+    /// became `align(Align2)`: `RIGHT_CENTER` silently changed vertical alignment too.
+    #[test]
+    fn chart_value_cells_are_right_and_top_aligned() {
+        /// Finds the first text shape's position, descending into a vector of shapes.
+        fn text_pos(shape: &egui::Shape) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) => Some(text.pos),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(text_pos),
+                _ => None,
+            }
+        }
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(120.0, 120.0))), ..Default::default() };
+        let mut text = "7".to_owned();
+        let output = ctx.run_ui(raw, |ui| {
+            ui.add_sized([100.0, 100.0], value_cell(&mut text));
+        });
+        let pos = output.shapes.iter().find_map(|clipped| text_pos(&clipped.shape)).expect("the cell's text is painted");
+        output.drop_without_applying_deltas();
+        assert!(pos.y < 20.0, "RIGHT_TOP leaves the number on the first line, not centred (pos={pos:?})");
+        assert!(pos.x > 40.0, "the number is right-aligned (pos={pos:?})");
     }
 
     /// Default names are saved into the document, so an RTL interface must not add isolate marks.
