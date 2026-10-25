@@ -1039,8 +1039,14 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                         if let Some(text) = val.and_then(wordcraft_doc::section::baht_text_f64) {
                             updates.push((k, text));
                         }
+                    } else if fmt == NumFormat::DollarText {
+                        if let Some(x) = val {
+                            if let Some(text) = wordcraft_layout::fields::dollar_text(x) {
+                                updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
+                            }
+                        }
                     } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX)) {
-                        updates.push((k, fmt.format(x as u32)));
+                        updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
                     }
                 }
                 continue;

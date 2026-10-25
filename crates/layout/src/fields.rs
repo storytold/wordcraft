@@ -344,8 +344,14 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
                             .unwrap_or_else(|| result.to_string());
                         return (text, false);
                     }
+                    // DollarText preserves cents from the f64 value; all other integer formats
+                    // go through field_number (which handles Hex, case switches, etc.).
+                    if fmt == NumFormat::DollarText {
+                        let text = dollar_text(x).unwrap_or_else(|| result.to_string());
+                        return (apply_case_switch(instr, text), false);
+                    }
                     if x >= 0.0 && x <= f64::from(u32::MAX) {
-                        return (fmt.format(x as u32), false);
+                        return (field_number(instr, fmt, x as u32), false);
                     }
                 }
             }
