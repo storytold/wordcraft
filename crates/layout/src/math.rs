@@ -555,15 +555,22 @@ impl Ctx {
         }
         let mut seg = 0usize;
         let mut u = u0;
+        let mut pending_break = None;
         for (i, n) in a.iter().enumerate() {
             self.nodes += 1;
             if self.nodes > MAX_NODES {
                 break;
             }
             let path = self.path.clone();
+            let first = out.len();
             match n {
                 MNode::Run(r) => {
-                    let first = out.len();
+                    // Empty break carriers add neither spacing nor caret slots. Apply the
+                    // boundary to the next real atom, including a structural node.
+                    pending_break = r.brk.or(pending_break);
+                    if r.text.is_empty() {
+                        continue;
+                    }
                     for part in self.run_atoms(r, st, u, &path) {
                         match part {
                             RunPart::Atom(b) => out.push((b, seg)),
@@ -572,9 +579,6 @@ impl Ctx {
                                 out.push((b, seg));
                             }
                         }
-                    }
-                    if let Some((b, _)) = out.get_mut(first) {
-                        b.brk = r.brk;
                     }
                     u += r.text.chars().count();
                 }
@@ -604,6 +608,9 @@ impl Ctx {
                     out.push((b, seg));
                     u += 1;
                 }
+            }
+            if let Some((b, _)) = out.get_mut(first) {
+                b.brk = pending_break.take();
             }
         }
         out
@@ -1650,21 +1657,19 @@ impl Ctx {
         // operator repeated at the start of the line it begins.
         let mut starts: std::collections::BTreeMap<usize, (Option<u8>, Option<usize>)> = std::collections::BTreeMap::new();
         for i in 1..n {
-            let op = is_op(i);
-            let at = if op && mp.brk_bin != BrkBin::Before { i + 1 } else { i };
-            if at == 0 || at >= n {
+            if let Some(alignment) = atoms.get(i).and_then(|b| b.brk) {
+                // A manual boundary is before this atom, even when an automatic break
+                // after the previous operator already proposed a repeat at this index.
+                starts.insert(i, (Some(alignment), None));
                 continue;
             }
-            let repeat = (op && mp.brk_bin == BrkBin::Repeat).then_some(i);
-            let forced = atoms.get(i).and_then(|b| b.brk);
-            if op || forced.is_some() {
-                let e = starts.entry(at).or_insert((None, None));
-                if forced.is_some() {
-                    e.0 = forced;
-                }
-                if repeat.is_some() {
-                    e.1 = repeat;
-                }
+            if !is_op(i) {
+                continue;
+            }
+            let at = if mp.brk_bin == BrkBin::Before { i } else { i + 1 };
+            if at < n {
+                let repeat = (mp.brk_bin == BrkBin::Repeat).then_some(i);
+                starts.insert(at, (None, repeat));
             }
         }
         // Chunks: [s, e) with their width inside and the gap before them.
@@ -2087,18 +2092,69 @@ mod tests {
 
     #[test]
     fn manual_breaks_start_new_lines() {
+        for brk_bin in [BrkBin::Before, BrkBin::After, BrkBin::Repeat] {
+            let mp = MathProps { brk_bin, ..Default::default() };
+            for carrier in [false, true] {
+                // The second case shares a boundary with an automatic break after `=`.
+                for (prefix, tail) in [("a=b", "+c"), ("a=", "c")] {
+                    for alignment in [0, 1] {
+                        let mut nodes = vec![MNode::Run(MRun::new(prefix))];
+                        if carrier {
+                            nodes.push(MNode::Run(MRun { brk: Some(alignment), ..Default::default() }));
+                            nodes.push(MNode::Run(MRun::new(tail)));
+                        } else {
+                            nodes.push(MNode::Run(MRun { brk: Some(alignment), ..MRun::new(tail) }));
+                        }
+                        let m = lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp);
+                        let ls = lines(&m);
+                        let text: Vec<String> = ls
+                            .iter()
+                            .map(|(_, gs)| gs.iter().map(|g| g.1.as_str()).collect::<String>().replace('𝑎', "a").replace('𝑏', "b").replace('𝑐', "c"))
+                            .collect();
+                        assert_eq!(text, [prefix, tail], "{brk_bin:?}, carrier={carrier}, alignment={alignment}");
+                        let expected = if alignment == 0 { mp.wrap_indent } else { ls[0].1.iter().find(|g| g.1 == "=").unwrap().0 };
+                        assert!((ls[1].1[0].0 - expected).abs() < 0.01, "{ls:?}");
+                        assert!(m.width < 400.0, "a manually broken equation is as wide as its lines");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn empty_break_run_before_structure_starts_new_line() {
         let mp = MathProps::default();
-        let nodes = vec![MNode::Run(MRun::new("a=b")), MNode::Run(MRun { brk: Some(0), ..MRun::new("+c") })];
-        let m = lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp);
-        let ls = lines(&m);
-        assert_eq!(ls.len(), 2, "{ls:?}");
-        assert!((ls[1].1[0].0 - mp.wrap_indent).abs() < 0.01 && ls[1].1[0].1 == "+", "{ls:?}");
-        assert!(m.width < 400.0, "a manually broken equation is as wide as its lines");
-        // `m:alnAt`: the new line's operator sits under the first line's first operator.
-        let nodes = vec![MNode::Run(MRun::new("a=b")), MNode::Run(MRun { brk: Some(1), ..MRun::new("+c") })];
-        let ls = lines(&lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp));
-        let eq_x = ls[0].1.iter().find(|g| g.1 == "=").unwrap().0;
-        assert!((ls[1].1[0].0 - eq_x).abs() < 0.01, "{ls:?}");
+        for alignment in [0, 1] {
+            let mut nodes = vec![MNode::Run(MRun::new("a=b")), MNode::Run(MRun { brk: Some(alignment), ..Default::default() })];
+            nodes.extend(parse_linear("(c)"));
+            assert!(matches!(nodes.last(), Some(MNode::Delim { .. })));
+            let ls = lines(&lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp));
+            assert_eq!(ls.len(), 2, "{ls:?}");
+            let expected = if alignment == 0 { mp.wrap_indent } else { ls[0].1.iter().find(|g| g.1 == "=").unwrap().0 };
+            assert_eq!(ls[1].1[0].1, "(");
+            assert!((ls[1].1[0].0 - expected).abs() < 0.01, "{ls:?}");
+        }
+    }
+
+    #[test]
+    fn built_fraction_manual_break_has_no_cross_line_gap() {
+        use wordcraft_doc::math_edit::{MathPos, build_up, units};
+
+        let mp = MathProps::default();
+        for latex in [false, true] {
+            for alignment in [0, 1] {
+                let input = if latex { r"\frac{c}{d}" } else { "c/d" };
+                let mut nodes = vec![MNode::Run(MRun::new("a=")), MNode::Run(MRun { brk: Some(alignment), ..MRun::new(input) })];
+                let caret = MathPos::new(vec![], units(&nodes));
+                let caret = build_up(&mut nodes, &caret, latex).expect("complete fraction builds");
+                assert!(nodes.iter().any(|n| matches!(n, MNode::Frac { .. })));
+                let m = lay_in(&Math { nodes, ..Default::default() }, "", true, 400.0, &mp);
+                let end = m.slot(&[], caret.off).unwrap();
+                let start = m.slots.iter().find(|s| s.path.is_empty() && s.off == 2 && (s.y - end.y).abs() < 0.01).unwrap();
+                let expected = if alignment == 0 { mp.wrap_indent } else { lines(&m)[0].1.iter().find(|g| g.1 == "=").unwrap().0 };
+                assert!((start.x - expected).abs() < 0.01, "fraction at {}, expected {expected}", start.x);
+            }
+        }
     }
 
     #[test]

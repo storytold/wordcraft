@@ -213,10 +213,14 @@ enum Loc {
 fn locate(a: &[MNode], off: usize) -> Loc {
     let mut u = 0;
     for (i, n) in a.iter().enumerate() {
+        let len = node_units(n);
+        // Empty break carriers mark a boundary, not an editable character or structure.
+        if len == 0 {
+            continue;
+        }
         if off == u {
             return Loc::Before(i);
         }
-        let len = node_units(n);
         if off < u + len {
             return Loc::Inside(i, off - u);
         }
@@ -240,6 +244,7 @@ fn split_at(a: &mut Arg, off: usize) -> usize {
             let tail = r.text.split_off(b);
             let mut right = r.clone();
             right.text = tail;
+            right.brk = None;
             a.insert(i + 1, MNode::Run(right));
             i + 1
         }
@@ -342,13 +347,18 @@ fn first_empty(n: &MNode, depth: usize) -> Option<Vec<(usize, usize)>> {
     None
 }
 
-/// Merge runs and drop empty ones everywhere (structures stay, empty or not).
+/// Merge runs and drop empty ones, except break carriers in nonempty arguments.
 pub fn tidy(root: &mut Arg) {
     fn go(a: &mut Arg, depth: usize) {
         if depth > MAX_DEPTH {
             return;
         }
-        a.retain(|n| !matches!(n, MNode::Run(r) if r.text.is_empty()));
+        // A break with no remaining content is not an equation or an editable slot.
+        if a.iter().all(|n| matches!(n, MNode::Run(r) if r.text.is_empty())) {
+            a.clear();
+            return;
+        }
+        a.retain(|n| !matches!(n, MNode::Run(r) if r.text.is_empty() && r.brk.is_none()));
         let taken = std::mem::take(a);
         *a = merge_shallow(taken);
         for n in a.iter_mut() {
@@ -394,6 +404,7 @@ fn merge_shallow(a: Arg) -> Arg {
             && prev.size == r.size
             && prev.color == r.color
             && prev.font == r.font
+            && r.brk.is_none()
         {
             prev.text.push_str(&r.text);
             continue;
@@ -840,27 +851,42 @@ pub fn build_up(root: &mut Arg, pos: &MathPos, latex: bool) -> Option<MathPos> {
     let at = split_at(a, pos.off);
     // Rewrite from after the last formatted run (its formatting would be lost) to the caret.
     let start = a.get(..at)?.iter().rposition(|n| !plain(n)).map(|k| k + 1).unwrap_or(0);
-    let region: Arg = a.get(start..at)?.to_vec();
-    if region.is_empty() {
-        tidy(root);
-        return None;
+    let region = a.get(start..at)?;
+    let mut built = Vec::new();
+    let mut changed = false;
+    // A manual break is a parsing boundary: neither its metadata nor its preceding line
+    // belongs inside a newly built fraction, script or other structure.
+    for part in region.chunk_by(|_, next| !matches!(next, MNode::Run(r) if r.brk.is_some())) {
+        let text = to_linear(part);
+        if !latex && !builds(&text) {
+            built.extend_from_slice(part);
+            continue;
+        }
+        let mut parsed = if latex { crate::math_latex::parse_latex(&text) } else { crate::math_linear::parse(&text) };
+        // `#` numbering wraps the whole equation, not a piece of it.
+        if let [MNode::EqArr { rows }] = parsed.as_slice()
+            && rows.len() == 1
+            && rows.first().is_some_and(|r| has_number_mark(r))
+        {
+            parsed = rows.first().cloned().unwrap_or_default();
+        }
+        if (!latex && unbalanced(&parsed, 0)) || (latex && text.matches('{').count() != text.matches('}').count()) {
+            built.extend_from_slice(part);
+            continue;
+        }
+        if let Some(MNode::Run(MRun { brk: Some(alignment), .. })) = part.first() {
+            if let Some(MNode::Run(r)) = parsed.first_mut() {
+                r.brk = Some(*alignment);
+            } else {
+                // Structural nodes have no break property; retain a zero-unit boundary run.
+                parsed.insert(0, MNode::Run(MRun { brk: Some(*alignment), ..Default::default() }));
+            }
+        }
+        let parsed = merge_runs(parsed);
+        changed |= merge_runs(part.to_vec()) != parsed;
+        built.extend(parsed);
     }
-    let text = to_linear(&region);
-    if !latex && !builds(&text) {
-        tidy(root);
-        return None;
-    }
-    let mut built = if latex { crate::math_latex::parse_latex(&text) } else { crate::math_linear::parse(&text) };
-    // `#` numbering wraps the whole equation, not a piece of it.
-    if let [MNode::EqArr { rows }] = built.as_slice()
-        && rows.len() == 1
-        && rows.first().is_some_and(|r| has_number_mark(r))
-    {
-        built = rows.first().cloned().unwrap_or_default();
-    }
-    let built = merge_runs(built);
-    let unchanged = merge_runs(region.clone()) == built;
-    if unchanged || (!latex && unbalanced(&built, 0)) || (latex && text.matches('{').count() != text.matches('}').count()) {
+    if !changed {
         tidy(root);
         return None;
     }
@@ -1154,6 +1180,122 @@ pub fn set_limits(nodes: &mut Arg, loc: Option<LimLoc>) {
 mod tests {
     use super::*;
     use crate::math::parse_linear;
+
+    #[test]
+    fn tidy_preserves_manual_break_alignment() {
+        for alignment in [0, 2] {
+            let mut eq = vec![
+                MNode::Run(MRun { text: "a=b".into(), ..Default::default() }),
+                MNode::Run(MRun { text: "+c".into(), brk: Some(alignment), ..Default::default() }),
+                MNode::Run(MRun { text: "+d".into(), ..Default::default() }),
+            ];
+            tidy(&mut eq);
+            assert_eq!(eq.len(), 2);
+            let MNode::Run(first) = &eq[0] else { panic!("first run") };
+            let MNode::Run(second) = &eq[1] else { panic!("continuation run") };
+            assert_eq!(first.text, "a=b");
+            assert_eq!(first.brk, None);
+            assert_eq!(second.text, "+c+d");
+            assert_eq!(second.brk, Some(alignment));
+        }
+    }
+
+    #[test]
+    fn deleting_all_text_removes_empty_manual_break_carriers() {
+        for back in [false, true] {
+            let mut eq = vec![MNode::Run(MRun::new("a")), MNode::Run(MRun { brk: Some(0), ..MRun::new("b") })];
+            let mut caret = MathPos::new(vec![], if back { units(&eq) } else { 0 });
+            for _ in 0..2 {
+                caret = if back { delete_back(&mut eq, &caret) } else { delete_forward(&mut eq, &caret) };
+            }
+            assert!(eq.is_empty(), "no content must leave an empty equation: {eq:#?}");
+            assert_eq!(caret, MathPos::default());
+        }
+    }
+
+    #[test]
+    fn build_up_inside_continuation_does_not_duplicate_break() {
+        let mut eq = vec![
+            MNode::Run(MRun { text: "a=b".into(), size: Some(18.0), ..Default::default() }),
+            MNode::Run(MRun { text: "+cd".into(), brk: Some(1), ..Default::default() }),
+        ];
+        let caret = insert_text(&mut eq, &MathPos::new(vec![], 5), " ", TypeStyle::default());
+        assert_eq!(build_up(&mut eq, &caret, false), None);
+        let breaks: Vec<_> = eq
+            .iter()
+            .filter_map(|n| match n {
+                MNode::Run(r) => r.brk,
+                _ => None,
+            })
+            .collect();
+        assert_eq!(breaks, vec![1]);
+        assert_eq!(lin(&eq), "a=b+c d");
+    }
+
+    #[test]
+    fn successful_build_up_preserves_manual_break_and_suffix() {
+        for latex in [false, true] {
+            for prefix in [vec![MNode::Run(MRun::new("a=b"))], vec![MNode::Run(MRun { size: Some(18.0), ..MRun::new("a=b") })], parse_linear("x^2=")]
+            {
+                for lead in ["", "+"] {
+                    let mut eq = prefix.clone();
+                    let before = units(&prefix);
+                    let input = if latex { r"\frac{c}{d}" } else { "c/d" };
+                    eq.push(MNode::Run(MRun { brk: Some(2), ..MRun::new(format!("{lead}{input}tail")) }));
+                    let caret = MathPos::new(vec![], before + lead.len() + input.chars().count());
+                    let built = build_up(&mut eq, &caret, latex).expect("a complete fraction must build up");
+                    assert!(eq.iter().any(|n| matches!(n, MNode::Frac { .. })), "{eq:#?}");
+                    let breaks: Vec<_> = eq
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(i, n)| match n {
+                            MNode::Run(r) => r.brk.map(|alignment| (node_start(&eq, i), alignment)),
+                            _ => None,
+                        })
+                        .collect();
+                    assert_eq!(breaks, vec![(before, 2)], "{eq:#?}");
+                    assert_eq!(lin(&eq), format!("{}{lead}c/dtail", lin(&prefix)));
+                    assert_eq!(built, MathPos::new(vec![], before + lead.len() + 1));
+                    assert!(matches!(eq.last(), Some(MNode::Run(r)) if r.text == "tail" && r.brk.is_none()));
+                    let fraction = eq.iter().position(|n| matches!(n, MNode::Frac { .. })).unwrap();
+                    let start = MathPos::new(vec![], before + lead.len());
+                    assert_eq!(move_right(&eq, &start).unwrap().path, vec![(fraction, 0)]);
+                    assert_eq!(move_left(&eq, &built).unwrap().path, vec![(fraction, 1)]);
+                    assert_eq!(delete_forward(&mut eq.clone(), &start).path, vec![(fraction, 0)]);
+                    let mut typed = eq.clone();
+                    insert_text(&mut typed, &start, "q", TypeStyle::default());
+                    assert_eq!(lin(&typed), format!("{}{lead}qc/dtail", lin(&prefix)));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn successful_build_up_preserves_multiple_manual_break_boundaries() {
+        for latex in [false, true] {
+            let fractions = if latex { [r"\frac{a}{b}", r"\frac{c}{d}", r"\frac{e}{f}"] } else { ["a/b", "c/d", "e/f"] };
+            let mut eq = vec![
+                MNode::Run(MRun::new(fractions[0])),
+                MNode::Run(MRun { brk: Some(0), ..MRun::new(fractions[1]) }),
+                MNode::Run(MRun { brk: Some(3), ..MRun::new(format!("{}tail", fractions[2])) }),
+            ];
+            let caret = MathPos::new(vec![], units(&eq) - 4);
+            let built = build_up(&mut eq, &caret, latex).expect("complete fractions must build up");
+            assert_eq!(eq.iter().filter(|n| matches!(n, MNode::Frac { .. })).count(), 3, "{eq:#?}");
+            let breaks: Vec<_> = eq
+                .iter()
+                .enumerate()
+                .filter_map(|(i, n)| match n {
+                    MNode::Run(r) => r.brk.map(|alignment| (node_start(&eq, i), alignment)),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(breaks, vec![(1, 0), (2, 3)], "{eq:#?}");
+            assert_eq!(lin(&eq), "a/bc/de/ftail");
+            assert_eq!(built, MathPos::new(vec![], 3));
+            assert!(matches!(eq.last(), Some(MNode::Run(r)) if r.text == "tail" && r.brk.is_none()));
+        }
+    }
 
     fn lin(a: &Arg) -> String {
         to_linear(a)
