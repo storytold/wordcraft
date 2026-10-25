@@ -101,6 +101,18 @@ fn link_definition(line: &str) -> Option<(String, String)> {
     titled.then_some((label, dest))
 }
 
+// A closing block-comment line can contain another comment before visible source text.
+// Walk those delimiters without copying the remaining line at each opener.
+fn block_comment_tail(mut text: &str) -> Option<&str> {
+    loop {
+        let end = text.find("-->")?;
+        text = text.get(end + 3..)?;
+        if !text.trim_start().starts_with("<!--") {
+            return Some(text);
+        }
+    }
+}
+
 /// Take the link reference definitions out of `lines`, leaving the rest. Lines inside a fenced
 /// code block are left alone: a definition there is code, not a definition. Fences open and
 /// close by the same rules [`parse_blocks`] applies, or a line it reads as code would be read
@@ -116,10 +128,19 @@ fn link_definition(line: &str) -> Option<(String, String)> {
 fn take_definitions(lines: &mut Vec<String>) -> Refs {
     let mut refs = Refs::new();
     let mut open: Option<(char, usize)> = None;
+    let mut in_comment = false;
     // The start of the document begins a block.
     let mut starts_block = true;
     lines.retain(|line| {
         let t = line.trim_start_matches([' ', '\t']);
+        if in_comment {
+            let tail = block_comment_tail(line);
+            in_comment = tail.is_none();
+            // parse_blocks reprocesses visible tails as source, including opening fences.
+            open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
+            starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
+            return true;
+        }
         // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
         let marker = (indent(line) < 4).then(|| fence(t)).flatten();
         match open {
@@ -138,6 +159,14 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
                 }
             }
         }
+        if indent(line) < 4 && t.starts_with("<!--") {
+            let tail = block_comment_tail(line);
+            in_comment = tail.is_none();
+            // parse_blocks reprocesses visible tails as source, including opening fences.
+            open = tail.filter(|s| indent(s) < 4).and_then(|s| fence(s.trim_start_matches([' ', '\t'])));
+            starts_block = tail.is_some_and(|s| is_blank(s) || atx_heading(s.trim_start()).is_some() || thematic_break(s.trim_start()));
+            return true;
+        }
         if starts_block && let Some((label, dest)) = link_definition(line) {
             // The first definition of a label wins, as CommonMark says, and definitions may
             // follow one another.
@@ -155,7 +184,7 @@ pub fn parse(text: &str) -> model::Flow {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
     let mut lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
     let refs = take_definitions(&mut lines);
-    let mut blocks = parse_blocks(&lines, 0, 0, &refs);
+    let mut blocks = parse_blocks(lines, 0, 0, &refs);
     // A leading "Title" from front matter isn't supported; a first-level heading stays a heading.
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
@@ -398,7 +427,7 @@ fn code_para(line: &str) -> FBlock {
 }
 
 /// Parse block structure. `level` is the list nesting level for lists found here.
-fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<FBlock> {
+fn parse_blocks(mut lines: Vec<String>, depth: usize, level: u8, refs: &Refs) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
     let mut i = 0;
@@ -478,10 +507,18 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
         if t.starts_with("<!--") {
             flush_para(&mut para, &mut out, depth, refs);
             while let Some(l) = lines.get(i) {
-                i += 1;
-                if l.contains("-->") {
+                if let Some(tail) = block_comment_tail(l) {
+                    if is_blank(tail) {
+                        i += 1;
+                    } else {
+                        let tail = tail.to_string();
+                        if let Some(line) = lines.get_mut(i) {
+                            *line = tail;
+                        }
+                    }
                     break;
                 }
+                i += 1;
             }
             continue;
         }
@@ -505,7 +542,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
                 p.push_text(&inner.join(" "), &Fmt::default());
                 out.push(FBlock::Para(p));
             } else {
-                for mut b in parse_blocks(&inner, depth + 1, level, refs) {
+                for mut b in parse_blocks(inner, depth + 1, level, refs) {
                     if let FBlock::Para(p) = &mut b
                         && p.kind == Kind::Normal
                     {
@@ -546,7 +583,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<F
             && (para.is_empty() || ((!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or(""))))
         {
             flush_para(&mut para, &mut out, depth, refs);
-            i = parse_list(lines, i, depth, level, &mut out, refs);
+            i = parse_list(&lines, i, depth, level, &mut out, refs);
             continue;
         }
         para.push(line.clone());
@@ -631,7 +668,7 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             p.push_text(&item.join(" "), &Fmt::default());
             vec![FBlock::Para(p)]
         } else {
-            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), refs)
+            parse_blocks(item, depth + 1, level.saturating_add(1).min(8), refs)
         };
         let mut placed = false;
         if inner.is_empty() {
@@ -894,6 +931,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     // earlier scan passed are looked up in `known` instead.
     let mut scan_budget = s.len().saturating_mul(8).saturating_add(8192);
     let ticks = Backticks::new(s);
+    let mut comment_search_exhausted = false;
     let mut known: HashMap<usize, Option<usize>> = HashMap::new();
     let b = s.as_bytes();
     let mut i = 0usize;
@@ -1031,9 +1069,25 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 }
             }
             b'<' => {
-                if let Some(pos) = s.get(i..).and_then(|r| r.strip_prefix("<!--")).and_then(|r| r.find("-->")) {
+                let comment_end = s.get(i..).filter(|r| r.starts_with("<!--")).and_then(|rest| {
+                    if rest.starts_with("<!-->") {
+                        return Some(5);
+                    }
+                    if rest.starts_with("<!--->") {
+                        return Some(6);
+                    }
+                    if comment_search_exhausted {
+                        return None;
+                    }
+                    let end = rest.get(4..).and_then(|r| r.find("-->")).map(|p| p + 7);
+                    // Successful searches are consumed below. After a miss no later opener
+                    // can have a closer, so scanning the same suffix again would be quadratic.
+                    comment_search_exhausted = end.is_none();
+                    end
+                });
+                if let Some(len) = comment_end {
                     flush!();
-                    i += 4 + pos + 3;
+                    i += len;
                     text_start = i;
                     continue;
                 }
@@ -2151,5 +2205,66 @@ mod tests {
         assert_eq!(flow.blocks.len(), 2);
         let texts: Vec<String> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
         assert_eq!(texts, ["Hello world!", "After comment."]);
+    }
+    #[test]
+    fn comment_definitions_cannot_shadow_visible_definitions() {
+        for md in [
+            "<!--\n\n[x]: /wrong\n-->\n\n[x]: /right\n\n[x]",
+            "<!--\n[x]: /wrong\n-->\n[x]: /right\n\n[x]",
+            "<!-- first --> <!-- second\n\n[x]: /wrong\n-->\n[x]: /right\n\n[x]",
+        ] {
+            let flow = parse(md);
+            let links: Vec<_> = flow
+                .blocks
+                .iter()
+                .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+                .flat_map(|p| &p.inlines)
+                .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+                .collect();
+            assert_eq!(links, ["/right"], "{md}");
+        }
+        for code in ["```\n<!--\n```", "    <!--"] {
+            let flow = parse(&format!("{code}\n\n[x]: /right\n\n[x]"));
+            assert!(flow.blocks.iter().any(
+                |b| matches!(b, FBlock::Para(p) if p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.link.as_deref() == Some("/right"))))
+            ));
+        }
+    }
+
+    #[test]
+    fn fences_after_comment_tails_keep_definitions_as_code() {
+        for (comment, marker) in [("<!-- -->", "```"), ("<!--\n-->", "~~~"), ("<!-- first --><!-- second -->  ", "```")] {
+            let flow = parse(&format!("{comment}{marker}\n\n[x]: /wrong\n{marker}\n[x]: /right\n\n[x]"));
+            assert!(flow.blocks.iter().any(|b| matches!(b, FBlock::Para(p) if p.kind == Kind::Code && p.text() == "[x]: /wrong")));
+            let links: Vec<_> = flow
+                .blocks
+                .iter()
+                .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+                .flat_map(|p| &p.inlines)
+                .filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref() } else { None })
+                .collect();
+            assert_eq!(links, ["/right"]);
+        }
+    }
+
+    #[test]
+    fn closing_comments_keep_following_source_and_short_inline_forms() {
+        for md in ["<!-- note -->Visible text", "<!--\nnote\n-->Visible text", "<!-- first --><!-- second -->Visible text"] {
+            let flow = parse(md);
+            assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == "Visible text"), "{md}");
+        }
+        let flow = parse("<!-- note --># Heading\n\nBefore <!-->middle<!---> after");
+        assert!(matches!(&flow.blocks[0], FBlock::Para(p) if p.kind == Kind::Heading(1) && p.text() == "Heading"));
+        assert!(matches!(&flow.blocks[1], FBlock::Para(p) if p.text() == "Before middle after"));
+    }
+
+    #[test]
+    fn long_comments_and_many_unclosed_inline_openers_preserve_text() {
+        let unmatched = format!("prefix {}suffix", "<!--".repeat(100_000));
+        let flow = parse(&unmatched);
+        assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == unmatched));
+        let matched = format!("before <!--{}-->after", "hidden ".repeat(100_000));
+        let flow = parse(&matched);
+        assert!(matches!(&flow.blocks[..], [FBlock::Para(p)] if p.text() == "before after"));
     }
 }

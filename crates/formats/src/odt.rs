@@ -2547,10 +2547,10 @@ fn read_meta(xml: &[u8]) -> Meta {
             _ => {}
         },
     });
-    if m.author.is_empty() {
+    if m.author.trim().is_empty() {
         m.author = creator;
     }
-    if m.created.is_empty() {
+    if m.created.trim().is_empty() {
         m.created = mod_date;
     }
     m.keywords = keywords.join(", ");
@@ -3882,5 +3882,19 @@ mod tests {
         let m2 = read_meta(xml_dc_date_fallback);
         assert_eq!(m2.created, "2024-03-05T13:45:00Z");
         assert_eq!(m2.author, "Solo Creator");
+    }
+    #[test]
+    fn whitespace_only_metadata_uses_creator_and_date_fallbacks() {
+        let m = read_meta(
+            br#"<office:document-meta><office:meta>
+            <meta:initial-creator> 	 </meta:initial-creator>
+            <meta:creation-date>
+ </meta:creation-date>
+            <dc:creator>Fallback Author</dc:creator>
+            <dc:date>2024-03-05T13:45:00-05:00</dc:date>
+        </office:meta></office:document-meta>"#,
+        );
+        assert_eq!(m.author, "Fallback Author");
+        assert_eq!(m.created, "2024-03-05T13:45:00-05:00");
     }
 }
