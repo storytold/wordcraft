@@ -1045,7 +1045,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                                 updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
                             }
                         }
-                    } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX)) {
+                    } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX) && x.fract() == 0.0) {
                         updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
                     }
                 }
@@ -1122,7 +1122,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
                                     updates.push((k, wordcraft_layout::fields::apply_case_switch(instr, text)));
                                 }
                             }
-                        } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX)) {
+                        } else if let Some(x) = val.filter(|x| *x >= 0.0 && *x <= f64::from(u32::MAX) && x.fract() == 0.0) {
                             updates.push((k, wordcraft_layout::fields::field_number(instr, fmt, x as u32)));
                         }
                     }
