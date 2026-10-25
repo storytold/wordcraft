@@ -3142,7 +3142,7 @@ fn mi_sample(
     }
     sample(ui.painter(), Rect::from_min_size(pos2(r.min.x + 22.0, r.min.y + 3.0), vec2(60.0, 16.0)), c);
     ui.painter().text(pos2(r.min.x + 92.0, r.center().y), Align2::LEFT_CENTER, text, egui::TextStyle::Button.resolve(ui.style()), c);
-    resp.widget_info(|| egui::WidgetInfo { selected: Some(checked), ..egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, text) });
+    resp.widget_info(|| egui::WidgetInfo { selected: Some(checked), ..egui::WidgetInfo::labeled(egui::Role::Button, enabled, text) });
     if enabled && resp.clicked() {
         crate::widgets::run_from_ribbon(app, id, params);
         ui.close();
