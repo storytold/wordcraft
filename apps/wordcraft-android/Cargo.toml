@@ -1,0 +1,89 @@
+[package]
+name = "wordcraft-android"
+description = "WordCraft's Android entry point: the NativeActivity android_main trampoline that opens the shared app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[lib]
+# NativeActivity loads this library and calls its android_main.
+crate-type = ["cdylib"]
+
+# This crate deliberately does not inherit the workspace lints. Android's NativeActivity ABI
+# requires an unmangled android_main export, and on edition 2024 that spelling
+# (`#[unsafe(no_mangle)]`) trips rust's `unsafe_code` lint, which the workspace forbids — there is
+# no safe spelling of a required export symbol. It therefore sets the workspace's *clippy* denials
+# itself (every one of them) and leaves `unsafe_code` alone. The shared app it opens keeps the
+# workspace lints unchanged.
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+unimplemented = "deny"
+todo = "deny"
+unreachable = "deny"
+
+[dependencies]
+wordcraft = { path = "../wordcraft" }
+log = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The NativeActivity handle the app's event loop needs; the same 0.6 instance eframe and winit
+# use, so the handle passes across crates as one type.
+android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
+# The "All files access" grant (`android_access.rs`): checks the grant and opens the system page
+# that asks for it, over the activity's JVM. `src/android_access.rs` is this crate's one piece
+# of `unsafe` (AGENTS.md, Never crash): the pointers never leave it, and the shared app receives
+# plain closures instead.
+jni = "0.21"
+
+[package.metadata.android]
+package = "ai.storyteller.wordcraft"
+apk_name = "wordcraft"
+build_targets = ["aarch64-linux-android"]
+# The launcher icon: `res/mipmap-<density>/ic_launcher.png`, regenerated from the app's own
+# wordcraft.svg by packaging/icons.sh (each PNG has its ATTRIBUTION.md row, like every asset).
+# cargo-apk runs `aapt package -S res`, which is what turns these into the APK's
+# @mipmap/ic_launcher.
+resources = "res"
+
+# "All files access" (`MANAGE_EXTERNAL_STORAGE`): lets the in-app file browser reach shared
+# storage (`/storage/emulated/0`) so a save or export can land outside the app-private
+# directory. It is a special permission an app can never hold silently — Android only opens the
+# system settings page where the user toggles it, which `src/android_access.rs` does over JNI —
+# so the manifest entry alone changes nothing until they do, and until then the browser keeps
+# its app-private root.
+#
+# Below API 30 the access module asks for the ordinary runtime storage grant on Android 9 only
+# (API 28), which is pre-scoped-storage, so that grant opens the whole shared tree. Android 10
+# (API 29) is not offered: this app targets 35, so scoped storage applies there and the shared
+# tree is not reachable (see `android_access.rs`); the browser stays in app storage on that one
+# version. The two permissions stay capped at API 29 because the platform drops them on 30+.
+uses_permission = [
+    { name = "android.permission.MANAGE_EXTERNAL_STORAGE" },
+    { name = "android.permission.READ_EXTERNAL_STORAGE", max_sdk_version = 29 },
+    { name = "android.permission.WRITE_EXTERNAL_STORAGE", max_sdk_version = 29 },
+]
+
+[package.metadata.android.sdk]
+min_sdk_version = 28
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "WordCraft"
+theme = "@android:style/Theme.DeviceDefault.NoActionBar.Fullscreen"
+icon = "@mipmap/ic_launcher"
+
+[package.metadata.android.application.activity]
+# Every configuration change the activity handles itself instead of a restart (the same list the
+# other Craft apps' Android builds use): the window, documents and the app survive rotating the
+# device, folding and unfolding it, a theme switch, a font-scale change, a different keyboard or
+# locale.
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|density|layoutDirection|uiMode|fontScale|keyboard|navigation|touchscreen|locale|mcc|mnc|colorMode"
+label = "WordCraft"
+launch_mode = "singleTask"
+# A document is read and written both ways; the app rotates with the device (the other Craft
+# apps pin landscape, where the work is a timeline or canvas).
+orientation = "unspecified"
+exported = true

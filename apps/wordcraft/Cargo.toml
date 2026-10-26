@@ -7,6 +7,10 @@ publish = false
 default-run = "wordcraft"
 description = "WordCraft desktop app"
 
+[lib]
+# The desktop binary is a shim over this library (and other hosts can open the same app).
+crate-type = ["rlib"]
+
 [lints]
 workspace = true
 
@@ -19,7 +23,7 @@ wordcraft-fonts = { workspace = true }
 wordcraft-ui-egui = { workspace = true }
 # The control key file's location (shared with the MCP bridge).
 wordcraft-control-key = { workspace = true }
-eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "clipboard", "wayland", "x11", "links"] }
+eframe = { workspace = true, features = ["default_fonts", "wgpu"] }
 egui = { workspace = true }
 serde_json = { workspace = true }
 log = { workspace = true }
@@ -74,6 +78,12 @@ clipboard-win = { version = "5.4", features = ["std"] }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-print = { git = "https://github.com/storytold/craft-libs", rev = "b926b5c03e256c86ca10934f58d03f628810b5b7" }
+# The control server's random key.
+getrandom = "0.3"
+
+[target.'cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))'.dependencies]
+# Native file dialogs (Open, Save As, Export, pictures): rfd has no backend for Android (it does
+# not compile there), so the app's own file browser serves those commands instead (a later step).
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.
@@ -81,8 +91,19 @@ pollster = "1"
 # Pictures and copied files on the system clipboard (#45); egui's paste only carries text. Already
 # in the build through egui-winit, with the same features.
 arboard = { workspace = true, features = ["image-data"] }
-# The control server's random key.
-getrandom = "0.3"
+
+[target.'cfg(not(target_os = "android"))'.dependencies]
+# Not on Android: eframe only builds `accesskit` there with a desktop backend set, the clipboard
+# and link opening have no backends either, and Wayland and X11 don't exist on a phone.
+eframe = { workspace = true, features = ["accesskit", "clipboard", "wayland", "x11", "links"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+# The NativeActivity handle eframe's event loop needs (`NativeOptions.android_app`); the same 0.6
+# instance winit and eframe use, so the handle passes across crates as one type.
+android-activity = { version = "0.6", default-features = false, features = ["native-activity"] }
+# eframe's Android backend (NativeActivity via winit). Without it android-activity builds with no
+# backend and fails to compile.
+eframe = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(windows)'.dependencies]
 craft-update = { workspace = true }
