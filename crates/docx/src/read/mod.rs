@@ -1524,7 +1524,10 @@ pub(crate) const PROTECTION_HASH_ATTRS: [&str; 16] = [
 /// kept; a hostile attribute value can't be longer than a hash needs.
 fn read_protection(k: &El, s: &mut wordcraft_doc::Settings) {
     let on = |v: &str| !matches!(v, "0" | "false" | "off");
-    if !k.attr("w:enforcement").is_some_and(on) {
+    // Word enforces protection when `w:enforcement` is missing ([MS-OI29500] §2.1.402 (c)), so
+    // absent means on: otherwise a Word-protected file opens editable and saving strips the
+    // restriction and its password hash.
+    if k.attr("w:enforcement").is_some_and(|v| !on(v)) {
         return;
     }
     let edit = k.attr("w:edit").filter(|e| matches!(*e, "readOnly" | "comments" | "trackedChanges" | "forms"));
