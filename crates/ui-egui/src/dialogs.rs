@@ -273,6 +273,9 @@ pub enum Dialog {
         /// first page (the section's), applied only if changed (#1230).
         odd_even: bool,
         first_page: bool,
+        /// The sheet's own colour (#RRGGBB, or empty for none); `page_color_was` as opened.
+        page_color: String,
+        page_color_was: String,
     },
     Link {
         url: String,
@@ -1334,7 +1337,10 @@ impl Dialog {
                 let size = app.session.doc.styles.resolve_char(Some("Normal"), &Default::default()).size;
                 let grid = (kind, sp.grid_lines_per_page().min(1000), sp.grid_chars_per_line(size).min(1000));
                 let paper = (sp.page_w / crate::options::unit().pt_per_unit(), sp.page_h / crate::options::unit().pt_per_unit());
+                let page_color = app.session.doc.settings.page_color.map(|c| c.hex()).unwrap_or_default();
                 Dialog::PageSetup {
+                    page_color_was: page_color.clone(),
+                    page_color,
                     paper,
                     paper_was: paper,
                     paper_custom: false,
@@ -1814,6 +1820,49 @@ fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, c
             *landscape = paper.0 > paper.1;
         }
         ui.end_row();
+    });
+}
+
+/// Page Setup › Page Color: the sheet's own colour (the document's `settings.pageColor`), with
+/// the palette, a hex field and RGB values; empty means no colour, and the page picture or the
+/// theme's paper shows instead. It is a document property, independent of the interface theme.
+fn page_color_group(ui: &mut Ui, theme: &[wordcraft_doc::Rgb], value: &mut String) {
+    let t = Tokens::get(ui.ctx());
+    ui.horizontal(|ui| {
+        color_field(ui, theme, value, "No Color", "");
+        let c = wordcraft_doc::Rgb::parse(value);
+        // Preview: the sheet as it will be painted, and a crossed swatch for no colour.
+        let (r, _) = ui.allocate_exact_size(vec2(28.0, 18.0), Sense::hover());
+        match c {
+            Some(c) => {
+                ui.painter().rect_filled(r, 2.0, crate::theme::c32(c));
+            }
+            None => {
+                ui.painter().rect_filled(r, 2.0, egui::Color32::WHITE);
+                ui.painter().line_segment([r.left_bottom(), r.right_top()], egui::Stroke::new(1.0, t.text_dim));
+            }
+        }
+        ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    });
+    ui.horizontal(|ui| {
+        let hex_label = ui.label(tl!("Hex:"));
+        ui.label("#");
+        ui.add(egui::TextEdit::singleline(value).desired_width(76.0).char_limit(8)).labelled_by(hex_label.id);
+        if let Some(c) = wordcraft_doc::Rgb::parse(value) {
+            let mut rgb = [c.0, c.1, c.2];
+            let mut changed = false;
+            for (label, v) in ["Red:", "Green:", "Blue:"].into_iter().zip(rgb.iter_mut()) {
+                ui.label(tl!(label));
+                changed |= ui.add(egui::DragValue::new(v).range(0..=255).speed(1.0)).changed();
+            }
+            if changed {
+                *value = wordcraft_doc::Rgb(rgb[0], rgb[1], rgb[2]).hex();
+            }
+        } else {
+            // Nothing to show for a half-typed or invalid hex: the sheet keeps no colour until
+            // the field parses, and OK stays disabled (see the dialog's OK).
+            ui.label(tl!("No Color")).on_hover_text(value.as_str());
+        }
     });
 }
 
@@ -2415,6 +2464,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             valign,
             odd_even,
             first_page,
+            page_color,
+            page_color_was,
         } => {
             ui.label(egui::RichText::new(tl!("Margins")).font(semibold(12.5)));
             egui::Grid::new("ps").num_columns(4).show(ui, |ui| {
@@ -2443,6 +2494,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("Pages")).font(semibold(12.5)));
             ui.checkbox(mirror, tl!("Mirror margins"));
             page_paper_group(ui, paper, landscape, paper_custom);
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new(tl!("Page Color")).font(semibold(12.5)));
+            page_color_group(ui, &app.session.doc.settings.theme_colors.clone(), page_color);
+            ui.add_space(2.0);
             ui.label(egui::RichText::new(tl!("Document Grid")).font(semibold(12.5)));
             ui.horizontal_wrapped(|ui| {
                 ui.radio_value(&mut grid.0, 0, tl!("No grid"));
@@ -2470,7 +2525,9 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
             ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
             ui.checkbox(first_page, tl!("Different First Page"));
+            let color_ok = page_color.is_empty() || wordcraft_doc::Rgb::parse(page_color).is_some();
             let (mut ok, cancel) = buttons(ui, tl!("OK"));
+            ok &= color_ok;
             if ok {
                 // Everything OK changes is one undo step; a refused command applies nothing.
                 let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right))
@@ -2502,6 +2559,10 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                         }
                         if *first_page != wordcraft_engine::cmd::page::sect(&app.session).title_page {
                             commands.push(("layout.differentFirstPage", json!({"value": *first_page})));
+                        }
+                        if page_color != page_color_was {
+                            let c = wordcraft_doc::Rgb::parse(page_color).map(|c| c.hex());
+                            commands.push(("design.pageColor", json!({"color": c})));
                         }
                         run_as_one_step(app, commands)
                     });
@@ -5301,6 +5362,54 @@ mod tests {
         let Some(Dialog::PageSetup { paper, .. }) = Dialog::open("pageSetup", app) else { panic!("no page setup dialog") };
         let ppu = crate::options::unit().pt_per_unit();
         ((paper.0 * ppu, paper.1 * ppu), paper_entry(paper))
+    }
+
+    /// Page Setup's Page Color: the sheet's own colour lives in the document (not the theme),
+    /// applies on OK, stays in the document on Cancel, and an invalid hex keeps OK from applying.
+    #[test]
+    fn page_setup_sets_the_pages_own_colour() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = app_harness(app_with("Page"));
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::PageSetup { ref page_color, .. }) if page_color.is_empty()));
+        if let Some(Dialog::PageSetup { page_color, .. }) = h.state_mut().dialog.as_mut() {
+            *page_color = "181818".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc.settings.page_color, Some(wordcraft_doc::Rgb(0x18, 0x18, 0x18)), "applied on OK");
+        // Reopening shows the document's colour; Cancel leaves it as it was.
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        assert!(matches!(h.state().dialog, Some(Dialog::PageSetup { ref page_color, .. }) if page_color == "181818"));
+        if let Some(Dialog::PageSetup { page_color, .. }) = h.state_mut().dialog.as_mut() {
+            *page_color = "FFFFFF".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc.settings.page_color, Some(wordcraft_doc::Rgb(0x18, 0x18, 0x18)), "Cancel changes nothing");
+        // A half-typed hex doesn't apply: the dialog stays open with the document untouched.
+        h.state_mut().run("ui.dialog", json!({"name": "pageSetup"})).unwrap();
+        h.run_steps(3);
+        if let Some(Dialog::PageSetup { page_color, .. }) = h.state_mut().dialog.as_mut() {
+            *page_color = "18".into();
+        }
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_some(), "an invalid colour leaves the dialog open");
+        assert_eq!(h.state().session.doc.settings.page_color, Some(wordcraft_doc::Rgb(0x18, 0x18, 0x18)));
+        // Clearing it gives the document no page colour again.
+        if let Some(Dialog::PageSetup { page_color, .. }) = h.state_mut().dialog.as_mut() {
+            page_color.clear();
+        }
+        h.run_steps(2);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.doc.settings.page_color, None, "No Color restores the default");
     }
 
     /// #1433: Page Setup's Paper size shows the named size the section has, in either

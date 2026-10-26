@@ -841,7 +841,7 @@ fn columns_xml(c: &Columns) -> String {
 
 /// One master page per entry of `pages` (name, setup), each with its own page layout `pm1`, `pm2`…
 /// (§16.5, §16.9); the first is the default one, "Standard".
-fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str) -> String {
+fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str, page_color: Option<Rgb>) -> String {
     let mut s = format!("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<office:document-styles {NS}><office:styles>");
     s.push_str(&format!(
         "<style:default-style style:family=\"paragraph\"><style:paragraph-properties fo:margin-bottom=\"8pt\"/><style:text-properties fo:font-family=\"'{}'\" fo:font-size=\"12pt\"/></style:default-style>",
@@ -861,11 +861,13 @@ fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str) 
     s.push_str("<style:style style:name=\"Quotations\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-left=\"36pt\" fo:margin-right=\"36pt\"/><style:text-properties fo:font-style=\"italic\" fo:color=\"#404040\"/></style:style>");
     s.push_str(&format!("<style:style style:name=\"Preformatted_20_Text\" style:display-name=\"Preformatted Text\" style:family=\"paragraph\" style:parent-style-name=\"Standard\" style:class=\"html\"><style:paragraph-properties fo:margin-top=\"0pt\" fo:margin-bottom=\"0pt\"/><style:text-properties fo:font-family=\"'{}'\" style:font-family-generic=\"modern\" style:font-pitch=\"fixed\" fo:font-size=\"10pt\"/></style:style>", model::MONO_FONT));
     s.push_str("</office:styles><office:automatic-styles>");
+    // The page background is a document setting: write it on the page layouts so Writer shows it.
+    let bg = page_color.map(|c| format!(" fo:background-color=\"#{}\"", c.hex().to_ascii_lowercase())).unwrap_or_default();
     for (i, (_, sec)) in pages.iter().enumerate() {
         // A page of several columns carries them in its layout.
         let cols = if sec.columns.count > 1 { columns_xml(&sec.columns) } else { String::new() };
         s.push_str(&format!(
-            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\">{cols}</style:page-layout-properties></style:page-layout>",
+            "<style:page-layout style:name=\"pm{}\"><style:page-layout-properties fo:page-width=\"{}\" fo:page-height=\"{}\" fo:margin-top=\"{}\" fo:margin-bottom=\"{}\" fo:margin-left=\"{}\" fo:margin-right=\"{}\" style:print-orientation=\"{}\"{}>{cols}</style:page-layout-properties></style:page-layout>",
             i + 1,
             pt(sec.page_w),
             pt(sec.page_h),
@@ -873,7 +875,8 @@ fn styles_xml(pages: &[(String, wordcraft_doc::SectionProps)], body_font: &str) 
             pt(sec.margin_bottom),
             pt(sec.margin_left),
             pt(sec.margin_right),
-            if sec.page_w > sec.page_h { "landscape" } else { "portrait" }
+            if sec.page_w > sec.page_h { "landscape" } else { "portrait" },
+            bg
         ));
     }
     s.push_str("</office:automatic-styles><office:master-styles>");
@@ -987,7 +990,7 @@ pub fn export(doc: &Document) -> Result<Vec<u8>, String> {
         w.automatic_styles()
     );
     let body_font = doc.styles.default_chr.font.clone().unwrap_or_else(|| wordcraft_doc::styles::BODY_FONT.to_string());
-    let styles = styles_xml(&pages, &body_font);
+    let styles = styles_xml(&pages, &body_font, doc.settings.page_color);
     let meta = meta_xml(&flow.meta);
     let mut manifest = String::from(
         "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<manifest:manifest xmlns:manifest=\"urn:oasis:names:tc:opendocument:xmlns:manifest:1.0\" manifest:version=\"1.3\">\n<manifest:file-entry manifest:full-path=\"/\" manifest:version=\"1.3\" manifest:media-type=\"application/vnd.oasis.opendocument.text\"/>\n<manifest:file-entry manifest:full-path=\"content.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"styles.xml\" manifest:media-type=\"text/xml\"/>\n<manifest:file-entry manifest:full-path=\"meta.xml\" manifest:media-type=\"text/xml\"/>\n",
@@ -2582,7 +2585,7 @@ fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
 }
 
 /// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
-fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts), String> {
+fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts, Option<Rgb>), String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -2622,13 +2625,13 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), parts))
+    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), parts, pages.background))
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
     model::begin_import();
-    let (flow, last, track, font, parts) = parse_tracked(bytes)?;
+    let (flow, last, track, font, parts, page_color) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
@@ -2638,6 +2641,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if let Some(t) = track {
         doc.settings.track_changes = t;
     }
+    doc.settings.page_color = page_color;
     Ok(doc)
 }
 
@@ -2648,6 +2652,9 @@ struct Pages {
     masters: HashMap<String, SectionProps>,
     first: Option<SectionProps>,
     first_name: Option<String>,
+    /// The page background of the default master page: a document-wide setting in WordCraft's
+    /// model, as it is in the DOCX reader (`w:background`).
+    background: Option<Rgb>,
 }
 
 fn read_pages(xml: &[u8]) -> Pages {
@@ -2700,6 +2707,7 @@ fn read_pages(xml: &[u8]) -> Pages {
         if pages.first.is_none() {
             pages.first = Some(sec.clone());
             pages.first_name = Some(name.clone());
+            pages.background = get(a, "fo:background-color").and_then(model::parse_color);
         }
         pages.masters.entry(name).or_insert(sec);
     }
@@ -2745,6 +2753,23 @@ fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The page background (`fo:background-color` of the page layout) is a document setting, as in
+    /// the DOCX reader: the reference Writer document has `#181818`, and WordCraft keeps it.
+    #[test]
+    fn a_page_background_survives_a_round_trip() {
+        let mut d = Document::new();
+        d.ensure_nonempty();
+        d.settings.page_color = Some(Rgb(0x18, 0x18, 0x18));
+        let bytes = super::export(&d).unwrap();
+        let back = super::import(&bytes).unwrap();
+        assert_eq!(back.settings.page_color, Some(Rgb(0x18, 0x18, 0x18)));
+
+        let mut plain = Document::new();
+        plain.ensure_nonempty();
+        let plain = super::import(&super::export(&plain).unwrap()).unwrap();
+        assert_eq!(plain.settings.page_color, None, "no background, none in the file");
+    }
 
     #[test]
     fn escaper_drops_noncharacters() {

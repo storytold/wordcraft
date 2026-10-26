@@ -1112,14 +1112,6 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
         app.canvas.read_target_page = None;
         app.canvas.scroll_request = Some(vec2(page as f32 * step, 0.0));
     }
-    // View › Switch Modes: dark paper, inverted document colours.
-    // In Read Mode the Page color setting is used instead: Inverse draws the dark page, Sepia
-    // draws sepia paper and None draws white paper.
-    use wordcraft_engine::cmd::view::ReadPageColor;
-    let read_mode = app.session.view.read_mode;
-    let dark_page = if read_mode { app.session.view.read_page_color == ReadPageColor::Inverse } else { app.session.view.dark_mode };
-    let sepia_page = read_mode && app.session.view.read_page_color == ReadPageColor::Sepia;
-    let dark_paper = wordcraft_render::DARK_PAPER;
     let show_ruler = app.session.view.ruler
         && app.session.view.mode == wordcraft_layout::ViewMode::Print
         && !app.session.view.read_mode
@@ -1420,17 +1412,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             } else {
                 painter.with_clip_rect(painter.clip_rect().intersect(band))
             };
-            // Shadow and paper.
+            // Shadow and paper. The paper under the raster is the one the renderer paints
+            // (`paper_of`: the document's own colour, Read Mode's paper, or the theme's), so no
+            // other colour flashes at the edges while a page or tile is re-rendered.
+            let paper_opts = page_render_options(app, dim_body);
             painter.rect_filled(visual_sr.translate(vec2(0.0, 2.0)).expand(1.5), 1.0, t.page_shadow);
-            let paper = if dark_page {
-                Color32::from_gray(dark_paper)
-            } else if sepia_page {
-                let s = wordcraft_render::SEPIA_PAPER;
-                Color32::from_rgb(s.0, s.1, s.2)
-            } else {
-                Color32::WHITE
-            };
-            painter.rect_filled(visual_sr, 0.0, paper);
+            painter.rect_filled(visual_sr, 0.0, crate::theme::c32(paper_opts.paper_of(&app.session.doc)));
             if tiled {
                 // Render before painting to keep the frame sharp immediately after an edit or
                 // zoom. Tiles are fixed to raster-pixel boundaries, independent of scrolling.

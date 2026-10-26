@@ -929,9 +929,11 @@ fn lines(
         StoryRef::Part(id) => doc.parts.get(&id).and_then(|p| p.body.auto_color),
         StoryRef::Body => None,
     };
+    // Writer's "Automatic" text follows the page: white on a dark page, black on a light one.
+    let page_bg = doc.settings.page_color;
     let ink = |c: &TextColor, background: Option<Rgb>| match (c, auto) {
         (TextColor::Auto, Some(rgb)) => rgb,
-        _ => text_color(c, background),
+        _ => text_color(c, background.or(page_bg)),
     };
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
@@ -1153,7 +1155,7 @@ fn lines(
             // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
             let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
             let color = match (ins, del) {
-                _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
+                _ if plain_move => ink(&rc.color, rc.shading.or(rc.highlight)),
                 (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
                 (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
                 (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
