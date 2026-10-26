@@ -95,13 +95,19 @@ fn is_below_or_phinthu(c: char) -> bool {
 /// 1. **Short-tail ฐ/ญ** (WTT 2.0 fonts only) — ฐ (U+0E10) and ญ (U+0E0D) have descending
 ///    tails that collide with below-vowels (◌ุ ◌ู) and phinthu (◌ฺ).  When immediately
 ///    followed by one of those marks, swap to PUA short-tail forms U+F700 / U+F70F.
-///    Detection is by font name ([`wordcraft_fonts::word::is_wtt2_thai_font`]); OpenType
-///    fonts handle short-tails via GSUB automatically and are left untouched.
+///    Detection is by font name ([`wordcraft_fonts::word::is_wtt2_thai_font`]) AND the
+///    resolved face must cover U+F700: when a WTT 2.0 font is not installed, the OpenType
+///    substitute (Thonburi, Noto Serif Thai, …) handles short-tails via GSUB automatically.
 ///
 /// 2. **RU/LU + Sara_AA → LAKKHANGYAO** — ฤ (U+0E24) and ฦ (U+0E26) followed by sara aa
 ///    (า U+0E32) render sara aa as lakkhangyao (ๅ U+0E45).  Applied for all Thai fonts.
-fn thai_short_tail(text: &str, font: &str) -> Option<String> {
-    let is_wtt2 = wordcraft_fonts::word::is_wtt2_thai_font(font);
+fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
+    // Name check: only WTT 2.0 families carry PUA short-tail glyphs.
+    // Face check: the *resolved* face must actually have U+F700 — when the WTT 2.0 font is
+    // missing and a substitute (e.g. Thonburi, Noto) is used instead, that substitute is an
+    // OpenType font that handles short-tails via GSUB automatically; emitting U+F700 would
+    // produce a .notdef glyph because the substitute has no PUA mapping.
+    let is_wtt2 = wordcraft_fonts::word::is_wtt2_thai_font(font) && face.covers('\u{F700}');
     let needs_short_tail = is_wtt2 && (text.contains('\u{0E10}') || text.contains('\u{0E0D}'));
     let needs_ru_lu = text.contains('\u{0E24}') || text.contains('\u{0E26}');
     if !needs_short_tail && !needs_ru_lu {
@@ -1149,7 +1155,7 @@ impl<'a> Builder<'a> {
             let shape_text = if substituted { mapped.as_str() } else { sub };
             // Render-only: swap ญ/ฐ for their short-tail PUA forms when followed by a below-vowel.
             let short_tail_buf;
-            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &rc.font) {
+            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &rc.font, &st.face) {
                 short_tail_buf = buf;
                 short_tail_buf.as_str()
             } else {
