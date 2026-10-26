@@ -280,8 +280,11 @@ pub fn thai_word_at(text: &str, off: usize) -> (usize, usize) {
     let run = &text[rs..re];
     let rel = off.saturating_sub(rs);
     let bounds: Vec<usize> = word_segmenter().segment_str(run).collect();
-    // An exact boundary hit (other than the very start of the run) selects the word to the left.
+    // "Word to the left" rule: only when the cursor is past the end of the Thai/Lao run
+    // (e.g. on a space or Latin char immediately after the run, where off == re).
+    // Inside the run a boundary hit selects the word to the right, matching the Latin path.
     if rel > 0
+        && off == re
         && let Ok(i) = bounds.binary_search(&rel)
     {
         let a = if i > 0 { bounds[i - 1] } else { 0 };
@@ -467,7 +470,7 @@ mod tests {
 
         // word_at: click at the boundary between word 1 and word 2 (byte 24) → word 1 (0, 24),
         // not word 2.  A boundary click lands the caret at the end of the preceding word.
-        assert_eq!(thai_word_at(s, 24), (0, 24), "boundary click at 24 selects อนุรักษ์, not ภาษา");
+        assert_eq!(thai_word_at(s, 24), (24, 36), "boundary click at start of ภาษา selects ภาษา (rightward, like Latin)");
 
         // word_at: click at offset 0 → first word.
         let (a0, b0) = thai_word_at(s, 0);

@@ -1095,8 +1095,8 @@ impl<'a> Builder<'a> {
                         // lets the render path apply the PUA substitution and HarfBuzz shape it.
                         let cs_font = rc_cs.as_ref().map_or(rc.font.as_str(), |r| r.font.as_str());
                         !(resolved.substituted && wordcraft_fonts::word::is_thai_family(&rc.font))
-                            && !wordcraft_fonts::has_thai_short_tail_support(prim.get())
                             && !wordcraft_fonts::word::is_wtt2_thai_font(cs_font)
+                            && !wordcraft_fonts::has_thai_short_tail_support(prim.get())
                     } else {
                         wordcraft_fonts::fallback_rank(dc, &prim.get().family) > wordcraft_fonts::script_fallbacks(dc).len()
                     }
