@@ -4995,8 +4995,7 @@ fn a_picture_line_in_multiple_spacing_takes_the_leading_of_its_text_or_the_parag
         para(1.0, 8.0, None, Some(20.0)),
         para(2.0, 8.0, Some(20.0), None),
         para(2.0, 8.0, Some(14.0), Some(20.0)),
-    ]
-    .into();
+    ];
     let l = lay(&d);
     let lines: Vec<crate::para::Line> =
         l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { para, l0, .. } = i { Some(para.lines[*l0].clone()) } else { None }).collect();
