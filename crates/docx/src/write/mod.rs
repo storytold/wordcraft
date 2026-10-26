@@ -1092,6 +1092,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     if doc.settings.do_not_expand_shift_return {
         w.empty("w:doNotExpandShiftReturn", &[]);
     }
+    if s.suppress_break_spacing {
+        w.empty("w:suppressSpBfAfterPgBrk", &[]);
+    }
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
     }

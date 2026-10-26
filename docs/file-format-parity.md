@@ -12,6 +12,8 @@ gives ~64%; we discount it to ~60% because DOCX fidelity has never been checked 
 files. DOCX dominates the weight: a Word user sends and receives .docx; everything else is
 occasional.
 
+Compatibility break-spacing insertion follows CT_Compat order, including existing HTML auto-spacing and trailing compatibility settings. Synthetic save/read controls cover enable, disable and re-enable. This does not repair pre-existing ordering errors in unowned settings.
+
 ## Drawing payloads
 
 DOCX textboxes retain their own frame and story when they contain an inline picture.
@@ -220,7 +222,8 @@ hold was dropped without a warning (on 18 real-world Word documents: compatibili
 of 18; the privacy options are modelled since #1062). Now the writer merges into the
 file's original (`crates/docx/src/write/settings_merge.rs`): the original root and every child
 the model doesn't own stay byte for byte; owned children follow the model, in CT_Settings order;
-in `w:compat` only `compatibilityMode` is replaced. Kept children that point at a relationship
+in `w:compat`, `compatibilityMode` and `suppressSpBfAfterPgBrk` follow the model; other
+unowned children remain preserved. Kept children that point at a relationship
 (a mail-merge data source) are dropped. Files WordCraft wrote itself keep nothing extra. Tests:
 `crates/docx/tests/it/settings_merge.rs`.
 
@@ -264,6 +267,7 @@ Repeated DOCX style IDs use the last complete definition. The original regressio
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-25 | trivial | #1931: Compatibility break-spacing insertion follows CT_Compat order, including existing HTML auto-spacing and trailing compatibility settings. |
 | 2026-10-17 | trivial | Encryption rows: Standard (Word 2007, AES-ECB) encrypted packages open with a password, also when named `.doc`/`.dot`; AES headers in Word 97-2003 files are outside the public spec and refused (gap 9). The duplicate combined `.docx`/`.doc` row is removed; the `.doc` row reads 🟡 ~60% (it opens XOR/RC4/RC4 CryptoAPI); hours 2–4 → 1–2 and 4–6 → 1–2 (left: checks against Word-written files); total re-summed from the rows, 175–287 h |
 | 2026-10-25 | trivial | Repeated DOCX style IDs: repeated save/reopen regression for whole-definition replacement. |
 | 2026-10-25 | trivial | Arabic list labels: `arabicAlpha` and `arabicAbjad` draw the 28 Arabic letters (alphabetical and abjad order), doubling past the last letter; Hebrew, Hindi, Thai and Vietnamese still show decimal (`doc::section::tests::arabic_letters_count_in_both_orders`) |
@@ -291,6 +295,9 @@ Repeated DOCX style IDs use the last complete definition. The original regressio
 | 2026-10-19 | trivial | DOCX: a Word signature line (`w:pict` whose VML picture has an `o:signatureline`) is kept whole like an OLE object and written back as it was, at its new size, so it stays signable in Word; it used to be saved as a plain DrawingML picture |
 | 2026-10-19 | trivial | DOCX: a `majorBidi`/`minorBidi` theme font is the theme's font for the script of `w:themeFontLang/@w:bidi` (its Latin font for a Latin language), else the theme's `a:cs`, else Times New Roman; with no bidi language in the settings, Times New Roman. Measured in Word for Mac with synthetic documents; the run's `w:lang` and inherited fonts play no part. Manuscripts set in `majorBidi` with Office's usual theme came out in Calibri Light instead of Times New Roman. Corrects the 2026-10-14 entry |
 | 2026-10-16 | trivial | A `HYPERLINK` field reads as a link with its result as ordinary text, so a Word for the web table of contents keeps its tabs, dot leaders and page fields (#2174) |
+| 2026-10-19 | trivial | Clarify that compatibilityMode and suppressSpBfAfterPgBrk are model-owned; other compatibility children remain preserved. |
+| 2026-10-19 | minor | Break-spacing toggles survive saves with unowned compatibility settings. A first paragraph does not carry suppressed before-spacing past its page break. |
+| 2026-10-19 | trivial | Retain page-break parity evidence and upstream history. Conflict repair preserves runtime behavior and assertions. |
 | 2026-10-19 | trivial | Restrict Editing: with Filling in forms enforced, inserting content controls, their Properties and Remove Content Control are refused, as in Word (it greys them out), so a form's fields stay as they are and only their content is filled in |
 | 2026-10-19 | trivial | Content controls: text typed over a placeholder takes the control's own run properties (`w:sdtPr/w:rPr`, ECMA-376 §17.5.2.27), as in Word, and the placeholder style is recognised by its built-in name "Placeholder Text" whatever its localized id (German Word: `Platzhaltertext`), so entries in forms from localized Word no longer stay grey |
 | 2026-10-18 | trivial | A Word 2003 XML or Flat OPC document, or a web page, saved under a `.doc`, `.docx` or `.rtf` name opens by what it holds, as in Word, instead of going to the Word 97-2003 reader and showing a blank page (#2853) |
@@ -298,6 +305,7 @@ Repeated DOCX style IDs use the last complete definition. The original regressio
 | 2026-10-18 | trivial | Manage Sources imports Word's `Sources.xml` (`b:Sources`) into the document's bibliography sources, sharing the reader of a document's own bibliography part (#2640) |
 | 2026-10-14 | trivial | RTF export writes sections: `\sectd` formatting and `\sect` per section, round-tripping through the reader (gap 19) |
 | 2026-10-14 | trivial | `ASK` and `SET` fields keep their result but show nothing (#1765) |
+| 2026-10-16 | trivial | Leading page breaks honor suppressSpBfAfterPgBrk; unflagged documents retain before-spacing. |
 | 2026-10-16 | trivial | Strict OOXML line heights: `w:line="13.90pt"` under `lineRule="auto"` is read as Word renders it — through twips (13.90 × 20 = 278; the 1.1583 multiple), not as 240ths of a line — so a Word 2024 strict file opens at Word's line spacing and page count (#2329) |
 | 2026-10-15 | trivial | RTF import reads each stylesheet entry's bold, italic, size and font (through `\sbasedon`; unset means RTF's default once the chain sets any) and keeps a heading's, Title's, Quote's or Code run's formatting set by hand, in the text and in the old formatting of a tracked change (gap 19) |
 | 2026-10-15 | trivial | RTF import's heading, Title and Code normalisation is main's again (direct size, bold and code font cleared); only the writer resolves old formatting to the style's values (gap 19) |

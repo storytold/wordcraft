@@ -3902,6 +3902,22 @@ fn equation_in_alternate_content_is_read() {
     assert!(!p.plain_text().contains("[picture]"));
 }
 
+#[test]
+fn break_spacing_flag_roundtrips() {
+    for (flag, expected) in [
+        ("", false),
+        (r#"<w:suppressSpBfAfterPgBrk w:val="0"/>"#, false),
+        (r#"<w:suppressSpBfAfterPgBrk/>"#, true),
+        (r#"<w:suppressSpBfAfterPgBrk w:val="1"/>"#, true),
+    ] {
+        let settings = format!("<w:compat>{flag}</w:compat>");
+        let d = with_settings(Some(&settings));
+        assert_eq!(d.settings.suppress_break_spacing, expected, "{flag}");
+        let reopened = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        assert_eq!(reopened.settings.suppress_break_spacing, expected, "{flag}");
+    }
+}
+
 /// #1500: gradient fills and transparency on shapes (the cases in the issue), from the shape's
 /// own properties, the theme's fill styles (`a:fillRef` 3 and 1003, as Word's cover pages use),
 /// a group's fill (`a:grpFill`), an outline gradient and VML's `v:fill`. Each is read as the

@@ -185,6 +185,13 @@ before/after overlap still needs #108; the uniform first-baseline offset, page
 boundaries, tables, text boxes and notes were not compared with Word in this study.
 No overall parity estimate changes from these probes.
 
+For `w:suppressSpBfAfterPgBrk`, archived Word Mac compatibility-mode 15 probes with 6 pt
+before-spacing and preceding after-spacing of 0/2/6/10 pt produced relative text-top
+offsets of 5.76/3.84/0/0 pt. Existing synthetic controls retain 6/4/0/0 pt. This
+predecessor-spacing interaction differs from the [official API remarks](https://learn.microsoft.com/en-us/dotnet/api/documentformat.openxml.wordprocessing.suppressspacingbeforeafterpagebreak?view=openxml-3.0.1),
+which say before-spacing is ignored when the break line has no content. The native
+Word build was not recorded. No new Word run; other builds and platforms remain unverified.
+
 ## Performance
 
 | Measure | WordCraft | Word | Kind |
@@ -294,6 +301,8 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-15 | trivial | A float placed above its anchor paragraph (fixed on the page, or moved up from it) has the text of the paragraphs above the anchor on its page wrap around it, as in Word, instead of running behind it (#2048) |
 | 2026-10-20 | trivial | A picture cropped to a sliver of its source (under 5% of an axis) is drawn at the size the file gives, on screen and in PDF, bitmap or metafile, and Tight/Through wrapping follows the part drawn; it was widened to 5%, so a header bar that is 2.7% of a page-sized WMF came out half as tall and the text box over it fell below it (#1899) |
 | 2026-10-19 | trivial | An object dragged near the bottom of a page lands where it is dropped: its paragraph's place is measured with the object already there, not at the paragraph's top, where it could push the paragraph onto the next page (#3169) |
+| 2026-10-19 | minor | Break-spacing toggles survive saves with unowned compatibility settings. A first paragraph does not carry suppressed before-spacing past its page break. |
+| 2026-10-19 | trivial | Retain page-break parity evidence and upstream history. Conflict repair preserves runtime behavior and assertions. |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-19 | trivial | #2964: a centred or end-aligned list label after a leading page break uses its text line's alignment. Synthetic LTR/RTL numbered/bulleted controls and the issue's DOCX export; broader pagination gaps and readiness estimates unchanged |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
@@ -313,6 +322,7 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-16 | trivial | Hint-reliant CJK fonts execute TrueType contour assembly; Windows DFKai-SB no longer loses strokes. Synthetic local-font regression; no font binaries bundled. |
 | 2026-10-16 | trivial | `w:autoSpaceDE` and `w:autoSpaceDN` are laid out: a quarter em between Asian text and Latin text or digits (#2358) |
 | 2026-10-16 | trivial | AutoFit donors lose equal widths, bounded by content minima |
+| 2026-10-16 | trivial | Leading page breaks honor suppressSpBfAfterPgBrk; unflagged documents retain before-spacing. |
 | 2026-10-16 | trivial | Behind-text pictures in table cells participate in centre and bottom vertical alignment without increasing row flow height. |
 | 2026-10-15 | trivial | Absent or zero DrawingML effect extents remain zero on rotated pictures; contracted axes no longer reserve invented effects room. Synthetic quarter-turn import regression (`zero_effects_stay_zero_rotated`). |
 | 2026-10-15 | trivial | Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. |
