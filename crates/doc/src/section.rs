@@ -315,9 +315,9 @@ impl NumFormat {
             | NumFormat::HindiNumbers
             | NumFormat::HindiCounting
             | NumFormat::ThaiLetters
-            | NumFormat::ThaiNumbers
-            | NumFormat::ThaiCounting
             | NumFormat::DollarText => n.to_string(),
+            NumFormat::ThaiNumbers => crate::thai_numbers::thai_digits(n),
+            NumFormat::ThaiCounting => crate::thai_numbers::thai_counting_int(n),
             NumFormat::BahtText => crate::thai_numbers::baht_text_int(n),
         }
     }
