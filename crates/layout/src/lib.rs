@@ -3994,10 +3994,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // the page while its text ends above the margin, about half a line lower than when the
             // whole line must fit). Only the bottom margin takes that leading: a footer taller than
             // the margin, or footnotes, keep the whole line clear of them.
-            let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
             let fit_h = match pl.rp.line_spacing {
                 wordcraft_doc::props::LineSpacing::Multiple(m)
-                    if m > 1.0 && at_margin && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
+                    if m > 1.0 && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
                 {
                     // `baseline` is from the paragraph's top; the text ends a descent below it.
                     (l.baseline - l.top + l.text_desc).clamp(0.0, l.height)
