@@ -334,14 +334,18 @@ pub fn thai_input_action(
                 };
             }
 
-            // Nikhahit (◌ํ) typed after Sara_I or Sara_II: Accept and append.
-            // The document stores the sequence as-is; the renderer maps
-            //   ◌ิ + ◌ํ → ◌ึ glyph  and  ◌ี + ◌ํ → ◌ื glyph at display time.
-            // (Same principle as Thai short-tail PUA substitution — render-only.)
-            if new_char == NIKHAHIT
-                && tcb.iter().any(|(_, c)| *c == SARA_I || *c == SARA_II)
-            {
-                return ThaiInputAction::Accept;
+            // Vowel upgrade: Nikhahit (◌ํ) after Sara_I → Sara_UE (◌ึ).
+            // Sara_I is replaced in the document; Nikhahit is consumed (not stored).
+            // Any slot-2 mark (tone/karan/diac) that follows Sara_I stays in place.
+            if new_char == NIKHAHIT {
+                if let Some(&(sara_off, sara_ch)) = tcb.iter().find(|(_, c)| *c == SARA_I) {
+                    return ThaiInputAction::Replace {
+                        slot_offset: sara_off,
+                        slot_bytes: sara_ch.len_utf8(),
+                        cons_swap: None,
+                        replacement: Some(SARA_UE),
+                    };
+                }
             }
 
             // Pali marks cannot co-exist with vowels, tone, diacritics, karan, or sara_am.
@@ -444,6 +448,26 @@ pub fn thai_input_action(
                 None => return ThaiInputAction::Accept,
             };
             let prev_cls = thai_char_class(prev_ch);
+
+            // Vowel upgrade: MAIEK (◌่) typed when the last TCB element is Sara_I or Sara_II
+            // upgrades the vowel in the document; MAIEK is consumed (not stored as a tone mark).
+            //   cons + Sara_I  + ◌่ → cons + Sara_II   (◌ิ → ◌ี)
+            //   cons + Sara_II + ◌่ → cons + Sara_UEE  (◌ี → ◌ื)
+            if new_char == MAIEK {
+                let upgraded = match prev_ch {
+                    c if c == SARA_I  => Some(SARA_II),
+                    c if c == SARA_II => Some(SARA_UEE),
+                    _ => None,
+                };
+                if let Some(new_vowel) = upgraded {
+                    return ThaiInputAction::Replace {
+                        slot_offset: prev_off,
+                        slot_bytes: prev_ch.len_utf8(),
+                        cons_swap: None,
+                        replacement: Some(new_vowel),
+                    };
+                }
+            }
 
             // Typing a tone while a pali mark is present replaces the pali mark.
             if prev_cls == ThaiCharClass::PaliMark {
@@ -810,7 +834,8 @@ mod tests {
         assert_eq!(action("ก", mai_ek), ThaiInputAction::Accept);
 
         // Tone after consonant+vowel: Accept (slot 2 free).
-        assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
+        // Use mai_tho here — MAIEK after Sara_I is a vowel-upgrade (spec), not a plain tone.
+        assert_eq!(action("กิ", mai_tho), ThaiInputAction::Accept);
 
         // Second tone after consonant+vowel+tone: Replace existing tone.
         // กิ้ = ก(0) + sara_i(3) + mai_ek(6); caret at 9.
@@ -933,12 +958,24 @@ mod tests {
         assert_eq!(action("ก", nikhahit), ThaiInputAction::Accept);
         assert_eq!(action("ก", phinthu), ThaiInputAction::Accept);
 
-        // ── Nikhahit after Sara_I / Sara_II → Accept (store as-is; render layer handles display) ─
-        // The document keeps ◌ิ + ◌ํ  or  ◌ี + ◌ํ; the renderer maps them to ◌ึ / ◌ื glyphs.
-        assert_eq!(action("กิ",  nikhahit), ThaiInputAction::Accept);  // [cons, Sara_I] + ํ
-        assert_eq!(action("กิ้", nikhahit), ThaiInputAction::Accept);  // [cons, Sara_I, Tone] + ํ
-        assert_eq!(action("กี",  nikhahit), ThaiInputAction::Accept);  // [cons, Sara_II] + ํ
-        assert_eq!(action("กี้", nikhahit), ThaiInputAction::Accept);  // [cons, Sara_II, Tone] + ํ
+        // ── Vowel upgrade via Nikhahit: cons + Sara_I + Nikhahit = cons + Sara_UE ────
+        let sara_ue  = '\u{0E36}'; // ึ  Sara_UE
+
+        // กิ + ํ → replace ิ(3,3) with ึ  (Sara_I → Sara_UE; Nikhahit consumed)
+        match action("กิ", nikhahit) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
+                                       replacement: Some(r) } if r == sara_ue => {}
+            other => panic!("nikhahit after sara_i must upgrade to sara_ue, got {other:?}"),
+        }
+
+        // กิ้ + ํ → replace ิ(3,3) with ึ; tone ้ at offset 6 stays
+        match action("กิ้", nikhahit) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
+                                       replacement: Some(r) } if r == sara_ue => {}
+            other => panic!("nikhahit after sara_i+tone must upgrade sara_i→sara_ue, keep tone; got {other:?}"),
+        }
+
+        let _ = sara_ue;
 
         // ── Pali mark after other upper/lower vowels → replaces vowel (and any tone/diac) ─
         // กั = ก(0) + ั(3); nikhahit must delete ั (3 bytes) and insert nikhahit at 3
@@ -1073,11 +1110,51 @@ mod tests {
         // Maitaikhu after consonant+vowel+diac: rejected too.
         assert_eq!(action("กิ็", maitaikhu), ThaiInputAction::Reject);
 
-        // Other tones still use only slot-2 replacement (no vowel fallback).
-        // กิ = ก(0,3) + ิ(3,3); mai_ek has no slot-2 occupant → Accept.
-        assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
+        // MAIEK after Sara_I upgrades the vowel (spec: cons+Sara_I+MAIEK = cons+Sara_II).
+        let sara_ii = '\u{0E35}';
+        match action("กิ", mai_ek) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
+                                       replacement: Some(r) } if r == sara_ii => {}
+            other => panic!("maiek after sara_i must upgrade vowel to sara_ii, got {other:?}"),
+        }
 
         let _ = (sara_i, sara_u, sara_am);
+    }
+
+    #[test]
+    fn maiek_vowel_upgrade() {
+        let maiek  = '\u{0E48}'; // ่ mai ek
+        let maitho = '\u{0E49}'; // ้ mai tho
+        let sara_i   = '\u{0E34}'; // ิ
+        let sara_ii  = '\u{0E35}'; // ี
+        let sara_uee = '\u{0E37}'; // ื
+
+        // cons + Sara_I + MAIEK = cons + Sara_II  (◌ิ → ◌ี; MAIEK consumed)
+        match action("กิ", maiek) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
+                                       replacement: Some(r) } if r == sara_ii => {}
+            other => panic!("maiek after sara_i must upgrade to sara_ii, got {other:?}"),
+        }
+
+        // cons + Sara_II + MAIEK = cons + Sara_UEE  (◌ี → ◌ื; MAIEK consumed)
+        match action("กี", maiek) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
+                                       replacement: Some(r) } if r == sara_uee => {}
+            other => panic!("maiek after sara_ii must upgrade to sara_uee, got {other:?}"),
+        }
+
+        // Other vowels + MAIEK behave normally (Accept, slot 2 free)
+        assert_eq!(action("กั", maiek), ThaiInputAction::Accept);
+        assert_eq!(action("กุ", maiek), ThaiInputAction::Accept);
+
+        // Tone after a different tone: replace (unchanged behaviour)
+        match action("ก้", maiek) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
+                                       replacement: None } => {}
+            other => panic!("maiek must replace existing tone, got {other:?}"),
+        }
+
+        let _ = (sara_i, maitho);
     }
 
     #[test]
