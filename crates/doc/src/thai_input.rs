@@ -471,26 +471,6 @@ pub fn thai_input_action(
             };
             let prev_cls = thai_char_class(prev_ch);
 
-            // Vowel upgrade: MAIEK (◌่) typed when the last TCB element is Sara_I or Sara_II
-            // upgrades the vowel in the document; MAIEK is consumed (not stored as a tone mark).
-            //   cons + Sara_I  + ◌่ → cons + Sara_II   (◌ิ → ◌ี)
-            //   cons + Sara_II + ◌่ → cons + Sara_UEE  (◌ี → ◌ื)
-            if new_char == MAIEK {
-                let upgraded = match prev_ch {
-                    c if c == SARA_I  => Some(SARA_II),
-                    c if c == SARA_II => Some(SARA_UEE),
-                    _ => None,
-                };
-                if let Some(new_vowel) = upgraded {
-                    return ThaiInputAction::Replace {
-                        slot_offset: prev_off,
-                        slot_bytes: prev_ch.len_utf8(),
-                        cons_swap: None,
-                        replacement: Some(new_vowel),
-                    };
-                }
-            }
-
             // Typing a tone while a pali mark is present replaces the pali mark.
             if prev_cls == ThaiCharClass::PaliMark {
                 return ThaiInputAction::Replace {
@@ -856,8 +836,7 @@ mod tests {
         assert_eq!(action("ก", mai_ek), ThaiInputAction::Accept);
 
         // Tone after consonant+vowel: Accept (slot 2 free).
-        // Use mai_tho here — MAIEK after Sara_I is a vowel-upgrade (spec), not a plain tone.
-        assert_eq!(action("กิ", mai_tho), ThaiInputAction::Accept);
+        assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
 
         // Second tone after consonant+vowel+tone: Replace existing tone.
         // กิ้ = ก(0) + sara_i(3) + mai_ek(6); caret at 9.
@@ -1132,51 +1111,10 @@ mod tests {
         // Maitaikhu after consonant+vowel+diac: rejected too.
         assert_eq!(action("กิ็", maitaikhu), ThaiInputAction::Reject);
 
-        // MAIEK after Sara_I upgrades the vowel (spec: cons+Sara_I+MAIEK = cons+Sara_II).
-        let sara_ii = '\u{0E35}';
-        match action("กิ", mai_ek) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
-                                       replacement: Some(r) } if r == sara_ii => {}
-            other => panic!("maiek after sara_i must upgrade vowel to sara_ii, got {other:?}"),
-        }
+        // MAIEK after Sara_I: tone appended normally (no vowel-upgrade).
+        assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
 
         let _ = (sara_i, sara_u, sara_am);
-    }
-
-    #[test]
-    fn maiek_vowel_upgrade() {
-        let maiek  = '\u{0E48}'; // ่ mai ek
-        let maitho = '\u{0E49}'; // ้ mai tho
-        let sara_i   = '\u{0E34}'; // ิ
-        let sara_ii  = '\u{0E35}'; // ี
-        let sara_uee = '\u{0E37}'; // ื
-
-        // cons + Sara_I + MAIEK = cons + Sara_II  (◌ิ → ◌ี; MAIEK consumed)
-        match action("กิ", maiek) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
-                                       replacement: Some(r) } if r == sara_ii => {}
-            other => panic!("maiek after sara_i must upgrade to sara_ii, got {other:?}"),
-        }
-
-        // cons + Sara_II + MAIEK = cons + Sara_UEE  (◌ี → ◌ื; MAIEK consumed)
-        match action("กี", maiek) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
-                                       replacement: Some(r) } if r == sara_uee => {}
-            other => panic!("maiek after sara_ii must upgrade to sara_uee, got {other:?}"),
-        }
-
-        // Other vowels + MAIEK behave normally (Accept, slot 2 free)
-        assert_eq!(action("กั", maiek), ThaiInputAction::Accept);
-        assert_eq!(action("กุ", maiek), ThaiInputAction::Accept);
-
-        // Tone after a different tone: replace (unchanged behaviour)
-        match action("ก้", maiek) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None,
-                                       replacement: None } => {}
-            other => panic!("maiek must replace existing tone, got {other:?}"),
-        }
-
-        let _ = (sara_i, maitho);
     }
 
     #[test]
