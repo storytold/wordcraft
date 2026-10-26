@@ -25,4 +25,7 @@ jobs:
       craft-fonts-ref: b076417b5880bd4154bd22f00695b1d28c6bea83
       packages: >-
         pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxcursor-dev libxrandr-dev libxi-dev
-        libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers
+        libgtk-3-dev libfontconfig1-dev libfreetype-dev mesa-vulkan-drivers fonts-noto-core
+      # Exercise Myanmar reordering with a shaping font, rather than a generic Unicode fallback.
+      linux-env: |
+        WORDCRAFT_TEST_MYANMAR_FONT=/usr/share/fonts/truetype/noto/NotoSansMyanmar-Regular.ttf
