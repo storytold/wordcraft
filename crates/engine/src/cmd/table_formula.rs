@@ -78,7 +78,11 @@ pub fn evaluate_field_with(
     // For BahtText, prefer a decimal literal parsed with parse_baht_token so
     // "1.005" rounds to 1.01 rather than 1.00 (f64 precision); fall back to the
     // evaluated value when no single literal is present.
-    let switch_value = match switch.and_then(wordcraft_layout::fields::format_switch) {
+    // Strip quoted segments (e.g. `\# "0 \* CardText items"`) before checking for
+    // BahtText so a \* switch inside a quoted picture is not mistaken for a real switch.
+    let switch_unquoted: Option<String> =
+        switch.map(|s| s.split('"').step_by(2).collect::<Vec<_>>().join(" "));
+    let switch_value = match switch_unquoted.as_deref().and_then(wordcraft_layout::fields::format_switch) {
         Some(wordcraft_doc::section::NumFormat::BahtText) => {
             wordcraft_layout::fields::literal_after_eq(formula)
                 .and_then(wordcraft_doc::section::parse_baht_token)
