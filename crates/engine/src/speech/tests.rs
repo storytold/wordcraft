@@ -30,6 +30,7 @@ fn powershell_starts_without_a_console_window() {
 }
 
 #[test]
+/// The shared launch helper keeps the PowerShell path, arguments and flags in one place.
 fn powershell_command_uses_the_shared_program_and_flags() {
     let w = windows_command(Some("D:\\Win".into()), "script");
     assert_eq!(w.program, windows_powershell(Some("D:\\Win".into())));

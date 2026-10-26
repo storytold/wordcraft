@@ -131,6 +131,7 @@ enum Reply {
     Error(u64, String),
 }
 
+/// Parse one protocol reply: `started <id>`, `done <id>`, `stopped <id>` or `error <id> <code>`.
 fn parse_reply(line: &str) -> Option<Reply> {
     let (kind, rest) = line.trim().split_once(' ')?;
     let (id, code) = match rest.split_once(' ') {
@@ -147,6 +148,7 @@ fn parse_reply(line: &str) -> Option<Reply> {
     }
 }
 
+/// Encode one `speak` command as a single JSON line.
 fn speak_message(id: u64, text: &str, lang: Option<&str>, rate: f32) -> String {
     let lang = lang.and_then(super::primary_tag).unwrap_or_default();
     json!({
@@ -181,10 +183,12 @@ pub(super) struct Host {
 
 #[cfg(target_os = "windows")]
 impl Host {
+    /// Start the real PowerShell host with the embedded script.
     pub(super) fn start(changed: &dyn Fn() -> bool) -> Result<Self, String> {
         Self::start_with(super::windows_command(std::env::var_os("SystemRoot"), HOST_SCRIPT).command(), changed)
     }
 
+    /// Start a host from a prepared command; the tests use this to run a fake host.
     fn start_with(mut command: Command, changed: &dyn Fn() -> bool) -> Result<Self, String> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = command.spawn().map_err(|e| e.to_string())?;
@@ -233,6 +237,7 @@ impl Host {
         }
     }
 
+    /// Speak one sentence and wait for `started`/`done`/`stopped`/`error`; a host failure is `Unavailable`.
     pub(super) fn speak(&mut self, text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Result<Spoken, HostError> {
         if self.broken {
             return Err(HostError::Unavailable);
@@ -287,6 +292,7 @@ impl Host {
         }
     }
 
+    /// Cancel the current prompt and wait briefly for the host to acknowledge the stop.
     fn stop(&mut self, id: u64) {
         let _ = writeln!(self.stdin, "{{\"cmd\":\"stop\",\"id\":{id}}}");
         let _ = self.stdin.flush();
@@ -314,6 +320,7 @@ impl Host {
 
 #[cfg(target_os = "windows")]
 impl Drop for Host {
+    /// Send `quit`, then kill the child if it does not exit; detach the reader as a last resort.
     fn drop(&mut self) {
         let _ = writeln!(self.stdin, "{{\"cmd\":\"quit\"}}");
         let _ = self.stdin.flush();
@@ -389,12 +396,14 @@ while ($null -ne ($line = $reader.ReadLine())) {
 "#;
 
     #[cfg(target_os = "windows")]
+    /// Start the fake host used by the protocol tests.
     fn fake_host() -> Host {
         Host::start_with(super::super::windows_command(None, FAKE_HOST_SCRIPT).command(), &|| false).unwrap()
     }
 
     #[cfg(target_os = "windows")]
     #[test]
+    /// A host that exits before `ready` fails startup.
     fn fake_host_start_fails_if_it_exits_before_ready() {
         let err = Host::start_with(super::super::windows_command(None, "exit 1").command(), &|| false);
         assert!(err.is_err());
@@ -402,6 +411,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
 
     #[cfg(target_os = "windows")]
     #[test]
+    /// The fake host's `done` is accepted even before `started`.
     fn fake_host_reports_done_including_before_started() {
         let mut host = fake_host();
         assert!(matches!(host.speak("ok", None, 1.0, &|| false), Ok(Spoken::Done)));
@@ -411,6 +421,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
 
     #[cfg(target_os = "windows")]
     #[test]
+    /// Voice and parser errors come back as distinct host errors.
     fn fake_host_reports_voice_and_protocol_errors() {
         let mut host = fake_host();
         assert!(matches!(host.speak("voice", None, 1.0, &|| false), Err(HostError::Voice)));
@@ -419,6 +430,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
 
     #[cfg(target_os = "windows")]
     #[test]
+    /// A host that dies after `started` is unavailable, not done, so the caller can fall back.
     fn fake_host_falls_back_when_it_dies_after_started() {
         let mut host = fake_host();
         assert!(matches!(host.speak("crash", None, 1.0, &|| false), Err(HostError::Unavailable)));
@@ -427,6 +439,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
 
     #[cfg(target_os = "windows")]
     #[test]
+    /// An idle stop does not break the host; dropping it quits cleanly.
     fn fake_host_stops_when_idle_and_quits() {
         let mut host = fake_host();
         host.stop(99);
@@ -435,6 +448,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
     }
 
     #[test]
+    /// The embedded script loads System.Speech once and uses the async prompt APIs.
     fn host_script_keeps_one_synthesizer_alive() {
         for needle in [
             "Add-Type -AssemblyName System.Speech",
@@ -451,6 +465,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
     }
 
     #[test]
+    /// Cyrillic text and quotes stay on one JSON line.
     fn speak_message_is_one_json_line() {
         let line = speak_message(7, "Привет, \"мир\".", Some("ru-RU"), 1.0);
         assert!(!line.contains('\n'));
@@ -464,6 +479,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
     }
 
     #[test]
+    /// Newlines, tabs, backslashes and control characters are escaped.
     fn speak_message_escapes_control_characters() {
         let text = "line\nbreak\ttab\\slash\"quote\u{1}";
         let line = speak_message(1, text, None, 1.0);
@@ -476,6 +492,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
     #[cfg(target_os = "windows")]
     #[test]
     #[ignore = "starts a real PowerShell speech host"]
+    /// A real PowerShell host speaks an empty sentence and answers `done`.
     fn host_round_trips_a_speak_command() {
         let mut host = Host::start(&|| false).unwrap();
         assert!(matches!(host.speak("", None, 1.0, &|| false), Ok(Spoken::Done)));
@@ -484,6 +501,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
     #[cfg(target_os = "windows")]
     #[test]
     #[ignore = "starts a real PowerShell speech host"]
+    /// One real host speaks two sentences, then answers an idle stop.
     fn host_reuses_one_process_for_two_sentences() {
         let mut host = Host::start(&|| false).unwrap();
         assert_eq!(host.next_id, 1, "sentence ids start at 1; 0 is the parser sentinel");
@@ -495,6 +513,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
     }
 
     #[test]
+    /// Protocol replies parse, including padded and malformed lines.
     fn replies_are_parsed() {
         assert_eq!(parse_reply("started 3"), Some(Reply::Started(3)));
         assert_eq!(parse_reply("done 3"), Some(Reply::Done(3)));
