@@ -122,6 +122,10 @@ impl Writer {
                         let env = if li.ordered { "enumerate" } else { "itemize" };
                         self.out.push_str(&format!("{}\\begin{{{env}}}\n", "  ".repeat(lists.len())));
                         lists.push(li.ordered);
+                        if li.ordered && li.start > 1 {
+                            let counter = ["enumi", "enumii", "enumiii", "enumiv"][lists.len().saturating_sub(1).min(3)];
+                            self.out.push_str(&format!("{}\\setcounter{{{counter}}}{{{}}}\n", "  ".repeat(lists.len()), li.start - 1));
+                        }
                     }
                 }
                 None => {
