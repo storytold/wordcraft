@@ -3960,7 +3960,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // An empty paragraph closing a section before a new page: measured in Word, it stays
             // on a full page instead of starting one of its own.
             let closing_mark = pb.next_starts_page && p.section.is_some() && p.text.is_empty();
-            if over && l1 == l0 && !pb.at_top() && !split && !only_break && !closing_mark {
+            // (A line with only a page break in it is moved like any other when its text does not fit, leaving the page blank, as Word does;
+            // `only_break` is kept for exact line height and for column breaks.)
+            if over && l1 == l0 && !pb.at_top() && !split && !(only_break && (matches!(l.end, LineEnd::ColumnBreak) || matches!(pl.rp.line_spacing, wordcraft_doc::props::LineSpacing::Exactly(_)))) && !closing_mark {
                 break;
             }
             new_notes.extend(line_notes);
