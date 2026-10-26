@@ -145,7 +145,13 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let was_collapsed = s.sel.is_collapsed();
     // Thai input sequence checking: a single Thai combining character (vowel, tone, diacritic)
     // may replace an existing character in the current TCB rather than append.
+    // Skip when the selection is not collapsed (non-collapsed selection must go through type_text
+    // so the selected text is replaced correctly) or when Track Changes is on (the slot-byte
+    // offset math assumes deleted text is removed from the paragraph, but track_delete keeps it
+    // in place, so the caret arithmetic would land at the wrong position).
     if !raw
+        && s.sel.is_collapsed()
+        && !s.doc.settings.track_changes
         && text_to_type.chars().count() == 1
         && let Some(ch) = text_to_type.chars().next()
         && let Some(action) = thai_tcb_action(s, ch)

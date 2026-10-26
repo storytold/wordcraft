@@ -346,7 +346,20 @@ impl FontFace {
         // Check the default LangSys (the one Word uses for plain Thai text).
         let Some(Ok(lang_sys)) = script.default_lang_sys() else { return false };
         let ft = harfrust::Tag::new(feature_tag);
-        lang_sys.feature_index_for_tag(&feature_list, ft).is_some()
+        if lang_sys.feature_index_for_tag(&feature_list, ft).is_some() {
+            return true;
+        }
+        // Also check requiredFeatureIndex: if `feature_tag` is the LangSys's required feature
+        // (stored at a fixed index, not in the feature index array), feature_index_for_tag won't
+        // find it.  0xFFFF means "no required feature".
+        let req = lang_sys.required_feature_index();
+        if req == 0xFFFF {
+            return false;
+        }
+        feature_list
+            .feature_records()
+            .get(req as usize)
+            .is_some_and(|rec| rec.feature_tag() == ft)
     }
     /// Units per em.
     pub fn units_per_em(&self) -> f64 {
