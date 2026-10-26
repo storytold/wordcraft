@@ -198,6 +198,42 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
                 s.sel = crate::Selection { anchor: pos.clone(), focus: pos };
                 return sel_result(s);
             }
+            wordcraft_doc::thai_input::ThaiInputAction::DeleteThenAppend { slot_offset, slot_bytes, cons_swap, replacement } => {
+                // Delete `slot_bytes` at `slot_offset` (removes the vowel), then insert
+                // the typed char at the original caret position adjusted for the deletion.
+                // This produces the correct [cons, tone, ำ] order from [cons, vowel, tone].
+                let original_off = s.sel.focus.off;
+                if let Some(wordcraft_doc::thai_input::ConsSwap { offset: co, old_bytes: cb, new_char: nc }) = cons_swap {
+                    let a = Pos { off: co, ..s.sel.focus.clone() };
+                    let b = Pos { off: co + cb, ..s.sel.focus.clone() };
+                    s.sel = crate::Selection { anchor: a, focus: b };
+                    delete_selection(s)?;
+                    type_text(s, &nc.to_string())?;
+                }
+                if slot_bytes > 0 {
+                    let a = Pos { off: slot_offset, ..s.sel.focus.clone() };
+                    let b = Pos { off: slot_offset + slot_bytes, ..s.sel.focus.clone() };
+                    s.sel = crate::Selection { anchor: a, focus: b };
+                    delete_selection(s)?;
+                }
+                // Move caret to original position adjusted for the deletion.
+                let insert_off = original_off.saturating_sub(slot_bytes);
+                let pos = Pos { off: insert_off, ..s.sel.focus.clone() };
+                s.sel = crate::Selection { anchor: pos.clone(), focus: pos };
+                let insert_str;
+                let insert_text: &str = if let Some(rc) = replacement {
+                    insert_str = rc.to_string();
+                    &insert_str
+                } else {
+                    text_to_type
+                };
+                let insert_len = insert_text.len();
+                type_text(s, insert_text)?;
+                let new_off = insert_off.saturating_add(insert_len);
+                let pos = Pos { off: new_off, ..s.sel.focus.clone() };
+                s.sel = crate::Selection { anchor: pos.clone(), focus: pos };
+                return sel_result(s);
+            }
             wordcraft_doc::thai_input::ThaiInputAction::Accept => {}
         }
     }
