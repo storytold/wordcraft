@@ -692,27 +692,30 @@ pub fn thai_input_action(
                     replacement: None,
                 }
             } else {
-                // No existing vowel: insert before a tone/karan/diac if present, else append.
+                // No existing vowel: check for a slot-2 character (tone/karan/diac).
+                // - MAITAIKHU (◌็): the vowel replaces it entirely (slot_bytes = its length).
+                // - Tone / Karan: insert before it, preserving the slot-2 mark.
                 let caret_pos = tcb.last().map(|&(o, c)| o + c.len_utf8()).unwrap_or(0);
-                let slot_offset = tcb
-                    .iter()
-                    .find(|(_, c)| {
-                        matches!(
-                            thai_char_class(*c),
-                            ThaiCharClass::Tone | ThaiCharClass::Karan | ThaiCharClass::Diacritic
-                        )
-                    })
-                    .map(|&(o, _)| o)
-                    .unwrap_or(caret_pos);
-                if slot_offset == caret_pos {
-                    ThaiInputAction::Accept
-                } else {
+                if let Some(&(slot_off, slot_ch)) = tcb.iter().find(|(_, c)| {
+                    matches!(
+                        thai_char_class(*c),
+                        ThaiCharClass::Tone | ThaiCharClass::Karan | ThaiCharClass::Diacritic
+                    )
+                }) {
+                    let slot_bytes = if slot_ch == MAITAIKHU {
+                        slot_ch.len_utf8() // replace MAITAIKHU
+                    } else {
+                        0 // insert before tone/karan
+                    };
                     ThaiInputAction::Replace {
-                        slot_offset,
-                        slot_bytes: 0,
+                        slot_offset: slot_off,
+                        slot_bytes,
                         cons_swap: None,
                         replacement: None,
                     }
+                } else {
+                    let _ = caret_pos;
+                    ThaiInputAction::Accept
                 }
             }
         }
@@ -1113,6 +1116,37 @@ mod tests {
 
         // MAIEK after Sara_I: tone appended normally (no vowel-upgrade).
         assert_eq!(action("กิ", mai_ek), ThaiInputAction::Accept);
+
+        // ── Special: MAITAIKHU ↔ vowel mutual replacement ────────────────────────
+
+        // Case 1: cons + MAITAIKHU, then type upper/lower vowel → vowel replaces MAITAIKHU.
+        // ก็ = ก(0,3) + ็(3,3); type ิ → Replace ็ at 3 with ิ (slot_bytes=3, not 0).
+        match action("ก็", sara_i) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("upper vowel must replace maitaikhu at 3, got {other:?}"),
+        }
+        match action("ก็", sara_u) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("lower vowel must replace maitaikhu at 3, got {other:?}"),
+        }
+
+        // Case 2: cons + upper/lower vowel, then type MAITAIKHU → MAITAIKHU replaces vowel.
+        // กิ = ก(0,3) + ิ(3,3); type ็ → Replace ิ at 3. (already tested above, verify again)
+        match action("กิ", maitaikhu) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("maitaikhu must replace sara_i at 3, got {other:?}"),
+        }
+        match action("กุ", maitaikhu) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("maitaikhu must replace sara_u at 3, got {other:?}"),
+        }
+
+        // Tone/Karan before caret: vowel still inserts BEFORE them (not replacing).
+        // ก้ = ก(0,3) + ้(3,3); type ิ → pure insert before ้ (slot_bytes=0).
+        match action("ก้", sara_i) {
+            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 0, cons_swap: None, replacement: None } => {}
+            other => panic!("upper vowel must insert before tone (not replace), got {other:?}"),
+        }
 
         let _ = (sara_i, sara_u, sara_am);
     }
