@@ -30,6 +30,15 @@ fn powershell_starts_without_a_console_window() {
 }
 
 #[test]
+fn powershell_command_uses_the_shared_program_and_flags() {
+    let w = windows_command(Some("D:\\Win".into()), "script");
+    assert_eq!(w.program, windows_powershell(Some("D:\\Win".into())));
+    assert_eq!(w.creation_flags, 0x0800_0000);
+    assert_eq!(w.args[..3], ["-NoProfile", "-NonInteractive", "-Command"]);
+    assert_eq!(w.args[3], "script");
+}
+
+#[test]
 fn splits_sentences_but_not_abbreviations() {
     let t = "Smith et al. found 3.5 times more (see Fig. 2). J. Smith agreed! Did they? Yes… Pick one, e.g. this one.";
     let spans = split_sentences(t);

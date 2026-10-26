@@ -6,7 +6,7 @@
 #[cfg(target_os = "windows")]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "windows")]
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 #[cfg(target_os = "windows")]
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 #[cfg(target_os = "windows")]
@@ -176,9 +176,8 @@ pub(super) struct Host {
 #[cfg(target_os = "windows")]
 impl Host {
     pub(super) fn start(changed: &dyn Fn() -> bool) -> Result<Self, String> {
-        let mut command = Command::new(super::windows_powershell(std::env::var_os("SystemRoot")));
-        command.args(["-NoProfile", "-NonInteractive", "-Command", HOST_SCRIPT]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
-        std::os::windows::process::CommandExt::creation_flags(&mut command, super::CREATE_NO_WINDOW);
+        let mut command = super::windows_command(std::env::var_os("SystemRoot"), HOST_SCRIPT).command();
+        command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = command.spawn().map_err(|e| e.to_string())?;
         let Some(stdin) = child.stdin.take() else {
             let _ = child.kill();
