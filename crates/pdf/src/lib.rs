@@ -47,7 +47,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::Paint;
-use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
+use wordcraft_layout::display::{DisplayOptions, Draw, ItemDisplay, Stroke as LineStyle};
 use wordcraft_layout::para::{ClKind, LineEnd};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
@@ -920,9 +920,10 @@ impl Exporter<'_> {
             placeholders: false,
             ..Default::default()
         };
-        let clips = clipped_cells(page);
+        // What the items share (the authors' colours, the clipped cells) is worked out once per page.
+        let shown = ItemDisplay::new(self.doc, page);
         for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = self.draws(page, it, &clips, &dopts);
+            let draws = shown.draws(it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
                 for d in &draws {
                     me.draw(s, d);
@@ -930,7 +931,7 @@ impl Exporter<'_> {
             });
         }
         for it in &page.items {
-            let draws = self.draws(page, it, &clips, &dopts);
+            let draws = shown.draws(it, &dopts);
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
@@ -990,20 +991,6 @@ impl Exporter<'_> {
                 }),
             }
         }
-    }
-
-    /// Display items for one placed item.
-    fn draws(&self, page: &Page, it: &Placed, clips: &CellClips, dopts: &DisplayOptions) -> Vec<Draw> {
-        let mut items = vec![it.clone()];
-        // Lines in a cell cut off at its edge are drawn inside its clip: `page_display` finds the
-        // cell among the items (cells themselves draw nothing). Only that line's cell goes along.
-        if let Placed::Lines { story, path, .. } = it
-            && let Some(cell) = clip_cell(clips, *story, &path.0)
-        {
-            items.push(cell.clone());
-        }
-        let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
-        page_display(self.doc, &one, dopts)
     }
 
     /// A heading's text for bookmarks and tags: what the pages show. That leaves out what its
@@ -1896,31 +1883,6 @@ fn path_from(b: &kurbo::BezPath) -> Option<Path> {
     let mut pb = PathBuilder::new();
     append_path(&mut pb, b);
     pb.finish()
-}
-
-/// A page's cells whose content is cut off at their edge, by story and content path (table,
-/// row, cell), with their place in header, footer, items order (the first wins, as in layout).
-type CellClips<'a> = HashMap<StoryRef, HashMap<Vec<u32>, (usize, &'a Placed)>>;
-
-fn clipped_cells(page: &Page) -> CellClips<'_> {
-    let mut clips: CellClips = HashMap::new();
-    for (order, it) in page.header.iter().chain(&page.footer).chain(&page.items).enumerate() {
-        if let Placed::Cell { table, row, cell, story, clip: true, .. } = it
-            && let (Ok(row), Ok(cell)) = (u32::try_from(*row), u32::try_from(*cell))
-        {
-            let mut prefix = table.0.clone();
-            prefix.extend([row, cell]);
-            clips.entry(*story).or_default().entry(prefix).or_insert((order, it));
-        }
-    }
-    clips
-}
-
-/// The clipped cell a line at `path` of `story` is in: the first one whose path starts it. A
-/// lookup per prefix of the (short) path instead of passing every clipped cell with every line.
-fn clip_cell<'a>(clips: &CellClips<'a>, story: StoryRef, path: &[u32]) -> Option<&'a Placed> {
-    let cells = clips.get(&story)?;
-    (0..=path.len()).filter_map(|k| cells.get(path.get(..k)?)).min_by_key(|(order, _)| *order).map(|(_, it)| *it)
 }
 
 /// Where each glyph's text ends: the cluster (byte offset) of the first later glyph whose cluster

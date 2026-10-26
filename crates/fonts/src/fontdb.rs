@@ -95,6 +95,9 @@ pub struct FontFace {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     hint_slow: std::sync::atomic::AtomicU32,
     hinting_off: std::sync::atomic::AtomicBool,
+    /// A hinted draw slower than this is a strike ([`HINT_STRIKE`]; tests shorten it).
+    #[cfg(not(target_arch = "wasm32"))]
+    hint_strike: std::time::Duration,
 }
 
 /// Limits on what a face's TrueType instructions may run over (#3692). skrifa's interpreter budget
@@ -233,7 +236,7 @@ impl FontFace {
         (!pen.over).then_some(pen.path)
     }
     fn draw_outline(&self, gid: u32, max_elements: usize) -> FlipPen {
-        let mut pen = FlipPen { path: BezPath::new(), room: max_elements, over: false };
+        let mut pen = FlipPen { path: BezPath::new(), room: max_elements, over: false, hinted: false };
         if let Some(f) = self.skrifa()
             && let Some(g) = f.outline_glyphs().get(GlyphId::new(gid))
         {
@@ -242,10 +245,18 @@ impl FontFace {
             #[cfg(not(target_arch = "wasm32"))]
             let started = std::time::Instant::now();
             let settings = hinter.map_or_else(|| DrawSettings::unhinted(Size::unscaled(), self.location()), |h| DrawSettings::hinted(h, false));
-            let drawn = g.draw(settings, &mut pen);
+            pen.hinted = hinter.is_some();
+            let mut drawn = g.draw(settings, &mut pen);
             #[cfg(not(target_arch = "wasm32"))]
-            if hinter.is_some() && self.count_hinted(started.elapsed() > HINT_STRIKE) {
+            if hinter.is_some() && self.count_hinted(started.elapsed() > self.hint_strike) {
                 log::warn!("Hinting glyph {gid} in {:?} took {:?}: drawing the face unhinted", self.family, started.elapsed());
+            }
+            // A draw that was hinted when hinting went off (by itself, or by another thread's draw
+            // meanwhile) is the kind that was slow or misassembled: draw it again unhinted, so
+            // the outline cache never keeps it (#3692).
+            if pen.hinted && self.hinting_off.load(Ordering::Relaxed) {
+                pen = FlipPen { path: BezPath::new(), room: max_elements, over: false, hinted: false };
+                drawn = g.draw(DrawSettings::unhinted(Size::unscaled(), self.location()), &mut pen);
             }
             if let Err(e) = drawn {
                 log::warn!("Cannot draw glyph {gid} in {:?}: {e}", self.family);
@@ -1015,6 +1026,8 @@ fn make_face(bytes: FontBytes, index: u32, family: String, style: String, legacy
         hint_draws: Default::default(),
         hint_slow: Default::default(),
         hinting_off: Default::default(),
+        #[cfg(not(target_arch = "wasm32"))]
+        hint_strike: HINT_STRIKE,
     })
 }
 
@@ -1996,6 +2009,8 @@ struct FlipPen {
     path: BezPath,
     room: usize,
     over: bool,
+    /// Drawn with the face's TrueType interpreter.
+    hinted: bool,
 }
 
 impl FlipPen {
@@ -2373,6 +2388,35 @@ mod tests {
         let face = db.face("MingLiU JBMono", "Regular");
         assert!(face.hinter().is_none(), "a huge twilight zone is not hinted");
         assert!(!face.glyph_outline(face.glyph_for('a')).elements().is_empty(), "drawn unhinted");
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn the_draw_that_turns_hinting_off_is_redrawn_unhinted_for_the_outline_cache() {
+        // #3692: the glyph whose slow hinted draw trips the breaker may be misassembled; it must not be
+        // what the outline cache keeps.
+        let data = hint_reliant_font(660);
+        let mut face = super::make_face(
+            super::FontBytes::Owned(std::sync::Arc::new(data)),
+            0,
+            "MingLiU JBMono".into(),
+            "Regular".into(),
+            "MingLiU JBMono".into(),
+            Vec::new(),
+        )
+        .unwrap();
+        assert!(face.hinter().is_some());
+        face.hint_strike = std::time::Duration::ZERO; // every hinted draw is slow
+        let gid = face.glyph_for('a');
+        assert!(face.draw_outline(gid, usize::MAX).hinted, "hinted while the breaker is closed");
+        assert!(face.draw_outline(gid, usize::MAX).hinted);
+        let tripping = face.draw_outline(gid, usize::MAX);
+        assert!(face.hinting_off.load(std::sync::atomic::Ordering::Relaxed), "the third slow draw trips the breaker");
+        assert!(!tripping.hinted, "the tripping draw is returned unhinted");
+        assert!(!tripping.path.elements().is_empty());
+        // And what the cache keeps is that outline.
+        let db = FontDb::with_font_dirs(vec![]);
+        assert_eq!(db.outline(&face, gid).elements(), tripping.path.elements());
     }
 
     #[test]

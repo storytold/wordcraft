@@ -2039,7 +2039,7 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let mut drawn = String::new();
     for page in &lay.pages {
-        for draw in page_display(&d, page, &DisplayOptions::default()) {
+        for draw in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
             if let Draw::Glyphs { face, glyphs, text, .. } = draw {
                 assert_eq!(face.data(), bundled.data(), "page glyphs must use the bundled face without system fallback");
                 assert!(glyphs.iter().all(|(id, _, _)| *id != 0), "page glyphs must not use .notdef");
@@ -2449,44 +2449,4 @@ fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
     assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
     assert!(ends[..=n].iter().all(|e| *e == 2 * n + 2));
     assert_eq!(ends.last(), Some(&(2 * n + 4)));
-}
-
-/// A line in a cell cut off at its edge is drawn with that cell's clip, found by path in an index
-/// built once per page: every line used to carry a clone of every clipped cell on the page, so a
-/// page of exact-height rows cost lines × cells.
-#[test]
-fn a_line_finds_its_clipped_cell_by_path() {
-    let cell = |story, table: Vec<u32>, row, cell, clip| Placed::Cell {
-        rect: Rect::default(),
-        covered: false,
-        table: DocPath(table),
-        row,
-        cell,
-        story,
-        clip,
-    };
-    let mut page = Page { items: vec![cell(StoryRef::Body, vec![0], 0, 1, false), cell(StoryRef::Body, vec![2], 1, 0, true)], ..Default::default() };
-    // A nested clipped cell inside the first one; the outer one comes first in the page.
-    page.items.push(cell(StoryRef::Body, vec![2, 1, 0, 3], 0, 0, true));
-    page.footer.push(cell(StoryRef::Part(7), vec![0], 0, 0, true));
-    let clips = clipped_cells(&page);
-    let found = |story, path: &[u32]| {
-        clip_cell(&clips, story, path).and_then(|c| if let Placed::Cell { table, .. } = c { Some(table.0.clone()) } else { None })
-    };
-    assert_eq!(found(StoryRef::Body, &[2, 1, 0, 0]), Some(vec![2]));
-    assert_eq!(found(StoryRef::Body, &[2, 1, 0, 3, 0, 0, 1]), Some(vec![2]), "the first cell in page order wins, as in layout");
-    assert_eq!(found(StoryRef::Body, &[0, 0, 1, 0]), None, "that cell isn't clipped");
-    assert_eq!(found(StoryRef::Body, &[2, 0, 0, 0]), None, "another row");
-    assert_eq!(found(StoryRef::Part(7), &[0, 0, 0, 2]), Some(vec![0]));
-    assert_eq!(found(StoryRef::Body, &[0, 0, 0, 2]), None, "another story");
-
-    // 100 000 clipped cells and as many lines: a lookup each, not a pass over the cells each
-    // (10^10 steps, minutes; the lookups take well under a second on a loaded machine).
-    let n = 100_000;
-    let big = Page { items: (0..n).map(|r| cell(StoryRef::Body, vec![0], r, 0, true)).collect(), ..Default::default() };
-    let start = std::time::Instant::now();
-    let clips = clipped_cells(&big);
-    let hits = (0..n as u32).filter(|r| clip_cell(&clips, StoryRef::Body, &[0, *r, 0, 0]).is_some()).count();
-    assert_eq!(hits, n);
-    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
 }

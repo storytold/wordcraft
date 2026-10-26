@@ -113,6 +113,20 @@ pub fn is_empty_file(_path: &std::path::Path) -> bool {
     false
 }
 
+/// The canonical form of `path` (symbolic links and `.`/`..` resolved), for telling whether two
+/// spellings name one file; `None` when it can't be resolved or is outside the readable roots.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn canonical(path: &std::path::Path) -> Option<std::path::PathBuf> {
+    crate::file_access::check_read(&path.to_string_lossy()).ok()?;
+    std::fs::canonicalize(path).ok()
+}
+
+/// [`canonical`]: on the web files come through the browser, never by path.
+#[cfg(target_arch = "wasm32")]
+pub(crate) fn canonical(_path: &std::path::Path) -> Option<std::path::PathBuf> {
+    None
+}
+
 /// Can files with this extension be saved with a password (Word's packages)?
 pub fn can_encrypt(name: &str) -> bool {
     is_word_package(&ext_of(name))
@@ -507,7 +521,7 @@ impl LocalImages {
         left.map(|_| ())
     }
 
-    /// The canonical path `src` names, if it's inside the folder.
+    /// The canonical path `src` names, if it's inside the folder and may be read.
     fn resolve(&self, src: &str) -> Option<std::path::PathBuf> {
         let src = src.split(['#', '?']).next().unwrap_or("");
         if src.is_empty() || src.starts_with("//") || src.split_once(':').is_some_and(|(scheme, _)| !scheme.contains('/')) {
@@ -521,6 +535,9 @@ impl LocalImages {
         let dir = self.dir.as_ref()?;
         // Canonical paths have `..` and symlinks resolved, so this keeps both inside the folder.
         let path = std::fs::canonicalize(dir.join(rel)).ok()?;
+        // The folder is the one the HTML path names, which may be a link from outside the
+        // automation read root; the picture itself must be inside it (#3736).
+        crate::file_access::check_read(&path.to_string_lossy()).ok()?;
         path.starts_with(dir).then_some(path)
     }
 }

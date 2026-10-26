@@ -188,8 +188,9 @@ fn fit_tables(b: Block, room: usize, out: &mut Vec<Block>) {
 const MAX_BOX_DEPTH: usize = 8;
 /// Most text box stories one paste may create (hostile documents can fan out).
 const MAX_PASTED_BOXES: usize = 4096;
-/// Most text box content (estimated bytes, see [`block_cost`]) one paste may adopt: thousands of
-/// boxes can show the same large story, and each needs a story of its own.
+/// Most text box content (estimated bytes, see [`block_cost`]) one paste may copy: thousands of
+/// boxes can show the same story, and each needs a story of its own. Blocks without text boxes
+/// are shared between those stories, not copied, so they are not charged per box.
 const MAX_PASTED_BOX_BYTES: usize = 32 << 20;
 
 /// What a paste may still spend on text box stories.
@@ -901,9 +902,16 @@ impl Document {
             return None;
         }
         let src = parts.get(&old).or_else(|| self.parts.get(&old).filter(|p| p.kind == PartKind::TextBox))?;
-        // Charge the whole story before copying any of it. Its cost is worked out once per paste
-        // (that walks its payloads), however many boxes show it.
-        let cost = *budget.costs.entry(old).or_insert_with(|| src.blocks.iter().fold(0usize, |a, b| a.saturating_add(block_cost(b).0)));
+        // Charge what the copy really allocates before making any of it: the block slots, and the
+        // blocks holding text boxes (deep-copied below). The rest are shared `Arc`s, however many
+        // boxes show them, so they cost nothing more. Worked out once per paste.
+        let cost = *budget.costs.entry(old).or_insert_with(|| {
+            let slots = src.blocks.len().saturating_mul(std::mem::size_of::<Arc<Block>>());
+            src.blocks.iter().fold(slots, |a, b| match block_cost(b) {
+                (c, true) => a.saturating_add(c),
+                (_, false) => a,
+            })
+        });
         let Some(left) = budget.bytes.checked_sub(cost) else {
             budget.skipped = budget.skipped.saturating_add(1);
             return None;
@@ -1385,7 +1393,10 @@ mod tests {
     fn a_box_over_the_budget_leaves_later_smaller_boxes_their_stories() {
         // Review of #3874: once one story didn't fit, every later box in the paste was left
         // empty, however small its story. Only the box that doesn't fit is.
-        let big = para_block(Paragraph::with_text(&"x".repeat(100_000), CharProps::default()));
+        // (Story 1 holds a text box, so each box showing it needs a real copy.)
+        let mut bp = Paragraph::with_text(&"x".repeat(100_000), CharProps::default());
+        bp.insert_object(0, box_shape(Some(999)), &CharProps::default()).unwrap();
+        let big = para_block(bp);
         let small = para_block(Paragraph::with_text("small", CharProps::default()));
         let mut p = Paragraph::new();
         for story in [2, 1, 2, 1] {
@@ -1403,6 +1414,25 @@ mod tests {
         assert_eq!(got.iter().map(Option::is_some).collect::<Vec<_>>(), [false, true, false, true], "{got:?}");
         assert_eq!(budget.skipped, 2);
         assert_eq!(budget.costs.len(), 2, "each story costed once");
+    }
+
+    #[test]
+    fn many_boxes_sharing_one_story_paste_with_their_text() {
+        // Review of #3874: a document converted from PDF has thousands of boxes showing story
+        // data they share. 64 boxes x a 1 MiB block is 64 MiB counted per box (over the 32 MiB
+        // cap) but the block is shared, not copied, so every box keeps its text.
+        let big = para_block(Paragraph::with_text(&"x".repeat(1 << 20), CharProps::default()));
+        let f = fan_out(vec![big.clone()], 64);
+        let mut d = doc(&["x"]);
+        let (_, warned) = crate::test_log::warnings(|| d.insert_fragment(&Pos::body(0, 1), &f).unwrap());
+        assert!(!warned.iter().any(|w| w.contains("text boxes are left empty")), "{warned:?}");
+        let ids: Vec<u32> = boxes_in(&d, &Path::top(0)).into_iter().flatten().collect();
+        assert_eq!(ids.len(), 64, "every box keeps a story");
+        for id in ids {
+            let b = d.parts[&id].blocks.first().unwrap();
+            assert!(Arc::ptr_eq(b, &big), "shared, so not charged per box");
+            assert_eq!(d.parts[&id].blocks.len(), 1);
+        }
     }
 
     #[test]

@@ -551,6 +551,9 @@ pub struct ReadAloud {
     pub skip_citations: bool,
     /// The player window is open (it stays open after the last sentence until closed).
     pub open: bool,
+    /// The document being read ([`crate::Session::document_id`]): the sentences' positions are
+    /// in it.
+    pub document: Option<u64>,
 }
 
 impl Default for ReadAloud {
@@ -564,6 +567,7 @@ impl Default for ReadAloud {
             backend: if off { Backend::Hold } else { Backend::System },
             skip_citations: true,
             open: false,
+            document: None,
         }
     }
 }
