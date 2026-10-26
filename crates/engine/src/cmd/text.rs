@@ -102,7 +102,15 @@ fn typing_options(s: &mut Session, text: &str) {
 fn thai_tcb_action(s: &Session, ch: char) -> Option<wordcraft_doc::thai_input::ThaiInputAction> {
     use wordcraft_doc::thai_input::{ThaiCharClass, current_tcb, thai_char_class, thai_input_action};
     match thai_char_class(ch) {
-        ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel | ThaiCharClass::Tone | ThaiCharClass::Diacritic | ThaiCharClass::LeadingVowel => {}
+        ThaiCharClass::UpperVowel
+        | ThaiCharClass::LowerVowel
+        | ThaiCharClass::Tone
+        | ThaiCharClass::Diacritic
+        | ThaiCharClass::LeadingVowel
+        | ThaiCharClass::PaliMark   // Nikhahit (◌ํ): vowel upgrade + sara_am compose
+        | ThaiCharClass::Karan      // ์ thanthakhat
+        | ThaiCharClass::SaraAm     // ำ
+        => {}
         // SARA_AA (า U+0E32) can combine with a preceding NIKHAHIT into SARA_AM.
         ThaiCharClass::Other if ch == '\u{0E32}' => {}
         _ => return None,
