@@ -130,7 +130,11 @@ pub(crate) fn sttb_strings_max(table: &[u8], fc: u32, lcb: u32, max_chars: usize
         }
         at += cb_extra;
         let s: String = if extended {
-            chars.as_chunks::<2>().0.iter().take(max_chars).map(|c| char::from_u32(u16::from_le_bytes(*c) as u32).unwrap_or('\u{FFFD}')).collect()
+            // UTF-16: a surrogate pair is one character; a lone surrogate reads as U+FFFD.
+            char::decode_utf16(chars.as_chunks::<2>().0.iter().map(|c| u16::from_le_bytes(*c)))
+                .map(|r| r.unwrap_or('\u{FFFD}'))
+                .take(max_chars)
+                .collect()
         } else {
             chars.iter().take(max_chars).map(|&c| wordcraft_doc::encoding::cp1252(c)).collect()
         };
@@ -179,6 +183,20 @@ mod tests {
         b.truncate(b.len() - 2);
         let got = sttb_strings(&b, 0, b.len() as u32).unwrap();
         assert_eq!(got, vec!["first".to_string()]);
+    }
+
+    #[test]
+    fn extended_names_decode_surrogate_pairs() {
+        // An author or bookmark name with a character outside the BMP is one character, not two
+        // U+FFFD; the length limit counts characters. A lone surrogate is U+FFFD.
+        let b = ext_sttb(&["Ann \u{1F600}"], &[]);
+        assert_eq!(sttb_strings(&b, 0, b.len() as u32).unwrap(), vec!["Ann \u{1F600}".to_string()]);
+        let b = ext_sttb(&[&"\u{1F600}".repeat(41)], &[]);
+        assert_eq!(sttb_strings(&b, 0, b.len() as u32).unwrap(), vec!["\u{1F600}".repeat(40)]);
+        let mut b = ext_sttb(&["ab"], &[]);
+        let n = b.len();
+        b[n - 2..].copy_from_slice(&0xD800u16.to_le_bytes());
+        assert_eq!(sttb_strings(&b, 0, b.len() as u32).unwrap(), vec!["a\u{FFFD}".to_string()]);
     }
 
     #[test]
