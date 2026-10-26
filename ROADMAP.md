@@ -71,6 +71,8 @@ the two partial ones (real-world .docx, printing) complete, roughly.
 | Ecosystem and plugins | 15% | 40–80 + owner decisions | [gaps.md](docs/gaps.md) (#22) |
 | AI features | 40% (beyond Word for external agents; no in-app assistant) | 15–30 | [gaps.md](docs/gaps.md) (#25) |
 
+> **Page-number update:** 2026-10-16 · header/footer content and existing PAGE fields in anchored text boxes are preserved on insertion (#2201); readiness estimates unchanged.
+
 ## Features
 
 | Area | Parity | Hours |
@@ -356,6 +358,8 @@ Imported Word 97–2003 `.doc`/`.dot` files now ask for a supported DOCX target 
 | 2026-10-15 | Word's native ink inside groups and drawing canvases survives DOCX saves (gap 2): the ink member keeps its InkML part, relationship, content type and picture fallback, stays in its place among the members, moves with the group and is drawn from its fallback picture; deleting the group drops its part |
 | 2026-10-15 | Crash recovery copies and native .json files store pictures and kept parts as base64 text instead of arrays of numbers (#586 follow-up, #518): with a 27 MiB picture a recovery copy is 36 MiB instead of 96 MiB and a .json file 36 MiB instead of 286 MiB, written and read about five times faster. Copies and files written before still open |
 | 2026-10-14 | Consistent preferred cell widths override a stale table grid when both totals agree, for fixed and AutoFit tables. Conflicting widths, spans and percentages remain unchanged. |
+| 2026-10-16 | Existing PAGE fields in deeply nested tables and anchored header/footer text boxes, including nested boxes and group members, prevent duplicate numbering (#2201). Detection follows only boxes anchored from that header/footer and terminates on cyclic references. |
+| 2026-10-15 | Inserting top/bottom page numbers appends a separate paragraph without replacing existing header/footer text, formatting or tables (#2201). An existing PAGE field, including one in a table, is preserved instead of duplicated. |
 | 2026-10-14 | Legacy VML freeforms (`v:shape` with its own `path`), such as the rule lines in many older headers, are read as freeform shapes: they show on screen and in PDFs and are saved back as DrawingML custom geometry instead of vanishing |
 | 2026-10-14 | Field instructions spanning paragraphs no longer add blank lines during pagination; empty result paragraphs still take a line. |
 | 2026-10-16 | Opening a DOCX no longer copies its pictures: each picture, and each embedded object or macro part kept for saving, was copied out of the unzipped package, so a document with pictures held them twice while it opened and left the package's copies behind as freed memory. The document now shares the package's bytes: a 92 MB document with 20 pictures opens in about 90 MB less (866 → 772 MB in the app on macOS; the command line's peak, 319 → 231 MB) |
@@ -801,6 +805,8 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 | 2026-10-15 | trivial | Progress log: recovery copies and .json files store pictures as base64 (#586 follow-up) |
 | 2026-10-17 | trivial | Progress log: Scale Font Sizes command (#1475) |
 | 2026-10-14 | trivial | Progress log: row table border exceptions |
+| 2026-10-16 | trivial | Existing PAGE fields in anchored header/footer text boxes are preserved (#2201); readiness estimates unchanged |
+| 2026-10-15 | trivial | Page-number insertion preserves header/footer content (#2201); readiness estimates unchanged |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-15 | trivial | Three-column header/footer presets use editable table cells and screen-only editing guides (#2197); readiness unchanged |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |

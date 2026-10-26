@@ -128,6 +128,8 @@ The same gaps grouped the way the parity documents are, for agents working in on
 - **Localization gaps:** #8, #11, #16, #17; native-speaker review of every catalog (human).
 - **Stability and performance gaps:** #3, #20.
 
+> **Page-number update:** 2026-10-16 · top/bottom numbering preserves header/footer text, formatting, tables and existing PAGE fields, including fields in deeply nested tables and anchored text boxes (#2201). Detection follows nested boxes and group members, terminates on cyclic references and does not treat unrelated stories as duplicates. Section-slot behavior and readiness estimates are unchanged; this does not close the broader file-fidelity gaps.
+
 The Language dialog reads effective character formatting, including document defaults, paragraph styles and character styles. Accepting it unchanged keeps inherited language and no-proof choices (#2717); explicit direct formatting still takes precedence. Other proofing and Windows-specific reports remain separate.
 
 Footer page-table height and body wrapping are corrected. Other pagination gaps remain open.
@@ -236,6 +238,8 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 | 2026-10-16 | trivial | #8: English is three proofing languages — American, British spelling (en-GB, en-AU, en-NZ, en-IE, en-ZA, en-IN…) and Canadian — each flagging the other's spellings (#1281, #1045) |
 | 2026-10-16 | trivial | #10 narrowed: pictures and shapes without text stories preview rotation while dragging (#2277); remaining object gaps and estimates unchanged |
 | 2026-10-14 | trivial | Row table border exceptions fixed; other row table exceptions remain unsupported |
+| 2026-10-16 | trivial | Header/footer PAGE detection includes deep tables and anchored text boxes, with nested/grouped-box, unrelated-story and cyclic-reference regressions (#2201); readiness estimates unchanged |
+| 2026-10-15 | trivial | Page-number insertion preserves existing header/footer content and skips an existing PAGE field (#2201); synthetic undo/redo and repeated DOCX save/reopen checks; readiness estimates unchanged |
 | 2026-10-12 | minor | Czech proofing review: short-word splits rank after deletion, NOSUGGEST excludes suggestions while accepting typed forms, affix comments apply only to headers, ratios keep spaces and repeated-word messages use Czech quotes; synthetic engine end-to-end and latency checks |
 | 2026-10-15 | trivial | Three-column header/footer preset uses a borderless table with editing guides (#2197); broader gaps and estimates unchanged |
 | 2026-10-12 | minor | Czech spelling from the installed Hunspell dictionary, runtime-table suggestions and generic checks; Czech interface writes cs-CZ documents; no Czech hyphenation patterns bundled; estimates unchanged |
