@@ -247,26 +247,29 @@ pub(crate) fn show(app: &mut Ctx<'_>, ctx: &egui::Context) {
     if keep && form.pending.is_none() {
         let mut open = true;
         let mut close = false;
-        egui::Window::new("New Pleading").id(egui::Id::unique("law_new_pleading")).collapsible(false).resizable(false).open(&mut open).show(ctx, |ui| {
-            ui.set_min_width(420.0);
-            egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| form_ui(ui, &mut form));
-            if let Some(e) = &form.error {
-                ui.colored_label(ui.visuals().error_fg_color, e);
-            }
-            let missing = form.missing();
-            if let Some(label) = missing {
-                ui.label(RichText::new(format!("Fill in {label} to create.")).small().weak());
-            }
-            ui.add_space(6.0);
-            ui.horizontal(|ui| {
-                if ui.add_enabled(missing.is_none(), egui::Button::new("Create")).clicked() && submit(app, &mut form) {
-                    close = true;
+        egui::Window::new("New Pleading").id(egui::Id::unique("law_new_pleading")).collapsible(false).resizable(false).open(&mut open).show(
+            ctx,
+            |ui| {
+                ui.set_min_width(420.0);
+                egui::ScrollArea::vertical().max_height(560.0).show(ui, |ui| form_ui(ui, &mut form));
+                if let Some(e) = &form.error {
+                    ui.colored_label(ui.visuals().error_fg_color, e);
                 }
-                if ui.button("Cancel").clicked() {
-                    close = true;
+                let missing = form.missing();
+                if let Some(label) = missing {
+                    ui.label(RichText::new(format!("Fill in {label} to create.")).small().weak());
                 }
-            });
-        });
+                ui.add_space(6.0);
+                ui.horizontal(|ui| {
+                    if ui.add_enabled(missing.is_none(), egui::Button::new("Create")).clicked() && submit(app, &mut form) {
+                        close = true;
+                    }
+                    if ui.button("Cancel").clicked() {
+                        close = true;
+                    }
+                });
+            },
+        );
         keep = open && !close && keep;
     }
     if keep {
