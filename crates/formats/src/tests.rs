@@ -1001,7 +1001,6 @@ fn rtf_notes_comments_tracked_changes_and_sections_work_together() {
     assert!(out.contains("\\revised") && out.contains("\\footnote") && out.contains("\\atrfstart"), "{out}");
     let d2 = import("rtf", out.as_bytes()).unwrap().unwrap();
     check(&d2);
-    }
 }
 
 /// A link target with any whitespace (a no-break or ideographic space too) is written in `<…>`,
