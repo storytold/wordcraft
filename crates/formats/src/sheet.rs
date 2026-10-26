@@ -90,7 +90,7 @@ pub fn detect(bytes: &[u8]) -> Option<Kind> {
         return None;
     }
     let mut pkg = Package::open(bytes).ok()?;
-    pkg.kind()
+    pkg.kind().ok().flatten()
 }
 
 /// The sheet names, in workbook order.
@@ -99,7 +99,7 @@ pub fn sheet_names(bytes: &[u8]) -> Result<Vec<String>, String> {
         return xls::sheet_names(bytes);
     }
     let mut pkg = Package::open(bytes)?;
-    match pkg.kind().ok_or("not an Excel or OpenDocument spreadsheet")? {
+    match pkg.kind()?.ok_or("not an Excel or OpenDocument spreadsheet")? {
         Kind::Xlsx => Ok(xlsx_sheets(&mut pkg)?.into_iter().map(|s| s.name).collect()),
         Kind::Ods => Ok(ods_read(&pkg.read("content.xml")?, None)?.0),
         Kind::Xls => xls::sheet_names(bytes),
@@ -113,7 +113,7 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
         return xls::read_rows(bytes, pick);
     }
     let mut pkg = Package::open(bytes)?;
-    match pkg.kind().ok_or("not an Excel or OpenDocument spreadsheet")? {
+    match pkg.kind()?.ok_or("not an Excel or OpenDocument spreadsheet")? {
         Kind::Xlsx => {
             let sheets = xlsx_sheets(&mut pkg)?;
             let names: Vec<String> = sheets.iter().map(|s| s.name.clone()).collect();
@@ -214,9 +214,9 @@ impl<'a> Package<'a> {
         Ok(out)
     }
 
-    fn kind(&mut self) -> Option<Kind> {
-        if self.workbook_path().is_some() {
-            return Some(Kind::Xlsx);
+    fn kind(&mut self) -> Result<Option<Kind>, String> {
+        if self.workbook_path()?.is_some() {
+            return Ok(Some(Kind::Xlsx));
         }
         if self.has("content.xml") {
             let ods = match self.read("mimetype") {
@@ -225,23 +225,24 @@ impl<'a> Package<'a> {
                 Err(_) => !self.has("word/document.xml"),
             };
             if ods {
-                return Some(Kind::Ods);
+                return Ok(Some(Kind::Ods));
             }
         }
-        None
+        Ok(None)
     }
 
     /// The SpreadsheetML workbook part: the package's main part when it is a workbook,
     /// otherwise `xl/workbook.xml` when present.
-    fn workbook_path(&mut self) -> Option<String> {
-        if let Ok(rels) = self.read("_rels/.rels") {
-            for r in relationships(&rels, "") {
+    fn workbook_path(&mut self) -> Result<Option<String>, String> {
+        if self.has("_rels/.rels") {
+            let rels = self.read("_rels/.rels")?;
+            for r in relationships(&rels, "")? {
                 if r.kind.ends_with("/officeDocument") && r.target.to_ascii_lowercase().contains("workbook") && self.has(&r.target) {
-                    return Some(r.target);
+                    return Ok(Some(r.target));
                 }
             }
         }
-        self.has("xl/workbook.xml").then(|| "xl/workbook.xml".to_string())
+        Ok(self.has("xl/workbook.xml").then(|| "xl/workbook.xml".to_string()))
     }
 }
 
@@ -249,31 +250,44 @@ impl<'a> Package<'a> {
 // XML
 
 /// A streamed XML event with namespace prefixes dropped; elements deeper than
-/// [`MAX_XML_DEPTH`] (and their text) are skipped.
+/// [`MAX_XML_DEPTH`] (and their text) are skipped. `false` when the reader stopped on malformed
+/// XML before the end of the stream: a truncated or corrupt part, whose partial content the
+/// caller must not mistake for a complete read (#1342).
 enum Ev<'e> {
     Start(&'e BytesStart<'e>),
     End(Vec<u8>),
     Text(String),
 }
 
-fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) {
+fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) -> bool {
     let mut r = quick_xml::Reader::from_reader(xml);
     let cfg = r.config_mut();
     cfg.trim_text(false);
-    cfg.check_end_names = false;
-    cfg.allow_unmatched_ends = true;
+    cfg.check_end_names = true;
+    cfg.allow_unmatched_ends = false;
     let mut buf = Vec::new();
     let mut depth = 0usize;
+    // `quick_xml` accepts a second top-level element; one document must have exactly one root.
+    let mut root_closed = false;
     loop {
         buf.clear();
         match r.read_event_into(&mut buf) {
             Ok(Event::Start(e)) => {
+                if depth == 0 && root_closed {
+                    return false;
+                }
                 depth = depth.saturating_add(1);
                 if depth <= MAX_XML_DEPTH {
                     f(Ev::Start(&e));
                 }
             }
             Ok(Event::Empty(e)) => {
+                if depth == 0 {
+                    if root_closed {
+                        return false;
+                    }
+                    root_closed = true;
+                }
                 if depth < MAX_XML_DEPTH {
                     f(Ev::Start(&e));
                     f(Ev::End(e.local_name().as_ref().to_vec()));
@@ -284,7 +298,20 @@ fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) {
                     f(Ev::End(e.local_name().as_ref().to_vec()));
                 }
                 depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    root_closed = true;
+                }
             }
+            // Outside the document element only XML's four whitespace characters may appear
+            // (syntax: S = #x20 | #x9 | #xD | #xA); CDATA sections and entity references are
+            // not allowed there at all.
+            Ok(Event::Text(t)) if depth == 0 => {
+                if t.decode().map(|c| c.chars().any(|ch| !matches!(ch, ' ' | '\t' | '\r' | '\n'))).unwrap_or(true) {
+                    return false;
+                }
+            }
+            Ok(Event::CData(_)) if depth == 0 => return false,
+            Ok(Event::GeneralRef(_)) if depth == 0 => return false,
             Ok(Event::Text(t)) if depth <= MAX_XML_DEPTH => f(Ev::Text(t.decode().map(|c| c.into_owned()).unwrap_or_default())),
             Ok(Event::CData(t)) if depth <= MAX_XML_DEPTH => f(Ev::Text(String::from_utf8_lossy(&t).into_owned())),
             Ok(Event::GeneralRef(g)) if depth <= MAX_XML_DEPTH => {
@@ -298,7 +325,8 @@ fn walk(xml: &[u8], mut f: impl FnMut(Ev<'_>)) {
                 };
                 f(Ev::Text(s));
             }
-            Ok(Event::Eof) | Err(_) => break,
+            Ok(Event::Eof) => return root_closed && depth == 0,
+            Err(_) => return false,
             Ok(_) => {}
         }
     }
@@ -395,9 +423,9 @@ struct Rel {
 }
 
 /// The relationships of a part in `dir` (targets resolved to package paths).
-fn relationships(xml: &[u8], dir: &str) -> Vec<Rel> {
+fn relationships(xml: &[u8], dir: &str) -> Result<Vec<Rel>, String> {
     let mut v = Vec::new();
-    walk(xml, |ev| {
+    let complete = walk(xml, |ev| {
         if let Ev::Start(e) = ev
             && e.local_name().as_ref() == b"Relationship"
             && v.len() < MAX_SHEETS * 2
@@ -409,7 +437,10 @@ fn relationships(xml: &[u8], dir: &str) -> Vec<Rel> {
             v.push(Rel { id: attr(e, b"Id").unwrap_or_default(), kind: attr(e, b"Type").unwrap_or_default(), target: join(dir, &target) });
         }
     });
-    v
+    if !complete {
+        return Err("the relationships part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
+    Ok(v)
 }
 
 /// A relative part name resolved against `dir` (`/` = package root).
@@ -451,12 +482,13 @@ struct Workbook {
 }
 
 fn workbook(pkg: &mut Package<'_>) -> Result<Workbook, String> {
-    let path = pkg.workbook_path().ok_or("the workbook part is missing")?;
+    let path = pkg.workbook_path()?.ok_or("the workbook part is missing")?;
     let xml = pkg.read(&path)?;
-    let rels = pkg.read(&rels_of(&path)).map(|r| relationships(&r, dir_of(&path))).unwrap_or_default();
+    let rel_path = rels_of(&path);
+    let rels = if pkg.has(&rel_path) { relationships(&pkg.read(&rel_path)?, dir_of(&path))? } else { Vec::new() };
     let mut listed: Vec<(String, String)> = Vec::new();
     let mut date1904 = false;
-    walk(&xml, |ev| {
+    let complete = walk(&xml, |ev| {
         if let Ev::Start(e) = ev {
             match e.local_name().as_ref() {
                 b"sheet" if listed.len() < MAX_SHEETS => listed.push((attr(e, b"name").unwrap_or_default(), attr(e, b"id").unwrap_or_default())),
@@ -465,6 +497,9 @@ fn workbook(pkg: &mut Package<'_>) -> Result<Workbook, String> {
             }
         }
     });
+    if !complete {
+        return Err("the workbook part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
     let sheets = listed
         .into_iter()
         .filter_map(|(name, id)| {
@@ -483,11 +518,11 @@ fn xlsx_sheets(pkg: &mut Package<'_>) -> Result<Vec<SheetRef>, String> {
 
 /// The shared string table (§18.4): each `si`'s text, rich-text runs joined, phonetic runs
 /// (`rPh`) left out.
-fn shared_strings(xml: &[u8]) -> Vec<String> {
+fn shared_strings(xml: &[u8]) -> Result<Vec<String>, String> {
     let mut out = Vec::new();
     let mut cur: Option<String> = None;
     let (mut in_t, mut phonetic) = (false, 0usize);
-    walk(xml, |ev| match ev {
+    let complete = walk(xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
             b"si" => cur = Some(String::new()),
             b"t" => in_t = true,
@@ -515,7 +550,10 @@ fn shared_strings(xml: &[u8]) -> Vec<String> {
             }
         }
     });
-    out
+    if !complete {
+        return Err("the shared strings part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
+    Ok(out)
 }
 
 /// Whether a number format shows a date, a time or both.
@@ -578,11 +616,11 @@ fn custom_date(code: &str) -> Option<DateKind> {
 }
 
 /// Each cell format's (`cellXfs/xf`, by `s` index) date kind.
-fn cell_formats(xml: &[u8]) -> Vec<Option<DateKind>> {
+fn cell_formats(xml: &[u8]) -> Result<Vec<Option<DateKind>>, String> {
     let mut custom: HashMap<u32, Option<DateKind>> = HashMap::new();
     let mut xfs: Vec<u32> = Vec::new();
     let mut in_xfs = false;
-    walk(xml, |ev| match ev {
+    let complete = walk(xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
             b"numFmt" if custom.len() < MAX_XFS => {
                 if let Some(id) = attr(e, b"numFmtId").and_then(|v| v.trim().parse().ok()) {
@@ -596,7 +634,10 @@ fn cell_formats(xml: &[u8]) -> Vec<Option<DateKind>> {
         Ev::End(n) if n.as_slice() == b"cellXfs" => in_xfs = false,
         _ => {}
     });
-    xfs.into_iter().map(|id| custom.get(&id).copied().unwrap_or_else(|| builtin_date(id))).collect()
+    if !complete {
+        return Err("the styles part's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
+    Ok(xfs.into_iter().map(|id| custom.get(&id).copied().unwrap_or_else(|| builtin_date(id))).collect())
 }
 
 /// A cell reference's 0-based column (`C5` → 2); `None` when it isn't one.
@@ -629,11 +670,11 @@ struct XCell {
 fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<String>>, String> {
     let wb = workbook(pkg)?;
     let shared = match wb.shared.as_deref().or(pkg.has("xl/sharedStrings.xml").then_some("xl/sharedStrings.xml")).map(str::to_string) {
-        Some(p) => shared_strings(&pkg.read(&p)?),
+        Some(p) => shared_strings(&pkg.read(&p)?)?,
         None => Vec::new(),
     };
     let formats = match wb.styles.as_deref().or(pkg.has("xl/styles.xml").then_some("xl/styles.xml")).map(str::to_string) {
-        Some(p) => cell_formats(&pkg.read(&p)?),
+        Some(p) => cell_formats(&pkg.read(&p)?)?,
         None => Vec::new(),
     };
     let xml = pkg.read(path)?;
@@ -644,7 +685,7 @@ fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<String>>, Stri
     let (mut in_data, mut row_no, mut next_col) = (false, 0u64, 0usize);
     let mut cell: Option<XCell> = None;
     let (mut in_v, mut in_is_t, mut phonetic) = (false, false, 0usize);
-    walk(&xml, |ev| match ev {
+    let complete = walk(&xml, |ev| match ev {
         Ev::Start(e) => match e.local_name().as_ref() {
             b"sheetData" => in_data = true,
             b"row" if in_data => {
@@ -708,6 +749,9 @@ fn xlsx_rows(pkg: &mut Package<'_>, path: &str) -> Result<Vec<Vec<String>>, Stri
             _ => {}
         },
     });
+    if !complete {
+        return Err("the sheet's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
     let mut grid = Grid::default();
     for (_, r) in rows {
         grid.push(r, 1);
@@ -881,7 +925,7 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
     let mut row: Option<(Vec<String>, u64, u64, Option<usize>)> = None;
     let mut cell: Option<OCell> = None;
     let (mut in_p, mut skip) = (0usize, 0usize);
-    walk(xml, |ev| match ev {
+    let complete = walk(xml, |ev| match ev {
         Ev::Start(e) => {
             let n = e.local_name();
             let n = n.as_ref();
@@ -1017,6 +1061,9 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
             }
         }
     });
+    if !complete {
+        return Err("the spreadsheet's XML is not well-formed (the file is truncated or corrupt)".into());
+    }
     if names.is_empty() {
         return Err("the spreadsheet has no sheets".into());
     }
@@ -1063,6 +1110,19 @@ mod tests {
     }
 
     const RELS: &str = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>"#;
+
+    fn xlsx_with_aux(sheet: &str, wb_rels: &str, shared: Option<&str>, styles: Option<&str>) -> Vec<u8> {
+        let wb = r#"<workbook><sheets><sheet name="S" r:id="rId1"/></sheets></workbook>"#;
+        let mut entries =
+            vec![("_rels/.rels", RELS), ("xl/workbook.xml", wb), ("xl/_rels/workbook.xml.rels", wb_rels), ("xl/worksheets/sheet1.xml", sheet)];
+        if let Some(shared) = shared {
+            entries.push(("xl/sharedStrings.xml", shared));
+        }
+        if let Some(styles) = styles {
+            entries.push(("xl/styles.xml", styles));
+        }
+        zip(&entries)
+    }
 
     fn xlsx(sheet1: &str) -> Vec<u8> {
         let wb = r#"<workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><workbookPr/><sheets><sheet name="People" sheetId="1" r:id="rId1"/><sheet name="Chart" sheetId="2" r:id="rId9"/><sheet name="Notes" sheetId="3" r:id="rId2"/></sheets></workbook>"#;
@@ -1178,6 +1238,107 @@ mod tests {
             let _ = sheet_names(junk);
             let _ = read_rows(junk, Pick::Index(0));
         }
+    }
+
+    #[test]
+    fn malformed_xml_is_an_error_not_a_partial_list() {
+        // #1342: a valid prefix followed by corruption fails the import, so a partial sheet
+        // cannot be mistaken for the file's rows and merged or saved. (Truncation inside a tag:
+        // quick-xml tolerates some junk mid-stream, but not an unfinished tag.)
+        let ods = r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="Guests"><table:table-row><table:table-cell office:value-type="string"><text:p>Ada</text:p></table:table-cell></table:table-row><table:table-row><table:table-cell office:value"#;
+        let book = zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", ods)]);
+        let err = read_rows(&book, Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
+        // The same corruption in an xlsx sheet part.
+        let sheet = r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Ada</t></is></c></row><row r="2"><c r="A2" t="inline"#;
+        let err = read_rows(&xlsx(sheet), Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
+    }
+
+    #[test]
+    fn ods_and_xlsx_reject_unclosed_and_mismatched_outer_tags() {
+        let ods_cases = [
+            r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>Ada</text:p></table:table-cell></table:table-row></table:table>"#,
+            r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>Ada</text:p></table:table-cell></table:table></office:spreadsheet></office:body></office:document-content>"#,
+        ];
+        let mut accepted = Vec::new();
+        for (label, content) in [("ODS unclosed", ods_cases[0]), ("ODS mismatched", ods_cases[1])] {
+            let book = zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content)]);
+            match read_rows(&book, Pick::Index(0)) {
+                Ok(_) => accepted.push(label),
+                Err(err) => assert!(err.contains("not well-formed"), "{err}"),
+            }
+        }
+
+        let xlsx_cases = [
+            r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Ada</t></is></c></row></sheetData>"#,
+            r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Ada</t></is></c></row></worksheet></sheetData>"#,
+        ];
+        for (label, sheet) in [("XLSX unclosed", xlsx_cases[0]), ("XLSX mismatched", xlsx_cases[1])] {
+            match read_rows(&xlsx(sheet), Pick::Index(0)) {
+                Ok(_) => accepted.push(label),
+                Err(err) => assert!(err.contains("not well-formed"), "{err}"),
+            }
+        }
+        assert!(accepted.is_empty(), "malformed XML imported: {accepted:?}");
+    }
+
+    #[test]
+    fn second_root_element_is_rejected() {
+        // quick-xml accepts a second top-level element; a well-formed document has one root.
+        let ods = r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>Ada</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content><office:document-content xmlns:office="o"><office:body/></office:document-content>"#;
+        let book = zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", ods)]);
+        let err = read_rows(&book, Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
+
+        let sheet = r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Ada</t></is></c></row></sheetData></worksheet><worksheet><sheetData/></worksheet>"#;
+        let err = read_rows(&xlsx(sheet), Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
+    }
+
+    #[test]
+    fn text_outside_the_root_is_rejected() {
+        // Only whitespace may follow the document element; other character data is malformed.
+        let ods = r#"<office:document-content xmlns:office="o" xmlns:table="t" xmlns:text="x"><office:body><office:spreadsheet><table:table table:name="S"><table:table-row><table:table-cell office:value-type="string"><text:p>Ada</text:p></table:table-cell></table:table-row></table:table></office:spreadsheet></office:body></office:document-content>"#;
+        let book = |content: &str| zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", content)]);
+        for trailing in ["garbage", "<![CDATA[ ]]>", "&amp;", "\u{a0}"] {
+            let err = read_rows(&book(&format!("{ods}{trailing}")), Pick::Index(0)).unwrap_err();
+            assert!(err.contains("not well-formed"), "{trailing}: {err}");
+        }
+        assert!(read_rows(&book(&format!("{ods}\r\n\t ")), Pick::Index(0)).is_ok());
+
+        let sheet = r#"<worksheet><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Ada</t></is></c></row></sheetData></worksheet>"#;
+        for trailing in ["garbage", "<![CDATA[ ]]>", "&amp;", "\u{a0}"] {
+            let err = read_rows(&xlsx(&format!("{sheet}{trailing}")), Pick::Index(0)).unwrap_err();
+            assert!(err.contains("not well-formed"), "{trailing}: {err}");
+        }
+        assert!(read_rows(&xlsx(&format!("{sheet}\r\n\t ")), Pick::Index(0)).is_ok());
+    }
+
+    #[test]
+    fn malformed_xlsx_relationships_are_propagated() {
+        let sheet = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#;
+        let worksheet_rel = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>"#;
+        let err = read_rows(&xlsx_with_aux(sheet, worksheet_rel, None, None), Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
+    }
+
+    #[test]
+    fn malformed_xlsx_shared_strings_are_propagated() {
+        let sheet = r#"<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c></row></sheetData></worksheet>"#;
+        let shared_rel = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/sharedStrings" Target="sharedStrings.xml"/></Relationships>"#;
+        let shared = r#"<sst><si><t>Ada</t></si>"#;
+        let err = read_rows(&xlsx_with_aux(sheet, shared_rel, Some(shared), None), Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
+    }
+
+    #[test]
+    fn malformed_xlsx_styles_are_propagated() {
+        let sheet = r#"<worksheet><sheetData><row r="1"><c r="A1" s="0"><v>45200</v></c></row></sheetData></worksheet>"#;
+        let style_rel = r#"<Relationships><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/><Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>"#;
+        let styles = r#"<styleSheet><cellXfs><xf numFmtId="14"/></cellXfs>"#;
+        let err = read_rows(&xlsx_with_aux(sheet, style_rel, None, Some(styles)), Pick::Index(0)).unwrap_err();
+        assert!(err.contains("not well-formed"), "{err}");
     }
 
     #[test]
