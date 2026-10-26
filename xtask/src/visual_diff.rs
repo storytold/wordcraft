@@ -30,17 +30,34 @@ struct Line {
     text: String,
 }
 
-pub fn run(args: &[&str]) -> Result<(), String> {
-    let private = args.contains(&"--private");
-    let dpi = match args.iter().position(|a| *a == "--dpi") {
-        Some(i) => args.get(i + 1).and_then(|v| v.parse::<u32>().ok()).filter(|d| (36..=300).contains(d)).ok_or("--dpi takes 36..=300")?,
-        None => 100,
-    };
-    let pos: Vec<&str> =
-        args.iter().enumerate().filter(|(i, a)| !a.starts_with("--") && !(*i > 0 && args[i - 1] == "--dpi")).map(|(_, a)| *a).collect();
+/// Reject unknown options before creating output; a typo in --private must not expose text.
+fn parse_args<'a>(args: &[&'a str]) -> Result<([&'a str; 3], u32, bool), String> {
+    let mut private = false;
+    let mut dpi = 100;
+    let mut pos = Vec::new();
+    let mut args = args.iter().copied();
+    while let Some(arg) = args.next() {
+        match arg {
+            "--private" => private = true,
+            "--dpi" => {
+                dpi = args.next().and_then(|v| v.parse::<u32>().ok()).filter(|d| (36..=300).contains(d)).ok_or("--dpi takes 36..=300")?;
+            }
+            "--" => {
+                pos.extend(args);
+                break;
+            }
+            flag if flag.starts_with('-') => return Err(format!("unknown visual-diff option: {flag}")),
+            path => pos.push(path),
+        }
+    }
     let [reference, test, out] = pos.as_slice() else {
         return Err("usage: cargo xtask visual-diff REF.pdf TEST.pdf OUTDIR [--private] [--dpi N]".into());
     };
+    Ok(([*reference, *test, *out], dpi, private))
+}
+
+pub fn run(args: &[&str]) -> Result<(), String> {
+    let ([reference, test, out], dpi, private) = parse_args(args)?;
     let out = PathBuf::from(out);
     std::fs::create_dir_all(&out).map_err(|e| format!("{}: {e}", out.display()))?;
     let tmp = out.join(".visual-diff-tmp");
@@ -332,6 +349,21 @@ fn round(v: f64, places: i32) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn privacy_flags_and_dpi_are_validated_before_output() {
+        assert_eq!(parse_args(&["r.pdf", "--private", "t.pdf", "--dpi", "144", "out"]).unwrap(), (["r.pdf", "t.pdf", "out"], 144, true));
+        assert_eq!(parse_args(&["r", "t", "out"]).unwrap(), (["r", "t", "out"], 100, false));
+        for flag in ["--privte", "--unknown", "-private"] {
+            assert!(parse_args(&["r", "t", "out", flag]).is_err());
+        }
+        for args in
+            [vec!["r", "t", "out", "--dpi"], vec!["r", "t", "out", "--dpi", "301"], vec!["r", "t", "out", "--dpi", "--private"], vec!["r", "t"]]
+        {
+            assert!(parse_args(&args).is_err());
+        }
+        assert_eq!(parse_args(&["--", "-r", "t", "out"]).unwrap().0, ["-r", "t", "out"]);
+    }
 
     fn gray(w: usize, h: usize, f: impl Fn(usize, usize) -> u8) -> Gray {
         Gray { w, h, px: (0..w * h).map(|i| f(i % w, i / w)).collect() }
