@@ -637,16 +637,16 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
             ui.horizontal(|ui| {
                 let kind_label = ui.label("Kind:");
                 let mut selected_kind = kind.to_string();
-                let combo = egui::ComboBox::from_id_salt(("law_check_kind", profile_id, doc_key, i)).selected_text(&selected_kind).width(200.0).show_ui(
-                    ui,
-                    |ui| {
+                let combo = egui::ComboBox::from_id_salt(("law_check_kind", profile_id, doc_key, i))
+                    .selected_text(&selected_kind)
+                    .width(200.0)
+                    .show_ui(ui, |ui| {
                         for k in CHECK_KINDS {
                             if ui.selectable_label(selected_kind == *k, *k).clicked() {
                                 selected_kind = k.to_string();
                             }
                         }
-                    },
-                );
+                    });
                 combo.response.labelled_by(kind_label.id);
                 if selected_kind != kind && commit_pending_drafts(app) {
                     reload_profile(app, profile_id, profile);
