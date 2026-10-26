@@ -142,6 +142,14 @@ impl WordApp {
             // A host that answered at once (or failed to show anything) is handled right away.
             return self.poll_file_dialog().map_or(Asked::Pending, Asked::Done);
         }
+        // No system dialog hook (Android): the built-in browser serves the request over the
+        // host's app-private storage (`Services::app_files_dir`) instead of answering none. The
+        // browser is a native feature (web keeps its own flow), hence the gate.
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.services.app_files_dir.is_some() {
+            self.show_file_browser(req, after, false);
+            return Asked::Pending;
+        }
         let picked = match &req {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 self.services.pick_open.as_ref().and_then(|f| f(purpose))
