@@ -7,8 +7,8 @@
 
 use super::tests::{SCALE, cost_ratio};
 use super::{
-    Block, CharProps, DocLayout, Document, HeaderSet, HeightRule, InlineObject, LayoutCache, LayoutOptions, ParaLayout, Paragraph, Path, Placed,
-    SectionProps, SectionStart, StoryRef, display, layout, para, work,
+    Block, CharProps, DocLayout, Document, HeaderSet, HeightRule, InlineObject, LayoutCache, LayoutOptions, Page, ParaLayout, Paragraph, Path,
+    Placed, Rgb, SectionProps, SectionStart, StoryRef, display, layout, para, work,
 };
 use wordcraft_doc::para::Run;
 use wordcraft_doc::{Pos, Table};
