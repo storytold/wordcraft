@@ -45,6 +45,7 @@ while ($true) {
         try { $line = $task.Result } catch { break }
         if ($null -eq $line) { break }
         $m = $null
+        # 0 is never a sentence id; it marks a line the host could not parse.
         $id = '0'
         try {
             $m = $line | ConvertFrom-Json
@@ -205,7 +206,8 @@ impl Host {
                 let _ = child.wait();
                 e.to_string()
             })?;
-        let host = Self { child, stdin, lines, reader: Some(reader), next_id: 0, broken: false };
+        // Sentence ids start at 1: id 0 is the host's "could not parse the line" sentinel.
+        let host = Self { child, stdin, lines, reader: Some(reader), next_id: 1, broken: false };
         let deadline = Instant::now() + STARTUP_TIMEOUT;
         loop {
             if changed() {
@@ -251,7 +253,14 @@ impl Host {
                     Some(Reply::Started(got)) if got == id => started = true,
                     Some(Reply::Done(got)) if got == id => return Ok(Spoken::Done),
                     Some(Reply::Stopped(got)) if got == id => return Ok(Spoken::Interrupted),
-                    Some(Reply::Error(got, code)) if got == id || got == 0 => {
+                    Some(Reply::Error(0, code)) => {
+                        // Id 0 is the host's parser sentinel, never a sentence id.
+                        if started {
+                            return Ok(Spoken::Failed(format!("Read Aloud host protocol error: {code}")));
+                        }
+                        return Err(HostError::Unavailable);
+                    }
+                    Some(Reply::Error(got, code)) if got == id => {
                         if started {
                             return Ok(Spoken::Failed(format!("Read Aloud host error: {code}")));
                         }
