@@ -1,7 +1,7 @@
 //! Programmatic control of the running app (agents, tests, MCP bridge).
 //!
 //! Methods (JSON lines over the host's transport, see `docs/control-protocol.md`):
-//! - `engine.execute {command, params}`: run any command (engine or `ui.*`)
+//! - `engine.execute {command, params, doc?}`: run any command (engine or `ui.*`)
 //! - `engine.commands {search?}`: engine and app print commands with enablement and parameters
 //! - `document.inspect`: document structure; `ui.inspect`: UI state, canvas geometry, perf
 //! - `ui.wheel {x, y, dx?, dy, unit?, phase?}`: a mouse-wheel / trackpad scroll at a window point.
@@ -12,6 +12,10 @@
 //! - `ui.screenshot {path?}`: PNG of the window; `ui.render {path?, page?, scale?}`: page PNG
 //!   (without `path`, both reply with the PNG as base64 `png`)
 //! - `ui.parity`: feature catalog parity
+//!
+//! `engine.execute`, `document.inspect` and `ui.render` take `doc`, the id of an open document
+//! (`view.switchWindows` lists them): they work on that document while the window keeps showing
+//! the active one. Without `doc` they work on the active document.
 
 use std::sync::mpsc::Sender;
 
@@ -47,7 +51,7 @@ fn err(e: impl std::fmt::Display) -> Outcome {
 }
 
 pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
-    let r = ctx.content_rect();
+    let r = ctx.input_for(app.active_viewport(), |i| i.content_rect());
     let caret = crate::canvas::caret_screen(app).map(|(p, h)| json!({"x": p.x, "y": p.y, "h": h}));
     json!({
         "ui": app.prefs(),
@@ -63,6 +67,8 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
         "focused": app.canvas.focused,
         "title": app.title_stem(),
         "dirty": app.session.dirty,
+        "document": app.session.document_id(),
+        "documents": app.session.documents(),
         "perf": {"frameMs": app.frame_ms, "renderMs": app.canvas.render_ms, "layoutMs": app.session.layout().ms},
     })
 }
@@ -115,21 +121,102 @@ pub(crate) fn close_refused(app: &WordApp, id: &str, params: &Value) -> Option<&
         return None;
     }
     if id == "file.close" && app.session.dirty {
-        return Some("the document has unsaved changes: save it first, or pass {\"force\": true} to discard them and close");
+        return Some(UNSAVED);
     }
     // Comment text still being typed is unsaved work too (#1348): replacing the document would drop it.
     (crate::discards_document(id, params) && crate::panes::has_comment_drafts(app))
         .then_some("a comment is still being edited: finish it first, or pass {\"force\": true} to discard it")
 }
 
+const UNSAVED: &str = "the document has unsaved changes: save it first, or pass {\"force\": true} to discard them and close";
+
 /// The reply to a request that needs a document while none is open (#1129).
 const NO_DOCUMENT: &str = "no document is open; create one (file.new) or open one (file.open) first";
+
+/// The methods that take `doc`.
+const DOC_METHODS: &[&str] = &["engine.execute", "command", "document.inspect", "ui.render"];
+
+/// The open document other than the active one that a request's `doc` names; `None` for the
+/// active document (no `doc`, null, or the active document's id). An id that names no open
+/// document is an error.
+fn addressed(app: &WordApp, p: &Value) -> Result<Option<u64>, String> {
+    let id = match p.get("doc") {
+        None | Some(Value::Null) => return Ok(None),
+        Some(v) => v.as_u64().ok_or("`doc` must be the id of an open document (view.switchWindows lists them)")?,
+    };
+    if !app.session.is_open(id) {
+        return Err(format!("no open document has id {id}"));
+    }
+    Ok((id != app.session.document_id()).then_some(id))
+}
+
+/// The reply to work run on another document: its result, or why it couldn't run or failed.
+fn reply<E: std::fmt::Display, F: std::fmt::Display>(r: Result<Result<Value, E>, F>) -> Outcome {
+    match r {
+        Ok(Ok(v)) => ok(v),
+        Ok(Err(e)) => err(e),
+        Err(e) => err(e),
+    }
+}
+
+/// A document method addressed to open document `doc`, which isn't the active one: it runs on
+/// that document, and the window keeps showing the active one.
+fn handle_in(app: &mut WordApp, doc: u64, method: &str, p: &Value) -> Outcome {
+    if app.no_document == Some(doc) {
+        return err(NO_DOCUMENT);
+    }
+    match method {
+        "document.inspect" => reply(app.session.with_document(doc, |s| s.run("document.inspect", p))),
+        "ui.render" => {
+            let page = p.get("page").and_then(Value::as_u64).unwrap_or(1);
+            let scale = p.get("scale").and_then(Value::as_f64).map_or(2.0, |v| v as f32);
+            let path = p.get("path").and_then(Value::as_str);
+            let r = app.session.with_document(doc, |s| match path {
+                Some(path) => s.run("file.exportPng", &json!({"path": path, "page": page, "scale": scale})).map_err(|e| e.to_string()),
+                None => render_png(s, page, scale),
+            });
+            reply(r)
+        }
+        _ => {
+            let Some(id) = p.get("command").or(p.get("id")).and_then(Value::as_str) else { return err("missing `command`") };
+            let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            if id.starts_with("ui.") {
+                return err(format!("`{id}` works on the window: make the document active first (view.switchWindows {{\"id\": {doc}}})"));
+            }
+            // Close, with the same guard as the window's: unsaved changes need `force`.
+            if id == "file.close" {
+                let force = params.get("force").and_then(Value::as_bool) == Some(true);
+                if !force && app.session.documents().iter().any(|d| d.id == doc && d.dirty) {
+                    return err(UNSAVED);
+                }
+                return match app.session.close_document(doc) {
+                    Ok(()) => ok(json!({"closed": true, "id": doc, "documents": app.session.documents()})),
+                    Err(e) => err(e),
+                };
+            }
+            let r = app.session.with_document(doc, |s| s.run(id, &params));
+            // UI requests the command made carry `document`, so the window can tell they aren't
+            // about the document it shows.
+            for req in std::mem::take(&mut app.session.ui_requests) {
+                app.handle_request(&req);
+            }
+            reply(r)
+        }
+    }
+}
 
 /// Dispatches one JSON-lines control request: commands and inspection, parity, synthetic click,
 /// drag, key, wheel and text input, screenshots and renders, resize, focus and quit, and unknown
 /// ids as commands. It refuses closing unsaved work and document operations without a document.
 pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> Outcome {
     let p = &req.params;
+    if DOC_METHODS.contains(&req.method.as_str()) {
+        match addressed(app, p) {
+            Ok(Some(doc)) => return handle_in(app, doc, &req.method, p),
+            Ok(None) => {}
+            Err(e) => return err(e),
+        }
+    }
     let s = |k: &str| p.get(k).and_then(Value::as_str);
     let f = |k: &str| p.get(k).and_then(Value::as_f64).map(|v| v as f32);
     match req.method.as_str() {
@@ -268,7 +355,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
                 },
                 // No path: the PNG travels in the reply. Never a fixed name in the shared
                 // temporary folder, where another user could have planted a link to a file.
-                None => match render_png(app, page, scale) {
+                None => match render_png(&app.session, page, scale) {
                     Ok(v) => ok(v),
                     Err(e) => err(e),
                 },
@@ -281,11 +368,11 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             let Some(size) = crate::window_geometry::requested_size(egui::vec2(w, h), max_side) else {
                 return err("width and height must be positive numbers no larger than 3.4e38");
             };
-            ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
+            ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::InnerSize(size));
             ok(json!({"width": size.x, "height": size.y}))
         }
         "ui.focus" => {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            ctx.send_viewport_cmd_to(app.active_viewport(), egui::ViewportCommand::Focus);
             app.canvas.want_focus = true;
             ok(json!({}))
         }
@@ -308,11 +395,11 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
 
 /// A page rendered by the engine, as base64 PNG in the reply (the same shape as the headless
 /// MCP server's `ui.render`).
-fn render_png(app: &WordApp, page: u64, scale: f32) -> Result<Value, String> {
+fn render_png(session: &wordcraft_engine::Session, page: u64, scale: f32) -> Result<Value, String> {
     let page = usize::try_from(page.max(1)).unwrap_or(usize::MAX).saturating_sub(1);
-    let l = app.session.export_layout();
-    let pg = l.pages.get(page).ok_or_else(|| format!("no page {}", page + 1))?;
-    let img = wordcraft_render::render_page(&app.session.doc, pg, scale.clamp(0.1, 8.0), &Default::default());
+    let l = session.export_layout();
+    let pg = l.pages.get(page).ok_or_else(|| format!("no page {}", page.saturating_add(1)))?;
+    let img = wordcraft_render::render_page(&session.doc, pg, scale.clamp(0.1, 8.0), &Default::default());
     let png = img.to_png();
     Ok(json!({"png": wordcraft_engine::cmd::insert::base64_encode(&png), "width": img.width, "height": img.height, "pages": l.pages.len()}))
 }
@@ -369,20 +456,29 @@ impl SurfaceGeometry {
     /// Derives this frame's capturable surface from raw viewport data, rejecting a missing, non-finite
     /// or zero-sized visible surface and recording minimized or occluded state.
     pub(crate) fn from_raw(raw: &egui::RawInput, ctx: &egui::Context) -> Option<Self> {
-        let viewport = raw.viewports.get(&raw.viewport_id)?;
+        Self::from_viewport(raw.viewports.get(&raw.viewport_id)?, raw.screen_rect, raw.max_texture_side, ctx)
+    }
+
+    /// [`Self::from_raw`] for one viewport's info, content rectangle and texture limit.
+    pub(crate) fn from_viewport(
+        viewport: &egui::ViewportInfo,
+        screen_rect: Option<egui::Rect>,
+        max_texture_side: Option<usize>,
+        ctx: &egui::Context,
+    ) -> Option<Self> {
         let minimized = viewport.minimized == Some(true);
         let occluded = viewport.occluded == Some(true);
         // A minimized/occluded surface may report no rectangle at all. Its stale size is harmless
         // because such a surface is never capturable; a visible surface without a rectangle is not
         // fresh enough to use.
-        let rect = match viewport.inner_rect.or(raw.screen_rect) {
+        let rect = match viewport.inner_rect.or(screen_rect) {
             Some(rect) => rect,
             None if minimized || occluded => ctx.content_rect(),
             None => return None,
         };
         let zoom = ctx.zoom_factor();
         let pixels_per_point = viewport.native_pixels_per_point.map_or_else(|| ctx.pixels_per_point(), |native| native * zoom);
-        let max_texture_side = raw.max_texture_side.filter(|side| *side > 0).unwrap_or_else(|| ctx.input(|i| i.max_texture_side));
+        let max_texture_side = max_texture_side.filter(|side| *side > 0).unwrap_or_else(|| ctx.input(|i| i.max_texture_side));
         if !rect.width().is_finite() || !rect.height().is_finite() || rect.width() <= 0.0 || rect.height() <= 0.0 {
             return None;
         }
@@ -392,9 +488,10 @@ impl SurfaceGeometry {
         Some(Self { viewport: rect.size(), pixels_per_point, max_texture_side, minimized, occluded })
     }
 
-    /// Pairs the surface geometry with the document id a capture belongs to.
-    pub(crate) fn with_document(self, document: u64) -> CaptureGeometry {
-        CaptureGeometry { surface: self, document }
+    /// Pairs the surface geometry with the window's viewport and the document id a capture
+    /// belongs to.
+    pub(crate) fn with_target(self, viewport: egui::ViewportId, document: u64) -> CaptureGeometry {
+        CaptureGeometry { surface: self, viewport, document }
     }
 }
 
@@ -404,6 +501,8 @@ impl SurfaceGeometry {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct CaptureGeometry {
     surface: SurfaceGeometry,
+    /// The active window's viewport, which the capture command goes to.
+    viewport: egui::ViewportId,
     document: u64,
 }
 
@@ -411,6 +510,18 @@ impl CaptureGeometry {
     /// Returns the document id the capture was admitted for.
     pub(crate) fn document(self) -> u64 {
         self.document
+    }
+
+    /// Why a capture admitted for `viewport` and `document` can't go on against this geometry:
+    /// another window was brought forward, or the window shows another document.
+    fn moved_reason(self, viewport: egui::ViewportId, document: u64) -> Option<&'static str> {
+        if self.viewport != viewport {
+            Some("screenshot failed: another window was brought forward while the capture was queued")
+        } else if self.document != document {
+            Some("screenshot failed: the document changed while the capture was queued")
+        } else {
+            None
+        }
     }
 
     /// Explains why the surface cannot be captured, when it is minimized or fully occluded, and
@@ -482,6 +593,9 @@ pub(crate) struct Shot {
     pub(crate) retries: u32,
     /// The document the request was admitted for. It never changes; a document switch cancels.
     pub(crate) document: u64,
+    /// The viewport of the window the request was admitted for. It never changes; bringing
+    /// another window forward cancels.
+    pub(crate) viewport: egui::ViewportId,
     pub(crate) geometry: CaptureGeometry,
     pub(crate) epoch: u64,
     pub(crate) expected: [usize; 2],
@@ -536,6 +650,8 @@ fn next_token(app: &mut WordApp) -> u64 {
 /// earlier request.
 pub(crate) fn admit_screenshot(app: &mut WordApp, ctx: &egui::Context, path: Option<String>, reply: Sender<Value>) {
     let token = next_token(app);
+    // An earlier request in this batch may have brought another window forward.
+    app.refresh_capture_geometry(ctx);
     let Some(geometry) = app.capture_geometry.map(|g| CaptureGeometry { document: app.session.document_id(), ..g }) else {
         reject_shot(reply, token, "screenshot failed: the window geometry is not known yet");
         return;
@@ -597,6 +713,7 @@ pub(crate) fn admit_screenshot(app: &mut WordApp, ctx: &egui::Context, path: Opt
         issued: false,
         retries: 0,
         document: geometry.document(),
+        viewport: geometry.viewport,
         geometry,
         epoch: app.capture_epoch,
         expected,
@@ -621,7 +738,8 @@ pub(crate) fn issue_screenshots(app: &mut WordApp, ctx: &egui::Context) {
             let shot = &app.shots.requests[i];
             (shot.issued, shot.ready_at, shot.frames)
         };
-        if issued {
+        // Each window issues its own captures, from a pass that drew its layout.
+        if issued || app.shots.requests[i].viewport != ctx.viewport_id() {
             continue;
         }
         let frames = if first_pass { frames.saturating_add(1) } else { frames };
@@ -637,8 +755,8 @@ pub(crate) fn issue_screenshots(app: &mut WordApp, ctx: &egui::Context) {
             failures.push((i, format!("screenshot failed: {reason} while the capture was queued")));
             continue;
         }
-        if current.document() != app.shots.requests[i].document {
-            failures.push((i, "screenshot failed: the document changed while the capture was queued".into()));
+        if let Some(reason) = current.moved_reason(app.shots.requests[i].viewport, app.shots.requests[i].document) {
+            failures.push((i, reason.into()));
             continue;
         }
         let Some(expected) = current.expected_size() else {
@@ -675,7 +793,7 @@ pub(crate) fn issue_screenshots(app: &mut WordApp, ctx: &egui::Context) {
         shot.bytes = bytes;
         shot.epoch = epoch;
         if let Some(callback) = shot.callback.take() {
-            ctx.send_viewport_cmd_to(shot.viewport(), egui::ViewportCommand::Screenshot(callback));
+            ctx.send_viewport_cmd_to(shot.viewport, egui::ViewportCommand::Screenshot(callback));
             shot.issued = true;
         }
     }
@@ -688,13 +806,6 @@ pub(crate) fn issue_screenshots(app: &mut WordApp, ctx: &egui::Context) {
     }
     if app.shots.in_flight() {
         ctx.request_repaint_after(std::time::Duration::from_millis(16));
-    }
-}
-
-impl Shot {
-    /// The screenshot callback's viewport: the root window.
-    fn viewport(&self) -> egui::ViewportId {
-        egui::ViewportId::ROOT
     }
 }
 
@@ -763,6 +874,13 @@ fn take_screenshot_action(app: &mut WordApp, index: usize, now: f64, current: Op
             }
             return ShotAction::Remove(error_reply(shot.token, "no frame was presented before the screenshot timeout"));
         }
+        // Before the issue check: a window that closed never draws to issue its capture.
+        if let Some(reason) = current.and_then(|geometry| geometry.moved_reason(shot.viewport, shot.document)) {
+            if let Some(slot) = shot.slot.take() {
+                slot.cancel();
+            }
+            return ShotAction::Remove(error_reply(shot.token, reason));
+        }
         if !shot.issued {
             return ShotAction::Keep;
         }
@@ -771,12 +889,6 @@ fn take_screenshot_action(app: &mut WordApp, index: usize, now: f64, current: Op
                 slot.cancel();
             }
             return ShotAction::Remove(error_reply(shot.token, format!("screenshot failed: {reason} while the capture was pending")));
-        }
-        if current.is_some_and(|geometry| geometry.document() != shot.document) {
-            if let Some(slot) = shot.slot.take() {
-                slot.cancel();
-            }
-            return ShotAction::Remove(error_reply(shot.token, "screenshot failed: the document changed while the capture was queued"));
         }
         shot.slot.as_ref().and_then(|slot| slot.take())
     };
@@ -993,7 +1105,7 @@ mod tests {
 
     /// Builds a capture geometry fixture for document id 7.
     fn geometry(viewport: egui::Vec2, pixels_per_point: f32, max_texture_side: usize) -> CaptureGeometry {
-        CaptureGeometry { surface: surface(viewport, pixels_per_point, max_texture_side), document: 7 }
+        CaptureGeometry { surface: surface(viewport, pixels_per_point, max_texture_side), viewport: egui::ViewportId::ROOT, document: 7 }
     }
 
     /// Creates a black test image of the given size.
@@ -1118,3 +1230,7 @@ mod screenshot_tests {
         assert!(!outside.exists());
     }
 }
+
+#[cfg(test)]
+#[path = "control_tests.rs"]
+mod doc_tests;

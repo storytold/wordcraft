@@ -631,19 +631,19 @@ impl Ctx {
             last_gid = Some(g.gid);
         }
         b.w = x;
-        // Character boundaries: where the first glyph of each character starts.
+        // Character boundaries: where the first glyph of each character starts. The glyph for a
+        // boundary is never before the previous boundary's, so one walk of the glyphs finds all.
         let mut cuts = Vec::with_capacity(text.len() + 1);
+        let (mut j, mut gx) = (0usize, 0.0f32);
         for (cb, _) in text.char_indices() {
-            let mut gx = 0.0f32;
-            let mut found = None;
-            for g in &shaped {
-                if g.cluster >= cb {
-                    found = Some(gx);
-                    break;
-                }
+            while let Some(g) = shaped.get(j)
+                && g.cluster < cb
+            {
+                crate::work::steps(1);
                 gx += g.x_advance as f32 * k;
+                j += 1;
             }
-            cuts.push(found.unwrap_or(x));
+            cuts.push(if j < shaped.len() { gx } else { x });
         }
         cuts.push(x);
         b.cuts = cuts;
@@ -2373,5 +2373,16 @@ mod tests {
                 assert!(m.width.is_finite() && m.descent.is_finite());
             }
         }
+    }
+
+    /// Finding 23: each character's boundary in a run of text was found by walking the run's
+    /// glyphs from the first.
+    #[test]
+    fn a_long_text_run_lays_out_in_linear_time() {
+        use crate::tests_linear::assert_linear_steps;
+        use wordcraft_doc::math::*;
+        let eq = |n: usize| Math { nodes: vec![MNode::Run(MRun { nor: true, ..MRun::new("a".repeat(n)) })], ..Default::default() };
+        let lay = |m: &Math| drop(std::hint::black_box(lay_in(m, "", false, 1e6, &MathProps::default())));
+        assert_linear_steps("math text run", 400, eq, lay);
     }
 }

@@ -1396,27 +1396,13 @@ fn clear_background(rgba: &mut image::RgbaImage, tol: f32) -> usize {
         !seen.get(at(x, y)).copied().unwrap_or(true) && rgba.get_pixel_checked(x, y).is_some_and(|p| close(p.0))
     };
     let mut seen = vec![false; (w as usize) * (h as usize)];
-    let mut stack: Vec<(u32, u32)> = Vec::new();
-    for x in 0..w {
-        stack.push((x, 0));
-        stack.push((x, h - 1));
-    }
-    for y in 0..h {
-        stack.push((0, y));
-        stack.push((w - 1, y));
-    }
+    let mut stack = border_pixels(w, h);
     let mut most = stack.len();
     while let Some((x, y)) = stack.pop() {
         if !open(rgba, &seen, x, y) {
             continue;
         }
-        let (mut x0, mut x1) = (x, x);
-        while x0 > 0 && open(rgba, &seen, x0 - 1, y) {
-            x0 -= 1;
-        }
-        while x1 + 1 < w && open(rgba, &seen, x1 + 1, y) {
-            x1 += 1;
-        }
+        let (x0, x1) = run_span(x, y, w, |xi, yi| open(rgba, &seen, xi, yi));
         for xi in x0..=x1 {
             if let Some(s) = seen.get_mut(at(xi, y)) {
                 *s = true;
@@ -1426,21 +1412,52 @@ fn clear_background(rgba: &mut image::RgbaImage, tol: f32) -> usize {
             }
         }
         for ny in [y.checked_sub(1), y.checked_add(1).filter(|&n| n < h)].into_iter().flatten() {
-            let mut xi = x0;
-            while xi <= x1 {
-                if open(rgba, &seen, xi, ny) {
-                    stack.push((xi, ny));
-                    while xi <= x1 && open(rgba, &seen, xi, ny) {
-                        xi += 1;
-                    }
-                } else {
-                    xi += 1;
-                }
-            }
+            push_open_runs(&mut stack, x0, x1, ny, |xi, yi| open(rgba, &seen, xi, yi));
         }
         most = most.max(stack.len());
     }
     most
+}
+
+/// Every pixel on the image's edge, the flood-fill seeds.
+fn border_pixels(w: u32, h: u32) -> Vec<(u32, u32)> {
+    let mut stack = Vec::new();
+    for x in 0..w {
+        stack.push((x, 0));
+        stack.push((x, h - 1));
+    }
+    for y in 0..h {
+        stack.push((0, y));
+        stack.push((w - 1, y));
+    }
+    stack
+}
+
+/// The horizontal run of open pixels around `(x, y)`, both ends included.
+fn run_span(x: u32, y: u32, w: u32, open: impl Fn(u32, u32) -> bool) -> (u32, u32) {
+    let (mut x0, mut x1) = (x, x);
+    while x0 > 0 && open(x0 - 1, y) {
+        x0 -= 1;
+    }
+    while x1 + 1 < w && open(x1 + 1, y) {
+        x1 += 1;
+    }
+    (x0, x1)
+}
+
+/// Queues the first pixel of each open run in row `ny` between `x0` and `x1`.
+fn push_open_runs(stack: &mut Vec<(u32, u32)>, x0: u32, x1: u32, ny: u32, open: impl Fn(u32, u32) -> bool) {
+    let mut xi = x0;
+    while xi <= x1 {
+        if open(xi, ny) {
+            stack.push((xi, ny));
+            while xi <= x1 && open(xi, ny) {
+                xi += 1;
+            }
+        } else {
+            xi += 1;
+        }
+    }
 }
 
 fn frame(img: image::DynamicImage, border: u32, color: [u8; 4]) -> Result<image::DynamicImage, CmdError> {

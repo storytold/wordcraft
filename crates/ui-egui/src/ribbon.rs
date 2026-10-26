@@ -2354,6 +2354,16 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
+        menu_button(
+            ui,
+            app,
+            "switchWindows",
+            Some("Switch\nWindows"),
+            "Switch Windows",
+            true,
+            "view.switchWindows",
+            crate::documents::switch_windows_menu,
+        );
         // The Full Screen button carries its name for assistive technology (and for the
         // regression test that clicks it): big buttons are otherwise drawn unlabeled. Its
         // enabled state is the command's own, as every other ribbon control reports: the
