@@ -114,7 +114,7 @@ pub(crate) fn close_refused(app: &WordApp, id: &str, params: &Value) -> Option<&
     if force {
         return None;
     }
-    if id == "file.close" && app.session.dirty {
+    if crate::discards_document(id, params) && (app.session.dirty || app.save_unconfirmed()) {
         return Some("the document has unsaved changes: save it first, or pass {\"force\": true} to discard them and close");
     }
     // Comment text still being typed is unsaved work too (#1348): replacing the document would drop it.
@@ -150,6 +150,7 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
                 .map(|c| json!({"id": c.id, "label": c.label, "location": c.location, "shortcut": c.shortcut, "params": c.params, "enabled": app.session.why_disabled(c.id).is_none()}))
                 .collect();
             commands.extend(crate::printing::commands(app));
+            commands.extend(crate::document_tabs::commands(app));
             let search = s("search").unwrap_or("").to_ascii_lowercase();
             if !search.is_empty() {
                 commands.retain(|command| {
@@ -290,6 +291,12 @@ pub fn handle(app: &mut WordApp, ctx: &egui::Context, req: &ControlRequest) -> O
             ok(json!({}))
         }
         "app.quit" => {
+            if app.any_dirty_documents() && p.get("force").and_then(Value::as_bool) != Some(true) {
+                return err("documents have unsaved work; save first or pass force: true");
+            }
+            if app.printing.busy() {
+                return err("wait for the print job to finish submitting");
+            }
             app.quit_requested = true;
             ok(json!({}))
         }

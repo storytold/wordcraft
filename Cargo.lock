@@ -6913,7 +6913,6 @@ dependencies = [
  "egui",
  "js-sys",
  "log",
- "rfd",
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-futures",

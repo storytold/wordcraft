@@ -216,7 +216,7 @@ fn recovery_page(app: &mut WordApp, ui: &mut Ui) {
 
 /// The Backstage pages that work while no document is open (#1129).
 fn works_without_document(page: &str) -> bool {
-    matches!(page, "home" | "new" | "open" | "options")
+    matches!(page, "home" | "new" | "open" | "recover" | "options")
 }
 
 fn heading(ui: &mut Ui, s: &str) {
@@ -329,6 +329,9 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
 fn new_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     heading(ui, "New");
+    if app.services.document_window.is_some() && ui.button(tl!("New Window")).clicked() {
+        let _ = app.run("ui.newWindow", json!({}));
+    }
     let id = egui::Id::unique("backstage_template_search");
     let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
     let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
@@ -834,7 +837,7 @@ mod tests {
     #[cfg(not(target_arch = "wasm32"))]
     fn recovery_app() -> (WordApp, std::path::PathBuf) {
         let (mut app, root) = recovery_fixture();
-        app.session.enable_recovery(root.clone(), std::sync::Arc::new(|| {})).unwrap();
+        app.enable_recovery(root.clone(), std::sync::Arc::new(|| {})).unwrap();
         (app, root)
     }
 
@@ -858,7 +861,7 @@ mod tests {
         );
         h.run_steps(4);
         poll.set(false);
-        h.state_mut().session.enable_recovery(root.to_path_buf(), std::sync::Arc::new(|| {})).unwrap();
+        h.state_mut().enable_recovery(root.to_path_buf(), std::sync::Arc::new(|| {})).unwrap();
         assert!(!h.state().session.recovery_ready());
         (h, poll)
     }
@@ -1038,29 +1041,74 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn recovery_restore_uses_save_changes_and_resets_autosave_permission() {
+    fn typing_before_the_recovery_scan_finishes_cancels_restoration() {
+        let (mut app, root) = recovery_app();
+        let ctx = egui::Context::default();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !app.session.recovery_ready() || app.session.recovery_busy() {
+            app.tick_recovery(&ctx);
+            assert!(std::time::Instant::now() < end);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let id = app.session.recovery_documents()[0].id.clone();
+        app.run("file.recover", json!({"restore": id})).unwrap();
+        app.run("text.insert", json!({"text": "Writing typed before the recovery scan finishes"})).unwrap();
+        app.tick_recovery(&ctx);
+        assert!(app.pending_restores.is_empty());
+        assert_eq!(app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Writing typed before the recovery scan finishes");
+        assert!(app.session.dirty && app.session.path.is_none());
+        assert!(app.status_msg.as_ref().is_some_and(|(message, _)| message.contains("Recovery cancelled")));
+        app.finish_recovery();
+        drop(app);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recovery_restore_from_start_replaces_only_the_placeholder() {
+        let (mut app, root) = recovery_app();
+        app.start_screen();
+        let mut h = recovery_harness(app);
+        settle_recovery(&mut h);
+        assert!(!h.state().has_document());
+        h.get_by_label("Restore").click();
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !h.state().session.dirty {
+            h.run_steps(2);
+            assert!(std::time::Instant::now() < end, "restoration from Start must finish");
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(h.state().document_tabs().len(), 1);
+        assert!(h.state().has_document() && h.state().session.path.is_none());
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Recovered synthetic work");
+        drop(h);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn recovery_restore_opens_an_unsaved_tab_and_preserves_current_work() {
         let (app, root) = recovery_app();
         let mut h = recovery_harness(app);
         settle_recovery(&mut h);
         h.state_mut().execute("text.insert", json!({"text": "Current unsaved work"})).unwrap();
+        let original = h.state().active_document_tab();
         h.state_mut().autosave_path = Some(root.join("must-not-write.docx"));
         h.state_mut().run("file.recover", json!({})).unwrap();
         h.run_steps(4);
-        assert_eq!(h.state().session.recovery_documents().len(), 1);
         h.get_by_label("Restore").click();
-        h.run_steps(4);
-        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
-        h.get_by_label("Cancel").click();
-        h.run_steps(4);
-        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Current unsaved work");
-        h.get_by_label("Restore").click();
-        h.run_steps(4);
-        h.get_by_label("Don't Save").click();
         settle_recovery(&mut h);
-        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Recovered synthetic work");
+        let end = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body) != "Recovered synthetic work" {
+            assert!(std::time::Instant::now() < end);
+            h.run_steps(2);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
         assert!(h.state().session.dirty && h.state().session.path.is_none());
         assert!(h.state().autosave_path.is_none());
         assert!(!h.state().ui.backstage);
+        assert!(h.state_mut().switch_document_tab(original));
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Current unsaved work");
         assert!(!root.join("must-not-write.docx").exists());
         drop(h);
         let _ = std::fs::remove_dir_all(root);
@@ -1177,32 +1225,23 @@ mod tests {
     /// A personal template replaces the document like New does: unsaved changes are asked about
     /// first, and nothing is replaced until that is answered.
     #[test]
-    fn a_personal_template_asks_about_unsaved_changes_first() {
+    fn a_personal_template_opens_a_tab_and_keeps_unsaved_changes() {
         let dir = personal_dir("dirty");
         let memo = dir.join("Memo.dotx");
         write_template(&memo, "From the template");
         let mut h = new_page_harness(Some(dir.clone()));
         h.state_mut().run("document.setText", json!({"text": "Unsaved work"})).unwrap();
-        assert!(h.state().session.dirty);
+        let original = h.state().active_document_tab();
         h.get_by_label("Memo").click();
         h.run_steps(3);
-        let body = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "Save changes is asked");
-        assert_eq!(body(&h), "Unsaved work", "the document stays until the question is answered");
-        h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-        h.run_steps(2);
-        assert_eq!(body(&h), "Unsaved work", "Cancel keeps it");
-        assert_eq!(h.state().session.doc.settings.attached_template, None);
-        h.state_mut().run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
-        h.run_steps(3);
-        h.get_by_label("Memo").click();
-        h.run_steps(3);
-        h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        h.run_steps(2);
-        assert!(body(&h).contains("From the template"), "Don't Save makes the document from the template");
+        assert!(h.state().dialog.is_none());
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("From the template"));
         assert_eq!(h.state().session.doc.settings.attached_template.as_deref(), Some(memo.to_string_lossy().as_ref()));
+        assert!(h.state_mut().switch_document_tab(original));
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Unsaved work");
+        assert!(h.state().session.dirty);
         drop(h);
-        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     /// The templates folder is read when New is shown and on Refresh, not on every frame.

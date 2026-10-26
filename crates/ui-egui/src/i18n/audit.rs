@@ -88,8 +88,8 @@ fn ribbon_controls(ctx: &egui::Context) -> Vec<egui::Pos2> {
             .filter(|w| w.enabled && w.sense.senses_click())
             .collect();
         let page_top = widgets.iter().max_by(|a, b| a.rect.area().total_cmp(&b.rect.area())).map_or(f32::INFINITY, |w| w.rect.min.y);
-        // The tab row ends where the ribbon's first group label row starts; tabs sit near y = 53.
-        let tabs_bottom = 64.0;
+        // Exclude the document strip and ribbon tab row before auditing ribbon controls.
+        let tabs_bottom = 99.0;
         widgets.iter().filter(|w| w.rect.width() < 300.0).map(|w| w.rect.center()).filter(|c| c.y > tabs_bottom && c.y < page_top).collect()
     })
 }
@@ -148,6 +148,7 @@ impl<'a> Exempt<'a> {
         note_global_names();
         let mut names: std::collections::HashSet<String> = GLOBAL_NAMES.with_borrow(Clone::clone);
         names.extend(app.session.doc.styles.styles.iter().map(|s| s.name.clone()));
+        names.extend(app.document_tabs().into_iter().map(|tab| tab.name));
         // Fonts a document asks for, installed or not (Aptos is drawn with a substitute).
         names.extend([wordcraft_doc::styles::BODY_FONT, wordcraft_doc::styles::HEADING_FONT].map(str::to_string));
         // The selected SmartArt graphic's items (the Text Pane): document content.
@@ -181,7 +182,7 @@ impl<'a> Exempt<'a> {
     /// names and fixed tokens.
     fn allows(&self, app: &WordApp, text: &str) -> bool {
         let plain = pseudo::unmarked(text);
-        let plain = plain.trim().trim_end_matches(" —").trim();
+        let plain = plain.trim().trim_end_matches(" —").trim_end_matches(" •").trim();
         let is_shortcut =
             || plain.split('+').all(|k| matches!(k, "Ctrl" | "Shift" | "Alt" | "Cmd" | "Esc" | "Tab" | "Enter") || k.chars().count() <= 3);
         // A command's error message in the status bar: commands answer scripts and MCP too, so

@@ -15,6 +15,7 @@ mod apple_events;
 mod clipboard;
 mod control_server;
 mod default_apps;
+mod document_windows;
 mod file_dialogs;
 #[cfg(any(target_os = "windows", target_os = "macos", test))]
 mod graphics;
@@ -39,6 +40,7 @@ struct App(
     Option<WindowGeometry>,
     Option<control_server::KeyFile>,
     file_dialogs::Launcher,
+    document_windows::Launcher,
     // The host's answer for this frame. `InputState` still describes the last painted frame on
     // a hidden logic tick.
     RawWindowState,
@@ -51,10 +53,11 @@ impl eframe::App for App {
     /// on unsaved changes and active printing.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.5, &mut self.0, ctx);
+        apple_events::poll(&self.6, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
-        let window = self.4;
+        self.4.poll();
+        let window = self.5;
         // A window that doesn't fit on its screen (the default size on a laptop) shrinks to fit
         // there, so all of the scroll bar can be dragged (#1215). Checked on the frame that first
         // knows the monitor: the off-screen check below takes the pending geometry then.
@@ -98,7 +101,7 @@ impl eframe::App for App {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
         // Keep this frame's native window state. `logic` must not read the last painted
         // `InputState` when a hidden Wayland tick reports no fresh inner rect.
-        self.4 = RawWindowState::from_raw(raw);
+        self.5 = RawWindowState::from_raw(raw);
         self.0.raw_input_hook(ctx, raw);
     }
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
@@ -107,7 +110,7 @@ impl eframe::App for App {
     }
     fn on_exit(&mut self) {
         print::finish_pending_jobs();
-        self.0.session.finish_recovery();
+        self.0.finish_recovery();
         save_prefs(&self.0);
         if let Some(key_file) = &self.2 {
             key_file.remove();
@@ -135,7 +138,7 @@ fn schedule_macos_terminate(app: &mut WordApp, key_file: Option<&control_server:
     log::info!("window close: quitting");
     // This path can bypass on_exit. Join the owned workers before termination and cleanup.
     print::finish_pending_jobs();
-    app.session.finish_recovery();
+    app.finish_recovery();
     save_prefs(app);
     if let Some(key_file) = key_file {
         key_file.remove();
@@ -225,7 +228,14 @@ fn save_prefs(app: &WordApp) {
             log::warn!("preferences: cannot create {}: {e}", dir.display());
             return;
         }
-        match serde_json::to_vec_pretty(&app.prefs()) {
+        let ui = match preferences_for_save(app, &p) {
+            Ok(ui) => ui,
+            Err(e) => {
+                log::warn!("preferences: cannot preserve workspace from {}: {e}", p.display());
+                return;
+            }
+        };
+        match serde_json::to_vec_pretty(&ui) {
             Ok(bytes) => {
                 if let Err(e) = write_prefs(&p, &bytes) {
                     log::warn!("preferences: cannot save {}: {e}", p.display());
@@ -234,6 +244,21 @@ fn save_prefs(app: &WordApp) {
             Err(e) => log::warn!("preferences: cannot serialize: {e}"),
         }
     }
+}
+
+/// Secondary windows keep the primary window's latest saved workspace, not their startup copy.
+fn preferences_for_save(app: &WordApp, path: &std::path::Path) -> std::io::Result<UiState> {
+    let mut ui = app.prefs();
+    if !app.persist_workspace {
+        ui.workspace = match std::fs::read(path) {
+            Ok(bytes) => {
+                UiState::from_json(&bytes).ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid preferences"))?.workspace
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Default::default(),
+            Err(e) => return Err(e),
+        };
+    }
+    Ok(ui)
 }
 
 /// Writes `bytes` to a sibling temporary file and renames it over `path`, so a failed or
@@ -284,10 +309,11 @@ const USAGE: &str = "\
 wordcraft — the WordCraft desktop app
 
 USAGE:
-  wordcraft [--sample] [--control PORT] [FILE…]
+  wordcraft [--sample] [--new-window] [--control PORT] [FILE…]
 
 OPTIONS:
   --sample            open the sample document
+  --new-window        open a blank window without restoring the saved workspace
   --control PORT      start the localhost control server on PORT, for agents and scripts
                       (or set WORDCRAFT_CONTROL_PORT); see docs/control-protocol.md
   --version           print the version
@@ -348,6 +374,7 @@ fn main() -> eframe::Result {
     let mut control_port: Option<u16> = std::env::var("WORDCRAFT_CONTROL_PORT").ok().and_then(|p| p.parse().ok());
     let mut files = Vec::new();
     let mut sample = false;
+    let mut new_window = false;
     let (args, other_files) = text_args();
     let mut bad_control: Option<Option<String>> = None;
     let mut args = args.into_iter().peekable();
@@ -362,6 +389,7 @@ fn main() -> eframe::Result {
                 }
             }
             "--sample" => sample = true,
+            "--new-window" => new_window = true,
             "--version" => {
                 println!("wordcraft {} ({})", env!("CARGO_PKG_VERSION"), build_sha());
                 return Ok(());
@@ -452,6 +480,7 @@ fn main() -> eframe::Result {
             let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
+            app.persist_workspace = !new_window;
             load_user_dictionary(&mut app);
             // A region chosen in File › Options replaces the system's for the first blank
             // document too (#838).
@@ -464,8 +493,9 @@ fn main() -> eframe::Result {
                 && let Some(dir) = wordcraft_control_key::settings_dir()
             {
                 let ctx = cc.egui_ctx.clone();
-                if let Err(e) = app.session.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint())) {
+                if let Err(e) = app.enable_recovery(dir.join("recovery"), std::sync::Arc::new(move || ctx.request_repaint())) {
                     log::warn!("local recovery unavailable: {e}");
+                    app.status(e);
                 }
             }
             app.ui.window = restored;
@@ -485,8 +515,13 @@ fn main() -> eframe::Result {
             // Nothing to open (no files, no sample, no control channel driving the editor): start
             // on File › Home, as Word does (#766), unless the Start screen option is off. Files
             // macOS hands over later open on top of it and close it (`apple_events`).
-            if files.is_empty() && other_files.is_empty() && !sample && control_port.is_none() {
+            if files.is_empty() && other_files.is_empty() && !sample && !new_window && control_port.is_none() && app.restore_workspace() == 0 {
                 app.start_screen();
+            }
+            let windows = document_windows::Launcher::default();
+            app.services.document_window = Some(windows.hook());
+            if (!files.is_empty() || !other_files.is_empty()) && !sample {
+                app.empty_window();
             }
             for f in files {
                 if let Err(e) = app.run("file.open", serde_json::json!({"path": f})) {
@@ -502,6 +537,7 @@ fn main() -> eframe::Result {
                 Some(restored.unwrap_or_default()),
                 key_file,
                 dialogs,
+                windows,
                 RawWindowState::default(),
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
@@ -579,6 +615,37 @@ mod tests {
 #[cfg(test)]
 mod prefs_tests {
     use super::write_prefs;
+
+    #[test]
+    fn secondary_window_preserves_the_latest_primary_workspace() {
+        use wordcraft_ui_egui::{Services, UiState, WordApp};
+        let dir = std::env::temp_dir().join(format!("wordcraft-secondary-prefs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("ui.json");
+        let mut primary = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        primary.run("file.new", serde_json::json!({})).unwrap();
+        let saved = primary.prefs();
+        write_prefs(&path, &serde_json::to_vec(&saved).unwrap()).unwrap();
+        let mut secondary = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+        secondary.apply_prefs(saved);
+        secondary.persist_workspace = false;
+        // Primary saves a newer workspace after the secondary window started.
+        primary.run("file.new", serde_json::json!({})).unwrap();
+        primary.pin_document_tab(0, true);
+        write_prefs(&path, &serde_json::to_vec(&primary.prefs()).unwrap()).unwrap();
+        secondary.session.author = "Secondary window author".into();
+        let ui = super::preferences_for_save(&secondary, &path).unwrap();
+        assert_eq!(serde_json::to_value(&ui.workspace).unwrap(), serde_json::to_value(primary.workspace_snapshot()).unwrap());
+        assert_eq!(ui.author, "Secondary window author");
+        write_prefs(&path, &serde_json::to_vec(&ui).unwrap()).unwrap();
+        assert_eq!(UiState::from_json(&std::fs::read(&path).unwrap()).unwrap().workspace.tabs.len(), 3);
+        std::fs::write(&path, b"invalid").unwrap();
+        assert!(super::preferences_for_save(&secondary, &path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), b"invalid");
+        std::fs::remove_file(&path).unwrap();
+        assert!(super::preferences_for_save(&secondary, &path).unwrap().workspace.tabs.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn failed_preferences_write_keeps_the_old_file_and_reports_the_error() {

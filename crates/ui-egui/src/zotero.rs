@@ -340,8 +340,10 @@ mod tests {
         let ctx = egui::Context::default();
         app.ctx = Some(ctx.clone());
         app.run("ui.zotero.addEditCitation", json!({})).unwrap();
-        app.run("file.new", json!({"template": "blank"})).unwrap();
+        assert!(app.run("file.new", json!({"template": "blank"})).is_err());
         pump(&mut app, &ctx, |a| a.zotero.busy.is_none());
+        assert!(app.session.doc.plain_text(StoryRef::Body).contains("(Sample, 2020)"));
+        app.run("file.new", json!({"template": "blank"})).unwrap();
         server.join().unwrap();
         assert_eq!(app.session.doc.plain_text(StoryRef::Body), "");
         assert!(!app.session.can_undo(), "the old command left no undo step in the new document");

@@ -1,12 +1,14 @@
 # Local document recovery
 
+> **Last reviewed:** 2026-10-26 · **Last updated:** 2026-10-26 · **Change:** minor (independent recovery for active and inactive document tabs)
+
 Desktop WordCraft periodically keeps a local copy of unsaved work, including new drafts.
 File › Recover lists available copies. The page opens at startup when copies are found,
 unless a document was explicitly created or opened before the startup scan completed.
 In particular, a window launched for New/Open keeps the requested document visible;
 older copies remain available through File › Recover. Recovery uses the regular interface
 palette so its labels and buttons stay readable in light and dark themes.
-Restore opens an unsaved document with no file path. Save As chooses where to keep it.
+Restore opens a new, unsaved tab with no file path, preserving current writing. Save As chooses where to keep it.
 Recovery never writes to the original document. AutoSave's permission to write to an earlier
 file is cleared on restore.
 
@@ -28,7 +30,7 @@ separate profile for isolated runs, including preferences, logs and control keys
 `WORDCRAFT_NO_PREFS` disables recovery as well as preferences. Headless engine/CLI sessions
 and the browser do not create recovery files implicitly.
 
-The desktop host checks for a dirty document every frame but snapshots at most once per ten
+The desktop host checks every active and inactive document session each frame but snapshots at most once per ten
 seconds, and only when its revision changes. It clones the shared document model for a bounded
 worker queue. Encoding, file I/O, full-document validation and discovery run on the worker.
 An unchanged document does not schedule repeated recovery repaints. The most recent edits can
@@ -70,7 +72,7 @@ interval, English fallback for new labels, and no cloud, version-history or brow
 and `savedAt`. `{"refresh":true}`, `{"restore":"id"}` and `{"discard":"id"}` queue worker
 operations. Poll until `busy` is false; inspect `error` for failure. A restore is cancelled if the
 document id or revision changes while it loads. Programmatic restores do not open dialogs;
-user restores over dirty work use the existing Save Changes prompt.
+UI restores open a new unsaved tab, leaving dirty work in its original tab.
 `ui.recoveryDiscard={"id":"id"}` opens confirmation; `{"answer":"discard"}` or
 `{"answer":"cancel"}` answers it.
 
@@ -86,10 +88,17 @@ after. No Microsoft Word operation is needed for this reliability test.
 
 The 2026-10-12 rebase retains main’s editable graphic models, native font setup, current
 options module, fixed-width Backstage and filename-aware Save As. The SIGKILL/restart
-observations above belong to the original contribution, not a rerun on this branch. Current
-validation executes the focused lifecycle and preservation tests in temporary profiles and
-all repository CI gates; no daily-driver recovery folder or native app is operated.
+observations above belong to the original contribution, not a rerun on this branch. The 2026-10-26 tabs verification repeats abrupt-process recovery
+in an isolated temporary profile and exercises the native app with synthetic documents. See
+[document-tabs-validation.md](document-tabs-validation.md). No daily-driver recovery folder
+is operated.
 
 The desktop host chooses the private recovery profile. Recovery commands accept known
 snapshot IDs, never file paths or a profile override. This internal store is separate from
 the automation roots that constrain opening and saving user documents.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-26 | minor | Recovery ticks every tab; restore opens a new unsaved tab without replacing current writing |

@@ -56,16 +56,27 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
 
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
+    Bound {
+        document: u64,
+        after: Box<AfterPick>,
+    },
     /// Open the picked document.
     OpenDocument,
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
     /// Save the document there, then carry on.
-    SaveAs { after: AfterSave, document: u64 },
+    SaveAs {
+        after: AfterSave,
+        document: u64,
+    },
     /// Save a copy there in this format (`pdf`, `docx`, `png`…).
-    Export { ext: String },
+    Export {
+        ext: String,
+    },
     /// Write the PDF of these print settings there (File › Print › Save these pages as PDF).
-    PrintPdf { settings: Value },
+    PrintPdf {
+        settings: Value,
+    },
     /// Load the picked CSV/TSV/text file or spreadsheet as the mail-merge recipients (#240, #334).
     Recipients,
     /// Add every picked font file (#582, #1789).
@@ -78,7 +89,9 @@ pub(crate) enum AfterPick {
     /// Organizer (#377).
     ForDialog,
     /// Put the picked document into the Compare dialog (original or revised, #412).
-    ComparePath { revised: bool },
+    ComparePath {
+        revised: bool,
+    },
 }
 
 /// What to do once Save As has written the document.
@@ -112,10 +125,38 @@ pub(crate) enum Asked {
     Done(Result<Value, String>),
 }
 
+impl AfterPick {
+    pub(crate) fn bind(self, document: u64) -> Self {
+        match self {
+            Self::Bound { .. } | Self::OpenDocument | Self::Font => self,
+            _ => Self::Bound { document, after: Box::new(self) },
+        }
+    }
+    fn continuation(&self) -> bool {
+        match self {
+            Self::Bound { after, .. } => after.continuation(),
+            Self::SaveAs { after: AfterSave::Continue { .. }, .. } => true,
+            _ => false,
+        }
+    }
+}
+
 impl WordApp {
+    pub(crate) fn file_dialog_is_continuation(&self) -> bool {
+        let pending = self.file_dialog.as_ref().is_some_and(|d| d.after.continuation());
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            pending || self.file_browser.open.as_ref().is_some_and(|b| b.after.continuation())
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            pending
+        }
+    }
+
     /// Whether a file dialog is open (its answer hasn't arrived yet), the host's or the built-in one.
     pub fn file_dialog_open(&self) -> bool {
-        self.file_dialog.is_some() || self.file_browser_open()
+        self.file_dialog.is_some() || self.web_pick.is_some() || self.file_browser_open()
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -131,6 +172,7 @@ impl WordApp {
     /// Ask the host for a file and do `after` with the answer: now for a blocking dialog, on a
     /// later frame for an asynchronous one. Ignored while another dialog is open.
     pub(crate) fn ask_file(&mut self, req: FileDialogRequest, after: AfterPick) -> Asked {
+        let after = after.bind(self.session.document_id());
         if self.file_dialog_open() {
             log::debug!("file dialog already open; ignoring {req:?}");
             self.status(tl!("A file dialog is already open."));
@@ -161,13 +203,17 @@ impl WordApp {
             Some(Err(TryRecvError::Disconnected)) => Ok(Vec::new()),
         };
         let d = self.file_dialog.take()?;
-        match answer {
+        let result = match answer {
             Ok(picked) => Some(self.finish_picks(d.after, picked)),
             Err(reason) => {
                 log::warn!("no system file dialog ({reason}); showing the built-in file browser");
                 self.dialog_unavailable(d.req, d.after)
             }
+        };
+        if let Some(Err(error)) = &result {
+            self.status(error.clone());
         }
+        result
     }
 
     /// Treat the system dialog the host is showing as cancelled, e.g. one that never showed up.
@@ -242,6 +288,30 @@ impl WordApp {
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
         match after {
+            AfterPick::Bound { document, after } => {
+                if document == self.session.document_id() {
+                    return self.finish_pick(*after, picked);
+                }
+                if !matches!(*after, AfterPick::SaveAs { .. }) {
+                    let message = tl!("File operation cancelled because its document is no longer active.").to_string();
+                    self.status(message.clone());
+                    return Err(message);
+                }
+                let previous = self.active_document_id();
+                let index = self
+                    .tabs
+                    .iter()
+                    .position(|t| t.as_ref().is_some_and(|t| t.session.document_id() == document))
+                    .ok_or("the document for this save has been closed")?;
+                if !self.switch_document_tab(index) {
+                    return Err("cannot finish save while a document dialog is open".into());
+                }
+                let result = self.finish_pick(*after, picked);
+                if let Some(index) = self.tab_ids.iter().position(|&id| id == previous) {
+                    self.switch_document_tab(index);
+                }
+                result
+            }
             AfterPick::OpenDocument => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
                 let r = self.run("file.open", json!({"path": path}));
@@ -350,6 +420,7 @@ impl WordApp {
                             return Err(self.save_failed(&error, then, params, document));
                         }
                         if !self.safely_saved(saved) || document != self.session.document_id() {
+                            self.cancel_close_sequence();
                             return Ok(json!({"done": false}));
                         }
                         self.execute_user(&then, params).map(|r| json!({"done": true, "result": r}))
@@ -442,25 +513,22 @@ impl WordApp {
     }
 
     pub(crate) fn open_dialog(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("document");
+        if self.ask_web_file("document") {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument);
     }
 
     pub(crate) fn pick_picture(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("picture");
+        if self.ask_web_file("picture") {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::Open { purpose: "picture".into() }, AfterPick::Picture);
     }
 
-    /// Pick a font file to add (Add Font…; web: it arrives through the inbox).
+    /// Pick a font file to add (Add Font…; web: a complete batch on its result channel).
     pub(crate) fn pick_font(&mut self) {
-        if let Some(f) = &self.services.open_async {
-            f("font");
+        if self.ask_web_file("font") {
             return;
         }
         let _ = self.ask_file(FileDialogRequest::OpenMany { purpose: "font".into() }, AfterPick::Font);
@@ -472,6 +540,68 @@ impl WordApp {
             f();
         } else {
             self.status(tl!("All system fonts are already available."));
+        }
+    }
+}
+
+/// A browser picker owns its complete result batch, independently of dropped files.
+pub(crate) struct PendingWebPick {
+    rx: Receiver<crate::PickedFiles>,
+    document: u64,
+    purpose: &'static str,
+}
+
+impl WordApp {
+    /// Returns whether the browser host handled the request, including refusing a second picker.
+    pub(crate) fn ask_web_file(&mut self, purpose: &'static str) -> bool {
+        let Some(show) = &self.services.open_async else { return false };
+        if self.file_dialog_open() {
+            self.status(tl!("A file dialog is already open."));
+            return true;
+        }
+        self.web_pick = Some(PendingWebPick { rx: show(purpose), document: self.session.document_id(), purpose });
+        self.recipient_list_pending = purpose == "recipients";
+        true
+    }
+
+    /// Complete or cancel exactly one picker; never route an answer through the drop inbox.
+    pub(crate) fn poll_web_pick(&mut self) {
+        let Some(pick) = &self.web_pick else { return };
+        let files = match pick.rx.try_recv() {
+            Ok(files) => files,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Vec::new(),
+        };
+        let Some(pick) = self.web_pick.take() else { return };
+        self.recipient_list_pending = false;
+        if files.is_empty() {
+            if pick.purpose == "picture" {
+                self.change_picture_target = None;
+            }
+            return;
+        }
+        if matches!(pick.purpose, "picture" | "recipients") && pick.document != self.session.document_id() {
+            self.status(tl!("File operation cancelled because its document is no longer active."));
+            return;
+        }
+        let mut placed_picture = false;
+        for (name, bytes) in files {
+            let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
+            let result = match pick.purpose {
+                "font" => self.run("font.add", json!({"name": name, "data": data})),
+                "recipients" => self.load_recipients(json!({"path": name, "data": data})),
+                "picture" => {
+                    self.caret_after_placed_picture(placed_picture);
+                    let result = self.insert_or_change_picture(json!({"data": data}));
+                    placed_picture = Self::placed_in_text(&result);
+                    result
+                }
+                _ => self.run("file.open", json!({"path": name, "data": data})),
+            };
+            match result {
+                Ok(_) => self.ui.backstage = false,
+                Err(error) => self.status(error),
+            }
         }
     }
 }
@@ -567,6 +697,7 @@ mod tests {
         let bytes = legacy_word_bytes();
         std::fs::write(&original, &bytes).unwrap();
         let (mut a, shown) = async_app();
+        a.empty_window();
         a.run("file.open", json!({"path": original.to_string_lossy()})).unwrap();
         a.run("text.insert", json!({"text": "Revised "})).unwrap();
         let draft = a.session.doc.clone();
@@ -624,6 +755,13 @@ mod tests {
             assert!(a.file_dialog_open());
             let previous = a.session.document_id();
             // Automation bypasses the user prompt and can replace a document during a picker.
+            if close {
+                assert!(a.execute("file.new", json!({})).is_err(), "save-before-close is document modal");
+                answer(&shown, None);
+                a.poll_file_dialog().unwrap().unwrap();
+                assert_eq!(std::fs::read(&destination).unwrap(), sentinel);
+                continue;
+            }
             a.execute("file.new", json!({})).unwrap();
             typed(&mut a);
             assert_ne!(previous, a.session.document_id());
@@ -631,7 +769,8 @@ mod tests {
             let revision = a.session.rev();
             answer(&shown, Some(&destination.to_string_lossy()));
             let _ = a.poll_file_dialog().unwrap();
-            assert!(std::fs::read(&destination).unwrap() == sentinel, "stale picker overwrote the destination");
+            let saved = wordcraft_engine::io::open_path(&destination).unwrap();
+            assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Legacy contract"), "the original tab was saved");
             assert_eq!(std::fs::read(&original).unwrap(), bytes);
             assert_eq!(a.session.doc, draft);
             assert_eq!(a.session.rev(), revision);
@@ -960,14 +1099,15 @@ mod tests {
     }
 
     /// "Save changes?" → Save on a new document: the held-back Close runs only once the later
-    /// Save As has actually saved; a cancelled Save As cancels the held-back New.
+    /// Save As has actually saved; a cancelled Save As cancels the held-back Close.
     #[test]
     fn save_changes_waits_for_the_save_as_answer() {
         let dir = scratch("prompt");
         let path = dir.join("novel.docx");
         let (mut a, shown) = async_app();
         typed(&mut a);
-        a.run("file.new", json!({})).unwrap();
+        // New opens a tab. Closing a dirty tab is what asks to save.
+        a.run("file.close", json!({})).unwrap();
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         answer(&shown, None);
         a.poll_file_dialog();

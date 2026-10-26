@@ -272,7 +272,7 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, pages: &[Rect]
     let adding = ui.input(|i| i.modifiers.shift || i.modifiers.command);
     // Ctrl on the object that is already selected starts a copy-drag instead.
     let again = selected(app).is_some_and(|(p, _)| p == object.pos());
-    if pressed && adding && grab == Grab::Move && selected(app).is_some() && !(again && !ui.input(|i| i.modifiers.shift)) {
+    if pressed && adding && grab == Grab::Move && selected(app).is_some() && (!again || ui.input(|i| i.modifiers.shift)) {
         let _ = app.run("select.addObject", json!({"pos": object.pos()}));
         return true;
     }

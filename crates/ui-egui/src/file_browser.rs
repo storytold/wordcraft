@@ -259,6 +259,7 @@ impl FileBrowser {
 impl WordApp {
     /// Ask for a file in the built-in browser and do `after` with the answer when it closes.
     pub(crate) fn show_file_browser(&mut self, req: FileDialogRequest, after: AfterPick, unavailable: bool) {
+        let after = after.bind(self.session.document_id());
         // A folder the request names (the user templates folder, #2852) comes first.
         let asked = match &req {
             FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),

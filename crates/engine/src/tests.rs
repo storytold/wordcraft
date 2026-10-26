@@ -10734,12 +10734,26 @@ fn export_png_refuses_a_path_that_is_not_png() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+#[test]
+fn document_identities_are_unique_across_sessions_and_replacements() {
+    let mut a = Session::new(wordcraft_doc::Document::new());
+    let mut b = Session::new(wordcraft_doc::Document::new());
+    let ids = [a.document_id(), b.document_id()];
+    assert_ne!(ids[0], ids[1]);
+    a.set_document(wordcraft_doc::Document::new());
+    b.set_document(wordcraft_doc::Document::new());
+    assert_ne!(a.document_id(), b.document_id());
+    assert!(!ids.contains(&a.document_id()));
+    assert!(!ids.contains(&b.document_id()));
+}
+
 /// The body's IME replacement epoch advances when the whole body is swapped (setText, Undo/Redo)
 /// and stays put for ordinary edits; an equation editing session cannot ride across a replacement.
 #[test]
 fn ime_body_epoch_marks_body_replacements_not_edits() {
     let mut s = s();
     run(&mut s, "text.insert", json!({"text": "one"}));
+    let document = s.document_id();
     let first = s.ime_body_epoch();
     run(&mut s, "text.insert", json!({"text": " two"}));
     assert_eq!(s.ime_body_epoch(), first, "typing is not a replacement");
@@ -10747,7 +10761,7 @@ fn ime_body_epoch_marks_body_replacements_not_edits() {
     run(&mut s, "document.setText", json!({"text": "same text"}));
     let replaced = s.ime_body_epoch();
     assert!(replaced > first, "setText replaces the body under the same document id");
-    assert_eq!(s.document_id(), 1, "the document id itself is unchanged");
+    assert_eq!(s.document_id(), document, "the document id itself is unchanged");
 
     // The same text again still replaces the body: a composition must not survive on content
     // equality.

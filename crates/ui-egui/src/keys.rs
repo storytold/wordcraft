@@ -129,11 +129,36 @@ fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value)> {
     }
 }
 
+fn document_shortcut(app: &WordApp, key: Key, m: Modifiers) -> Option<&'static str> {
+    let id = if key == Key::Tab && m.ctrl && !m.alt && !m.mac_cmd && app.session.sel.focus.path.cell().is_none() && app.document_tabs().len() > 1 {
+        if m.shift { "ui.previousDocument" } else { "ui.nextDocument" }
+    } else if key == Key::T && m.ctrl && m.shift && !m.alt && !m.mac_cmd {
+        "ui.reopenClosedDocument"
+    } else {
+        return None;
+    };
+    (!crate::document_tabs::shortcut(app, id).is_empty()).then_some(id)
+}
+
 /// Find and run the command bound to this key. Returns true if handled.
 fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
     let reg = app.session.registry.clone();
     let name = key_name(key);
     let bound = name.and_then(|n| app.session.keymap.resolve(&reg, &combo(m, n, true)));
+    if let Some(id) = document_shortcut(app, key, m) {
+        let _ = app.run(id, json!({}));
+        return true;
+    }
+    if key == Key::Tab
+        && m.ctrl
+        && !m.alt
+        && !m.mac_cmd
+        && app.session.sel.focus.path.cell().is_none()
+        && bound.is_some_and(|s| s.id == "text.insertTab")
+        && !app.session.keymap.assigned.contains_key(&combo(m, "Tab", true))
+    {
+        return false;
+    }
     // Ctrl+F1 collapses the ribbon only when the user hasn't given it to a command (#1678); the
     // other interface shortcuts (Alt+Q, ⌘⌥R) keep their place ahead of the keymap.
     if let Some((id, params)) = ui_shortcut(key, m).filter(|_| key != Key::F1 || bound.is_none()) {
@@ -1466,13 +1491,29 @@ fn alt_code_echoed(app: &mut WordApp, echo: &AltCodeEcho, text: &str) -> bool {
 /// Whether a key runs its shortcut with the canvas unfocused (after a ribbon click, say): Mod and
 /// Alt shortcuts (Alt+Q reaches Search from anywhere, as in Word, #819) and the function keys.
 fn is_global_shortcut(key: Key, m: Modifiers) -> bool {
-    m.command || m.alt || is_function_key(key)
+    m.command || m.alt || (m.ctrl && (key == Key::Tab || (key == Key::T && m.shift))) || is_function_key(key)
 }
 
 /// Command shortcuts when the canvas isn't focused but no text field is either.
 pub fn global_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
-    // Customize Keyboard records the keys pressed; they never run commands meanwhile.
-    if app.canvas.focused || ctx.egui_wants_keyboard_input() || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })) {
+    // Customize Keyboard records keys before any shortcut can consume them.
+    if matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })) {
+        return;
+    }
+    // Document cycling also works while a comment or another text field has focus.
+    if !app.canvas.focused && !app.document_modal() {
+        let events = ctx.input(|i| i.events.clone());
+        for event in events {
+            if let egui::Event::Key { key, pressed: true, modifiers: m, .. } = event
+                && document_shortcut(app, key, m).is_some()
+            {
+                ctx.input_mut(|i| i.consume_key(m, key));
+                dispatch(app, key, m);
+                return;
+            }
+        }
+    }
+    if app.canvas.focused || ctx.egui_wants_keyboard_input() {
         return;
     }
     let events = ctx.input(|i| i.events.clone());
@@ -2711,5 +2752,88 @@ mod tests {
         a.run("edit.undo", json!({})).unwrap();
         let g = wordcraft_engine::cmd::smart_art::selected_smart_art(&a.session).expect("still there");
         assert_eq!(g.items[0].text, "Ada", "one undo step for the typing");
+    }
+}
+
+#[cfg(test)]
+mod tab_tests {
+    use super::*;
+
+    #[test]
+    fn cycling_respects_custom_keys_and_table_literal_tabs() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        let ctrl = if cfg!(target_os = "macos") { Modifiers::CTRL } else { Modifiers::CTRL | Modifiers::COMMAND };
+        assert!(!dispatch(&mut a, Key::Tab, ctrl));
+        a.run("file.new", json!({})).unwrap();
+        assert!(dispatch(&mut a, Key::Tab, ctrl));
+        assert_eq!(a.active_document_tab(), 0);
+        assert!(dispatch(&mut a, Key::Tab, ctrl | Modifiers::SHIFT));
+        assert_eq!(a.active_document_tab(), 1);
+        let key = combo(ctrl, "Tab", true);
+        a.session.keymap.assigned.insert(key.clone(), "format.bold".into());
+        assert!(dispatch(&mut a, Key::Tab, ctrl));
+        assert_eq!(a.active_document_tab(), 1, "the custom command wins");
+        a.session.keymap.assigned.remove(&key);
+        a.run("insert.table", json!({"rows": 1, "cols": 2})).unwrap();
+        let active = a.active_document_tab();
+        dispatch(&mut a, Key::Tab, ctrl);
+        assert_eq!(a.active_document_tab(), active, "literal Tab in a table never cycles documents");
+        if !cfg!(target_os = "macos") {
+            assert!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains('\t'));
+        }
+        assert!(dispatch(&mut a, Key::Tab, Modifiers::NONE));
+        assert!(dispatch(&mut a, Key::Tab, Modifiers::SHIFT));
+        assert_eq!(a.active_document_tab(), active);
+    }
+}
+
+#[cfg(test)]
+mod field_tab_tests {
+    use super::*;
+
+    #[test]
+    fn document_cycling_works_from_a_focused_text_field() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("file.new", json!({})).unwrap();
+        let ctx = egui::Context::default();
+        let mut draft = String::from("Uncommitted comment text");
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.text_edit_singleline(&mut draft).request_focus();
+        })
+        .drop_without_applying_deltas();
+        let modifiers = if cfg!(target_os = "macos") { Modifiers::CTRL } else { Modifiers::CTRL | Modifiers::COMMAND };
+        let event = egui::Event::Key { key: Key::Tab, physical_key: None, pressed: true, repeat: false, modifiers };
+        ctx.run_ui(egui::RawInput { events: vec![event], ..Default::default() }, |ui| {
+            assert!(ui.ctx().egui_wants_keyboard_input());
+            global_shortcuts(&mut a, ui.ctx());
+            ui.text_edit_singleline(&mut draft);
+        })
+        .drop_without_applying_deltas();
+        assert_eq!(a.active_document_tab(), 0);
+        assert_eq!(draft, "Uncommitted comment text");
+    }
+}
+
+#[cfg(test)]
+mod review_shortcut_capture_tests {
+    use super::*;
+
+    #[test]
+    fn codex_review_customize_keyboard_keeps_tab_shortcuts_for_recording() {
+        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("file.new", json!({})).unwrap();
+        a.dialog = Some(crate::dialogs::Dialog::CustomizeKeyboard { form: Box::new(crate::dialogs_keyboard::KeyboardForm::read(&a)) });
+        let ctx = egui::Context::default();
+        let ctrl = if cfg!(target_os = "macos") { Modifiers::CTRL } else { Modifiers::CTRL | Modifiers::COMMAND };
+        for (key, modifiers) in [(Key::Tab, ctrl), (Key::Tab, ctrl | Modifiers::SHIFT), (Key::T, ctrl | Modifiers::SHIFT)] {
+            let event = egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+            ctx.run_ui(egui::RawInput { events: vec![event], ..Default::default() }, |ui| {
+                global_shortcuts(&mut a, ui.ctx());
+                assert!(ui.ctx().input_mut(|i| i.consume_key(modifiers, key)), "shortcut must remain available for recording");
+            })
+            .drop_without_applying_deltas();
+            assert_eq!(a.active_document_tab(), 1);
+            assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })));
+        }
     }
 }

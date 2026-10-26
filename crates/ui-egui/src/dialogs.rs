@@ -2821,13 +2821,32 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
                 reg.all().iter().filter(|c| command_matches(c, query)).collect()
             };
             hits.truncate(14);
+            let tab_hits: Vec<_> = crate::document_tabs::commands(app)
+                .into_iter()
+                .filter(|c| {
+                    !query.trim().is_empty()
+                        && query.split_whitespace().all(|word| format!("{} {}", c["label"], c["id"]).to_lowercase().contains(&word.to_lowercase()))
+                })
+                .collect();
             let enter = ui.input(|i| i.key_pressed(egui::Key::Enter));
             let mut run: Option<&str> = enter.then(|| hits.first().map(|c| c.id)).flatten();
+            if run.is_none() && enter {
+                run = tab_hits.iter().find(|c| c["enabled"].as_bool().unwrap_or(false)).and_then(|c| c["id"].as_str());
+            }
             for c in &hits {
                 let sc = crate::widgets::shortcut_text(app, c.id);
                 let label = format!("{}   —   {}", tl!(c.label), crate::i18n::location(c.location));
                 if ui.add(egui::Button::new(label).shortcut_text(sc).min_size(vec2(380.0, 0.0))).clicked() {
                     run = Some(c.id);
+                }
+            }
+            for command in &tab_hits {
+                let id = command["id"].as_str().unwrap_or("");
+                let label = command["label"].as_str().unwrap_or("");
+                let enabled = command["enabled"].as_bool().unwrap_or(false);
+                let shortcut = crate::widgets::key_text(&crate::document_tabs::shortcut(app, id));
+                if ui.add_enabled(enabled, egui::Button::new(tl!(label)).shortcut_text(shortcut)).clicked() {
+                    run = Some(id);
                 }
             }
             // Search also finds the words in the document (the Navigation pane's results).
@@ -2836,7 +2855,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             if !text.is_empty() {
                 ui.separator();
                 let label = crate::i18n::fmt(tl!("Find “{text}” in the document"), &[("text", &text)]);
-                find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty());
+                find = ui.add(egui::Button::new(label).min_size(vec2(380.0, 0.0))).clicked() || (enter && hits.is_empty() && tab_hits.is_empty());
             }
             if let Some(id) = run {
                 let _ = app.run(id, json!({}));

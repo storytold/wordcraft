@@ -80,7 +80,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
-        let clean = !(app.session.dirty || app.save_unconfirmed() || app.printing.busy() || crate::panes::has_comment_drafts(app));
+        let clean = can_restart(app);
         match app.updates_rt.updater.show_if(ctx, clean) {
             Action::OpenUrl(url) => ctx.open_url(egui::OpenUrl::new_tab(url)),
             Action::Close => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
@@ -129,5 +129,27 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     if !app.updates_rt.manual_window_open {
         app.updates_rt.updater.dismiss_status();
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn can_restart(app: &WordApp) -> bool {
+    !(app.any_dirty_documents() || app.printing.busy())
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn restart_waits_for_unsaved_work_in_inactive_tabs() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        assert!(can_restart(&app));
+        app.run("text.insert", serde_json::json!({"text": "inactive draft"})).unwrap();
+        app.run("file.new", serde_json::json!({})).unwrap();
+        assert!(!app.session.dirty);
+        assert!(!can_restart(&app));
+        app.execute("ui.closeAllDocuments", serde_json::json!({"force": true})).unwrap();
+        assert!(can_restart(&app));
     }
 }

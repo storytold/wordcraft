@@ -952,7 +952,7 @@ fn alert(ui: &mut Ui, text: &Option<String>) {
 
 fn split_cells_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SplitCellsForm) -> bool {
     // Several cells split one by one keep their rows.
-    let rows_on = !(f.cells > 1 && !f.merge_first);
+    let rows_on = f.cells <= 1 || f.merge_first;
     egui::Grid::new("split_cells").num_columns(2).show(ui, |ui| {
         ui.label(tl!("Number of columns:"));
         ui.add(egui::DragValue::new(&mut f.columns).range(1..=63));

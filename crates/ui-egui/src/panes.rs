@@ -509,6 +509,9 @@ pub(crate) struct CommentDrafts {
 }
 
 impl CommentDrafts {
+    pub(crate) fn has_work(&self, document: u64) -> bool {
+        self.document == document && (!self.edits.is_empty() || !self.replies.is_empty())
+    }
     /// The drafts for `document`, dropping any left from another one.
     fn of(&mut self, document: u64) -> &mut Self {
         if self.document != document {

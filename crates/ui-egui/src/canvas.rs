@@ -1274,7 +1274,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     };
     let delta = wheel_delta + auto_delta + middle_delta;
     let mut scroll_area = egui::ScrollArea::both()
-        .id_salt("canvas_scroll")
+        .id_salt(("canvas_scroll", app.active_document_id()))
         .auto_shrink([false, false])
         // Bringing the caret into view glides there, or jumps with animation effects off.
         .animated(animate)
@@ -5741,8 +5741,8 @@ mod tests {
         click_balloon(&mut h, id);
         type_in(&mut h, "Typed ");
         let open = json!({"path": "/nonexistent/other.docx"});
-        assert!(crate::control::close_refused(h.state(), "file.open", &open).is_some());
-        assert!(crate::control::close_refused(h.state(), "file.new", &json!({})).is_some());
+        assert!(crate::control::close_refused(h.state(), "file.open", &open).is_none());
+        assert!(crate::control::close_refused(h.state(), "file.new", &json!({})).is_none());
         assert!(crate::control::close_refused(h.state(), "file.close", &json!({})).is_some());
         assert!(crate::control::close_refused(h.state(), "file.close", &json!({"force": true})).is_none());
         assert!(crate::control::close_refused(h.state(), "text.insert", &json!({"text": "x"})).is_none());
@@ -5771,13 +5771,21 @@ mod tests {
 
     /// #1348: New with a refused draft asks to save; Don't Save makes the new document.
     #[test]
-    fn a_refused_comment_draft_can_be_dropped_on_new() {
-        let (mut h, _) = refused_draft();
+    fn a_refused_comment_draft_stays_with_its_document_across_tabs() {
+        let (mut h, id) = refused_draft();
         let document = h.state().session.document_id();
+        let original = h.state().active_document_tab();
         h.state_mut().run("file.new", json!({})).unwrap();
-        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "the save prompt asks about it");
-        h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        assert_ne!(h.state().session.document_id(), document, "Don't Save made the new document");
+        assert!(h.state().dialog.is_none());
+        assert_ne!(h.state().session.document_id(), document);
+        assert!(!crate::panes::has_comment_drafts(h.state()));
+        assert!(h.state_mut().switch_document_tab(original));
+        assert!(crate::panes::comment_draft(h.state(), id).is_some_and(|d| d.contains("Refused")));
+        assert!(h.state().document_tabs()[original].dirty);
+        h.state_mut().run("file.close", json!({})).unwrap();
+        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
+        h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
+        assert!(crate::panes::has_comment_drafts(h.state()));
     }
 
     /// #1348: Save with a refused draft saves the rest of the document, keeps the draft and says why.
@@ -7093,7 +7101,7 @@ mod tests {
 
     fn drawn_rulers(ctx: &egui::Context, a: &mut WordApp, t: &mut f64) -> DrawnRulers {
         *t += 1.0 / 60.0;
-        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 900.0));
+        let screen = Rect::from_min_size(Pos2::ZERO, vec2(1440.0, 935.0));
         let input = egui::RawInput { time: Some(*t), screen_rect: Some(screen), ..Default::default() };
         let out = ctx.run_ui(input, |ui| {
             a.logic(ui.ctx());

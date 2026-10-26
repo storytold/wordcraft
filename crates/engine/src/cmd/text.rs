@@ -848,7 +848,7 @@ fn tab_indent_on(s: &Session) -> bool {
 fn tab_indents(s: &mut Session, f: &Pos) -> bool {
     let Some(para) = s.doc.para_at(f).filter(|p| !p.is_empty()) else { return false };
     if f.off == 0 {
-        return !s.doc.styles.resolve_para(&para.props).numbering.is_some_and(|n| n.num != 0);
+        return s.doc.styles.resolve_para(&para.props).numbering.is_none_or(|n| n.num == 0);
     }
     let l = s.layout();
     l.line_bounds(f, s.page_hint).is_some_and(|(a, _)| a == *f)

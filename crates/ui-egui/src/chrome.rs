@@ -762,6 +762,172 @@ impl WordApp {
     }
 }
 
+/// Browser-style document tabs, positioned above the ribbon. Tabs can be reordered by dragging
+/// their labels; pinned tabs occupy the left group. Long lists scroll horizontally.
+pub fn document_tabs(app: &mut WordApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let current = (app.active_document_id(), app.active_document_tab());
+    let reveal_active = ui.ctx().data_mut(|data| {
+        let key = egui::Id::unique("last_drawn_document_tab");
+        let changed = data.get_temp::<(u64, usize)>(key) != Some(current);
+        data.insert_temp(key, current);
+        changed
+    });
+    egui::Panel::top("document_tabs")
+        .exact_size(35.0)
+        .frame(egui::Frame::NONE.fill(t.tab_strip).inner_margin(egui::Margin { left: 8, right: 8, top: 3, bottom: 2 }))
+        .show(ui, |ui| {
+            egui::ScrollArea::horizontal().id_salt("open_document_tabs_scroll").auto_shrink([false, false]).show(ui, |ui| {
+                ui.horizontal_centered(|ui| {
+                    ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
+                    let mut hit_rects = Vec::new();
+                    // Snapshot labels: closing/reordering may change indexes during this frame.
+                    for tab in app.document_tabs() {
+                        let fill = if tab.active { t.ribbon } else { t.tab_strip };
+                        let ink = if tab.active { t.text } else { t.text_dim };
+                        egui::Frame::NONE
+                            .fill(fill)
+                            .corner_radius(egui::CornerRadius { nw: 5, ne: 5, sw: 2, se: 2 })
+                            .stroke(Stroke::new(if tab.active { 1.0 } else { 0.5 }, t.border))
+                            .inner_margin(egui::Margin::symmetric(6, 3))
+                            .show(ui, |ui| {
+                                ui.horizontal_centered(|ui| {
+                                    ui.spacing_mut().item_spacing = vec2(3.0, 0.0);
+                                    let name: String = if tab.name.chars().count() > 26 {
+                                        let shortened: String = tab.name.chars().take(23).collect();
+                                        format!("{shortened}…")
+                                    } else {
+                                        tab.name.clone()
+                                    };
+                                    if tab.pinned {
+                                        let (rect, _) = ui.allocate_exact_size(vec2(14.0, 17.0), egui::Sense::hover());
+                                        crate::icons::paint(ui.painter(), rect, "pin", t.icon, t.accent);
+                                    }
+                                    let label = format!("{}{}", name, if tab.dirty { " •" } else { "" });
+                                    let button = egui::Button::new(egui::RichText::new(label).font(regular(11.5)).color(ink))
+                                        .fill(egui::Color32::TRANSPARENT)
+                                        .stroke(Stroke::NONE)
+                                        .frame(false)
+                                        .sense(egui::Sense::click_and_drag())
+                                        .min_size(vec2(65.0, 23.0));
+                                    let response =
+                                        ui.add(button).on_hover_text(crate::i18n::fmt(tl!("{name} (drag to reorder)"), &[("name", &tab.name)]));
+                                    let accessible =
+                                        if tab.dirty { format!("{} — {}", tab.name, tl!("Unsaved changes")) } else { tab.name.clone() };
+                                    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Tab, true, tab.active, &accessible));
+                                    if tab.active && reveal_active {
+                                        response.scroll_to_me(None);
+                                    }
+                                    hit_rects.push((tab.index, response.rect));
+                                    if response.clicked() {
+                                        let _ = app.run("ui.switchDocument", json!({"id": tab.id}));
+                                    }
+                                    if response.drag_started() {
+                                        app.drag_document_tab = Some(tab.id);
+                                    }
+                                    response.context_menu(|ui| {
+                                        if ui.button(tl!(if tab.pinned { "Unpin Tab" } else { "Pin Tab" })).clicked() {
+                                            let _ = app.run("ui.pinDocument", json!({"id": tab.id, "pinned": !tab.pinned}));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.add_enabled(tab.index > 0, egui::Button::new(tl!("Move Tab Left"))).clicked() {
+                                            let _ = app.run("ui.moveDocument", json!({"from": tab.index, "to": tab.index - 1}));
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .add_enabled(tab.index + 1 < app.document_tabs().len(), egui::Button::new(tl!("Move Tab Right")))
+                                            .clicked()
+                                        {
+                                            let _ = app.run("ui.moveDocument", json!({"from": tab.index, "to": tab.index + 1}));
+                                            ui.close();
+                                        }
+                                        if let Some(path) = app.document_tab_path(tab.index)
+                                            && ui.button(tl!("Copy Full Path")).clicked()
+                                        {
+                                            ui.ctx().copy_text(path);
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.button(tl!("Close Tab")).clicked() {
+                                            let _ = app.run("ui.closeDocument", json!({"id": tab.id}));
+                                            ui.close();
+                                        }
+                                        if ui.button(tl!("Close other unpinned tabs")).clicked() {
+                                            let _ = app.run("ui.closeOtherDocuments", json!({"id": tab.id}));
+                                            ui.close();
+                                        }
+                                        if ui.button(tl!("Close All Tabs")).clicked() {
+                                            let _ = app.run("ui.closeAllDocuments", json!({}));
+                                            ui.close();
+                                        }
+                                        ui.separator();
+                                        if ui.add_enabled(app.services.document_window.is_some(), egui::Button::new(tl!("New Window"))).clicked() {
+                                            let _ = app.run("ui.newWindow", json!({}));
+                                            ui.close();
+                                        }
+                                        if ui
+                                            .button(format!(
+                                                "{}  {}",
+                                                tl!("Reopen Closed Tab"),
+                                                crate::widgets::key_text(&crate::document_tabs::shortcut(app, "ui.reopenClosedDocument"))
+                                            ))
+                                            .clicked()
+                                        {
+                                            let _ = app.run("ui.reopenClosedDocument", json!({}));
+                                            ui.close();
+                                        }
+                                    });
+                                    let close = ui
+                                        .add(
+                                            egui::Button::new(egui::RichText::new("×").size(15.0).color(t.text_dim))
+                                                .fill(egui::Color32::TRANSPARENT)
+                                                .stroke(Stroke::NONE)
+                                                .frame(false)
+                                                .min_size(vec2(17.0, 23.0)),
+                                        )
+                                        .on_hover_text(crate::i18n::fmt(tl!("Close {name}"), &[("name", &tab.name)]));
+                                    close.widget_info(|| {
+                                        egui::WidgetInfo::labeled(
+                                            egui::Role::Button,
+                                            true,
+                                            crate::i18n::fmt(tl!("Close {name}"), &[("name", &tab.name)]),
+                                        )
+                                    });
+                                    if close.clicked() {
+                                        let _ = app.run("ui.closeDocument", json!({"id": tab.id}));
+                                    }
+                                });
+                            });
+                    }
+                    if ui
+                        .add(
+                            egui::Button::new(egui::RichText::new("+").size(17.0).color(t.text))
+                                .fill(egui::Color32::TRANSPARENT)
+                                .stroke(Stroke::NONE)
+                                .min_size(vec2(28.0, 24.0)),
+                        )
+                        .on_hover_text(tl!("New"))
+                        .clicked()
+                    {
+                        let _ = app.run("file.new", json!({}));
+                    }
+                    // Apply a completed drag *after* collecting hit targets for every tab.
+                    if app.drag_document_tab.is_some() && ui.input(|i| i.pointer.any_released()) {
+                        let pos = ui.input(|i| i.pointer.latest_pos());
+                        if let (Some(source), Some(pos)) = (app.drag_document_tab, pos)
+                            && let Some(from) = app.document_tabs().iter().find(|t| t.id == source).map(|t| t.index)
+                            && let Some((to, _)) = hit_rects.iter().find(|(_, rect)| rect.contains(pos))
+                        {
+                            let _ = app.run("ui.moveDocument", json!({"from": from, "to": to}));
+                        }
+                        app.drag_document_tab = None;
+                    }
+                });
+            });
+        });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
