@@ -194,6 +194,7 @@ fn is_thai_combining(c: char) -> bool {
         | 0x0E47..=0x0E4E) // maitaikhu, mai ek–chattawa (tone), thanthakhat, nikhahit, yamakkan
 }
 
+/// Returns the shared ICU4X dictionary `WordSegmenter`, built once on first use.
 fn word_segmenter() -> &'static icu_segmenter::WordSegmenterBorrowed<'static> {
     static S: OnceLock<icu_segmenter::WordSegmenterBorrowed<'static>> = OnceLock::new();
     S.get_or_init(|| icu_segmenter::WordSegmenter::new_auto(icu_segmenter::options::WordBreakInvariantOptions::default()))
