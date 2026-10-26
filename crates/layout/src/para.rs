@@ -86,27 +86,23 @@ fn is_below_or_phinthu(c: char) -> bool {
     matches!(c, '\u{0E38}'..='\u{0E3A}')
 }
 
-/// Render-only WTT 2.0 substitutions applied to the string sent to the shaper.
+/// Render-only substitutions applied to the string sent to the shaper.
 /// The document text is never touched.  All substituted codepoints are exactly 3 UTF-8
 /// bytes, so cluster byte offsets remain valid after substitution.
 ///
-/// Three rules:
+/// Two rules:
 ///
-/// 1. **Short-tail ฐ/ญ** — ฐ (U+0E10) and ญ (U+0E0D) have descending tails that collide
-///    with below-vowels (◌ุ ◌ู) and phinthu (◌ฺ).  When immediately followed by one of
-///    those marks, swap to PUA short-tail forms U+F700 / U+F70F.  If the next character
-///    is not a below-vowel/phinthu the consonant stays in its normal full-tail form.
-///    Applied only when the rendering face contains the PUA glyphs (WTT 2.0 fonts); modern
-///    OpenType fonts handle this via GSUB automatically.
+/// 1. **Short-tail ฐ/ญ** (WTT 2.0 fonts only) — ฐ (U+0E10) and ญ (U+0E0D) have descending
+///    tails that collide with below-vowels (◌ุ ◌ู) and phinthu (◌ฺ).  When immediately
+///    followed by one of those marks, swap to PUA short-tail forms U+F700 / U+F70F.
+///    Detection is by font name ([`wordcraft_fonts::word::is_wtt2_thai_font`]); OpenType
+///    fonts handle short-tails via GSUB automatically and are left untouched.
 ///
 /// 2. **RU/LU + Sara_AA → LAKKHANGYAO** — ฤ (U+0E24) and ฦ (U+0E26) followed by sara aa
-///    (า U+0E32) must render the sara aa as lakkhangyao (ๅ U+0E45).  In WTT 2.0 fonts ๅ
-///    carries a specifically narrower/shaped glyph designed to follow these consonants.
-fn thai_short_tail(text: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
-    let has_f700 = face.covers('\u{F700}');
-    let has_f70f = face.covers('\u{F70F}');
-    let needs_short_tail = (has_f700 || has_f70f)
-        && (text.contains('\u{0E10}') || text.contains('\u{0E0D}'));
+///    (า U+0E32) render sara aa as lakkhangyao (ๅ U+0E45).  Applied for all Thai fonts.
+fn thai_short_tail(text: &str, font: &str) -> Option<String> {
+    let is_wtt2 = wordcraft_fonts::word::is_wtt2_thai_font(font);
+    let needs_short_tail = is_wtt2 && (text.contains('\u{0E10}') || text.contains('\u{0E0D}'));
     let needs_ru_lu = text.contains('\u{0E24}') || text.contains('\u{0E26}');
     if !needs_short_tail && !needs_ru_lu {
         return None;
@@ -116,10 +112,10 @@ fn thai_short_tail(text: &str, face: &wordcraft_fonts::FaceRef) -> Option<String
     while let Some(c) = chars.next() {
         match c {
             // Rule 1: short-tail substitution — only before below-vowels and phinthu.
-            '\u{0E10}' if has_f700 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
+            '\u{0E10}' if is_wtt2 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
                 out.push('\u{F700}');
             }
-            '\u{0E0D}' if has_f70f && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
+            '\u{0E0D}' if is_wtt2 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
                 out.push('\u{F70F}');
             }
             // Rule 2: ฤ/ฦ + sara aa → push consonant then lakkhangyao, consuming sara aa.
@@ -1153,7 +1149,7 @@ impl<'a> Builder<'a> {
             let shape_text = if substituted { mapped.as_str() } else { sub };
             // Render-only: swap ญ/ฐ for their short-tail PUA forms when followed by a below-vowel.
             let short_tail_buf;
-            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &st.face) {
+            let shape_text = if let Some(buf) = thai_short_tail(shape_text, &rc.font) {
                 short_tail_buf = buf;
                 short_tail_buf.as_str()
             } else {
