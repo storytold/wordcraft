@@ -411,10 +411,11 @@ fn ce_e(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
 }
 
 /// `lui a detto` → `lui ha detto`: `a`, `o`, `anno` between a pronoun and a past participle.
-/// `non anno passato` may be the noun phrase. A feminine form agrees only with a clitic before
-/// it (`ne a fatta una`); after `lui`, `non` or `chi` it is a noun (`a vista`, `a portata`).
+/// `non anno passato` may be the noun phrase, and so is `anno` after a possessive `loro` (`il loro
+/// anno passato`). A feminine form agrees only with a clitic before it (`ne a fatta una`); after
+/// `lui`, `non` or `chi` it is a noun (`a vista`, `a portata`).
 fn avere_without_h(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
-    for triple in ws.windows(3) {
+    for (i, triple) in ws.windows(3).enumerate() {
         let [(a0, b0), (a1, b1), (a2, b2)] = triple else { continue };
         let (Some(w0), Some(w1), Some(w2)) = (text.get(*a0..*b0), text.get(*a1..*b1), text.get(*a2..*b2)) else { continue };
         let (Some(g0), Some(g1)) = (text.get(*b0..*a1), text.get(*b1..*a2)) else { continue };
@@ -425,12 +426,26 @@ fn avere_without_h(text: &str, ws: &[(usize, usize)], v: &mut Vec<Issue>) {
         if w2.ends_with('a') && !CLITICS.contains(&w0.as_str()) {
             continue;
         }
+        if w0 == "loro" && w1 == "anno" && i > 0 && possessive_loro(text, ws[i - 1], *a0) {
+            continue;
+        }
         for (bare, verb, subjects) in AVERE_SUBJECTS {
             if w1 == *bare && subjects.contains(&w0.as_str()) {
                 v.push(issue(*a1, *b1, format!("Qui è il verbo avere: «{verb}», con l'acca"), vec![(*verb).to_string()]));
             }
         }
     }
+}
+
+/// Is `loro` (starting at `start`) a possessive, after an article or an articulated preposition
+/// (`il loro`, `nel loro`)?
+fn possessive_loro(text: &str, (a, b): (usize, usize), start: usize) -> bool {
+    const DETERMINERS: &[&str] = &[
+        "il", "lo", "la", "l'", "i", "gli", "le", "un", "uno", "una", "del", "dello", "della", "dei", "degli", "delle", "al", "allo", "alla", "ai",
+        "agli", "alle", "dal", "dallo", "dalla", "dai", "dagli", "dalle", "nel", "nello", "nella", "nei", "negli", "nelle", "sul", "sullo", "sulla",
+        "sui", "sugli", "sulle", "col", "coi",
+    ];
+    text.get(b..start) == Some(" ") && text.get(a..b).is_some_and(|w| DETERMINERS.contains(&w.to_lowercase().as_str()))
 }
 
 /// `i mie amici` → `i miei amici`, `le tuoi cose` → `le tue cose`.
@@ -625,6 +640,8 @@ mod tests {
             "I depositi non a vista rendono di più",
             "Non a portata di mano",
             "Lui a messa la domenica",
+            "Il loro anno passato è stato difficile",
+            "Nel loro anno finito male",
         ] {
             assert!(fixes(ok).is_empty(), "{ok}: {:?}", fixes(ok));
         }
