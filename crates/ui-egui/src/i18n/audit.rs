@@ -281,6 +281,7 @@ fn untranslated_interface_text() {
         "about",
         "contributors",
         "models",
+        "clearRecent",
         "insertMergeField",
         "findRecipient",
         "mergeRecords",
