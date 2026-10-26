@@ -1384,7 +1384,15 @@ impl WordApp {
             }
             SaveChoice::Save => match self.save_for_prompt() {
                 Ok(PromptSave::Saved) => true,
-                Ok(PromptSave::NotSaved) => false,
+                // A format that doesn't keep everything (Markdown, plain text) wrote a copy but
+                // left the document unsaved, so Close can't go on (#3236): the prompt comes back
+                // with the reason, as a failed save does (#1445), instead of closing and leaving
+                // only a status-bar line the user has already stopped looking at.
+                Ok(PromptSave::NotSaved) => {
+                    let message = tl!("That format doesn't keep everything, so the document is still open. Save it as a Word document (.docx) to go on.");
+                    self.prompt_again(message, then, params, document);
+                    return Ok(json!({"done": false}));
+                }
                 // The browser's picker finishes later: the command waits for it (#1315).
                 Ok(PromptSave::Later(ticket)) => {
                     let rev = self.session.rev();
@@ -7443,6 +7451,33 @@ mod tests {
             assert!(a.status_msg.is_some(), "{ext}: the status bar says why");
             let _ = std::fs::remove_dir_all(&dir);
         }
+    }
+
+    /// #3236: Save from the close prompt on a document whose format doesn't keep everything
+    /// (.md here) writes the file but leaves the document unsaved, so the prompt's Save could
+    /// never let the Close go on, and the only explanation was a status-bar line after the
+    /// dialog had gone. The prompt now comes back with that reason, as a failed save does
+    /// (#1445), so the user can choose Don't Save or Cancel with the explanation in front of
+    /// them.
+    #[test]
+    fn a_prompt_save_in_a_lossy_format_keeps_the_prompt_with_the_reason() {
+        let dir = scratch("lossy-prompt-md");
+        let md = dir.join("notes.md");
+        std::fs::write(&md, "# Notes\n\nSome text\n").unwrap();
+        let mut a = app();
+        a.run("file.open", json!({"path": md.to_string_lossy()})).unwrap();
+        a.run("text.insert", json!({"text": "Typed "})).unwrap();
+        a.run("file.close", json!({})).unwrap();
+        assert_eq!(prompt(&a), Some("saveChanges"));
+        a.status_msg = None;
+        let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
+        assert_eq!(r["done"], false, "the Close was cancelled");
+        let saved = std::fs::read_to_string(&md).unwrap();
+        assert!(saved.contains("Typed"), "the .md was written with the latest text");
+        assert_eq!(prompt(&a), Some("saveChanges"), "the prompt is back with the reason");
+        assert!(a.status_msg.is_some(), "the status bar says why too");
+        assert!(a.session.dirty, "the document is still unsaved");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// Web: a download in a format that doesn't keep everything marked the document saved, so
