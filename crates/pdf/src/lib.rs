@@ -47,7 +47,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::Paint;
-use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
+use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, ground, page_display_over};
 use wordcraft_layout::para::{ClKind, LineEnd};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
@@ -921,16 +921,24 @@ impl Exporter<'_> {
             ..Default::default()
         };
         let clips = clipped_cells(page);
-        for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = self.draws(page, it, &clips, &dopts);
-            self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
-                for d in &draws {
-                    me.draw(s, d);
-                }
-            });
+        // The backgrounds drawn so far in each list (header, footer, body), for automatic text
+        // drawn over them (#3585): kept as the items go, not looked up for each.
+        for list in [&page.header, &page.footer] {
+            let mut behind = Vec::new();
+            for it in list.iter() {
+                let draws = self.draws(page, it, &clips, &dopts, &behind);
+                behind.extend(ground(it));
+                self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
+                    for d in &draws {
+                        me.draw(s, d);
+                    }
+                });
+            }
         }
+        let mut behind = Vec::new();
         for it in &page.items {
-            let draws = self.draws(page, it, &clips, &dopts);
+            let draws = self.draws(page, it, &clips, &dopts, &behind);
+            behind.extend(ground(it));
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
@@ -993,7 +1001,8 @@ impl Exporter<'_> {
     }
 
     /// Display items for one placed item.
-    fn draws(&self, page: &Page, it: &Placed, clips: &CellClips, dopts: &DisplayOptions) -> Vec<Draw> {
+    /// `behind`: the backgrounds its list draws before it, which its automatic text is drawn against.
+    fn draws(&self, page: &Page, it: &Placed, clips: &CellClips, dopts: &DisplayOptions, behind: &[(Rect, Rgb)]) -> Vec<Draw> {
         let mut items = vec![it.clone()];
         // Lines in a cell cut off at its edge are drawn inside its clip: `page_display` finds the
         // cell among the items (cells themselves draw nothing). Only that line's cell goes along.
@@ -1003,7 +1012,8 @@ impl Exporter<'_> {
             items.push(cell.clone());
         }
         let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
-        page_display(self.doc, &one, dopts)
+        // Drawn alone, its lines still see the cell, paragraph and shape fills drawn before them (#3585).
+        page_display_over(self.doc, &one, dopts, behind)
     }
 
     /// A heading's text for bookmarks and tags: what the pages show. That leaves out what its

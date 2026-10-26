@@ -8,7 +8,7 @@ use wordcraft_doc::props::{Border, BorderStyle, Rgb, TextColor, TextDirection, U
 use wordcraft_doc::section::SectionStart;
 use wordcraft_doc::{Block, Document, Path, StoryRef};
 use wordcraft_fonts::{BezPath, FaceRef};
-use wordcraft_geom::{Rect, Spin};
+use wordcraft_geom::{Point, Rect, Spin};
 
 use crate::math::MItem;
 use crate::para::{ClKind, LineEnd, ParaLayout};
@@ -530,11 +530,18 @@ fn stroke_of(u: Underline) -> Stroke {
 
 /// Draw items for a page.
 pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<Draw> {
+    page_display_over(doc, page, opts, &[])
+}
+
+/// [`page_display`] for a page holding part of another page's items, drawn over `behind`: the
+/// backgrounds that page draws before them (each [`ground`] so far), which automatic text is drawn
+/// against.
+pub fn page_display_over(doc: &Document, page: &Page, opts: &DisplayOptions, behind: &[(Rect, Rgb)]) -> Vec<Draw> {
     let mut out = Vec::new();
     let (ha, ba) = dimming(opts);
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header, &page.footer], opts, &authors, ha, &mut out);
-    stories_display(doc, &[&page.items], opts, &authors, ba, &mut out);
+    stories_display(doc, &[&page.header, &page.footer], opts, &authors, ha, behind, &mut out);
+    stories_display(doc, &[&page.items], opts, &authors, ba, behind, &mut out);
     body_change_bars(doc, page, opts, ba, &mut out);
     out
 }
@@ -546,8 +553,8 @@ pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32,
     let (ha, ba) = dimming(opts);
     let (mut hf, mut body) = (Vec::new(), Vec::new());
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header, &page.footer], opts, &authors, 1.0, &mut hf);
-    stories_display(doc, &[&page.items], opts, &authors, 1.0, &mut body);
+    stories_display(doc, &[&page.header, &page.footer], opts, &authors, 1.0, &[], &mut hf);
+    stories_display(doc, &[&page.items], opts, &authors, 1.0, &[], &mut body);
     body_change_bars(doc, page, opts, 1.0, &mut body);
     [(ha, hf), (ba, body)]
 }
@@ -564,17 +571,44 @@ fn body_change_bars(doc: &Document, page: &Page, opts: &DisplayOptions, alpha: f
     }
 }
 
-/// Draw items for the placed items of `stories`, faded by `a`.
-fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptions, authors: &Authors, a: f32, out: &mut Vec<Draw>) {
+/// Draw items for the placed items of `stories`, faded by `a`, over the fills `behind`.
+fn stories_display(
+    doc: &Document,
+    stories: &[&Vec<Placed>],
+    opts: &DisplayOptions,
+    authors: &Authors,
+    a: f32,
+    behind: &[(Rect, Rgb)],
+    out: &mut Vec<Draw>,
+) {
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
         let clips = clipped_cells(items);
         let mut done: Vec<u32> = Vec::new();
+        // The cell and paragraph fills drawn so far, newest last: the background under later lines.
+        let mut fills: Vec<(Rect, Rgb)> = behind.to_vec();
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
             if hidden.as_ref().is_some_and(|h| h.hides(it)) {
                 continue;
+            }
+            if let Some(ground) = ground(it) {
+                fills.push(ground);
+            }
+            if let Placed::Lines { story, path, para, l0, l1, x, y, turn } = it
+                && !turn.is_turned()
+            {
+                let warped = matches!(story, StoryRef::Part(id) if warps.iter().any(|(w, ..)| w == id));
+                if !warped {
+                    let mut inner = Vec::new();
+                    lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, authors, a, false, &fills, &mut inner);
+                    match cell_clip(&clips, *story, &path.0) {
+                        Some(rect) => out.push(Draw::Clip { rect, items: inner }),
+                        None => out.extend(inner),
+                    }
+                    continue;
+                }
             }
             if let Placed::Lines { story, path, .. } = it
                 && let Some(rect) = cell_clip(&clips, *story, &path.0)
@@ -601,6 +635,58 @@ fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptio
             }
         }
     }
+}
+
+/// The background `it` paints for the text drawn over it: a cell or paragraph fill, or the mostly
+/// opaque fill (transparency, in percent, under 50) of an unturned rectangle or text box, whose frame
+/// is the area it paints, so a white text box over a dark cell keeps its automatic text black. A
+/// gradient counts as its average colour over the shape ([`gradient_average`]). Turned, round and
+/// freeform shapes, and shapes without a fill, leave what is under them.
+pub fn ground(it: &Placed) -> Option<(Rect, Rgb)> {
+    use wordcraft_doc::para::ShapeKind;
+    match it {
+        Placed::Fill { rect, color } => Some((*rect, *color)),
+        Placed::Shape {
+            rect,
+            fill: Some(fill),
+            kind: ShapeKind::Rectangle | ShapeKind::RoundedRectangle | ShapeKind::TextBox,
+            spin,
+            freeform: None,
+            ..
+        } if spin.is_identity() => {
+            let color = match fill {
+                wordcraft_doc::fill::Fill::Solid { color, transparency } => (*transparency < 50.0).then_some(*color),
+                wordcraft_doc::fill::Fill::Gradient(g) => gradient_average(&g.stops),
+            }?;
+            Some((*rect, color))
+        }
+        _ => None,
+    }
+}
+
+/// A gradient's average colour along its length: its mostly opaque stops (positions in percent),
+/// each colour weighted by how much of the gradient it covers, the colour before the first stop and
+/// after the last held flat. `None` when no stop is mostly opaque.
+fn gradient_average(stops: &[wordcraft_doc::wordart::GradStop]) -> Option<Rgb> {
+    let mut opaque: Vec<(f32, Rgb)> = stops.iter().filter(|s| s.transparency < 50.0).map(|s| (s.pos.clamp(0.0, 100.0), s.color)).collect();
+    opaque.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (first, last) = (*opaque.first()?, *opaque.last()?);
+    let channel = |f: fn(&Rgb) -> u8| {
+        let v = |c: &Rgb| f32::from(f(c));
+        let mut area = first.0 * v(&first.1) + (100.0 - last.0) * v(&last.1);
+        for w in opaque.windows(2) {
+            if let [(p0, c0), (p1, c1)] = w {
+                area += (p1 - p0) * (v(c0) + v(c1)) / 2.0;
+            }
+        }
+        (area / 100.0).round().clamp(0.0, 255.0) as u8
+    };
+    Some(Rgb(channel(|c| c.0), channel(|c| c.1), channel(|c| c.2)))
+}
+
+/// The colour of the newest fill in `fills` that covers `p`, if any.
+fn fill_at(fills: &[(Rect, Rgb)], p: Point) -> Option<Rgb> {
+    fills.iter().rev().find(|(r, _)| r.contains(p)).map(|(_, c)| *c)
 }
 
 /// One object drawn alone, as its page draws it: the picture, shape or group `o` in `rect` (its
@@ -841,7 +927,7 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
         Placed::Cell { .. } | Placed::Object { .. } => {}
         Placed::Lines { story, path, para, l0, l1, x, y, turn } if turn.is_turned() => {
             let mut items = Vec::new();
-            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, authors, alpha, *turn == TextDirection::Down, &mut items);
+            lines(doc, *story, path, para, *l0, *l1, 0.0, 0.0, opts, authors, alpha, *turn == TextDirection::Down, &[], &mut items);
             // Link areas are axis-aligned page rectangles: turned text gets none.
             for d in &mut items {
                 if let Draw::Glyphs { link, .. } = d {
@@ -853,7 +939,9 @@ fn item_in(doc: &Document, it: &Placed, opts: &DisplayOptions, authors: &Authors
             }
             out.push(Draw::Turned { x: *x, y: *y, turn: *turn, items });
         }
-        Placed::Lines { story, path, para, l0, l1, x, y, .. } => lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, authors, alpha, false, out),
+        Placed::Lines { story, path, para, l0, l1, x, y, .. } => {
+            lines(doc, *story, path, para, *l0, *l1, *x, *y, opts, authors, alpha, false, &[], out)
+        }
     }
 }
 
@@ -874,6 +962,7 @@ fn lines(
     authors: &Authors,
     alpha: f32,
     down: bool,
+    behind: &[(Rect, Rgb)],
     out: &mut Vec<Draw>,
 ) {
     let Some(first) = pl.lines.get(l0) else { return };
@@ -890,6 +979,10 @@ fn lines(
     for li in l0..l1 {
         let Some(line) = pl.lines.get(li) else { continue };
         let top = y + (line.top - first.top);
+        // The cell or paragraph shading behind the line: what automatic text is drawn against
+        // when the run has no shading or highlight of its own (#3585).
+        let mid = line.xs.first().zip(line.xs.last()).map_or(0.0, |(a, b)| (a + b) / 2.0);
+        let under = fill_at(behind, Point::new(x + mid, top + line.height / 2.0));
         let base = top + (line.baseline - line.top);
         let bottom = top + line.height;
         // Commented text gets a soft shade (comment anchors are object markers).
@@ -1107,12 +1200,12 @@ fn lines(
             // Moved text marked (none) is plain text, its colour setting aside (Word for Mac).
             let plain_move = (moved_from && m.move_from_mark == DeleteMark::None) || (moved_to && m.move_to_mark == InsertMark::None);
             let color = match (ins, del) {
-                _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight)),
+                _ if plain_move => text_color(&rc.color, rc.shading.or(rc.highlight).or(under)),
                 (_, Some(r)) if moved_from => m.move_from_color.unwrap_or_else(|| author(r)),
                 (Some(r), _) if moved_to => m.move_to_color.unwrap_or_else(|| author(r)),
                 (Some(r), _) => m.insert_color.unwrap_or_else(|| author(r)),
                 (None, Some(r)) => m.delete_color.unwrap_or_else(|| author(r)),
-                _ => ink(&rc.color, rc.shading.or(rc.highlight)),
+                _ => ink(&rc.color, rc.shading.or(rc.highlight).or(under)),
             };
             // The highlight or shading drawn under this run (as filled in the backgrounds pass).
             let text_bg = rc.highlight.or(rc.shading);
@@ -1372,7 +1465,7 @@ fn lines(
                     face: st.face,
                     size: st.size,
                     glyphs: run.iter().map(|(_, g)| (g.gid, cx + g.dx, y - g.dy)).collect(),
-                    color: ink(&st.rc.color, st.rc.shading.or(st.rc.highlight)),
+                    color: ink(&st.rc.color, st.rc.shading.or(st.rc.highlight).or(under)),
                     alpha,
                     synth_bold: st.synth_bold,
                     synth_italic: st.synth_italic,
