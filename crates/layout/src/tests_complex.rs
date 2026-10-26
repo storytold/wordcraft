@@ -152,6 +152,53 @@ fn a_missing_thai_font_draws_the_whole_run_in_one_thai_face() {
     }
 }
 
+/// Body paragraph 0 of `text` at 16 pt, its run set in `font` whose font table alternate
+/// (`w:altName`) is `alt`, and the face of every cluster: (cluster start, face).
+fn cluster_faces_with_alternate(text: &str, font: &str, alt: &str) -> Vec<(usize, wordcraft_fonts::FaceRef)> {
+    let mut d = Document::from_text(text);
+    d.settings.font_alt_names = vec![(font.into(), alt.into())];
+    let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+    p.runs[0].props.font = Some(font.into());
+    p.runs[0].props.size = Some(16.0);
+    let l = lay(&d);
+    let pl = para_layout(&l, 0);
+    pl.clusters.iter().map(|c| (c.start, pl.styles[c.style as usize].face)).collect()
+}
+
+/// The Thai-run check of #2711 (Nghiathan13), raised in FredApps's review there.
+#[test]
+fn a_missing_thai_font_with_a_latin_alternate_still_draws_the_run_in_one_face() {
+    if !thai_font_installed() {
+        eprintln!("skipped: no Thai font installed");
+        return;
+    }
+    // A missing font is drawn in its font table alternate. When the font is Thai and the
+    // installed alternate has no Thai letters, the run still takes one face for its Thai and
+    // Latin text (#1549), not the alternate for the Latin and per-letter fallback for the Thai.
+    let alt = "Source Sans 3";
+    let alt_face = wordcraft_fonts::word::resolve(alt, false, false).face;
+    assert!(!alt_face.covers('\u{0E19}'), "{} has no Thai, so the run must move", alt_face.family);
+    let db = wordcraft_fonts::FontDb::global();
+    for font in ["TH Sarabun New", "Angsana New"] {
+        if db.has_family(font) {
+            continue;
+        }
+        let faces = cluster_faces_with_alternate(THAI_RUN, font, alt);
+        let first = faces[0].1;
+        let names: Vec<&str> = faces.iter().map(|(_, f)| f.family.as_str()).collect();
+        assert!(faces.iter().all(|(_, f)| f.id() == first.id()), "{font} (alternate {alt}): one face for the run, not {names:?}");
+        assert!(first.covers('\u{0E19}') && first.covers('D') && first.covers('1') && first.covers('\u{0E3F}'), "{font} → {}", first.family);
+        // A Latin-only run in the same font is drawn in the alternate.
+        let latin = cluster_faces_with_alternate("Lanterns 1,250", font, alt);
+        assert!(latin.iter().all(|(_, f)| f.id() == alt_face.id()), "{font}: Latin text in {alt}");
+    }
+    // A missing Latin font with the same alternate isn't Thai: its Latin text stays in the
+    // alternate and only the Thai letters fall back.
+    let faces = cluster_faces_with_alternate("Hello \u{0E2A}\u{0E27}\u{0E31}\u{0E2A}\u{0E14}\u{0E35}", "No Such Latin Font", alt);
+    assert!(faces.iter().filter(|(at, _)| *at < 5).all(|(_, f)| f.id() == alt_face.id()), "Hello stays in {alt}");
+    assert!(faces.iter().any(|(at, f)| *at >= 6 && f.id() != alt_face.id()), "the Thai letters fall back");
+}
+
 #[test]
 fn a_thai_substitute_without_latin_hands_the_run_to_one_face_covering_it() {
     if !thai_font_installed() {

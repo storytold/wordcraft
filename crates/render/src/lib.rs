@@ -697,7 +697,7 @@ fn render_region_capped(doc: &Document, page: &Page, w: u32, h: u32, view: Affin
     }
     let visible = view.inverse().transform_rect_bbox(kurbo::Rect::new(0.0, 0.0, w16 as f64, h16 as f64)).inflate(40.0, 40.0);
     if let Some(wm) = &doc.settings.watermark {
-        draw_watermark(&mut ctx, view, page, wm, opts);
+        draw_watermark(&mut ctx, view, page, doc, wm, opts);
     }
     // A dimmed layer is drawn whole, then faded once, so its overlaps don't darken.
     for (alpha, items) in page_layers(doc, page, &opts.display) {
@@ -826,8 +826,8 @@ pub fn render_text_line(face: &wordcraft_fonts::FontFace, text: &str, size: f32,
     Rendered { width: w16 as u32, height: h16 as u32, pixels }
 }
 
-fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
-    let r = wordcraft_fonts::word::resolve(&wm.font, false, false);
+fn draw_watermark(ctx: &mut RenderContext, view: Affine, page: &Page, doc: &Document, wm: &wordcraft_doc::Watermark, opts: &RenderOptions) {
+    let r = wordcraft_fonts::word::resolve(wordcraft_layout::para::lookup_alternate(doc, &wm.font), false, false);
     let face = r.face;
     let glyphs = wordcraft_fonts::shape(&face, &wm.text, &[], |c| c);
     let upem = face.upem.max(1.0);
@@ -1558,6 +1558,31 @@ mod tests {
         assert!(dark > 30, "dark {dark}");
         assert_eq!(img.pixel(5, 5), [255, 255, 255, 255]);
         assert!(!img.to_png().is_empty());
+    }
+
+    /// The watermark's font, missing: drawn in the font table's alternate when it is installed,
+    /// else in the font's own substitute, as before; never in the roman fallback (Cambria).
+    #[test]
+    fn a_watermark_in_a_missing_roman_font_takes_only_the_font_tables_alternate() {
+        const MISSING: &str = "No Such Roman Watermark Font";
+        let pixels = |font: &str, roman: bool, alt: Option<&str>| {
+            let mut d = Document::new();
+            d.settings.watermark = Some(wordcraft_doc::Watermark { text: "COPY".into(), font: font.into(), diagonal: false, ..Default::default() });
+            if roman {
+                d.settings.roman_fonts = vec![font.into()];
+            }
+            d.settings.font_alt_names = alt.map(|a| vec![(font.to_string(), a.to_string())]).unwrap_or_default();
+            let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+            render_page(&d, &l.pages[0], 0.5, &RenderOptions::default()).pixels
+        };
+        let missing = pixels(MISSING, false, None);
+        assert!(pixels("Cambria", false, None) != missing, "Cambria draws the watermark differently");
+        assert!(pixels(MISSING, true, None) == missing, "roman, no alternate: the font's own substitute");
+        assert!(pixels(MISSING, true, Some("Also Not Installed")) == missing, "roman, a missing alternate: the font's own substitute");
+        assert!(
+            pixels(MISSING, true, Some("JetBrains Mono")) == pixels("JetBrains Mono", false, None),
+            "roman, an installed alternate: the alternate"
+        );
     }
 
     /// Table Layout › Text Direction (#226): a turned cell's text is painted running down the

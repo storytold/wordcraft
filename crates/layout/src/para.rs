@@ -66,13 +66,14 @@ impl<'a> SymbolRun<'a> {
 /// Whether a bullet level's `text` has a private-use character that no installed font draws:
 /// its font isn't installed (or lacks it) and it isn't a symbol-font code with a Unicode
 /// equivalent. Private-use codes mean something different in every font, so another face's
-/// glyph there is an unrelated icon, not a bullet.
-fn undrawable_bullet(text: &str, lvl: &Level, rc: &ResolvedChar) -> bool {
+/// glyph there is an unrelated icon, not a bullet. The font is the font table's alternate for a
+/// missing font when there is a usable one ([`lookup_alternate`]), never the roman fallback.
+fn undrawable_bullet(doc: &Document, text: &str, lvl: &Level, rc: &ResolvedChar) -> bool {
     let private = |c: char| matches!(u32::from(c), 0xE000..=0xF8FF | 0xF0000..=0x10FFFF);
     lvl.format == NumFormat::Bullet
         && text.chars().any(|c| {
             private(c) && wordcraft_doc::symbol_fonts::symbol_char(&rc.font, c).is_none() && {
-                let r = wordcraft_fonts::word::resolve(&rc.font, rc.bold, rc.italic);
+                let r = wordcraft_fonts::word::resolve(lookup_alternate(doc, &rc.font), rc.bold, rc.italic);
                 r.substituted || !r.face.covers(c)
             }
         })
@@ -806,34 +807,10 @@ fn east_asian(c: char) -> bool {
     crate::kinsoku::is_east_asian(c) || matches!(u32::from(c), 0x1100..=0x11FF | 0x3130..=0x318F | 0xAC00..=0xD7AF)
 }
 
-/// Word draws a font that isn't installed in Cambria when the document's font table classes it
-/// as roman (measured in Word; Calibri otherwise, which our own substitutes already match).
-const MISSING_ROMAN_FONT: &str = "Cambria";
-
-/// The family to look `font` up as: [`MISSING_ROMAN_FONT`] for a missing roman font, else `font`.
-/// A missing Thai font keeps its name: it is drawn in a Thai face, not in Cambria (#1549).
-/// A font with substitutes of its own keeps them: Times New Roman is roman in every font table,
-/// and where it isn't installed Liberation Serif has its metrics; Word never meets it missing.
-fn lookup_family<'f>(doc: &Document, font: &'f str) -> &'f str {
-    let db = wordcraft_fonts::FontDb::global();
-    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font));
-    if roman
-        && !wordcraft_fonts::word::is_thai_family(font)
-        && !wordcraft_doc::symbol_fonts::is_symbol_font(font)
-        && !wordcraft_fonts::word::has_named_substitutes(font)
-        && !db.has_family(font)
-        && !db.has_family(wordcraft_fonts::word::charset_base_family(font))
-    {
-        MISSING_ROMAN_FONT
-    } else {
-        font
-    }
-}
-
 /// One face for a run in a Thai font that isn't installed (#1549): Word substitutes one font
 /// (Cordia New) for the whole run, so the Latin letters, digits and ฿ keep the Thai letters' face
-/// and size. `None` unless `font` is a Thai family, it was substituted, and its substitute
-/// `primary` lacks some of the run's Thai or Latin characters; then the first face covering all of
+/// and size. `None` unless `font` is a Thai family, it was substituted (or drawn in its font
+/// table alternate), and its stand-in `primary` lacks some of the run's Thai or Latin characters; then the first face covering all of
 /// them, if one does. Other families keep Latin text in their own substitute, as Word does.
 pub(crate) fn thai_run_face(font: &str, substituted: bool, primary: FaceRef, text: &str, bold: bool, italic: bool) -> Option<FaceRef> {
     if !substituted || !wordcraft_fonts::word::is_thai_family(font) {
@@ -850,6 +827,48 @@ pub(crate) fn thai_run_face(font: &str, substituted: bool, primary: FaceRef, tex
 /// and punctuation.
 fn thai_or_latin(c: char) -> bool {
     matches!(u32::from(c), 0x0021..=0x024F | 0x0E00..=0x0E7F) && !c.is_whitespace() && !c.is_control() && c != SOFT_HYPHEN
+}
+
+/// The family to look the document's `font` up as: Word draws a font that isn't installed in the
+/// font table's alternate name for it, or in Cambria when the table classes it as roman (measured
+/// in Word; see [`wordcraft_fonts::word::document_family`]). A symbol font keeps its name: its
+/// characters are drawn as their Unicode equivalents. The roman rule also spares a missing Thai
+/// font, drawn in a Thai face (#1549), and a font with substitutes of its own: Times New Roman is
+/// roman in every font table, and where it isn't installed Liberation Serif has its metrics; Word
+/// never meets it missing.
+pub fn lookup_family<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    if wordcraft_doc::symbol_fonts::is_symbol_font(font) {
+        return font;
+    }
+    let alt = alt_name(doc, font);
+    let roman = doc.settings.roman_fonts.iter().any(|f| f.eq_ignore_ascii_case(font))
+        && !wordcraft_fonts::word::is_thai_family(font)
+        && !wordcraft_fonts::word::has_named_substitutes(font);
+    if alt.is_none() && !roman {
+        return font;
+    }
+    wordcraft_fonts::word::document_family(font, alt, roman, wordcraft_fonts::word::available)
+}
+
+/// The family to look `font` up as by the font table's alternate name alone: the alternate when
+/// `font` isn't installed and the alternate is ([`wordcraft_fonts::word::document_family`]), else
+/// `font`, never the roman fallback; a symbol font keeps its name. For a run's East Asian font
+/// (Word draws a missing roman East Asian font in its own East Asian face, not Cambria), a
+/// bullet's private-use code, and text outside a paragraph's runs (normal text in equations,
+/// chart and diagram text, watermarks), which never took the roman fallback.
+pub fn lookup_alternate<'f>(doc: &'f Document, font: &'f str) -> &'f str {
+    if wordcraft_doc::symbol_fonts::is_symbol_font(font) {
+        return font;
+    }
+    match alt_name(doc, font) {
+        Some(alt) => wordcraft_fonts::word::document_family(font, Some(alt), false, wordcraft_fonts::word::available),
+        None => font,
+    }
+}
+
+/// The font table's alternate name for `font` (`w:altName`; names match in any case, as in Word).
+fn alt_name<'f>(doc: &'f Document, font: &str) -> Option<&'f str> {
+    doc.settings.font_alt_names.iter().find(|(f, _)| f.eq_ignore_ascii_case(font)).map(|(_, a)| a.as_str())
 }
 
 impl<'a> Builder<'a> {
@@ -934,7 +953,11 @@ impl<'a> Builder<'a> {
         // Complex-script characters (Persian, Arabic…) use the run's complex-script font, size,
         // bold and italic.
         let rc_cs: Option<Arc<ResolvedChar>> = text.chars().any(|c| rc.uses_complex(c)).then(|| Arc::new(rc.complex()));
-        let resolved = wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &rc.font), rc.bold, rc.italic);
+        let family = lookup_family(self.env.doc, &rc.font);
+        let resolved = wordcraft_fonts::word::resolve(family, rc.bold, rc.italic);
+        // The run's font is missing when it was substituted, or when another family stands in for
+        // it: its font table alternate, which may itself be installed.
+        let requested_missing = resolved.substituted || !family.eq_ignore_ascii_case(&rc.font);
         let primary = resolved.face;
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
@@ -946,7 +969,7 @@ impl<'a> Builder<'a> {
             .font_ea
             .as_ref()
             .filter(|f| !f.eq_ignore_ascii_case(&rc.font) && text.chars().any(east_asian))
-            .map(|f| wordcraft_fonts::word::resolve(f, rc.bold, rc.italic))
+            .map(|f| wordcraft_fonts::word::resolve(lookup_alternate(self.env.doc, f), rc.bold, rc.italic))
             .filter(|r| !r.substituted)
             .map(|r| r.face);
         // The levels by byte of `text`, from `lbase` on.
@@ -960,7 +983,7 @@ impl<'a> Builder<'a> {
         // A missing Thai font: one face for the run's Thai and Latin text (#1549). A run with its
         // own complex-script font keeps that font for the Thai letters.
         let run_face: Option<FaceRef> = if primary_cs.is_none_or(|f| f.id() == primary.id()) {
-            thai_run_face(&rc.font, resolved.substituted, primary, text, rc.bold, rc.italic)
+            thai_run_face(&rc.font, requested_missing, primary, text, rc.bold, rc.italic)
         } else {
             None
         };
@@ -1719,7 +1742,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
                         }
                         Some(InlineObject::Equation { linear, display, math }) => {
                             let avail = (env.width - rp.indent_left.max(0.0) - rp.indent_right.max(0.0)).max(12.0);
-                            let ml = crate::math::layout_equation(math, linear, &rc, *display, avail, &math_props, &mut eq_counter);
+                            let ml = crate::math::layout_equation(env.doc, math, linear, &rc, *display, avail, &math_props, &mut eq_counter);
                             let st = b.styles.get(si as usize);
                             // The line is at least as tall as the text around it.
                             let (a, d) = st.map(|s| (s.ascent, s.descent)).unwrap_or((0.0, 0.0));
@@ -1872,7 +1895,7 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         // A bullet no installed font can draw would come from whatever icon font has its
         // private-use code (Font Awesome's Twitter logo at U+F081, #1683): it shows the level's
         // default bullet instead.
-        let fixed = undrawable_bullet(text, lvl, &rc)
+        let fixed = undrawable_bullet(env.doc, text, lvl, &rc)
             .then(|| wordcraft_doc::numbering::default_bullet(usize::from(rp.numbering.map_or(0, |n| n.level))).to_string());
         let text: &str = fixed.as_deref().unwrap_or(text);
         // A Symbol/Wingdings bullet (U+F0B7…) is drawn as its Unicode equivalent when the font
@@ -3490,6 +3513,6 @@ mod tests {
         for family in ["Symbol (PCL6)", "Wingdings"] {
             assert_eq!(lookup_family(&d, family), family);
         }
-        assert_eq!(lookup_family(&d, "No Such Roman Font"), MISSING_ROMAN_FONT);
+        assert_eq!(lookup_family(&d, "No Such Roman Font"), "Cambria");
     }
 }

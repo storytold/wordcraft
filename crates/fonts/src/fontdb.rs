@@ -296,10 +296,13 @@ impl FontFace {
     }
     /// Is `family` this face's typographic, legacy, full or PostScript name?
     pub fn named(&self, family: &str) -> bool {
+        self.named_but_postscript(family) || self.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
+    }
+    /// Is `family` this face's typographic, legacy or full name?
+    fn named_but_postscript(&self, family: &str) -> bool {
         self.family.eq_ignore_ascii_case(family)
             || self.legacy_family.eq_ignore_ascii_case(family)
             || self.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
-            || self.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
     }
     /// Does the face map `c` to a glyph?
     pub fn covers(&self, c: char) -> bool {
@@ -1262,9 +1265,14 @@ impl FontDb {
     }
 
     /// Add a user font (TTF/OTF/TTC bytes). Returns the number of faces added (0 if unparseable or
-    /// every face was already present).
+    /// every face was already present). Lookups made while its family was missing are forgotten
+    /// ([`FontDb::generation`]).
     pub fn add_font(&self, bytes: Vec<u8>) -> usize {
-        self.add_fonts(vec![(bytes, None)])
+        let added = self.add_fonts(vec![(bytes, None)]);
+        if added > 0 {
+            self.fonts_changed();
+        }
+        added
     }
 
     /// Add the faces of several font files at once: lookups see all of them or none, never a
@@ -1324,13 +1332,18 @@ impl FontDb {
 
     /// Scan the font folders again (fonts installed or removed since), cataloging the faces
     /// found (native only). Font data is loaded when a cataloged family is first resolved.
-    /// Returns the number of faces cataloged.
+    /// Returns the number of faces cataloged. A rescan forgets lookups made before it
+    /// ([`FontDb::generation`]); the first scan has none to forget, as lookups wait for it.
     #[cfg(not(target_arch = "wasm32"))]
     pub fn load_system_fonts(&self) -> usize {
         // The first scan, or a rescan once it is done (never both at once).
         let mut first = None;
         self.cataloged.get_or_init(|| first = Some(self.scan_font_dirs()));
-        first.unwrap_or_else(|| self.scan_font_dirs())
+        first.unwrap_or_else(|| {
+            let n = self.scan_font_dirs();
+            self.fonts_changed();
+            n
+        })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -1522,7 +1535,18 @@ impl FontDb {
     /// Is `family` available (loaded, or installed on the system)? English and localized family
     /// names and exact full or PostScript face names count.
     pub fn has_family(&self, family: &str) -> bool {
-        if self.is_loaded(family) {
+        self.has_named(family, true)
+    }
+
+    /// [`FontDb::has_family`] without PostScript names: Word for Mac treats a font named only by
+    /// its PostScript name (`ArialMT`) as missing when the font table gives it an alternate.
+    pub fn has_family_but_postscript(&self, family: &str) -> bool {
+        self.has_named(family, false)
+    }
+
+    fn has_named(&self, family: &str, postscript: bool) -> bool {
+        let face_named = |f: &FontFace| if postscript { f.named(family) } else { f.named_but_postscript(family) };
+        if self.read_faces().iter().any(|f| face_named(f)) {
             return true;
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -1530,7 +1554,7 @@ impl FontDb {
             c.family.eq_ignore_ascii_case(family)
                 || c.legacy.eq_ignore_ascii_case(family)
                 || c.full_name.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
-                || c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family))
+                || (postscript && c.postscript.as_ref().is_some_and(|n| n.eq_ignore_ascii_case(family)))
         }) {
             return true;
         }
@@ -1978,7 +2002,7 @@ impl FontDb {
                 data = read_fallback_file(&file.path);
             }
             if let Some(data) = data
-                && self.add_font(data) > 0
+                && self.add_fonts(vec![(data, None)]) > 0
                 && covered(self)
             {
                 return true;
