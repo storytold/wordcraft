@@ -129,10 +129,8 @@ fn thai_tcb_action(s: &Session, ch: char) -> Option<wordcraft_doc::thai_input::T
     }
 }
 
-/// `text.insert`: type `text` at the selection as the keyboard does (AutoCorrect and
-/// AutoFormat unless `raw`), or, with `paragraphs`, line by line with Enter between. A single
-/// trigger character records the IME outcome, and list, AutoCorrect, dash and double-space
-/// AutoFormat run as a separate undo step when they rewrite the paragraph.
+/// Insert `text` at the caret, applying AutoFormat, AutoCorrect, and Thai input
+/// sequence checking.  `raw` bypasses all of those (used for paste and programmatic inserts).
 fn insert(s: &mut Session, v: &Value) -> CmdResult {
     let text = p::req_str(v, "text")?;
     let raw = p::bool(v, "raw").unwrap_or(false);
