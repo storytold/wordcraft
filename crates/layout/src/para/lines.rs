@@ -405,7 +405,7 @@ impl<'e> Breaker<'e> {
     /// tallest picture on it (which sits on the baseline).
     fn extents(&self, pl: &ParaLayout, (c0, c1): (usize, usize)) -> Extents {
         let rp = &self.rp;
-        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0 };
+        let mut ex = Extents { asc: 0.0, desc: 0.0, obj_asc: 0.0, tasc: 0.0, tdesc: 0.0 };
         let mut any = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
@@ -432,6 +432,8 @@ impl<'e> Breaker<'e> {
             } else {
                 // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
                 let (a, d) = st.line_extent();
+                ex.tasc = ex.tasc.max(a);
+                ex.tdesc = ex.tdesc.max(d);
                 (a.max(c.obj_h + st.shift), d)
             };
             ex.asc = ex.asc.max(a);
@@ -450,7 +452,7 @@ impl<'e> Breaker<'e> {
     /// The line's height, baseline and text extent.
     fn measure(&self, pl: &ParaLayout, range: (usize, usize)) -> Measure {
         let rp = &self.rp;
-        let Extents { mut asc, mut desc, obj_asc } = self.extents(pl, range);
+        let Extents { mut asc, mut desc, obj_asc, tasc, tdesc } = self.extents(pl, range);
         let text_natural = asc + desc;
         let (text_asc, text_desc) = (asc.max(obj_asc), desc);
         let text_pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
@@ -476,14 +478,26 @@ impl<'e> Breaker<'e> {
         // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
-        // Word puts the multiple's leading of the text, (m - 1) x its natural height, below a taller
-        // picture instead of the descent: a 472pt picture in 1.5-spaced 12pt text (natural 12.59pt,
-        // descent 2.63pt) takes 478.3pt in Word for Windows, its next line 6.3pt below it. Never
-        // less than the picture and the descent (single spacing). (height, leading)
+        // Below a picture taller than the text Word puts the multiple's leading, (m - 1) x the
+        // natural height, of the line's text after its descent, or of the paragraph mark's font
+        // alone on a line of only pictures, never of a picture's own run. Word for Mac 16.93,
+        // a 2cm picture: next to 14pt Times New Roman text at double spacing 3.0 + 16.1pt below it,
+        // under a default 11pt Cambria mark 12.9pt, in a 20pt Arial run under an 8pt Times New
+        // Roman mark 9.2pt; at 1.15 spacing 0.15 x 12.9pt, less than the descent. Word for
+        // Windows: a 472pt picture in 1.5-spaced 12pt text takes 478.3pt. (height, leading)
         let multiple_pictures = match rp.line_spacing {
             LineSpacing::Multiple(m) if text_pictures > 0.0 && m > 1.0 => {
-                let leading = (m - 1.0) * text_natural;
-                Some((obj_asc + desc.max(leading), leading))
+                let (below, leading) = if tasc + tdesc > 0.0 {
+                    let leading = (m - 1.0) * (tasc + tdesc);
+                    (tdesc + leading, leading)
+                } else {
+                    let natural = pl.styles.get(self.mark_style as usize).map_or(text_natural, |st| {
+                        let (a, d) = st.line_extent();
+                        a + d
+                    });
+                    ((m - 1.0) * natural, (m - 1.0) * natural)
+                };
+                Some((obj_asc + below, leading))
             }
             _ => None,
         };
@@ -500,7 +514,10 @@ impl<'e> Breaker<'e> {
             let up = asc.max(obj_asc);
             self.top + ((height - up - desc) / 2.0).max(0.0) + up
         } else {
-            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
+            // A picture that sets the line's height under multiple spacing stands at its top: the
+            // room below it may be less than the descent.
+            let floor = if multiple_pictures.is_some_and(|p| height <= p.0) { obj_asc } else { obj_asc.min(height - desc) };
+            self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(floor)
         };
         // Below a picture that sets the line's height the leading is the multiple's, as below text:
         // Word keeps such a line on the page when the picture fits above the bottom margin (with
@@ -656,6 +673,9 @@ struct Extents {
     asc: f32,
     desc: f32,
     obj_asc: f32,
+    /// The line's text alone, without its pictures' runs: the multiple's leading below a picture.
+    tasc: f32,
+    tdesc: f32,
 }
 
 /// A line's height and baseline, and the extent of its text.
