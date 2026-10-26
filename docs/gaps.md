@@ -344,6 +344,7 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 | 2026-10-12 | trivial | #811: large-table scrolling fixed; performance gap (#20) narrowed |
 | 2026-10-12 | trivial | #13: radar, stock and other undrawn chart types show a placeholder instead of blank space (#998) |
 | 2026-10-19 | trivial | Personal templates in File › New and Save as Word Template (#2852); no gap entry tracked it |
+| 2026-10-26 | trivial | Automatic-width tables keep their saved grid when it holds the content; a page-break-only line that does not fit moves on, as in Word's PDFs of two real documents; w14 numSpacing, numForm, stylisticSets and cntxtAlts shape text; no gap entry tracked it |
 
 ## Layout validation fonts
 
