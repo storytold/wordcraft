@@ -326,13 +326,21 @@ fn missouri_appendix_pages_are_numbered_from_a1() {
     assert_eq!(rendered_footer(&mut reopened, 1), "A2", "rendered footer page 2 after .docx round-trip");
 }
 
-/// Creating an appendix opens it in place of the brief, so an interface asks to save the brief
-/// first, as it does for File › New.
+/// Creating an appendix opens it as another document, as File › New does: the brief stays open,
+/// unsaved changes and all, so nothing asks to save it first.
 #[test]
-fn law_appendix_create_asks_to_save_the_brief_first() {
+fn law_appendix_create_keeps_the_brief_open() {
     let spec = crate::specs().into_iter().find(|c| c.id == "law.appendix.create").expect("the command");
-    assert!(spec.replaces_document);
-    assert!(!crate::specs().into_iter().find(|c| c.id == "law.appendix.apply").expect("the command").replaces_document);
+    assert!(!spec.replaces_document);
+    let mut s = apply_session(MISSOURI, "brief");
+    run(&mut s, "text.insert", json!({"text": "Brief text"}));
+    let brief = s.document_id();
+    run(&mut s, "law.appendix.create", json!({}));
+    assert_ne!(s.document_id(), brief, "the appendix is a document of its own");
+    assert!(s.is_open(brief), "the brief is still open");
+    s.activate(brief).unwrap();
+    assert!(s.dirty, "with its unsaved changes");
+    assert!(s.doc.plain_text(StoryRef::Body).contains("Brief text"));
 }
 
 #[test]

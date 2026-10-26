@@ -136,8 +136,6 @@ pub fn specs() -> Vec<wordcraft_engine::CommandSpec> {
         wordcraft_engine::CommandSpec::new("law.appendix.create", "Create Appendix", LOC, |s, v| {
             create_appendix(s, v).map_err(|e| CmdError::Failed(e.to_string()))
         })
-        // It opens the appendix in place of the brief: the interface asks to save the brief first.
-        .replaces_document()
         .params(
             r#"{"id"?: string (court profile; default: the profile applied to the open brief)} → {"profile", "doc", "applied", "styles"}; opens a new appendix document"#,
         ),

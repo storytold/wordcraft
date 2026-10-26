@@ -148,8 +148,10 @@ fn create_on_a_clean_document_with_text_runs_file_new_and_writes_the_pleading() 
     assert_eq!(firm["firmName"], "Nolan Law Firm LLC", "Remember firm details saved them");
 }
 
+/// Unsaved work stays open: File › New opens another document beside it, so Create puts the
+/// pleading there without asking to save anything.
 #[test]
-fn cancelling_the_save_prompt_creates_nothing_and_keeps_the_window() {
+fn unsaved_work_stays_open_beside_the_new_pleading() {
     let _lock = serial();
     let mut a = law_app();
     a.run("text.insert", json!({"text": "Unsaved work"})).unwrap();
@@ -160,23 +162,15 @@ fn cancelling_the_save_prompt_creates_nothing_and_keeps_the_window() {
     let mut h = harness(a);
     h.run_steps(4);
     h.get_by_label("Create").click();
-    h.run_steps(2);
-    assert!(matches!(h.state().dialog, Some(Dialog::SaveChanges { .. })), "File › New asks first");
-    h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
     h.run_steps(4);
     let a = h.state_mut();
-    assert!(is_open(a), "the window stays");
-    assert_eq!(form(a).pending, None);
-    assert_eq!(a.session.document_id(), before);
-    assert_eq!(body(a).trim(), "Unsaved work", "nothing created");
-    // Another try, this time not saving: the pleading goes into the new document.
-    h.get_by_label("Create").click();
-    h.run_steps(2);
-    h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-    h.run_steps(4);
-    let a = h.state_mut();
+    assert!(!matches!(a.dialog, Some(Dialog::SaveChanges { .. })), "nothing to save first");
     assert!(!is_open(a));
-    assert_ne!(a.session.document_id(), before);
+    assert_ne!(a.session.document_id(), before, "a new document");
     assert!(body(a).contains("STATE OF MISSOURI"));
     assert!(caret_on_placeholder(a));
+    assert!(a.session.is_open(before), "the unsaved document is still open");
+    a.session.activate(before).unwrap();
+    assert!(a.session.dirty);
+    assert_eq!(body(a).trim(), "Unsaved work");
 }
