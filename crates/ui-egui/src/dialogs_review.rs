@@ -17,6 +17,7 @@ use crate::theme::{Tokens, semibold};
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "form", rename_all = "camelCase")]
 pub enum ReviewDialog {
+    Spelling(Box<crate::dialogs_spelling::SpellingForm>),
     Compare(CompareForm),
     AutoCorrect(Box<AutoCorrectForm>),
 }
@@ -24,6 +25,7 @@ pub enum ReviewDialog {
 impl ReviewDialog {
     pub fn name(&self) -> &'static str {
         match self {
+            ReviewDialog::Spelling(_) => "spelling",
             ReviewDialog::Compare(f) if f.combine => "combine",
             ReviewDialog::Compare(_) => "compare",
             ReviewDialog::AutoCorrect(_) => "autoCorrect",
@@ -33,6 +35,7 @@ impl ReviewDialog {
     /// The window title (English; the caller translates it).
     pub fn title(&self) -> &'static str {
         match self {
+            ReviewDialog::Spelling(_) => "Spelling & Grammar",
             ReviewDialog::Compare(f) if f.combine => "Combine Documents",
             ReviewDialog::Compare(_) => "Compare Documents",
             ReviewDialog::AutoCorrect(_) => "AutoCorrect",
@@ -57,6 +60,7 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<ReviewDialog> {
 /// Draws the dialog; returns true to close it.
 pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut ReviewDialog) -> bool {
     match d {
+        ReviewDialog::Spelling(f) => crate::dialogs_spelling::body(app, ui, f),
         ReviewDialog::Compare(f) => compare_ui(app, ui, f),
         ReviewDialog::AutoCorrect(f) => autocorrect_ui(app, ui, f),
     }

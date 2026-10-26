@@ -45,6 +45,7 @@ pub mod dialogs_notes;
 pub mod dialogs_para;
 pub mod dialogs_refs;
 pub mod dialogs_review;
+pub mod dialogs_spelling;
 pub mod dialogs_ribbon;
 pub mod dialogs_smart_art;
 pub mod dialogs_table_style;
@@ -1114,15 +1115,12 @@ impl WordApp {
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
         }
-        // review.spelling only moves the selection to the next issue; without this, the ribbon's
-        // Spelling & Grammar and Editor buttons looked broken — just a selection with no way to
-        // see or apply a suggestion (#3340). Reuse the context menu's suggestions, as Shift+F10
-        // already does for the word at the caret.
-        if id == "review.spelling"
-            && let Ok(v) = &r
-            && v.get("done").and_then(serde_json::Value::as_bool) != Some(true)
-        {
-            self.canvas.context_menu_from_keys = true;
+        // User proofing opens a persistent correction form; scripts keep the engine's
+        // structured result. Right-click and Shift+F10 retain their compact suggestions.
+        if matches!(id, "review.spelling" | "review.editor") && let Ok(v) = &r {
+            self.dialog = Some(dialogs::Dialog::Review(Box::new(dialogs_review::ReviewDialog::Spelling(Box::new(
+                dialogs_spelling::SpellingForm::new(self, v.clone()),
+            )))));
         }
         let r = system_clipboard::explain(self, id, r);
         // Check Accessibility shows its findings in the Accessibility pane, kept up to date there.

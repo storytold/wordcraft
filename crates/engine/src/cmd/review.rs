@@ -66,6 +66,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.changes", "Reviewing Pane", "Review › Tracking", list_changes).pure(),
         CommandSpec::new("review.spelling", "Spelling & Grammar", "Review › Proofing", next_issue)
             .key(super::mac_or("F7 / Alt+F7 / Mod+Alt+L", "F7 / Alt+F7"))
+            .params(r#"{"wrap"?: bool (default true; false stops at the end of the current story)}"#)
             .pure(),
         CommandSpec::new("review.issues", "Proofing Issues", "Review › Proofing", all_issues).pure(),
         CommandSpec::new("review.suggestions", "Spelling Suggestions", "Review › Proofing", suggestions).params(r#"{"pos"?: Pos}"#).pure(),
@@ -989,15 +990,20 @@ fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Valu
 }
 
 /// F7: select the next issue after the caret and return it with suggestions.
-fn next_issue(s: &mut Session, _: &Value) -> CmdResult {
+fn next_issue(s: &mut Session, v: &Value) -> CmdResult {
     let caret = s.sel.ordered().1;
     let story = caret.story;
     let paths = s.doc.para_paths(story);
     let start = paths.iter().position(|p| *p == caret.path).unwrap_or(0);
-    for k in 0..paths.len() {
-        let Some(path) = paths.get((start + k) % paths.len().max(1)) else { break };
+    let wrap = p::bool(v, "wrap").unwrap_or(true);
+    // Scan forward first, including the rest of the caret's paragraph. A second pass
+    // optionally visits the earlier part; never select the first typo repeatedly in
+    // a single-paragraph story. Dialogs disable wrapping so Ignore Once can finish.
+    for (path, before) in paths.iter().skip(start).map(|path| (path, false)).chain(
+        paths.iter().take(if wrap { start.saturating_add(1) } else { 0 }).map(|path| (path, true)),
+    ) {
         for (a, b, i) in para_issues(s, story, path) {
-            if k == 0 && a.off < caret.off && start + k < paths.len() && paths.len() > 1 {
+            if *path == caret.path && (a.off < caret.off) != before {
                 continue;
             }
             let r = issue_json(s, &a, &b, &i);
@@ -2243,6 +2249,27 @@ mod tests {
                 assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).trim_end(), want, "{cmd}");
                 assert!(s.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty(), "{cmd}");
             }
+        }
+    }
+}
+
+#[cfg(test)]
+mod spelling_navigation_tests {
+    use super::*;
+    use wordcraft_doc::Document;
+
+    #[test]
+    fn spelling_review_dialog_navigation_moves_forward_and_wraps_only_when_requested() {
+        for text in ["The brwn fox and brwn dog.", "The brwn fox.\nThe brwn dog."] {
+            let mut s = Session::new(Document::from_text(text));
+            let first = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(first["text"], "brwn");
+            let first_selection = s.sel.clone();
+            let second = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(second["text"], "brwn");
+            assert_ne!(s.sel, first_selection);
+            assert_eq!(s.run("review.spelling", &json!({"wrap": false})).unwrap()["done"], true);
+            assert_eq!(s.run("review.spelling", &json!({})).unwrap()["start"], first["start"]);
         }
     }
 }

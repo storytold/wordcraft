@@ -6217,38 +6217,6 @@ mod tests {
         assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brown fox");
     }
 
-    /// #3340: review.spelling (the Review tab's Spelling & Grammar button and the Home tab's
-    /// Editor button both run it) only moved the selection to the next issue — with no way to see
-    /// or apply a suggestion from there, just the generic selection toolbar, it looked broken.
-    /// Running it now also opens the same suggestions menu Shift+F10 and a Control-click already
-    /// open for the word at the caret.
-    #[test]
-    fn spelling_and_grammar_opens_suggestions_for_the_issue_it_selects() {
-        use egui_kittest::kittest::Queryable;
-        let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Default::default());
-        a.run("text.insert", json!({"text": "The quick brwn fox"})).unwrap();
-        a.session.sel = wordcraft_engine::Selection::caret(Pos::body(0, 0));
-        a.run("review.spelling", json!({})).unwrap();
-        assert!(a.canvas.context_menu_from_keys, "queues the open the context menu already uses for Shift+F10");
-        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
-            |ui, app: &mut WordApp| {
-                let ctx = ui.ctx().clone();
-                app.logic(&ctx);
-                app.ui(ui);
-            },
-            a,
-        );
-        for _ in 0..6 {
-            h.step();
-        }
-        assert!(h.state().canvas.context_menu_open, "Spelling & Grammar opens the suggestions menu");
-        h.get_by_label("brown").click();
-        for _ in 0..3 {
-            h.step();
-        }
-        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brown fox");
-    }
-
     #[test]
     fn floating_picture_can_be_dragged_in_front_of_or_behind_text() {
         for wrap in ["inFrontOfText", "behindText"] {
