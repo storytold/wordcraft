@@ -5,6 +5,7 @@ mod embed;
 mod glossary;
 mod settings_merge;
 pub(crate) use settings_merge::has_unowned as settings_has_unowned;
+pub use settings_merge::kept_unowned as settings_kept_unowned;
 mod math;
 mod props;
 mod sdt;

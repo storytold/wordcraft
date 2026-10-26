@@ -32,10 +32,11 @@ pub use crypt::{
 };
 pub use flat::{XmlKind, sniff_xml, write as write_flat};
 pub use fonts::{EmbeddedFont, embedded_fonts};
+pub use package::SETTINGS_ORIG;
 pub use read::read;
 pub use smart_art::smart_art_items;
 pub use wordml2003_write::write as write_wordml2003;
-pub use write::{write, write_as};
+pub use write::{settings_kept_unowned, write, write_as};
 
 /// Largest `.xml` file read as a Word XML document.
 pub const MAX_XML_FILE: usize = 1 << 30;
