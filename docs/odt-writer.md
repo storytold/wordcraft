@@ -57,6 +57,9 @@ page or column break waiting for the next block.
 | `pages.rs` | the page layout of the section: size, orientation, margins, gutter, columns, page number format |
 | `text.rs` | paragraphs and headings, spans, links, bookmarks, tabs, line, page and column breaks, ruby; pictures in line, `PAGE` and `NUMPAGES` fields, other fields as their result, equations as their linear text |
 
+As the exchange-flow writer does, hidden text is left out of the package (with the breaks and
+objects in it), and a picture marked decorative is written with no description.
+
 ## LibreOffice behaviours the writer works around
 
 The reference is LibreOffice opening the DOCX of the same document: the ODT must lay out the

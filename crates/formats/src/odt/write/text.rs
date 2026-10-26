@@ -9,7 +9,7 @@
 
 use wordcraft_doc::para::{COLUMN_BREAK, InlineObject, LINE_BREAK, OBJ, PAGE_BREAK};
 use wordcraft_doc::props::CharProps;
-use wordcraft_doc::{Block, Paragraph};
+use wordcraft_doc::{Block, Document, Paragraph};
 
 use super::{Ctx, Props, pt, styles};
 use crate::odt::x;
@@ -34,12 +34,18 @@ enum Piece<'a> {
     Obj(&'a InlineObject),
 }
 
-/// The paragraph's content split into pieces, each with its run's formatting.
-fn pieces(p: &Paragraph) -> Vec<(Piece<'_>, &CharProps)> {
+/// The paragraph's content split into pieces, each with its run's formatting. Hidden runs are
+/// left out with their breaks and objects, as the exchange-flow writer leaves them out: hidden
+/// text is not in the exported file at all.
+fn pieces<'a>(doc: &Document, p: &'a Paragraph) -> Vec<(Piece<'a>, &'a CharProps)> {
     let mut out = Vec::new();
     let mut objects = p.objects.iter();
     for (range, props) in p.run_ranges() {
         let Some(text) = p.text.get(range) else { continue };
+        if props.hidden == Some(true) || doc.styles.resolve_char(p.props.style.as_deref(), props).hidden {
+            objects.by_ref().take(text.chars().filter(|c| *c == OBJ).count()).for_each(drop);
+            continue;
+        }
         let mut buf = String::new();
         for c in text.chars() {
             let special = match c {
@@ -154,7 +160,7 @@ fn para(ctx: &mut Ctx, p: &Paragraph, out: &mut String) {
     };
     let tag = Tag { p, open, close };
     out.push_str(&tag.open.replace("{}", &style));
-    let items = pieces(p);
+    let items = pieces(ctx.doc, p);
     let mut prev_space = true;
     runs(ctx, &items, &tag, &mut prev_space, out);
     out.push_str(close);
@@ -253,6 +259,8 @@ fn object(ctx: &mut Ctx, o: &InlineObject, props: &CharProps, prev_space: &mut b
             if o.frame().is_some_and(|(_, _, f)| f.hidden) {
                 return;
             }
+            // A decorative picture exports with no description, so screen readers skip it.
+            let alt = if o.is_decorative() { "" } else { alt.as_str() };
             let Some(href) = ctx.picture(media) else {
                 // A picture whose bytes are missing leaves its description.
                 let t = chars(alt, prev_space, false);

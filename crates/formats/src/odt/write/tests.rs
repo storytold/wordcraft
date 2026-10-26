@@ -489,3 +489,53 @@ fn widow_control_is_on_unless_turned_off() {
     d.styles.default_para.widow_control = Some(false);
     assert_eq!(Odt::new(&d).props("paragraph", "").get("fo:widows").map(String::as_str), Some("0"));
 }
+
+#[test]
+fn hidden_text_is_left_out() {
+    // The exchange-flow writer drops hidden runs; text the author hid must not reach the package.
+    let mut d = Document::new();
+    let key = d.add_media(vec![0x89, b'P', b'N', b'G', 1, 2, 3], "png");
+    let mut p = plain("Shown ");
+    let hidden = CharProps { hidden: Some(true), ..Default::default() };
+    let n = p.len();
+    p.insert_text(n, "secret", &hidden).unwrap();
+    let n = p.len();
+    let pic = |alt: &str| InlineObject::Image {
+        media: key.clone(),
+        w: 40.0,
+        h: 20.0,
+        alt: alt.into(),
+        float: Default::default(),
+        crop: [0.0; 4],
+        ole: None,
+    };
+    p.insert_object(n, pic("hidden picture"), &hidden).unwrap();
+    let n = p.len();
+    p.insert_text(n, " end", &CharProps::default()).unwrap();
+    let n = p.len();
+    p.insert_object(n, pic("kept"), &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let o = Odt::new(&d);
+    assert!(!o.content.contains("secret") && !o.content.contains("hidden picture"), "{}", o.content);
+    assert!(!o.content.contains("text:display"), "{}", o.content);
+    assert!(o.content.contains("<svg:desc>kept</svg:desc>"), "objects after a hidden one keep their place: {}", o.content);
+    assert!(o.paras().iter().any(|p| p.text.starts_with("Shown  end")), "{:?}", o.paras());
+}
+
+#[test]
+fn decorative_pictures_have_no_description() {
+    // Screen readers skip a decorative picture: it exports with no description, found or not.
+    let mut d = Document::new();
+    let key = d.add_media(vec![0x89, b'P', b'N', b'G', 1, 2, 3], "png");
+    let mut p = plain("Pic: ");
+    for media in [key, "missing.png".into()] {
+        let mut pic = InlineObject::Image { media, w: 40.0, h: 20.0, alt: "ornament".into(), float: Default::default(), crop: [0.0; 4], ole: None };
+        pic.float_mut().unwrap().alt.decorative = true;
+        let n = p.len();
+        p.insert_object(n, pic, &CharProps::default()).unwrap();
+    }
+    d.body = vec![para_block(p)];
+    let o = Odt::new(&d);
+    assert!(o.content.contains("<draw:image"), "{}", o.content);
+    assert!(!o.content.contains("ornament"), "{}", o.content);
+}
