@@ -375,12 +375,35 @@ mod tests {
         assert!(v["voice"].is_null());
     }
 
+    #[test]
+    fn speak_message_escapes_control_characters() {
+        let text = "line\nbreak\ttab\\slash\"quote\u{1}";
+        let line = speak_message(1, text, None, 1.0);
+        assert!(!line.contains('\n') && !line.contains('\t'), "{line}");
+        let v: serde_json::Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(v["text"], text);
+        assert_eq!(v["lang"], "");
+    }
+
     #[cfg(target_os = "windows")]
     #[test]
     #[ignore = "starts a real PowerShell speech host"]
     fn host_round_trips_a_speak_command() {
         let mut host = Host::start(&|| false).unwrap();
         assert!(matches!(host.speak("", None, 1.0, &|| false), Ok(Spoken::Done)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "starts a real PowerShell speech host"]
+    fn host_reuses_one_process_for_two_sentences() {
+        let mut host = Host::start(&|| false).unwrap();
+        assert_eq!(host.next_id, 1, "sentence ids start at 1; 0 is the parser sentinel");
+        assert!(matches!(host.speak("", None, 1.0, &|| false), Ok(Spoken::Done)));
+        assert!(matches!(host.speak("", None, 1.0, &|| false), Ok(Spoken::Done)));
+        assert_eq!(host.next_id, 3);
+        host.stop(99);
+        assert!(!host.broken, "an idle stop must not break the host");
     }
 
     #[test]
@@ -390,6 +413,10 @@ mod tests {
         assert_eq!(parse_reply("stopped 3"), Some(Reply::Stopped(3)));
         assert_eq!(parse_reply("error 3 voice"), Some(Reply::Error(3, "voice".into())));
         assert_eq!(parse_reply("error 0 other"), Some(Reply::Error(0, "other".into())));
+        assert_eq!(parse_reply("done 3 "), Some(Reply::Done(3)));
+        assert_eq!(parse_reply(" error 3 voice "), Some(Reply::Error(3, "voice".into())));
+        assert_eq!(parse_reply("error 3"), None);
+        assert_eq!(parse_reply("error"), None);
         assert_eq!(parse_reply("what 3"), None);
         assert_eq!(parse_reply("started"), None);
     }
