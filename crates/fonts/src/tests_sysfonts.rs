@@ -270,7 +270,7 @@ fn the_scan_lists_a_variable_fonts_named_instances_as_loading_it_does() {
         return;
     };
     let data = std::fs::read(path).unwrap();
-    let loaded: Vec<(String, String, String)> = enumerate_faces(&data).into_iter().map(|f| (f.family, f.style, f.legacy)).collect();
+    let loaded: Vec<(String, String, String)> = enumerate_faces(&data, MAX_FILE_FACES).into_iter().map(|f| (f.family, f.style, f.legacy)).collect();
     assert_eq!(names(path), loaded);
     if loaded.len() > 1 {
         // Instances other than Regular, Bold and Italic have names of their own.
@@ -436,9 +436,9 @@ fn screen_hinting_runs_a_tricky_fonts_instructions_with_the_monochrome_target() 
     let ppem = 11.0 * 96.0 / 72.0 * 1.45;
     let drawn = |target: Target, gid: u32| {
         let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine: Engine::Interpreter, target }).unwrap();
-        let mut pen = FlipPen(BezPath::new());
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false };
         outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
-        pen.0
+        pen.path
     };
     // The target decides whether the instructions may move points sideways (the light target's
     // backward compatibility forbids it): this font's instructions only move points vertically,
