@@ -52,6 +52,9 @@ pub struct ResolvedChar {
     /// WordArt text effects (sanitized; `None` when there are none).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_effects: Option<Box<crate::wordart::TextEffects>>,
+    /// The OpenType feature tags Word's typography settings turn on or off (`tnum`, `ss04`...); see `OpenTypeSettings::tags`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ot_tags: Vec<String>,
     pub link: Option<String>,
     pub ins: Option<u32>,
     pub del: Option<u32>,
@@ -103,6 +106,7 @@ impl ResolvedChar {
             emboss: c.emboss.unwrap_or(false),
             engrave: c.engrave.unwrap_or(false),
             text_effects: c.text_effects.as_deref().map(crate::wordart::TextEffects::sanitized).filter(|t| !t.is_empty()).map(Box::new),
+            ot_tags: c.ot.as_deref().map(crate::props::OpenTypeSettings::tags).unwrap_or_default(),
             link: c.link.clone(),
             ins: c.ins,
             del: c.del,

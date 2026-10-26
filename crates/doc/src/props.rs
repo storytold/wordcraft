@@ -345,6 +345,64 @@ impl Highlight {
 /// The text size, in points, of a run whose size no style or default sets.
 pub const DEFAULT_FONT_SIZE: f32 = 11.0;
 
+/// Word's OpenType typography settings of a run besides ligatures ([MS-DOCX] `w14:numForm`, `w14:numSpacing`, `w14:stylisticSets`,
+/// `w14:cntxtAlts`). Each setting is inherited on its own: `None` leaves what the style chain says.
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct OpenTypeSettings {
+    /// 0 default, 1 proportional figures, 2 tabular figures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_spacing: Option<u8>,
+    /// 0 default, 1 lining figures, 2 old-style figures.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub num_form: Option<u8>,
+    /// The stylistic sets that are on (1 to 20); empty: none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stylistic_sets: Option<Vec<u8>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contextual_alts: Option<bool>,
+}
+
+impl OpenTypeSettings {
+    /// What `patch` sets replaces what this has, setting by setting.
+    pub fn overlay(&mut self, patch: &OpenTypeSettings) {
+        if patch.num_spacing.is_some() {
+            self.num_spacing = patch.num_spacing;
+        }
+        if patch.num_form.is_some() {
+            self.num_form = patch.num_form;
+        }
+        if patch.stylistic_sets.is_some() {
+            self.stylistic_sets.clone_from(&patch.stylistic_sets);
+        }
+        if patch.contextual_alts.is_some() {
+            self.contextual_alts = patch.contextual_alts;
+        }
+    }
+    /// The OpenType feature tags these settings turn on or off (a `-` in front: off), for the shaper. Settings left unset add
+    /// nothing, so a font keeps its own defaults. Values outside what Word writes add nothing either.
+    pub fn tags(&self) -> Vec<String> {
+        let mut t = Vec::new();
+        match self.num_spacing {
+            Some(1) => t.push("pnum".to_string()),
+            Some(2) => t.push("tnum".to_string()),
+            _ => {}
+        }
+        match self.num_form {
+            Some(1) => t.push("lnum".to_string()),
+            Some(2) => t.push("onum".to_string()),
+            _ => {}
+        }
+        for id in self.stylistic_sets.iter().flatten().filter(|i| (1..=20).contains(*i)) {
+            t.push(format!("ss{id:02}"));
+        }
+        if let Some(on) = self.contextual_alts {
+            t.push(format!("{}calt", if on { "" } else { "-" }));
+        }
+        t
+    }
+}
+
 /// Character formatting (direct or in a style). `None` = inherit.
 #[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
@@ -420,6 +478,9 @@ pub struct CharProps {
     /// properties). Overlaid effect by effect.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub text_effects: Option<Box<crate::wordart::TextEffects>>,
+    /// Word's OpenType typography settings (figure spacing and form, stylistic sets). Overlaid setting by setting.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ot: Option<Box<OpenTypeSettings>>,
     /// BCP 47 language tag (proofing).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lang: Option<String>,
@@ -580,7 +641,7 @@ impl CharProps {
     pub fn minus(mut self, base: &CharProps) -> CharProps {
         drop_same_fields!(self, base; style, font, sym_font, size, bold, italic, underline, underline_color, strike, double_strike, color, highlight,
             shading, border, vert_align, caps, small_caps, hidden, spacing, scale, position, kern, outline, shadow, emboss, engrave, lang, no_proof, rtl,
-            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, link, ins, del, ligatures);
+            cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, link, ins, del, ligatures, ot);
         self
     }
 
@@ -594,6 +655,9 @@ impl CharProps {
             cs, font_cs, font_ea, size_cs, bold_cs, italic_cs, lang_bidi, lang_ea, east_asian_layout, link, ins, del, fmt_change, ligatures);
         if let Some(p) = &patch.text_effects {
             self.text_effects.get_or_insert_with(Default::default).overlay(p);
+        }
+        if let Some(p) = &patch.ot {
+            self.ot.get_or_insert_with(Default::default).overlay(p);
         }
     }
     pub fn overlaid(mut self, patch: &CharProps) -> CharProps {

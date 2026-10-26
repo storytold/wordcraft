@@ -129,6 +129,33 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     if let Some(l) = c.ligatures {
         w.empty("w14:ligatures", &[("w14:val", &l.ooxml())]);
     }
+    // The rest of Word's OpenType typography, in the schema's order
+    if let Some(ot) = &c.ot {
+        if let Some(f) = ot.num_form {
+            w.empty("w14:numForm", &[("w14:val", ["default", "lining", "oldStyle"].get(f as usize).copied().unwrap_or("default"))]);
+        }
+        if let Some(s) = ot.num_spacing {
+            w.empty("w14:numSpacing", &[("w14:val", ["default", "proportional", "tabular"].get(s as usize).copied().unwrap_or("default"))]);
+        }
+        if let Some(sets) = &ot.stylistic_sets {
+            if sets.is_empty() {
+                w.empty("w14:stylisticSets", &[]);
+            } else {
+                w.open("w14:stylisticSets", &[]);
+                for id in sets.iter().filter(|i| (1..=20).contains(*i)) {
+                    w.empty("w14:styleSet", &[("w14:id", &id.to_string())]);
+                }
+                w.close("w14:stylisticSets");
+            }
+        }
+        if let Some(on) = ot.contextual_alts {
+            if on {
+                w.empty("w14:cntxtAlts", &[]);
+            } else {
+                w.empty("w14:cntxtAlts", &[("w14:val", "0")]);
+            }
+        }
+    }
 }
 
 /// `w:eastAsianLayout` with the attributes that are set (ISO/IEC 29500-1 §17.3.2.10).
