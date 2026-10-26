@@ -1845,28 +1845,63 @@ fn layout(app: &mut WordApp, ui: &mut Ui) {
             ui.label("");
             spaced(ui, egui::RichText::new(tl!("Spacing")).small().strong());
             ui.end_row();
-            // Indents in the File › Options unit.
+            // Indents in the File › Options unit. A value outside a field's range is shown as it is,
+            // not clamped and applied: switching to this tab edits nothing (#3943).
             let u = crate::options::unit();
             let k = u.pt_per_unit();
             let mut l = rp.indent_left / k;
             let mut b = rp.space_before;
             ui.label(egui::RichText::new(tl!("Left:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut l).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut l)
+                        .speed(3.6 / k)
+                        .range(-792.0 / k..=1584.0 / k)
+                        .clamp_existing_to_range(false)
+                        .measure(u)
+                        .max_decimals(2),
+                )
+                .changed()
+            {
                 let _ = app.run("para.indents", json!({"left": l * k}));
             }
             spaced(ui, egui::RichText::new(tl!("Before:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut b).speed(1.0).range(0.0..=1584.0).clamp_existing_to_range(false).suffix(format!(" {}", tl!("pt"))),
+                )
+                .changed()
+            {
                 let _ = app.run("para.spacing", json!({"before": b}));
             }
             ui.end_row();
             let mut r = rp.indent_right / k;
             let mut a = rp.space_after;
             ui.label(egui::RichText::new(tl!("Right:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut r).speed(3.6 / k).range(-792.0 / k..=1584.0 / k).measure(u).max_decimals(2)).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut r)
+                        .speed(3.6 / k)
+                        .range(-792.0 / k..=1584.0 / k)
+                        .clamp_existing_to_range(false)
+                        .measure(u)
+                        .max_decimals(2),
+                )
+                .changed()
+            {
                 let _ = app.run("para.indents", json!({"right": r * k}));
             }
             spaced(ui, egui::RichText::new(tl!("After:")).small());
-            if ui.add_sized(FIELD, egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).suffix(format!(" {}", tl!("pt")))).changed() {
+            if ui
+                .add_sized(
+                    FIELD,
+                    egui::DragValue::new(&mut a).speed(1.0).range(0.0..=1584.0).clamp_existing_to_range(false).suffix(format!(" {}", tl!("pt"))),
+                )
+                .changed()
+            {
                 let _ = app.run("para.spacing", json!({"after": a}));
             }
             ui.end_row();
@@ -3083,7 +3118,10 @@ fn cell_size_boxes(ui: &mut Ui, app: &mut WordApp) {
         crate::widgets::row(ui, |ui| {
             ui.add_sized(vec2(48.0, 18.0), egui::Label::new(egui::RichText::new(tl!(label)).small()));
             let mut v = pt / k;
-            let r = ui.add_sized(vec2(72.0, 18.0), egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).measure(unit).max_decimals(2));
+            let r = ui.add_sized(
+                vec2(72.0, 18.0),
+                egui::DragValue::new(&mut v).speed(0.01).range(0.02..=22.0).clamp_existing_to_range(false).measure(unit).max_decimals(2),
+            );
             if r.changed() {
                 out = Some((v * k, r.dragged() && !r.drag_started()));
             }
@@ -3816,6 +3854,50 @@ mod tests {
         h.run_steps(6);
         assert_eq!(size(h.state()), Some((0.75, 0.75)), "shown, not resized");
         assert_eq!(h.state().session.undo_depth(), undo, "no undo step");
+    }
+
+    /// #3943: showing a ribbon tab only shows its fields. A value outside a field's range (a −1000 pt
+    /// indent, a column wider than 22 mm) stays as it is: no edit, no undo step, until the person changes it.
+    #[test]
+    fn showing_a_ribbon_tab_leaves_values_outside_a_fields_range_alone() {
+        let show = |a: crate::WordApp| {
+            let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(2560.0, 900.0)).build_ui_state(
+                |ui, app: &mut crate::WordApp| {
+                    let ctx = ui.ctx().clone();
+                    app.logic(&ctx);
+                    app.ui(ui);
+                },
+                a,
+            );
+            h.run_steps(6);
+            h
+        };
+        // Layout › Paragraph: a −1000 pt left indent (the field's range starts at −792 pt).
+        let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "Indented"})).unwrap();
+        a.run("para.indents", json!({"left": -1000.0, "right": -900.0})).unwrap();
+        a.run("ui.tab", json!({"tab": "Layout"})).unwrap();
+        let (undo, rev) = (a.session.undo_depth(), a.session.rev());
+        let h = show(a);
+        let para = h.state().session.doc.para_at(&h.state().session.sel.focus).map(|p| (p.props.indent_left, p.props.indent_right));
+        assert_eq!(para, Some((Some(-1000.0), Some(-900.0))), "the indents are as they were");
+        assert_eq!((h.state().session.undo_depth(), h.state().session.rev()), (undo, rev), "no edit, no undo step");
+
+        // Table Layout › Cell Size: a column wider than 22 mm, with millimetres as the unit.
+        let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("file.options", json!({"units": "millimeters"})).unwrap();
+        a.run("insert.table", json!({"rows": 2, "cols": 2})).unwrap();
+        a.run("table.columnWidth", json!({"width": 100.0})).unwrap();
+        a.run("ui.tab", json!({"tab": "Table Layout"})).unwrap();
+        let widths = |a: &crate::WordApp| {
+            let story = a.session.sel.focus.story;
+            a.session.sel.focus.path.cell().and_then(|(tp, _, _)| a.session.doc.table(story, &tp).map(|t| t.grid.clone()))
+        };
+        let (before, undo, rev) = (widths(&a), a.session.undo_depth(), a.session.rev());
+        assert!(before.as_ref().is_some_and(|g| g.iter().any(|w| *w > 70.0)), "a column wider than 22 mm: {before:?}");
+        let h = show(a);
+        assert_eq!(widths(h.state()), before, "the column keeps its width");
+        assert_eq!((h.state().session.undo_depth(), h.state().session.rev()), (undo, rev), "no edit, no undo step");
     }
 
     /// #3242: Align used to run `arrange.align` directly with no `value`, which always centers
