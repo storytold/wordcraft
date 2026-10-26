@@ -10,15 +10,14 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.pageBreak", "Page Break", "Insert › Pages", |s, _| {
-            type_text(s, "\u{000C}")?;
-            sel_result(s)
-        }),
+        CommandSpec::new("insert.pageBreak", "Page Break", "Insert › Pages", super::text::page_break),
         CommandSpec::new("insert.blankPage", "Blank Page", "Insert › Pages", |s, _| {
             type_text(s, "\u{000C}")?;
             let at = s.sel.focus.clone();
             let at = split_para(s, &at)?;
             s.doc.insert_text(&at, "\u{000C}", &CharProps::default())?;
+            let end = s.doc.para_at(&at).map_or(at.clone(), |p| Pos { off: p.len(), ..at.clone() });
+            super::text::open_page_after_final_break(s, &end)?;
             s.sel = Selection::caret(at);
             sel_result(s)
         }),

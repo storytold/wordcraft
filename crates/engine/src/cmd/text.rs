@@ -5,7 +5,7 @@ use wordcraft_doc::para::{COLUMN_BREAK, NB_HYPHEN, NBSP, OBJ, PAGE_BREAK, SOFT_H
 use wordcraft_doc::props::{Border, BorderStyle, NumRef};
 use wordcraft_doc::{Block, ListKind, Path, Pos, StoryRef, Table};
 
-use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, type_text, type_text_effect};
+use super::{delete_selection, delete_selection_effect, non_mac, sel_result, split_para, split_para_keeping_format, type_text, type_text_effect};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
 /// The text-entry commands: typing, Enter, breaks, Tab, deleting and typed symbols.
@@ -14,7 +14,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("text.insert", "Type Text", "Editing", insert).params(r#"{"text": string, "raw"?: bool, "paragraphs"?: bool} (paragraphs: each line a paragraph, one undo step, at most 10000 lines)"#),
         CommandSpec::new("text.newParagraph", "New Paragraph", "Editing", new_paragraph).key("Enter"),
         CommandSpec::new("text.lineBreak", "Line Break", "Editing", |s, _| ins_char(s, '\n')).key("Shift+Enter"),
-        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", |s, _| ins_char(s, PAGE_BREAK)).key("Mod+Enter"),
+        CommandSpec::new("text.pageBreak", "Page Break", "Insert › Pages", page_break).key("Mod+Enter"),
         CommandSpec::new("text.columnBreak", "Column Break", "Layout › Breaks", |s, _| ins_char(s, COLUMN_BREAK)).key("Mod+Shift+Enter"),
         CommandSpec::new("text.tab", "Tab", "Editing", tab).key("Tab"),
         CommandSpec::new("text.backTab", "Shift+Tab", "Editing", back_tab).key("Shift+Tab"),
@@ -659,6 +659,45 @@ fn codeable(c: char) -> bool {
 /// A character's code as Word writes it: at least four upper-case hex digits.
 fn code_of(c: char) -> String {
     format!("{:04X}", u32::from(c))
+}
+
+/// A page break at the caret. At the end of the document Word puts it in a paragraph of its own
+/// (Normal, not in a list) between the text and a new empty paragraph with the last paragraph's
+/// formatting, which takes the caret: a page break ending the body would start no page.
+pub(crate) fn page_break(s: &mut Session, _: &Value) -> CmdResult {
+    let at = s.sel.focus.clone();
+    if !s.sel.is_collapsed() || !at_body_end(s, &at) || super::controls::refuses_paragraph(s) {
+        return ins_char(s, PAGE_BREAK);
+    }
+    let own = if at.off > 0 { split_para_keeping_format(s, &at)? } else { at };
+    let after = split_para_keeping_format(s, &own)?;
+    let p = s.doc.para_mut(own.story, &own.path)?;
+    p.props = Default::default();
+    p.touch();
+    s.sel = Selection::caret(own);
+    let mut b = [0u8; 4];
+    type_text(s, PAGE_BREAK.encode_utf8(&mut b))?;
+    s.sel = Selection::caret(after);
+    s.goal_x = None;
+    sel_result(s)
+}
+
+/// Whether `at` is the end of the body's last paragraph.
+fn at_body_end(s: &Session, at: &Pos) -> bool {
+    at.story == StoryRef::Body
+        && at.path.0.len() == 1
+        && at.path.0.first().is_some_and(|&i| usize::try_from(i).is_ok_and(|i| i.saturating_add(1) == s.doc.body.len()))
+        && s.doc.para_at(at).is_some_and(|p| at.off >= p.len())
+}
+
+/// When `at` is the end of the body's last paragraph and that paragraph ends with a page break,
+/// a new empty paragraph after it with its formatting, where it is returned: a page break ending
+/// the body starts no page (Word), so the page the break was inserted for needs something on it.
+pub(crate) fn open_page_after_final_break(s: &mut Session, at: &Pos) -> Result<Option<Pos>, CmdError> {
+    if !at_body_end(s, at) || !s.doc.para_at(at).is_some_and(|p| p.text.ends_with(PAGE_BREAK)) {
+        return Ok(None);
+    }
+    split_para_keeping_format(s, at).map(Some)
 }
 
 fn ins_char(s: &mut Session, c: char) -> CmdResult {

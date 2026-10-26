@@ -4367,6 +4367,7 @@ mod tests {
                 a.run("text.insert", json!({"text": "Page text"})).unwrap();
                 a.run("layout.break", json!({"kind": "page"})).unwrap();
             }
+            a.run("caret.docStart", json!({})).unwrap();
             a.run("view.commentsPane", json!({"value": false})).unwrap();
             a.run("view.hideWhiteSpace", json!({"value": hide_white_space})).unwrap();
             let (rev, sel) = (a.session.rev(), a.session.sel.clone());
