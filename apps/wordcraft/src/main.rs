@@ -23,7 +23,6 @@ mod print;
 mod region;
 #[cfg(target_os = "macos")]
 mod traffic_lights;
-mod windows;
 
 use wordcraft_engine::Session;
 use wordcraft_ui_egui::{
@@ -33,9 +32,8 @@ use wordcraft_ui_egui::{
 
 /// The app, the restored window geometry (or, with none, the default: no position) until the
 /// first frame that knows the monitor has checked it, the control server's key file (removed on
-/// exit), the file dialogs the app asked for, this frame's raw host window state, this window's
-/// entry in the window registry (removed on exit; View › Window, #322) and, on macOS, the
-/// documents opened from Finder.
+/// exit), the file dialogs the app asked for, this frame's raw host window state and, on macOS,
+/// the documents opened from Finder.
 struct App(
     WordApp,
     Option<WindowGeometry>,
@@ -44,7 +42,6 @@ struct App(
     // The host's answer for this frame. `InputState` still describes the last painted frame on
     // a hidden logic tick.
     RawWindowState,
-    Option<windows::RegistryFile>,
     #[cfg(target_os = "macos")] fmv_macos_events::Inbox,
 );
 
@@ -54,7 +51,7 @@ impl eframe::App for App {
     /// on unsaved changes and active printing.
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         #[cfg(target_os = "macos")]
-        apple_events::poll(&self.6, &mut self.0, ctx);
+        apple_events::poll(&self.5, &mut self.0, ctx);
         self.0.logic(ctx);
         self.3.show(frame);
         let window = self.4;
@@ -65,8 +62,17 @@ impl eframe::App for App {
             ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(size));
             ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(pos));
         }
+        // The geometry saved for the next start is the active window's.
         let prev = self.0.ui.window;
-        self.0.ui.window = WindowGeometry::track(prev, &window);
+        // Another document window's state is the one it last painted with: the host reports only
+        // the root window's for this frame.
+        let active = self.0.active_viewport();
+        let tracked = if active == egui::ViewportId::ROOT {
+            window
+        } else {
+            ctx.input_for(active, |i| RawWindowState::from_viewport(Some(i.viewport()), Some(i.viewport_rect())))
+        };
+        self.0.ui.window = WindowGeometry::track(prev, &tracked);
         // The first frame, once the monitor is known (as `take_rescue` waits for): maximize a
         // window that opened at its normal size so it never flashed on screen half-opened.
         let maximize = self.1.and_then(|g| g.maximize_after_open()).filter(|_| window.monitor_size.is_some());
@@ -76,9 +82,11 @@ impl eframe::App for App {
         if let Some(command) = maximize {
             ctx.send_viewport_cmd(command);
         }
-        // The window's close button: with unsaved changes, ask first (`WordApp::close_requested`).
+        // The window's close button: with other windows open only this window closes (the app
+        // handles that while drawing it); the last one quits, asking first about unsaved changes
+        // (`WordApp::close_requested`).
         let closing = ctx.input(|i| i.viewport().close_requested());
-        if closing && !self.0.close_requested() {
+        if closing && (self.0.closes_a_window() || !self.0.close_requested()) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         } else if (closing || self.0.quit_requested) && !self.0.printing.busy() {
             // On macOS, letting eframe drop the window inside `-[NSApplication run]` aborts in
@@ -114,9 +122,6 @@ impl eframe::App for App {
         save_prefs(&self.0);
         if let Some(key_file) = &self.2 {
             key_file.remove();
-        }
-        if let Some(entry) = &self.5 {
-            entry.remove();
         }
     }
 }
@@ -424,6 +429,8 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     graphics::configure_indirect_validation(&mut options, graphics::skips_indirect_validation(true, cfg!(target_arch = "x86_64")));
     load_user_fonts();
+    // Windows opened for further documents start like the first one, before its saved place.
+    let window_builder = options.viewport.clone();
     let restored = saved_window();
     if let Some(window) = restored {
         options.viewport = window.apply(options.viewport);
@@ -455,14 +462,7 @@ fn main() -> eframe::Result {
             let (file_dialog, dialogs) = file_dialogs::hook(&cc.egui_ctx);
             let mut session = Session::new(doc);
             session.system_region = region;
-            let mut services = services(file_dialog, &cc.egui_ctx);
-            // The other WordCraft windows, for View › Window (#322).
-            let registry = wordcraft_control_key::settings_dir().and_then(|d| windows::start(&d.join("windows"), cc.egui_ctx.clone()));
-            let registry = registry.map(|(host, file)| {
-                services.windows = Some(Box::new(host));
-                file
-            });
-            let mut app = WordApp::new(session, services);
+            let mut app = WordApp::new(session, services(file_dialog, &cc.egui_ctx));
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
@@ -482,6 +482,7 @@ fn main() -> eframe::Result {
                 }
             }
             app.ui.window = restored;
+            app.set_window_builder(window_builder);
             app.integrated_titlebar = cfg!(target_os = "macos");
             #[cfg(target_os = "macos")]
             if let Some(bar) = traffic_lights::title_bar() {
@@ -516,7 +517,6 @@ fn main() -> eframe::Result {
                 key_file,
                 dialogs,
                 RawWindowState::default(),
-                registry,
                 #[cfg(target_os = "macos")]
                 apple_events.connect(&cc.egui_ctx),
             )))

@@ -287,7 +287,7 @@ impl WordApp {
                 FileDialogRequest::Save { name: self.default_save_name(), dir: None },
                 AfterPick::SaveAs { after: crate::file_dialogs::AfterSave::Nothing, document: self.session.document_id() },
             ),
-            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument),
+            _ => (FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() }),
         };
         self.show_file_browser(req, after, false);
     }
@@ -535,7 +535,7 @@ mod tests {
         std::fs::create_dir(dir.join("drafts")).unwrap();
         std::fs::write(dir.join("drafts").join("old.docx"), b"x").unwrap();
         let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
-        let mut b = FileBrowser::new(req, AfterPick::OpenDocument, dir.clone(), false);
+        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         b.name = "drafts".into();
         assert_eq!(b.accept(), Step::Stay);
         assert_eq!(b.dir, dir.join("drafts"));
@@ -583,7 +583,8 @@ mod tests {
     fn an_empty_folder_says_there_are_no_items() {
         let dir = scratch("empty_state");
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        let mut b = FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument, dir.clone(), false);
+        let mut b =
+            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
         b.navigate(dir.clone());
         assert!(matches!(&b.listing, Ok(l) if l.entries.is_empty()), "the folder starts empty");
         a.file_browser.open = Some(Box::new(b));

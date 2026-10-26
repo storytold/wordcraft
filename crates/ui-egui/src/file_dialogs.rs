@@ -56,8 +56,8 @@ pub fn open_filters(purpose: &str) -> &'static [(&'static str, &'static [&'stati
 
 /// What to do with the path picked in a dialog.
 pub(crate) enum AfterPick {
-    /// Open the picked document.
-    OpenDocument,
+    /// Open the picked document from the window showing `document` ([`WordApp::open_file`]).
+    OpenDocument { document: u64 },
     /// Insert the picked picture, or replace the pending Change Picture target.
     Picture,
     /// Save the document there, then carry on.
@@ -242,9 +242,9 @@ impl WordApp {
     /// Do what the dialog was for with the picked path (`None`: the user cancelled).
     pub(crate) fn finish_pick(&mut self, after: AfterPick, picked: Option<String>) -> Result<Value, String> {
         match after {
-            AfterPick::OpenDocument => {
+            AfterPick::OpenDocument { document } => {
                 let Some(path) = picked else { return Ok(json!({"cancelled": true})) };
-                let r = self.run("file.open", json!({"path": path}));
+                let r = self.open_file(&path, Some(document));
                 self.ui.backstage = false;
                 r
             }
@@ -315,8 +315,12 @@ impl WordApp {
                 r
             }
             AfterPick::SaveAs { after, document } => {
+                // The document it was for may wait behind another one: it is shown and saved.
                 if document != self.session.document_id() {
-                    return Err("the document for this save has been replaced".into());
+                    if !self.session.is_open(document) {
+                        return Err("the document for this save has been closed".into());
+                    }
+                    self.show_document(document)?;
                 }
                 // The save's error, kept for the Save Changes prompt to explain (#1445). A plain
                 // Save As (Backstage's Browse…, AutoSave) has no prompt to carry it to, so it was
@@ -446,7 +450,8 @@ impl WordApp {
             f("document");
             return;
         }
-        let _ = self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument);
+        let _ =
+            self.ask_file(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: self.session.document_id() });
     }
 
     pub(crate) fn pick_picture(&mut self) {
@@ -601,7 +606,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(dir);
     }
 
-    /// A late Save As answer belongs to the imported document that opened the picker.
+    /// A late Save As answer belongs to the imported document that opened the picker: once that
+    /// document is closed, it writes nothing.
     #[test]
     fn imported_word_stale_save_as_never_writes_the_replacement_document() {
         for close in [false, true] {
@@ -623,8 +629,8 @@ mod tests {
             }
             assert!(a.file_dialog_open());
             let previous = a.session.document_id();
-            // Automation bypasses the user prompt and can replace a document during a picker.
-            a.execute("file.new", json!({})).unwrap();
+            // Automation bypasses the user prompt and can close a document during a picker.
+            a.execute("file.closeDocument", json!({"force": true})).unwrap();
             typed(&mut a);
             assert_ne!(previous, a.session.document_id());
             let draft = a.session.doc.clone();
@@ -960,14 +966,14 @@ mod tests {
     }
 
     /// "Save changes?" → Save on a new document: the held-back Close runs only once the later
-    /// Save As has actually saved; a cancelled Save As cancels the held-back New.
+    /// Save As has actually saved; a cancelled Save As cancels it.
     #[test]
     fn save_changes_waits_for_the_save_as_answer() {
         let dir = scratch("prompt");
         let path = dir.join("novel.docx");
         let (mut a, shown) = async_app();
         typed(&mut a);
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         answer(&shown, None);
         a.poll_file_dialog();

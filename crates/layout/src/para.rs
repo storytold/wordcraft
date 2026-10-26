@@ -3107,19 +3107,42 @@ impl ParaLayout {
             let k = self.clusters.partition_point(|c| c.start < off);
             self.clusters.get(..k).into_iter().flatten().rev().find(|c| self.is_edit_boundary(c.start)).map_or(0, |c| c.start)
         };
+        let mut from = l.c0;
+        self.x_from(l, off, &mut from)
+    }
+    /// [`Self::x_of`] on line `l`, looking for the cluster at `off` from cluster `*from` on (the
+    /// clusters before it must all end at or before `off`: so they do when `from` was left there
+    /// by an offset no greater), and leaving `from` at the cluster found. Walks a line's carets
+    /// in order in one pass over its clusters.
+    fn x_from(&self, l: &Line, off: usize, from: &mut usize) -> Option<f32> {
         if !l.vis.is_empty() {
-            return self.x_of_bidi(l, off);
+            return self.x_of_bidi(l, off, from);
         }
-        for k in l.c0..l.c1 {
+        for k in *from..l.c1 {
+            crate::work::steps(1);
             let c = self.clusters.get(k)?;
-            if off <= c.start {
-                return l.xs.get(k - l.c0).copied();
-            }
-            if off < c.end {
+            if off <= c.start || off < c.end {
+                *from = k;
                 return l.xs.get(k - l.c0).copied();
             }
         }
+        *from = l.c1;
         l.xs.last().copied()
+    }
+    /// Each caret offset on line `li` ([`Self::line_offsets`]) with its x ([`Self::x_of`]).
+    pub fn line_carets(&self, li: usize) -> Vec<(usize, Option<f32>)> {
+        let Some(l) = self.lines.get(li) else { return Vec::new() };
+        let (mut from, mut last) = (l.c0, 0);
+        self.line_offsets(li)
+            .into_iter()
+            .map(|off| {
+                if off < last {
+                    from = l.c0;
+                }
+                last = off;
+                (off, self.x_from(l, off, &mut from))
+            })
+            .collect()
     }
     /// The farthest right a caret goes on left-to-right line `li`: spaces at the end of a line
     /// hang past its right edge, but the caret after them stays at the edge, as in Word (#2146);
@@ -3155,8 +3178,12 @@ impl ParaLayout {
     /// edge of right-to-left text), except where `off` leaves an embedded run (the cluster before
     /// it has the higher level), which keeps the caret at that run's trailing edge, so each
     /// visual boundary of the common mixed cases has its own offset.
-    fn x_of_bidi(&self, l: &Line, off: usize) -> Option<f32> {
-        let k = (l.c0..l.c1).find(|&k| self.clusters.get(k).is_some_and(|c| off < c.end || off <= c.start));
+    fn x_of_bidi(&self, l: &Line, off: usize, from: &mut usize) -> Option<f32> {
+        let k = (*from..l.c1).find(|&k| {
+            crate::work::steps(1);
+            self.clusters.get(k).is_some_and(|c| off < c.end || off <= c.start)
+        });
+        *from = k.unwrap_or(l.c1);
         let Some(k) = k else { return Some(l.end_x()) };
         let c = self.clusters.get(k)?;
         let here = l.vis.get(k - l.c0)?;
@@ -3204,8 +3231,8 @@ impl ParaLayout {
         let Some(l) = self.lines.get(li) else { return self.text_len };
         if !l.vis.is_empty() {
             let mut best = (l.start, f32::MAX);
-            for off in self.line_offsets(li) {
-                let d = self.x_of(li, off).map_or(f32::MAX, |cx| (cx - x).abs());
+            for (off, cx) in self.line_carets(li) {
+                let d = cx.map_or(f32::MAX, |cx| (cx - x).abs());
                 if d < best.1 {
                     best = (off, d);
                 }
@@ -3319,8 +3346,18 @@ fn proof_issues(
 /// U+0001 bytes (neither words nor spaces).
 pub fn proof_text(p: &wordcraft_doc::Paragraph) -> String {
     let mut out = String::with_capacity(p.text.len());
+    // The run holding each character ([`Paragraph::props_of_char`]), found by walking the runs
+    // along with the text rather than from the first run for every character.
+    let mut runs = p.runs.iter();
+    let mut run = runs.next();
+    let mut end = run.map_or(0, |r| r.len);
     for (i, c) in p.text.char_indices() {
-        let deleted = c == wordcraft_doc::para::OBJ || p.props_of_char(i).del.is_some();
+        while run.is_some() && i >= end {
+            run = runs.next();
+            end = end.saturating_add(run.map_or(0, |r| r.len));
+        }
+        let props = run.map_or(&p.mark, |r| &r.props);
+        let deleted = c == wordcraft_doc::para::OBJ || props.del.is_some();
         if deleted {
             for _ in 0..c.len_utf8() {
                 out.push('\u{1}');

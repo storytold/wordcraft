@@ -2354,7 +2354,7 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
         big(ui, app, "newWindow", "New\nWindow", "view.newWindow", json!({}), false);
         big(ui, app, "arrangeAll", "Arrange\nAll", "view.arrangeAll", json!({}), false);
         big(ui, app, "split", "Split", "view.split", json!({}), false);
-        // Across WordCraft windows (#322; `windows`): each is its own process and document.
+        // Across the app's windows (#322; `windows`).
         let w = app.session.windows.clone();
         stack(ui, |ui| {
             if w.side_by_side.is_none() && w.others.len() > 1 {
@@ -2366,9 +2366,16 @@ fn view(app: &mut WordApp, ui: &mut Ui) {
             }
             small(ui, app, "syncScroll", Some("Synchronous Scrolling"), "Synchronous Scrolling", "view.syncScroll", json!({}), w.sync_scroll);
         });
-        menu_button(ui, app, "switchWindows", Some("Switch\nWindows"), "Switch Windows", true, "view.switchWindows", |ui, app| {
-            window_list(ui, app, &w.others, "view.switchWindows")
-        });
+        menu_button(
+            ui,
+            app,
+            "switchWindows",
+            Some("Switch\nWindows"),
+            "Switch Windows",
+            true,
+            "view.switchWindows",
+            crate::documents::switch_windows_menu,
+        );
         // The Full Screen button carries its name for assistive technology (and for the
         // regression test that clicks it): big buttons are otherwise drawn unlabeled. Its
         // enabled state is the command's own, as every other ribbon control reports: the

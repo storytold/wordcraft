@@ -57,15 +57,21 @@ impl Rendered {
         }
         out
     }
+    /// Whether the pixels are exactly `width`×`height` RGBA, within a page raster's budget
+    /// ([`wordcraft_geom::MAX_RASTER_PIXELS`]): the fields are public, so an encoder is never asked
+    /// to pad a short buffer out to a huge claimed size (or, for JPEG, to assert on a mismatch).
+    fn encodable(&self) -> bool {
+        let budget = wordcraft_geom::MAX_RASTER_PIXELS.saturating_mul(4);
+        wordcraft_geom::rgba_fits(self.width, self.height, budget)
+            && wordcraft_geom::rgba_bytes(self.width, self.height).is_some_and(|b| b == self.pixels.len() as u64)
+    }
     /// PNG bytes (empty on failure, logged).
     pub fn to_png(&self) -> Vec<u8> {
-        let mut px = self.to_straight();
-        let Some(len) = wordcraft_geom::rgba_bytes(self.width, self.height).and_then(|b| usize::try_from(b).ok()) else {
-            log::error!("PNG encode: size {}×{} overflows", self.width, self.height);
+        if !self.encodable() {
+            log::error!("PNG encode: {} bytes for {}×{} pixels", self.pixels.len(), self.width, self.height);
             return Vec::new();
-        };
-        px.resize(len, 0);
-        let Some(img) = image::RgbaImage::from_raw(self.width, self.height, px) else {
+        }
+        let Some(img) = image::RgbaImage::from_raw(self.width, self.height, self.to_straight()) else {
             log::error!("PNG encode: bad size {}×{}", self.width, self.height);
             return Vec::new();
         };
@@ -76,7 +82,12 @@ impl Rendered {
         }
         buf
     }
+    /// JPEG bytes on white (empty on failure, logged).
     pub fn to_jpeg(&self, quality: u8) -> Vec<u8> {
+        if !self.encodable() {
+            log::error!("JPEG encode: {} bytes for {}×{} pixels", self.pixels.len(), self.width, self.height);
+            return Vec::new();
+        }
         let rgba = self.to_straight();
         let rgb: Vec<u8> = rgba
             .as_chunks::<4>()
@@ -209,17 +220,30 @@ pub fn decode_pixmap(bytes: &[u8]) -> Option<Pixmap> {
 
 /// [`decode_pixmap`] with an explicit RGBA byte budget (a small one in tests).
 fn decode_pixmap_within(bytes: &[u8], budget: u64) -> Option<Pixmap> {
-    // The header gives the size; refuse before the decoder (and the RGBA copy) allocate anything.
-    let (hw, hh) = image_size(bytes)?;
-    if !wordcraft_geom::decode_fits(hw, hh, budget) {
-        return None;
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+    use image::ImageDecoder;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_DECODE_SIDE);
     limits.max_image_height = Some(MAX_DECODE_SIDE);
-    reader.limits(limits);
-    let img = reader.decode().ok()?.into_rgba8();
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().ok()?;
+        r.limits(limits.clone());
+        Some(r)
+    };
+    // The header gives the size and the decoder's pixel format (16-bit RGBA takes 8 bytes a pixel
+    // before its RGBA8 copy); refuse before the decoder (and the RGBA copy) allocate anything.
+    let (hw, hh, native) = {
+        let d = reader()?.into_decoder().ok()?;
+        let (w, h) = d.dimensions();
+        (w, h, u64::from(d.color_type().bytes_per_pixel()))
+    };
+    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
+        // Logged once a picture: its refusal is cached with it (`pixmap_for`).
+        log::warn!(
+            "a {hw}×{hh} picture of {native} bytes a pixel needs more than {budget} bytes to decode: it is not drawn (in the text, a grey box takes its place)"
+        );
+        return None;
+    }
+    let img = reader()?.decode().ok()?.into_rgba8();
     let (w, h) = img.dimensions();
     premul_pixmap(w, h, img.as_raw())
 }
@@ -390,11 +414,46 @@ fn draw_vector_text(ctx: &mut RenderContext, t: &wordcraft_metafile::Text, tf: A
     let k = lay.em / face.upem.max(1.0);
     ctx.set_paint(rgba_color(t.color));
     let db = FontDb::global();
+    let canvas = kurbo::Rect::new(0.0, 0.0, f64::from(ctx.width()), f64::from(ctx.height()));
+    let mut oversized = 0usize;
     for (g, (x, y)) in shaped.iter().zip(&lay.glyphs) {
         let o = db.outline(&face, g.gid);
-        ctx.set_transform(tf * Affine::translate((*x, *y)) * Affine::scale(k));
+        let m = tf * Affine::translate((*x, *y)) * Affine::scale(k);
+        // A record's font size is file data: a glyph many canvases tall (or off the canvas) would
+        // have its outline flattened into millions of segments for nothing, so it is left out.
+        let b = m.transform_rect_bbox(o.bounding_box());
+        let sane = [b.x0, b.y0, b.x1, b.y1].iter().all(|v| v.is_finite()) && b.width() <= MAX_GLYPH_PIXELS && b.height() <= MAX_GLYPH_PIXELS;
+        if !sane {
+            oversized = oversized.saturating_add(1);
+            continue;
+        }
+        if !b.overlaps(canvas) {
+            continue;
+        }
+        ctx.set_transform(m);
         ctx.fill_path(&o);
     }
+    note_oversized_glyphs(&OVERSIZED_GLYPHS_NOTED, oversized);
+}
+
+/// Largest metafile glyph drawn, in device pixels per side (four times the widest canvas).
+const MAX_GLYPH_PIXELS: f64 = 65_536.0;
+
+/// Whether metafile glyphs left out for their size have been logged ([`note_oversized_glyphs`]).
+static OVERSIZED_GLYPHS_NOTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Logs that `n` glyphs of a metafile text run were left out for being larger than
+/// [`MAX_GLYPH_PIXELS`] (or of no finite size), the first time any are this run (`noted`): a
+/// page is drawn again on every repaint, so a warning each time would flood the log. True when
+/// this call logged it.
+fn note_oversized_glyphs(noted: &std::sync::atomic::AtomicBool, n: usize) -> bool {
+    if n == 0 || noted.swap(true, std::sync::atomic::Ordering::Relaxed) {
+        return false;
+    }
+    log::warn!(
+        "a picture's text has {n} letter(s) larger than {MAX_GLYPH_PIXELS} pixels drawn, left out (logged once a run; later ones are left out too)"
+    );
+    true
 }
 
 /// One device pixel in page points under `view` (its mean axis scale); 1 for a degenerate transform.
@@ -855,6 +914,44 @@ fn wave_path(x0: f64, y0: f64, x1: f64, y1: f64, amp: f64) -> BezPath {
     p
 }
 
+/// Most pieces one dashed stroke may be cut into; past it the stroke is drawn solid. kurbo's dash
+/// iterator makes no progress along a segment when a dash is too small next to it (it never ends),
+/// and every piece is more stroke to build.
+const MAX_DASH_PIECES: f64 = 100_000.0;
+
+/// `dashes` to stroke a path at most `len` long with, or none (solid) when they can't be drawn: a
+/// negative or non-finite length, a pattern that adds up to nothing, or more than
+/// [`MAX_DASH_PIECES`] pieces along the path.
+fn safe_dashes(dashes: impl IntoIterator<Item = f64>, len: f64) -> Vec<f64> {
+    let d: Vec<f64> = dashes.into_iter().take(MAX_DASH_PIECES as usize + 1).collect();
+    let period: f64 = d.iter().sum();
+    let ok = d.iter().all(|v| v.is_finite() && *v >= 0.0) && period > 0.0 && period.is_finite() && len.is_finite();
+    // Each repeat of the pattern is up to `d.len()` pieces; a partial repeat at each end counts too.
+    if ok && (len / period + 2.0) * d.len() as f64 <= MAX_DASH_PIECES { d } else { Vec::new() }
+}
+
+/// An upper bound on `path`'s length: its control polygon's (a curve is no longer than it).
+fn path_len_bound(path: &BezPath) -> f64 {
+    let (mut len, mut at, mut start) = (0.0, kurbo::Point::ZERO, kurbo::Point::ZERO);
+    for el in path.elements() {
+        let pts: &[kurbo::Point] = match el {
+            kurbo::PathEl::MoveTo(p) => {
+                (at, start) = (*p, *p);
+                continue;
+            }
+            kurbo::PathEl::LineTo(p) => std::slice::from_ref(p),
+            kurbo::PathEl::QuadTo(a, b) => &[*a, *b],
+            kurbo::PathEl::CurveTo(a, b, c) => &[*a, *b, *c],
+            kurbo::PathEl::ClosePath => std::slice::from_ref(&start),
+        };
+        for p in pts {
+            len += at.distance(*p);
+            at = *p;
+        }
+    }
+    len
+}
+
 /// Rasterize one display item with `view` mapping its current point coordinates to pixels.
 /// `visible` is a culling area in those point coordinates; nested clips intersect it and turns
 /// transform it into the child's coordinates. Shape and path strokes apply their stored caps,
@@ -883,10 +980,10 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             // every end, blobbing over the neighbouring border at a table's corners (#2892). Wavy
             // underlines keep round ends, as the PDF draws them.
             let mut st = kurbo::Stroke::new(w).with_caps(kurbo::Cap::Butt);
-            if let Some(d) = stroke.dashes() {
-                st = st.with_dashes(0.0, d.iter().map(|k| f64::from(*k) * w));
-            }
             let (x0, y0, x1, y1) = (*x0 as f64, *y0 as f64, *x1 as f64, *y1 as f64);
+            if let Some(d) = stroke.dashes() {
+                st = st.with_dashes(0.0, safe_dashes(d.iter().map(|k| f64::from(*k) * w), (x1 - x0).hypot(y1 - y0)));
+            }
             let line = |ctx: &mut RenderContext, ox: f64, oy: f64| {
                 let mut p = BezPath::new();
                 p.move_to((x0 + ox, y0 + oy));
@@ -1062,7 +1159,11 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 // Width 0 (or none) is a hairline.
                 let w = if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 };
                 ctx.set_paint(color(opts.ink(*s), 1.0));
-                ctx.set_stroke(kurbo::Stroke::new(w as f64).with_caps(screen_cap(*cap)).with_dashes(0.0, dash.iter().map(|v| f64::from(*v))));
+                ctx.set_stroke(
+                    kurbo::Stroke::new(w as f64)
+                        .with_caps(screen_cap(*cap))
+                        .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
+                );
                 ctx.stroke_path(&path);
             }
         }
@@ -1153,7 +1254,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 ctx.set_stroke(
                     kurbo::Stroke::new(if stroke_width.is_nan() { 0.25 } else { stroke_width.clamp(0.25, 200.0) } as f64)
                         .with_caps(screen_cap(*cap))
-                        .with_dashes(0.0, dash.iter().map(|v| f64::from(*v))),
+                        .with_dashes(0.0, safe_dashes(dash.iter().map(|v| f64::from(*v)), path_len_bound(&path))),
                 );
                 ctx.stroke_path(&path);
             }
@@ -1719,10 +1820,34 @@ mod tests {
         // Decode, the RGBA conversion and the premultiplied copy are charged: two buffers at peak.
         assert!(decode_pixmap_within(&buf, 1024).is_some());
         assert!(decode_pixmap_within(&buf, 1023).is_none());
+        // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 copy: 12 bytes a pixel.
+        let mut wide = Vec::new();
+        let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
+        image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+        assert!(decode_pixmap_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+        assert!(decode_pixmap_within(&wide, 1536).is_some());
         // A header (valid CRC) claiming 60000x60000 with no pixel data reads fine, then the budget refuses it.
         let hdr = ihdr_only_png(60_000, 60_000);
         assert_eq!(image_size(&hdr), Some((60_000, 60_000)));
         assert!(decode_pixmap(&hdr).is_none());
+    }
+
+    /// A `Rendered` whose pixels don't match its claimed size isn't padded out to that size: a
+    /// 60000×60000 claim over no pixels would allocate 14 GB. It, and any mismatch, encodes to
+    /// nothing (JPEG used to assert on the length).
+    #[test]
+    fn encoders_refuse_pixels_that_dont_match_the_size() {
+        let huge = Rendered { width: 60_000, height: 60_000, pixels: Vec::new() };
+        assert!(huge.to_png().is_empty());
+        assert!(huge.to_jpeg(80).is_empty());
+        let short = Rendered { width: 2, height: 2, pixels: vec![255; 4] };
+        assert!(short.to_png().is_empty());
+        assert!(short.to_jpeg(80).is_empty());
+        let long = Rendered { width: 1, height: 1, pixels: vec![255; 8] };
+        assert!(long.to_png().is_empty());
+        let ok = Rendered { width: 2, height: 2, pixels: vec![255; 16] };
+        assert!(!ok.to_png().is_empty());
+        assert!(!ok.to_jpeg(80).is_empty());
     }
 
     #[test]
@@ -2335,6 +2460,56 @@ mod tests {
         assert!(dark > 50, "the text is painted inside the picture: {dark} dark pixels");
     }
 
+    /// An EMF text run whose anchor sits inside the picture but whose font is billions of units
+    /// tall: each glyph's curves would span billions of device pixels, which the rasteriser
+    /// subdivides for ever. Glyphs that big (or off the raster) are left out; the page renders.
+    #[test]
+    fn metafile_text_with_a_huge_font_is_left_out() {
+        let mut font = emf_rec(82, &le32(&[1, -2_000_000_000, 0, 0, 0, 400, 0, 0]));
+        let mut name: Vec<u8> = "Arial".encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+        name.resize(64, 0);
+        font.extend(name);
+        font[4..8].copy_from_slice(&104u32.to_le_bytes());
+        let mut text = emf_rec(84, &le32(&[0, 0, 100, 100, 1, 0, 0, 5, 40, 4, 76, 0, 0, 0, 0, 0, 0]));
+        text.extend("WOWS".encode_utf16().flat_map(|u| u.to_le_bytes()));
+        text[4..8].copy_from_slice(&84u32.to_le_bytes());
+        let mut emf = red_right_half_emf()[..88].to_vec();
+        emf.extend([font, emf_rec(37, &le32(&[1])), emf_rec(24, &le32(&[0])), text, emf_rec(14, &[0; 12])].concat());
+        let mut d = Document::new();
+        let media = d.add_media(emf, "emf");
+        let mut p = wordcraft_doc::Paragraph::new();
+        let obj = wordcraft_doc::para::InlineObject::Image {
+            media,
+            w: 70.0,
+            h: 70.0,
+            alt: String::new(),
+            float: Default::default(),
+            crop: [0.0; 4],
+            ole: None,
+        };
+        p.insert_object(0, obj, &Default::default()).unwrap();
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+        let start = std::time::Instant::now();
+        let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+        // About 20 ms without the huge glyphs; drawing them ran past 4 minutes without finishing.
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+        assert_eq!(img.width, 612);
+        // Leaving them out is logged (once a run, so it may have been by another test already).
+        assert!(OVERSIZED_GLYPHS_NOTED.load(std::sync::atomic::Ordering::Relaxed), "the left-out glyphs are logged");
+    }
+
+    /// Glyphs left out for their size are logged the first time only: a page is drawn on every
+    /// repaint. A run with none left out logs nothing and doesn't use up the warning.
+    #[test]
+    fn oversized_glyphs_are_logged_once_a_run() {
+        let noted = std::sync::atomic::AtomicBool::new(false);
+        assert!(!note_oversized_glyphs(&noted, 0), "nothing left out, nothing logged");
+        assert!(!noted.load(std::sync::atomic::Ordering::Relaxed));
+        assert!(note_oversized_glyphs(&noted, 4), "the first glyphs left out are logged");
+        assert!(!note_oversized_glyphs(&noted, 2), "later ones aren't");
+    }
+
     #[test]
     fn unreadable_metafile_keeps_the_grey_box() {
         let mut d = Document::new();
@@ -2485,6 +2660,34 @@ mod tests {
         // A 0.75 pt stroke has a 3 pt dash followed by a 2.25 pt gap.
         assert!(image.pixel(812, 800)[1] < 80, "inside the first dash");
         assert_eq!(image.pixel(832, 800), [255, 255, 255, 255], "inside the first gap");
+    }
+
+    /// Dash lengths too small to cut the path make kurbo's dash iterator spin without moving along
+    /// it (and every piece is more stroke to build): such a pattern is drawn solid, as are negative
+    /// and non-finite ones. A normal dash pattern still dashes.
+    #[test]
+    fn hostile_dash_patterns_draw_solid_and_finish() {
+        use wordcraft_doc::graphic::PathSeg;
+        let line = |dash: Vec<f32>| Draw::Path {
+            segs: vec![PathSeg::Move(10.0, 20.0), PathSeg::Line(90.0, 20.0)],
+            fill: None,
+            stroke: Some(Rgb(0, 0, 0)),
+            stroke_width: 2.0,
+            dash,
+            cap: Default::default(),
+        };
+        let start = std::time::Instant::now();
+        for dash in [vec![1e-30, 1e-30], vec![1e-30], vec![-1.0, 2.0], vec![f32::NAN, 1.0], vec![f32::INFINITY, 1.0], vec![0.0, 0.0]] {
+            let img = render_items(&Document::new(), &[line(dash.clone())], 0.0, 0.0, 100.0, 40.0, 1.0, &RenderOptions::default());
+            assert!(img.pixel(50, 20)[3] > 200, "{dash:?} draws solid");
+        }
+        // Milliseconds drawn solid; drawn as dashes they ran past 4 minutes without finishing.
+        assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+        let dashed = render_items(&Document::new(), &[line(vec![10.0, 10.0])], 0.0, 0.0, 100.0, 40.0, 1.0, &RenderOptions::default());
+        assert!(dashed.pixel(15, 20)[3] > 200 && dashed.pixel(25, 20)[3] == 0, "a normal pattern dashes");
+        assert!(safe_dashes([3.0, 1.0], 1000.0).len() == 2);
+        assert!(safe_dashes([1e-3, 1e-3], 1000.0).is_empty(), "a million pieces");
+        assert!(safe_dashes(std::iter::repeat_n(1.0, 200_000), 1.0).is_empty(), "too many entries");
     }
 
     #[test]

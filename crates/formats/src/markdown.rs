@@ -10,6 +10,7 @@
 //! Export writes the same constructs; pictures become `![alt](media-name)` placeholders.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use wordcraft_doc::{Align, Document};
 
@@ -24,16 +25,19 @@ const MAX_NEST: usize = 32;
 
 /// Parse Markdown text into a document.
 pub fn import(text: &str) -> Document {
+    model::begin_import();
     model::to_doc(&parse(text))
 }
 
 /// [`import`] onto `page`: Markdown gives no page size (#1381).
 pub fn import_on(text: &str, page: &wordcraft_doc::SectionProps) -> Document {
+    model::begin_import();
     model::to_doc_in(&parse(text), page.clone())
 }
 
 /// Link reference definitions: the normalised label to its destination.
-pub type Refs = HashMap<String, String>;
+/// A destination is shared by every reference to it, not copied into each (#3713).
+pub type Refs = HashMap<String, Arc<str>>;
 
 /// A label as CommonMark compares them: case-folded, and any run of white space one space
 /// (§4.7, "matches"). `[FOO bar]` and `[foo   BAR]` are the same label.
@@ -141,7 +145,7 @@ fn take_definitions(lines: &mut Vec<String>) -> Refs {
         if starts_block && let Some((label, dest)) = link_definition(line) {
             // The first definition of a label wins, as CommonMark says, and definitions may
             // follow one another.
-            refs.entry(label).or_insert(dest);
+            refs.entry(label).or_insert(dest.into());
             return false;
         }
         starts_block = is_blank(line) || atx_heading(t).is_some() || thematic_break(t);
@@ -799,10 +803,18 @@ fn link_dest(s: &str, at: usize) -> Option<(String, usize)> {
     i += ws;
     let r = s.get(i..)?;
     let (dest, used) = if let Some(inner) = r.strip_prefix('<') {
-        let end = inner.find(['>', '\n'])?;
-        if inner.get(end..)?.starts_with('\n') {
-            return None;
-        }
+        // The first `>` not escaped by a backslash ends it; a line break first means no link.
+        let b = inner.as_bytes();
+        let mut k = 0;
+        let end = loop {
+            match b.get(k)? {
+                b'\\' => k += 1,
+                b'>' => break k,
+                b'\n' => return None,
+                _ => {}
+            }
+            k += 1;
+        };
         (inner.get(..end)?.to_string(), end + 2)
     } else {
         let mut depth = 0i32;
@@ -983,7 +995,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                             let dest = link_dest(s, close + 1);
                             scan_budget = scan_budget.saturating_sub(dest.as_ref().map_or(s.len(), |d| d.1).saturating_sub(close));
                             let (dest, end) = dest?;
-                            return Some((text.to_string(), dest, end));
+                            return Some((text.to_string(), Arc::from(dest), end));
                         }
                         // A reference link: `[text][label]`, `[text][]` and `[text]` all take
                         // their destination from a definition collected before parsing (#3238).
@@ -1020,7 +1032,11 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                     Some((inner, dest, end)) if base.link.is_none() => {
                         flush!();
                         let mut f = base.clone();
-                        f.link = Some(dest);
+                        // A destination too long to keep leaves its text unlinked.
+                        f.link = (dest.len() <= model::MAX_LINK).then_some(dest);
+                        if f.link.is_none() {
+                            model::dropped(model::Dropped::Link);
+                        }
                         for x in parse_inlines(&inner, &f, depth + 1, refs) {
                             nodes.push(Node::Inl(x));
                         }
@@ -1047,7 +1063,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
                 if is_auto {
                     flush!();
                     let mut f = base.clone();
-                    f.link = Some(if inner.contains('@') && !inner.contains(':') { format!("mailto:{inner}") } else { inner.to_string() });
+                    f.link = Some(if inner.contains('@') && !inner.contains(':') { format!("mailto:{inner}").into() } else { inner.into() });
                     push_text(&mut nodes, inner, &f);
                     i += inner.len() + 2;
                     text_start = i;
@@ -1202,18 +1218,16 @@ fn emit(mut nodes: Vec<Node>) -> Vec<Inline> {
         }
         out.push(Inline::Text(t.to_string(), f));
     };
-    let base_of = |nodes: &[Node], k: usize| -> Fmt {
-        // Delimiter literals take the formatting (link, …) of neighbouring text.
-        for j in (0..k).rev() {
-            if let Some(Node::Text(_, f)) = nodes.get(j) {
-                return Fmt { bold: false, italic: false, strike: false, ..f.clone() };
-            }
-        }
-        Fmt::default()
-    };
-    for (k, n) in nodes.iter().enumerate() {
+    // Delimiter literals take the formatting (link, …) of the text before them: the last text
+    // node, tracked here rather than searched for backwards from every delimiter (quadratic on
+    // a paragraph of delimiters).
+    let mut last_text: Option<&Fmt> = None;
+    for n in &nodes {
         match n {
-            Node::Text(t, f) => push(&mut out, t, f, em, strong, strike),
+            Node::Text(t, f) => {
+                push(&mut out, t, f, em, strong, strike);
+                last_text = Some(f);
+            }
             Node::Inl(Inline::Text(t, f)) => push(&mut out, t, f, em, strong, strike),
             Node::Inl(other) => out.push(other.clone()),
             Node::Delim { ch, left, opens, closes, .. } => {
@@ -1224,9 +1238,11 @@ fn emit(mut nodes: Vec<Node>) -> Vec<Inline> {
                         Emph::Strike => strike = strike.saturating_sub(1),
                     }
                 }
-                let lit: String = std::iter::repeat_n(*ch, *left).collect();
-                let f = base_of(&nodes, k);
-                push(&mut out, &lit, &f, em, strong, strike);
+                if *left > 0 {
+                    let lit: String = std::iter::repeat_n(*ch, *left).collect();
+                    let f = last_text.map_or_else(Fmt::default, |f| Fmt { bold: false, italic: false, strike: false, ..f.clone() });
+                    push(&mut out, &lit, &f, em, strong, strike);
+                }
                 for e in opens {
                     match e {
                         Emph::Em => em += 1,
@@ -1378,7 +1394,7 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     }
     let mut out = String::new();
     let mut stack: Vec<Mark> = Vec::new();
-    let mut link: Option<String> = None;
+    let mut link: Option<Arc<str>> = None;
     let close_all = |out: &mut String, stack: &mut Vec<Mark>| {
         while let Some(m) = stack.pop() {
             out.push_str(marker(m));
@@ -1436,8 +1452,35 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     out
 }
 
+/// `l` as a Markdown link destination that reads back as exactly `l`, the target
+/// `is_safe_href` passed. What Markdown would decode (a backslash escape, an entity reference)
+/// or end the destination on (`<`, `>`) is backslash-escaped, never deleted: deleting `<` or `>`
+/// could turn an accepted relative target into `javascript:…` or `//host`. Control characters
+/// can't be written in a destination and are left out, as the safety check ignores them.
 fn link_target(l: &str) -> String {
-    if l.contains([' ', '(', ')', '<', '>']) { format!("<{}>", l.replace(['<', '>', '\n'], "")) } else { l.to_string() }
+    let l: String = l.chars().filter(|c| !c.is_ascii_control()).collect();
+    let mut out = String::with_capacity(l.len() + 2);
+    for (i, c) in l.char_indices() {
+        let rest = l.get(i + c.len_utf8()..).unwrap_or("");
+        match c {
+            '<' | '>' => out.push('\\'),
+            // A backslash is literal unless punctuation (or the closing `)`/`>`) follows it.
+            '\\' if rest.chars().next().is_none_or(|n| n.is_ascii_punctuation()) => out.push('\\'),
+            '&' if entity_like(rest) => out.push('\\'),
+            _ => {}
+        }
+        out.push(c);
+    }
+    if l.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>')) { format!("<{out}>") } else { out }
+}
+
+/// Whether `rest` (the text after a `&`) starts like an entity reference (`amp;`, `#106;`,
+/// `#x6A;`), which a Markdown reader would decode.
+fn entity_like(rest: &str) -> bool {
+    let Some(end) = within(rest, 34).find(';') else { return false };
+    let body = rest.get(..end).unwrap_or("");
+    let body = body.strip_prefix('#').map_or(body, |n| n.strip_prefix(['x', 'X']).unwrap_or(n));
+    !body.is_empty() && body.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 fn marker(m: Mark) -> &'static str {
@@ -1640,7 +1683,7 @@ mod tests {
         let s = inl("see [the *site*](http://x.org \"T\") and `a*b*` \\*lit\\* &amp; <https://y.com>");
         let link: Vec<_> = s
             .iter()
-            .filter_map(|i| if let Inline::Text(t, f) = i { f.link.as_ref().map(|l| (t.clone(), l.clone(), f.italic)) } else { None })
+            .filter_map(|i| if let Inline::Text(t, f) = i { f.link.as_ref().map(|l| (t.clone(), l.to_string(), f.italic)) } else { None })
             .collect();
         assert_eq!(link[0], ("the ".into(), "http://x.org".into(), false));
         assert_eq!(link[1], ("site".into(), "http://x.org".into(), true));
@@ -1661,7 +1704,7 @@ mod tests {
                     .inlines
                     .iter()
                     .filter_map(|x| match x {
-                        Inline::Text(t, f) => f.link.clone().map(|l| (t.clone(), l)),
+                        Inline::Text(t, f) => f.link.as_deref().map(|l| (t.clone(), l.to_string())),
                         _ => None,
                     })
                     .collect(),
@@ -2067,7 +2110,8 @@ mod tests {
         use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};
         let cases = ["Shopping\n- milk\n# not a heading", "a\n1. x", "a\n2) x", "a\n+ x", "a\n---", "a\n***", "a\n==", "a\n--", "a\n> q"];
         for s in cases {
-            let d = Document { body: vec![para_block(Paragraph::with_text(s, CharProps::default()))], ..Default::default() };
+            let mut d = Document::new();
+            d.body = vec![para_block(Paragraph::with_text(s, CharProps::default()))];
             let md = export(&d);
             let back = import(&md);
             assert_eq!(back.body.len(), 1, "{s:?} -> {md:?}");
@@ -2151,5 +2195,52 @@ mod tests {
         assert_eq!(flow.blocks.len(), 2);
         let texts: Vec<String> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
         assert_eq!(texts, ["Hello world!", "After comment."]);
+    }
+
+    #[test]
+    fn a_paragraph_of_delimiters_parses_in_linear_time() {
+        // #3714: each delimiter's literal looked back for the text before it, to the start of
+        // the paragraph when there was none (quadratic).
+        let src = "*_".repeat(200_000);
+        let t = std::time::Instant::now();
+        let out = inl(&src);
+        // Under a second on a loaded machine; the backwards search ran past 6 minutes.
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        let text: String = out.iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t.as_str()) } else { None }).collect();
+        assert!(text.chars().all(|c| matches!(c, '*' | '_')), "only delimiters come out");
+        // Literal delimiters still take the link of the text before them.
+        let s = inl("[a](http://x.org) [b*](http://y.org)");
+        assert!(s.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "b*" && f.link.as_deref() == Some("http://y.org"))), "{s:?}");
+    }
+
+    #[test]
+    fn exported_link_destinations_read_back_unchanged() {
+        // Removing `<` and `>` from a destination after the safety check could make a relative
+        // target a script or network-path one (`java<script:…` → `javascript:…`). They are
+        // escaped instead, as are backslash escapes and entity references a reader would decode.
+        let md = |l: &str| inlines_md(&[Inline::Text("x".into(), Fmt { link: Some(l.into()), ..Default::default() })]);
+        assert_eq!(md("java<script:alert(1)"), "[x](<java\\<script:alert(1)>)");
+        for l in [
+            "java<script:alert(1)",
+            "/</evil.example/(x)",
+            "a>b c",
+            "&#106;avascript:alert(1)",
+            "&#x6A;avascript:x",
+            "&amp;",
+            "javascript\\:x",
+            "dir\\",
+            "dir\\(1)\\",
+            "q?a=1&b=2",
+        ] {
+            let out = md(l);
+            let back = inl(&out);
+            let got: Vec<_> =
+                back.iter().filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref().map(str::to_string) } else { None }).collect();
+            assert_eq!(got, [l.to_string()], "{l:?} → {out:?}");
+        }
+        // Ordinary destinations are written as before.
+        assert_eq!(md("https://example.com/a?b=1&c=2"), "[x](https://example.com/a?b=1&c=2)");
+        assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
+        assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
     }
 }

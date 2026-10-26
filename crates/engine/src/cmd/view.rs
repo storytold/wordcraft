@@ -110,6 +110,10 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"value"?: "light" | "dark" | "system"; without it, toggles light and dark}"#)
         .pure(),
         CommandSpec::new("view.stylesPane", "Styles Pane", "Home › Styles", |s, v| toggle(s, v, |x| &mut x.styles_pane)).pure(),
+        // Where the Styles pane sits: docked right or left, or floating (#1756). No `dock` reads it.
+        CommandSpec::new("view.stylesPaneDock", "Styles Pane Position", "Home › Styles", styles_pane_dock)
+            .params(r#"{"dock"?: "left" | "right" | "float"}"#)
+            .pure(),
         CommandSpec::new("view.commentsPane", "Comments Pane", "Review › Comments", |s, v| toggle(s, v, |x| &mut x.comments_pane)).pure(),
         CommandSpec::new("view.accessibilityPane", "Accessibility Pane", "Review › Accessibility", |s, v| {
             toggle(s, v, |x| &mut x.accessibility_pane)
@@ -129,22 +133,17 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .pure(),
+        CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", switch_windows)
+            .params(r#"{"id"?: n (make this open document the active one)} → {"documents": [{"id", "title", "path", "dirty", "active"}]} in the order they were opened"#)
+            .pure(),
         CommandSpec::new("view.split", "Split", "View › Window", |s, _| {
             s.push_ui_request(json!({"toggle": "split"}));
             sel_result(s)
         })
         .key("Mod+Alt+S")
         .pure(),
-        // View › Window across WordCraft windows (#322): each window is its own process; the
-        // desktop app performs these (see `Windows`), elsewhere they are disabled.
-        CommandSpec::new("view.switchWindows", "Switch Windows", "View › Window", |s, v| {
-            let id = pick_window(s, v)?;
-            s.ui_requests.push(json!({"windows": "focus", "id": id}));
-            Ok(json!({"window": id}))
-        })
-        .params(r#"{"window"?: id from ui.inspect `windows.others` (optional when one other window is open)}"#)
-        .when(has_other_window)
-        .pure(),
+        // View › Window across WordCraft windows (#322): the desktop app's native windows
+        // perform these (see `Windows`), elsewhere they are disabled.
         CommandSpec::new("view.arrangeAll", "Arrange All", "View › Window", |s, _| {
             s.ui_requests.push(json!({"windows": "arrange"}));
             Ok(json!({"windows": s.windows.others.len() + 1}))
@@ -196,9 +195,10 @@ pub fn specs() -> Vec<CommandSpec> {
     ]
 }
 
-/// View › Window (#322): the other WordCraft windows as the desktop app last saw them, and the
-/// Side by Side pairing. The front end keeps `available` and `others` current; elsewhere (web,
-/// CLI, MCP without the app) they stay empty and the window commands are disabled.
+/// View › Window (#322): the other native windows of the app as the window being drawn sees them
+/// (by window id, the ids of `ui.inspect`'s `windows`), and its Side by Side pairing. The front
+/// end keeps these current as each window draws; elsewhere (web, CLI, MCP without the app) they
+/// stay empty and the window commands are disabled.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct Windows {
@@ -285,6 +285,16 @@ fn mode(s: &mut Session, m: ViewMode, read: bool) -> CmdResult {
     s.view.read_mode = read;
     s.relayout();
     Ok(json!({"mode": m, "readMode": read}))
+}
+
+fn styles_pane_dock(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(d) = v.get("dock") {
+        let Some(dock) = d.as_str().and_then(crate::StylesPaneDock::parse) else {
+            return Err(CmdError::Params("dock must be left, right or float".into()));
+        };
+        s.view.styles_pane_dock = dock;
+    }
+    Ok(json!({"dock": s.view.styles_pane_dock.name()}))
 }
 
 fn read_column_width(s: &mut Session, v: &Value) -> CmdResult {
@@ -394,4 +404,13 @@ fn zoom(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     Ok(json!({"zoom": s.view.zoom, "fit": s.view.fit}))
+}
+
+/// View › Window › Switch Windows: the open documents, or make one of them active.
+fn switch_windows(s: &mut Session, v: &Value) -> CmdResult {
+    if let Some(x) = v.get("id").filter(|x| !x.is_null()) {
+        let id = x.as_u64().ok_or_else(|| CmdError::Params("`id` must be an open document's id".into()))?;
+        s.activate(id)?;
+    }
+    Ok(json!({"documents": s.documents()}))
 }

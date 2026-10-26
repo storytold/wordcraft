@@ -1323,6 +1323,7 @@ fn bookmark_destination_is_the_page_of_its_start() {
     let mut p = Paragraph::with_text("Paragraph start\u{c}Bookmark target", CharProps::default());
     let at = "Paragraph start\u{c}".len();
     p.insert_object(at, InlineObject::BookmarkStart { name: "target".into() }, &CharProps::default()).unwrap();
+    p.insert_object(at, InlineObject::BookmarkStart { name: "First".into() }, &CharProps::default()).unwrap();
     p.insert_object(0, InlineObject::BookmarkStart { name: "first".into() }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p)];
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
@@ -1354,6 +1355,13 @@ fn bookmark_destination_is_the_page_of_its_start() {
     let (page_ci, x_ci, y_ci) = ex.bookmark("TARGET").unwrap();
     assert_eq!(page_ci, 1);
     assert_eq!((x_ci, y_ci), (x, y));
+    // An exact name wins; names that differ only in case fall back to the first in the document
+    // (a folded index, not a scan of a hash map in arbitrary order for every link).
+    assert_eq!(ex.bookmark("First").map(|b| b.0), Some(1));
+    assert_eq!(ex.bookmark("FIRST").map(|b| b.0), Some(0));
+    assert!(ex.bookmark("absent").is_none());
+    let (exact, folded) = ex.bookmarks.get().unwrap();
+    assert_eq!((exact.len(), folded.len()), (3, 2));
 
     // Whitespace in ISO date string is parsed successfully
     assert!(parse_iso("  2024-05-06T07:08:09Z \n").is_some());
@@ -2031,7 +2039,7 @@ fn bundled_unicode_glyphs_are_visible_and_extractable() {
     let lay = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
     let mut drawn = String::new();
     for page in &lay.pages {
-        for draw in page_display(&d, page, &DisplayOptions::default()) {
+        for draw in wordcraft_layout::display::page_display(&d, page, &DisplayOptions::default()) {
             if let Draw::Glyphs { face, glyphs, text, .. } = draw {
                 assert_eq!(face.data(), bundled.data(), "page glyphs must use the bundled face without system fallback");
                 assert!(glyphs.iter().all(|(id, _, _)| *id != 0), "page glyphs must not use .notdef");
@@ -2140,6 +2148,13 @@ fn image_budget_is_checked_from_the_header() {
     // The decoded image and its RGBA conversion are charged: two buffers at peak.
     assert!(load_image_within(&data, 1024).is_some());
     assert!(load_image_within(&data, 1023).is_none());
+    // 16-bit RGBA decodes to 8 bytes a pixel, alive with its RGBA8 conversion: 12 bytes a pixel.
+    let mut wide = Vec::new();
+    let img16 = image::ImageBuffer::<image::Rgba<u16>, _>::from_fn(16, 8, |x, y| image::Rgba([x as u16 * 999, y as u16, 9, 65535]));
+    image::DynamicImage::ImageRgba16(img16).write_to(&mut std::io::Cursor::new(&mut wide), image::ImageFormat::Png).unwrap();
+    let wide = Arc::new(wide);
+    assert!(load_image_within(&wide, 1024).is_none(), "two RGBA8 buffers' worth is not enough for RGBA16");
+    assert!(load_image_within(&wide, 1536).is_some());
     // A header (valid CRC) claiming 30000x30000 with no pixel data reads fine, then the budget refuses it.
     let hdr = ihdr_only_png(30_000, 30_000);
     let dims = image::ImageReader::new(std::io::Cursor::new(hdr.as_slice())).with_guessed_format().unwrap().into_dimensions().unwrap();
@@ -2410,4 +2425,28 @@ fn only_safe_link_targets_become_annotations() {
         })
         .collect();
     assert_eq!(uris, ["https://example.com/", "mailto:ada@example.com"]);
+}
+
+/// A glyph's text runs to the first later glyph with a cluster past its own (the end of the text
+/// without one), found in one pass: a long run of glyphs sharing a cluster used to rescan the rest
+/// of the run for every glyph.
+#[test]
+fn cluster_ends_match_the_next_larger_cluster_in_linear_time() {
+    let brute = |cl: &[usize], len: usize| -> Vec<usize> {
+        (0..cl.len()).map(|i| cl.iter().skip(i + 1).copied().find(|n| *n > cl[i]).unwrap_or(len)).collect::<Vec<_>>()
+    };
+    for cl in [vec![], vec![0], vec![0, 0, 3, 3, 5], vec![5, 3, 3, 0], vec![2, 0, 4, 1, 1, 6, 3], vec![0, 7, 2, 2, 9, 1]] {
+        assert_eq!(cluster_ends(&cl, 10), brute(&cl, 10), "{cl:?}");
+    }
+    // One base letter and a million combining marks in its cluster, then one more letter.
+    // Milliseconds; the rescan (`brute`) took 2.9 s at 50,000 and grows with the square, so
+    // about 20 minutes here.
+    let n = 1_000_000;
+    let mut cl = vec![0; n + 1];
+    cl.push(2 * n + 2);
+    let start = std::time::Instant::now();
+    let ends = cluster_ends(&cl, 2 * n + 4);
+    assert!(start.elapsed() < std::time::Duration::from_secs(10), "{:?}", start.elapsed());
+    assert!(ends[..=n].iter().all(|e| *e == 2 * n + 2));
+    assert_eq!(ends.last(), Some(&(2 * n + 4)));
 }

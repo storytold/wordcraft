@@ -47,7 +47,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::Paint;
-use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
+use wordcraft_layout::display::{DisplayOptions, Draw, ItemDisplay, Stroke as LineStyle};
 use wordcraft_layout::para::{ClKind, LineEnd};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
@@ -747,7 +747,9 @@ struct Exporter<'a> {
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
     /// link up by walking the whole document made a long document with a linked table of contents
     /// take seconds to export.
-    bookmarks: std::cell::OnceCell<HashMap<String, wordcraft_doc::Pos>>,
+    /// Bookmarks by exact name, and by ASCII-lowercased name for the case-blind fallback; the
+    /// first in document order wins either way.
+    bookmarks: std::cell::OnceCell<(HashMap<String, wordcraft_doc::Pos>, HashMap<String, wordcraft_doc::Pos>)>,
 }
 
 /// What the content being drawn is, for tagging.
@@ -918,8 +920,10 @@ impl Exporter<'_> {
             placeholders: false,
             ..Default::default()
         };
+        // What the items share (the authors' colours, the clipped cells) is worked out once per page.
+        let shown = ItemDisplay::new(self.doc, page);
         for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = self.draws(page, it, &dopts);
+            let draws = shown.draws(it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
                 for d in &draws {
                     me.draw(s, d);
@@ -927,7 +931,7 @@ impl Exporter<'_> {
             });
         }
         for it in &page.items {
-            let draws = self.draws(page, it, &dopts);
+            let draws = shown.draws(it, &dopts);
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
@@ -987,19 +991,6 @@ impl Exporter<'_> {
                 }),
             }
         }
-    }
-
-    /// Display items for one placed item.
-    fn draws(&self, page: &Page, it: &Placed, dopts: &DisplayOptions) -> Vec<Draw> {
-        let mut items = vec![it.clone()];
-        // Lines in a cell cut off at its edge are drawn inside its clip: `page_display` finds the
-        // cell among the items (cells themselves draw nothing).
-        if matches!(it, Placed::Lines { .. }) {
-            let clipped = page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. }));
-            items.extend(clipped.cloned());
-        }
-        let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
-        page_display(self.doc, &one, dopts)
     }
 
     /// A heading's text for bookmarks and tags: what the pages show. That leaves out what its
@@ -1544,14 +1535,15 @@ impl Exporter<'_> {
     /// Where a bookmark is: (output page, x, y) — the page and line its start lands on, which
     /// in a paragraph split across pages need not be the paragraph's first page.
     fn bookmark(&self, name: &str) -> Option<(usize, f32, f32)> {
-        let marks = self.bookmarks.get_or_init(|| {
-            let mut m = HashMap::new();
+        let (exact, folded) = self.bookmarks.get_or_init(|| {
+            let (mut exact, mut folded) = (HashMap::new(), HashMap::new());
             for (n, pos) in self.doc.bookmarks() {
-                m.entry(n).or_insert(pos);
+                folded.entry(n.to_ascii_lowercase()).or_insert_with(|| pos.clone());
+                exact.entry(n).or_insert(pos);
             }
-            m
+            (exact, folded)
         });
-        let pos = marks.get(name).or_else(|| marks.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?.clone();
+        let pos = exact.get(name).or_else(|| folded.get(&name.to_ascii_lowercase()))?.clone();
         if let Some(c) = self.lay.caret(&pos)
             && let Some(out) = self.out_index.get(&c.page)
         {
@@ -1703,11 +1695,12 @@ impl Exporter<'_> {
         match font {
             Some(font) => {
                 let upem = face.upem.max(1.0) as f32;
+                let ends = cluster_ends(&shaped.iter().map(|g| g.cluster).collect::<Vec<_>>(), t.text.len());
                 let kg: Vec<KrillaGlyph> = shaped
                     .iter()
                     .enumerate()
                     .map(|(i, g)| {
-                        let end = shaped.iter().skip(i + 1).map(|n| n.cluster).find(|cl| *cl > g.cluster).unwrap_or(t.text.len());
+                        let end = ends.get(i).copied().unwrap_or(t.text.len());
                         let start = g.cluster.min(end);
                         let x = lay.glyphs.get(i).map_or(0.0, |p| p.0);
                         let adv = match lay.glyphs.get(i + 1) {
@@ -1758,11 +1751,12 @@ impl Exporter<'_> {
         if font.is_none() && !self.outlined.contains(&face.id()) {
             return;
         }
+        let ends = cluster_ends(&shaped.iter().map(|g| g.cluster).collect::<Vec<_>>(), text.len());
         let glyphs: Vec<KrillaGlyph> = shaped
             .iter()
             .enumerate()
             .map(|(i, g)| {
-                let end = shaped.iter().skip(i + 1).map(|n| n.cluster).find(|cl| *cl > g.cluster).unwrap_or(text.len());
+                let end = ends.get(i).copied().unwrap_or(text.len());
                 let start = g.cluster.min(end);
                 KrillaGlyph::new(
                     GlyphId::new(g.gid),
@@ -1891,6 +1885,23 @@ fn path_from(b: &kurbo::BezPath) -> Option<Path> {
     pb.finish()
 }
 
+/// Where each glyph's text ends: the cluster (byte offset) of the first later glyph whose cluster
+/// is past the glyph's own, else `len`. One backward pass keeping the later clusters that can
+/// still be an answer, so a long run of glyphs sharing a cluster (combining marks) stays linear.
+fn cluster_ends(clusters: &[usize], len: usize) -> Vec<usize> {
+    let mut ends = vec![len; clusters.len()];
+    // Later clusters, nearest last, each greater than every one nearer.
+    let mut later: Vec<usize> = Vec::new();
+    for (end, &c) in ends.iter_mut().zip(clusters).rev() {
+        while later.last().is_some_and(|&n| n <= c) {
+            later.pop();
+        }
+        *end = later.last().copied().unwrap_or(len);
+        later.push(c);
+    }
+    ends
+}
+
 /// Decode a picture for embedding (validated with the `image` crate first, so a broken file
 /// can't fail the whole export).
 fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
@@ -1903,19 +1914,28 @@ fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
 fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Image> {
+    use image::ImageDecoder;
     let fmt = image::guess_format(data).ok()?;
-    // Header-only size check before anything is allocated (decode buffer + RGBA conversion are
-    // charged); the side limits and the default 512 MB allocation cap stay as a second guard.
-    let (hw, hh) = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?.into_dimensions().ok()?;
-    if !wordcraft_geom::decode_fits(hw, hh, budget) {
-        return None;
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_SIDE);
     limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    reader.limits(limits);
-    let dec = reader.decode().ok()?;
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?;
+        r.limits(limits.clone());
+        Some(r)
+    };
+    // Header-only size check before anything is allocated (the decoder's buffer at its own pixel
+    // size, 8 bytes for 16-bit RGBA, plus the RGBA conversion are charged); the side limits and
+    // the default 512 MB allocation cap apply to the header read and the decode alike.
+    let (hw, hh, native) = {
+        let d = reader()?.into_decoder().ok()?;
+        let (w, h) = d.dimensions();
+        (w, h, u64::from(d.color_type().bytes_per_pixel()))
+    };
+    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
+        return None;
+    }
+    let dec = reader()?.decode().ok()?;
     let (w, h) = (dec.width(), dec.height());
     if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
         return None;
