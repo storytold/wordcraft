@@ -324,8 +324,6 @@ fn save_privacy_checkboxes_set_the_privacy_options() {
 #[test]
 fn animation_effects_is_an_accessibility_option() {
     use crate::theme::Animations;
-    use egui::accesskit::Role;
-    use egui_kittest::kittest::{By, Queryable};
     let services = Services { animations_enabled: Some(Box::new(|| Some(false))), ..Default::default() };
     let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), services);
     a.session.read_aloud.backend = wordcraft_engine::speech::Backend::Hold;

@@ -813,7 +813,7 @@ mod tests {
         // the wait gives up with an error, drops the message (`CANCEL self`), and closes.
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::Hold);
-        let req = Request { text: "Withheld.", rate: 0, lang: None };
+        let req = Request { text: "Withheld.", rate: 0, lang: None, voice: None };
         let start = Instant::now();
         let err = converse(&Stream::Unix(client), &req, &|| false).unwrap_err();
         assert_eq!(err.kind(), ErrorKind::TimedOut, "{err}");
@@ -825,7 +825,7 @@ mod tests {
         // is spoken to its end.
         let (client, srv) = UnixStream::pair().unwrap();
         let h = server(srv, Ending::End);
-        assert_eq!(converse(&Stream::Unix(client), &Request { text: "Next.", rate: 0, lang: None }, &|| false).unwrap(), Outcome::Done);
+        assert_eq!(converse(&Stream::Unix(client), &Request { text: "Next.", rate: 0, lang: None, voice: None }, &|| false).unwrap(), Outcome::Done);
         assert_eq!(speaks(&h.join().unwrap()), 1);
     }
 
