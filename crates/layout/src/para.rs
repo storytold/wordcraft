@@ -36,6 +36,8 @@ pub(crate) use chars::{caps_char, push_caps};
 pub(crate) use chars::{ligature_features, remap_range, thai_run_face};
 pub use grid::{Exclusion, Grid, is_east_asian};
 #[cfg(test)]
+pub(crate) use justify::cluster_gaps;
+#[cfg(test)]
 use lines::break_lines;
 pub use model::{CellText, ClKind, Cluster, Enclosed, Glyph, Label, LabelRun, Line, LineEnd, PARA_MARK_WIDTH, ParaEnv, RubyLayout, StyleRun, VisCl};
 pub use paragraph::layout_para;
@@ -94,6 +96,9 @@ pub struct ParaLayout {
     /// Room after a cluster between Asian text and Latin text or digits ([`auto_space`]), by
     /// cluster index, sorted. It is part of the cluster's advance, but takes no room at a line's end.
     pub auto_space: Vec<(usize, f32)>,
+    /// Thai Distributed and Khmer Justify: for each cluster, what the gap after it is (a space, a
+    /// word boundary, a syllable boundary, or nothing to stretch). Empty for other alignments.
+    pub gaps: Vec<wordcraft_doc::khmer::Gap>,
 }
 
 impl ParaLayout {

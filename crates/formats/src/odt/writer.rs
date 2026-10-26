@@ -156,7 +156,7 @@ impl Writer {
         match p.align {
             Some(Align::Center) => props.push_str(" fo:text-align=\"center\""),
             Some(Align::Right) => props.push_str(" fo:text-align=\"end\""),
-            Some(Align::Justify) | Some(Align::Distribute) => props.push_str(" fo:text-align=\"justify\""),
+            Some(Align::Justify | Align::Distribute | Align::ThaiDistribute | Align::KhmerJustify) => props.push_str(" fo:text-align=\"justify\""),
             Some(Align::Left) => props.push_str(" fo:text-align=\"start\""),
             None => {}
         }

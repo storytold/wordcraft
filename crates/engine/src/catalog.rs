@@ -99,6 +99,7 @@ Home|Paragraph|Center|para.alignCenter
 Home|Paragraph|Align Right|para.alignRight
 Home|Paragraph|Justify|para.justify
 Home|Paragraph|Distributed|para.distribute
+Home|Paragraph|Thai Distributed|para.thaiDistribute
 Home|Paragraph|Line Spacing|para.lineSpacing
 Home|Paragraph|Add Space Before|para.addSpaceBefore
 Home|Paragraph|Remove Space After|para.removeSpaceAfter
