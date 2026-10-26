@@ -1792,7 +1792,7 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     });
     crate::ink::replay_bar(app, ui, out.inner_rect);
     // This window's own scrolling (wheel, scroll bar, keys, caret), for a partner window.
-    let own = out.state.offset.y - before.y - from_partner;
+    let own = app.canvas.scroll_offset.y - before.y - from_partner;
     if app.session.windows.sync_scroll && !rescaled && own.abs() > 0.01 && geo.scale > 0.0 {
         app.canvas.sync_out += own / geo.scale;
     }
