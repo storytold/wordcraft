@@ -1008,7 +1008,8 @@ impl<'a> Builder<'a> {
         // Symbol-font characters are laid out as their Unicode equivalents.
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
-        let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
+        let resolved_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic));
+        let primary_cs = resolved_cs.as_ref().map(|r| r.face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
         // it is installed and has them.
         let primary_ea = rc
@@ -1094,7 +1095,7 @@ impl<'a> Builder<'a> {
                         // negative from has_thai_short_tail_support.  Keeping the WTT 2.0 face
                         // lets the render path apply the PUA substitution and HarfBuzz shape it.
                         let cs_font = rc_cs.as_ref().map_or(rc.font.as_str(), |r| r.font.as_str());
-                        !(resolved.substituted && wordcraft_fonts::word::is_thai_family(&rc.font))
+                        !(resolved_cs.as_ref().map_or(resolved.substituted, |r| r.substituted) && wordcraft_fonts::word::is_thai_family(cs_font))
                             && !wordcraft_fonts::word::is_wtt2_thai_font(cs_font)
                             && !wordcraft_fonts::has_thai_short_tail_support(prim.get())
                     } else {
