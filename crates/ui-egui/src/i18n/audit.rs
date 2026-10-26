@@ -456,11 +456,26 @@ fn report_catalog_gaps(mut keys: std::collections::BTreeSet<String>) {
     // required`): the message names JSON parameters for scripts and MCP, so it stays English like
     // the rest of the engine's errors; the status bar translates only the ones a catalog knows.
     let script_error = |s: &str| s.starts_with("bad parameters: ");
+    // Shape gallery section headings and shape preset labels: the preset library falls back
+    // to English until catalog translations land.
+    let is_shape_gallery = |s: &str| {
+        matches!(
+            s,
+            "Recently Used Shapes"
+                | "Rectangles"
+                | "Basic Shapes"
+                | "Block Arrows"
+                | "Equation Shapes"
+                | "Flowchart"
+                | "Stars and Banners"
+                | "Callouts"
+        ) || wordcraft_doc::para::ShapeKind::ALL.iter().any(|k| k.label() == s)
+    };
     // A pattern of placeholders and figures only (`{paper}   {width} × {height}`) has nothing to
     // translate: its placeholder names aren't words the interface shows.
     let words = |s: &str| english_words(&s.split('{').map(|p| p.split_once('}').map_or(p, |(_, rest)| rest)).collect::<String>());
     for lang in super::Lang::all().filter(|l| *l != super::Lang::EN) {
-        let reported = keys.iter().filter(|s| words(s) && !numbered(s) && !same(s) && !script_error(s));
+        let reported = keys.iter().filter(|s| words(s) && !numbered(s) && !same(s) && !script_error(s) && !is_shape_gallery(s));
         let (kept, missing): (Vec<&String>, Vec<&String>) = reported.filter(|s| super::tr(lang, s) == s.as_str()).partition(|s| super::has(lang, s));
         if !missing.is_empty() {
             eprintln!("{} strings have no {} translation:\n{missing:#?}", missing.len(), lang.code());

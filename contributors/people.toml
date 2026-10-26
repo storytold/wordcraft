@@ -70,9 +70,16 @@ sync_github_name = true
 real_name = "Gleyson do Nascimento Carvalho"
 display_name = "Gleyson Carvalho"
 sync_github_name = false
+
 [people.alexanderalber]
 real_name = "Alexander Alber"
+
 [people.edurbs]
+sync_github_name = true
+
+[people.krinry]
+sync_github_name = true
+
 
 [people.Silvertree2010]
 display_name = "Netter"
