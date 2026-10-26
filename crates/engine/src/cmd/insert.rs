@@ -871,6 +871,25 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
     let mut i = 0;
     while i < chars.len() {
         let c = chars.get(i).copied().unwrap_or(' ');
+        // Literal text enclosed in single quotes: `'...'` (#3488).
+        if c == '\'' {
+            i += 1;
+            while i < chars.len() {
+                if chars[i] == '\'' {
+                    if chars.get(i + 1) == Some(&'\'') {
+                        out.push('\'');
+                        i += 2;
+                    } else {
+                        i += 1;
+                        break;
+                    }
+                } else {
+                    out.push(chars[i]);
+                    i += 1;
+                }
+            }
+            continue;
+        }
         // `am/pm` (any case) is one token: AM or PM.
         if chars.get(i..i + 5).is_some_and(|w| w.iter().collect::<String>().eq_ignore_ascii_case("am/pm")) {
             out.push_str(if hh < 12 { "AM" } else { "PM" });
@@ -900,7 +919,6 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
             ('m', _) => out.push_str(&mm.to_string()),
             ('s', 2..) => out.push_str(&format!("{ss:02}")),
             ('s', _) => out.push_str(&ss.to_string()),
-            ('a' | 'A', _) => out.push_str(if hh < 12 { "AM" } else { "PM" }),
             _ => {
                 for _ in 0..n {
                     out.push(c);
@@ -1428,5 +1446,14 @@ mod tests {
         assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
         assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
         assert_eq!(date_picture("DATE"), None);
+
+        // #3488: Quoted literals and bare 'a'
+        use super::format_date_parts;
+        assert_eq!(format_date_parts("yyyy 'Q'", 2026, 10, 21, (14, 30, 0), 0), "2026 Q");
+        assert_eq!(format_date_parts("yyyy 'at' h:mm", 2026, 10, 21, (9, 5, 0), 0), "2026 at 9:05");
+        assert_eq!(format_date_parts("yyyy 'O''clock'", 2026, 10, 21, (14, 30, 0), 0), "2026 O'clock");
+        assert_eq!(format_date_parts("yyyy a", 2026, 10, 21, (14, 30, 0), 0), "2026 a");
+        assert_eq!(format_date_parts("hh:mm", 2026, 10, 21, (9, 5, 0), 0), "09:05");
+        assert_eq!(format_date_parts("h:mm", 2026, 10, 21, (9, 5, 0), 0), "9:05");
     }
 }
