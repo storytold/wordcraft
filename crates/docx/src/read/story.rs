@@ -1059,6 +1059,8 @@ impl Reader<'_> {
         }
     }
 
+    /// Send an inline object to the paragraph, or buffer it with its run properties for a field
+    /// result. Objects in field instructions or beyond the 100,000-item result limit are ignored.
     fn emit_obj(&mut self, sc: &mut StoryCtx, pb: &mut PB, o: InlineObject, props: &CharProps) {
         match sink(sc) {
             Some(f) => {

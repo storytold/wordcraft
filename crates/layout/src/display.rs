@@ -199,6 +199,7 @@ pub enum Draw {
         stroke_width: f32,
         /// Alternating dash/space lengths in page points; empty means solid.
         dash: Vec<f32>,
+        /// Outline ends for both screen and PDF strokes; missing imported caps use flat ends.
         cap: wordcraft_doc::connector::LineCap,
         /// Shadow, glow and soft edges (drawn with [`wordcraft_doc::effects::bands`]).
         effects: wordcraft_doc::effects::ShapeEffects,
@@ -209,7 +210,15 @@ pub enum Draw {
     /// wide, in `color` at opacity `alpha`.
     Ink { pts: Vec<(f32, f32)>, color: Rgb, width: f32, alpha: f32 },
     /// A vector path (a chart's or diagram's polygons, slices, lines): filled, then stroked.
-    Path { segs: Vec<PathSeg>, fill: Option<Paint>, stroke: Option<Rgb>, stroke_width: f32, dash: Vec<f32>, cap: wordcraft_doc::connector::LineCap },
+    Path {
+        segs: Vec<PathSeg>,
+        fill: Option<Paint>,
+        stroke: Option<Rgb>,
+        stroke_width: f32,
+        dash: Vec<f32>,
+        /// Ends of open subpaths and dash segments in screen and PDF strokes; no effect on fills.
+        cap: wordcraft_doc::connector::LineCap,
+    },
     /// An inline chart, diagram or described shape's draws, as one figure with its alt text (for
     /// tagged PDF). `kind` is the graphic's, `None` for a shape (see [`crate::shape_figure_alt`]).
     Figure { alt: String, kind: Option<GraphicKind>, draws: Vec<Draw> },
@@ -1767,7 +1776,8 @@ fn shape_draws(
     }
 }
 
-// Dash lengths use the effective width used by both path painters.
+/// Effective freeform stroke width in points: clamp finite positive widths to 0.25..=200,
+/// otherwise use 0.75. Dash lengths use this same width as the screen and PDF path painters.
 fn path_stroke_width(width: f32) -> f32 {
     if width.is_finite() && width > 0.0 { width.clamp(0.25, 200.0) } else { 0.75 }
 }

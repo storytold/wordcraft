@@ -3748,6 +3748,8 @@ fn empty_field_keeps_begin_props() {
     assert!(matches!(&p.objects[0], InlineObject::Field { result, .. } if result.is_empty()));
 }
 
+/// Preset and custom outline dashes survive import and save/reopen with their shape geometry
+/// and stroke intact; missing or malformed dash settings fall back to solid.
 #[test]
 fn shape_dashes_import_and_save() {
     use wordcraft_doc::line_dash::LineDash;

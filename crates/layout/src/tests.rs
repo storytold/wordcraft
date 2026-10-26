@@ -5279,6 +5279,8 @@ fn floats_are_drawn_in_their_stacking_order() {
     assert_eq!(xs, [200.0, 100.0, 300.0], "no order after ordered ones: drawn last");
 }
 
+/// Header floats retain page coordinates and paint behind text; paragraph-relative cell
+/// floats stay horizontally inside their containing cell.
 #[test]
 fn floats_in_headers_and_table_cells_are_drawn() {
     use wordcraft_doc::para::{Anchor, Float, Wrap};
