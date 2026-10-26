@@ -264,8 +264,12 @@ fn text_width(s: &Session, text: &str, size: f32, bold: bool) -> f32 {
 
 /// `insert.wordArt`: a floating text box without fill or line, its text in a WordArt style (and
 /// optionally bent), centred on the column at the caret's paragraph; its text is selected so
-/// typing replaces it.
+/// typing replaces it. With text selected (not a drawing), no box is made: the style is applied to
+/// the selection, as WordArt Styles and Text Effects do.
 fn insert(s: &mut Session, v: &Value) -> CmdResult {
+    if !s.sel.is_collapsed() && super::objects::object_selection(s).is_none() {
+        return text_effects(s, &json!({"style": p::str(v, "style").unwrap_or("solid")}));
+    }
     let text: String = p::str(v, "text").unwrap_or("Your text here").chars().filter(|c| !c.is_control()).take(1000).collect();
     let text = if text.trim().is_empty() { "Your text here".to_string() } else { text };
     let style = p::str(v, "style").unwrap_or("solid");
