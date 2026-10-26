@@ -464,13 +464,23 @@ const OTHER_SCRIPT_LANGUAGES: &[&str] = &[
     "iu",
 ];
 
-/// Are all the letters of `text` Latin (with their accented forms)?
+/// Is `text` written in Latin letters (with their accented forms and ligatures)? Letters of other
+/// scripts may be there, but less than a fifth of them, as in [`detect_language`]: a Greek letter
+/// in a formula doesn't make a Hungarian sentence Greek. Modifier letters (`ʼ`) and the micro sign
+/// count for no script.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn is_latin_text(text: &str) -> bool {
-    text.chars().filter(|c| c.is_alphabetic()).all(|c| {
-        c.is_ascii_alphabetic()
-            || matches!(c, 'ª' | 'º' | '\u{00C0}'..='\u{024F}' | '\u{1E00}'..='\u{1EFF}' | '\u{2C60}'..='\u{2C7F}' | '\u{A720}'..='\u{A7FF}' | '\u{AB30}'..='\u{AB6F}')
-    })
+    let (mut latin, mut other) = (0usize, 0usize);
+    for c in text.chars().filter(|c| c.is_alphabetic()) {
+        if c.is_ascii_alphabetic()
+            || matches!(c, 'ª' | 'º' | '\u{00C0}'..='\u{024F}' | '\u{1E00}'..='\u{1EFF}' | '\u{2C60}'..='\u{2C7F}' | '\u{A720}'..='\u{A7FF}' | '\u{AB30}'..='\u{AB6F}' | '\u{FB00}'..='\u{FB06}')
+        {
+            latin += 1;
+        } else if !matches!(c, 'µ' | '\u{02B0}'..='\u{02FF}') {
+            other += 1;
+        }
+    }
+    other.saturating_mul(5) < latin.saturating_add(other).max(1)
 }
 
 /// The chosen voice, when it suits the sentence `text` in `lang`: the sentence has no language,
@@ -486,14 +496,16 @@ fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Op
     // A language as a program writes it: `hu`, `en-gb`, `ru_RU`, `cmn-latn-pinyin`.
     let primary = |tag: &str| primary_tag(tag.split(['-', '_']).next().unwrap_or(""));
     let Some(sentence) = lang.and_then(primary) else { return Some(voice) };
-    let own = primary(&voice.lang)?;
-    if own == sentence {
+    // A voice without a language the program names (empty, `none`) counts as a Latin-script one.
+    let own = primary(&voice.lang);
+    if own.as_deref() == Some(sentence.as_str()) {
         return Some(voice);
     }
-    if let Some(script) = script_language(&own) {
-        return (script_language(&sentence) == Some(script)).then_some(voice);
+    let script = script_language(&sentence);
+    if let Some(own_script) = own.as_deref().and_then(script_language) {
+        return (script == Some(own_script)).then_some(voice);
     }
-    (!OTHER_SCRIPT_LANGUAGES.contains(&own.as_str()) && is_latin_text(text)).then_some(voice)
+    (script.is_none() && !own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) && is_latin_text(text)).then_some(voice)
 }
 
 /// The voices in `espeak-ng --voices`' `listing`: a header, then `Pty Language Age/Gender
@@ -573,11 +585,13 @@ const WINDOWS_VOICES: &str = "[Console]::OutputEncoding = New-Object System.Text
 
 /// Ask the system which voices it has (desktop only; nothing in tests or with speech off).
 #[cfg(not(target_arch = "wasm32"))]
-fn list_voices() -> Vec<Voice> {
+fn list_voices(start_server: bool) -> Vec<Voice> {
     if cfg!(test) || std::env::var("WORDCRAFT_SPEECH").is_ok_and(|v| v == "off") {
         return Vec::new();
     }
     let run = |program: &str, args: &[&str]| run_listing(program.as_ref(), args);
+    // Only Speech Dispatcher (Linux, BSD) is a server that may be started for the list.
+    let _ = start_server;
     #[cfg(target_os = "macos")]
     {
         // Asked afresh (the listing `say` uses is kept for the process).
@@ -605,8 +619,17 @@ fn list_voices() -> Vec<Voice> {
                 return espeak_all_voices(&l, mb.as_deref(), &database);
             }
         }
-        // Only a running Speech Dispatcher: showing the voice list never starts a server.
-        let listed = ssip::connect_running().and_then(|s| ssip::list_voices(&s).ok()).unwrap_or_default();
+        // A running Speech Dispatcher; started for the list only when the voice picker opened or
+        // a voice was chosen, never from a repaint or a retry.
+        let stream = if start_server {
+            match ssip::connect(&|| false) {
+                ssip::Connection::Open(s) => Some(s),
+                _ => None,
+            }
+        } else {
+            ssip::connect_running()
+        };
+        let listed = stream.and_then(|s| ssip::list_voices(&s).ok()).unwrap_or_default();
         return listed
             .into_iter()
             .map(|(name, lang)| Voice { id: name.clone(), name: name.replace('_', " "), lang, kind: VoiceKind::Dispatcher })
@@ -657,7 +680,10 @@ fn run_listing(program: &std::ffi::OsStr, args: &[&str]) -> Option<String> {
             }
         }
     };
-    let out = rx.recv_timeout(std::time::Duration::from_secs(1)).ok()?;
+    // A program that exited may have left a child holding its output open: wait for the rest
+    // within the same bound.
+    let rest = until.saturating_duration_since(std::time::Instant::now()).max(std::time::Duration::from_millis(100));
+    let out = rx.recv_timeout(rest).ok()?;
     status.filter(std::process::ExitStatus::success).map(|_| String::from_utf8_lossy(&out).into_owned())
 }
 
@@ -679,10 +705,31 @@ struct VoiceList {
     voices: Option<Arc<[Voice]>>,
     asked: Option<std::time::Instant>,
     asking: bool,
+    /// The next asking may start Speech Dispatcher (the voice picker opened, a voice was chosen).
+    start_server: bool,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-static VOICES: Mutex<VoiceList> = Mutex::new(VoiceList { voices: None, asked: None, asking: false });
+static VOICES: Mutex<VoiceList> = Mutex::new(VoiceList { voices: None, asked: None, asking: false, start_server: false });
+
+/// Should the voices be asked for now? Not while asked already; an empty list after
+/// [`VOICES_RETRY`], or at once when Speech Dispatcher may be started for it; any other list after
+/// [`VOICES_REFRESH`].
+#[cfg(not(target_arch = "wasm32"))]
+fn ask_voices_now(empty: bool, asking: bool, since: Option<std::time::Duration>, start_server: bool) -> bool {
+    let again = if empty { VOICES_RETRY } else { VOICES_REFRESH };
+    !asking && (since.is_none_or(|t| t >= again) || (empty && start_server))
+}
+
+/// The list to keep after asking: a good list is never replaced by an empty answer (a server
+/// that exited meanwhile, a program that failed once).
+#[cfg(not(target_arch = "wasm32"))]
+fn keep_voices(old: Option<Arc<[Voice]>>, found: Vec<Voice>) -> Arc<[Voice]> {
+    match old {
+        Some(old) if found.is_empty() && !old.is_empty() => old,
+        _ => found.into(),
+    }
+}
 
 /// The installed voices, or `None` while the system is asked for the first time. Asking happens
 /// on a thread, so neither a settings page nor the speech worker waits on a slow speech program;
@@ -692,14 +739,14 @@ fn installed_voices() -> Option<Arc<[Voice]>> {
     {
         let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
         let empty = l.voices.as_ref().is_none_or(|v| v.is_empty());
-        let again = if empty { VOICES_RETRY } else { VOICES_REFRESH };
-        if !l.asking && l.asked.is_none_or(|t| t.elapsed() >= again) {
+        if ask_voices_now(empty, l.asking, l.asked.map(|t| t.elapsed()), l.start_server) {
             l.asking = true;
             l.asked = Some(std::time::Instant::now());
-            let asked = std::thread::Builder::new().name("read-aloud-voices".into()).spawn(|| {
-                let found: Arc<[Voice]> = list_voices().into();
+            let start_server = std::mem::take(&mut l.start_server);
+            let asked = std::thread::Builder::new().name("read-aloud-voices".into()).spawn(move || {
+                let found = list_voices(start_server);
                 let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
-                l.voices = Some(found);
+                l.voices = Some(keep_voices(l.voices.take(), found));
                 l.asking = false;
             });
             if asked.is_err() {
@@ -1126,6 +1173,9 @@ impl ReadAloud {
         if self.voice() == v {
             return;
         }
+        if v.is_some() {
+            self.ask_voices_starting_server();
+        }
         if self.state() == State::Playing {
             self.change(|s| s.voice = v);
         } else {
@@ -1140,6 +1190,16 @@ impl ReadAloud {
     /// voices with the system's speech, none with a silent backend (tests never ask the system).
     pub fn voices(&self) -> Option<Arc<[Voice]>> {
         if self.backend == Backend::System { installed_voices() } else { Some(Arc::new([])) }
+    }
+    /// Ask for the voices once more, allowing Speech Dispatcher to be started for them (the voice
+    /// picker just opened): with only Speech Dispatcher installed, its voices are listed only
+    /// while it runs. Nothing with a silent backend.
+    pub fn ask_voices_starting_server(&self) {
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.backend == Backend::System {
+            VOICES.lock().unwrap_or_else(PoisonError::into_inner).start_server = true;
+            let _ = installed_voices();
+        }
     }
     /// The sentence being read (or paused on).
     pub fn current(&self) -> Option<Utterance> {

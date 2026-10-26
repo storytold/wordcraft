@@ -369,6 +369,37 @@ fn installed_voices_are_read_from_each_listing() {
     assert!(espeak_voices("", &|_| true).is_empty() && windows_voices("").is_empty());
 }
 
+#[test]
+fn a_good_voice_list_survives_an_empty_answer() {
+    let hu = Voice { id: "urj/hu".into(), name: "Hungarian".into(), lang: "hu".into(), kind: VoiceKind::Espeak };
+    let old: Arc<[Voice]> = vec![hu.clone()].into();
+    // Speech Dispatcher exited after its idle timeout: the refresh found nothing.
+    assert_eq!(&*keep_voices(Some(Arc::clone(&old)), Vec::new()), &[hu.clone()][..]);
+    assert!(keep_voices(None, Vec::new()).is_empty());
+    assert!(keep_voices(Some(Arc::new([])), Vec::new()).is_empty());
+    let gb = Voice { id: "gmw/en".into(), name: "English".into(), lang: "en-gb".into(), kind: VoiceKind::Espeak };
+    assert_eq!(&*keep_voices(Some(old), vec![gb.clone()]), &[gb][..], "a new list replaces it");
+}
+
+#[test]
+fn the_voice_picker_may_start_the_server_once() {
+    use std::time::Duration;
+    let s = Duration::from_secs;
+    // An empty list asked for a moment ago: not again on every repaint…
+    assert!(!ask_voices_now(true, false, Some(s(1)), false));
+    // …but at once when the picker opens and the server may be started.
+    assert!(ask_voices_now(true, false, Some(s(1)), true));
+    assert!(!ask_voices_now(true, true, Some(s(1)), true), "not while asking");
+    assert!(!ask_voices_now(false, false, Some(s(1)), true), "a list is there");
+    assert!(ask_voices_now(true, false, Some(VOICES_RETRY), false));
+    assert!(ask_voices_now(false, false, Some(VOICES_REFRESH), false));
+    assert!(ask_voices_now(true, false, None, false), "never asked");
+    // A silent backend never asks the system, picker or not.
+    let r = ReadAloud::default();
+    r.ask_voices_starting_server();
+    assert_eq!(r.voices().as_deref(), Some(&[][..]));
+}
+
 #[cfg(unix)]
 #[test]
 fn a_voice_listing_program_that_hangs_is_stopped() {
@@ -378,6 +409,10 @@ fn a_voice_listing_program_that_hangs_is_stopped() {
     assert_eq!(run_listing("sh".as_ref(), &["-c", "echo partial; sleep 30"]), None);
     assert!(start.elapsed() < LIST_TIMEOUT * 4, "{:?}", start.elapsed());
     assert_eq!(run_listing("no-such-program-for-wordcraft".as_ref(), &[]), None);
+    // The program exits but a child keeps its output open for a while: the listing still
+    // arrives, within the overall bound.
+    let script = "echo hu; (sleep 0.5; echo late) & exit 0";
+    assert_eq!(run_listing("sh".as_ref(), &["-c", script]).as_deref(), Some("hu\nlate\n"));
 }
 
 #[test]
@@ -435,6 +470,20 @@ fn a_chosen_voice_reads_its_own_language() {
     assert_eq!(voice_for(Some(&ka), Some("en-US"), "Hello"), None);
     assert!(is_latin_text("Árvíztűrő tükörfúrógép, Ñandú, Łódź 123"));
     assert!(!is_latin_text("Hello мир"));
+    // Symbols, ligatures, modifier letters and a stray Greek letter don't make text foreign.
+    assert!(is_latin_text("5 µm vastag réteg"));
+    assert!(is_latin_text("A ﬁnom ﬁlm ﬂottul fut."));
+    assert!(is_latin_text("Hawaiʻi és Oʼahu szigete"));
+    assert!(is_latin_text("Az α-részecskék pályáját mérték a kísérletben."));
+    assert!(is_latin_text("123 – !"), "no letters at all");
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "5 µm vastag réteg"), Some(&hu));
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "A ﬁnom ﬁlm ﬂottul fut."), Some(&hu));
+    // A voice whose language the program doesn't name reads Latin text, as before.
+    for lang in ["", "none", "x"] {
+        let unnamed = Voice { id: "v".into(), name: "Voice".into(), lang: lang.into(), kind: VoiceKind::Mac };
+        assert_eq!(voice_for(Some(&unnamed), Some("en-US"), "Hello"), Some(&unnamed), "{lang:?}");
+        assert_eq!(voice_for(Some(&unnamed), Some("ru"), "Привет"), None, "{lang:?}");
+    }
 }
 
 #[test]
