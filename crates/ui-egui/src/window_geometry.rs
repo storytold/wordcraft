@@ -28,11 +28,15 @@ pub struct RawWindowState {
 impl RawWindowState {
     /// Copy the window state out of this frame's raw input.
     pub fn from_raw(raw: &egui::RawInput) -> Self {
-        let viewport = raw.viewports.get(&raw.viewport_id);
+        Self::from_viewport(raw.viewports.get(&raw.viewport_id), raw.screen_rect)
+    }
+
+    /// The state of one viewport, from what egui knows about it and its content rectangle.
+    pub fn from_viewport(viewport: Option<&egui::ViewportInfo>, screen_rect: Option<egui::Rect>) -> Self {
         Self {
             inner_rect: viewport.and_then(|v| v.inner_rect).filter(|r| r.is_finite()),
             outer_rect: viewport.and_then(|v| v.outer_rect).filter(|r| r.is_finite()),
-            screen_rect: raw.screen_rect.filter(|r| r.is_finite()),
+            screen_rect: screen_rect.filter(|r| r.is_finite()),
             monitor_size: viewport.and_then(|v| v.monitor_size),
             maximized: viewport.and_then(|v| v.maximized),
             minimized: viewport.and_then(|v| v.minimized),

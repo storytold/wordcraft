@@ -1,7 +1,7 @@
 //! #3977: floating tables include a line's bottom edge; shapes keep a strict boundary.
 //! The expected distinction is cyril265's Word for Mac 16.114.1 observation in the issue.
 
-use super::*;
+use super::{Arc, Block, Document, LayoutCache, LayoutOptions, Placed, StoryRef, layout};
 use wordcraft_doc::para::{Anchor, Float, InlineObject, ShapeKind, Wrap};
 use wordcraft_doc::props::{HeightRule, LineSpacing, ParaProps, TableFloat};
 use wordcraft_doc::{CharProps, Paragraph, Pos, Table};

@@ -14,6 +14,11 @@ pub struct Dictionary {
 }
 
 const MAGIC: &[u8] = b"DCHYPH1\n";
+/// Largest inflated dictionary, and most bytes of words kept from one (the bundled US English one
+/// is about 1 MB).
+const MAX_BYTES: usize = 64 << 20;
+/// Most words read from one dictionary (the bundled one has about 160k).
+const MAX_ENTRIES: usize = 4_000_000;
 
 impl Dictionary {
     /// Build from `(lowercase word, break mask)` pairs (sorted and de-duplicated here; the first
@@ -76,9 +81,16 @@ impl Dictionary {
         miniz_oxide::deflate::compress_to_vec(&raw, 10)
     }
 
-    /// Deserialize data written by [`Dictionary::to_bytes`].
+    /// Deserialize data written by [`Dictionary::to_bytes`]. Data that inflates past
+    /// [`MAX_BYTES`], or holds more than [`MAX_ENTRIES`] words or [`MAX_BYTES`] of them, is refused.
     pub fn from_bytes(data: &[u8]) -> Result<Dictionary, String> {
-        let raw = miniz_oxide::inflate::decompress_to_vec(data).map_err(|e| format!("hyphenation dictionary: inflate failed: {:?}", e.status))?;
+        Dictionary::from_bytes_within(data, MAX_BYTES, MAX_ENTRIES)
+    }
+
+    /// [`Dictionary::from_bytes`] with the limits given.
+    fn from_bytes_within(data: &[u8], max_bytes: usize, max_entries: usize) -> Result<Dictionary, String> {
+        let raw = miniz_oxide::inflate::decompress_to_vec_with_limit(data, max_bytes)
+            .map_err(|e| format!("hyphenation dictionary: inflate failed: {:?}", e.status))?;
         let body = raw.strip_prefix(MAGIC).ok_or("hyphenation dictionary: bad header")?;
         let mut d = Dictionary { words: String::with_capacity(body.len()), offs: vec![0], masks: Vec::new() };
         let mut cur: Vec<u8> = Vec::new();
@@ -94,6 +106,11 @@ impl Dictionary {
             i = end + 1;
             let s = std::str::from_utf8(&cur).map_err(|_| "hyphenation dictionary: bad utf-8")?;
             let (w, m) = parse_hyphenated(s);
+            // Front coding lets a short line repeat a long prefix: bound what is kept, not only
+            // what is read.
+            if d.masks.len() >= max_entries || d.words.len() + w.len() > max_bytes {
+                return Err("hyphenation dictionary: too large".into());
+            }
             d.words.push_str(&w);
             d.offs.push(d.words.len() as u32);
             d.masks.push(m);
@@ -146,5 +163,32 @@ mod tests {
         assert_eq!(back.get("cat"), Some(0));
         assert_eq!(back.get("naïveté").map(|m| hyphenated("naïveté", m)), Some("naïve-té".to_string()));
         assert!(back.get("dog").is_none());
+    }
+
+    #[test]
+    fn oversized_data_is_refused() {
+        const LIMIT: usize = 1 << 16;
+        let within = |raw: &[u8]| Dictionary::from_bytes_within(&miniz_oxide::deflate::compress_to_vec(raw, 6), LIMIT, 1000);
+        // Data that inflates past the limit is refused before anything is decoded.
+        let mut raw = MAGIC.to_vec();
+        raw.resize(LIMIT + 1, b'a');
+        assert!(within(&raw).unwrap_err().contains("inflate failed"));
+        // Short lines that each repeat a long prefix: small to inflate, but the words they spell
+        // out would be ~100x larger. Kept storage is bounded too.
+        let mut raw = MAGIC.to_vec();
+        raw.push(0);
+        raw.extend_from_slice(&[b'a'; 255]);
+        raw.push(b'\n');
+        for _ in 0..(LIMIT / 255 + 2) {
+            raw.extend_from_slice(&[255, b'\n']);
+        }
+        assert!(raw.len() < LIMIT);
+        assert!(within(&raw).unwrap_err().contains("too large"));
+        // So is the number of words.
+        let words: Vec<(String, u64)> = (0..1001).map(|i| (format!("w{i}"), 0)).collect();
+        let raw = miniz_oxide::inflate::decompress_to_vec(&Dictionary::from_entries(words).to_bytes()).unwrap();
+        assert!(within(&raw).unwrap_err().contains("too large"));
+        // The real limits leave the bundled dictionary whole.
+        assert!(Dictionary::en_us().len() > 100_000);
     }
 }

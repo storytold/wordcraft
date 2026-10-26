@@ -16,7 +16,7 @@ mod suggest;
 pub(crate) mod test_dict;
 pub mod voseo;
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, PoisonError, RwLock};
 
 use crate::ProofLang;
 use crate::affix::AffixDict;
@@ -62,11 +62,11 @@ pub fn dictionary_name(lang: ProofLang) -> &'static str {
 /// see [`has_dictionary`]).
 pub fn dictionary(lang: ProofLang) -> Arc<AffixDict> {
     let Some(slot) = DICTS.get(variety(lang).0) else { return Arc::new(AffixDict::default()) };
-    if let Some(d) = slot.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
+    if let Some(d) = slot.read().unwrap_or_else(PoisonError::into_inner).as_ref() {
         return d.clone();
     }
     let loaded = Arc::new(load_installed(lang));
-    let mut slot = slot.write().unwrap_or_else(|e| e.into_inner());
+    let mut slot = slot.write().unwrap_or_else(PoisonError::into_inner);
     // Another thread (or an install) may have filled it meanwhile: that one wins.
     slot.get_or_insert(loaded).clone()
 }
@@ -90,7 +90,7 @@ fn load_installed(lang: ProofLang) -> AffixDict {
 pub fn install_dictionary(lang: ProofLang, aff: &str, dic: &str) -> Result<(), String> {
     let d = AffixDict::from_hunspell(aff, dic, &[])?;
     if let Some(slot) = DICTS.get(variety(lang).0) {
-        *slot.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(d));
+        *slot.write().unwrap_or_else(PoisonError::into_inner) = Some(Arc::new(d));
     }
     Ok(())
 }
@@ -99,7 +99,7 @@ pub fn install_dictionary(lang: ProofLang, aff: &str, dic: &str) -> Result<(), S
 /// (after [`crate::hunspell::set_dictionary_dir`] or a dictionary was installed).
 pub fn reload_dictionary() {
     for slot in &DICTS {
-        *slot.write().unwrap_or_else(|e| e.into_inner()) = None;
+        *slot.write().unwrap_or_else(PoisonError::into_inner) = None;
     }
 }
 
