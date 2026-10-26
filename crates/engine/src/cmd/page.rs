@@ -247,6 +247,26 @@ pub fn section_index_of_focus(s: &Session) -> usize {
     }
 }
 
+/// The caret's section, for the header and footer commands. In a header or footer it is the
+/// section of the caret's page when that page shows it: a section linked to the previous one
+/// shows that section's header, so the header alone names the earlier section (#3639).
+pub fn hf_section_of_focus(s: &mut Session) -> usize {
+    let wordcraft_doc::StoryRef::Part(id) = s.sel.focus.story else { return section_index_of_focus(s) };
+    let layout = s.layout();
+    match layout.pages.get(s.page_hint) {
+        Some(pg) if pg.header_story == Some(id) || pg.footer_story == Some(id) => pg.section,
+        _ => section_of_part(s, id),
+    }
+}
+
+/// The last body block of the caret's section ([`hf_section_of_focus`]), the block
+/// [`wordcraft_doc::Document::section_mut`] takes. In a header or footer the caret's block index
+/// counts that story's paragraphs, not the body's, so it would name another section (#3639).
+pub fn section_end_of_focus(s: &mut Session) -> usize {
+    let i = hf_section_of_focus(s);
+    s.doc.sections().get(i).map(|(end, _)| *end).unwrap_or(0)
+}
+
 pub fn sect(s: &Session) -> SectionProps {
     let i = section_index_of_focus(s);
     s.doc.sections().get(i).map(|(_, x)| (*x).clone()).unwrap_or_default()

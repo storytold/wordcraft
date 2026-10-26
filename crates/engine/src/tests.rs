@@ -2715,6 +2715,74 @@ fn layout_size_when_focus_is_in_header_updates_correct_section() {
     assert_eq!((s0.page_w, s0.page_h), (612.0, 792.0));
 }
 
+/// #3639: with the caret in section 2's header, the header and footer commands change section 2.
+/// The caret's block index counts the header's paragraphs, and block 0 of the body is in section 1.
+#[test]
+fn header_and_footer_commands_change_the_section_of_the_header_the_caret_is_in() {
+    use wordcraft_doc::{Block, Paragraph, PartKind, StoryRef};
+    let mut s = s();
+    run(&mut s, "text.insert", json!({"text": "section 1"}));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "text.insert", json!({"text": "section 2"}));
+    assert_eq!(s.doc.sections().len(), 2);
+    let header = |s: &mut Session, text: &str| {
+        s.doc.add_part(PartKind::Header, vec![std::sync::Arc::new(Block::Para(Paragraph::with_text(text, Default::default())))])
+    };
+    let (h1, h2) = (header(&mut s, "H1"), header(&mut s, "H2"));
+    let f1 = s.doc.add_part(PartKind::Footer, vec![std::sync::Arc::new(Block::Para(Paragraph::with_text("F1", Default::default())))]);
+    s.doc.section_mut(0).headers.default = Some(h1);
+    s.doc.section_mut(0).footers.default = Some(f1);
+    s.doc.last_section.headers.default = Some(h2);
+    let first = s.doc.sections()[0].1.clone();
+    let in_h2 = |s: &mut Session| s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Part(h2)));
+
+    in_h2(&mut s);
+    run(&mut s, "hf.position", json!({"header": 50}));
+    assert_eq!(s.doc.last_section.header, 50.0);
+    in_h2(&mut s);
+    run(&mut s, "design.pageBorders", json!({"kind": "box"}));
+    assert!(s.doc.last_section.page_borders.is_some());
+    // Section 2 has no footer of its own and shows section 1's: Edit Footer opens that one and
+    // keeps the link.
+    in_h2(&mut s);
+    assert_eq!(run(&mut s, "insert.editFooter", json!({}))["story"], f1);
+    assert_eq!(s.doc.last_section.footers.default, None, "section 2 stays linked");
+    in_h2(&mut s);
+    run(&mut s, "insert.footer", json!({"text": "F2"}));
+    let f2 = s.doc.last_section.footers.default.expect("section 2 has the new footer");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(f2)), "F2");
+    in_h2(&mut s);
+    assert_eq!(run(&mut s, "insert.editFooter", json!({}))["story"], f2, "Edit Footer opens section 2's footer");
+    in_h2(&mut s);
+    run(&mut s, "layout.linkToPrevious", json!({}));
+    assert_eq!(s.doc.last_section.headers.default, None, "section 2 is linked to section 1");
+
+    assert_eq!(*s.doc.sections()[0].1, first, "section 1 is untouched");
+    assert_eq!(s.doc.plain_text(StoryRef::Part(h1)), "H1");
+
+    // Section 2 now shows section 1's header and has its own footer. With the caret in that
+    // header on section 2's page, the commands change section 2, not section 1 that owns it.
+    let page2 = s.layout().pages.iter().position(|pg| pg.section == 1).expect("section 2 has a page");
+    assert_eq!(s.layout().pages[page2].header_story, Some(h1));
+    let in_h1 = |s: &mut Session, page: usize| {
+        s.sel = crate::Selection::caret(s.doc.start_of(StoryRef::Part(h1)));
+        s.page_hint = page;
+    };
+    in_h1(&mut s, page2);
+    assert_eq!(run(&mut s, "insert.editFooter", json!({}))["story"], f2, "Edit Footer opens the footer section 2 shows");
+    in_h1(&mut s, page2);
+    run(&mut s, "hf.position", json!({"header": 40}));
+    assert_eq!(s.doc.last_section.header, 40.0);
+    assert_eq!(*s.doc.sections()[0].1, first, "section 1 is untouched");
+    // On section 1's own page the same header is section 1's.
+    in_h1(&mut s, 0);
+    assert_eq!(run(&mut s, "insert.editFooter", json!({}))["story"], f1);
+    in_h1(&mut s, 0);
+    run(&mut s, "hf.position", json!({"header": 30}));
+    assert_eq!(s.doc.sections()[0].1.header, 30.0);
+    assert_eq!(s.doc.last_section.header, 40.0);
+}
+
 /// #1433: the smallest page there can be (0.1" wide, no margins, set straight through Page
 /// Setup's section) still lays out and exports text, a table and two columns.
 #[test]
