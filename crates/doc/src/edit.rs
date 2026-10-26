@@ -1479,10 +1479,26 @@ mod tests {
         // Nested group members and equations count too.
         let member = |obj| crate::para::GroupChild { x: 0.0, y: 0.0, obj };
         let deep = InlineObject::Opaque { format: String::new(), xml: "y".repeat(5000), text: String::new() };
-        let inner =
-            InlineObject::Group { w: 1.0, h: 1.0, float: Default::default(), ch_w: 1.0, ch_h: 1.0, children: vec![member(deep)], canvas: None };
-        let outer =
-            InlineObject::Group { w: 1.0, h: 1.0, float: Default::default(), ch_w: 1.0, ch_h: 1.0, children: vec![member(inner)], canvas: None };
+        let inner = InlineObject::Group {
+            w: 1.0,
+            h: 1.0,
+            float: Default::default(),
+            ch_w: 1.0,
+            ch_h: 1.0,
+            children: vec![member(deep)],
+            canvas: None,
+            picture_fill: false,
+        };
+        let outer = InlineObject::Group {
+            w: 1.0,
+            h: 1.0,
+            float: Default::default(),
+            ch_w: 1.0,
+            ch_h: 1.0,
+            children: vec![member(inner)],
+            canvas: None,
+            picture_fill: false,
+        };
         assert!(object_cost(&outer) >= 5000);
         let eq = InlineObject::Equation {
             linear: String::new(),

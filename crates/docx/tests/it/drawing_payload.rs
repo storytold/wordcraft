@@ -109,6 +109,7 @@ fn picture_group_canvas_keep_kind() {
         ch_h: 50.0,
         children: vec![GroupChild { x: 3.0, y: 4.0, obj: picture() }],
         canvas,
+        picture_fill: false,
     };
     for original in [picture(), group(None), group(Some(CanvasStyle::default()))] {
         let mut doc = Document::new();

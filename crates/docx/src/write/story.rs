@@ -675,7 +675,7 @@ impl Writer<'_> {
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("Picture {docpr}");
-                self.drawing_open(w, float, *iw, *ih, &docpr, &name, alt);
+                self.drawing_open(w, float, *iw, *ih, &docpr, &name, alt, false);
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 w.open("a:graphicData", &[("uri", "http://schemas.openxmlformats.org/drawingml/2006/picture")]);
@@ -707,7 +707,7 @@ impl Writer<'_> {
                         .map(std::sync::Arc::new);
                 }
                 let float = &float;
-                self.drawing_open(w, float, *sw, *sh, &docpr, &name, o.alt_text());
+                self.drawing_open(w, float, *sw, *sh, &docpr, &name, o.alt_text(), false);
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingShape")]);
@@ -719,14 +719,14 @@ impl Writer<'_> {
                 w.close("w:r");
                 self.rev_close(w, props);
             }
-            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, canvas } => {
+            InlineObject::Group { w: gw, h: gh, float, ch_w, ch_h, children, canvas, picture_fill } => {
                 self.rev_open(w, props);
                 w.open("w:r", &[]);
                 self.rpr(w, props);
                 w.open("w:drawing", &[]);
                 let docpr = self.next_docpr();
                 let name = format!("{} {docpr}", if canvas.is_some() { "Canvas" } else { "Group" });
-                self.drawing_open(w, float, *gw, *gh, &docpr, &name, o.alt_text());
+                self.drawing_open(w, float, *gw, *gh, &docpr, &name, o.alt_text(), *picture_fill && canvas.is_none());
                 w.empty("wp:cNvGraphicFramePr", &[]);
                 w.open("a:graphic", &[]);
                 let outer = match canvas {
@@ -1001,7 +1001,7 @@ impl Writer<'_> {
         self.used_media.insert(media.clone());
         w.open("pic:pic", &[]);
         w.open("pic:nvPicPr", &[]);
-        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, float.hidden);
+        nv_props(w, "pic:cNvPr", "0", file, alt, &float.alt, float.hidden, false);
         w.open("pic:cNvPicPr", &[]);
         w.empty("a:picLocks", &[("noChangeAspect", "1"), ("noChangeArrowheads", "1")]);
         w.close("pic:cNvPicPr");
@@ -1033,7 +1033,7 @@ impl Writer<'_> {
         w.open("wps:wsp", &[]);
         if let Some(id) = id {
             let name = shape_name(*kind, freeform.as_deref(), id);
-            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt, float.hidden);
+            nv_props(w, "wps:cNvPr", id, &name, &float.alt.text, &float.alt, float.hidden, false);
         }
         if kind.is_connector() {
             // A connector's glued ends (ECMA-376 §20.1.2.2.8 `cNvCxnSpPr`).
@@ -1195,14 +1195,17 @@ impl Writer<'_> {
     #[allow(clippy::too_many_arguments)]
     fn graphic_frame(&mut self, w: &mut W, float: &Float, (gw, gh): (f32, f32), docpr: &str, name: &str, alt: &str, graphic: &crate::xml::El) {
         w.open("w:drawing", &[]);
-        self.drawing_open(w, float, gw, gh, docpr, name, alt);
+        self.drawing_open(w, float, gw, gh, docpr, name, alt, false);
         w.empty("wp:cNvGraphicFramePr", &[]);
         w.raw(&graphic.to_xml());
         w.close(if float.wrap == Wrap::Inline { "wp:inline" } else { "wp:anchor" });
         w.close("w:drawing");
     }
 
-    fn drawing_open(&mut self, w: &mut W, float: &Float, iw: f32, ih: f32, docpr: &str, name: &str, alt: &str) {
+    /// Open drawing `docpr` (`wp:inline` or `wp:anchor`) up to its `wp:docPr`, which carries our
+    /// mark of a group read from a VML shape filled with a picture when `picture_fill`.
+    #[allow(clippy::too_many_arguments)]
+    fn drawing_open(&mut self, w: &mut W, float: &Float, iw: f32, ih: f32, docpr: &str, name: &str, alt: &str, picture_fill: bool) {
         let (cx, cy) = (emu(iw.max(0.0)), emu(ih.max(0.0)));
         if float.wrap == Wrap::Inline {
             w.open("wp:inline", &[("distT", "0"), ("distB", "0"), ("distL", "0"), ("distR", "0")]);
@@ -1283,7 +1286,7 @@ impl Writer<'_> {
             Wrap::TopAndBottom => w.empty("wp:wrapTopAndBottom", &[]),
             Wrap::BehindText | Wrap::InFrontOfText => w.empty("wp:wrapNone", &[]),
         }
-        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt, float.hidden);
+        nv_props(w, "wp:docPr", docpr, name, alt, &float.alt, float.hidden, picture_fill);
     }
 
     fn table(&mut self, w: &mut W, t: &Table, rels: &mut PartRels, depth: usize) {
@@ -1740,9 +1743,11 @@ fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
 
 /// A drawing's `wp:docPr` (or a group member's `pic:cNvPr`/`wps:cNvPr`, ECMA-376
 /// `CT_NonVisualDrawingProps`) with its alt text `descr`, its title, and the decorative mark as
-/// the `adec:decorative` extension ([MS-ODRAWXML]). A description that is only the title (read
-/// from a file with no description) is not written twice.
-pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText, hidden: bool) {
+/// the `adec:decorative` extension ([MS-ODRAWXML]), and with `picture_fill` our mark of a group
+/// read from a VML shape filled with a picture ([`crate::PICTURE_FILL_EXT`]) after it. A
+/// description that is only the title (read from a file with no description) is not written
+/// twice.
+pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, alt: &AltText, hidden: bool, picture_fill: bool) {
     let mut attrs = vec![("id", id), ("name", name)];
     if descr != alt.title || descr.is_empty() {
         attrs.push(("descr", descr));
@@ -1753,15 +1758,22 @@ pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, 
     if hidden {
         attrs.push(("hidden", "1"));
     }
-    if !alt.decorative {
+    if !alt.decorative && !picture_fill {
         w.empty(tag, &attrs);
         return;
     }
     w.open(tag, &attrs);
     w.open("a:extLst", &[]);
-    w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
-    w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
-    w.close("a:ext");
+    if alt.decorative {
+        w.open("a:ext", &[("uri", crate::xml::DECORATIVE_EXT)]);
+        w.empty("adec:decorative", &[("xmlns:adec", crate::xml::DECORATIVE_NS), ("val", "1")]);
+        w.close("a:ext");
+    }
+    if picture_fill {
+        w.open("a:ext", &[("uri", crate::PICTURE_FILL_EXT)]);
+        w.empty("wcpf:pictureFill", &[("xmlns:wcpf", crate::PICTURE_FILL_EXT)]);
+        w.close("a:ext");
+    }
     w.close("a:extLst");
     w.close(tag);
 }

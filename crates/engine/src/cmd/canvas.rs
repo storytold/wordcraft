@@ -64,7 +64,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     };
     let props = s.typing_props();
     let at = delete_selection(s)?;
-    let obj = InlineObject::Group { w, h, float: Float::default(), ch_w: w, ch_h: h, children: Vec::new(), canvas: Some(style) };
+    let obj = InlineObject::Group { w, h, float: Float::default(), ch_w: w, ch_h: h, children: Vec::new(), canvas: Some(style), picture_fill: false };
     let end = s.doc.insert_object(&at, obj, &props)?;
     s.sel = Selection { anchor: at, focus: end };
     sel_result(s)
