@@ -314,6 +314,14 @@ pub struct UiState {
     /// Headings whose sub-headings the Navigation pane hides (#1997); per session, not saved.
     #[serde(skip)]
     pub nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
+    /// View › Show › Ruler: shown or hidden in every document and kept between runs (#4027).
+    pub ruler: bool,
+    /// View › Show › Gridlines (the drawing grid over the page).
+    pub gridlines: bool,
+    /// Table Layout › View Gridlines.
+    pub table_gridlines: bool,
+    /// Home › Paragraph › Show/Hide ¶.
+    pub marks: bool,
     pub show_discord: bool,
     /// User name (File › Options) for comments and tracked changes; empty keeps the default.
     pub author: String,
@@ -437,6 +445,12 @@ impl Default for UiState {
             pane_places: Default::default(),
             pane_order: Vec::new(),
             nav_collapsed: Default::default(),
+            // The view's own defaults (ViewState::default): ruler on, drawing grid off, table
+            // gridlines on, formatting marks off.
+            ruler: true,
+            gridlines: false,
+            table_gridlines: true,
+            marks: false,
             show_discord: true,
             author: String::new(),
             window: None,
@@ -958,6 +972,11 @@ impl WordApp {
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
+        // View › Show preferences: the session's current state is the person's choice.
+        ui.ruler = self.session.view.ruler;
+        ui.gridlines = self.session.view.gridlines;
+        ui.table_gridlines = self.session.view.table_gridlines;
+        ui.marks = self.session.view.marks;
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
         ui.keyboard = self.session.keymap.clone();
@@ -1007,6 +1026,11 @@ impl WordApp {
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
+        // View › Show preferences, as the person left them (#4027).
+        self.session.view.ruler = self.ui.ruler;
+        self.session.view.gridlines = self.ui.gridlines;
+        self.session.view.table_gridlines = self.ui.table_gridlines;
+        self.session.view.marks = self.ui.marks;
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
         // Keys for commands this version doesn't have are dropped.
@@ -3842,6 +3866,30 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    /// #4027: View › Show preferences (ruler, drawing grid, table gridlines, formatting marks)
+    /// are saved with the app's other preferences and restored at the next launch.
+    #[test]
+    fn view_preferences_survive_a_restart() {
+        let mut first = app();
+        first.session.view.ruler = false;
+        first.session.view.gridlines = true;
+        first.session.view.marks = true;
+        first.session.view.table_gridlines = false;
+        let saved = serde_json::to_vec(&first.prefs()).unwrap();
+
+        let mut second = app();
+        second.apply_prefs(UiState::from_json(&saved).unwrap());
+        assert!(!second.session.view.ruler, "the ruler stays hidden");
+        assert!(second.session.view.gridlines, "the drawing grid stays shown");
+        assert!(second.session.view.marks, "formatting marks stay shown");
+        assert!(!second.session.view.table_gridlines, "table gridlines stay hidden");
+
+        // A `ui.json` from before the settings keeps the app's defaults.
+        let mut old = app();
+        old.apply_prefs(UiState::from_json(br#"{"navPane": true}"#).unwrap());
+        assert!(old.session.view.ruler && !old.session.view.gridlines && old.session.view.table_gridlines && !old.session.view.marks);
     }
 
     /// All title-bar inputs have accessible names. Clicking the title opens Rename Document, the
