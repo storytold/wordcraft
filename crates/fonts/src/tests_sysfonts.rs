@@ -436,7 +436,7 @@ fn screen_hinting_runs_a_tricky_fonts_instructions_with_the_monochrome_target() 
     let ppem = 11.0 * 96.0 / 72.0 * 1.45;
     let drawn = |target: Target, gid: u32| {
         let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine: Engine::Interpreter, target }).unwrap();
-        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false };
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
         outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
         pen.path
     };
