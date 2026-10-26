@@ -222,6 +222,9 @@ pub struct ListInfo {
     pub level: u8,
     /// Number of the first item of an ordered list (1 unless the source says otherwise).
     pub start: u32,
+    /// This item begins a new list run of its own: two adjacent lists of the same kind (two
+    /// `<ol>`s in HTML) stay separate lists instead of numbering on (#3493).
+    pub restart: bool,
 }
 
 /// Paragraph spacing and indents (points) that a source states on the paragraph itself (RTF);
@@ -786,13 +789,24 @@ impl<'a> Builder<'a> {
                     let mut j = i;
                     let mut group: Vec<ListInfo> = Vec::new();
                     let mut top: Option<bool> = None;
+                    let mut top_start: Option<u32> = None;
                     while let Some(FBlock::Para(q)) = blocks.get(j) {
                         let Some(li) = q.list else { break };
+                        // A source-marked run break: two adjacent lists of the same kind stay
+                        // separate lists instead of numbering on (#3493).
+                        if li.level == 0 && li.restart && !group.is_empty() {
+                            break;
+                        }
                         if li.level == 0 {
                             if top.is_some_and(|o| o != li.ordered) {
                                 break;
                             }
+                            // A changed start (a per-item value, a new <ol start>) is a new list run.
+                            if li.ordered && top_start.is_some_and(|s| s != li.start) {
+                                break;
+                            }
                             top = Some(li.ordered);
+                            top_start = Some(li.start);
                         }
                         group.push(li);
                         j += 1;
@@ -1030,7 +1044,7 @@ fn props_kind(doc: &Document, props: &ParaProps, blank: bool) -> (Kind, Option<L
     };
     let list = rp.numbering.and_then(|n| {
         let lv = doc.numbering.level(n.num, n.level)?;
-        Some(ListInfo { ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None), level: n.level.min(8), start: lv.start })
+        Some(ListInfo { ordered: !matches!(lv.format, NumFormat::Bullet | NumFormat::None), level: n.level.min(8), start: lv.start, restart: false })
     });
     (kind, list)
 }
@@ -1636,12 +1650,12 @@ mod tests {
     #[test]
     fn list_labels() {
         let mut c = ListCounter::default();
-        let o = |level| ListInfo { ordered: true, level, start: 1 };
+        let o = |level| ListInfo { ordered: true, level, start: 1, restart: false };
         assert_eq!(c.label(o(0)), "1.");
         assert_eq!(c.label(o(1)), "a.");
         assert_eq!(c.label(o(1)), "b.");
         assert_eq!(c.label(o(0)), "2.");
-        assert_eq!(c.label(ListInfo { ordered: false, level: 0, start: 1 }), "•");
+        assert_eq!(c.label(ListInfo { ordered: false, level: 0, start: 1, restart: false }), "•");
     }
 
     #[test]
