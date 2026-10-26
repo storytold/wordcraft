@@ -8558,6 +8558,49 @@ fn rejected_default_proofing_language_does_not_survive_a_restart() {
     }
 }
 
+/// #2717: default_no_proof persists across restarts and applies to new documents.
+#[test]
+fn default_no_proof_survives_a_restart() {
+    let mut first = s();
+    run(&mut first, "review.language", json!({"lang": "en-US", "noProof": true, "default": true}));
+    let saved = serde_json::to_vec(&first.prefs).unwrap();
+    assert!(first.prefs.default_no_proof);
+    assert_eq!(first.prefs.default_language.as_deref(), Some("en-US"));
+
+    let mut second = s();
+    second.prefs = serde_json::from_slice(&saved).unwrap();
+    assert!(second.prefs.default_no_proof);
+    run(&mut second, "file.new", json!({}));
+    assert_eq!(second.doc.styles.default_chr.no_proof, Some(true));
+    assert_eq!(second.doc.styles.default_chr.lang.as_deref(), Some("en-US"));
+}
+
+/// #2717: review.language with default=true and noProof persists both settings.
+#[test]
+fn review_language_default_no_proof_persists_both() {
+    let mut session = s();
+    run(&mut session, "review.language", json!({"lang": "fr-FR", "noProof": true, "default": true}));
+    assert!(session.prefs.default_no_proof);
+    assert_eq!(session.prefs.default_language.as_deref(), Some("fr-FR"));
+
+    let mut session2 = s();
+    session2.prefs = serde_json::from_slice(&serde_json::to_vec(&session.prefs).unwrap()).unwrap();
+    run(&mut session2, "file.new", json!({}));
+    assert_eq!(session2.doc.styles.default_chr.no_proof, Some(true));
+    assert_eq!(session2.doc.styles.default_chr.lang.as_deref(), Some("fr-FR"));
+}
+
+/// #2717: file.new applies default_no_proof to plain text and markdown.
+#[test]
+fn file_new_applies_default_no_proof_to_plain_text() {
+    let mut session = s();
+    session.prefs.default_no_proof = true;
+    session.prefs.default_language = Some("en-US".into());
+    run(&mut session, "file.new", json!({}));
+    assert_eq!(session.doc.styles.default_chr.no_proof, Some(true));
+    assert_eq!(session.doc.styles.default_chr.lang.as_deref(), Some("en-US"));
+}
+
 /// A Polish document keeps its languages through .docx: the default (`w:docDefaults`) and an
 /// English run (`w:lang`) come back, and so does the proofing.
 #[test]

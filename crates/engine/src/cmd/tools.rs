@@ -862,6 +862,9 @@ fn language(s: &mut Session, v: &Value) -> CmdResult {
     })?;
     if p::bool(v, "default") == Some(true) {
         s.prefs.default_language = lang;
+        if let Some(np) = no_proof {
+            s.prefs.default_no_proof = np;
+        }
     }
     Ok(result)
 }
