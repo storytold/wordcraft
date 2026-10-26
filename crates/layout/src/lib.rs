@@ -22,6 +22,7 @@ mod table;
 mod textbox;
 mod vertical;
 pub mod wordart;
+mod work;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -694,11 +695,6 @@ enum Pass {
 /// Walk state while paginating.
 struct Ctx<'a> {
     doc: &'a Document,
-    /// The body's sections ([`Document::sections`]) for one pass, with the block index each
-    /// starts after: header and footer wrap work asks for them per page, and rebuilding the
-    /// list walked the whole body every time, so a long document paid a body-length scan per
-    /// page. The document does not change during a pass.
-    sections: Vec<(usize, &'a SectionProps)>,
     cache: &'a mut LayoutCache,
     opts: &'a LayoutOptions,
     counters: Counters,
@@ -743,6 +739,8 @@ struct Ctx<'a> {
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
+    /// The document's sections with their headers and footers linked ([`HfLinks`]).
+    hf: Arc<HfLinks<'a>>,
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -2306,7 +2304,6 @@ fn layout_pass(
     });
     let mut ctx = Ctx {
         doc,
-        sections: doc.sections(),
         cache,
         opts,
         hide_deleted: opts.hides_deleted(StoryRef::Body),
@@ -2340,8 +2337,10 @@ fn layout_pass(
         footer_wraps: HashMap::new(),
         pin: None,
         floats_above: HashMap::new(),
+        hf: Arc::new(HfLinks::new(doc.sections())),
     };
-    let sections = doc.sections();
+    let hf = Arc::clone(&ctx.hf);
+    let sections = &hf.sections;
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
     let read = opts.view == ViewMode::Read;
     let reflow = web || read;
@@ -2471,9 +2470,9 @@ fn layout_pass(
         ctx.fields.section = u32::try_from(si).unwrap_or(u32::MAX).saturating_add(1);
         ctx.fields.section_pages = totals.section(si);
         // Headers and footers left out are linked to the previous section's, and take its room.
-        let (heads, feet) = (linked(&sections, si, |s| s.headers), linked(&sections, si, |s| s.footers));
-        let hb = |i: Option<u32>| defining_width(&sections, si, |s| s.headers, i);
-        let fb = |i: Option<u32>| defining_width(&sections, si, |s| s.footers, i);
+        let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
+        let hb = |i: Option<u32>| hf.defining_width(false, si, i);
+        let fb = |i: Option<u32>| hf.defining_width(true, si, i);
         let body_top = if reflow || turn.is_turned() {
             sect.margin_top
         } else {
@@ -2513,7 +2512,7 @@ fn layout_pass(
             {
                 pb.sect = prev;
                 pb.sect_idx = si - 1;
-                let (ph, pf) = (linked(&sections, si - 1, |s| s.headers), linked(&sections, si - 1, |s| s.footers));
+                let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
                 let top = body_top_for(&mut ctx, prev, ph.default);
                 pb.foot_top = foot_top_for(&mut ctx, prev, pf.default);
                 pb.new_page(block, top);
@@ -2627,7 +2626,7 @@ fn layout_pass(
         }
     }
     if !reflow {
-        let found = Totals::of(&pages, &sections);
+        let found = Totals::of(&pages, sections);
         if ctx.uses_totals && may_repeat && found != *totals {
             return Pass::Again(found);
         }
@@ -2635,13 +2634,13 @@ fn layout_pass(
         // Page references in headers and footers are filled in after pagination, like their page
         // totals: they don't make the body lay out again.
         if headers_footers_refer_to_pages(doc) {
-            let marks = bookmark_pages(doc, &pages, &sections);
+            let marks = bookmark_pages(doc, &pages, sections);
             ctx.fields.bookmarks_key = marks_key(&marks);
             ctx.fields.bookmark_pages = Arc::new(marks);
         }
-        headers_footers(&mut ctx, &mut pages, &sections, &found);
+        headers_footers(&mut ctx, &mut pages, sections, &found);
         if doc.settings.mirror_margins {
-            mirror_even_pages(&mut pages, &sections);
+            mirror_even_pages(&mut pages, sections);
         }
     }
     // Evict paragraph layouts that weren't used this pass if the cache grew large.
@@ -2924,23 +2923,77 @@ fn section_side(start: SectionStart, restart: Option<u32>, last: u32, pages: usi
     }
 }
 
-/// The text width of the section that defines header or footer `id`, when section `si` inherits
-/// it rather than naming it (`None` when it names it). Measured in Word: an inherited part's
-/// percentage-width tables are sized by that section, though it's laid out on `si`'s pages.
-fn defining_width(sections: &[(usize, &SectionProps)], si: usize, get: fn(&SectionProps) -> HeaderSet, id: Option<u32>) -> Option<f32> {
-    let id = id?;
-    let names = |s: &SectionProps| {
-        let h = get(s);
-        [h.default, h.first, h.even].contains(&Some(id))
-    };
-    let own = sections.get(si)?.1;
-    if names(own) {
-        return None;
-    }
-    sections.iter().take(si).rev().find(|(_, s)| names(s)).map(|(_, s)| s.text_width()).filter(|w| (w - own.text_width()).abs() > 0.01)
+/// The document's sections with their headers and footers (Word's "link to previous"), each
+/// section's resolved once for the whole layout in document order rather than by looking back
+/// over the sections before it whenever one is needed.
+struct HfLinks<'a> {
+    sections: Vec<(usize, &'a SectionProps)>,
+    heads: Linked,
+    feet: Linked,
 }
 
-/// Lay out with percentage-width tables sized by `base` (see [`defining_width`]).
+impl<'a> HfLinks<'a> {
+    fn new(sections: Vec<(usize, &'a SectionProps)>) -> Self {
+        let heads = Linked::new(&sections, |s| s.headers);
+        let feet = Linked::new(&sections, |s| s.footers);
+        HfLinks { sections, heads, feet }
+    }
+
+    /// The text width of the section that defines header (or, `footer`, footer) `id`, when
+    /// section `si` inherits it rather than naming it (`None` when it names it). Measured in
+    /// Word: an inherited part's percentage-width tables are sized by that section, though it's
+    /// laid out on `si`'s pages.
+    fn defining_width(&self, footer: bool, si: usize, id: Option<u32>) -> Option<f32> {
+        let id = id?;
+        work::steps(1);
+        let linked = if footer { &self.feet } else { &self.heads };
+        let own = self.sections.get(si)?.1;
+        if linked.own.get(si).is_some_and(|h| [h.default, h.first, h.even].contains(&Some(id))) {
+            return None;
+        }
+        // The last section before `si` naming it.
+        let namers = linked.namers.get(&id)?;
+        let k = *namers.get(namers.partition_point(|&k| k < si).checked_sub(1)?)?;
+        self.sections.get(k).map(|(_, s)| s.text_width()).filter(|w| (w - own.text_width()).abs() > 0.01)
+    }
+}
+
+/// The headers (or footers) of every section: those it names, and with those it leaves out
+/// inherited from the sections before it.
+struct Linked {
+    own: Vec<HeaderSet>,
+    linked: Vec<HeaderSet>,
+    /// The sections naming each part, in order.
+    namers: HashMap<u32, Vec<usize>>,
+}
+
+impl Linked {
+    fn new(sections: &[(usize, &SectionProps)], get: fn(&SectionProps) -> HeaderSet) -> Self {
+        let own: Vec<HeaderSet> = sections.iter().map(|(_, s)| get(s)).collect();
+        let mut linked = Vec::with_capacity(own.len());
+        let mut namers: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut prev = HeaderSet::default();
+        for (si, o) in own.iter().enumerate() {
+            work::steps(1);
+            prev = HeaderSet { default: o.default.or(prev.default), first: o.first.or(prev.first), even: o.even.or(prev.even) };
+            linked.push(prev);
+            for id in [o.default, o.first, o.even].into_iter().flatten() {
+                let v = namers.entry(id).or_default();
+                if v.last() != Some(&si) {
+                    v.push(si);
+                }
+            }
+        }
+        Linked { own, linked, namers }
+    }
+
+    /// Section `si`'s headers (or footers), those it leaves out inherited.
+    fn set(&self, si: usize) -> HeaderSet {
+        self.linked.get(si).copied().unwrap_or_default()
+    }
+}
+
+/// Lay out with percentage-width tables sized by `base` (see [`HfLinks::defining_width`]).
 fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(&mut Ctx) -> T) -> T {
     let before = std::mem::replace(&mut ctx.pct_base, base);
     let out = f(ctx);
@@ -3400,11 +3453,12 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     }
     ctx.footer_wraps.insert(key, Vec::new());
     let doc = ctx.doc;
-    let Some((_, sect)) = ctx.sections.get(page.section).copied() else { return Vec::new() };
+    let hf = Arc::clone(&ctx.hf);
+    let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
     }
-    let set = linked(&ctx.sections, page.section, |s| s.footers);
+    let set = hf.feet.set(page.section);
     let id = if sect.title_page && first {
         set.first
     } else if doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
@@ -3416,7 +3470,7 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     let Some(part) = doc.parts.get(&id) else { return Vec::new() };
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
-    let base = defining_width(&ctx.sections, page.section, |s| s.footers, Some(id));
+    let base = hf.defining_width(true, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
@@ -4534,11 +4588,12 @@ fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     if let Some(areas) = ctx.header_tables.get(&key) {
         return areas.clone();
     }
-    let Some((_, sect)) = ctx.sections.get(page.section).copied() else { return Vec::new() };
+    let hf = Arc::clone(&ctx.hf);
+    let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
     }
-    let set = linked(&ctx.sections, page.section, |s| s.headers);
+    let set = hf.heads.set(page.section);
     let id = if sect.title_page && first {
         set.first
     } else if ctx.doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
@@ -4551,7 +4606,7 @@ fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
     let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
-    let base = defining_width(&ctx.sections, page.section, |s| s.headers, Some(id));
+    let base = hf.defining_width(false, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
@@ -4704,22 +4759,6 @@ fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
     y
 }
 
-/// Section `si`'s headers (or footers, as `get` picks), with those it leaves out inherited from
-/// the sections before it (Word's "link to previous").
-fn linked(sections: &[(usize, &SectionProps)], si: usize, get: fn(&SectionProps) -> HeaderSet) -> HeaderSet {
-    let mut set = sections.get(si).map(|(_, s)| get(s)).unwrap_or_default();
-    for (_, s) in sections.iter().take(si).rev() {
-        if set.default.is_some() && set.first.is_some() && set.even.is_some() {
-            break;
-        }
-        let o = get(s);
-        set.default = set.default.or(o.default);
-        set.first = set.first.or(o.first);
-        set.even = set.even.or(o.even);
-    }
-    set
-}
-
 /// Whether a header, a footer or a text box shows a `PAGEREF` field, which they resolve from the
 /// paginated body (see [`bookmark_pages`]).
 fn headers_footers_refer_to_pages(doc: &Document) -> bool {
@@ -4798,6 +4837,7 @@ fn marks_key(marks: &fields::BookmarkPages) -> u64 {
 
 fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {
     let total = pages.len() as u32;
+    let hf = Arc::clone(&ctx.hf);
     let even_odd = ctx.doc.settings.even_odd_headers;
     let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
     let mut first_of_section: HashSet<usize> = HashSet::new();
@@ -4810,8 +4850,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
     for (i, page) in pages.iter_mut().enumerate() {
         let Some((_, sect)) = sections.get(page.section) else { continue };
         // Inherit header/footer references from earlier sections (Word's "link to previous").
-        let pick = |get: fn(&SectionProps) -> HeaderSet| -> Option<u32> {
-            let set = linked(sections, page.section, get);
+        let pick = |linked: &Linked| -> Option<u32> {
+            let set = linked.set(page.section);
             if sect.title_page && first_of_section.contains(&i) {
                 return set.first;
             }
@@ -4820,8 +4860,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             }
             set.default
         };
-        let hid = pick(|s| s.headers);
-        let fid = pick(|s| s.footers);
+        let hid = pick(&hf.heads);
+        let fid = pick(&hf.feet);
         page.hf_slot = if sect.title_page && first_of_section.contains(&i) {
             HfSlot::First
         } else if even_odd && page.number % 2 == 0 {
@@ -4849,7 +4889,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         {
             let blocks = part.blocks.clone();
             let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
-            let base = defining_width(sections, page.section, |s| s.headers, hid);
+            let base = hf.defining_width(false, page.section, hid);
             let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, Some(frame)).items)
             });
@@ -4863,7 +4903,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let base = defining_width(sections, page.section, |s| s.footers, fid);
+            let base = hf.defining_width(true, page.section, fid);
             // The footer's height fixes where it sits, which page-relative floats need.
             let (h, ..) = with_pin(ctx, id, sect, page.number, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, None).height)
@@ -4932,6 +4972,8 @@ mod tests_complex;
 mod tests_grid;
 #[cfg(test)]
 mod tests_ligature;
+#[cfg(test)]
+mod tests_linear;
 #[cfg(test)]
 mod tests_nbsp;
 #[cfg(test)]

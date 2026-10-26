@@ -112,23 +112,32 @@ pub(crate) struct Blip {
 /// The picture of an `OfficeArtFBSE` body: its embedded BLIP, or the BLIP stored at `foDelay`
 /// in `delay` (the WordDocument stream for the document's BLIP store, the Data stream for
 /// inline pictures). `limit` caps the bytes produced.
-pub(crate) fn fbse_blip(fbse: &[u8], delay: &[u8], limit: usize) -> Option<Blip> {
+pub(crate) fn fbse_blip(fbse: &[u8], delay: &[u8], limit: usize, work: &mut usize) -> Option<Blip> {
+    let (rec, _) = fbse_record(fbse, delay)?;
+    blip(&rec, limit, work)
+}
+
+/// The BLIP record of an `OfficeArtFBSE`: embedded after it, or in the delay stream, where
+/// its (`foDelay`, end) location is returned too (store entries can share one record).
+pub(crate) fn fbse_record<'a>(fbse: &'a [u8], delay: &'a [u8]) -> Option<(Rec<'a>, Option<(usize, usize)>)> {
     // btWin32, btMacOS, rgbUid[16], tag, size, cRef, foDelay, unused, cbName, unused×2.
     let size = u32_at(fbse, 20)? as usize;
     let fo_delay = u32_at(fbse, 28)? as usize;
     let cb_name = *fbse.get(33)? as usize;
     let at = 36usize.checked_add(cb_name)?;
     if let Some((rec, _)) = fbse.get(at..).and_then(record) {
-        return blip(&rec, limit);
+        return Some((rec, None));
     }
     // Not embedded: the record sits in the delay stream.
     let end = fo_delay.checked_add(size.max(8))?.min(delay.len());
     let (rec, _) = record(delay.get(fo_delay..end)?)?;
-    blip(&rec, limit)
+    Some((rec, Some((fo_delay, end))))
 }
 
-/// Decode one `OfficeArtBlip*` record ([MS-ODRAW] §2.2.23-§2.2.31).
-pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
+/// Decode one `OfficeArtBlip*` record ([MS-ODRAW] §2.2.23-§2.2.31). `work` is the
+/// document's decode budget: inflating a metafile or decoding a DIB is charged to it before
+/// it runs, whether it succeeds or not, and nothing is decoded once it is spent.
+pub(crate) fn blip(rec: &Rec, limit: usize, work: &mut usize) -> Option<Blip> {
     // Each type has two instance values; the odd one carries a second 16-byte UID.
     let uids = if rec.inst & 1 == 1 { 32 } else { 16 };
     match rec.typ {
@@ -141,7 +150,7 @@ pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
                 rt::BLIP_PNG => Some(Blip { bytes: data.to_vec(), ext: "png", placeholder: false }),
                 rt::BLIP_JPEG | rt::BLIP_JPEG_CMYK => Some(Blip { bytes: data.to_vec(), ext: "jpeg", placeholder: false }),
                 rt::BLIP_TIFF => Some(Blip { bytes: data.to_vec(), ext: "tiff", placeholder: false }),
-                _ => dib_to_png(data, limit),
+                _ => dib_to_png(data, limit, work),
             }
         }
         rt::BLIP_EMF | rt::BLIP_WMF | rt::BLIP_PICT => {
@@ -154,7 +163,11 @@ pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
             let raw = raw.get(..cb_save.min(raw.len()))?;
             let cap = limit.min(MAX_METAFILE);
             let bytes = if compression == 0 {
-                let want = if cb_size > 0 { cb_size.min(cap) } else { cap };
+                let want = (if cb_size > 0 { cb_size.min(cap) } else { cap }).min(*work);
+                if want == 0 {
+                    return None;
+                }
+                *work -= want;
                 miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(raw, want).ok()?
             } else {
                 if raw.len() > cap {
@@ -177,8 +190,9 @@ pub(crate) fn blip(rec: &Rec, limit: usize) -> Option<Blip> {
 
 /// A device-independent bitmap (BITMAPINFOHEADER + palette + pixels) as a PNG: the DIB gets
 /// the 14-byte BMP file header it lacks, is decoded with size limits and re-encoded. When the
-/// bitmap can't be decoded the BMP bytes are kept (and render as a grey placeholder).
-fn dib_to_png(dib: &[u8], limit: usize) -> Option<Blip> {
+/// bitmap can't be decoded, or its declared pixels (4 bytes each) don't fit in `work`, the
+/// BMP bytes are kept (and render as a grey placeholder).
+fn dib_to_png(dib: &[u8], limit: usize, work: &mut usize) -> Option<Blip> {
     let header = u32_at(dib, 0)? as usize;
     if !(12..=124).contains(&header) {
         return None;
@@ -203,6 +217,17 @@ fn dib_to_png(dib: &[u8], limit: usize) -> Option<Blip> {
     bmp.extend_from_slice(&[0, 0, 0, 0]);
     bmp.extend_from_slice(&u32::try_from(off_bits).ok()?.to_le_bytes());
     bmp.extend_from_slice(dib);
+    let placeholder = |bmp| Some(Blip { bytes: bmp, ext: "bmp", placeholder: true });
+    // The declared size is what decoding allocates, however small the (RLE) data is.
+    let (w, h) = if header == 12 {
+        (u64::from(u16_at(dib, 4)?), u64::from(u16_at(dib, 6)?))
+    } else {
+        (u64::from(u32_at(dib, 4)?), u64::from((u32_at(dib, 8)? as i32).unsigned_abs()))
+    };
+    let Some(left) = w.saturating_mul(h).saturating_mul(4).try_into().ok().and_then(|cost: usize| work.checked_sub(cost)) else {
+        return placeholder(bmp);
+    };
+    *work = left;
     let mut reader = image::ImageReader::new(std::io::Cursor::new(&bmp));
     reader.set_format(image::ImageFormat::Bmp);
     let mut limits = image::Limits::default();
@@ -217,7 +242,7 @@ fn dib_to_png(dib: &[u8], limit: usize) -> Option<Blip> {
         {
             Some(Blip { bytes: png.bytes, ext: "png", placeholder: false })
         }
-        _ => Some(Blip { bytes: bmp, ext: "bmp", placeholder: true }),
+        _ => placeholder(bmp),
     }
 }
 

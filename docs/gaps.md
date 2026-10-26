@@ -35,6 +35,8 @@ Document renaming: desktop renaming requires a filesystem that supports hard lin
 
 Comment command safety (#1690, finding 3): Delete, Resolve, Reply and Edit reject explicit fractional, negative or wrong-type IDs before editing, rather than truncating floats or using the caret. Synthetic tests cover refusal without document or history changes, valid operations with undo/redo and repeated DOCX saves. This narrows the data-path risks in gap #3; the other audit findings and broader stability gate are outside this change.
 
+Proofing robustness (security audit, #3613 part, #3661, #3657, #3625): installed Hunspell dictionaries with thousands of self-continuing rules check each word in linear time and list a bounded number of forms; dictionary files are read with a bounded read (Turkish included) and the hyphenation dictionary inflates under a 64 MiB limit; Russian hyphenation and Turkish suggestions no longer grow with the square of the word's length. This narrows the freeze risks in gap #3; distinct-strip rule chains and proofing off the UI thread remain (#3613).
+
 Font-menu reliability: clearing a query with no matches now shows the recent section from its first row, including its heading, in a scrollable list. Fixed synthetic-family widget and full-ribbon tests cover this case and matching-query controls (#2068).
 
 Additive paragraph spacing retains the full before-space after a section page break; ordinary overlapping spacing is unchanged. Other pagination gaps remain open.
@@ -42,6 +44,8 @@ Additive paragraph spacing retains the full before-space after a section page br
 Exact line spacing keeps the run font baseline around tall equations; automatic and minimum spacing still grow for math. Other pagination gaps remain open.
 
 Legacy Word imports (#2445): interactive Save for `.doc`/`.dot` uses the existing DOCX Save As dialog. Cancel and write failures retain the draft and original path; Save before Close continues only after a successful supported-format save. This narrows save reliability under gap #3; binary `.doc` writing remains unsupported. Late Save As answers are rejected before writing if automation has replaced the document.
+
+Document model hangs (#3614, #3692): paragraph object walks, image deduplication, linear-equation letter runs and text box paste no longer do quadratic work or unbounded copies on hostile files. This narrows gap #3; the engine, DOCX reader and UI loops named in #3614 remain.
 
 Active footnote and endnote text stays readable while editing (#2545). This fixes a display-context defect; the broader fidelity, accessibility and readiness gates below are unchanged.
 
@@ -158,6 +162,8 @@ Small follow-ups from the 2026-10-25 field, table and AutoFormat batch (#4232):
 | 2026-10-23 | trivial | cu20we: paragraph-relative box floats use the pre-spacing origin; header/footer/cell/text-box regressions; readiness estimates unchanged |
 | 2026-10-24 | trivial | Exact-spacing table contact uses the specified line height in row selection and word skipping; large/small mark regressions in modes 11/12/14/15 (#3977); shape estimates unchanged |
 | 2026-10-24 | trivial | Floating tables count exact line-bottom contact; shapes keep strict overlap (#3977); original boundary/skip regressions in modes 11/12/14/15, expected Word rule from cyril265; readiness estimates unchanged |
+| 2026-10-22 | trivial | Gap 3: proofing robustness — linear affix rule walks, bounded dictionary reads, linear Russian hyphenation, Turkish word cap (#3613 part, #3661, #3657, #3625); readiness estimates unchanged |
+| 2026-10-22 | trivial | Gap #3 note: document model quadratic scans and text box paste copies bounded (#3692, part of #3614) |
 | 2026-10-22 | trivial | Gap 10: group connector rerouting preserves rotated/flipped free and unresolved endpoints under nonuniform scaling, with safe degenerate-dimension and display-size-cap handling; routing around shapes and readiness estimates unchanged |
 | 2026-10-21 | trivial | The ranked gap list held two rows each for #19, #20 and #21; the stale copies are gone, so each gap appears once, and the #20 row carries the measured figure (#3411) |
 | 2026-10-21 | trivial | #20 narrowed: a document with many relationships opens in the time its part takes (#3411) |
