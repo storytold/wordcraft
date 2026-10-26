@@ -10,6 +10,9 @@
 //!   is a link that leads nowhere).
 //! - The result must lie inside the root, compared by whole components (`/work2` isn't inside
 //!   `/work`), without regard to case on Windows.
+//! - Writing replaces or removes a directory entry, so for write access the entry itself (its
+//!   folder's links followed, its own name as given) must lie inside the root as well: a link
+//!   outside the root that leads into it is not a way to write outside (#3735).
 //! - Read and write access are separate: a root given alone grants only its own kind of access.
 //!
 //! Roots are in force on a thread inside [`confine`], and in the whole process after
@@ -95,7 +98,14 @@ impl AutomationRoots {
                 Access::Write => Err(format!("automation filesystem access is not granted: write authority is absent: {path}")),
             };
         };
-        if inside(&resolve(path)?, folder) {
+        // Writing replaces or removes the directory entry `path` names (a safe save renames its
+        // temporary file over it, a rename removes it): that entry must be inside the root too,
+        // not only what a link there leads to (#3735).
+        let entry_inside = || match access {
+            Access::Read => Ok(true),
+            Access::Write => resolve_entry(path).map(|entry| inside(&entry, folder)),
+        };
+        if inside(&resolve(path)?, folder) && entry_inside()? {
             return Ok(());
         }
         let root = shown.display();
@@ -201,9 +211,27 @@ fn resolve(path: &str) -> Result<PathBuf, String> {
         return Err(format!("automation path rejected: reserved device names are not allowed: {path}"));
     }
     let absolute = std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {path}: {e}"))?;
+    resolve_absolute(path, &absolute)
+}
+
+/// The directory entry `path` names: its folder resolved as [`resolve`] resolves it, then its own
+/// name as given, so a link there is the entry itself, not what it leads to. That entry is what
+/// replacing or removing the file changes.
+fn resolve_entry(path: &str) -> Result<PathBuf, String> {
+    let absolute = std::path::absolute(path).map_err(|e| format!("automation path rejected: cannot resolve {path}: {e}"))?;
+    let (Some(folder), Some(name)) = (absolute.parent(), absolute.file_name()) else {
+        return Err(format!("automation path rejected: not a file name: {path}"));
+    };
+    let mut entry = resolve_absolute(path, folder)?;
+    entry.push(name);
+    Ok(entry)
+}
+
+/// [`resolve`] for `absolute`, `path` made absolute (`path` as given, for messages).
+fn resolve_absolute(path: &str, absolute: &Path) -> Result<PathBuf, String> {
     // The names below the nearest existing folder, last first.
     let mut missing: Vec<OsString> = vec![];
-    let mut at = absolute.as_path();
+    let mut at = absolute;
     loop {
         match std::fs::canonicalize(at) {
             Ok(mut found) => {
@@ -382,6 +410,17 @@ mod tests {
         // A link to a folder inside the root stays inside.
         assert!(made(&base.join("in/sub"), &base.join("in/alias")));
         assert_eq!(roots.check(&s(base.join("in/alias/x.docx")), Access::Read), Ok(()));
+        // A link outside the write root that leads into it: writing would replace the link,
+        // outside (#3735). One inside that leads to a file inside is fine.
+        std::fs::write(base.join("out/doc.docx"), "x").unwrap();
+        assert!(made(&base.join("out/doc.docx"), &base.join("outside/alias.docx")));
+        let e = roots.check(&s(base.join("outside/alias.docx")), Access::Write).unwrap_err();
+        assert!(e.contains("outside the write root"), "the link itself is outside: {e}");
+        assert!(made(&base.join("out/doc.docx"), &base.join("out/alias.docx")));
+        assert_eq!(roots.check(&s(base.join("out/alias.docx")), Access::Write), Ok(()));
+        // A folder link outside that leads into the root: the entry is inside, as the system opens it.
+        assert!(made(&base.join("out"), &base.join("outside/to-out")));
+        assert_eq!(roots.check(&s(base.join("outside/to-out/new.docx")), Access::Write), Ok(()));
         // A root given through a link is the folder it leads to.
         assert!(made(&base.join("in"), &base.join("in-link")));
         let linked = AutomationRoots::new(Some(&base.join("in-link")), None).unwrap().unwrap();

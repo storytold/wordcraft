@@ -4092,7 +4092,8 @@ const SEARCH_SUGGESTIONS: [&str; 3] = ["review.spelling", "review.wordCount", "f
 
 /// Search's "Find … in the document": the Navigation pane opens on its results for `text`.
 fn find_in_navigation_pane(app: &mut WordApp, ctx: &egui::Context, text: &str) {
-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("nav_query"), text.to_string()));
+    let qid = app.window_id("nav_query");
+    ctx.data_mut(|d| d.insert_temp(qid, text.to_string()));
     app.ui.nav_tab = "results".into();
     let _ = app.run("view.navigationPane", json!({"value": true}));
     let _ = app.run("edit.find", json!({"text": text}));
@@ -4792,15 +4793,16 @@ mod tests {
 
     /// #1346: a check box the selected paragraphs differ in shows as neither on nor off; a click
     /// and OK turn it on in all of them, and the other fields they differ in stay as they were.
-    /// #3028: the records dialog refuses a range with no records itself, before Save Changes asks
-    /// about the unsaved document; a good range goes on to that question.
+    /// #3028: the records dialog refuses a range with no records itself; a good range merges into
+    /// a new document beside the unsaved one, asking nothing.
     #[test]
-    fn merge_records_dialog_checks_the_range_before_asking_to_save() {
+    fn merge_records_dialog_checks_the_range_before_merging() {
         use egui_kittest::kittest::Queryable;
         let mut app = app_with("Dear ");
         let _ = app.run("mailings.recipients", json!({"csv": "Name\nAda\nAlan\nGrace"}));
         let _ = app.run("text.insert", json!({"text": "unsaved"}));
         assert!(app.session.dirty);
+        let source = app.session.document_id();
         app.dialog = Dialog::open("mergeRecords", &mut app);
         if let Some(Dialog::MergeRecords { choice, from, to, .. }) = &mut app.dialog {
             *choice = 2;
@@ -4836,8 +4838,10 @@ mod tests {
         for _ in 0..2 {
             h.step();
         }
-        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"));
-        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "nothing merged yet");
+        assert!(h.state().dialog.is_none(), "nothing to ask about: the merge opens beside");
+        assert_ne!(h.state().session.document_id(), source, "the merge is a new document");
+        h.state_mut().run("view.switchWindows", json!({"id": source})).unwrap();
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "the unsaved document is still open");
     }
 
     #[test]

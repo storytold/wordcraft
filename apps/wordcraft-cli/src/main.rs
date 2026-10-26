@@ -36,7 +36,11 @@ USAGE:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
                                               \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
                                               formats follow the extension (docx and pdf in one run);
-                                              relative paths resolve against the script's folder
+                                              relative paths resolve against the script's folder.
+                                              file.new and file.open open another document and
+                                              make it active; later commands and the saves work on
+                                              the active one; view.switchWindows lists the open
+                                              documents and with {\"id\": N} makes one active
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
@@ -484,10 +488,14 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut s = match (from_file, from_template) {
                 (Some(f), _) => open(&f, password.as_deref())?,
                 // Both go through `file.new`, which puts a blank document on the region's paper (#3152).
+                // `file.new` opens beside the session's first document, which is then closed: the
+                // run starts with one open document.
                 (None, t) => {
                     let mut s = session(wordcraft_doc::Document::new());
+                    let first = s.document_id();
                     let params = t.map_or_else(|| json!({}), |t| json!({"template": t}));
                     s.run("file.new", &params).map_err(|e| e.to_string())?;
+                    s.close_document(first).map_err(|e| e.to_string())?;
                     s
                 }
             };

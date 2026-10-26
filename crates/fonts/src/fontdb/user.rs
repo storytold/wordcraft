@@ -273,9 +273,11 @@ fn glyf_points_fit(t: &[u8]) -> Option<bool> {
     let points = t.get(contours_end..contours_end.checked_add(u32_at(12)?)?)?;
     let mut at = 0;
     for g in 0..glyphs {
-        let n = i16::from_be_bytes(contours.get(2 * g..2 * g + 2)?.try_into().ok()?);
+        // The decoder reads the count as unsigned and only 0xFFFF is a composite glyph (no points
+        // here): 0x8000..=0xFFFE are that many contours, so they are counted, not read as negative.
+        let n = u16::from_be_bytes(contours.get(2 * g..2 * g + 2)?.try_into().ok()?);
         let mut total = 0usize;
-        for _ in 0..n.max(0) {
+        for _ in 0..if n == 0xFFFF { 0 } else { n } {
             // 255UInt16
             let code = *points.get(at)?;
             at += 1;
@@ -745,15 +747,20 @@ pub(crate) mod tests {
     /// A WOFF2 file holding a transformed `glyf` (and `loca`) whose one glyph has two contours of
     /// `points` points each (and no coordinates: the decoder finds it damaged in the end).
     fn woff2_glyph_with(points: u16) -> Vec<u8> {
-        let total = 2 * points as usize;
+        let [hi, lo] = points.to_be_bytes();
+        woff2_glyph_with_contours(2, &[253, hi, lo].repeat(2), 2 * points as usize)
+    }
+
+    /// As [`woff2_glyph_with`], for a glyph whose contour count is `n` and whose point-count stream
+    /// is `counts`, with `total` flags.
+    fn woff2_glyph_with_contours(n: u16, counts: &[u8], total: usize) -> Vec<u8> {
         let mut glyf = vec![0, 0, 0, 0, 0, 1, 0, 0]; // reserved, optionFlags, numGlyphs 1, indexFormat
         // nContour, nPoints, flag, glyph, composite, bbox and instruction stream sizes.
-        for size in [2, 6, total, 0, 0, 4, 0] {
+        for size in [2, counts.len(), total, 0, 0, 4, 0] {
             glyf.extend_from_slice(&(size as u32).to_be_bytes());
         }
-        glyf.extend_from_slice(&2i16.to_be_bytes());
-        let [hi, lo] = points.to_be_bytes();
-        glyf.extend_from_slice(&[253, hi, lo, 253, hi, lo]); // 255UInt16 in its word form
+        glyf.extend_from_slice(&n.to_be_bytes());
+        glyf.extend_from_slice(counts); // 255UInt16 point counts
         glyf.resize(glyf.len() + total, 1); // on-curve flags
         glyf.extend_from_slice(&[0; 4]); // no explicit bounding boxes
         let mut dir = vec![10]; // glyf, transform version 0
@@ -799,6 +806,25 @@ pub(crate) mod tests {
         assert_eq!(decode_font_file(&woff2_glyph_with(40_000)), Err(UserFontError::BadWebFont(TOO_MANY_POINTS.into())));
         // Within the limit the scan passes the file on, to the decoder.
         assert!(matches!(decode_font_file(&woff2_glyph_with(3)), Err(UserFontError::BadWebFont(e)) if e != TOO_MANY_POINTS));
+    }
+
+    #[test]
+    fn a_woff2_glyph_with_a_contour_count_past_i16_max_is_counted() {
+        // #3703: the decoder reads the contour count as unsigned (only 0xFFFF is a composite), so
+        // 0x8000..=0xFFFE are that many contours; read as negative they counted no points and the
+        // decoder then allocated about 1 GB for a 1.3 MB font.
+        for n in [0x7FFFu16, 0x8000, 0xFFFE] {
+            let file = woff2_glyph_with_contours(n, &vec![3; usize::from(n)], 3 * usize::from(n));
+            assert_eq!(decode_font_file(&file), Err(UserFontError::BadWebFont(TOO_MANY_POINTS.into())), "{n:#x}");
+        }
+    }
+
+    #[test]
+    fn a_woff2_composite_glyph_is_not_counted_as_having_points() {
+        // 0xFFFF marks a composite glyph: the point check skips it (the decoder reads its own
+        // streams), so it is not refused for its points.
+        let file = woff2_glyph_with_contours(0xFFFF, &[], 0);
+        assert!(matches!(decode_font_file(&file), Err(UserFontError::BadWebFont(e)) if e != TOO_MANY_POINTS));
     }
 
     #[test]

@@ -4,9 +4,10 @@
 //! - **Every system:** WordCraft only connects to this computer (a loopback address).
 //! - **Linux only:** the program listening there must not run as another user, from the
 //!   kernel's socket table (`/proc/net/tcp`): another account on a shared machine that took the
-//!   port while Zotero wasn't running is refused. A listener the table doesn't show (WSL2
-//!   mirrored networking with Zotero on Windows, a local proxy, a sandbox) leaves only the
-//!   loopback rule.
+//!   port while Zotero wasn't running is refused. A listener the tables don't show (WSL2
+//!   mirrored networking with Zotero on Windows, a local proxy) leaves only the loopback rule,
+//!   but only when the tables were read in full: a read error, or an open error other than
+//!   "not found" (e.g. a sandbox profile that denies `/proc/net/tcp`), refuses.
 //!
 //! On Windows, macOS and the BSDs there is **no same-user check**: the loopback rule is the
 //! only one, so any local account's listener on the port is taken for Zotero. Those systems have
@@ -35,23 +36,13 @@ pub(crate) fn check(stream: &TcpStream) -> Result<(), ZoteroError> {
 }
 
 /// Refuse a listener at `peer` that the kernel's socket tables say belongs to another user.
+/// A table that can't be read in full (I/O error) is a refusal, never "unknown".
 #[cfg(any(target_os = "linux", target_os = "android"))]
 fn owner_check(local: SocketAddr, peer: SocketAddr) -> Result<(), ZoteroError> {
-    use std::io::Read;
-    /// Longest socket table read (a busy server's table is a few MB).
-    const MAX_TABLE: u64 = 64 * 1024 * 1024;
-    let mut table = String::new();
-    for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
-        if let Ok(f) = std::fs::File::open(path) {
-            let mut part = String::new();
-            if f.take(MAX_TABLE).read_to_string(&mut part).is_ok() {
-                table.push_str(&part);
-            }
-        }
-    }
+    let rows = scan_tables(["/proc/net/tcp", "/proc/net/tcp6"], |p| std::fs::File::open(p), local, peer)?;
     // Our uid when our own socket's row is missing: `/proc/self` belongs to this process's user.
     let me = std::fs::metadata("/proc/self").ok().map(|m| std::os::unix::fs::MetadataExt::uid(&m));
-    same_owner(&table, local, peer, me)
+    decide(&rows, peer, me)
 }
 
 /// Windows, macOS, the BSDs: no same-user check (no socket table to read without OS calls this
@@ -61,41 +52,132 @@ fn owner_check(_local: SocketAddr, _peer: SocketAddr) -> Result<(), ZoteroError>
     Ok(())
 }
 
-/// From a `/proc/net/tcp`-format socket table: refuse when the socket at `peer` connected to
-/// `local` (the listener's side) belongs to another user than ours. Our uid is our own socket's
-/// row, else `me` (this process's). When the listener isn't listed (or the table couldn't be
-/// read, or our uid is unknown) its owner is unknown and the loopback rule decides.
+/// Scan the tables named by `paths` (opened by `open`) in order, stopping once both rows are
+/// found. A table that doesn't exist (no IPv6) is skipped; any other open or read error refuses.
 #[cfg_attr(not(any(target_os = "linux", target_os = "android")), allow(dead_code))]
-pub(crate) fn same_owner(table: &str, local: SocketAddr, peer: SocketAddr, me: Option<u32>) -> Result<(), ZoteroError> {
+fn scan_tables<R: std::io::Read>(
+    paths: [&str; 2],
+    open: impl Fn(&str) -> std::io::Result<R>,
+    local: SocketAddr,
+    peer: SocketAddr,
+) -> Result<Rows, ZoteroError> {
+    let mut rows = Rows::default();
+    for path in paths {
+        match open(path) {
+            Ok(f) => scan_table(std::io::BufReader::new(f), local, peer, &mut rows)?,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(unreadable(&e)),
+        }
+        if rows.done() {
+            break;
+        }
+    }
+    Ok(rows)
+}
+
+/// The uids found for the two rows of one connection.
+#[derive(Default)]
+struct Rows {
+    ours: Option<u32>,
+    theirs: Option<u32>,
+}
+
+impl Rows {
+    fn done(&self) -> bool {
+        self.ours.is_some() && self.theirs.is_some()
+    }
+}
+
+fn unreadable(e: &std::io::Error) -> ZoteroError {
+    ZoteroError::Refused(format!("couldn't read the system's socket table ({e}), so the program on the Zotero port can't be checked"))
+}
+
+/// Stream a `/proc/net/tcp`-format table line by line (nothing is kept, so the table's size
+/// doesn't matter and nothing is truncated), recording the uids of the connection's two rows.
+/// Stops once both are found. Any read error is a refusal: a table we couldn't finish reading
+/// must never count as "the listener isn't listed".
+fn scan_table(mut table: impl std::io::BufRead, local: SocketAddr, peer: SocketAddr, rows: &mut Rows) -> Result<(), ZoteroError> {
     let key = |a: SocketAddr| (a.ip().to_canonical(), a.port());
     let (local, peer) = (key(local), key(peer));
-    let (mut ours, mut theirs) = (None, None);
-    for line in table.lines() {
-        let f: Vec<&str> = line.split_whitespace().take(8).collect();
-        let (Some(l), Some(r), Some(uid)) = (f.get(1).and_then(|a| parse_addr(a)), f.get(2).and_then(|a| parse_addr(a)), f.get(7)) else {
+    let mut line = Vec::new();
+    loop {
+        line.clear();
+        // Bounded line: a row is ~150 bytes; read at most 4 KiB of one (the rest is skipped).
+        let n = read_line_capped(&mut table, &mut line).map_err(|e| unreadable(&e))?;
+        if n == 0 {
+            return Ok(());
+        }
+        let line = String::from_utf8_lossy(&line);
+        let mut f = line.split_whitespace();
+        let (Some(l), Some(r), Some(uid)) = (f.nth(1).and_then(parse_addr), f.next().and_then(parse_addr), f.nth(4)) else {
             continue;
         };
         let Ok(uid) = uid.parse::<u32>() else { continue };
         let (l, r) = (key(l), key(r));
         if l == local && r == peer {
-            ours = Some(uid);
+            rows.ours = Some(uid);
         } else if l == peer && r == local {
-            theirs = Some(uid);
+            rows.theirs = Some(uid);
+        }
+        if rows.done() {
+            return Ok(());
         }
     }
-    match (ours.or(me), theirs) {
+}
+
+/// Read one line into `out`, keeping at most 4 KiB of it; returns the bytes consumed (0 at the end).
+fn read_line_capped(r: &mut impl std::io::BufRead, out: &mut Vec<u8>) -> std::io::Result<usize> {
+    const CAP: usize = 4096;
+    let mut total = 0;
+    loop {
+        let buf = match r.fill_buf() {
+            Ok(b) => b,
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(e) => return Err(e),
+        };
+        if buf.is_empty() {
+            return Ok(total);
+        }
+        let (take, found) = match buf.iter().position(|b| *b == b'\n') {
+            Some(i) => (i + 1, true),
+            None => (buf.len(), false),
+        };
+        let keep = take.min(CAP.saturating_sub(out.len()));
+        out.extend_from_slice(buf.get(..keep).unwrap_or_default());
+        r.consume(take);
+        total += take;
+        if found {
+            return Ok(total);
+        }
+    }
+}
+
+/// Refuse when the connection's rows show another user. Our uid is our own socket's row, else
+/// `me` (this process's). When the listener isn't listed in a table that was read in full (WSL2,
+/// a proxy) or our uid is unknown, its owner is unknown and the loopback rule decides.
+fn decide(rows: &Rows, peer: SocketAddr, me: Option<u32>) -> Result<(), ZoteroError> {
+    match (rows.ours.or(me), rows.theirs) {
         (Some(a), Some(b)) if a == b => Ok(()),
         (Some(_), Some(b)) => {
-            Err(ZoteroError::Refused(format!("the program on port {} runs as another user (uid {b}), so it isn't your Zotero", peer.1)))
+            Err(ZoteroError::Refused(format!("the program on port {} runs as another user (uid {b}), so it isn't your Zotero", peer.port())))
         }
         _ => {
             log::debug!(
                 "Zotero: couldn't tell which user runs the program on port {} (not in the socket table); trusting the loopback address alone",
-                peer.1
+                peer.port()
             );
             Ok(())
         }
     }
+}
+
+/// From an in-memory `/proc/net/tcp`-format table (tests and callers with a string): see
+/// [`scan_table`] and [`decide`].
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn same_owner(table: &str, local: SocketAddr, peer: SocketAddr, me: Option<u32>) -> Result<(), ZoteroError> {
+    let mut rows = Rows::default();
+    scan_table(table.as_bytes(), local, peer, &mut rows)?;
+    decide(&rows, peer, me)
 }
 
 /// `0100007F:5A5C` (IPv4) or 32 hex digits and a port (IPv6): each 32-bit word as the kernel
@@ -167,14 +249,14 @@ mod tests {
         assert_eq!(same_owner(&junk, local, peer, None), Ok(()));
     }
 
-    /// WSL2 mirrored networking (Zotero on Windows), a local proxy or a sandbox: the listener
+    /// WSL2 mirrored networking (Zotero on Windows) or a local proxy: the listener
     /// isn't in our table, so the loopback rule decides, as on other systems.
     #[test]
     fn an_unlisted_listener_falls_back_to_the_loopback_rule() {
         let (local, peer) = addrs();
         let missing = format!("{HEADER}{}", row(local, peer, 1000));
         assert_eq!(same_owner(&missing, local, peer, None), Ok(()));
-        // The table couldn't be read.
+        // An empty table: the listener isn't listed.
         assert_eq!(same_owner("", local, peer, None), Ok(()));
         assert_eq!(same_owner("", local, peer, Some(1000)), Ok(()));
     }
@@ -203,6 +285,105 @@ mod tests {
         };
         let table = format!("{HEADER}{}{}", row(local, peer, 1000), row(mapped(peer), mapped(local), 1001));
         assert!(matches!(same_owner(&table, local, peer, None), Err(ZoteroError::Refused(e)) if e.contains("another user")));
+    }
+
+    /// A reader that yields `data`, then fails.
+    struct Failing(std::io::Cursor<Vec<u8>>);
+    impl std::io::Read for Failing {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            match self.0.read(buf)? {
+                0 => Err(std::io::Error::other("injected")),
+                n => Ok(n),
+            }
+        }
+    }
+
+    /// Repeats `unit` for `left` bytes, then ends: a huge table without holding it in memory.
+    struct Table {
+        parts: Vec<(Vec<u8>, usize)>,
+        part: usize,
+        at: usize,
+    }
+    impl std::io::Read for Table {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            let Some((unit, times)) = self.parts.get(self.part) else { return Ok(0) };
+            if self.at >= unit.len() * times {
+                self.part += 1;
+                self.at = 0;
+                return self.read(buf);
+            }
+            let n = buf.len().min(unit.len() - self.at % unit.len());
+            let off = self.at % unit.len();
+            buf[..n].copy_from_slice(&unit[off..off + n]);
+            self.at += n;
+            Ok(n)
+        }
+    }
+
+    /// The real attack: a hostile user floods the table with listener rows so the connection's
+    /// rows sit past any fixed cap. The real read path (`scan_tables`, which `owner_check`
+    /// calls on `/proc/net/tcp*`) finds them wherever they are.
+    #[test]
+    fn rows_far_into_a_huge_table_are_still_found() {
+        let (local, peer) = addrs();
+        let filler = row("127.0.0.1:1".parse().unwrap(), "0.0.0.0:0".parse().unwrap(), 1001);
+        // More than 64 MiB of rows (the old cap), then the connection's two rows.
+        let times = 70 * 1024 * 1024 / filler.len();
+        assert!(filler.len() * times > 64 * 1024 * 1024);
+        let tail = format!("{}{}", row(local, peer, 1000), row(peer, local, 1001)).into_bytes();
+        let open = |p: &str| match p {
+            "t4" => {
+                Ok(Table { parts: vec![(HEADER.as_bytes().to_vec(), 1), (filler.clone().into_bytes(), times), (tail.clone(), 1)], part: 0, at: 0 })
+            }
+            _ => Err(std::io::Error::from(std::io::ErrorKind::NotFound)),
+        };
+        let rows = scan_tables(["t4", "t6"], open, local, peer).unwrap();
+        assert_eq!((rows.ours, rows.theirs), (Some(1000), Some(1001)));
+        assert!(matches!(decide(&rows, peer, None), Err(ZoteroError::Refused(e)) if e.contains("another user")));
+    }
+
+    /// A signal interrupting a read is retried, not taken for an unreadable table.
+    #[test]
+    fn an_interrupted_read_is_retried() {
+        struct Eintr(bool, std::io::Cursor<Vec<u8>>);
+        impl std::io::Read for Eintr {
+            fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+                if !std::mem::replace(&mut self.0, true) {
+                    return Err(std::io::ErrorKind::Interrupted.into());
+                }
+                self.1.read(buf)
+            }
+        }
+        let (local, peer) = addrs();
+        let data = format!("{HEADER}{}{}", row(local, peer, 7), row(peer, local, 7)).into_bytes();
+        let open = |_: &str| Ok(Eintr(false, std::io::Cursor::new(data.clone())));
+        let rows = scan_tables(["a", "b"], open, local, peer).unwrap();
+        assert_eq!((rows.ours, rows.theirs), (Some(7), Some(7)));
+    }
+
+    /// A sandbox that denies the table (not "not found") refuses.
+    #[test]
+    fn a_table_that_cannot_be_opened_is_refused() {
+        let (local, peer) = addrs();
+        let open = |_: &str| -> std::io::Result<&[u8]> { Err(std::io::ErrorKind::PermissionDenied.into()) };
+        assert!(matches!(scan_tables(["a", "b"], open, local, peer), Err(ZoteroError::Refused(_))));
+    }
+
+    /// A table that fails mid-read is a refusal, not "listener unknown, trust loopback".
+    #[test]
+    fn a_table_that_fails_to_read_is_refused() {
+        let (local, peer) = addrs();
+        let data = format!("{HEADER}{}", row(local, peer, 1000)).into_bytes();
+        let mut rows = Rows::default();
+        let r = scan_table(std::io::BufReader::new(Failing(std::io::Cursor::new(data))), local, peer, &mut rows);
+        assert!(matches!(r, Err(ZoteroError::Refused(ref e)) if e.contains("socket table")), "{r:?}");
+    }
+
+    #[test]
+    fn an_overlong_line_is_skipped_without_gluing_to_the_next() {
+        let (local, peer) = addrs();
+        let table = format!("{HEADER}{}\n{}{}", "x".repeat(100_000), row(local, peer, 1000), row(peer, local, 1001));
+        assert!(matches!(same_owner(&table, local, peer, None), Err(ZoteroError::Refused(_))));
     }
 
     #[test]

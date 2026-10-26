@@ -74,8 +74,10 @@ isn't another user's. On Windows and macOS (and the BSDs) the loopback rule is t
   program listening on the port runs as the same user as WordCraft, before sending anything. If
   another account on a shared machine took the port while Zotero wasn't running, WordCraft
   refuses with an error and the document isn't touched. When the table doesn't show the
-  listener (WSL2 mirrored networking with Zotero running on Windows, a local proxy, a sandbox)
-  or can't be read, its owner is unknown and only the loopback rule applies, as below.
+  listener (WSL2 mirrored networking with Zotero running on Windows, a local proxy), its owner
+  is unknown and only the loopback rule applies, as below. That holds only when the tables were
+  read in full: a read error, or an open error other than "not found", **refuses**. Sandboxes
+  that deny `/proc/net/tcp` (some AppArmor or Snap profiles, for example) are therefore refused.
 - Windows, macOS and the BSDs: **no same-user check.** They have no such table to read
   without OS calls WordCraft doesn't make (it uses no `unsafe` code), so only the loopback rule
   applies there (and on Linux when the listener isn't in the table). Remaining risk: on a

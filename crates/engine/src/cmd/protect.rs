@@ -406,6 +406,8 @@ fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdErro
                 | "table.modifyStyle"
                 | "table.deleteStyle"
                 | "tools.updateStyles"
+                // Copies style definitions in from another file, locked flags included (#3692).
+                | "styles.copyFrom"
         )
         // Attach Template updates the styles from it when asked (`linkStyles` is only a setting).
         || (id == "tools.attachTemplate" && p::bool(params, "update") == Some(true));
@@ -817,7 +819,8 @@ mod tests {
     }
 
     /// Formatting limited to styles: attaching a template refuses to update the styles from it
-    /// (it would bypass the Update Styles block); attaching without updating still works.
+    /// (it would bypass the Update Styles block), nor can Copy Styles; attaching without
+    /// updating still works.
     #[test]
     fn formatting_restriction_refuses_attach_template_update() {
         let mut t = Document::from_text("Template.");
@@ -829,6 +832,12 @@ mod tests {
         s.run("review.restrict", &json!({"mode": "none", "formatting": true})).unwrap();
         let before = s.doc.clone();
         let e = s.run("tools.attachTemplate", &json!({"path": "Report.dotx", "update": true, "data": data})).unwrap_err().to_string();
+        assert!(e.contains("formatting is limited"), "{e}");
+        assert_eq!(s.doc, before);
+        // Copying styles in replaces their definitions, locked flag included (#3692).
+        s.doc.styles.styles.iter_mut().filter(|st| st.id == "Heading1").for_each(|st| st.locked = true);
+        let before = s.doc.clone();
+        let e = s.run("styles.copyFrom", &json!({"path": "Report.dotx", "styles": ["Heading 1"], "data": data})).unwrap_err().to_string();
         assert!(e.contains("formatting is limited"), "{e}");
         assert_eq!(s.doc, before);
         s.run("tools.attachTemplate", &json!({"path": "Report.dotx"})).unwrap();

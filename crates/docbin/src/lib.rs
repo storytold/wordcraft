@@ -259,7 +259,7 @@ pub fn read_with_password(bytes: &[u8], password: Option<&str>) -> Result<Docume
     let ftn_base = fib.ccp.text;
     let hdd_base = fib.ccp.text.saturating_add(fib.ccp.ftn);
     let edn_base = hdd_base.saturating_add(fib.ccp.hdd).saturating_add(fib.ccp.atn);
-    let mut pics = media::Pictures::default();
+    let mut pics = media::Pictures::for_input(word.len().saturating_add(data.len()));
     // Every materialised character comes from at least one byte of the WordDocument stream, so a
     // legitimate document's total text (body plus every header, footnote and text box, each read
     // once) cannot exceed its stream. A hostile piece or story table that aliases the same bytes
