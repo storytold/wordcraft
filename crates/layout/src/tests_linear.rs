@@ -6,8 +6,12 @@
 //! whose walk is the document model's, is timed.
 
 use super::tests::{SCALE, cost_ratio};
-use super::*;
+use super::{
+    Block, CharProps, DocLayout, Document, HeaderSet, HeightRule, InlineObject, LayoutCache, LayoutOptions, Page, ParaLayout, Paragraph, Path,
+    Placed, SectionProps, SectionStart, StoryRef, display, layout, para, work,
+};
 use wordcraft_doc::para::Run;
+use wordcraft_doc::props::Rgb;
 use wordcraft_doc::{Pos, Table};
 
 fn lay(d: &Document, opts: &LayoutOptions) -> DocLayout {
@@ -201,6 +205,35 @@ fn selecting_a_long_header_takes_linear_time() {
     assert_linear_steps("header selection", 300, laid, |(d, l, (a, b))| drop(std::hint::black_box(l.selection_rects(d, a, b, 0))));
 }
 
+/// An endnote of `n` paragraphs, a few lines each, continued over many pages.
+fn long_endnote(n: usize) -> (Document, u32) {
+    let mut d = Document::from_text("Body");
+    // One huge letter to a paragraph, one line high enough for a page, so the pages are as many as
+    // the paragraphs and each paragraph costs next to nothing.
+    let huge = CharProps { size: Some(400.0), ..Default::default() };
+    let paras = (0..n).map(|_| wordcraft_doc::para_block(Paragraph::with_text("n", huge.clone()))).collect();
+    let id = d.add_part(wordcraft_doc::PartKind::Endnote, paras);
+    let r = InlineObject::NoteRef { kind: wordcraft_doc::para::NoteKind::Endnote, id, custom: String::new() };
+    d.insert_object(&Pos::body(0, 4), r, &Default::default()).unwrap();
+    (d, id)
+}
+
+/// #3866: selecting across an endnote over many pages probed the pages from the first for each
+/// paragraph (paragraphs x pages).
+#[test]
+fn selecting_a_long_endnote_takes_linear_time() {
+    let laid = |n: usize| {
+        let (d, id) = long_endnote(n);
+        let l = lay(&d, &LayoutOptions::default());
+        let ends = (Pos::new(StoryRef::Part(id), Path::top(0), 0), Pos::new(StoryRef::Part(id), Path::top(n - 1), 2));
+        (d, l, ends)
+    };
+    let (d, l, (a, b)) = laid(SCALE * 20);
+    assert!(l.pages.len() >= SCALE * 20 / 2, "the endnote runs over many pages: {}", l.pages.len());
+    assert!(l.selection_rects(&d, &a, &b, 0).len() >= SCALE * 20, "a rectangle per paragraph");
+    assert_linear_steps("endnote selection", 20, laid, |(d, l, (a, b))| drop(std::hint::black_box(l.selection_rects(d, a, b, 0))));
+}
+
 /// A table of `n` rows of 60 cells, each row exactly half a point high, so every cell clips its
 /// (empty) paragraph and the whole table fits on the first page.
 fn clipped_table(n: usize) -> Document {
@@ -293,4 +326,170 @@ fn balloons_for_many_authors_lay_out_in_linear_time() {
     };
     let opts = LayoutOptions { comment_balloons: true, ..Default::default() };
     assert_layout_linear("comment balloons", 120, doc, &opts);
+}
+
+/// `n` one-word paragraphs, each inserted by its own author, small enough for one page.
+fn tracked_paras(n: usize) -> Document {
+    let mut d = Document::from_text("x");
+    d.body = (0..n)
+        .map(|i| {
+            let run = Run { len: 1, props: CharProps { ins: u32::try_from(i).ok(), size: Some(1.0), ..Default::default() } };
+            let mut p = Paragraph { runs: vec![run], ..Paragraph::with_text("w", CharProps::default()) };
+            p.mark.size = Some(1.0);
+            p.props.space_before = Some(0.0);
+            p.props.space_after = Some(0.0);
+            wordcraft_doc::para_block(p)
+        })
+        .collect();
+    d.revisions = (0..n).map(|i| wordcraft_doc::Revision::new(wordcraft_doc::RevisionKind::Insert, format!("Author {i}"), "")).collect();
+    d
+}
+
+/// Draws every item of the first page on its own, as the PDF export does.
+fn draw_items((d, l): &(Document, DocLayout), opts: &display::DisplayOptions) {
+    let Some(p) = l.pages.first() else { return };
+    let shown = display::ItemDisplay::new(d, p);
+    for it in p.header.iter().chain(&p.footer).chain(&p.items) {
+        std::hint::black_box(shown.draws(it, opts));
+    }
+}
+
+/// #3866: the PDF export drew each item with a `page_display` of its own, which ranked the revision
+/// authors again for every item with a tracked change (lines x revisions).
+#[test]
+fn drawing_items_one_by_one_ranks_the_authors_once() {
+    let laid = |n: usize| {
+        let d = tracked_paras(n);
+        let l = lay(&d, &LayoutOptions::default());
+        (d, l)
+    };
+    assert_eq!(laid(SCALE * 40).1.pages.len(), 1);
+    let opts = display::DisplayOptions { markup: true, ..Default::default() };
+    assert_linear_steps("items drawn one by one", 40, laid, |dl| draw_items(dl, &opts));
+}
+
+/// #3866: the same for the clipped cells, which each item's `page_display` collected again
+/// (lines x clipped cells).
+#[test]
+fn drawing_items_one_by_one_collects_the_clipped_cells_once() {
+    let laid = |n: usize| {
+        let d = clipped_table(n);
+        let l = lay(&d, &LayoutOptions::default());
+        (d, l)
+    };
+    let opts = display::DisplayOptions::default();
+    assert_linear_steps("clipped cells, items one by one", 16, laid, |dl| draw_items(dl, &opts));
+}
+
+/// #3866: a comment's balloon is in its author's colour, authors numbered in order of appearance.
+#[test]
+fn balloons_are_in_their_authors_colours() {
+    let mut d = Document::from_text("one two three");
+    for (i, a) in ["Ana", "Ben", "Ana"].into_iter().enumerate() {
+        let part = d.add_part(wordcraft_doc::PartKind::Comment, vec![wordcraft_doc::para_block(Paragraph::with_text("c", CharProps::default()))]);
+        let id = u32::try_from(i).unwrap();
+        d.comments.insert(id, wordcraft_doc::Comment { author: a.into(), part, ..Default::default() });
+        let p = CharProps::default();
+        d.insert_object(&Pos::body(0, 0), InlineObject::CommentEnd { id }, &p).unwrap();
+        d.insert_object(&Pos::body(0, 0), InlineObject::CommentStart { id }, &p).unwrap();
+    }
+    let l = lay(&d, &LayoutOptions { comment_balloons: true, ..Default::default() });
+    // Each card's stripe is a 3 pt wide fill in the author's colour; the cards run down the page.
+    let mut stripes: Vec<_> = l.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Fill { rect, color } if rect.w == 3.0 => Some((rect.y, *color)),
+            _ => None,
+        })
+        .collect();
+    stripes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let (ana, ben) = (display::revision_color(0), display::revision_color(1));
+    assert_ne!(ana, ben);
+    assert_eq!(stripes.iter().map(|s| s.1).collect::<Vec<_>>(), [ana, ben, ana]);
+}
+
+/// A page with tracked changes by several authors in its body and header, and exact-height
+/// tables, one nested in a cell of another, whose cells clip their lines.
+fn mixed_page() -> (Document, DocLayout) {
+    let mut d = tracked_paras(6);
+    let mut hp = Paragraph::with_text("head", CharProps::default());
+    hp.runs = vec![Run { len: 4, props: CharProps { ins: Some(2), ..Default::default() } }];
+    let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(hp)]);
+    d.last_section.headers.default = Some(id);
+    let exact = |rows, cols| {
+        let mut t = Table::new(rows, cols, 200.0);
+        for row in &mut t.rows {
+            row.props.height = Some(0.5);
+            row.props.height_rule = HeightRule::Exact;
+        }
+        t
+    };
+    // A cell with text in it holds a nested table.
+    let mut outer = exact(2, 2);
+    outer.rows[0].cells[0].blocks.push(std::sync::Arc::new(Block::Table(exact(2, 2))));
+    d.insert_block(StoryRef::Body, &Path::top(1), Block::Table(outer)).unwrap();
+    d.insert_block(StoryRef::Body, &Path::top(0), Block::Table(exact(2, 3))).unwrap();
+    let l = lay(&d, &LayoutOptions::default());
+    (d, l)
+}
+
+/// What drawing `it` on a page of just it (and every clipped cell, for a line) gave before the
+/// page's authors and clipped cells were shared: a `page_display` of its own.
+fn drawn_alone(d: &Document, page: &Page, it: &Placed, opts: &display::DisplayOptions) -> Vec<display::Draw> {
+    let mut items = vec![it.clone()];
+    if matches!(it, Placed::Lines { .. }) {
+        let cells = page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. }));
+        items.extend(cells.cloned());
+    }
+    let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
+    display::page_display(d, &one, opts)
+}
+
+/// #3866: drawing the items of a page one by one with the page's shared authors and clipped
+/// cells gives what a `page_display` of each alone gave.
+#[test]
+fn drawing_items_one_by_one_matches_a_page_display_of_each() {
+    let (d, l) = mixed_page();
+    let page = &l.pages[0];
+    let clipped = page.items.iter().filter(|c| matches!(c, Placed::Cell { clip: true, .. })).count();
+    assert!(clipped >= 8, "clipped cells, nested ones among them: {clipped}");
+    assert!(!page.header.is_empty(), "a header on the page");
+    for markup in [true, false] {
+        let opts = display::DisplayOptions { markup, ..Default::default() };
+        let shown = display::ItemDisplay::new(&d, page);
+        let (mut clips, mut coloured) = (0, 0);
+        for it in page.header.iter().chain(&page.footer).chain(&page.items) {
+            let (got, want) = (shown.draws(it, &opts), drawn_alone(&d, page, it, &opts));
+            assert_eq!(format!("{got:?}"), format!("{want:?}"), "markup {markup}: {it:?}");
+            clips += got.iter().filter(|x| matches!(x, display::Draw::Clip { .. })).count();
+            coloured += got.iter().filter(|x| matches!(x, display::Draw::Glyphs { color, .. } if *color != Rgb(0, 0, 0))).count();
+        }
+        assert!(clips > 0, "some lines are clipped");
+        assert!(!markup || coloured > 0, "some tracked text is in an author's colour");
+    }
+}
+
+/// #3866: a header paragraph on the hinted page is found there, without a walk of every page of a
+/// long document to find the first page that shows it.
+#[test]
+fn selecting_a_header_on_the_hinted_page_does_not_walk_every_page() {
+    let laid = |n: usize| {
+        let mut d = Document::from_text("n");
+        let huge = CharProps { size: Some(400.0), ..Default::default() };
+        d.body = (0..n).map(|_| wordcraft_doc::para_block(Paragraph::with_text("n", huge.clone()))).collect();
+        let id = d.add_part(wordcraft_doc::PartKind::Header, vec![wordcraft_doc::para_block(Paragraph::with_text("head", CharProps::default()))]);
+        d.last_section.headers.default = Some(id);
+        let l = lay(&d, &LayoutOptions::default());
+        let ends = (Pos::new(StoryRef::Part(id), Path::top(0), 0), Pos::new(StoryRef::Part(id), Path::top(0), 2));
+        (d, l, ends)
+    };
+    let steps = |n: usize| {
+        let (d, l, (a, b)) = laid(n);
+        assert!(l.pages.len() >= n, "a page to each paragraph: {}", l.pages.len());
+        work::count(|| drop(std::hint::black_box(l.selection_rects(&d, &a, &b, 0))))
+    };
+    let (small, big) = (steps(20), steps(160));
+    eprintln!("hinted header: {small} steps for 20 pages, {big} for 160");
+    assert!(small > 0 && big <= small + 8, "the pages aren't walked: {small} → {big}");
 }

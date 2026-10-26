@@ -533,10 +533,40 @@ pub fn page_display(doc: &Document, page: &Page, opts: &DisplayOptions) -> Vec<D
     let mut out = Vec::new();
     let (ha, ba) = dimming(opts);
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header, &page.footer], opts, &authors, ha, &mut out);
-    stories_display(doc, &[&page.items], opts, &authors, ba, &mut out);
-    body_change_bars(doc, page, opts, ba, &mut out);
+    stories_display(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, ha, &mut out);
+    stories_display(doc, &[&page.items[..]], None, opts, &authors, ba, &mut out);
+    body_change_bars(doc, page, &page.items, opts, ba, &mut out);
     out
+}
+
+/// A page's draw items one placed item at a time, for a caller that draws and tags each item on
+/// its own (the PDF export). What every item shares, the revision authors' colours and the cells
+/// cut off at their edge, is worked out once for the page, not once for every item as calling
+/// [`page_display`] with each would (#3866).
+pub struct ItemDisplay<'a> {
+    doc: &'a Document,
+    page: &'a Page,
+    authors: Authors<'a>,
+    clips: Clips,
+}
+
+impl<'a> ItemDisplay<'a> {
+    pub fn new(doc: &'a Document, page: &'a Page) -> Self {
+        let cells: Vec<Placed> =
+            page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. })).cloned().collect();
+        ItemDisplay { doc, page, authors: Authors::new(doc), clips: clipped_cells(&cells) }
+    }
+
+    /// The draw items of `it` alone, as [`page_display`] gives them for a page holding just it
+    /// (and, for a line in a clipped cell, the cell's clip).
+    pub fn draws(&self, it: &Placed, opts: &DisplayOptions) -> Vec<Draw> {
+        let mut out = Vec::new();
+        let items = std::slice::from_ref(it);
+        let (_, ba) = dimming(opts);
+        stories_display(self.doc, &[items], Some(&self.clips), opts, &self.authors, ba, &mut out);
+        body_change_bars(self.doc, self.page, items, opts, ba, &mut out);
+        out
+    }
 }
 
 /// A page's draw items as two layers, its headers and footers then its body, each at full
@@ -546,9 +576,9 @@ pub fn page_layers(doc: &Document, page: &Page, opts: &DisplayOptions) -> [(f32,
     let (ha, ba) = dimming(opts);
     let (mut hf, mut body) = (Vec::new(), Vec::new());
     let authors = Authors::new(doc);
-    stories_display(doc, &[&page.header, &page.footer], opts, &authors, 1.0, &mut hf);
-    stories_display(doc, &[&page.items], opts, &authors, 1.0, &mut body);
-    body_change_bars(doc, page, opts, 1.0, &mut body);
+    stories_display(doc, &[&page.header[..], &page.footer[..]], None, opts, &authors, 1.0, &mut hf);
+    stories_display(doc, &[&page.items[..]], None, opts, &authors, 1.0, &mut body);
+    body_change_bars(doc, page, &page.items, opts, 1.0, &mut body);
     [(ha, hf), (ba, body)]
 }
 
@@ -558,18 +588,34 @@ fn dimming(opts: &DisplayOptions) -> (f32, f32) {
     (a(opts.dim_header), a(opts.dim_body))
 }
 
-fn body_change_bars(doc: &Document, page: &Page, opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
+fn body_change_bars(doc: &Document, page: &Page, items: &[Placed], opts: &DisplayOptions, alpha: f32, out: &mut Vec<Draw>) {
     if opts.markup && (opts.revisions.insertions_deletions || opts.revisions.formatting) && opts.revisions.changed_lines != ChangeBar::None {
-        change_bars(doc, page, &opts.revisions, alpha, out);
+        change_bars(doc, page, items, &opts.revisions, alpha, out);
     }
 }
 
 /// Draw items for the placed items of `stories`, faded by `a`.
-fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptions, authors: &Authors, a: f32, out: &mut Vec<Draw>) {
+/// `shared` gives the page's clipped cells when the caller worked them out already.
+fn stories_display(
+    doc: &Document,
+    stories: &[&[Placed]],
+    shared: Option<&Clips>,
+    opts: &DisplayOptions,
+    authors: &Authors,
+    a: f32,
+    out: &mut Vec<Draw>,
+) {
     let hidden = opts.hide_object.as_ref().map(|p| Hidden::new(doc, p));
     for items in stories {
         let warps = warped_boxes(doc, items);
-        let clips = clipped_cells(items);
+        let own;
+        let clips = match shared {
+            Some(c) => c,
+            None => {
+                own = clipped_cells(items);
+                &own
+            }
+        };
         let mut done: Vec<u32> = Vec::new();
         for it in items.iter() {
             // The object being dragged is drawn by its preview instead: leave it out here.
@@ -577,7 +623,7 @@ fn stories_display(doc: &Document, stories: &[&Vec<Placed>], opts: &DisplayOptio
                 continue;
             }
             if let Placed::Lines { story, path, .. } = it
-                && let Some(rect) = cell_clip(&clips, *story, &path.0)
+                && let Some(rect) = cell_clip(clips, *story, &path.0)
             {
                 let mut inner = Vec::new();
                 item(doc, it, opts, authors, a, &mut inner);
@@ -726,7 +772,7 @@ pub const CHANGE_BAR: Rgb = Rgb(0x50, 0x50, 0x50);
 
 /// Bars in the margin beside body lines with tracked insertions or deletions, or (when shown)
 /// tracked formatting changes of their text, paragraph or paragraph mark.
-fn change_bars(doc: &Document, page: &Page, m: &MarkupOptions, alpha: f32, out: &mut Vec<Draw>) {
+fn change_bars(doc: &Document, page: &Page, items: &[Placed], m: &MarkupOptions, alpha: f32, out: &mut Vec<Draw>) {
     // Outside: the left margin, or the outer one of a right-hand page with mirrored margins.
     let right = match m.changed_lines {
         ChangeBar::Right => true,
@@ -735,7 +781,7 @@ fn change_bars(doc: &Document, page: &Page, m: &MarkupOptions, alpha: f32, out: 
     };
     let bx = if right { page.body.right() + 9.0 } else { page.body.x - 9.0 };
     let color = m.changed_lines_color.unwrap_or(CHANGE_BAR);
-    for it in &page.items {
+    for it in items {
         let Placed::Lines { story, path, para: pl, l0, l1, y, turn, .. } = it else { continue };
         if turn.is_turned() {
             continue;
@@ -2141,4 +2187,54 @@ fn upright_east_asian(items: Vec<Draw>) -> Vec<Draw> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests_clips {
+    use super::*;
+    use wordcraft_doc::Path as DocPath;
+
+    /// A cell whose area is told apart by `x`.
+    fn cell(story: StoryRef, table: Vec<u32>, row: usize, cell: usize, clip: bool, x: f32) -> Placed {
+        Placed::Cell { rect: Rect::new(x, 0.0, 1.0, 1.0), covered: false, table: DocPath(table), row, cell, story, clip }
+    }
+
+    /// Which cell (by its `x`) clips a line at `path` of `story`.
+    fn found(clips: &Clips, story: StoryRef, path: &[u32]) -> Option<f32> {
+        cell_clip(clips, story, path).map(|r| r.x)
+    }
+
+    /// A line in a cell cut off at its edge is drawn with that cell's clip, found by path in an
+    /// index built once per page: every line used to look through every clipped cell on the page,
+    /// so a page of exact-height rows cost lines x cells.
+    #[test]
+    fn a_line_finds_its_clipped_cell_by_path() {
+        let mut page = Page {
+            items: vec![cell(StoryRef::Body, vec![0], 0, 1, false, 1.0), cell(StoryRef::Body, vec![2], 1, 0, true, 2.0)],
+            ..Default::default()
+        };
+        // A nested clipped cell inside the second one; the outer one comes first in the page.
+        page.items.push(cell(StoryRef::Body, vec![2, 1, 0, 3], 0, 0, true, 3.0));
+        page.footer.push(cell(StoryRef::Part(7), vec![0], 0, 0, true, 4.0));
+        // The page's cells in header, footer, items order, as the PDF export and layout see them.
+        let all: Vec<Placed> = page.header.iter().chain(&page.footer).chain(&page.items).cloned().collect();
+        let clips = clipped_cells(&all);
+        assert_eq!(found(&clips, StoryRef::Body, &[2, 1, 0, 0]), Some(2.0));
+        assert_eq!(found(&clips, StoryRef::Body, &[2, 1, 0, 3, 0, 0, 1]), Some(2.0), "the first cell in page order wins, as in layout");
+        assert_eq!(found(&clips, StoryRef::Body, &[0, 0, 1, 0]), None, "that cell isn't clipped");
+        assert_eq!(found(&clips, StoryRef::Body, &[2, 0, 0, 0]), None, "another row");
+        assert_eq!(found(&clips, StoryRef::Part(7), &[0, 0, 0, 2]), Some(4.0));
+        assert_eq!(found(&clips, StoryRef::Body, &[0, 0, 0, 2]), None, "another story");
+    }
+
+    /// Thousands of clipped cells and as many lines: a lookup each, not a pass over the cells each.
+    #[test]
+    fn looking_up_many_clipped_cells_takes_linear_time() {
+        let make = |n: usize| (0..n).map(|r| cell(StoryRef::Body, vec![0], r, 0, true, r as f32)).collect::<Vec<_>>();
+        crate::tests_linear::assert_linear_steps("clip lookups", 1000, make, |cells| {
+            let clips = clipped_cells(cells);
+            let hits = (0..cells.len() as u32).filter(|r| cell_clip(&clips, StoryRef::Body, &[0, *r, 0, 0]).is_some()).count();
+            assert_eq!(hits, cells.len());
+        });
+    }
 }
