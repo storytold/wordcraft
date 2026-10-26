@@ -1299,7 +1299,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
     } else {
         app.canvas.auto_scroll.update(ui, area)
     };
-    let delta = wheel_delta + auto_delta + middle_delta;
+    // A panning finger's delta (the touch arbiter's latched verdict): the same subtraction as
+    // below, so the page follows the finger the frame it moves.
+    let delta = wheel_delta + auto_delta + middle_delta + touch::pan(ui);
     let mut scroll_area = egui::ScrollArea::both()
         // One scroll position per open document, so switching back finds the page as it was left.
         .id_salt(("canvas_scroll", app.session.document_id()))
@@ -2540,6 +2542,33 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
     if crate::table_mouse::pointer(app, ui, resp, rects, layout, scale) {
         return;
     }
+    // Android: arbitrate a finger press on the page (`touch`): a moving finger pans — its delta
+    // goes to the canvas's own scroll before the pass, in `show` — and a still hold belongs to
+    // egui's long-press, whose synthesized secondary click the menu paths in `show` answer. A
+    // mouse press is never arbitrated, so the desktop keeps every drag it has. Read Mode is
+    // excluded: it snaps the view every frame. A press on a comment balloon is the balloon's.
+    if !app.session.view.read_mode
+        && let Some(at) = pointer
+        && !over_balloon(app, at)
+    {
+        match touch::gesture(ui, resp) {
+            touch::Gesture::Panning => {
+                app.canvas.dragging = false;
+                app.canvas.unit_drag = None;
+                app.canvas.column_drag = None;
+                return;
+            }
+            // The menu's frame drops the drag state (a move under the open menu must not
+            // select); the press's undecided frames fall through, so the tap's release (the
+            // format painter's paste on mouse-up) still finds `dragging` set.
+            touch::Gesture::Menu => {
+                app.canvas.dragging = false;
+                app.canvas.unit_drag = None;
+                app.canvas.column_drag = None;
+            }
+            touch::Gesture::Pressing | touch::Gesture::None => {}
+        }
+    }
     let Some(p) = pointer else { return };
     // While drag-selecting, the pointer may sit past the viewport's edge (or the window's):
     // hit-test where it would be inside the view, so as the edge auto-scroll moves the content the
@@ -2789,7 +2818,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
         app.canvas.dragging = true;
         // Format painter applies on mouse up.
     } else if app.canvas.dragging
-        && ui.input(|i| i.pointer.primary_down())
+        && ui.input(|i| i.pointer.primary_down() && !i.any_touches())
         && let Some((from, last)) = app.canvas.column_drag
     {
         if last != (page, x, y) {
@@ -2801,7 +2830,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             );
         }
     } else if app.canvas.dragging
-        && ui.input(|i| i.pointer.primary_down())
+        && ui.input(|i| i.pointer.primary_down() && !i.any_touches())
         && let Some(d) = app.canvas.unit_drag.as_mut()
     {
         // Lines grow line by line wherever the pointer is across; the whole document can't grow.
@@ -2819,7 +2848,7 @@ fn mouse(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect], layo
             app.session.page_hint = page;
             app.canvas.caret_visible_since = crate::now_ms();
         }
-    } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down()) {
+    } else if app.canvas.dragging && ui.input(|i| i.pointer.primary_down() && !i.any_touches()) {
         // Through the command, so from one table cell into another the drag takes whole cells
         // (Word); straight to the session, as the app's `run` would scroll on every frame.
         if let Some(pos) = layout.hit(page, x, y, story)
@@ -3693,6 +3722,276 @@ fn is_generated_bookmark_link(link: &str) -> bool {
 /// so a document can't launch `file:` paths, programs or custom-scheme handlers.
 fn is_followable_link(url: &str) -> bool {
     wordcraft_doc::link::is_web_or_mail_link(url)
+}
+
+/// Android: a finger drag on the page pans the document (Word on touch), and a still hold
+/// belongs to egui's long-press, whose synthesized secondary click the canvas's context-menu
+/// paths already answer. A mouse press is never arbitrated, so the desktop keeps every drag it
+/// has. The press latch and the early-move verdict are FilmCraft's touch arbiter (its
+/// `widgets.rs`), cut down to the canvas's one case: no rows to pick up, no sideways controls —
+/// and no pan inside the arbiter, because the canvas answers the verdict only after the scroll
+/// area's pass has ended; [`pan`] hands the finger's delta to the canvas's own scroll before the
+/// pass, the way the wheel does.
+mod touch {
+    /// What a finger press turned out to mean, latched for the rest of the press (a scroll must
+    /// not turn back into a selection because the finger later paused).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    enum Kind {
+        /// Not settled yet: still a candidate for a click or a pan.
+        Undecided,
+        /// The finger moved past the click distance before the long-press: the page pans.
+        Panning,
+        /// The long-press fired: the press belongs to the menu.
+        Menu,
+    }
+
+    /// A finger press on the canvas and what it means, latched in temp data.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct Press {
+        /// Where the finger went down.
+        origin: egui::Pos2,
+        /// egui's start time of *this* press, so a latch never outlives it: presses the
+        /// specialized handlers owned (a pen stroke, an object drag) never reach the arbiter,
+        /// and the next press must not inherit the old one's meaning.
+        started: f64,
+        /// What the press means.
+        kind: Kind,
+    }
+
+    fn press_id() -> egui::Id {
+        egui::Id::unique("wordcraft-canvas-touch-press")
+    }
+
+    /// What the arbiter says this frame about a press on the canvas (see [`super::touch`]).
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    pub(crate) enum Gesture {
+        /// No arbitrated press this frame (a mouse press, a finger's lift, or none).
+        None,
+        /// A finger press neither held long enough nor moved: keep waiting.
+        Pressing,
+        /// A finger drag pans the page: the caller must skip its selection machinery for the
+        /// rest of the press, and [`pan`] feeds the finger's delta to the canvas's own scroll.
+        Panning,
+        /// egui's long-press fired: the press belongs to the menu, and the caller drops its own
+        /// drag state while the menu's secondary-click paths answer the press.
+        Menu,
+    }
+
+    /// Arbitrate a press on the canvas: returns the verdict for this frame. The pan itself is
+    /// not applied here — by the time the canvas answers (`mouse`), the enclosing scroll area's
+    /// pass has already ended — [`pan`] feeds the delta to the canvas's own scroll instead, the
+    /// way the wheel does.
+    ///
+    /// `resp` is the canvas's own response, and a press is arbitrated only when egui's hit test
+    /// made the canvas the widget whose drag began (`drag_started`): a press on a widget above
+    /// the page (a context menu, a dialog) never latches. egui fires `drag_started` when the
+    /// press turns into a drag — on the finger's first movement, or (a still hold) when the
+    /// hold outlasts the click window, which is also the one frame `long_touched` flags the
+    /// menu — so the latch is born there, settled to [`Kind::Menu`] on that very frame.
+    pub(crate) fn gesture(ui: &egui::Ui, resp: &egui::Response) -> Gesture {
+        let ctx = ui.ctx().clone();
+        let (touch, down, start, origin, pos) = ctx.input(|i| {
+            (
+                i.any_touches(),
+                i.pointer.any_down(),
+                i.pointer.press_start_time(),
+                i.pointer.press_origin(),
+                i.pointer.interact_pos().or(i.pointer.hover_pos()),
+            )
+        });
+        let latched = ctx.data(|d| d.get_temp::<Option<Press>>(press_id())).flatten();
+        // The latch is valid only for the press it was made for: each press has its own start
+        // time, and one the specialized handlers owned never reached the arbiter.
+        let press = match (latched, start) {
+            (Some(p), Some(t)) if p.started == t => Some(p),
+            (Some(_), _) => {
+                // The press ended, or a different press began: whatever it meant is over.
+                ctx.data_mut(|d| d.remove::<Option<Press>>(press_id()));
+                None
+            }
+            (None, _) => None,
+        };
+        if let (Some(t), Some(o), None) = (start, origin, press.as_ref())
+            && touch
+            && (resp.drag_started() || resp.long_touched())
+        {
+            // egui makes the long touch a click for the menu and never a drag (`dragged` stays
+            // false), so a hold without a wiggle only ever shows `long_touched` here — born
+            // settled to the menu, before any move can mean a pan under the open menu.
+            let kind = if resp.long_touched() { Kind::Menu } else { Kind::Undecided };
+            let p = Press { origin: o, started: t, kind };
+            ctx.data_mut(|d| d.insert_temp(press_id(), Some(p)));
+            return match kind {
+                Kind::Menu => Gesture::Menu,
+                _ => Gesture::Pressing,
+            };
+        }
+        let Some(press) = press else {
+            // No arbitrated press: a mouse press never latches, and a touch press owned by a
+            // specialized handler (a pen stroke, an object drag) is theirs.
+            return Gesture::None;
+        };
+        if !down {
+            // The finger lifted this frame (egui keeps the pointer position through a touch
+            // release, and the tap's click answers from the canvas's own response): the
+            // arbitration is over.
+            ctx.data_mut(|d| d.remove::<Option<Press>>(press_id()));
+            return Gesture::None;
+        }
+        let Some(pos) = pos else {
+            // A `PointerGone` while held (a touch release is such a frame): keep waiting.
+            return Gesture::Pressing;
+        };
+        // Settle the press once: the finger decides what it meant by moving, against the
+        // long-press boundary. A still hold past egui's long-press belongs to the menu.
+        let click_dist = ctx.options(|o| o.input_options.max_click_dist);
+        let kind = match press.kind {
+            Kind::Undecided if press.origin.distance(pos) > click_dist => Kind::Panning,
+            Kind::Undecided if resp.long_touched() => Kind::Menu,
+            settled => settled,
+        };
+        if kind != press.kind {
+            ctx.data_mut(|d| d.insert_temp(press_id(), Some(Press { kind, ..press })));
+        }
+        match kind {
+            Kind::Panning => Gesture::Panning,
+            Kind::Menu => Gesture::Menu,
+            Kind::Undecided => Gesture::Pressing,
+        }
+    }
+
+    /// The pointer delta of a latched finger pan (see [`super::touch`]): the canvas applies it
+    /// through its own scroll (the way the wheel does) before the pass begins, so the page
+    /// follows the finger the frame it moves.
+    pub(crate) fn pan(ui: &egui::Ui) -> egui::Vec2 {
+        let ctx = ui.ctx().clone();
+        let (down, start, delta) = ctx.input(|i| (i.pointer.any_down(), i.pointer.press_start_time(), i.pointer.delta()));
+        let latched = ctx.data(|d| d.get_temp::<Option<Press>>(press_id())).flatten();
+        match (latched, start) {
+            (Some(p), Some(t)) if p.started == t && p.kind == Kind::Panning && down => delta,
+            _ => egui::Vec2::ZERO,
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use egui::{Event, TouchId, TouchPhase};
+
+        /// A canvas-like widget inside a scroll area, arbitrated the way `mouse` does and panned
+        /// the way `show` does: the latched delta goes through the same subtraction the canvas's
+        /// `clamped_scroll` uses, before the area runs. (The full canvas needs a session; the
+        /// mechanics don't.)
+        struct Bench {
+            verdicts: Vec<Gesture>,
+            offset_y: Vec<f32>,
+        }
+
+        fn touch_frame(b: &mut Bench, ctx: &egui::Context, events: Vec<Event>, at: f64) {
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0));
+            let area = egui::Id::unique("bench-scroll");
+            let input = egui::RawInput { screen_rect: Some(screen), time: Some(at), events, ..Default::default() };
+            let mut before = b.offset_y.last().copied().unwrap_or(0.0);
+            let mut run = ctx.run_ui(input, |ui| {
+                let pan = pan(ui);
+                before = (before - pan.y).max(0.0);
+                let out =
+                    egui::ScrollArea::vertical().id_salt(area).auto_shrink([false, false]).scroll_offset(egui::vec2(0.0, before)).show(ui, |ui| {
+                        // A tall page-like widget: the content is larger than the viewport, and
+                        // the finger lands on the widget, as it does on the canvas.
+                        let resp = ui.allocate_response(egui::vec2(ui.available_width(), 600.0), egui::Sense::click_and_drag());
+                        b.verdicts.push(gesture(ui, &resp));
+                    });
+                b.offset_y.push(out.state.clamped_offset().y);
+            });
+            run.textures_delta.clear();
+        }
+
+        fn touch(phase: TouchPhase, pos: egui::Pos2) -> Event {
+            Event::Touch { device_id: egui::TouchDeviceId(1), id: TouchId(1), phase, pos, force: Some(0.5) }
+        }
+
+        fn button(pos: egui::Pos2, pressed: bool) -> Event {
+            Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() }
+        }
+
+        fn at2(x: f32, y: f32) -> egui::Pos2 {
+            egui::pos2(x, y)
+        }
+
+        /// A finger on the canvas that drags up before the hold expires: the verdict settles at
+        /// `Panning` (never `Menu`), and the area's offset really follows the finger.
+        #[test]
+        fn an_early_finger_move_pans_and_does_not_select() {
+            let ctx = egui::Context::default();
+            let mut b = Bench { verdicts: Vec::new(), offset_y: Vec::new() };
+            let at = at2(120.0, 100.0);
+            // A warm-up pass, as the app has run many frames before a finger lands: egui
+            // hit-tests the press against the previous pass's widgets, and with none it has no
+            // click candidate.
+            touch_frame(&mut b, &ctx, vec![], -0.1);
+            touch_frame(&mut b, &ctx, vec![touch(TouchPhase::Start, at), egui::Event::PointerMoved(at), button(at, true)], 0.0);
+            assert_eq!(b.verdicts.last(), Some(&Gesture::None), "a press alone is not arbitrated: {:?}", b.verdicts);
+            for k in 1..=5 {
+                let p = at2(at.x, at.y - 15.0 * k as f32);
+                touch_frame(&mut b, &ctx, vec![touch(TouchPhase::Move, p), egui::Event::PointerMoved(p)], 0.1 * k as f64);
+            }
+            assert!(b.verdicts.contains(&Gesture::Panning), "an early move pans: {:?}", b.verdicts);
+            assert!(!b.verdicts.contains(&Gesture::Menu), "no menu: {:?}", b.verdicts);
+            assert!(*b.offset_y.last().unwrap() > 20.0, "the area really panned: {:?}", b.offset_y);
+            // And it stays panning for the rest of the press, however long the finger pauses.
+            touch_frame(&mut b, &ctx, vec![], 1.2);
+            assert_eq!(b.verdicts.last(), Some(&Gesture::Panning), "a paused pan never selects: {:?}", b.verdicts);
+        }
+
+        /// A finger held still past egui's long-press (0.8 s) is told `Menu` the frame the hold
+        /// turns into a drag, and never pans; moving after it stays with the menu (the menu is
+        /// open over the page).
+        #[test]
+        fn a_still_hold_belongs_to_the_long_press_and_never_pans() {
+            let ctx = egui::Context::default();
+            let mut b = Bench { verdicts: Vec::new(), offset_y: Vec::new() };
+            let at = at2(120.0, 100.0);
+            touch_frame(&mut b, &ctx, vec![], -0.1);
+            touch_frame(&mut b, &ctx, vec![touch(TouchPhase::Start, at), egui::Event::PointerMoved(at), button(at, true)], 0.0);
+            // Held frames past egui's long-press: no events, frames must run on their own.
+            for k in 1..=12 {
+                touch_frame(&mut b, &ctx, vec![], 0.1 * k as f64);
+            }
+            assert!(b.verdicts.contains(&Gesture::Menu), "the long-press is reported: {:?}", b.verdicts);
+            assert_eq!(*b.offset_y.last().unwrap_or(&0.0), 0.0, "a still hold does not pan the page");
+            // Moving while still down, after the long-press: the menu owns the press.
+            let p = at2(at.x, at.y - 30.0);
+            touch_frame(&mut b, &ctx, vec![touch(TouchPhase::Move, p), egui::Event::PointerMoved(p)], 1.3);
+            assert_eq!(b.verdicts.last(), Some(&Gesture::Menu), "a move under the menu stays with it: {:?}", b.verdicts);
+            touch_frame(&mut b, &ctx, vec![], 1.35);
+            assert_eq!(*b.offset_y.last().unwrap_or(&0.0), 0.0, "the area never panned under the menu");
+            // Lift: the arbitration ends.
+            touch_frame(&mut b, &ctx, vec![touch(TouchPhase::End, p), button(p, false), egui::Event::PointerGone], 1.4);
+            assert_eq!(b.verdicts.last(), Some(&Gesture::None));
+        }
+
+        /// A mouse press (no `Touch` events at all) is never arbitrated: the desktop keeps its
+        /// drag-select, byte for byte.
+        #[test]
+        fn a_mouse_press_is_never_arbitrated() {
+            let ctx = egui::Context::default();
+            let mut b = Bench { verdicts: Vec::new(), offset_y: Vec::new() };
+            let at = at2(120.0, 100.0);
+            touch_frame(&mut b, &ctx, vec![], -0.1);
+            touch_frame(&mut b, &ctx, vec![button(at, true)], 0.0);
+            for k in 1..=5 {
+                let p = at2(at.x, at.y - 15.0 * k as f32);
+                touch_frame(&mut b, &ctx, vec![egui::Event::PointerMoved(p)], 0.1 * k as f64);
+            }
+            touch_frame(&mut b, &ctx, vec![], 0.8);
+            assert!(b.verdicts.iter().all(|v| *v == Gesture::None), "no verdict without a touch: {:?}", b.verdicts);
+            assert_eq!(*b.offset_y.last().unwrap(), 0.0, "the area never panned for a mouse drag");
+            // Lift.
+            touch_frame(&mut b, &ctx, vec![button(at, false), egui::Event::PointerGone], 0.9);
+            assert_eq!(b.verdicts.last(), Some(&Gesture::None));
+        }
+    }
 }
 
 #[cfg(test)]

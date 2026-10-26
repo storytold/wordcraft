@@ -13,7 +13,7 @@ use egui::{Align2, Rect, Sense, Ui, pos2, vec2};
 
 use crate::file_dialogs::{AfterPick, FileDialogRequest, open_filters};
 use crate::theme::{Tokens, regular};
-use crate::{WordApp, icons};
+use crate::{Services, WordApp, icons};
 
 /// At most this many entries are listed; a bigger folder shows the first ones and says so.
 const MAX_LISTED: usize = 5000;
@@ -91,6 +91,39 @@ pub(crate) fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")).filter(|h| !h.is_empty()).map(PathBuf::from)
 }
 
+/// "Up one level" from `dir`: the parent while both `dir` and its parent stay inside `root`, else
+/// `None` — at the root's top (the button reads as disabled), and for a `dir` the root doesn't
+/// contain. `Path::starts_with` compares path components, so a sibling whose name shares the
+/// root's text is not inside it.
+pub(crate) fn up_from(root: &Path, dir: &Path) -> Option<PathBuf> {
+    match dir.parent() {
+        Some(parent) if dir.starts_with(root) && parent.starts_with(root) => Some(parent.to_path_buf()),
+        _ => None,
+    }
+}
+
+/// Whether `p` is a folder the browser may open: under the app-private root, or under the shared
+/// root when the host offers one.
+pub(crate) fn inside_root(p: &Path, app_root: &Path, shared_root: Option<&Path>) -> bool {
+    p.starts_with(app_root) || shared_root.is_some_and(|s| p.starts_with(s))
+}
+
+/// The roots an Android browser walks (the host's app-private storage, and shared storage when
+/// the host offers it): navigation is clamped inside them. The desktop has none —
+/// `FileBrowser::roots` is `None` and every folder the user types is fair game, as before.
+pub(crate) struct Roots {
+    /// The app-private root (`Services::app_files_dir`).
+    pub(crate) app: PathBuf,
+    /// Shared internal storage once the host offers it (`Services::shared_storage_root`).
+    pub(crate) shared: Option<PathBuf>,
+}
+
+/// The app storage the browser starts in: its `Documents` folder when it exists, else the root.
+fn app_start(roots: &Roots) -> PathBuf {
+    let documents = roots.app.join("Documents");
+    if documents.is_dir() { documents } else { roots.app.clone() }
+}
+
 /// What the user typed in the file name field, as a path: relative to `dir`, absolute, or under
 /// the home folder (`~/…`). `None` when nothing was typed.
 pub(crate) fn resolve(dir: &Path, typed: &str) -> Option<PathBuf> {
@@ -122,6 +155,9 @@ enum Note {
     None,
     NotFound(String),
     Replace(PathBuf),
+    /// Shared storage needs Android's "All files access" before it can be browsed; the ask
+    /// opened the system page.
+    Grant,
 }
 
 /// The open browser.
@@ -130,6 +166,8 @@ pub(crate) struct FileBrowser {
     pub(crate) after: AfterPick,
     /// Opened because the system dialog couldn't be shown: say why, and how to get it.
     unavailable: bool,
+    /// The roots navigation is clamped to (Android); `None` on the desktop, as before.
+    roots: Option<Roots>,
     dir: PathBuf,
     /// The folder field (edited by the user, applied on Enter).
     location: String,
@@ -146,7 +184,7 @@ pub(crate) struct FileBrowser {
 }
 
 impl FileBrowser {
-    pub(crate) fn new(req: FileDialogRequest, after: AfterPick, start: PathBuf, unavailable: bool) -> Self {
+    pub(crate) fn new(req: FileDialogRequest, after: AfterPick, start: PathBuf, unavailable: bool, roots: Option<Roots>) -> Self {
         let (name, filters) = match &req {
             FileDialogRequest::Open { purpose } | FileDialogRequest::OpenMany { purpose } => {
                 (String::new(), open_filters(purpose).iter().map(|(l, e)| ((*l).to_string(), e.iter().map(|x| (*x).to_string()).collect())).collect())
@@ -162,6 +200,7 @@ impl FileBrowser {
             req,
             after,
             unavailable,
+            roots,
             dir: start.clone(),
             location: String::new(),
             name,
@@ -180,8 +219,10 @@ impl FileBrowser {
         self.filters.get(self.filter).map_or(&[], |(_, e)| e.as_slice())
     }
 
-    /// Show the folder `dir` (an unreadable folder shows why, and Up still works).
+    /// Show the folder `dir` (an unreadable folder shows why, and Up still works). On Android a
+    /// folder outside the browser's roots lands on the shown root's top instead.
     pub(crate) fn navigate(&mut self, dir: PathBuf) {
+        let dir = self.clamped(dir);
         self.listing = list_dir(&dir, self.exts(), MAX_LISTED).map_err(|e| e.to_string());
         self.location = dir.to_string_lossy().into_owned();
         self.dir = dir;
@@ -189,10 +230,49 @@ impl FileBrowser {
         self.note = Note::None;
     }
 
+    /// The folder actually shown for `dir`: itself, or — when the browser is clamped and `dir`
+    /// is outside its roots (a typed path, a jump) — the root the browser was in.
+    fn clamped(&self, dir: PathBuf) -> PathBuf {
+        let Some(roots) = &self.roots else { return dir };
+        if inside_root(&dir, &roots.app, roots.shared.as_deref()) {
+            return dir;
+        }
+        match roots.shared.as_deref() {
+            Some(s) if self.dir.starts_with(s) => s.to_path_buf(),
+            _ => roots.app.clone(),
+        }
+    }
+
+    /// Where "Up one level" goes: the parent, clamped to the shown root on Android; `None` when
+    /// there is nowhere up to go (the root's top, or no parent on the desktop).
+    pub(crate) fn up_target(&self) -> Option<PathBuf> {
+        let Some(roots) = &self.roots else { return self.dir.parent().map(Path::to_path_buf) };
+        let root: &Path = match roots.shared.as_deref() {
+            Some(s) if self.dir.starts_with(s) => s,
+            _ => &roots.app,
+        };
+        up_from(root, &self.dir)
+    }
+
     fn up(&mut self) {
-        if let Some(parent) = self.dir.parent().map(Path::to_path_buf) {
+        if let Some(parent) = self.up_target() {
             self.navigate(parent);
         }
+    }
+
+    /// The app-storage start (its `Documents` when it exists): the switcher's and the home
+    /// button's target on Android.
+    fn app_start_target(&self) -> Option<PathBuf> {
+        self.roots.as_ref().map(app_start)
+    }
+
+    /// Where the home-folder button goes: the user's home on the desktop; on Android the app
+    /// storage the browser starts in.
+    fn home_target(&self) -> Option<PathBuf> {
+        if self.roots.is_some() {
+            return self.app_start_target();
+        }
+        home()
     }
 
     /// OK: a highlighted folder, or a typed folder, is opened; otherwise the typed name is the
@@ -204,6 +284,12 @@ impl FileBrowser {
             return Step::Stay;
         }
         let Some(mut path) = resolve(&self.dir, &self.name) else { return Step::Stay };
+        // Android: a typed pick outside the browser's roots (…/, an absolute path) is not one
+        // this dialog may take.
+        if self.roots.as_ref().is_some_and(|r| !inside_root(&path, &r.app, r.shared.as_deref())) {
+            self.note = Note::NotFound(self.name.trim().to_string());
+            return Step::Stay;
+        }
         if path.is_dir() {
             self.name.clear();
             self.navigate(path);
@@ -264,13 +350,17 @@ impl WordApp {
             FileDialogRequest::Save { dir: Some(d), .. } => Some(PathBuf::from(d)).filter(|d| d.is_dir()),
             _ => None,
         };
+        // Android: navigation is clamped to the host's app-private storage (and shared storage,
+        // once the host offers it); the desktop clamps nothing, as before.
+        let roots = self.services.app_files_dir.as_ref().map(|app| Roots { app: app.clone(), shared: self.services.shared_storage_root.clone() });
         let start = asked
             .or_else(|| self.file_browser.last_dir.clone().filter(|d| d.is_dir()))
             .or_else(|| self.session.path.as_ref().and_then(|p| p.parent()).map(Path::to_path_buf).filter(|d| d.is_dir()))
+            .or_else(|| roots.as_ref().map(app_start).filter(|d| d.is_dir()))
             .or_else(home)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
-        self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable)));
+        self.file_browser.open = Some(Box::new(FileBrowser::new(req, after, start, unavailable, roots)));
     }
 
     /// `ui.fileBrowser`: the built-in browser for `purpose` (document, picture, recipients, save),
@@ -316,7 +406,7 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
         .anchor(Align2::CENTER_CENTER, vec2(0.0, -20.0));
     let shown = crate::window_close::window(ctx, window).show(ctx, |ui| {
         ui.set_width(620.0);
-        done = body(ui, &mut b, &t);
+        done = body(ui, &mut b, &t, &app.services);
     });
     if shown.is_some_and(|s| crate::window_close::show(ctx, &s.response, &t)) {
         done = Some(None);
@@ -327,8 +417,9 @@ pub(crate) fn show(app: &mut WordApp, ctx: &egui::Context) {
     }
 }
 
-/// The browser's contents; `Some` once it closes (`Some(None)`: cancelled).
-fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>> {
+/// The browser's contents; `Some` once it closes (`Some(None)`: cancelled). `s` is only read for
+/// the shared-storage grant hooks (Android; the desktop draws none of it).
+fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens, s: &Services) -> Option<Option<PathBuf>> {
     if b.unavailable {
         ui.label(
             egui::RichText::new(tl!(
@@ -340,11 +431,11 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
     }
     let mut location_done = false;
     ui.horizontal(|ui| {
-        if icon_button(ui, t, "chevronUp", tl!("Up one level"), b.dir.parent().is_some()) {
+        if icon_button(ui, t, "chevronUp", tl!("Up one level"), b.up_target().is_some()) {
             b.up();
         }
         if icon_button(ui, t, "homeFolder", tl!("Home folder"), true)
-            && let Some(h) = home()
+            && let Some(h) = b.home_target()
         {
             b.navigate(h);
         }
@@ -358,6 +449,32 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         }
     });
     ui.add_space(4.0);
+    // Android's second root: the switcher between the app-private tree and shared storage,
+    // offered only while the host offers shared storage (the desktop draws nothing here).
+    if b.roots.as_ref().is_some_and(|r| r.shared.is_some()) {
+        let shared: PathBuf = b.roots.as_ref().and_then(|r| r.shared.clone()).unwrap_or_default();
+        let in_shared = b.dir.starts_with(&shared);
+        ui.horizontal(|ui| {
+            if ui.selectable_label(!in_shared, tl!("App files")).clicked()
+                && in_shared
+                && let Some(start) = b.app_start_target()
+            {
+                b.navigate(start);
+            }
+            if ui.selectable_label(in_shared, tl!("Shared storage")).clicked() && !in_shared {
+                let granted = s.shared_storage_granted.as_ref().map(|f| f()).unwrap_or(false);
+                if granted {
+                    b.navigate(shared.clone());
+                } else {
+                    if let Some(ask) = &s.shared_storage_grant {
+                        ask();
+                    }
+                    b.note = Note::Grant;
+                }
+            }
+        });
+        ui.add_space(4.0);
+    }
     let mut pick = false;
     let mut go: Option<PathBuf> = None;
     let mut clicked: Option<Entry> = None;
@@ -409,6 +526,10 @@ fn body(ui: &mut Ui, b: &mut FileBrowser, t: &Tokens) -> Option<Option<PathBuf>>
         b.navigate(dir);
     }
     let message = match (&b.listing, &b.note) {
+        (_, Note::Grant) => Some((
+            tl!("To browse shared storage, allow WordCraft all-files access in Android's settings, then choose Shared storage again.").to_string(),
+            t.text_dim,
+        )),
         (_, Note::NotFound(name)) => Some((crate::i18n::fmt(tl!("{name} wasn't found."), &[("name", name)]), t.red)),
         (_, Note::Replace(p)) => {
             let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
@@ -535,7 +656,7 @@ mod tests {
         std::fs::create_dir(dir.join("drafts")).unwrap();
         std::fs::write(dir.join("drafts").join("old.docx"), b"x").unwrap();
         let req = FileDialogRequest::Save { name: "Document1.docx".into(), dir: None };
-        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let mut b = FileBrowser::new(req, AfterPick::OpenDocument { document: 0 }, dir.clone(), false, None);
         b.name = "drafts".into();
         assert_eq!(b.accept(), Step::Stay);
         assert_eq!(b.dir, dir.join("drafts"));
@@ -577,14 +698,78 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// "Up one level" stays inside the shown root: the parent while it is still under the root,
+    /// and none at the root's top (the button then reads as disabled).
+    #[test]
+    fn up_from_stops_at_the_root() {
+        let root = Path::new("/data/user/0/ai.storyteller.wordcraft/files");
+        assert_eq!(up_from(root, &root.join("Documents").join("drafts")), Some(root.join("Documents")));
+        assert_eq!(up_from(root, &root.join("Documents")), Some(root.to_path_buf()));
+        assert_eq!(up_from(root, root), None, "the root's top has no Up");
+        // a root that isn't a parent of dir (defensive): no Up rather than an escape
+        assert_eq!(up_from(root, Path::new("/storage/emulated/0")), None);
+    }
+
+    /// A folder this dialog may open is under the app-private root or the shared root; a path
+    /// that merely starts with the same text but is a sibling directory is not inside.
+    #[test]
+    fn inside_root_accepts_only_the_roots() {
+        let app = Path::new("/data/user/0/ai.storyteller.wordcraft/files");
+        let shared = Path::new("/storage/emulated/0");
+        assert!(inside_root(&app.join("Documents"), app, None));
+        assert!(inside_root(app, app, None), "the root itself is a folder the dialog may show");
+        assert!(!inside_root(Path::new("/data/user/0/ai.storyteller.wordcraft/other"), app, None));
+        assert!(!inside_root(Path::new("/data/user/0/ai.storyteller.wordcraft/files-x"), app, None), "a sibling that shares a prefix");
+        assert!(inside_root(&shared.join("Download"), app, Some(shared)));
+        assert!(!inside_root(Path::new("/etc"), app, Some(shared)));
+    }
+
+    /// Android (no system dialog hook, the host's app-private storage recorded): Save As serves
+    /// the request in the built-in browser over that storage instead of answering none — and the
+    /// browser is clamped to the host's roots.
+    #[test]
+    fn app_files_dir_serves_the_dialog_in_the_built_in_browser() {
+        let base = scratch("android-route");
+        std::fs::create_dir_all(base.join("Documents")).unwrap();
+        let services = Services { app_files_dir: Some(base.clone()), ..Default::default() };
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), services);
+        a.run("text.insert", json!({"text": "Saved on the phone"})).unwrap();
+        a.save_as_dialog();
+        let b = a.file_browser.open.as_mut().expect("the built-in browser serves the request");
+        assert_eq!(b.roots.as_ref().map(|r| r.app.clone()), Some(base.clone()), "clamped to the host's roots");
+        assert!(!b.unavailable, "the browser is not a broken-portal fallback here");
+        assert_eq!(b.dir, base.join("Documents"), "starts in the phone's Documents");
+        b.name = "novel".into();
+        let Step::Pick(path) = b.accept() else { panic!("picked") };
+        a.close_file_browser(Some(path));
+        assert!(!a.session.dirty);
+        let saved = wordcraft_engine::io::open_path(&base.join("Documents").join("novel.docx")).unwrap();
+        assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Saved on the phone"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    /// No host hooks at all (a bare desktop test run): Save As keeps today's behaviour — no
+    /// browser opens, the pick answers none.
+    #[test]
+    fn no_hooks_at_all_still_answers_none_without_a_browser() {
+        let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        a.save_as_dialog();
+        assert!(a.file_browser.open.is_none(), "no browser without a host's roots");
+    }
+
     /// #3037: an empty folder (or a type filter that matches nothing) says so instead of a blank
     /// box; a matching file replaces the hint.
     #[test]
     fn an_empty_folder_says_there_are_no_items() {
         let dir = scratch("empty_state");
         let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
-        let mut b =
-            FileBrowser::new(FileDialogRequest::Open { purpose: "document".into() }, AfterPick::OpenDocument { document: 0 }, dir.clone(), false);
+        let mut b = FileBrowser::new(
+            FileDialogRequest::Open { purpose: "document".into() },
+            AfterPick::OpenDocument { document: 0 },
+            dir.clone(),
+            false,
+            None,
+        );
         b.navigate(dir.clone());
         assert!(matches!(&b.listing, Ok(l) if l.entries.is_empty()), "the folder starts empty");
         a.file_browser.open = Some(Box::new(b));

@@ -1,0 +1,34 @@
+# Android
+/src/platform/android.rs            @MarijnS95
+/src/platform_impl/android          @MarijnS95
+
+# iOS
+/src/platform/ios.rs                @madsmtm
+/src/platform_impl/ios              @madsmtm
+
+# Unix
+/src/platform_impl/linux/mod.rs     @kchibisov
+
+# Wayland
+/src/platform/wayland.rs            @kchibisov
+/src/platform_impl/linux/wayland    @kchibisov
+
+# X11
+/src/platform/x11.rs                @kchibisov @notgull
+/src/platform_impl/linux/x11        @kchibisov @notgull
+
+# macOS
+/src/platform/macos.rs              @madsmtm
+/src/platform_impl/macos            @madsmtm
+
+# Web
+/src/platform/web.rs                @daxpedda
+/src/platform_impl/web              @daxpedda
+
+# Windows
+/src/platform/windows.rs            @notgull
+/src/platform_impl/windows          @notgull
+
+# Orbital (Redox OS)
+/src/platform/orbital.rs            @jackpot51
+/src/platform_impl/orbital          @jackpot51

@@ -241,6 +241,10 @@ impl WordApp {
             file_browser,
             info_editing,
             shown_document,
+            // Android: the cross-frame modifier-stamp state (`raw_input_hook`); not a window-ui
+            // concern, but the pattern must mention the field.
+            #[cfg(target_os = "android")]
+                android_modifiers: _,
         } = self;
         let UiState {
             // App-wide: preferences, recent lists, and the settings the session owns while

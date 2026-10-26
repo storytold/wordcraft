@@ -39,6 +39,16 @@ done
 mkdir -p "$DIR/hicolor/scalable/apps"
 cp "$SVG" "$DIR/hicolor/scalable/apps/$ID.svg"
 
+# Android launcher icons: one mipmap per density, and the APK manifest points at @mipmap/ic_launcher.
+# These live in the crate's res/ tree (which aapt reads), not assets/: aapt rejects a second
+# resource name per directory, so they must be named exactly ic_launcher.png — the ATTRIBUTION.md
+# rows cover them like every other asset. See `cargo xtask assets`.
+for ds in mdpi:48 hdpi:72 xhdpi:96 xxhdpi:144 xxxhdpi:192; do
+  d="${ds%%:*}"; s="${ds##*:}"
+  mkdir -p "$ROOT/apps/wordcraft-android/res/mipmap-$d"
+  render "$SVG" "$s" "$ROOT/apps/wordcraft-android/res/mipmap-$d/ic_launcher.png"
+done
+
 # Windows .ico.
 ICO_PNGS=()
 for s in 16 20 24 32 40 48 64 128 256; do
