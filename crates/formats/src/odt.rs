@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
+use std::sync::Arc;
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -1034,7 +1035,7 @@ struct FmtDelta {
     color: Option<Rgb>,
     background: Option<Rgb>,
     size: Option<f32>,
-    font: Option<String>,
+    font: Option<Arc<str>>,
     code: Option<bool>,
 }
 
@@ -1340,7 +1341,7 @@ impl Styles {
                             if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
                                 d.code = Some(true);
                             } else if !fam.is_empty() {
-                                d.font = Some(fam);
+                                d.font = model::kept_font(&fam);
                             }
                         }
                     }
@@ -1446,7 +1447,7 @@ impl Styles {
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
     fn doc_font(&self) -> Option<String> {
-        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.clone()).or_else(|| self.default_font.clone())
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }
 
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
@@ -2053,7 +2054,7 @@ impl Body<'_> {
             "a" => {
                 let mut f = self.cur_fmt();
                 if let Some(h) = get(a, "xlink:href").filter(|h| !h.is_empty()) {
-                    f.link = Some(h.to_string());
+                    f.link = model::kept_link(h);
                 }
                 if let Some(s) = get(a, "text:style-name") {
                     f = self.styles.text_fmt(s, &f);
@@ -2626,6 +2627,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    model::begin_import();
     let (flow, last, track, font, parts) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {

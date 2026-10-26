@@ -30,7 +30,7 @@ KEYCHAIN="$WORK/wordcraft-signing.keychain-db"
 cleanup() {
   local status=$?
   rm -f "$CERT"
-  if [ "$status" -ne 0 ]; then
+  if [[ "$status" -ne 0 ]]; then
     security delete-keychain "$KEYCHAIN" 2>/dev/null || true
     rm -rf "$WORK"
   fi

@@ -243,8 +243,10 @@ impl Writer {
         }
         self.out.push_str("\\begin{verbatim}\n");
         for l in lines {
-            // The environment ends at the first `\end{verbatim}`, so keep it from appearing.
-            let l: String = l.replace("\\end{verbatim}", "\\end {verbatim}").chars().filter(|c| *c == '\t' || !c.is_control()).collect();
+            // The environment ends at the first `\end{verbatim}`, so keep it from appearing. The
+            // control characters go first: removing one afterwards could join a delimiter back up.
+            let l: String = l.chars().filter(|c| *c == '\t' || !c.is_control()).collect();
+            let l = l.replace("\\end{verbatim}", "\\end {verbatim}");
             self.out.push_str(&l);
             self.out.push('\n');
         }
@@ -1055,6 +1057,7 @@ fn math_seq(t: &[MTok], pos: &mut usize, depth: usize, in_opt: bool) -> String {
 
 /// Import a LaTeX source file.
 pub fn import(bytes: &[u8]) -> Document {
+    model::begin_import();
     let mut d = model::to_doc(&parse(&crate::txt::decode(bytes.get(..MAX_SOURCE).unwrap_or(bytes))));
     d.ensure_nonempty();
     d
@@ -2333,20 +2336,21 @@ impl<'a> Parser<'a> {
                 }
             }
             "href" => {
-                let url = self.arg_raw();
-                self.with_arg(move |f| f.link = Some(url));
+                let url = model::kept_link(&self.arg_raw());
+                self.with_arg(move |f| f.link = url);
             }
             "url" | "nolinkurl" => {
                 let url = self.arg_raw();
                 let mut f = self.fmt();
                 if name == "url" {
-                    f.link = Some(url.clone());
+                    f.link = model::kept_link(&url);
                 }
                 self.para.push_text(&url, &f);
             }
             "hyperlink" => {
                 let target = self.arg_raw();
-                self.with_arg(move |f| f.link = Some(format!("#{target}")));
+                let link = model::kept_link(&format!("#{target}"));
+                self.with_arg(move |f| f.link = link);
             }
             "hypertarget" => {
                 let target = self.arg_raw();
@@ -2360,7 +2364,7 @@ impl<'a> Parser<'a> {
             "ref" | "eqref" | "pageref" | "autoref" | "cref" | "Cref" | "nameref" => {
                 let l = self.arg_raw();
                 let mut f = self.fmt();
-                f.link = Some(format!("#{l}"));
+                f.link = model::kept_link(&format!("#{l}"));
                 self.para.push_text(&l, &f);
             }
             "cite" | "citep" | "citet" | "parencite" | "textcite" | "autocite" => {
@@ -2671,19 +2675,24 @@ fn table(toks: &[Tok], spec: &str, depth: usize) -> FTable {
         for cell_toks in r {
             let mut cell = Cell::default();
             let mut content = trim_cell(cell_toks);
-            // `\multicolumn{n}{spec}{content}`, `\multirow{n}{width}{content}`.
+            // `\multicolumn{n}{spec}{content}`, `\multirow{n}{width}{content}`. Each wrapper
+            // rescans its content, so only MAX_NEST of them are unwrapped (a cell nests one or
+            // two); further ones stay in the content.
             let mut sub = Parser::new(content, depth + 1);
+            let mut wrappers = 0usize;
             loop {
                 sub.skip_spaces();
                 match sub.t.get(sub.pos) {
-                    Some(Tok::Cmd(c)) if c == "multicolumn" => {
+                    Some(Tok::Cmd(c)) if c == "multicolumn" && wrappers < MAX_NEST => {
+                        wrappers += 1;
                         sub.pos += 1;
                         cell.colspan = sub.arg_raw().trim().parse::<u32>().unwrap_or(1).clamp(1, 63);
                         let _ = sub.arg_raw();
                         content = sub.arg_tokens();
                         sub = Parser::new(content, depth + 1);
                     }
-                    Some(Tok::Cmd(c)) if c == "multirow" || c == "multirow*" => {
+                    Some(Tok::Cmd(c)) if (c == "multirow" || c == "multirow*") && wrappers < MAX_NEST => {
+                        wrappers += 1;
                         sub.pos += 1;
                         let _ = sub.opt_arg();
                         cell.rowspan = sub.arg_raw().trim().parse::<i64>().map(|n| n.unsigned_abs().clamp(1, 1000) as u32).unwrap_or(1);
@@ -3161,13 +3170,13 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let FBlock::Para(p) = &flow.blocks[0] else { panic!() };
         assert_eq!(
             p.inlines[0],
-            Inline::Text("Homepage".to_string(), Fmt { link: Some("https://example.com/~user/page".to_string()), ..Default::default() })
+            Inline::Text("Homepage".to_string(), Fmt { link: Some("https://example.com/~user/page".into()), ..Default::default() })
         );
         assert_eq!(
             p.inlines[2],
             Inline::Text(
                 "https://example.com/~user/page".to_string(),
-                Fmt { link: Some("https://example.com/~user/page".to_string()), ..Default::default() }
+                Fmt { link: Some("https://example.com/~user/page".into()), ..Default::default() }
             )
         );
     }
@@ -3233,5 +3242,35 @@ Caf\'e na\"ive \c{c}a \v{s}\'{e} and {\bfseries grouped bold} after.
         let back_bordered = import(tex_bordered.as_bytes());
         let Some(Block::Table(bt_bordered)) = back_bordered.body.first().map(|b| &**b) else { panic!() };
         assert!(bt_bordered.props.style.is_some(), "imported table should remain bordered");
+    }
+
+    #[test]
+    fn verbatim_end_is_kept_out_after_control_characters_go() {
+        // A control character inside `\end{verbatim}` was removed after the check for it, so
+        // the code line closed the environment and the rest ran as TeX.
+        let mut d = Document::new();
+        let line = "\\end{verb\u{E}atim}\\input{/etc/passwd}";
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(line, Default::default()).styled(model::CODE_STYLE))];
+        let out = export(&d);
+        assert_eq!(out.matches("\\end{verbatim}").count(), 1, "{out}");
+        assert!(out.contains("\\end {verbatim}\\input"), "{out}");
+    }
+
+    #[test]
+    fn nested_multicolumn_wrappers_are_bounded() {
+        // Each `\multicolumn` unwrapped rescanned the rest of the cell; nested ones were all
+        // unwrapped, quadratic in the nesting.
+        let n = 50_000;
+        let src = format!("\\begin{{tabular}}{{l}}{}x{}\\\\\\end{{tabular}}", "\\multicolumn{1}{c}{".repeat(n), "}".repeat(n));
+        let t = std::time::Instant::now();
+        let f = parse(&src);
+        // Under a second on a loaded machine; unwrapping every wrapper took 213 s.
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        assert!(f.blocks.iter().any(|b| matches!(b, FBlock::Table(_))));
+        // One or two wrappers, as written in real tables, are still read.
+        let f = parse("\\begin{tabular}{ll}\\multicolumn{2}{c}{\\multirow{2}{*}{Both}}\\\\\\end{tabular}");
+        let Some(FBlock::Table(t)) = f.blocks.first() else { panic!("{:?}", f.blocks) };
+        assert_eq!((t.rows[0][0].colspan, t.rows[0][0].rowspan), (2, 2));
+        assert_eq!(t.rows[0][0].text(), "Both");
     }
 }
