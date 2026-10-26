@@ -102,6 +102,17 @@ An original embedded-font control matches native Word inline fallback to Times w
 a covered primary glyph. A tall present-glyph label retains a 19.628 pt pitch (Word mean 19.632 pt).
 The combined numbering-definition blocks are not used to infer their individual font choices.
 
+## Justified break choice
+
+In compatibility mode 15, choose a space break by its relative spacing adjustment.
+Compression costs twice as much as expansion per inner-space width, subject to the existing
+compression cap. A fitting extra word can therefore stay on the next line. Final lines remain
+eligible for compression. Tabs, explicit breaks, display equations and selected discretionary
+hyphens retain their existing break path. Original native Word controls cover short words,
+longer words and multi-line paragraphs; bundled-font regressions cover body and table cells.
+The cost uses the same line-end width as fitting: automatic Asian-Latin spacing after the final
+cluster is excluded, while interior spacing remains. Exact first-line assertions reject suffix-only matches.
+
 ## Floating tables across header and body
 
 A body floating table with `tblOverlap=never` clears floating header tables.
@@ -294,6 +305,8 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-15 | trivial | A float placed above its anchor paragraph (fixed on the page, or moved up from it) has the text of the paragraphs above the anchor on its page wrap around it, as in Word, instead of running behind it (#2048) |
 | 2026-10-20 | trivial | A picture cropped to a sliver of its source (under 5% of an axis) is drawn at the size the file gives, on screen and in PDF, bitmap or metafile, and Tight/Through wrapping follows the part drawn; it was widened to 5%, so a header bar that is 2.7% of a page-sized WMF came out half as tall and the text box over it fell below it (#1899) |
 | 2026-10-19 | trivial | An object dragged near the bottom of a page lands where it is dropped: its paragraph's place is measured with the object already there, not at the paragraph's top, where it could push the paragraph onto the next page (#3169) |
+| 2026-10-19 | trivial | Justified-break cost excludes final automatic Asian-Latin spacing; exact first-line controls retain interior spacing and compression limits. |
+| 2026-10-16 | trivial | Justified breaks compare normalized expansion and compression cost before pulling another word onto the line |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-19 | trivial | #2964: a centred or end-aligned list label after a leading page break uses its text line's alignment. Synthetic LTR/RTL numbered/bulleted controls and the issue's DOCX export; broader pagination gaps and readiness estimates unchanged |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
