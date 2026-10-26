@@ -562,8 +562,8 @@ fn styles_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                     if font_resp.changed() {
                         app.law.style_font_drafts.insert(draft_key.clone(), font.clone());
                     }
-                    ui.label("Size (pt):");
-                    let size_changed = ui.add(egui::DragValue::new(&mut size).speed(0.5).range(1.0..=4096.0)).changed();
+                    let value_label = ui.label("Size (pt):");
+                    let size_changed = ui.add(egui::DragValue::new(&mut size).speed(0.5).range(1.0..=4096.0)).labelled_by(value_label.id).changed();
                     let font_dirty = font.trim() != stored_font.trim();
                     if (size_changed || (font_resp.lost_focus() && font_dirty))
                         && patch_style(app, profile_id, doc_key, profile, i, |s| {
@@ -586,8 +586,8 @@ fn styles_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                 });
                 let mut spacing = st.pointer("/para/lineSpacing/value").and_then(Value::as_f64).unwrap_or(0.0) as f32;
                 ui.horizontal(|ui| {
-                    ui.label("Line spacing (multiple):");
-                    if ui.add(egui::DragValue::new(&mut spacing).speed(0.05).range(0.5..=4.0)).changed() {
+                    let value_label = ui.label("Line spacing (multiple):");
+                    if ui.add(egui::DragValue::new(&mut spacing).speed(0.05).range(0.5..=4.0)).labelled_by(value_label.id).changed() {
                         patch_style(app, profile_id, doc_key, profile, i, |s| {
                             let para = s.entry("para").or_insert(json!({}));
                             if let Some(p) = para.as_object_mut() {
@@ -635,9 +635,9 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
         let kind = ch["kind"].as_str().unwrap_or("");
         ui.group(|ui| {
             ui.horizontal(|ui| {
-                ui.label("Kind:");
+                let kind_label = ui.label("Kind:");
                 let mut selected_kind = kind.to_string();
-                egui::ComboBox::from_id_salt(("law_check_kind", profile_id, doc_key, i)).selected_text(&selected_kind).width(200.0).show_ui(
+                let combo = egui::ComboBox::from_id_salt(("law_check_kind", profile_id, doc_key, i)).selected_text(&selected_kind).width(200.0).show_ui(
                     ui,
                     |ui| {
                         for k in CHECK_KINDS {
@@ -647,6 +647,7 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                         }
                     },
                 );
+                combo.response.labelled_by(kind_label.id);
                 if selected_kind != kind && commit_pending_drafts(app) {
                     reload_profile(app, profile_id, profile);
                     let mut checks = current_checks(profile, doc_key);
@@ -671,8 +672,8 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                 "wordLimit" => {
                     let mut limit = ch["limit"].as_u64().unwrap_or(0) as u32;
                     ui.horizontal(|ui| {
-                        ui.label("Word limit:");
-                        if ui.add(egui::DragValue::new(&mut limit).speed(100.0).range(1..=1_000_000)).changed() {
+                        let value_label = ui.label("Word limit:");
+                        if ui.add(egui::DragValue::new(&mut limit).speed(100.0).range(1..=1_000_000)).labelled_by(value_label.id).changed() {
                             patch_check(app, profile_id, doc_key, profile, i, json!({"limit": limit}));
                         }
                     });
@@ -694,8 +695,8 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                     let stored_font = ch["font"].as_str().unwrap_or("").to_string();
                     let mut font = app.law.check_font_drafts.get(&font_key).cloned().unwrap_or_else(|| stored_font.clone());
                     ui.horizontal(|ui| {
-                        ui.label("Minimum (pt):");
-                        let pt_changed = ui.add(egui::DragValue::new(&mut pt).speed(0.5).range(1.0..=4096.0)).changed();
+                        let value_label = ui.label("Minimum (pt):");
+                        let pt_changed = ui.add(egui::DragValue::new(&mut pt).speed(0.5).range(1.0..=4096.0)).labelled_by(value_label.id).changed();
                         let font_label = ui.label("Font:");
                         let font_resp = ui.text_edit_singleline(&mut font).labelled_by(font_label.id);
                         // Untrimmed draft until commit: trimming each keystroke drops the spaces.
@@ -716,8 +717,8 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                 "minMargins" => {
                     let mut pt = ch["pt"].as_f64().unwrap_or(72.0) as f32;
                     ui.horizontal(|ui| {
-                        ui.label("Minimum margin (pt):");
-                        if ui.add(egui::DragValue::new(&mut pt).speed(1.0).range(1.0..=4096.0)).changed() {
+                        let value_label = ui.label("Minimum margin (pt):");
+                        if ui.add(egui::DragValue::new(&mut pt).speed(1.0).range(1.0..=4096.0)).labelled_by(value_label.id).changed() {
                             patch_check(app, profile_id, doc_key, profile, i, json!({"pt": pt}));
                         }
                     });
@@ -725,8 +726,8 @@ fn checks_editor(app: &mut Ctx<'_>, ui: &mut Ui, profile_id: &str, doc_key: &str
                 "minLineSpacing" => {
                     let mut spacing = ch["spacing"].as_f64().unwrap_or(1.5) as f32;
                     ui.horizontal(|ui| {
-                        ui.label("Minimum line spacing (multiple):");
-                        if ui.add(egui::DragValue::new(&mut spacing).speed(0.05).range(0.5..=4.0)).changed() {
+                        let value_label = ui.label("Minimum line spacing (multiple):");
+                        if ui.add(egui::DragValue::new(&mut spacing).speed(0.05).range(0.5..=4.0)).labelled_by(value_label.id).changed() {
                             patch_check(app, profile_id, doc_key, profile, i, json!({"spacing": spacing}));
                         }
                     });
