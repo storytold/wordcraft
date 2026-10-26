@@ -74,7 +74,7 @@ const NS_PASSWORD: &str = "http://schemas.microsoft.com/office/2006/keyEncryptor
 /// Is this an encrypted Office package (a compound file with `EncryptionInfo` and
 /// `EncryptedPackage` streams) rather than a zip?
 pub fn is_encrypted(bytes: &[u8]) -> bool {
-    if bytes.get(..8) != Some(&CFB_MAGIC[..]) {
+    if bytes.get(..8) != Some(&CFB_MAGIC[..]) || wordcraft_doc::cfb_guard::check(bytes).is_err() {
         return false;
     }
     match cfb::CompoundFile::open(Cursor::new(bytes)) {
@@ -87,6 +87,7 @@ pub fn is_encrypted(bytes: &[u8]) -> bool {
 /// [`DocxError::PasswordRequired`] once it knows the file is one it can decrypt; a password that
 /// doesn't fit gives [`DocxError::WrongPassword`].
 pub fn decrypt(bytes: &[u8], password: Option<&str>) -> Result<Vec<u8>, DocxError> {
+    wordcraft_doc::cfb_guard::check(bytes).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
     let mut comp = cfb::CompoundFile::open(Cursor::new(bytes)).map_err(|e| bad(format!("not a readable compound file ({e})")))?;
     let info = stream(&mut comp, "/EncryptionInfo", MAX_INFO)?;
     let package = stream(&mut comp, "/EncryptedPackage", bytes.len() as u64)?;

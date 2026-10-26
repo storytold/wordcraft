@@ -28,8 +28,8 @@ pub use io::Password;
 pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;
 pub use session::{
-    CellRange, ColumnBlock, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, UNDO_LIST_MAX, ViewState, blank_document,
-    next_math_session, set_system_locale,
+    CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,
+    ViewState, WindowView, blank_document, next_math_session, set_system_locale,
 };
 /// The outcome a command reports for IME receipt classification.
 ///
@@ -199,6 +199,8 @@ pub mod p {
 mod tests;
 #[cfg(test)]
 mod tests_bidi;
+#[cfg(test)]
+mod tests_documents;
 #[cfg(test)]
 mod tests_fonts;
 #[cfg(test)]

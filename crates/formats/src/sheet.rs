@@ -18,7 +18,7 @@
 //! all), sheets, rows, columns, cells and string lengths are capped, repeat counts are clamped to
 //! what is left, and nothing recurses, so XML depth costs nothing.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read};
 
 use quick_xml::XmlVersion;
@@ -138,18 +138,28 @@ pub fn read_rows(bytes: &[u8], pick: Pick<'_>) -> Result<(Vec<String>, Vec<Vec<S
 /// repeats numbered (`Name`, `Name 2`), ignoring case as merge fields do.
 pub fn field_names(row: &[String]) -> Vec<String> {
     let mut out: Vec<String> = Vec::with_capacity(row.len());
+    // The names given so far, ASCII-lowercased, and per base name the next number to try: a set
+    // lookup per candidate, and each base resumes where it stopped, instead of rescanning every
+    // name from `2` for every repeat (cubic on a row of equal headers).
+    let mut taken: HashSet<String> = HashSet::with_capacity(row.len());
+    let mut next: HashMap<String, usize> = HashMap::new();
     for (i, h) in row.iter().enumerate() {
         let base = match h.trim() {
             "" => format!("Column {}", i + 1),
             t => t.to_string(),
         };
-        let taken = |n: &str, out: &[String]| out.iter().any(|o| o.eq_ignore_ascii_case(n));
         let mut name = base.clone();
-        let mut k = 2usize;
-        while taken(&name, &out) {
-            name = format!("{base} {k}");
-            k = k.saturating_add(1);
+        if taken.contains(&name.to_ascii_lowercase()) {
+            let k = next.entry(base.to_ascii_lowercase()).or_insert(2);
+            loop {
+                name = format!("{base} {k}");
+                *k = k.saturating_add(1);
+                if !taken.contains(&name.to_ascii_lowercase()) {
+                    break;
+                }
+            }
         }
+        taken.insert(name.to_ascii_lowercase());
         out.push(name);
     }
     out
@@ -333,11 +343,22 @@ struct Grid {
     rows: Vec<Vec<String>>,
     cells: usize,
     text: TextBudget,
+    /// A row has been left out for its text (and logged, once per sheet).
+    refused: bool,
 }
 
 impl Grid {
     fn full(&self) -> bool {
         self.rows.len() >= MAX_ROWS || self.cells >= MAX_CELLS || self.text.0 >= MAX_TEXT_BYTES
+    }
+
+    /// Note that a row is left out because its text is over what is left of [`MAX_TEXT_BYTES`]:
+    /// logged once per sheet, not once per row.
+    fn refuse(&mut self) {
+        if !self.refused {
+            self.refused = true;
+            log::warn!("sheet: rows with more text than the {MAX_TEXT_BYTES} byte budget has left are left out of the recipient list");
+        }
     }
 
     /// Keep `row` (trailing blanks trimmed) `times` times, as far as the caps allow.
@@ -350,14 +371,15 @@ impl Grid {
         }
         let mut left = times;
         while left > 0 && !self.full() {
-            let room = MAX_CELLS.saturating_sub(self.cells);
-            let mut r = row.clone();
-            r.truncate(room);
+            // What fits is measured on `row` itself; only a copy that will be kept is made.
+            let keep = row.len().min(MAX_CELLS.saturating_sub(self.cells));
+            let r = row.get(..keep).unwrap_or_default();
             if !self.text.take(r.iter().map(String::len).sum()) {
+                self.refuse();
                 return;
             }
             self.cells = self.cells.saturating_add(r.len());
-            self.rows.push(r);
+            self.rows.push(r.to_vec());
             left -= 1;
         }
     }
@@ -854,7 +876,9 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
     // one is the wanted sheet.
     let mut tables = 0usize;
     let mut collecting = false;
-    let mut row: Option<(Vec<String>, u64, u64)> = None; // cells, pending blank cells, repeat
+    // Cells, pending blank cells, repeat, and the cells' text bytes (`None` once the row is over
+    // the text budget and so refused).
+    let mut row: Option<(Vec<String>, u64, u64, Option<usize>)> = None;
     let mut cell: Option<OCell> = None;
     let (mut in_p, mut skip) = (0usize, 0usize);
     walk(xml, |ev| match ev {
@@ -875,7 +899,7 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
             match n {
                 b"table-row" => {
                     let repeat = attr(e, b"number-rows-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
-                    row = Some((Vec::new(), 0, repeat));
+                    row = Some((Vec::new(), 0, repeat, Some(0)));
                 }
                 b"table-cell" | b"covered-table-cell" if row.is_some() => {
                     let repeat = attr(e, b"number-columns-repeated").and_then(|v| v.trim().parse().ok()).unwrap_or(1u64).max(1);
@@ -959,22 +983,33 @@ fn ods_read(xml: &[u8], want: Option<usize>) -> Result<(Vec<String>, Vec<Vec<Str
                     if n == b"covered-table-cell" {
                         skip = skip.saturating_sub(1);
                     }
-                    let (Some(c), Some((cells, pending, _))) = (cell.take(), row.as_mut()) else { return };
+                    let (Some(c), Some((cells, pending, _, budget))) = (cell.take(), row.as_mut()) else { return };
+                    let Some(bytes) = budget else { return };
                     let text = ods_value(&c);
                     if text.is_empty() {
                         *pending = pending.saturating_add(c.repeat);
                         return;
                     }
                     // Blank cells before this one, then the value as often as it repeats, as far
-                    // as the columns allow.
-                    let blanks = (*pending).min(MAX_COLS.saturating_sub(cells.len()) as u64) as usize;
+                    // as the columns and the grid's cells left (all `Grid::push` keeps) allow.
+                    let room = MAX_COLS.min(MAX_CELLS.saturating_sub(grid.cells));
+                    let blanks = (*pending).min(room.saturating_sub(cells.len()) as u64) as usize;
+                    let times = c.repeat.min(room.saturating_sub(cells.len().saturating_add(blanks)) as u64) as usize;
+                    // The row's text has to fit what is left of the budget to be kept at all
+                    // (`Grid::push`): one that can't is refused now, before the copies are made.
+                    *bytes = bytes.saturating_add(text.len().saturating_mul(times));
+                    if *bytes > MAX_TEXT_BYTES.saturating_sub(grid.text.0) {
+                        cells.clear();
+                        *budget = None;
+                        grid.refuse();
+                        return;
+                    }
                     cells.resize(cells.len() + blanks, String::new());
                     *pending = 0;
-                    let times = c.repeat.min(MAX_COLS.saturating_sub(cells.len()) as u64) as usize;
                     cells.extend(std::iter::repeat_n(text, times));
                 }
                 b"table-row" => {
-                    if let Some((cells, _, repeat)) = row.take() {
+                    if let Some((cells, _, repeat, Some(_))) = row.take() {
                         grid.push(cells, repeat);
                     }
                 }
@@ -997,7 +1032,12 @@ fn ods_value(c: &OCell) -> String {
         ("time", Some(v)) => iso_time(v).unwrap_or_else(|| c.text.clone()),
         ("boolean", Some(v)) => if v.eq_ignore_ascii_case("true") || v == "1" { "TRUE" } else { "FALSE" }.into(),
         ("percentage" | "currency", Some(v)) if c.text.trim().is_empty() => v.parse::<f64>().map(number).unwrap_or_else(|_| c.text.clone()),
-        ("string", Some(v)) if c.text.trim().is_empty() => v.to_string(),
+        ("string", Some(v)) if c.text.trim().is_empty() => {
+            // Attribute text obeys the same per-cell cap as `<text:p>` text.
+            let mut s = String::new();
+            push_capped(&mut s, v);
+            s
+        }
         _ => c.text.clone(),
     }
 }
@@ -1203,5 +1243,85 @@ mod tests {
         let (_, rows) = read_rows(&xlsx(sheet), Pick::Index(0)).unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0], vec!["TRUE", "World", "Name"]);
+    }
+
+    #[test]
+    fn repeated_headers_are_numbered_in_linear_time() {
+        // Every repeat used to restart at `Name 2` and compare each candidate with every name
+        // so far: cubic in the number of equal headers.
+        let row = vec!["Name".to_string(); 5_000];
+        let t = std::time::Instant::now();
+        let names = field_names(&row);
+        // Milliseconds; the old numbering ran past 6 minutes.
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        assert_eq!(names.len(), 5_000);
+        assert_eq!(names[0], "Name");
+        assert_eq!(names[4_999], "Name 5000");
+        // Names a header already has stay collision-free, ignoring case.
+        let row: Vec<String> = ["Name", "Name 2", "Name", "name", "", "Column 5", "NAME 2"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(field_names(&row), ["Name", "Name 2", "Name 3", "name 4", "Column 5", "Column 5 2", "NAME 2 2"]);
+    }
+
+    fn ods(rows: &str) -> Vec<u8> {
+        let content = format!(
+            r#"<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0"><office:body><office:spreadsheet><table:table table:name="Sheet1">{rows}</table:table></office:spreadsheet></office:body></office:document-content>"#
+        );
+        zip(&[("mimetype", "application/vnd.oasis.opendocument.spreadsheet"), ("content.xml", &content)])
+    }
+
+    #[test]
+    fn ods_string_attributes_are_capped_before_repeating() {
+        // An `office:string-value` is a cell's text: it obeys MAX_CELL_CHARS like `<text:p>`
+        // does, so repeating it across the columns can't build a huge row first.
+        let long = "v".repeat(MAX_CELL_CHARS * 4);
+        let book = ods(&format!(
+            r#"<table:table-row><table:table-cell office:value-type="string" office:string-value="{long}" table:number-columns-repeated="3"/></table:table-row>"#
+        ));
+        let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].len(), 3);
+        assert!(rows[0].iter().all(|c| c.chars().count() == MAX_CELL_CHARS));
+
+        // A row whose repeated text alone is over the text budget is dropped as it is built
+        // (it was built in full, then cloned, then refused); the rows after it still count.
+        let wide = "€".repeat(MAX_CELL_CHARS);
+        let book = ods(&format!(
+            r#"<table:table-row><table:table-cell office:value-type="string" office:string-value="{wide}" table:number-columns-repeated="1000"/></table:table-row><table:table-row><table:table-cell><text:p>next</text:p></table:table-cell></table:table-row>"#
+        ));
+        let ((_, rows), warned) = crate::test_log::warnings(|| read_rows(&book, Pick::Index(0)).unwrap());
+        assert_eq!(rows, vec![vec!["next".to_string()]]);
+        // The row left out is said to be (review of #3873).
+        assert_eq!(warned.iter().filter(|w| w.contains("are left out of the recipient list")).count(), 1, "{warned:?}");
+    }
+
+    #[test]
+    fn rows_over_the_text_budget_are_logged_once_per_sheet() {
+        let wide = "€".repeat(MAX_CELL_CHARS);
+        let over = format!(
+            r#"<table:table-row><table:table-cell office:value-type="string" office:string-value="{wide}" table:number-columns-repeated="1000"/></table:table-row>"#
+        );
+        let book = ods(&format!("{over}{over}{over}<table:table-row><table:table-cell><text:p>next</text:p></table:table-cell></table:table-row>"));
+        let ((_, rows), warned) = crate::test_log::warnings(|| read_rows(&book, Pick::Index(0)).unwrap());
+        assert_eq!(rows, vec![vec!["next".to_string()]]);
+        assert_eq!(warned.iter().filter(|w| w.contains("recipient list")).count(), 1, "one warning, not one per row: {warned:?}");
+        let book = ods("<table:table-row><table:table-cell><text:p>fine</text:p></table:table-cell></table:table-row>");
+        let (_, warned) = crate::test_log::warnings(|| read_rows(&book, Pick::Index(0)).unwrap());
+        assert!(warned.is_empty(), "{warned:?}");
+    }
+
+    #[test]
+    fn ods_repeated_text_is_budgeted_for_the_cells_the_grid_keeps() {
+        // One cell left in the grid: of a long value repeated a thousand times only the first
+        // copy is kept, and it fits the text budget, so the row isn't refused for the others.
+        let wide = "€".repeat(MAX_CELL_CHARS);
+        let full = MAX_CELLS / MAX_COLS - 1;
+        let book = ods(&format!(
+            r#"<table:table-row table:number-rows-repeated="{full}"><table:table-cell office:value-type="string" office:string-value="x" table:number-columns-repeated="{MAX_COLS}"/></table:table-row><table:table-row><table:table-cell office:value-type="string" office:string-value="x" table:number-columns-repeated="{}"/></table:table-row><table:table-row><table:table-cell office:value-type="string" office:string-value="{wide}" table:number-columns-repeated="1000"/></table:table-row>"#,
+            MAX_COLS - 1
+        ));
+        let (_, rows) = read_rows(&book, Pick::Index(0)).unwrap();
+        assert_eq!(rows.len(), full + 2);
+        assert_eq!(rows.last(), Some(&vec![wide]));
+        assert_eq!(rows.iter().map(Vec::len).sum::<usize>(), MAX_CELLS);
     }
 }

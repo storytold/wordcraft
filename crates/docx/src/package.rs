@@ -1,6 +1,7 @@
 //! OPC package access: bounded zip reading, relationships, part names.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::hash_map::Entry;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{Cursor, Read, Write};
 use std::sync::Arc;
 
@@ -191,6 +192,9 @@ pub fn rel_is(t: &str, full: &str) -> bool {
 /// picture, an embedded object) is handed over rather than copied.
 pub struct Package {
     files: BTreeMap<String, Arc<Vec<u8>>>,
+    /// Lowercased part name → its stored spelling (the first in name order): part names are
+    /// case-insensitive (ECMA-376 Part 2 §6.2.2.3), so every spelling is one part.
+    lower: HashMap<String, String>,
 }
 
 impl Package {
@@ -223,24 +227,60 @@ impl Package {
             let room = max_part.min(max_total.saturating_sub(total));
             let mut buf = Vec::with_capacity(f.size().min(16 * 1024 * 1024) as usize);
             let read = (&mut f).take(room + 1).read_to_end(&mut buf);
+            // Charged whether or not the read succeeds: an entry inflates in full before its CRC
+            // is checked, so failed entries would otherwise inflate without limit (#3723).
+            total = total.saturating_add(buf.len() as u64);
+            if buf.len() as u64 > room {
+                return Err(DocxError::Limit(format!("part {name} decompresses past the size limit")));
+            }
             if let Err(e) = read {
                 // A corrupt entry: keep going unless it's a part we can't do without.
                 log::warn!("docx: zip entry {name} unreadable: {e}");
                 continue;
             }
-            if buf.len() as u64 > room {
-                return Err(DocxError::Limit(format!("part {name} decompresses past the size limit")));
-            }
-            total = total.saturating_add(buf.len() as u64);
             files.insert(name, Arc::new(buf));
         }
-        Ok(Package { files })
+        Ok(Package::new(files))
     }
 
     /// A package from parts already in memory (a Flat OPC file, a converted document), by part
     /// name without the leading `/`.
     pub fn from_parts(files: BTreeMap<String, Vec<u8>>) -> Package {
-        Package { files: files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect() }
+        Package::new(files.into_iter().map(|(name, bytes)| (name, Arc::new(bytes))).collect())
+    }
+
+    fn new(mut files: BTreeMap<String, Arc<Vec<u8>>>) -> Package {
+        let mut lower: HashMap<String, String> = HashMap::new();
+        let mut collides = false;
+        for name in files.keys() {
+            match lower.entry(name.to_ascii_lowercase()) {
+                Entry::Occupied(_) => collides = true,
+                Entry::Vacant(v) => {
+                    v.insert(name.clone());
+                }
+            }
+        }
+        if !collides {
+            return Package { files, lower };
+        }
+        // Entries whose names differ only in case are one part, so every spelling of the name
+        // reaches the same stored entry (#3704). The spelling kept is the one a relationship
+        // names, so the part the document points at is the one read; the first in byte order only
+        // when no relationship names any of them.
+        let named = rel_targets(&files);
+        for name in files.keys().rev().filter(|n| named.contains(n.as_str())) {
+            lower.insert(name.to_ascii_lowercase(), name.clone());
+        }
+        let before = files.len();
+        files.retain(|name, _| lower.get(&name.to_ascii_lowercase()) == Some(name));
+        let dropped = before.saturating_sub(files.len());
+        log::warn!("docx: {dropped} zip entries are other spellings of parts already read; they are left out");
+        Package { files, lower }
+    }
+
+    /// The stored spelling of part `name` (leading `/` ignored; case-insensitive).
+    pub fn canonical(&self, name: &str) -> Option<&str> {
+        self.lower.get(&name.trim_start_matches('/').to_ascii_lowercase()).map(String::as_str)
     }
 
     /// Part bytes by name (leading `/` ignored; case-insensitive fallback).
@@ -251,11 +291,7 @@ impl Package {
     /// [`Package::get`], as the shared bytes themselves: for a part the document keeps whole, which
     /// then costs no copy (a picture document's pictures used to be held twice while it opened).
     pub fn get_shared(&self, name: &str) -> Option<&Arc<Vec<u8>>> {
-        let n = name.trim_start_matches('/');
-        if let Some(v) = self.files.get(n) {
-            return Some(v);
-        }
-        self.files.iter().find(|(k, _)| k.eq_ignore_ascii_case(n)).map(|(_, v)| v)
+        self.canonical(name).and_then(|n| self.files.get(n))
     }
 
     /// [`Package::xml`] for the main document part: malformed XML is an error, not a truncated read.
@@ -289,7 +325,14 @@ impl Package {
         for r in root.els().filter(|e| e.local() == "Relationship") {
             let (Some(id), Some(target)) = (r.attr("Id"), r.attr("Target")) else { continue };
             let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
-            let resolved = if external { target.to_string() } else { resolve(dir, target) };
+            // Internal targets name the part as stored, so a part reached under several spellings
+            // is kept, cached and written once (#3704).
+            let resolved = if external {
+                target.to_string()
+            } else {
+                let path = resolve(dir, target);
+                self.canonical(&path).map_or(path, str::to_string)
+            };
             rels.list.push(Rel { id: id.to_string(), kind: r.attr("Type").unwrap_or("").to_string(), target: resolved, external });
         }
         rels
@@ -364,6 +407,24 @@ fn split_dir(part: &str) -> (&str, &str) {
     }
 }
 
+/// Every internal part name the relationship parts in `files` target, spelled as they spell it.
+fn rel_targets(files: &BTreeMap<String, Arc<Vec<u8>>>) -> HashSet<String> {
+    let mut named = HashSet::new();
+    for (name, bytes) in files {
+        // `dir/_rels/file.rels` relates `dir/file`, so its targets resolve against `dir`.
+        let Some(at) = name.rfind("_rels/").filter(|_| name.to_ascii_lowercase().ends_with(".rels")) else { continue };
+        let dir = name.get(..at).unwrap_or("").trim_end_matches('/');
+        let Ok(root) = xml::parse(bytes) else { continue };
+        for r in root.els().filter(|e| e.local() == "Relationship") {
+            let external = r.attr("TargetMode").is_some_and(|m| m.eq_ignore_ascii_case("External"));
+            if let (Some(target), false) = (r.attr("Target"), external) {
+                named.insert(resolve(dir, target));
+            }
+        }
+    }
+    named
+}
+
 /// Resolve a relative target against a source directory into a package path.
 pub fn resolve(dir: &str, target: &str) -> String {
     let target = target.split('#').next().unwrap_or(target);
@@ -421,12 +482,65 @@ mod tests {
     }
 
     #[test]
+    fn case_colliding_entries_are_one_part() {
+        let z = zip_of(&[("word/media/Image.png", b"upper".to_vec()), ("word/media/image.png", b"lower".to_vec())]);
+        let p = Package::open(&z).unwrap();
+        for spelling in ["word/media/Image.png", "word/media/image.png", "/WORD/MEDIA/IMAGE.PNG"] {
+            assert_eq!(p.canonical(spelling), Some("word/media/Image.png"), "{spelling}");
+            assert_eq!(p.get(spelling), Some(&b"upper"[..]), "{spelling}");
+        }
+        assert_eq!(p.files.len(), 1);
+    }
+
+    #[test]
+    fn the_spelling_a_relationship_names_is_kept() {
+        // The first spelling in byte order ("Image.png") was kept even when the document's
+        // relationship named the other one, so the picture shown was not the one it pointed at.
+        let rels = r#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="image" Target="media/image.png"/></Relationships>"#;
+        let z = zip_of(&[
+            ("word/_rels/document.xml.rels", rels.as_bytes().to_vec()),
+            ("word/media/Image.png", b"upper".to_vec()),
+            ("word/media/image.png", b"lower".to_vec()),
+            ("word/media/Other.png", b"first".to_vec()),
+            ("word/media/other.png", b"second".to_vec()),
+        ]);
+        let (p, warned) = crate::test_log::warnings(|| Package::open(&z).unwrap());
+        assert_eq!(p.canonical("word/media/IMAGE.png"), Some("word/media/image.png"));
+        assert_eq!(p.get("word/media/Image.png"), Some(&b"lower"[..]));
+        assert_eq!(p.get("word/media/OTHER.PNG"), Some(&b"first"[..]), "no relationship names it: first in byte order");
+        assert_eq!(p.files.len(), 3);
+        let folded: Vec<_> = warned.iter().filter(|w| w.contains("other spellings")).collect();
+        assert_eq!(folded.len(), 1, "one warning for the package: {warned:?}");
+        assert!(folded.iter().all(|w| w.contains("2 zip entries")), "{folded:?}");
+    }
+
+    #[test]
     fn decompression_bomb_is_rejected() {
         let z = zip_of(&[("word/document.xml", vec![b' '; 2_000_000])]);
         assert!(z.len() < 100_000);
         assert!(matches!(Package::open_limited(&z, 1_000_000, 10_000_000), Err(DocxError::Limit(_))));
         assert!(matches!(Package::open_limited(&z, 10_000_000, 1_000_000), Err(DocxError::Limit(_))));
         assert!(Package::open_limited(&z, 10_000_000, 10_000_000).is_ok());
+    }
+
+    #[test]
+    fn entries_that_fail_their_check_still_count_against_the_total() {
+        // Each entry inflates in full before its CRC is checked; a failed one was dropped without
+        // being charged, so any number of them inflated (#3723).
+        let names: Vec<String> = (0..20).map(|i| format!("p{i}.bin")).collect();
+        let entries: Vec<(&str, Vec<u8>)> = names.iter().map(|n| (n.as_str(), vec![0u8; 1_000_000])).collect();
+        let mut z = zip_of(&entries);
+        let mut patched = 0;
+        for sig in [[0x50u8, 0x4B, 0x01, 0x02], [0x50, 0x4B, 0x03, 0x04]] {
+            let crc_at = if sig[2] == 1 { 16 } else { 14 };
+            let found: Vec<usize> = z.windows(4).enumerate().filter(|(_, w)| *w == sig).map(|(i, _)| i).collect();
+            for pos in found {
+                z[pos + crc_at] ^= 0xFF;
+                patched += 1;
+            }
+        }
+        assert_eq!(patched, 40);
+        assert!(matches!(Package::open_limited(&z, 2_000_000, 4_000_000), Err(DocxError::Limit(_))));
     }
 
     #[test]

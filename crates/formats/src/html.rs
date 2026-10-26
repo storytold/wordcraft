@@ -724,7 +724,7 @@ fn apply_style(css: &str, f: &mut Fmt, align: &mut Option<Align>, preserve: &mut
                 if model::is_mono(&fam) || fam.eq_ignore_ascii_case("monospace") {
                     f.code = true;
                 } else if !fam.is_empty() && !matches!(fam.to_ascii_lowercase().as_str(), "serif" | "sans-serif" | "inherit" | "initial") {
-                    f.font = Some(fam);
+                    f.font = model::kept_font(&fam).or(f.font.take());
                 }
             }
             "vertical-align" => {
@@ -1226,7 +1226,7 @@ impl<'r> Builder<'r> {
                     if model::is_mono(&fam) {
                         fmt.code = true;
                     } else if !fam.is_empty() {
-                        fmt.font = Some(fam);
+                        fmt.font = model::kept_font(&fam).or(fmt.font.take());
                     }
                 }
                 if let Some(sz) = attr(attrs, "size") {
@@ -1245,7 +1245,7 @@ impl<'r> Builder<'r> {
             }
             "a" => {
                 if let Some(h) = attr(attrs, "href").filter(|h| wordcraft_doc::link::is_safe_href(h)) {
-                    fmt.link = Some(h.trim().to_string());
+                    fmt.link = model::kept_link(h.trim());
                 }
             }
             _ => {}
@@ -1588,17 +1588,20 @@ fn collapse_ws(s: &str) -> String {
 
 /// Parse HTML into a document.
 pub fn import(s: &str) -> Document {
+    model::begin_import();
     model::to_doc(&parse(s))
 }
 
 /// [`import`], loading pictures that aren't `data:` URIs through `images`.
 pub fn import_with(s: &str, images: ImageLoader) -> Document {
+    model::begin_import();
     model::to_doc(&parse_with(s, images))
 }
 
 /// [`import_with`] onto `page` (its size and margins), which tables size to: HTML gives no page
 /// size, so the caller picks it (the region's paper, #1381).
 pub fn import_on(s: &str, images: ImageLoader, page: &wordcraft_doc::SectionProps) -> Document {
+    model::begin_import();
     model::to_doc_in(&parse_with(s, images), page.clone())
 }
 
@@ -2423,5 +2426,18 @@ mod tests {
         assert!(html.contains("vertical-align:top"));
         assert!(html.contains("vertical-align:middle"));
         assert!(html.contains("vertical-align:bottom"));
+    }
+
+    #[test]
+    fn many_formatted_leading_breaks_trim_quickly() {
+        // #3705: a paragraph opening with alternating bold and italic `<br>` was trimmed one
+        // span at a time with `Vec::remove(0)`.
+        let html = format!("<p>{}x</p>", "<b><br></b><i><br></i>".repeat(100_000));
+        let t = std::time::Instant::now();
+        let f = parse(&html);
+        // About a second on a loaded machine; trimming one span at a time ran past 6 minutes.
+        assert!(t.elapsed() < std::time::Duration::from_secs(20), "{:?}", t.elapsed());
+        let texts: Vec<String> = f.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
+        assert_eq!(texts, ["x"]);
     }
 }
