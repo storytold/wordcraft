@@ -275,6 +275,7 @@ impl WordApp {
             last_caption_label: _,
             ink_pens: _,
             initials: _,
+            defaults: _,
             options_pane: _,
             recent_count: _,
             mini_toolbar: _,

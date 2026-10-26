@@ -466,9 +466,10 @@ fn main() -> eframe::Result {
             app.set_startup_update_check(true);
             load_prefs(&mut app);
             load_user_dictionary(&mut app);
-            // A region chosen in File › Options replaces the system's for the first blank
-            // document too (#838).
-            if !sample && app.session.prefs.region.is_some() {
+            // The window's first document is made once the preferences are in: the person's
+            // defaults (styles, page setup) and, when chosen, their region's paper (#838) must
+            // both be in place.
+            if !sample {
                 let doc = app.session.blank_document();
                 app.session.set_document(doc);
             }

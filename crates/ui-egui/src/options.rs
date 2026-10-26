@@ -130,6 +130,7 @@ fn pane_label(id: &str) -> &'static str {
         "accessibility" => "Accessibility",
         "advanced" => "Advanced",
         "agents" => "Agents",
+        "defaults" => "Defaults",
         _ => "General",
     }
 }
@@ -175,6 +176,7 @@ pub fn page(app: &mut WordApp, ui: &mut Ui) {
                 "accessibility" => accessibility(app, ui),
                 "advanced" => advanced(app, ui),
                 "agents" => agents(ui),
+                "defaults" => defaults(app, ui),
                 _ => general(app, ui),
             }
         });
@@ -642,6 +644,462 @@ fn templates_folder(app: &mut WordApp, ui: &mut Ui) {
     note(ui, "File › New lists the .dotx and .dotm templates here under Personal; Save as Word Template starts here.");
 }
 
+/// A "Saved" note under an action for a moment after it ran (the dialog's own feedback that the
+/// defaults were written, without a new message that would have to be translated everywhere).
+fn flash(ui: &mut Ui, action: &str) {
+    // The time is read before the data lock: `Context::input` takes the context's own lock, and
+    // calling it inside `data_mut` deadlocks.
+    let now = ui.input(|i| i.time);
+    ui.data_mut(|d| d.insert_temp(egui::Id::unique(("defaults_saved", action)), now));
+}
+
+fn flashed(ui: &Ui, action: &str) -> bool {
+    let now = ui.input(|i| i.time);
+    ui.data(|d| d.get_temp::<f64>(egui::Id::unique(("defaults_saved", action)))).is_some_and(|t| now - t < 2.0)
+}
+
+fn saved_note(ui: &mut Ui, action: &str) {
+    if flashed(ui, action) {
+        ui.label(RichText::new(tl!("Saved")).small().weak());
+        ui.ctx().request_repaint();
+    }
+}
+
+/// A Reset button that asks once (OK/Cancel) before throwing the person's defaults away: a stray
+/// click on a small button shouldn't lose them.
+fn confirm_reset(ui: &mut Ui, key: &str) -> bool {
+    let id = egui::Id::unique(("defaults_reset", key));
+    if !ui.data(|d| d.get_temp::<bool>(id)).unwrap_or(false) {
+        if ui.button(tl!("Reset")).clicked() {
+            ui.data_mut(|d| d.insert_temp(id, true));
+        }
+        return false;
+    }
+    let mut go = false;
+    ui.label(tl!("Reset"));
+    if ui.button(tl!("OK")).clicked() {
+        go = true;
+    }
+    if ui.button(tl!("Cancel")).clicked() {
+        ui.data_mut(|d| d.insert_temp(id, false));
+    }
+    if go {
+        ui.data_mut(|d| d.insert_temp(id, false));
+    }
+    go
+}
+
+/// File › Options › Defaults: what a new document starts from. The view switches are the person's
+/// preferences (saved with the app); the styles and the page setup are adopted from a document —
+/// or reset — and only ever applied to documents created afterwards.
+/// The style being edited in the Defaults pane: the resolved properties the Modify Style dialog
+/// shows, kept apart from any document.
+#[derive(Clone)]
+struct StyleDraft {
+    /// Style id (the model's key; `basedOn` links use it).
+    id: String,
+    /// The style's own name (not the localized label): what is saved.
+    name: String,
+    /// The label shown in the pane (localized for built-in styles).
+    display: String,
+    font: String,
+    size: f32,
+    bold: bool,
+    italic: bool,
+    color: String,
+    before: f32,
+    after: f32,
+}
+
+/// The page setup being edited in the Defaults pane, in the measurement unit the dialogs show.
+#[derive(Clone, Debug)]
+struct PageDraft {
+    paper: (f32, f32),
+    custom: bool,
+    landscape: bool,
+    top: f32,
+    bottom: f32,
+    left: f32,
+    right: f32,
+    mirror: bool,
+    /// `RRGGBB`, or empty for the theme's paper.
+    color: String,
+}
+
+fn style_draft_id() -> egui::Id {
+    egui::Id::unique("defaults_style_draft")
+}
+
+fn page_draft_id() -> egui::Id {
+    egui::Id::unique("defaults_page_draft")
+}
+
+impl PageDraft {
+    /// The app's own page setup, for the editor's first show and a reset.
+    fn default_page() -> Self {
+        page_draft_from(&wordcraft_doc::SectionProps::default(), false, None)
+    }
+}
+
+fn color_text(value: &str) -> wordcraft_doc::props::TextColor {
+    match wordcraft_doc::Rgb::parse(value) {
+        Some(c) => wordcraft_doc::props::TextColor::Rgb(c),
+        None => wordcraft_doc::props::TextColor::Auto,
+    }
+}
+
+/// A style's properties as the Modify Style dialog shows them: resolved through its `basedOn`
+/// chain, so an edited Normal doesn't hide what Heading 1 inherits.
+fn draft_from_style(sheet: &wordcraft_doc::styles::StyleSheet, id: &str) -> Option<StyleDraft> {
+    let st = sheet.get(id)?;
+    let character = st.kind == wordcraft_doc::StyleKind::Character;
+    let rc = sheet.resolve_char(
+        if character { None } else { Some(id) },
+        &wordcraft_doc::CharProps { style: character.then(|| id.to_string()), ..Default::default() },
+    );
+    let rp = sheet.resolve_para(&wordcraft_doc::ParaProps { style: Some(id.to_string()), ..Default::default() });
+    Some(StyleDraft {
+        id: id.to_string(),
+        name: st.name.clone(),
+        display: crate::i18n::style_name(st),
+        font: rc.font,
+        size: rc.size,
+        bold: rc.bold,
+        italic: rc.italic,
+        color: match rc.color {
+            wordcraft_doc::props::TextColor::Rgb(c) => c.hex(),
+            wordcraft_doc::props::TextColor::Auto => "auto".into(),
+        },
+        before: rp.space_before,
+        after: rp.space_after,
+    })
+}
+
+/// The style the draft describes, for the sample: the default's own definition with the edited
+/// properties laid over it (the preview never touches the document).
+fn draft_style(sheet: &wordcraft_doc::styles::StyleSheet, draft: &StyleDraft) -> wordcraft_doc::styles::Style {
+    let mut st = sheet.get(&draft.id).cloned().unwrap_or_default();
+    st.id = draft.id.clone();
+    st.name = draft.name.clone();
+    st.chr.font = Some(draft.font.clone());
+    st.chr.size = Some(draft.size);
+    st.chr.bold = Some(draft.bold);
+    st.chr.italic = Some(draft.italic);
+    st.chr.color = Some(color_text(&draft.color));
+    st.para.space_before = Some(draft.before);
+    st.para.space_after = Some(draft.after);
+    st
+}
+
+fn page_draft_from_defaults(p: &wordcraft_doc::defaults::PageDefaults) -> PageDraft {
+    page_draft_from(
+        &wordcraft_doc::SectionProps {
+            page_w: p.page_w,
+            page_h: p.page_h,
+            landscape: p.landscape,
+            margin_top: p.margin_top,
+            margin_bottom: p.margin_bottom,
+            margin_left: p.margin_left,
+            margin_right: p.margin_right,
+            ..Default::default()
+        },
+        p.mirror,
+        p.page_color,
+    )
+}
+
+fn page_draft_from(sect: &wordcraft_doc::SectionProps, mirror: bool, color: Option<wordcraft_doc::Rgb>) -> PageDraft {
+    let ppu = crate::options::unit().pt_per_unit();
+    let paper = (sect.page_w / ppu, sect.page_h / ppu);
+    PageDraft {
+        paper,
+        custom: true,
+        landscape: sect.landscape,
+        top: sect.margin_top / ppu,
+        bottom: sect.margin_bottom / ppu,
+        left: sect.margin_left / ppu,
+        right: sect.margin_right / ppu,
+        mirror,
+        color: color.map(|c| c.hex()).unwrap_or_default(),
+    }
+}
+
+/// File › Options › Defaults: what a new document starts from, edited right here — the view
+/// switches, the default styles (each one shown and editable like the Modify Style dialog) and
+/// the default page setup. Only the adopted defaults change: the open document is never touched.
+fn defaults(app: &mut WordApp, ui: &mut Ui) {
+    section(ui, "Defaults");
+
+    // A. View preferences: the same switches as View › Show, saved with the app's preferences.
+    ui.label(RichText::new(tl!("View")).font(semibold(13.5)));
+    let mut ruler = app.session.view.ruler;
+    let mut gridlines = app.session.view.gridlines;
+    let mut table_gridlines = app.session.view.table_gridlines;
+    let mut marks = app.session.view.marks;
+    ui.horizontal_wrapped(|ui| {
+        if ui.checkbox(&mut ruler, tl!("Ruler")).changed() {
+            let _ = app.run("view.ruler", json!({"value": ruler}));
+        }
+        if ui.checkbox(&mut gridlines, tl!("Gridlines")).changed() {
+            let _ = app.run("view.gridlines", json!({"value": gridlines}));
+        }
+        if ui.checkbox(&mut table_gridlines, tl!("View Gridlines")).changed() {
+            let _ = app.run("table.viewGridlines", json!({"value": table_gridlines}));
+        }
+        if ui.checkbox(&mut marks, tl!("Show/Hide ¶")).changed() {
+            let _ = app.run("view.marks", json!({"value": marks}));
+        }
+        if confirm_reset(ui, "view") {
+            let _ = app.run("defaults.reset", json!({"what": "view"}));
+        }
+    });
+
+    // B. Default styles: pick one, edit it, see it, adopt it — without a document as the source.
+    ui.add_space(12.0);
+    ui.label(RichText::new(tl!("Styles")).font(semibold(13.5)));
+    let sheet = app.session.defaults.styles_sheet();
+    let ids: Vec<String> = sheet
+        .styles
+        .iter()
+        .filter(|s| !s.hidden && matches!(s.kind, wordcraft_doc::StyleKind::Paragraph | wordcraft_doc::StyleKind::Character))
+        .map(|s| s.id.clone())
+        .collect();
+    if ids.is_empty() {
+        return;
+    }
+    let Some(mut draft) = ui
+        .data(|d| d.get_temp::<StyleDraft>(style_draft_id()))
+        .filter(|d| ids.contains(&d.id))
+        .or_else(|| draft_from_style(&sheet, "Normal").or_else(|| draft_from_style(&sheet, &ids[0])))
+    else {
+        return;
+    };
+    ui.horizontal(|ui| {
+        let style_label = ui.label(tl!("Style:"));
+        let combo = egui::ComboBox::from_id_salt("defaults_style_pick").selected_text(&draft.display).width(240.0).show_ui(ui, |ui| {
+            for id in &ids {
+                let label = sheet.get(id).map(crate::i18n::style_name).unwrap_or_else(|| id.clone());
+                if ui.selectable_label(draft.id == *id, label.clone()).clicked()
+                    && draft.id != *id
+                    && let Some(next) = draft_from_style(&sheet, id)
+                {
+                    draft = next;
+                }
+            }
+        });
+        combo.response.labelled_by(style_label.id);
+    });
+    let display = draft.display.clone();
+    crate::dialogs::style_fields(
+        app,
+        ui,
+        crate::dialogs::StyleFields {
+            name: &mut draft.name,
+            font: &mut draft.font,
+            size: &mut draft.size,
+            bold: &mut draft.bold,
+            italic: &mut draft.italic,
+            color: &mut draft.color,
+            before: &mut draft.before,
+            after: &mut draft.after,
+        },
+        false,
+        Some(&display),
+    );
+    // The sample: drawn on a temporary document with the defaults' styles (never the open one).
+    let sample = draft_style(&sheet, &draft);
+    let ppp = ui.ctx().pixels_per_point();
+    let key = format!(
+        "defaults-style:{}:{}:{}:{}:{}:{}:{}:{}:{ppp}",
+        draft.id, draft.font, draft.size, draft.bold, draft.italic, draft.color, draft.before, draft.after
+    );
+    let text = tl!("AaBbCcDd").to_string();
+    let tex = app.previews.get_or(ui.ctx(), &key, || crate::previews::style_sample(&sheet, &sample, &text, 260.0, 40.0, ppp));
+    match tex {
+        Some(h) => {
+            let t = Tokens::get(ui.ctx());
+            let sz = h.size_vec2() / ppp;
+            let (r, _) = ui.allocate_exact_size(vec2(268.0, 34.0), egui::Sense::hover());
+            ui.painter().rect_filled(r, 3.0, if t.dark { egui::Color32::from_gray(0xC8) } else { egui::Color32::WHITE });
+            ui.painter().rect_stroke(r, 3.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+            let inner = egui::Rect::from_min_size(r.min + vec2(4.0, 2.0), sz.min(r.size() - vec2(8.0, 4.0)));
+            ui.painter().image(h.id(), inner, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+        }
+        None => {
+            ui.ctx().request_repaint();
+        }
+    }
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Set as Default")).clicked() {
+            let params = style_params_for_draft(&draft, false);
+            if app.run("defaults.saveStyle", params).is_ok() {
+                // Show what was stored (the engine validates and cleans the definition).
+                if let Some(saved) = draft_from_style(&app.session.defaults.styles_sheet(), &draft.id) {
+                    draft = saved;
+                }
+                flash(ui, "style");
+            }
+        }
+        if ui.button(tl!("Import from Document")).clicked() {
+            // Fill the editor from the open document's definition, without adopting it.
+            if let Some(next) = draft_from_style(&app.session.doc.styles, &draft.id) {
+                draft = next;
+            }
+        }
+        if confirm_reset(ui, "style") {
+            let _ = app.run("defaults.resetStyle", json!({"style": draft.id}));
+            if let Some(next) = draft_from_style(&app.session.defaults.styles_sheet(), &draft.id) {
+                draft = next;
+            }
+        }
+        ui.label(tl!("All"));
+        if confirm_reset(ui, "styles_all") {
+            let _ = app.run("defaults.reset", json!({"what": "styles"}));
+            if let Some(next) = draft_from_style(&app.session.defaults.styles_sheet(), &draft.id) {
+                draft = next;
+            }
+        }
+        saved_note(ui, "style");
+    });
+    ui.data_mut(|d| d.insert_temp(style_draft_id(), draft));
+
+    // C. Default page setup: edited here, adopted here; nothing comes from a document unless the
+    // person asks for it (Import).
+    ui.add_space(12.0);
+    ui.label(RichText::new(tl!("Page Setup")).font(semibold(13.5)));
+    let mut page = ui.data(|d| d.get_temp::<PageDraft>(page_draft_id())).unwrap_or_else(|| match app.session.defaults.page {
+        Some(p) => page_draft_from_defaults(&p),
+        None => PageDraft::default_page(),
+    });
+    crate::dialogs::page_paper_group(ui, &mut page.paper, &mut page.landscape, &mut page.custom);
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut page.landscape, false, tl!("Portrait"));
+        ui.radio_value(&mut page.landscape, true, tl!("Landscape"));
+    });
+    egui::Grid::new("defaults_page").num_columns(4).show(ui, |ui| {
+        let ppu = crate::options::unit().pt_per_unit();
+        let unit = crate::options::unit();
+        let speed = 3.6 / ppu;
+        ui.label(tl!("Top:"));
+        ui.add(egui::DragValue::new(&mut page.top).speed(speed).measure(unit).max_decimals(2));
+        ui.label(tl!("Bottom:"));
+        ui.add(egui::DragValue::new(&mut page.bottom).speed(speed).measure(unit).max_decimals(2));
+        ui.end_row();
+        ui.label(if page.mirror { tl!("Inside:") } else { tl!("Left:") });
+        ui.add(egui::DragValue::new(&mut page.left).speed(speed).measure(unit).max_decimals(2));
+        ui.label(if page.mirror { tl!("Outside:") } else { tl!("Right:") });
+        ui.add(egui::DragValue::new(&mut page.right).speed(speed).measure(unit).max_decimals(2));
+        ui.end_row();
+    });
+    ui.checkbox(&mut page.mirror, tl!("Mirror margins"));
+    ui.horizontal(|ui| {
+        ui.label(tl!("Page Color"));
+        let theme = app.session.doc.settings.theme_colors.clone();
+        crate::dialogs::color_field(ui, &theme, &mut page.color, "No Color", "");
+        // Swatch of the chosen sheet colour.
+        let t = Tokens::get(ui.ctx());
+        let (r, _) = ui.allocate_exact_size(vec2(28.0, 18.0), egui::Sense::hover());
+        match wordcraft_doc::Rgb::parse(&page.color) {
+            Some(c) => {
+                ui.painter().rect_filled(r, 2.0, crate::theme::c32(c));
+            }
+            None => {
+                ui.painter().rect_filled(r, 2.0, egui::Color32::WHITE);
+                ui.painter().line_segment([r.left_bottom(), r.right_top()], egui::Stroke::new(1.0, t.text_dim));
+            }
+        }
+        ui.painter().rect_stroke(r, 2.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    });
+    page_preview(ui, &page);
+    ui.horizontal(|ui| {
+        if ui.button(tl!("Set as Default")).clicked() {
+            let params = page_params(&page);
+            if app.run("defaults.savePageValues", params).is_ok() {
+                // The controls show what was stored: a value the page model limits (600 cm, a
+                // margin that leaves no room) can't stay on screen as if it had been adopted.
+                if let Some(saved) = app.session.defaults.page {
+                    page = page_draft_from_defaults(&saved);
+                }
+                flash(ui, "page");
+            }
+        }
+        if ui.button(tl!("Import from Document")).clicked() {
+            let sect = wordcraft_engine::cmd::page::sect(&app.session);
+            page = page_draft_from(&sect, app.session.doc.settings.mirror_margins, app.session.doc.settings.page_color);
+        }
+        if confirm_reset(ui, "page") {
+            let _ = app.run("defaults.reset", json!({"what": "page"}));
+            page = page_draft_from(&wordcraft_doc::SectionProps::default(), false, None);
+        }
+        saved_note(ui, "page");
+    });
+    ui.data_mut(|d| d.insert_temp(page_draft_id(), page));
+
+    // All the defaults at once (view preferences included), after a confirmation.
+    ui.add_space(16.0);
+    ui.horizontal(|ui| {
+        ui.label(tl!("All"));
+        if confirm_reset(ui, "all") {
+            let _ = app.run("defaults.reset", json!({"what": "all"}));
+            ui.data_mut(|d| d.remove::<StyleDraft>(style_draft_id()));
+            ui.data_mut(|d| d.remove::<PageDraft>(page_draft_id()));
+        }
+        saved_note(ui, "all");
+    });
+}
+
+/// The `defaults.saveStyle` parameters for the pane's draft (`apply` false: the open document is
+/// not changed by editing the defaults here).
+fn style_params_for_draft(draft: &StyleDraft, apply: bool) -> serde_json::Value {
+    let mut chr = json!({"font": draft.font, "size": draft.size, "bold": draft.bold, "italic": draft.italic});
+    if let Some(c) = wordcraft_doc::Rgb::parse(&draft.color) {
+        chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
+    }
+    json!({
+        "style": draft.id,
+        "name": draft.name,
+        "chr": chr,
+        "para": {"spaceBefore": draft.before, "spaceAfter": draft.after},
+        "apply": apply,
+    })
+}
+
+/// The `defaults.savePageValues` parameters for the pane's draft (points, as the engine takes).
+fn page_params(page: &PageDraft) -> serde_json::Value {
+    let ppu = crate::options::unit().pt_per_unit();
+    json!({
+        "pageW": page.paper.0 * ppu,
+        "pageH": page.paper.1 * ppu,
+        "landscape": page.landscape,
+        "marginTop": page.top * ppu,
+        "marginBottom": page.bottom * ppu,
+        "marginLeft": page.left * ppu,
+        "marginRight": page.right * ppu,
+        "mirror": page.mirror,
+        "color": wordcraft_doc::Rgb::parse(&page.color).map(|c| c.hex()),
+    })
+}
+
+/// A small, proportional view of the sheet: orientation, margins and colour, scaled to fit.
+fn page_preview(ui: &mut Ui, page: &PageDraft) {
+    let t = Tokens::get(ui.ctx());
+    let ppu = crate::options::unit().pt_per_unit();
+    let (w, h) = (page.paper.0 * ppu, page.paper.1 * ppu);
+    let box_size = vec2(200.0, 150.0);
+    let k = (box_size.x / w.max(1.0)).min(box_size.y / h.max(1.0)).min(1.0);
+    let size = vec2((w * k).max(8.0), (h * k).max(8.0));
+    let (r, _) = ui.allocate_exact_size(size, egui::Sense::hover());
+    let paper = wordcraft_doc::Rgb::parse(&page.color).map(crate::theme::c32).unwrap_or(egui::Color32::WHITE);
+    ui.painter().rect_filled(r, 1.0, paper);
+    ui.painter().rect_stroke(r, 1.0, egui::Stroke::new(1.0, t.border_strong), egui::StrokeKind::Inside);
+    let m = |v: f32| (v * ppu * k).max(0.0);
+    let inner = egui::Rect::from_min_max(
+        egui::pos2(r.min.x + m(page.left), r.min.y + m(page.top)),
+        egui::pos2((r.max.x - m(page.right)).max(r.min.x + 1.0), (r.max.y - m(page.bottom)).max(r.min.y + 1.0)),
+    );
+    ui.painter().rect_stroke(inner, 0.0, egui::Stroke::new(1.0, t.text_disabled), egui::StrokeKind::Inside);
+}
+
 fn agents(ui: &mut Ui) {
     section(ui, "Agents");
     ui.label(tl!("Every command is available to scripts and AI agents: run `wordcraft-cli mcp` for an MCP server, or start the app with `--control <port>` for the JSON control channel."));
@@ -859,7 +1317,7 @@ mod tests {
     use serde_json::json;
     use wordcraft_geom::Unit;
 
-    use super::{decimal, length, parse_length, unit};
+    use super::{PageDraft, StyleDraft, decimal, draft_from_style, length, page_draft_id, parse_length, style_draft_id, unit};
 
     use crate::theme::Appearance;
     use crate::{Services, UiState, WordApp};
@@ -878,6 +1336,111 @@ mod tests {
 
     fn app() -> WordApp {
         WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default())
+    }
+
+    fn defaults_harness() -> egui_kittest::Harness<'static, WordApp> {
+        let mut a = app();
+        a.run("file.options", json!({"pane": "defaults"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h
+    }
+
+    /// The Defaults pane edits the default style itself: its "Save" adopts the style shown (the
+    /// open document is untouched), and the pane's draft starts from the app's built-in sheet.
+    #[test]
+    fn the_defaults_pane_edits_and_adopts_a_style() {
+        let mut h = defaults_harness();
+        let doc_style = h.state().session.doc.styles.get("Normal").cloned();
+        // The editor was filled from the built-in default (not from the document's accident).
+        let draft = h.ctx.data(|d| d.get_temp::<StyleDraft>(style_draft_id())).expect("a style draft");
+        assert_eq!(draft.id, "Normal");
+        let builtin = draft_from_style(&wordcraft_doc::styles::StyleSheet::builtin(), "Normal").expect("built-in Normal");
+        assert_eq!((draft.font.clone(), draft.size, draft.color.clone()), (builtin.font, builtin.size, builtin.color));
+        // The styles section's "Set as Default" adopts it.
+        h.query_all_by_label("Set as Default").next().expect("styles Set as Default").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.defaults.style_ids(), ["Normal"]);
+        assert_eq!(h.state().session.doc.styles.get("Normal").cloned(), doc_style, "the open document is untouched");
+    }
+
+    /// "Import from Document" fills the editor with the document's style, without adopting it.
+    #[test]
+    fn importing_a_style_fills_the_editor_without_adopting_it() {
+        let mut h = defaults_harness();
+        h.state_mut().run("styles.modify", json!({"style": "Normal", "chr": {"font": "Georgia", "size": 15.0}})).unwrap();
+        h.run_steps(3);
+        h.query_all_by_label("Import from Document").next().expect("Import").click();
+        h.run_steps(3);
+        let draft = h.ctx.data(|d| d.get_temp::<StyleDraft>(style_draft_id())).expect("a style draft");
+        assert_eq!(draft.font, "Georgia", "the editor shows the document's definition");
+        assert_eq!(draft.size, 15.0);
+        assert!(h.state().session.defaults.is_empty(), "importing alone adopts nothing");
+    }
+
+    /// The page section adopts the values in its own controls, with no document involved.
+    #[test]
+    fn the_defaults_pane_adopts_the_page_setup_it_shows() {
+        let mut h = defaults_harness();
+        let (w0, m0) = (h.state().session.doc.last_section.page_w, h.state().session.doc.last_section.margin_top);
+        h.ctx.data_mut(|d| {
+            let page = d.get_temp_mut_or_insert_with(page_draft_id(), PageDraft::default_page);
+            page.paper = (8.27, 11.69);
+            page.top = 1.0;
+            page.bottom = 1.0;
+            page.left = 1.0;
+            page.right = 1.0;
+            page.color = "181818".into();
+        });
+        h.run_steps(2);
+        // The page section's "Set as Default" is the second one in the pane.
+        h.query_all_by_label("Set as Default").nth(1).expect("page Set as Default").click();
+        h.run_steps(3);
+        let page = h.state().session.defaults.page.expect("page defaults");
+        let ppu = crate::options::unit().pt_per_unit();
+        assert!((page.page_w - 8.27 * ppu).abs() < 0.1 && (page.page_h - 11.69 * ppu).abs() < 0.1, "{page:?}");
+        assert!((page.margin_top - 1.0 * ppu).abs() < 0.1);
+        // The pane shows what was stored, so the fields can't claim a value the model limited.
+        let shown = h.ctx.data(|d| d.get_temp::<PageDraft>(page_draft_id())).expect("the page draft");
+        assert!((shown.paper.0 - 8.27).abs() < 0.02 && (shown.paper.1 - 11.69).abs() < 0.02, "{shown:?}");
+        assert_eq!(page.page_color, Some(wordcraft_doc::Rgb(0x18, 0x18, 0x18)));
+        assert_eq!(
+            (h.state().session.doc.last_section.page_w, h.state().session.doc.last_section.margin_top),
+            (w0, m0),
+            "the open document is untouched"
+        );
+    }
+
+    /// "Import from Document" in the page section fills the editor with the open document's page
+    /// setup, and adopting it is a separate, explicit step.
+    #[test]
+    fn importing_the_page_does_not_adopt_it() {
+        let mut h = defaults_harness();
+        h.state_mut()
+            .run(
+                "defaults.savePageValues",
+                json!({"pageW": 500.0, "pageH": 700.0, "marginTop": 30.0, "marginBottom": 30.0, "marginLeft": 30.0, "marginRight": 30.0}),
+            )
+            .unwrap();
+        // The document itself has another page setup.
+        h.state_mut().run("layout.size", json!({"width": 400.0, "height": 600.0})).unwrap();
+        h.run_steps(3);
+        // Import the page (the second "Import from Document" in the pane).
+        h.query_all_by_label("Import from Document").nth(1).expect("page Import").click();
+        h.run_steps(3);
+        let ppu = crate::options::unit().pt_per_unit();
+        let draft = h.ctx.data(|d| d.get_temp::<PageDraft>(page_draft_id())).expect("the page draft");
+        assert!((draft.paper.0 * ppu - 400.0).abs() < 0.5 && (draft.paper.1 * ppu - 600.0).abs() < 0.5, "{draft:?}");
+        // The defaults still hold what was adopted before the import, not the document's page.
+        let page = h.state().session.defaults.page.expect("page defaults");
+        assert!((page.page_w - 500.0).abs() < 0.1 && (page.page_h - 700.0).abs() < 0.1, "{page:?}");
     }
 
     fn nav_harness(language: &str, percent: u16) -> egui_kittest::Harness<'static, WordApp> {

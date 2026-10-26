@@ -196,6 +196,8 @@ impl Session {
             doc: _,
             sel: _,
             view: _,
+            // App preferences for future documents, shared by every open document.
+            defaults: _,
             pending: _,
             path: _,
             file_name: _,

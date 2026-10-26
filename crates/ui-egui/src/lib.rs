@@ -314,6 +314,10 @@ pub struct UiState {
     /// Headings whose sub-headings the Navigation pane hides (#1997); per session, not saved.
     #[serde(skip)]
     pub nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
+    /// Defaults for new documents (File › Options › Defaults): styles and page setup. The session
+    /// owns them while running (see [`WordApp::prefs`]); they are never applied to an open
+    /// document.
+    pub defaults: wordcraft_doc::defaults::DocumentDefaults,
     pub show_discord: bool,
     /// User name (File › Options) for comments and tracked changes; empty keeps the default.
     pub author: String,
@@ -437,6 +441,7 @@ impl Default for UiState {
             pane_places: Default::default(),
             pane_order: Vec::new(),
             nav_collapsed: Default::default(),
+            defaults: Default::default(),
             show_discord: true,
             author: String::new(),
             window: None,
@@ -958,6 +963,7 @@ impl WordApp {
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
+        ui.defaults = self.session.defaults.clone();
         ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
         ui.keyboard = self.session.keymap.clone();
@@ -1007,6 +1013,10 @@ impl WordApp {
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
+        // Defaults for new documents: cleaned up, then owned by the session.
+        let mut defaults = std::mem::take(&mut self.ui.defaults);
+        defaults.sanitize();
+        self.session.defaults = defaults;
         self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
         // Keys for commands this version doesn't have are dropped.

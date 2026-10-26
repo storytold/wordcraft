@@ -21,6 +21,49 @@ fn text(s: &Session) -> String {
     s.doc.plain_text(StoryRef::Body)
 }
 
+/// File › Options › Defaults: the style and the page setup adopted for new documents are what a
+/// new document starts from, and the open document is never touched.
+#[test]
+fn adopted_defaults_start_every_new_document() {
+    let mut s = s();
+    run(&mut s, "defaults.saveStyle", json!({"style": "Normal", "chr": {"font": "Courier New", "size": 11.0}}));
+    run(&mut s, "defaults.savePageValues", json!({"pageW": 420.0, "pageH": 595.0, "marginTop": 42.0}));
+    let state = run(&mut s, "defaults.state", json!({}));
+    assert_eq!(state["styles"]["ids"], json!(["Normal"]));
+    assert_eq!(state["page"]["pageW"], json!(420.0));
+
+    let d = s.blank_document();
+    assert_eq!((d.last_section.page_w, d.last_section.page_h), (420.0, 595.0), "the adopted page");
+    assert_eq!(d.last_section.margin_top, 42.0, "the adopted margin");
+    let normal = d.styles.get("Normal").expect("Normal is a built-in");
+    assert_eq!((normal.chr.font.as_deref(), normal.chr.size), (Some("Courier New"), Some(11.0)), "the adopted style");
+    // A document already open keeps its own page and styles.
+    assert_ne!((s.doc.last_section.page_w, s.doc.last_section.page_h), (420.0, 595.0));
+
+    // Reset takes the app's own page back.
+    run(&mut s, "defaults.reset", json!({"what": "page"}));
+    let d = s.blank_document();
+    assert_ne!((d.last_section.page_w, d.last_section.page_h), (420.0, 595.0), "the app's paper again");
+}
+
+/// A `defaults.saveStyles` naming an unknown style changes nothing: the ids before the bad one
+/// are not adopted either, and a page update keeps the values it does not name.
+#[test]
+fn a_failed_save_styles_changes_nothing() {
+    let mut s = s();
+    run(&mut s, "defaults.savePageValues", json!({"pageW": 420.0, "pageH": 595.0, "marginTop": 30.0}));
+    let before = run(&mut s, "defaults.state", json!({}));
+    let r = s.run("defaults.saveStyles", &json!({"what": ["Normal", "NoSuchStyle"]}));
+    assert!(r.is_err(), "the unknown style is refused");
+    assert_eq!(run(&mut s, "defaults.state", json!({})), before, "nothing was adopted");
+
+    // A page update builds on what is already adopted (not on another document's page).
+    run(&mut s, "defaults.savePageValues", json!({"marginTop": 42.0}));
+    let state = run(&mut s, "defaults.state", json!({}));
+    assert_eq!(state["page"]["pageW"], json!(420.0), "the size it did not name");
+    assert_eq!(state["page"]["marginTop"], json!(42.0), "the margin it did name");
+}
+
 #[test]
 fn doc_extension_dispatches_to_docbin() {
     // Garbage bytes with a .doc name must produce an error through the Word 97-2003

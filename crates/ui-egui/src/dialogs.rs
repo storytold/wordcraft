@@ -1376,6 +1376,10 @@ impl Dialog {
             }
             "newStyle" => Dialog::NewStyle { name: "Style1".into(), based_on: "Normal".into(), back: false },
             "manageStyles" => Dialog::ManageStyles { alphabetical: false, selected: s("style") },
+            "modifyStyle" => {
+                let id = if s("style").is_empty() { "Normal".to_string() } else { s("style") };
+                return Dialog::modify_style(app, &id);
+            }
             "newTableStyle" | "modifyTableStyle" => crate::dialogs_table_style::open(app, name)?,
             "commands" => Dialog::Commands { query: String::new(), swallow: true },
             "icons" => Dialog::Icons { query: String::new(), category: String::new(), selected: String::new() },
@@ -1774,7 +1778,7 @@ fn run_as_one_step(app: &mut WordApp, commands: Vec<(&str, Value)>) -> Result<()
 /// Page Setup's Paper group (#1433): a Paper size list (the named sizes and Custom size) and
 /// the width and height. The fields follow the orientation (the wide side is the width in
 /// landscape), and a typed size that is wider than tall turns the orientation to landscape.
-fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, custom: &mut bool) {
+pub(crate) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, custom: &mut bool) {
     if (*landscape && paper.0 < paper.1) || (!*landscape && paper.0 > paper.1) {
         *paper = (paper.1, paper.0);
     }
@@ -1817,6 +1821,64 @@ fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, c
     });
 }
 
+/// The property fields the Modify Style dialog and the Defaults pane's style editor share: what
+/// a style says for itself, resolved for display (as the dialog has always shown it).
+pub(crate) struct StyleFields<'a> {
+    pub name: &'a mut String,
+    pub font: &'a mut String,
+    pub size: &'a mut f32,
+    pub bold: &'a mut bool,
+    pub italic: &'a mut bool,
+    pub color: &'a mut String,
+    pub before: &'a mut f32,
+    pub after: &'a mut f32,
+}
+
+/// The style's properties: name, font, size, colour, spacing and emphasis. Shared by Modify Style
+/// and File › Options › Defaults, so both edit a style in exactly the same terms. `name_editable`
+/// is false where renaming would break the `basedOn` links of the default styles.
+pub(crate) fn style_fields(app: &mut WordApp, ui: &mut Ui, f: StyleFields<'_>, name_editable: bool, display_name: Option<&str>) {
+    egui::Grid::new("style_fields").num_columns(2).show(ui, |ui| {
+        let name_label = ui.label(tl!("Name:"));
+        if name_editable {
+            ui.text_edit_singleline(f.name).labelled_by(name_label.id);
+        } else {
+            // A default style keeps its name: other styles are based on that id.
+            ui.label(egui::RichText::new(display_name.unwrap_or(f.name.as_str())).weak());
+        }
+        ui.end_row();
+        let font_label = ui.label(tl!("Font:"));
+        let shown = app.previews.font_shown(f.font);
+        let fams = app.previews.families();
+        let prev = app.previews.font_preview_fn();
+        if let Some(face) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
+            if face == crate::widgets::ADD_FONT {
+                let _ = app.run("font.add", json!({}));
+            } else {
+                *f.font = app.previews.font_stored(&face);
+            }
+        }
+        let _ = font_label;
+        ui.end_row();
+        let size_label = ui.label(tl!("Size:"));
+        ui.add(egui::DragValue::new(f.size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id);
+        ui.end_row();
+        let color_label = ui.label(tl!("Color:"));
+        ui.text_edit_singleline(f.color).labelled_by(color_label.id);
+        ui.end_row();
+        ui.label(tl!("Space before/after:"));
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(f.before).range(0.0..=1584.0)).accessible_name(tl!("Space before"));
+            ui.add(egui::DragValue::new(f.after).range(0.0..=1584.0)).accessible_name(tl!("Space after"));
+        });
+        ui.end_row();
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(f.bold, tl!("Bold"));
+        ui.checkbox(f.italic, tl!("Italic"));
+    });
+}
+
 /// Cancel key for dialogs: Escape everywhere, plus ⌘. (Command+Period) on macOS.
 pub(crate) fn cancel_key_pressed(ui: &Ui) -> bool {
     ui.input(|i| i.key_pressed(egui::Key::Escape) || (cfg!(target_os = "macos") && i.modifiers.command && i.key_pressed(egui::Key::Period)))
@@ -1833,6 +1895,15 @@ pub(crate) fn ok_cancel_responses(ui: &mut Ui, draw_ok: impl FnOnce(&mut Ui) -> 
         let cancelb = ui.button(cancel);
         (draw_ok(ui), cancelb)
     }
+}
+
+/// The `styles.modify`/`defaults.saveStyle` parameters the fields stand for.
+pub(crate) fn style_params(id: &str, name: &str, font: &str, size: f32, bold: bool, italic: bool, color: &str, before: f32, after: f32) -> Value {
+    let mut chr = json!({"font": font, "size": size, "bold": bold, "italic": italic});
+    if let Some(c) = wordcraft_doc::Rgb::parse(color) {
+        chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
+    }
+    json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": before, "spaceAfter": after}, "apply": true})
 }
 
 pub(crate) fn buttons(ui: &mut Ui, ok: &str) -> (bool, bool) {
@@ -2744,57 +2815,38 @@ fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
             ok || cancel
         }
         Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } => {
-            egui::Grid::new("ms").num_columns(2).show(ui, |ui| {
-                let name_label = ui.label(tl!("Name:"));
-                ui.text_edit_singleline(name).labelled_by(name_label.id);
-                ui.end_row();
-                ui.label(tl!("Font:"));
-                let shown = app.previews.font_shown(font);
-                let fams = app.previews.families();
-                let prev = app.previews.font_preview_fn();
-                if let Some(f) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
-                    if f == crate::widgets::ADD_FONT {
-                        let _ = app.run("font.add", json!({}));
-                    } else {
-                        *font = app.previews.font_stored(&f);
+            style_fields(app, ui, StyleFields { name, font, size, bold, italic, color, before, after }, true, None);
+            // "Set as Default in the App": the definition shown becomes the default for new
+            // documents *and* goes to the open document's style, so the two agree. It is one
+            // engine command, so the document isn't changed if adopting the default fails.
+            let mut adopted = false;
+            ui.horizontal(|ui| {
+                if ui.button(tl!("Set as Default in the App")).clicked() {
+                    let params = style_params(id, name, font, *size, *bold, *italic, color, *before, *after);
+                    match app.run("defaults.saveStyle", params) {
+                        Ok(_) => {
+                            let shown = app.session.doc.styles.get(id).map(crate::i18n::style_name).unwrap_or_else(|| id.clone());
+                            app.status(format!("{shown} — {}", tl!("Saved")));
+                            adopted = true;
+                        }
+                        Err(e) => app.status(e),
                     }
                 }
-                ui.end_row();
-                let size_label = ui.label(tl!("Size:"));
-                ui.add(egui::DragValue::new(size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id);
-                ui.end_row();
-                let color_label = ui.label(tl!("Color:"));
-                ui.text_edit_singleline(color).labelled_by(color_label.id);
-                ui.end_row();
-                ui.label(tl!("Space before/after:"));
-                ui.horizontal(|ui| {
-                    ui.add(egui::DragValue::new(before).range(0.0..=1584.0)).accessible_name(tl!("Space before"));
-                    ui.add(egui::DragValue::new(after).range(0.0..=1584.0)).accessible_name(tl!("Space after"));
-                });
-                ui.end_row();
-            });
-            ui.horizontal(|ui| {
-                ui.checkbox(bold, tl!("Bold"));
-                ui.checkbox(italic, tl!("Italic"));
             });
             let (ok, cancel) = buttons(ui, tl!("OK"));
             if ok {
-                let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
-                if let Some(c) = wordcraft_doc::Rgb::parse(color) {
-                    chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
-                }
-                let _ =
-                    app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+                let params = style_params(id, name, font, *size, *bold, *italic, color, *before, *after);
+                let _ = app.run("styles.modify", params);
             }
-            if (ok || cancel) && *back {
+            if (ok || cancel || adopted) && *back {
                 app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });
             }
-            if (ok || cancel)
+            if (ok || cancel || adopted)
                 && let Some(r) = resume.take()
             {
                 app.dialog = Some(*r);
             }
-            ok || cancel
+            ok || cancel || adopted
         }
         Dialog::ManageStyles { alphabetical, selected } => manage_styles(app, ui, alphabetical, selected),
         Dialog::TableStyle { id, name, based_on, region, regions, basis, pen } => {
@@ -5294,6 +5346,65 @@ mod tests {
             },
             app,
         )
+    }
+
+    /// closes; the other styles and the undo stack of other edits are untouched.
+    #[test]
+    fn the_modify_style_dialog_adopts_the_style_for_new_documents() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = app_harness(app_with("Test"));
+        let heading = h.state().session.doc.styles.get("Heading1").cloned();
+        h.state_mut().dialog = Some(Dialog::ModifyStyle {
+            back: false,
+            resume: None,
+            id: "Normal".into(),
+            name: "Normal".into(),
+            font: "Georgia".into(),
+            size: 15.0,
+            bold: false,
+            italic: false,
+            color: "112233".into(),
+            before: 4.0,
+            after: 3.0,
+        });
+        h.run_steps(3);
+        h.get_by_label("Set as Default in the App").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none(), "the dialog closes when both writes succeeded");
+        let normal = h.state().session.doc.styles.get("Normal").expect("Normal");
+        assert_eq!(normal.chr.font.as_deref(), Some("Georgia"), "the document's style changed");
+        assert_eq!(normal.chr.size, Some(15.0));
+        assert_eq!(normal.para.space_before, Some(4.0));
+        assert_eq!(h.state().session.defaults.style_ids(), ["Normal"], "only this style was adopted");
+        assert_eq!(h.state().session.defaults.styles[0].chr.size, Some(15.0));
+        assert_eq!(h.state().session.doc.styles.get("Heading1").cloned(), heading, "other styles unchanged");
+    }
+
+    /// Cancel in the Modify Style dialog leaves both the document and the defaults alone.
+    #[test]
+    fn cancelling_modify_style_saves_no_default() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = app_harness(app_with("Test"));
+        let normal = h.state().session.doc.styles.get("Normal").cloned();
+        h.state_mut().dialog = Some(Dialog::ModifyStyle {
+            back: false,
+            resume: None,
+            id: "Normal".into(),
+            name: "Normal".into(),
+            font: "Georgia".into(),
+            size: 15.0,
+            bold: true,
+            italic: false,
+            color: "auto".into(),
+            before: 1.0,
+            after: 1.0,
+        });
+        h.run_steps(3);
+        h.get_by_label("Cancel").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none());
+        assert_eq!(h.state().session.doc.styles.get("Normal").cloned(), normal, "no pending edit applied");
+        assert!(h.state().session.defaults.is_empty(), "and nothing adopted");
     }
 
     /// The Page Setup paper size as opened, in points, and the Paper size entry it shows.

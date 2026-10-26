@@ -974,22 +974,37 @@ fn modify_style(s: &mut Session, v: &Value) -> CmdResult {
         v.get("para").map(|c| serde_json::from_value(c.clone())).transpose().map_err(|e| CmdError::Params(e.to_string()))?;
     let next = p::str(v, "next").map(str::to_string);
     let name = p::str(v, "name").map(str::to_string);
-    let st = s.doc.styles.get_mut(&id).ok_or_else(|| CmdError::Params("no such style".into()))?;
+    overlay_style(s, &id, chr.as_ref(), para.as_ref(), name.as_deref(), next.as_deref())?;
+    sel_result(s)
+}
+
+/// Apply the Modify Style dialog's properties to a style of the open document: an overlay, so
+/// properties the dialog doesn't show (list numbering, borders, the paragraph after…) stay.
+/// Shared with the defaults, which adopt the same definition for new documents.
+pub(crate) fn overlay_style(
+    s: &mut Session,
+    id: &str,
+    chr: Option<&CharProps>,
+    para: Option<&ParaProps>,
+    name: Option<&str>,
+    next: Option<&str>,
+) -> Result<(), CmdError> {
+    let st = s.doc.styles.get_mut(id).ok_or_else(|| CmdError::Params("no such style".into()))?;
     if let Some(c) = chr {
-        st.chr.overlay(&c);
+        st.chr.overlay(c);
     }
     if let Some(pp) = para {
-        st.para.overlay(&pp);
+        st.para.overlay(pp);
     }
     if let Some(n) = next {
-        st.next = Some(n);
+        st.next = Some(n.to_string());
     }
     if let Some(n) = name.filter(|n| !n.trim().is_empty()) {
-        st.name = n;
+        st.name = n.to_string();
     }
     // Every paragraph's layout depends on styles: bump all revisions.
     touch_all(s);
-    sel_result(s)
+    Ok(())
 }
 
 /// Update Style to Match Selection: the style takes on how the selection looks — its paragraph
