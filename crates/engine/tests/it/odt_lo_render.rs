@@ -48,6 +48,7 @@ fn attr(tag: &str, name: &str) -> Option<f64> {
 
 fn lines(pdf: &Path) -> Vec<Line> {
     let out = Command::new("pdftotext").args(["-bbox-layout".as_ref(), pdf.as_os_str(), "-".as_ref()]).output().unwrap();
+    assert!(out.status.success(), "pdftotext {}: {}", pdf.display(), String::from_utf8_lossy(&out.stderr));
     let xml = String::from_utf8_lossy(&out.stdout).into_owned();
     let mut v = Vec::new();
     for (page, body) in xml.split("<page ").skip(1).enumerate() {
@@ -61,14 +62,38 @@ fn lines(pdf: &Path) -> Vec<Line> {
     v
 }
 
-/// Render `docs` (name, document) as `.docx` and `.odt` through LibreOffice in one run; the PDFs
-/// of each, `(docx, odt)`, by name.
-fn render(soffice: &Path, docs: &[(&str, &Document)]) -> (PathBuf, Vec<(PathBuf, PathBuf)>) {
-    let dir = match std::env::var("WORDCRAFT_LO_KEEP") {
-        Ok(d) => PathBuf::from(d),
-        Err(_) => std::env::temp_dir().join(format!("wordcraft-odt-lo-{}", std::process::id())),
-    };
-    std::fs::create_dir_all(&dir).unwrap();
+/// Where the files and PDFs go: `WORDCRAFT_LO_KEEP`, kept, or a fresh temporary directory removed
+/// when this is dropped, also when the test fails.
+struct OutDir {
+    path: PathBuf,
+    keep: bool,
+}
+
+impl OutDir {
+    fn new() -> OutDir {
+        let (path, keep) = match std::env::var("WORDCRAFT_LO_KEEP") {
+            Ok(d) => (PathBuf::from(d), true),
+            Err(_) => {
+                let nanos = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+                (std::env::temp_dir().join(format!("wordcraft-odt-lo-{}-{nanos}", std::process::id())), false)
+            }
+        };
+        std::fs::create_dir_all(&path).unwrap();
+        OutDir { path, keep }
+    }
+}
+
+impl Drop for OutDir {
+    fn drop(&mut self) {
+        if !self.keep {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+/// Render `docs` (name, document) as `.docx` and `.odt` through LibreOffice in one run, in `dir`;
+/// the PDFs of each, `(docx, odt)`, by name.
+fn render(soffice: &Path, dir: &Path, docs: &[(&str, &Document)]) -> Vec<(PathBuf, PathBuf)> {
     let mut files = Vec::new();
     for (name, doc) in docs {
         for ext in ["docx", "odt"] {
@@ -82,24 +107,27 @@ fn render(soffice: &Path, docs: &[(&str, &Document)]) -> (PathBuf, Vec<(PathBuf,
     let profile = format!("-env:UserInstallation=file://{}", dir.join("profile").display());
     let st = Command::new(soffice)
         .args([profile.as_str(), "--headless", "--norestore", "--convert-to", "pdf", "--outdir"])
-        .arg(&dir)
+        .arg(dir)
         .args(&files)
         .output()
         .unwrap();
     assert!(st.status.success(), "soffice: {}", String::from_utf8_lossy(&st.stderr));
-    let pdfs = docs.iter().map(|(name, _)| (dir.join(format!("{name}_docx.pdf")), dir.join(format!("{name}_odt.pdf")))).collect();
-    (dir, pdfs)
+    docs.iter().map(|(name, _)| (dir.join(format!("{name}_docx.pdf")), dir.join(format!("{name}_odt.pdf")))).collect()
 }
 
 /// Pages and line positions of the two PDFs: same page count, every reference line found on the
-/// same page with the same text, at most `tol` points off either way.
+/// same page with the same text, at most `tol` points off either way, and no ODT line left over.
 fn compare(name: &str, docx: &Path, odt: &Path, tol: f64) -> Result<(), String> {
     compare_lines(name, lines(docx), lines(odt), tol)
 }
 
 fn compare_lines(name: &str, a: Vec<Line>, b: Vec<Line>, tol: f64) -> Result<(), String> {
+    if a.is_empty() {
+        return Err(format!("{name}: no text in the reference PDF"));
+    }
     let pages = |l: &[Line]| l.iter().map(|l| l.page + 1).max().unwrap_or(0);
     let mut errs = Vec::new();
+    let mut used = vec![false; b.len()];
     if pages(&a) != pages(&b) {
         errs.push(format!("pages: docx {} odt {}", pages(&a), pages(&b)));
     }
@@ -120,9 +148,11 @@ fn compare_lines(name: &str, a: Vec<Line>, b: Vec<Line>, tol: f64) -> Result<(),
         };
         let same = |a: &str, b: &str| norm(a) == norm(b);
         // A drawing's text may come before or after the paragraph it is anchored in.
-        let here = |m: &&Line| m.page == l.page && same(&m.text, &l.text);
-        let found = b.iter().enumerate().skip(next).find(|(_, m)| here(m)).or_else(|| b.iter().enumerate().find(|(_, m)| here(m)));
+        // Each ODT line matches one reference line.
+        let here = |j: usize, m: &Line| !used[j] && m.page == l.page && same(&m.text, &l.text);
+        let found = b.iter().enumerate().skip(next).find(|(j, m)| here(*j, m)).or_else(|| b.iter().enumerate().find(|(j, m)| here(*j, m)));
         if let Some((j, _)) = found {
+            used[j] = true;
             next = j + 1;
         }
         match found.map(|(_, m)| m) {
@@ -130,6 +160,9 @@ fn compare_lines(name: &str, a: Vec<Line>, b: Vec<Line>, tol: f64) -> Result<(),
             Some(m) => errs.push(format!("line {i} {:?} p{}: at {:.1},{:.1} vs {:.1},{:.1}", l.text, l.page + 1, l.x, l.y, m.x, m.y)),
             None => errs.push(format!("line {i} {:?} p{} y {:.1}: not on that page", l.text, l.page + 1, l.y)),
         }
+    }
+    for (m, _) in b.iter().zip(&used).filter(|(_, u)| !**u) {
+        errs.push(format!("odt line {:?} p{} y {:.1}: not in the docx", m.text, m.page + 1, m.y));
     }
     if errs.is_empty() { Ok(()) } else { Err(format!("{name}: {} of {} lines differ\n{}", errs.len(), a.len(), errs.join("\n"))) }
 }
@@ -272,15 +305,25 @@ fn odt_lays_out_like_the_docx_in_libreoffice() {
     };
     let a = with_shipped_fonts(sections_and_styles());
     let docs = [("sections", &a)];
-    let (dir, pdfs) = render(&soffice, &docs);
+    let dir = OutDir::new();
+    let pdfs = render(&soffice, &dir.path, &docs);
     let mut errs = Vec::new();
     for ((name, _), (docx, odt)) in docs.iter().zip(&pdfs) {
         if let Err(e) = compare(name, docx, odt, 1.0) {
             errs.push(e);
         }
     }
-    if std::env::var("WORDCRAFT_LO_KEEP").is_err() {
-        let _ = std::fs::remove_dir_all(&dir);
-    }
     assert!(errs.is_empty(), "{}", errs.join("\n\n"));
+}
+
+#[test]
+fn the_comparison_wants_reference_text_and_every_odt_line() {
+    let line = |page, y, text: &str| Line { page, x: 72.0, y, text: text.into() };
+    assert!(compare_lines("empty", Vec::new(), Vec::new(), 1.0).is_err(), "nothing extracted is no match");
+    let a = vec![line(0, 72.0, "One line."), line(0, 86.0, "Two lines.")];
+    assert!(compare_lines("same", a.clone(), a.clone(), 1.0).is_ok());
+    let mut b = a.clone();
+    b.push(line(0, 100.0, "One line."));
+    let e = compare_lines("extra", a, b, 1.0).unwrap_err();
+    assert!(e.contains("odt line \"One line.\" p1 y 100.0: not in the docx"), "{e}");
 }
