@@ -867,6 +867,29 @@ struct WindowsSpeech {
     creation_flags: u32,
 }
 
+/// The PowerShell program and common arguments for `script`. Both the per-sentence fallback and
+/// the persistent host build their `Command` from this, so their path and flags cannot drift.
+#[cfg(any(target_os = "windows", test))]
+fn windows_command(system_root: Option<std::ffi::OsString>, script: &str) -> WindowsSpeech {
+    WindowsSpeech {
+        program: windows_powershell(system_root),
+        args: ["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), script.into()],
+        // PowerShell is a console program: without this, every sentence flashes a console window
+        // over the document (#1122).
+        creation_flags: CREATE_NO_WINDOW,
+    }
+}
+
+#[cfg(target_os = "windows")]
+impl WindowsSpeech {
+    fn command(&self) -> std::process::Command {
+        let mut command = std::process::Command::new(&self.program);
+        command.args(&self.args);
+        std::os::windows::process::CommandExt::creation_flags(&mut command, self.creation_flags);
+        command
+    }
+}
+
 /// SAPI rate: -10 (a third of normal speed) … 10 (three times).
 #[cfg(any(target_os = "windows", test))]
 fn sapi_rate(rate: f32) -> i64 {
@@ -891,13 +914,7 @@ fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Opti
     let script = format!(
         "Add-Type -AssemblyName System.Speech; $s = New-Object System.Speech.Synthesis.SpeechSynthesizer; $s.Rate = {r}; {voice}$m = New-Object System.IO.MemoryStream; [Console]::OpenStandardInput().CopyTo($m); $s.Speak([System.Text.Encoding]::UTF8.GetString($m.ToArray()))"
     );
-    WindowsSpeech {
-        program: windows_powershell(system_root),
-        args: ["-NoProfile".into(), "-NonInteractive".into(), "-Command".into(), script],
-        // PowerShell is a console program: without this, every sentence flashes a console window
-        // over the document (#1122).
-        creation_flags: CREATE_NO_WINDOW,
-    }
+    windows_command(system_root, &script)
 }
 
 /// Speak one sentence with the system's speech program, stopping early when `changed()`. When
@@ -934,10 +951,7 @@ fn speak_with(text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> b
     #[cfg(target_os = "windows")]
     {
         let w = windows_speech(std::env::var_os("SystemRoot"), rate, lang);
-        let mut c = Command::new(&w.program);
-        c.args(&w.args);
-        std::os::windows::process::CommandExt::creation_flags(&mut c, w.creation_flags);
-        tries.push((c, lang.and_then(primary_tag).is_some()));
+        tries.push((w.command(), lang.and_then(primary_tag).is_some()));
     }
     #[cfg(all(unix, not(target_os = "macos")))]
     {
