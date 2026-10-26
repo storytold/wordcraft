@@ -160,6 +160,10 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
             pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
             pen.frect(2.0, 16.5, 18.0, 19.0, yellow);
         }
+        "highlightNoColor" => {
+            pen.fill(&[(5.0, 12.0), (11.0, 4.0), (14.0, 7.0), (8.0, 15.0)], c);
+            pen.line(&[(5.0, 12.0), (3.5, 15.0), (8.0, 15.0)]);
+        }
         "fontcolor" => {
             pen.text(10.0, 9.0, 14.0, "A", c, false);
             pen.frect(2.0, 16.5, 18.0, 19.0, red);
@@ -896,7 +900,13 @@ pub fn paint(p: &Painter, r: Rect, name: &str, c: Color32, accent: Color32) {
         }
         "translate" | "language" => {
             pen.text(6.5, 7.0, 9.0, "A", c, true);
-            pen.text(13.5, 13.5, 9.0, "あ", a, false);
+            // あ drawn as strokes, like the rest of the icon set: the interface fonts need not
+            // carry Japanese (craft-fonts is optional), and a letter without a glyph drew a box.
+            pen.line_c(&[(11.6, 10.8), (15.4, 10.8)], a);
+            pen.line_c(&[(13.5, 8.8), (13.5, 13.9)], a);
+            pen.line_c(&[(11.0, 13.9), (16.2, 13.9)], a);
+            pen.circle(13.5, 16.1, 1.8, a);
+            pen.line_c(&[(15.0, 17.1), (15.8, 18.0)], a);
         }
         "deleteComment" => {
             pen.closed(&[(2.5, 3.5), (17.5, 3.5), (17.5, 13.5), (9.0, 13.5), (5.0, 17.0), (5.0, 13.5), (2.5, 13.5)], c);
@@ -1615,5 +1625,28 @@ pub fn library(p: &Painter, r: Rect, icon: &wordcraft_render::icon_lib::Icon, c:
             }
             p.add(Shape::line(pts, stroke));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn has_default_highlight_bar(name: &str) -> bool {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint(ui.painter(), Rect::from_min_size(Pos2::ZERO, egui::vec2(20.0, 20.0)), name, Color32::BLACK, Color32::BLACK);
+        });
+        let yellow = Color32::from_rgb(0xF2, 0xC8, 0x11);
+        let found = output.shapes.iter().any(|shape| matches!(&shape.shape, Shape::Rect(rect) if rect.fill == yellow));
+        output.drop_without_applying_deltas();
+        found
+    }
+
+    /// #4087: No Color uses the pen-only icon, not the ordinary icon's yellow fallback bar.
+    #[test]
+    fn no_colour_highlight_icon_has_no_yellow_bar() {
+        assert!(has_default_highlight_bar("highlight"));
+        assert!(!has_default_highlight_bar("highlightNoColor"));
     }
 }

@@ -724,7 +724,8 @@ impl Reader<'_> {
                 if sc.fields.iter().any(|f| f.phase == Phase::Instr) {
                     return;
                 }
-                let c = match k.attr("w:type") {
+                let ty = k.attr("w:type").map(|t| t.trim().to_ascii_lowercase());
+                let c = match ty.as_deref() {
                     Some("page") => "\u{000C}",
                     Some("column") => "\u{000E}",
                     _ => "\n",
@@ -739,7 +740,13 @@ impl Reader<'_> {
             "w:noBreakHyphen" => self.emit_text(sc, pb, "\u{2011}", props),
             "w:softHyphen" => self.emit_text(sc, pb, "\u{00AD}", props),
             "w:sym" => {
-                let ch = k.attr("w:char").and_then(|h| u32::from_str_radix(h.trim(), 16).ok()).and_then(char::from_u32).filter(|c| *c as u32 >= 0x20);
+                let h_str = k.attr("w:char").map(|h| {
+                    let s = h.trim();
+                    let s = s.strip_prefix("0x").or_else(|| s.strip_prefix("0X")).unwrap_or(s);
+                    let s = s.strip_prefix("U+").or_else(|| s.strip_prefix("u+")).unwrap_or(s);
+                    s.strip_prefix("#x").or_else(|| s.strip_prefix("#X")).unwrap_or(s)
+                });
+                let ch = h_str.and_then(|h| u32::from_str_radix(h, 16).ok()).and_then(char::from_u32).filter(|c| *c as u32 >= 0x20);
                 if let Some(ch) = ch {
                     let mut p = props.clone();
                     // The symbol's own font, kept apart from the run's (ECMA-376 §17.3.3.30).
@@ -783,7 +790,7 @@ impl Reader<'_> {
                 }
             }
             "w:footnoteReference" | "w:endnoteReference" => {
-                let foot = k.name == "w:footnoteReference";
+                let foot = k.local() == "footnoteReference";
                 let fid = k.attr("w:id").and_then(int).unwrap_or(i64::MIN);
                 let map = if foot { &self.footnotes } else { &self.endnotes };
                 if let Some(id) = map.get(&fid).copied() {
@@ -794,7 +801,7 @@ impl Reader<'_> {
             }
             // The note's own number at the start of its text: a reference to the note being read.
             "w:footnoteRef" | "w:endnoteRef" => {
-                let kind = if k.name == "w:footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
+                let kind = if k.local() == "footnoteRef" { NoteKind::Footnote } else { NoteKind::Endnote };
                 if let Some((nk, id)) = self.current_note
                     && nk == kind
                 {
@@ -1066,6 +1073,10 @@ impl Reader<'_> {
 
     // ---- drawings ----
 
+    /// Read a `w:drawing` frame and dispatch its payload to the picture, shape or graphic reader.
+    /// Frame dimensions are converted from EMUs to bounded point values; placement, alternative
+    /// text and drawing ids are carried into the object. Returns `None` when the frame or payload
+    /// cannot be read. Ink written by WordCraft keeps its tool's caps rather than an outline cap.
     fn read_drawing(&mut self, sc: &mut StoryCtx, d: &El, rels: &Rels) -> Option<InlineObject> {
         let (c, anchored) = match d.child("wp:inline") {
             Some(c) => (c, false),
@@ -1142,13 +1153,16 @@ impl Reader<'_> {
             let wsp = direct_shape.or_else(|| gd.find("wps:wsp"))?;
             let mut obj = self.read_wsp(sc, wsp, rels, w, h, float);
             // A freeform: whether it's ink WordCraft wrote.
-            if let InlineObject::Shape { freeform: Some(f), .. } = &mut obj
+            if let InlineObject::Shape { freeform: Some(f), extra, .. } = &mut obj
                 && let Some(name) = c.child("wp:docPr").and_then(|p| p.attr("name"))
                 && let Some(tool) = super::freeform::ink_tool(name)
             {
                 let f = Arc::make_mut(f);
                 f.ink = Some(tool);
                 f.order = super::freeform::ink_order(name);
+                // Ink's round ends belong to its tool, not the optional shape outline. Keep
+                // its canonical model unchanged when reading the round cap the writer adds.
+                extra.cap = Default::default();
             }
             obj
         };
@@ -1461,6 +1475,10 @@ impl Reader<'_> {
         }
     }
 
+    /// Build a shape from `wps:wsp`, using frame dimensions `w` and `h` in points and the caller's
+    /// placement. Reads geometry, paint, effects and connector ends, and creates a text-box story
+    /// when present within the nesting limit. Explicit outline caps are preserved; missing or
+    /// unknown caps use flat ends, without resolving theme-inherited caps.
     fn read_wsp(&mut self, sc: &mut StoryCtx, wsp: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> InlineObject {
         let sppr = wsp.child("wps:spPr");
         float.set_spin(xfrm_spin(sppr));
@@ -1533,7 +1551,12 @@ impl Reader<'_> {
         {
             part.body.auto_color = Some(rgb);
         }
-        let mut extra = ShapeExtra { dash: super::shape_style::line_dash(ln), outline_fill: paint.outline_fill, ..ShapeExtra::default() };
+        let mut extra = ShapeExtra {
+            dash: super::shape_style::line_dash(ln),
+            cap: wordcraft_doc::connector::LineCap::from_ooxml(ln.and_then(|e| e.attr("cap")).unwrap_or("flat")),
+            outline_fill: paint.outline_fill,
+            ..ShapeExtra::default()
+        };
         // A rounded rectangle's own corner (`adj`, ECMA-376 §20.1.10.56); other presets drawn as
         // rounded rectangles keep the default.
         if prst == "roundRect" {
@@ -1728,6 +1751,15 @@ impl Reader<'_> {
         let stroke = on("stroked").then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
         let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
         let fill = vml_fill(shape, shapetype);
+        let endcap = shape
+            .child("v:stroke")
+            .and_then(|s| s.attr("endcap"))
+            .or_else(|| shapetype.and_then(|t| t.child("v:stroke")).and_then(|s| s.attr("endcap")));
+        let cap = match endcap {
+            Some("square") => wordcraft_doc::connector::LineCap::Square,
+            Some("round") => wordcraft_doc::connector::LineCap::Round,
+            _ => wordcraft_doc::connector::LineCap::Flat,
+        };
         let kind = match shape.local() {
             "line" => Some(ShapeKind::Line),
             "rect" => Some(ShapeKind::Rectangle),
@@ -1751,7 +1783,7 @@ impl Reader<'_> {
             let font = tp
                 .attr("style")
                 .and_then(|s| vml_style(s, "font-family"))
-                .map(|f| f.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace()).chars().take(100).collect::<String>())
+                .map(|f| css_string(f).chars().take(100).collect::<String>())
                 .filter(|f| !f.is_empty());
             // The shapetype's WordArt shape (`o:spt` 136-175) bends the text like DrawingML's warp.
             let warp = vml_spt(shape, shapetype, type_id)
@@ -1830,7 +1862,7 @@ impl Reader<'_> {
                 story,
                 freeform: None,
                 effects: Default::default(),
-                extra: Default::default(),
+                extra: ShapeExtra { cap, ..Default::default() },
             });
         }
         // A freeform: its `path`, in its `coordsize` space; a `v:fill` with no opacity
@@ -1859,11 +1891,11 @@ impl Reader<'_> {
                 story: None,
                 freeform: Some(Arc::new(f)),
                 effects: Default::default(),
-                extra: Default::default(),
+                extra: ShapeExtra { cap, ..Default::default() },
             });
         }
         let kind = kind?;
-        let mut extra = ShapeExtra::default();
+        let mut extra = ShapeExtra { cap, ..Default::default() };
         if kind == ShapeKind::Line {
             // Arrowheads (`v:stroke` startarrow / endarrow): any but `none` is drawn.
             let arrow = |name: &str| shape.child("v:stroke").and_then(|s| s.attr(name)).is_some_and(|v| v != "none");
@@ -2231,6 +2263,49 @@ fn vml_style<'a>(style: &'a str, key: &str) -> Option<&'a str> {
     style.rsplit(';').filter_map(|d| d.split_once(':')).find(|(k, _)| k.trim().eq_ignore_ascii_case(key)).map(|(_, v)| v.trim())
 }
 
+/// A `v:textpath` style value with one pair of surrounding quotes removed and the writer's CSS
+/// escapes mapped back: `\` + up to six hex digits + one optional space is that character, and
+/// `\x` is `x` (#3994; `write::watermark::run` writes them). Only the surrounding pair goes, so a
+/// font name that starts or ends with an apostrophe keeps it. Word writes font names raw, and a
+/// lone trailing `\` none of CSS would accept stays literal.
+fn css_string(v: &str) -> String {
+    let v = v.trim();
+    let v = ['"', '\''].into_iter().find_map(|q| v.strip_prefix(q)?.strip_suffix(q)).unwrap_or(v).trim();
+    let mut out = String::with_capacity(v.len());
+    let mut chars = v.chars();
+    while let Some(c) = chars.next() {
+        if c != '\\' {
+            out.push(c);
+            continue;
+        }
+        let mut hex = String::new();
+        while hex.len() < 6 {
+            match chars.clone().next() {
+                Some(h) if h.is_ascii_hexdigit() => {
+                    hex.push(h);
+                    chars.next();
+                }
+                _ => break,
+            }
+        }
+        if hex.is_empty() {
+            match chars.next() {
+                Some(e) => out.push(e),
+                None => out.push('\\'),
+            }
+        } else {
+            if let Some(d) = u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32) {
+                out.push(d);
+            }
+            // One whitespace after the escape is its terminator, not part of the value.
+            if chars.clone().next().is_some_and(char::is_whitespace) {
+                chars.next();
+            }
+        }
+    }
+    out
+}
+
 /// Placement of a VML shape (ECMA-376 Part 4, VML): `position:absolute` in its style makes it
 /// float, offset by `left`/`margin-left` and `top`/`margin-top` from the area named by
 /// `mso-position-horizontal-relative` / `mso-position-vertical-relative` (unless aligned with
@@ -2332,7 +2407,7 @@ fn vml_watermark(shape: &El) -> Option<wordcraft_doc::Watermark> {
     let font = tp
         .attr("style")
         .and_then(|s| vml_style(s, "font-family"))
-        .map(|f| f.trim_matches(|c: char| c == '"' || c == '\'' || c.is_whitespace()).chars().take(100).collect::<String>())
+        .map(|f| css_string(f).chars().take(100).collect::<String>())
         .filter(|f| !f.is_empty())
         .unwrap_or(default.font);
     let color = shape.attr("fillcolor").and_then(vml_color).unwrap_or(default.color);

@@ -70,6 +70,11 @@ pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
 }
 
+/// The craft-fonts Georgian (`"Geor"`) Regular face for the interface. Empty without craft-fonts.
+pub fn georgian_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Geor") && f.style == "Regular")
+}
+
 /// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,
 /// Chinese, and Korean faces ordered for the selected interface language. Mixing the faces within
 /// a line would mix glyph styles, so the first face should cover the interface language. Empty

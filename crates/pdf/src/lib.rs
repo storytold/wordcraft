@@ -27,7 +27,6 @@ use std::num::NonZeroU16;
 use std::sync::Arc;
 
 use craft_pdf::write::{self, Metadata, WriteError, Writer, backend as krilla};
-use krilla::action::{Action, LinkAction};
 use krilla::annotation::{Annotation, LinkAnnotation, Target};
 use krilla::color::rgb;
 use krilla::destination::XyzDestination;
@@ -48,7 +47,7 @@ use wordcraft_doc::{Document, Path as DocPath, Rgb, StoryRef};
 use wordcraft_fonts::FaceRef;
 use wordcraft_geom::Rect;
 use wordcraft_layout::display::Paint;
-use wordcraft_layout::display::{DisplayOptions, Draw, Stroke as LineStyle, page_display};
+use wordcraft_layout::display::{DisplayOptions, Draw, ItemDisplay, Stroke as LineStyle};
 use wordcraft_layout::para::{ClKind, LineEnd};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, Page, Placed, layout};
 use wordcraft_metafile::{Picture, PlacedItem};
@@ -692,20 +691,10 @@ fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Option<Path> {
             pb.move_to(x0, y0);
             pb.line_to(x1, y1);
         }
-        ShapeKind::Arrow => {
-            let h = r.h;
-            poly(
-                &mut pb,
-                &[
-                    (x0, cy - h * 0.2),
-                    (x1 - h * 0.5, cy - h * 0.2),
-                    (x1 - h * 0.5, y0),
-                    (x1, cy),
-                    (x1 - h * 0.5, y1),
-                    (x1 - h * 0.5, cy + h * 0.2),
-                    (x0, cy + h * 0.2),
-                ],
-            )
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => {
+            let pts: Vec<(f32, f32)> =
+                wordcraft_doc::wrap::arrow_outline(kind, r.w, r.h).iter().map(|&(u, v)| (x0 + u * r.w, y0 + v * r.h)).collect();
+            poly(&mut pb, &pts)
         }
         ShapeKind::Star => {
             let pts: Vec<(f32, f32)> = (0..10)
@@ -758,7 +747,9 @@ struct Exporter<'a> {
     /// Bookmark positions by name (the first of a name wins), gathered once: looking each internal
     /// link up by walking the whole document made a long document with a linked table of contents
     /// take seconds to export.
-    bookmarks: std::cell::OnceCell<HashMap<String, wordcraft_doc::Pos>>,
+    /// Bookmarks by exact name, and by ASCII-lowercased name for the case-blind fallback; the
+    /// first in document order wins either way.
+    bookmarks: std::cell::OnceCell<(HashMap<String, wordcraft_doc::Pos>, HashMap<String, wordcraft_doc::Pos>)>,
 }
 
 /// What the content being drawn is, for tagging.
@@ -929,8 +920,10 @@ impl Exporter<'_> {
             placeholders: false,
             ..Default::default()
         };
+        // What the items share (the authors' colours, the clipped cells) is worked out once per page.
+        let shown = ItemDisplay::new(self.doc, page);
         for it in page.header.iter().chain(page.footer.iter()) {
-            let draws = self.draws(page, it, &dopts);
+            let draws = shown.draws(it, &dopts);
             self.tagged(s, Role::Artifact(ArtifactType::Other), None, |me, s| {
                 for d in &draws {
                     me.draw(s, d);
@@ -938,7 +931,7 @@ impl Exporter<'_> {
             });
         }
         for it in &page.items {
-            let draws = self.draws(page, it, &dopts);
+            let draws = shown.draws(it, &dopts);
             match it {
                 Placed::Lines { story, path, para, .. } => {
                     let idx = self.entry(*story, path, para);
@@ -1000,19 +993,6 @@ impl Exporter<'_> {
         }
     }
 
-    /// Display items for one placed item.
-    fn draws(&self, page: &Page, it: &Placed, dopts: &DisplayOptions) -> Vec<Draw> {
-        let mut items = vec![it.clone()];
-        // Lines in a cell cut off at its edge are drawn inside its clip: `page_display` finds the
-        // cell among the items (cells themselves draw nothing).
-        if matches!(it, Placed::Lines { .. }) {
-            let clipped = page.header.iter().chain(&page.footer).chain(&page.items).filter(|c| matches!(c, Placed::Cell { clip: true, .. }));
-            items.extend(clipped.cloned());
-        }
-        let one = Page { w: page.w, h: page.h, section: page.section, number: page.number, items, body: page.body, ..Default::default() };
-        page_display(self.doc, &one, dopts)
-    }
-
     /// A heading's text for bookmarks and tags: what the pages show. That leaves out what its
     /// layout `pl` left out (hidden text, resolved as laid out, so table formatting counts too) and,
     /// without markup, tracked deletions.
@@ -1053,6 +1033,10 @@ impl Exporter<'_> {
         tree
     }
 
+    /// Paint one display item on the PDF surface in its current point-coordinate system.
+    /// Nested clips and turns are pushed and popped around their child items. Shape and path
+    /// outlines set their own dash and cap state, then clear their fill and stroke; ink retains
+    /// round caps independently of the optional shape-outline setting.
     fn draw(&mut self, s: &mut Surface, d: &Draw) {
         match d {
             Draw::Figure { draws, .. } => {
@@ -1087,7 +1071,7 @@ impl Exporter<'_> {
             }
             Draw::Line { x0, y0, x1, y1, width, color, stroke, alpha, .. } => self.line(s, (*x0, *y0, *x1, *y1), *width, *color, *stroke, *alpha),
             Draw::Image { rect, media, crop, alpha, .. } => self.picture(s, rect, media, crop, *alpha),
-            Draw::Path { segs, fill: f, stroke, stroke_width, dash } => {
+            Draw::Path { segs, fill: f, stroke, stroke_width, dash, cap } => {
                 let mut pb = PathBuilder::new();
                 append_path(&mut pb, &wordcraft_layout::display::seg_path(segs));
                 let Some(p) = pb.finish() else { return };
@@ -1097,6 +1081,7 @@ impl Exporter<'_> {
                     // Width 0 (or none) is a hairline.
                     width: if stroke_width.is_finite() && *stroke_width > 0.0 { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
                     dash: (!dash.is_empty()).then(|| StrokeDash { array: dash.clone(), offset: 0.0 }),
+                    line_cap: pdf_line_cap(*cap),
                     ..Default::default()
                 }));
                 if f.is_some() || stroke.is_some() {
@@ -1135,7 +1120,7 @@ impl Exporter<'_> {
                 s.draw_path(&p);
                 s.set_stroke(None);
             }
-            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner, dash } => {
+            Draw::Shape { rect, kind, fill: f, stroke, stroke_width, effects, corner, dash, cap } => {
                 let Some(p) = shape_path(*kind, rect, *corner) else { return };
                 let can_fill = *kind != ShapeKind::Line;
                 let fx = effects.sanitized();
@@ -1160,6 +1145,7 @@ impl Exporter<'_> {
                     paint: rgb::Color::new(c.0, c.1, c.2).into(),
                     width: if stroke_width.is_finite() { stroke_width.clamp(0.25, 200.0) } else { 0.75 },
                     dash: (!dash.is_empty()).then(|| StrokeDash { array: dash.clone(), offset: 0.0 }),
+                    line_cap: pdf_line_cap(*cap),
                     ..Default::default()
                 }));
                 if f.is_some() && can_fill || stroke.is_some() {
@@ -1549,14 +1535,15 @@ impl Exporter<'_> {
     /// Where a bookmark is: (output page, x, y) — the page and line its start lands on, which
     /// in a paragraph split across pages need not be the paragraph's first page.
     fn bookmark(&self, name: &str) -> Option<(usize, f32, f32)> {
-        let marks = self.bookmarks.get_or_init(|| {
-            let mut m = HashMap::new();
+        let (exact, folded) = self.bookmarks.get_or_init(|| {
+            let (mut exact, mut folded) = (HashMap::new(), HashMap::new());
             for (n, pos) in self.doc.bookmarks() {
-                m.entry(n).or_insert(pos);
+                folded.entry(n.to_ascii_lowercase()).or_insert_with(|| pos.clone());
+                exact.entry(n).or_insert(pos);
             }
-            m
+            (exact, folded)
         });
-        let pos = marks.get(name).or_else(|| marks.iter().find(|(k, _)| k.eq_ignore_ascii_case(name)).map(|(_, v)| v))?.clone();
+        let pos = exact.get(name).or_else(|| folded.get(&name.to_ascii_lowercase()))?.clone();
         if let Some(c) = self.lay.caret(&pos)
             && let Some(out) = self.out_index.get(&c.page)
         {
@@ -1605,11 +1592,11 @@ impl Exporter<'_> {
                     None => continue,
                 }
             } else {
-                let url = target.trim();
-                if url.is_empty() {
-                    continue;
+                // Unsafe targets (javascript:, file:, shares, other schemes) get no link; the text stays.
+                match write::uri_target(target) {
+                    Some(t) => t,
+                    None => continue,
                 }
-                Target::Action(Action::Link(LinkAction::new(url.to_string())))
             };
             v.push(Annotation::new_link(LinkAnnotation::new(rect, t), Some(target.clone())));
         }
@@ -1708,11 +1695,12 @@ impl Exporter<'_> {
         match font {
             Some(font) => {
                 let upem = face.upem.max(1.0) as f32;
+                let ends = cluster_ends(&shaped.iter().map(|g| g.cluster).collect::<Vec<_>>(), t.text.len());
                 let kg: Vec<KrillaGlyph> = shaped
                     .iter()
                     .enumerate()
                     .map(|(i, g)| {
-                        let end = shaped.iter().skip(i + 1).map(|n| n.cluster).find(|cl| *cl > g.cluster).unwrap_or(t.text.len());
+                        let end = ends.get(i).copied().unwrap_or(t.text.len());
                         let start = g.cluster.min(end);
                         let x = lay.glyphs.get(i).map_or(0.0, |p| p.0);
                         let adv = match lay.glyphs.get(i + 1) {
@@ -1763,11 +1751,12 @@ impl Exporter<'_> {
         if font.is_none() && !self.outlined.contains(&face.id()) {
             return;
         }
+        let ends = cluster_ends(&shaped.iter().map(|g| g.cluster).collect::<Vec<_>>(), text.len());
         let glyphs: Vec<KrillaGlyph> = shaped
             .iter()
             .enumerate()
             .map(|(i, g)| {
-                let end = shaped.iter().skip(i + 1).map(|n| n.cluster).find(|cl| *cl > g.cluster).unwrap_or(text.len());
+                let end = ends.get(i).copied().unwrap_or(text.len());
                 let start = g.cluster.min(end);
                 KrillaGlyph::new(
                     GlyphId::new(g.gid),
@@ -1896,27 +1885,57 @@ fn path_from(b: &kurbo::BezPath) -> Option<Path> {
     pb.finish()
 }
 
+/// Where each glyph's text ends: the cluster (byte offset) of the first later glyph whose cluster
+/// is past the glyph's own, else `len`. One backward pass keeping the later clusters that can
+/// still be an answer, so a long run of glyphs sharing a cluster (combining marks) stays linear.
+fn cluster_ends(clusters: &[usize], len: usize) -> Vec<usize> {
+    let mut ends = vec![len; clusters.len()];
+    // Later clusters, nearest last, each greater than every one nearer.
+    let mut later: Vec<usize> = Vec::new();
+    for (end, &c) in ends.iter_mut().zip(clusters).rev() {
+        while later.last().is_some_and(|&n| n <= c) {
+            later.pop();
+        }
+        *end = later.last().copied().unwrap_or(len);
+        later.push(c);
+    }
+    ends
+}
+
 /// Decode a picture for embedding (validated with the `image` crate first, so a broken file
 /// can't fail the whole export).
 fn load_image(data: &Arc<Vec<u8>>) -> Option<Image> {
+    // The shared probe also charges what the decoder holds beside its output (#3644).
+    if !wordcraft_geom::picture::probe(data).is_ok_and(|p| p.fits(wordcraft_geom::MAX_DECODED_BYTES)) {
+        return None;
+    }
     load_image_within(data, wordcraft_geom::MAX_DECODED_BYTES)
 }
 
 /// [`load_image`] with an explicit RGBA byte budget (a small one in tests).
 fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Image> {
+    use image::ImageDecoder;
     let fmt = image::guess_format(data).ok()?;
-    // Header-only size check before anything is allocated (decode buffer + RGBA conversion are
-    // charged); the side limits and the default 512 MB allocation cap stay as a second guard.
-    let (hw, hh) = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?.into_dimensions().ok()?;
-    if !wordcraft_geom::decode_fits(hw, hh, budget) {
-        return None;
-    }
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?;
     let mut limits = image::Limits::default();
     limits.max_image_width = Some(MAX_IMAGE_SIDE);
     limits.max_image_height = Some(MAX_IMAGE_SIDE);
-    reader.limits(limits);
-    let dec = reader.decode().ok()?;
+    let reader = || {
+        let mut r = image::ImageReader::new(std::io::Cursor::new(data.as_slice())).with_guessed_format().ok()?;
+        r.limits(limits.clone());
+        Some(r)
+    };
+    // Header-only size check before anything is allocated (the decoder's buffer at its own pixel
+    // size, 8 bytes for 16-bit RGBA, plus the RGBA conversion are charged); the side limits and
+    // the default 512 MB allocation cap apply to the header read and the decode alike.
+    let (hw, hh, native) = {
+        let d = reader()?.into_decoder().ok()?;
+        let (w, h) = d.dimensions();
+        (w, h, u64::from(d.color_type().bytes_per_pixel()))
+    };
+    if !wordcraft_geom::decode_peak_fits(hw, hh, native, budget) {
+        return None;
+    }
+    let dec = reader()?.decode().ok()?;
     let (w, h) = (dec.width(), dec.height());
     if w == 0 || h == 0 || w > MAX_IMAGE_SIDE || h > MAX_IMAGE_SIDE {
         return None;
@@ -1925,6 +1944,15 @@ fn load_image_within(data: &Arc<Vec<u8>>, budget: u64) -> Option<Image> {
         return Image::from_jpeg(data.clone().into(), true).ok();
     }
     Some(Image::from_rgba8(dec.into_rgba8().into_raw(), w, h))
+}
+
+/// Map the document cap to the PDF backend for both shape and path outlines.
+fn pdf_line_cap(cap: wordcraft_doc::connector::LineCap) -> LineCap {
+    match cap {
+        wordcraft_doc::connector::LineCap::Flat => LineCap::Butt,
+        wordcraft_doc::connector::LineCap::Square => LineCap::Square,
+        wordcraft_doc::connector::LineCap::Round => LineCap::Round,
+    }
 }
 
 #[cfg(test)]

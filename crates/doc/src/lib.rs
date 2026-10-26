@@ -12,6 +12,7 @@
 
 pub mod bidi;
 mod byte_store;
+pub mod cfb_guard;
 pub mod chart;
 mod cjk_numbers;
 pub mod cluster;
@@ -26,6 +27,7 @@ pub mod fields;
 pub mod fill;
 pub mod freeform;
 pub mod graphic;
+pub mod ime_text;
 pub mod legacy_form;
 pub mod line_dash;
 pub mod link;
@@ -177,6 +179,95 @@ impl BoxBudget {
 
 pub fn para_block(p: Paragraph) -> Arc<Block> {
     Arc::new(Block::Para(p))
+}
+
+/// The same blocks: the same content. The blocks are compared by address first — the
+/// document is copy-on-write, so a block that changed was copied and has another address —
+/// and a block that was copied but holds the same content is compared by value.
+fn same_blocks(a: &Blocks, b: &Blocks) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| Arc::ptr_eq(x, y) || same_block(x, y))
+}
+
+/// The same block by value. A table's cells compare their blocks by address first too: an edit in
+/// one cell copies the whole table, which mustn't mean comparing every cell by value.
+fn same_block(a: &Block, b: &Block) -> bool {
+    match (a, b) {
+        (Block::Table(x), Block::Table(y)) => same_table(x, y),
+        _ => a == b,
+    }
+}
+
+/// The same table. Every field is listed, so a new one does not build until someone decides
+/// whether a change to it counts.
+fn same_table(a: &Table, b: &Table) -> bool {
+    let Table { props, grid, rows, controls } = a;
+    let Table { props: other_props, grid: other_grid, rows: other_rows, controls: other_controls } = b;
+    props == other_props
+        && grid == other_grid
+        && controls == other_controls
+        && rows.len() == other_rows.len()
+        && rows.iter().zip(other_rows).all(|(x, y)| same_row(x, y))
+}
+
+fn same_row(a: &Row, b: &Row) -> bool {
+    let Row { props, cells, controls } = a;
+    let Row { props: other_props, cells: other_cells, controls: other_controls } = b;
+    props == other_props
+        && controls == other_controls
+        && cells.len() == other_cells.len()
+        && cells.iter().zip(other_cells).all(|(x, y)| {
+            let Cell { props, blocks, controls } = x;
+            let Cell { props: other_props, blocks: other_blocks, controls: other_controls } = y;
+            props == other_props && controls == other_controls && same_blocks(blocks, other_blocks)
+        })
+}
+
+/// The same building blocks, their content compared by address first.
+fn same_glossary(a: &[BuildingBlock], b: &[BuildingBlock]) -> bool {
+    a.len() == b.len()
+        && a.iter().zip(b).all(|(x, y)| {
+            let BuildingBlock { name, gallery, category, description, guid, style, types, behaviors, blocks } = x;
+            let BuildingBlock {
+                name: other_name,
+                gallery: other_gallery,
+                category: other_category,
+                description: other_description,
+                guid: other_guid,
+                style: other_style,
+                types: other_types,
+                behaviors: other_behaviors,
+                blocks: other_blocks,
+            } = y;
+            name == other_name
+                && gallery == other_gallery
+                && category == other_category
+                && description == other_description
+                && guid == other_guid
+                && style == other_style
+                && types == other_types
+                && behaviors == other_behaviors
+                && same_blocks(blocks, other_blocks)
+        })
+}
+
+/// The same parts: the same keys, and each part the same.
+fn same_parts(a: &BTreeMap<u32, Part>, b: &BTreeMap<u32, Part>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((k1, p1), (k2, p2))| k1 == k2 && same_part(p1, p2))
+}
+
+/// The same part: the same kind, text body and blocks. Every field is listed, so a new one
+/// does not build until someone decides whether a change to it counts.
+fn same_part(a: &Part, b: &Part) -> bool {
+    let Part { kind, blocks, body } = a;
+    let Part { kind: other_kind, blocks: other_blocks, body: other_body } = b;
+    kind == other_kind && body == other_body && same_blocks(blocks, other_blocks)
+}
+
+/// The same bytes: the same content. The bytes are compared by address first — a changed
+/// picture was copied, so it has another address — and a picture that was copied but holds
+/// the same bytes is compared by value.
+fn same_bytes(a: &BTreeMap<String, Arc<Vec<u8>>>, b: &BTreeMap<String, Arc<Vec<u8>>>) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|((k1, v1), (k2, v2))| k1 == k2 && (Arc::ptr_eq(v1, v2) || **v1 == **v2))
 }
 
 /// Which story a position is in.
@@ -356,7 +447,8 @@ pub struct Comment {
     /// keeps tracking the same comment. `None` for comments made here: the writer assigns one.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub durable_id: Option<String>,
-    /// The comment's UTC timestamp from the file (`w16cex:dateUtc`); `date` is local time there.
+    /// The comment's UTC timestamp: from the file (`w16cex:dateUtc`, where `date` is local time),
+    /// or the time WordCraft stamped the comment with.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub date_utc: Option<String>,
 }
@@ -549,6 +641,10 @@ pub struct Settings {
     /// after plus the second's space before, not the larger of the two.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub sum_paragraph_spacing: bool,
+    /// `w:doNotExpandShiftReturn`: a justified line that ends in a manual line break keeps its
+    /// natural spacing; by default Word stretches it to the margin like a wrapped line.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub do_not_expand_shift_return: bool,
     /// Keep contextual paragraph spacing inside legacy table cells (`allowSpaceOfSameStyleInTable`).
     /// Word ignores the layout override in compatibility mode 15, but the flag still round-trips.
     pub allow_space_of_same_style_in_table: bool,
@@ -715,6 +811,7 @@ impl Default for Settings {
             compat_mode: COMPAT_MODE_CURRENT,
             roman_fonts: Vec::new(),
             sum_paragraph_spacing: false,
+            do_not_expand_shift_return: false,
             allow_space_of_same_style_in_table: false,
             grid_h: DEFAULT_GRID,
             grid_v: DEFAULT_GRID,
@@ -762,6 +859,50 @@ pub struct Document {
     /// The document's own building blocks (its glossary document), in file order.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub glossary: Vec<BuildingBlock>,
+    /// Lookup cache for [`Document::add_media`]; not part of the document (never saved, ignored
+    /// by `==`).
+    #[serde(skip)]
+    media_index: MediaIndex,
+}
+
+/// [`Document::media`] by content, so adding media is linear in the bytes added rather than a
+/// scan of every earlier image (CWE-407). Rebuilt whenever `media` changed size behind its back;
+/// a hit is always checked against `media`, so a stale entry can at worst miss a duplicate.
+#[derive(Clone, Default)]
+struct MediaIndex {
+    by_bytes: std::collections::HashMap<Arc<Vec<u8>>, String>,
+    /// `media.len()` when the index last matched it.
+    len: usize,
+    /// The number after the last generated `image{n}` key, so taken names are probed once.
+    next: usize,
+}
+
+impl MediaIndex {
+    fn rebuild(&mut self, media: &BTreeMap<String, Arc<Vec<u8>>>) {
+        self.by_bytes.clear();
+        // The first key (in key order) of equal bytes wins, as a scan would find it.
+        for (k, v) in media.iter().rev() {
+            self.by_bytes.insert(v.clone(), k.clone());
+        }
+        self.len = media.len();
+        self.next = 0;
+    }
+
+    fn find(&self, media: &BTreeMap<String, Arc<Vec<u8>>>, bytes: &Vec<u8>) -> Option<String> {
+        self.by_bytes.get(bytes).filter(|k| media.get(*k).is_some_and(|v| **v == *bytes)).cloned()
+    }
+}
+
+impl PartialEq for MediaIndex {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl std::fmt::Debug for MediaIndex {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("MediaIndex")
+    }
 }
 
 impl Default for Document {
@@ -790,6 +931,7 @@ impl Document {
             media: BTreeMap::new(),
             passthrough: BTreeMap::new(),
             glossary: Vec::new(),
+            media_index: MediaIndex::default(),
         }
     }
 
@@ -836,6 +978,72 @@ impl Document {
                 p.blocks.push(para_block(Paragraph::new()));
             }
         }
+    }
+
+    /// Whether the document holds the same content as `other`: the same blocks, the same
+    /// styles, lists, settings, comments and the rest.
+    ///
+    /// The blocks are compared by address first: the document is copy-on-write, so a block
+    /// that changed was copied and has another address. Comparing them by value would walk
+    /// the whole document, and this is asked after every command.
+    ///
+    /// Every field is listed, so a new one does not build until someone decides whether a
+    /// change to it counts (the same rule the session's edit snapshot follows).
+    pub fn same_content(&self, other: &Document) -> bool {
+        let Document {
+            body,
+            last_section,
+            parts,
+            styles,
+            numbering,
+            comments,
+            revisions,
+            settings,
+            core,
+            sources,
+            custom_props,
+            footnote_separators,
+            endnote_separators,
+            media,
+            passthrough,
+            glossary,
+            media_index: _,
+        } = self;
+        let Document {
+            body: other_body,
+            last_section: other_section,
+            parts: other_parts,
+            styles: other_styles,
+            numbering: other_numbering,
+            comments: other_comments,
+            revisions: other_revisions,
+            settings: other_settings,
+            core: other_core,
+            sources: other_sources,
+            custom_props: other_props,
+            footnote_separators: other_footnotes,
+            endnote_separators: other_endnotes,
+            media: other_media,
+            passthrough: other_passthrough,
+            glossary: other_glossary,
+            media_index: _,
+        } = other;
+        same_blocks(body, other_body)
+            && same_parts(parts, other_parts)
+            && last_section == other_section
+            && styles == other_styles
+            && numbering == other_numbering
+            && comments == other_comments
+            && revisions == other_revisions
+            && settings == other_settings
+            && core == other_core
+            && sources == other_sources
+            && custom_props == other_props
+            && footnote_separators == other_footnotes
+            && endnote_separators == other_endnotes
+            && same_bytes(media, other_media)
+            && same_bytes(passthrough, other_passthrough)
+            && same_glossary(glossary, other_glossary)
     }
 
     pub fn story(&self, s: StoryRef) -> Option<&Blocks> {
@@ -941,8 +1149,8 @@ impl Document {
         for story in stories {
             for path in self.para_paths(story) {
                 let Some(p) = self.para(story, &path) else { continue };
-                for off in p.object_offsets() {
-                    if p.object_at(off).is_some_and(|o| o.text_boxes().contains(&part)) {
+                for (off, o) in p.objects_with_offsets() {
+                    if o.text_boxes().contains(&part) {
                         return Some(Pos { story, path, off: off + para::OBJ.len_utf8() });
                     }
                 }
@@ -1402,17 +1610,32 @@ impl Document {
 
     /// Add a media item; returns its key (deduplicated by content).
     pub fn add_media(&mut self, bytes: Vec<u8>, ext: &str) -> String {
-        if let Some((k, _)) = self.media.iter().find(|(_, v)| v.as_slice() == bytes.as_slice()) {
-            return k.clone();
+        let ix = &mut self.media_index;
+        if ix.len != self.media.len() {
+            ix.rebuild(&self.media);
         }
-        let n = self.media.len() + 1;
-        let mut key = format!("image{n}.{ext}");
-        let mut i = n;
+        if let Some(k) = ix.find(&self.media, &bytes) {
+            return k;
+        }
+        if ix.by_bytes.contains_key(&bytes) {
+            // Stale (`media` was edited directly without changing its size): look again.
+            ix.rebuild(&self.media);
+            if let Some(k) = ix.find(&self.media, &bytes) {
+                return k;
+            }
+        }
+        let n = self.media.len().saturating_add(1);
+        let mut i = n.max(ix.next);
+        let mut key = format!("image{i}.{ext}");
         while self.media.contains_key(&key) {
-            i += 1;
+            i = i.saturating_add(1);
             key = format!("image{i}.{ext}");
         }
-        self.media.insert(key.clone(), Arc::new(bytes));
+        let bytes = Arc::new(bytes);
+        self.media.insert(key.clone(), bytes.clone());
+        ix.by_bytes.entry(bytes).or_insert_with(|| key.clone());
+        ix.len = self.media.len();
+        ix.next = i.saturating_add(1);
         key
     }
 
@@ -1447,22 +1670,22 @@ impl Document {
         let mut out: Vec<PermRange> = Vec::new();
         let stories = std::iter::once(StoryRef::Body).chain(self.parts.keys().map(|k| StoryRef::Part(*k)));
         for story in stories {
-            let mut open: Vec<usize> = Vec::new();
+            // Open ranges by id, latest last (an end closes the latest open range of its id).
+            let mut open: BTreeMap<u32, Vec<usize>> = BTreeMap::new();
             for path in self.para_paths(story) {
                 let Some(p) = self.para(story, &path) else { continue };
-                for off in p.object_offsets() {
-                    match p.object_at(off) {
-                        Some(InlineObject::PermStart { id, group, editor }) => {
+                for (off, o) in p.objects_with_offsets() {
+                    match o {
+                        InlineObject::PermStart { id, group, editor } => {
                             let start = Pos { story, path: path.clone(), off: off + para::OBJ.len_utf8() };
-                            open.push(out.len());
+                            open.entry(*id).or_default().push(out.len());
                             out.push(PermRange { id: *id, group: group.clone(), editor: editor.clone(), start: start.clone(), end: start });
                         }
-                        Some(InlineObject::PermEnd { id }) => {
-                            if let Some(k) = open.iter().rposition(|i| out.get(*i).is_some_and(|r| r.id == *id)) {
-                                let i = open.remove(k);
-                                if let Some(r) = out.get_mut(i) {
-                                    r.end = Pos { story, path: path.clone(), off };
-                                }
+                        InlineObject::PermEnd { id } => {
+                            if let Some(i) = open.get_mut(id).and_then(Vec::pop)
+                                && let Some(r) = out.get_mut(i)
+                            {
+                                r.end = Pos { story, path: path.clone(), off };
                             }
                         }
                         _ => {}
@@ -1471,7 +1694,7 @@ impl Document {
             }
             // A range left open runs to the end of its story.
             let end = self.end_of(story);
-            for i in open {
+            for i in open.into_values().flatten() {
                 if let Some(r) = out.get_mut(i) {
                     r.end = end.clone();
                 }
@@ -1485,8 +1708,8 @@ impl Document {
         let mut out = Vec::new();
         for path in self.para_paths(StoryRef::Body) {
             if let Some(p) = self.para(StoryRef::Body, &path) {
-                for off in p.object_offsets() {
-                    if let Some(InlineObject::BookmarkStart { name }) = p.object_at(off) {
+                for (off, o) in p.objects_with_offsets() {
+                    if let InlineObject::BookmarkStart { name } = o {
                         out.push((name.clone(), Pos { story: StoryRef::Body, path: path.clone(), off }));
                     }
                 }
@@ -1668,5 +1891,7 @@ fn story_word_count_of(bl: &Blocks, numbering: &Numbering, styles: &styles::Styl
     total
 }
 
+#[cfg(test)]
+mod test_log;
 #[cfg(test)]
 mod tests;

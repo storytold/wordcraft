@@ -81,12 +81,18 @@ pub(crate) fn anchors(
 ) -> Vec<(u32, InlineObject)> {
     let Some(pair) = pair else { return Vec::new() };
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for (cp, spa) in plc(table, pair, CB_SPA) {
         let i32_at = |o: usize| spa.get(o..o + 4).and_then(|b| b.try_into().ok()).map(i32::from_le_bytes).unwrap_or(0);
         let spid = i32_at(0) as u32;
         let [xl, yt, xr, yb] = [4, 8, 12, 16].map(i32_at);
         let flags = spa.get(20..22).map(|b| u16::from_le_bytes([b[0], b[1]])).unwrap_or(0);
         let Some(node) = shapes.get(&spid) else { continue };
+        // Word anchors each shape once. A repeated spid would build another copy of the shape,
+        // and of every member of a group, per anchor (#3710).
+        if !seen.insert(spid) {
+            continue;
+        }
         let tw = |v: i64| (v as f32 / 20.0).clamp(-2.0 * MAX_PT, 2.0 * MAX_PT);
         let (mut x, mut y) = (tw(xl as i64), tw(yt as i64));
         let (mut w, mut h) = (tw(xr as i64 - xl as i64).clamp(0.0, MAX_PT), tw(yb as i64 - yt as i64).clamp(0.0, MAX_PT));
@@ -190,7 +196,10 @@ fn leaf(sp: &Sp, w: f32, h: f32, float: Float, b: &Build, pics: &mut Pictures) -
         5 => ShapeKind::Triangle,
         6 => ShapeKind::RightTriangle,
         12 | 187 => ShapeKind::Star,
-        13 | 66 | 67 | 68 | 69 => ShapeKind::Arrow,
+        13 | 69 => ShapeKind::Arrow,
+        66 => ShapeKind::ArrowLeft,
+        67 => ShapeKind::ArrowDown,
+        68 => ShapeKind::ArrowUp,
         20 | 32 => ShapeKind::Line,
         74 => ShapeKind::Heart,
         202 => ShapeKind::TextBox,

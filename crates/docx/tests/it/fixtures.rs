@@ -49,6 +49,40 @@ fn read_body(body: &str) -> Document {
 }
 
 #[test]
+fn repeated_style_ids_use_last() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+        <w:style w:type="paragraph" w:styleId="Repeated"><w:name w:val="First"/>
+          <w:pPr><w:spacing w:after="240"/></w:pPr><w:rPr><w:b/><w:smallCaps/><w:sz w:val="28"/></w:rPr>
+        </w:style>
+        <w:style w:type="paragraph" w:styleId="Repeated"><w:name w:val="Last"/>
+          <w:pPr><w:spacing w:before="120"/></w:pPr><w:rPr><w:i/><w:caps/><w:sz w:val="20"/></w:rPr>
+        </w:style></w:styles>"#
+    );
+    let bytes = docx(
+        r#"<w:p><w:pPr><w:pStyle w:val="Repeated"/></w:pPr><w:r><w:t>Original style probe</w:t></w:r></w:p>"#,
+        &[("styles", "styles", "styles.xml")],
+        &[("word/styles.xml", &styles)],
+    );
+    let mut document = wordcraft_docx::read(&bytes).unwrap();
+    for round in 0..=2 {
+        let style = document.styles.get("Repeated").unwrap();
+        assert_eq!(style.name, "Last");
+        assert_eq!(style.chr.size, Some(10.0));
+        assert_eq!(style.chr.italic, Some(true));
+        assert_eq!(style.chr.bold, None);
+        assert_eq!(style.chr.caps, Some(true));
+        assert_eq!(style.chr.small_caps, None);
+        assert_eq!(style.para.space_before, Some(6.0));
+        assert_eq!(style.para.space_after, None);
+        assert_eq!(document.styles.styles.iter().filter(|style| style.id == "Repeated").count(), 1);
+        if round < 2 {
+            document = wordcraft_docx::read(&wordcraft_docx::write(&document).unwrap()).unwrap();
+        }
+    }
+}
+
+#[test]
 fn paragraph_default_presence_survives_repeated_saves() {
     // Omission leaves paragraph defaults application-defined (ISO 29500 pPrDefault).
     // An explicitly empty container must therefore remain distinct from omission.
@@ -337,6 +371,18 @@ fn pcl6_symbol_roundtrip() {
         assert_eq!(p.props_of_char(0).sym_font.as_deref(), Some("Symbol (PCL6)"));
         assert_eq!(p.shown_text(), "≥");
     }
+}
+
+#[test]
+fn sym_hex_prefixes_and_break_type_casing() {
+    let body = r##"
+<w:p>
+ <w:r><w:sym w:font="Wingdings" w:char="0xF0FC"/><w:sym w:font="Symbol" w:char="U+F061"/><w:sym w:font="Webdings" w:char="#xF061"/></w:r>
+ <w:r><w:br w:type="Page"/><w:br w:type="Column"/><w:br w:type="textWrapping"/></w:r>
+</w:p>"##;
+    let d = wordcraft_docx::read(&docx(body, &[], &[])).unwrap();
+    let p = paras(&d);
+    assert_eq!(p[0].plain_text(), "\u{F0FC}\u{F061}\u{F061}\u{C}\u{E}\n");
 }
 
 #[test]
@@ -681,6 +727,32 @@ fn a_style_defined_twice_is_its_last_definition() {
     assert_eq!((h.chr.bold, h.chr.italic, h.chr.size), (Some(true), None, Some(12.0)));
     assert_eq!(h.chr.color, Some(TextColor::Rgb(Rgb(0, 0, 0xFF))));
     assert_eq!(h.para.align, None, "nothing kept from the first definition");
+}
+
+/// #3889: Word in another language writes the TOC styles under ids in that language (`toc 1` is
+/// `Sumrio1` in Portuguese). They take the engine's ids, which Update Table and the writer know
+/// the entries by, with their formatting and references; an id the file already uses stays.
+#[test]
+fn localized_toc_style_ids_take_the_engine_ids() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="CabealhodoSumrio"><w:name w:val="TOC Heading"/><w:next w:val="Normal"/></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio1"><w:name w:val="toc 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:spacing w:after="100"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio2"><w:name w:val="toc 2"/><w:basedOn w:val="Sumrio1"/><w:pPr><w:ind w:left="220"/></w:pPr></w:style>
+<w:style w:type="paragraph" w:styleId="TOC3"><w:name w:val="toc 3"/></w:style>
+<w:style w:type="paragraph" w:styleId="Sumrio3"><w:name w:val="toc 3"/></w:style>
+</w:styles>"#
+    );
+    let p = |st: &str| format!(r#"<w:p><w:pPr><w:pStyle w:val="{st}"/></w:pPr><w:r><w:t>{st}</w:t></w:r></w:p>"#);
+    let body = ["CabealhodoSumrio", "Sumrio1", "Sumrio2", "Sumrio3"].map(p).concat();
+    let d = wordcraft_docx::read(&docx(&body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let ids: Vec<Option<&str>> = paras(&d).iter().map(|p| p.props.style.as_deref()).collect();
+    assert_eq!(ids, [Some("TOCHeading"), Some("TOC1"), Some("TOC2"), Some("Sumrio3")]);
+    let toc2 = d.styles.get("TOC2").unwrap();
+    assert_eq!((toc2.name.as_str(), toc2.based_on.as_deref(), toc2.para.indent_left), ("TOC 2", Some("TOC1"), Some(11.0)));
+    assert_eq!(d.styles.get("TOC1").unwrap().para.space_after, Some(5.0));
+    assert!(d.styles.get("Sumrio1").is_none() && d.styles.get("TOC3").is_some() && d.styles.get("Sumrio3").is_some());
 }
 
 #[test]
@@ -1040,7 +1112,7 @@ fn documents_without_a_compatibility_mode_are_laid_out_as_word_2007() {
 #[test]
 fn style_rfonts_without_ascii_inherits_doc_defaults_font() {
     // Issue #93: Normal names only East Asian / complex-script fonts, so Latin text keeps the
-    // docDefaults font. A run hinted as East Asian still uses its East Asian font.
+    // docDefaults font. A run hinted as East Asian keeps its East Asian font in `font_ea` (#4031).
     let styles = format!(
         r#"<w:styles {W_NS}>
  <w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:eastAsia="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/></w:rPr></w:rPrDefault><w:pPrDefault/></w:docDefaults>
@@ -1051,9 +1123,28 @@ fn style_rfonts_without_ascii_inherits_doc_defaults_font() {
     let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
     assert_eq!(d.styles.get("Normal").unwrap().chr.font, None);
     let ps = paras(&d);
-    let font = |p: &Paragraph| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props).font;
-    assert_eq!(font(ps[0]), "Calibri");
-    assert_eq!(font(ps[1]), "SimSun");
+    let rc = |p: &Paragraph| d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!(rc(ps[0]).font, "Calibri");
+    assert_eq!((rc(ps[1]).font.as_str(), rc(ps[1]).font_ea.as_deref()), ("Calibri", Some("SimSun")));
+}
+
+#[test]
+fn hinted_east_asian_or_cs_font_does_not_replace_the_latin_font() {
+    // Issue #4031: `w:hint` only picks the font for ambiguous characters, so a run with
+    // `w:eastAsia` + `w:hint="eastAsia"` and no `w:ascii` keeps the style's Latin font for its
+    // Latin text; the East Asian / complex-script fonts stay in their own fields.
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="paragraph" w:styleId="Heading2"><w:name w:val="heading 2"/><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman" w:eastAsiaTheme="majorEastAsia"/><w:b/></w:rPr></w:style>
+</w:styles>"#
+    );
+    let body = r#"<w:p><w:pPr><w:pStyle w:val="Heading2"/></w:pPr><w:r><w:rPr><w:rFonts w:eastAsia="宋体" w:hint="eastAsia"/></w:rPr><w:t>corn straw</w:t></w:r><w:r><w:rPr><w:rFonts w:cs="Arial" w:hint="cs"/></w:rPr><w:t>model fluids</w:t></w:r></w:p>"#;
+    let d = wordcraft_docx::read(&docx(body, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)])).unwrap();
+    let p = paras(&d)[0];
+    let ea = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[0].props);
+    assert_eq!((ea.font.as_str(), ea.font_ea.as_deref()), ("Times New Roman", Some("宋体")));
+    let cs = d.styles.resolve_char(p.props.style.as_deref(), &p.runs[1].props);
+    assert_eq!((cs.font.as_str(), cs.font_cs.as_str()), ("Times New Roman", "Arial"));
 }
 
 #[test]
@@ -2387,7 +2478,7 @@ fn vml_preset_shapes_are_drawn() {
     assert_eq!(kind(15), Some((ShapeKind::Rectangle, false)));
     assert_eq!(kind(16), Some((ShapeKind::Diamond, false)));
     assert_eq!(kind(17), Some((ShapeKind::Ellipse, false)));
-    assert_eq!(shape(18), Some((ShapeKind::Arrow, 60.0, 20.0, Some(Rgb(0xFF, 0xA5, 0x00)), black, 0.75, true, false)));
+    assert_eq!(shape(18), Some((ShapeKind::ArrowLeft, 60.0, 20.0, Some(Rgb(0xFF, 0xA5, 0x00)), black, 0.75, true, false)));
     assert_eq!(kind(19), Some((ShapeKind::Rectangle, false)));
     assert_eq!(kind(20), Some((ShapeKind::Star, false)));
     assert_eq!(shape(21), None);
@@ -2458,12 +2549,12 @@ fn vml_nearest_preset_shape_survives_saving() {
     let mut z = zip::ZipArchive::new(std::io::Cursor::new(saved.as_slice())).unwrap();
     let mut xml = String::new();
     std::io::Read::read_to_string(&mut z.by_name("word/document.xml").unwrap(), &mut xml).unwrap();
-    assert!(xml.contains(r#"prst="rightArrow""#), "{xml}");
+    assert!(xml.contains(r#"prst="leftArrow""#), "{xml}");
     let again = wordcraft_docx::read(&saved).unwrap();
     assert!(
         matches!(
             &paras(&again)[0].objects[..],
-            [InlineObject::Shape { kind: ShapeKind::Arrow, w: 60.0, h: 20.0, fill: Some(Fill::Solid { color: Rgb(0xFF, 0xA5, 0x00), .. }), .. }]
+            [InlineObject::Shape { kind: ShapeKind::ArrowLeft, w: 60.0, h: 20.0, fill: Some(Fill::Solid { color: Rgb(0xFF, 0xA5, 0x00), .. }), .. }]
         ),
         "{:?}",
         paras(&again)[0].objects
@@ -3527,6 +3618,22 @@ fn html_auto_spacing_off_is_read_and_kept() {
     assert_eq!(settings(""), (false, false));
 }
 
+/// `w:doNotExpandShiftReturn` in the settings' `w:compat`: justified lines ending in a manual line
+/// break keep their spacing (#3924).
+#[test]
+fn do_not_expand_shift_return_is_read_and_kept() {
+    let settings = |compat: &str| {
+        let s = format!(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:settings {W_NS}><w:compat>{compat}</w:compat></w:settings>"#);
+        let rels = [("rId9", "http://schemas.openxmlformats.org/officeDocument/2006/relationships/settings", "settings.xml")];
+        let d = wordcraft_docx::read(&docx("<w:p/>", &rels, &[("word/settings.xml", &s)])).unwrap();
+        let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+        (d.settings.do_not_expand_shift_return, again.settings.do_not_expand_shift_return)
+    };
+    assert_eq!(settings("<w:doNotExpandShiftReturn/>"), (true, true));
+    assert_eq!(settings(r#"<w:doNotExpandShiftReturn w:val="0"/>"#), (false, false));
+    assert_eq!(settings(""), (false, false));
+}
+
 /// A right triangle (`rtTriangle`) has its right angle at the bottom left: a cover page's white
 /// corner cut-outs drawn as isosceles triangles pointed the wrong way.
 #[test]
@@ -3664,6 +3771,50 @@ fn shape_dashes_import_and_save() {
             let InlineObject::Shape { w, h, stroke, stroke_width, extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
             assert_eq!(extra.dash, expected);
             assert_eq!((*w, *h, *stroke, *stroke_width), (70.0, 28.0, Some(Rgb(192, 0, 0)), 1.0));
+        }
+    }
+}
+
+/// Preserve explicit caps, default missing/unknown caps, and retain caps on unpainted outlines.
+#[test]
+fn shape_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in
+        [("", LineCap::Flat), ("flat", LineCap::Flat), ("sq", LineCap::Square), ("rnd", LineCap::Round), ("unknown", LineCap::Flat)]
+    {
+        for outline in [true, false] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" cap="{attr}""#) };
+            let fill = if outline { r#"<a:solidFill><a:srgbClr val="C00000"/></a:solidFill>"# } else { "<a:noFill/>" };
+            let sppr = format!(r#"<a:prstGeom prst="line"/><a:noFill/><a:ln w="12700"{cap}>{fill}</a:ln>"#);
+            let body = anchored_wsp("Cap probe", 889000, 0, &sppr, "", "<wps:cNvSpPr/>");
+            let d = read_body(&format!("<w:p>{body}</w:p>"));
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, outline={outline}");
+            }
+        }
+    }
+}
+
+/// Preserve direct and shapetype-inherited VML end caps through a DrawingML save.
+#[test]
+fn vml_line_caps_import_and_round_trip() {
+    use wordcraft_doc::connector::LineCap;
+    for (attr, expected) in [("", LineCap::Flat), ("flat", LineCap::Flat), ("square", LineCap::Square), ("round", LineCap::Round)] {
+        for inherited in [false, true] {
+            let cap = if attr.is_empty() { String::new() } else { format!(r#" endcap="{attr}""#) };
+            let stroke = format!("<v:stroke{cap}/>");
+            let (base, own) = if inherited { (stroke.as_str(), "") } else { ("", stroke.as_str()) };
+            let body = format!(
+                r##"<w:p><w:r><w:pict><v:shapetype id="probe" o:spt="32">{base}</v:shapetype><v:shape type="#probe" style="width:40pt;height:1pt" strokecolor="#ff0000">{own}</v:shape></w:pict></w:r></w:p>"##
+            );
+            let d = read_body(&body);
+            let saved = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
+            for doc in [&d, &saved] {
+                let InlineObject::Shape { extra, .. } = &paras(doc)[0].objects[0] else { panic!("shape") };
+                assert_eq!(extra.cap, expected, "{attr:?}, inherited={inherited}");
+            }
         }
     }
 }

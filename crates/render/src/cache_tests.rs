@@ -17,6 +17,8 @@ fn media_cache_only_hits_the_same_allocation() {
     c.insert("pic", &a, 7, 3);
     assert_eq!(c.get("pic", &a), Some(7));
     assert_eq!(c.get("pic", &b), None, "equal bytes in another allocation are another picture");
+    drop(a);
+    assert_eq!(c.get("pic", &Arc::new(vec![1u8, 2, 3])), None, "a freed source's address isn't reused");
 }
 
 #[test]
@@ -34,17 +36,18 @@ fn media_cache_is_bounded_by_bytes() {
 }
 
 #[test]
-fn media_cache_counts_the_source_bytes_it_holds() {
+fn media_cache_counts_what_it_keeps_and_lets_sources_go() {
     let mut c: MediaCache<Option<u32>> = MediaCache { map: HashMap::new(), bytes: 0 };
     let src = Arc::new(vec![0u8; 1000]);
     c.insert("broken", &src, None, 0);
-    assert_eq!(c.bytes, 1000, "an entry that decoded to nothing still holds its source");
     c.insert("pic", &src, Some(1), 24);
-    assert_eq!(c.bytes, 2024);
-    // A source over the whole budget is not kept, whatever it decoded to (calloc'd, so cheap).
+    assert_eq!(c.bytes, 24, "an entry counts what it decoded to");
+    assert_eq!(Arc::strong_count(&src), 1, "and doesn't keep its source alive");
+    // A source over the whole budget is cached by what it decoded to (calloc'd, so cheap), so a
+    // broken one isn't decoded again on every render either.
     let huge = Arc::new(vec![0u8; CACHE_BYTES + 1]);
     c.insert("huge", &huge, None, 0);
-    assert!(!c.map.contains_key("huge"));
+    assert_eq!(c.get("huge", &huge), Some(None));
     assert_eq!(CACHE_BYTES * 2, 256 * 1024 * 1024, "the image and vector caches share about 256 MB");
 }
 

@@ -10,7 +10,7 @@ workspace = true
 
 [dependencies]
 wordcraft-doc = { workspace = true }
-wordcraft-geom = { workspace = true }
+wordcraft-geom = { workspace = true, features = ["image"] }
 image = { workspace = true }
 quick-xml = { workspace = true }
 zip = { workspace = true }
@@ -25,4 +25,5 @@ chrono = { workspace = true }
 js-sys = "0.3"
 
 [dev-dependencies]
+wordcraft-doc = { workspace = true, features = ["test-support"] }
 proptest = { workspace = true }

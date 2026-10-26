@@ -320,10 +320,14 @@ pub fn hyphenate_word(word: &str, lim: &Limits) -> String {
 
 /// `word`, a word in `lang`, with `-` at every hyphenation point (tests and diagnostics).
 pub fn hyphenate_word_in(word: &str, lim: &Limits, lang: ProofLang) -> String {
-    let pts = hyphen_points_in(word, lim, lang);
-    let mut s = String::with_capacity(word.len() + pts.len());
+    let mut pts = hyphen_points_in(word, lim, lang);
+    pts.sort_unstable();
+    // Walk the points alongside the chars rather than searching them for each char.
+    let mut next = pts.into_iter().peekable();
+    let mut s = String::with_capacity(word.len() + 8);
     for (i, ch) in word.chars().enumerate() {
-        if pts.contains(&i) {
+        if next.next_if_eq(&i).is_some() {
+            while next.next_if_eq(&i).is_some() {}
             s.push('-');
         }
         s.push(ch);
@@ -707,6 +711,26 @@ mod tests {
     }
 
     #[test]
+    fn russian_hyphenation_and_hyphenated_output_are_linear() {
+        // A Russian word breaks at every syllable: each break used to be checked against all the
+        // earlier ones (#3657), and the hyphenated output searched every break for each char.
+        let word = |k: usize| "мама".repeat(k);
+        assert_eq!(word_breaks_in(&word(2), ProofLang::Ru).0, [2, 4, 6]);
+        assert_eq!(hyphenate_word_in(&word(2), &Limits::default(), ProofLang::Ru), "ма-ма-ма-ма");
+        // The breaks' rescan is a cheap one per break: it takes longer words to stand out.
+        for (what, k, repeat, f) in [
+            ("points", 1000, 3, (|w: &str| drop(hyphen_points_in(w, &Limits::default(), ProofLang::Ru))) as fn(&str)),
+            ("hyphenated", 400, 20, |w: &str| drop(hyphenate_word_in(w, &Limits::default(), ProofLang::Ru))),
+        ] {
+            let (small, big) = (word(k), word(8 * k));
+            let time = |w: &str| (0..repeat).for_each(|_| f(w));
+            let (t1, t8, ratio) = cost_ratio(8, || time(&small), || time(&big));
+            eprintln!("{what}: t(n) {t1:.4} s, t(8n) {t8:.4} s, ratio {ratio:.1}");
+            assert!(ratio < 24.0, "8x the letters, not linear: {what} {ratio:.1}");
+        }
+    }
+
+    #[test]
     fn heuristic_fallback() {
         let c: Vec<char> = "happen".chars().collect();
         assert_eq!(heuristic_points(&c), vec![3]);
@@ -852,7 +876,7 @@ mod tests {
     #[test]
     fn languages_without_patterns_keep_the_english_ones() {
         for w in ["hyphenation", "typography", "internationalization"] {
-            for lang in [ProofLang::Other, ProofLang::Cs, ProofLang::Id] {
+            for lang in [ProofLang::Other, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy] {
                 assert_eq!(hyphen_points_in(w, &Limits::default(), lang), hyphen_points(w, &Limits::default()), "{w}");
             }
         }

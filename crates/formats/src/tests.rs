@@ -748,8 +748,11 @@ fn code_spans_and_links_around_backticks_read_as_before() {
     // inside a code span in link text, and link text with a backtick that nothing closes.
     let flow = crate::markdown::parse("\\``e` `` a ` b `` then ``` and `c` [x `]` y](http://a.org) [p ` q](http://b.org) ``f");
     let FBlock::Para(p) = &flow.blocks[0] else { panic!("{:?}", flow.blocks) };
-    let spans: Vec<(String, bool, Option<String>)> =
-        p.inlines.iter().filter_map(|i| if let model::Inline::Text(t, f) = i { Some((t.clone(), f.code, f.link.clone())) } else { None }).collect();
+    let spans: Vec<(String, bool, Option<String>)> = p
+        .inlines
+        .iter()
+        .filter_map(|i| if let model::Inline::Text(t, f) = i { Some((t.clone(), f.code, f.link.as_deref().map(str::to_string))) } else { None })
+        .collect();
     let code: Vec<&str> = spans.iter().filter(|s| s.1).map(|s| s.0.as_str()).collect();
     assert_eq!(code, ["e", "a ` b", "c", "]"], "{spans:?}");
     let linked = |url: &str| spans.iter().filter(|s| s.2.as_deref() == Some(url)).map(|s| s.0.as_str()).collect::<String>();
@@ -766,7 +769,7 @@ fn latex_href_keeps_ampersand() {
         .iter()
         .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
         .flat_map(|p| p.inlines.iter())
-        .filter_map(|i| if let model::Inline::Text(_, f) = i { Some(f.link.clone()) } else { None })
+        .filter_map(|i| if let model::Inline::Text(_, f) = i { Some(f.link.as_deref().map(str::to_string)) } else { None })
         .collect();
     assert_eq!(links, [Some("https://e.com/a?b=1&c=2".to_string())]);
 
@@ -775,7 +778,7 @@ fn latex_href_keeps_ampersand() {
         .iter()
         .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
         .flat_map(|p| p.inlines.iter())
-        .filter_map(|i| if let model::Inline::Text(t, f) = i { Some((t.to_string(), f.link.clone())) } else { None })
+        .filter_map(|i| if let model::Inline::Text(t, f) = i { Some((t.to_string(), f.link.as_deref().map(str::to_string))) } else { None })
         .collect();
     let url = "https://e.com/a?b=1&c=2".to_string();
     assert_eq!(texts, [(url.clone(), Some(url))]);
@@ -789,7 +792,8 @@ fn brackets_do_not_turn_later_links_into_text() {
     let links = |md: &str| {
         let flow = crate::markdown::parse(md);
         let FBlock::Para(p) = &flow.blocks[0] else { panic!("{:?}", flow.blocks) };
-        let mut urls: Vec<String> = p.inlines.iter().filter_map(|i| if let model::Inline::Text(_, f) = i { f.link.clone() } else { None }).collect();
+        let mut urls: Vec<String> =
+            p.inlines.iter().filter_map(|i| if let model::Inline::Text(_, f) = i { f.link.as_deref().map(str::to_string) } else { None }).collect();
         urls.dedup();
         urls
     };
@@ -863,6 +867,21 @@ fn exported_links_keep_only_safe_targets() {
     }
 }
 
+/// A link target with any whitespace (a no-break or ideographic space too) is written in `<…>`,
+/// so the reader, which ends a bare destination at the first whitespace, reads it back whole.
+#[test]
+fn markdown_link_targets_with_unicode_spaces_read_back() {
+    for l in ["https://e.com/a\u{a0}b", "https://e.com/a\u{3000}b", "https://e.com/a b"] {
+        let mut d = Document::new();
+        let mut p = Paragraph::with_text("", CharProps::default());
+        p.insert_text(0, "go", &CharProps { link: Some(l.to_string()), ..Default::default() }).unwrap();
+        d.body = vec![para_block(p)];
+        let md = String::from_utf8(export("md", &d).unwrap().unwrap()).unwrap();
+        let sp = spans(&crate::markdown::parse(&md));
+        assert_eq!(sp.iter().find(|(t, _)| t == "go").and_then(|(_, f)| f.link.as_deref()), Some(l), "md: {md}");
+    }
+}
+
 #[test]
 fn hidden_drawings_are_left_out_of_exports() {
     let mut d = wordcraft_doc::Document::from_text("x");
@@ -874,4 +893,112 @@ fn hidden_drawings_are_left_out_of_exports() {
     }
     // Two pictures, one hidden: one comes out.
     assert_eq!(crate::html::export(&d).matches("<img").count(), 1);
+}
+
+/// Every text span of the flow, with its formatting.
+fn spans(flow: &model::Flow) -> Vec<(String, model::Fmt)> {
+    flow.blocks
+        .iter()
+        .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+        .flat_map(|p| p.inlines.iter())
+        .filter_map(|i| if let model::Inline::Text(t, f) = i { Some((t.clone(), f.clone())) } else { None })
+        .collect()
+}
+
+/// A font name or link target too long for any real one is dropped, its text kept: every run
+/// carried its own copy, so one long name times many runs was gigabytes (#3713).
+#[test]
+fn overlong_font_names_and_links_are_dropped() {
+    let long = "x".repeat(1 << 20);
+    let rtf = format!("{{\\rtf1{{\\fonttbl{{\\f0 Arial;}}{{\\f1 {long};}}}}\\f1 {}}}", "{\\b a}a".repeat(1000));
+    let flow = crate::rtf::parse(rtf.as_bytes()).unwrap();
+    let sp = spans(&flow);
+    assert!(sp.iter().map(|s| s.0.len()).sum::<usize>() >= 2000);
+    assert!(sp.iter().all(|(_, f)| f.font.is_none()), "an overlong RTF font name is no font");
+    // A real one still is.
+    let flow = crate::rtf::parse(b"{\\rtf1{\\fonttbl{\\f0 Arial;}{\\f1 Georgia;}}\\f1 a}").unwrap();
+    assert_eq!(spans(&flow)[0].1.font.as_deref(), Some("Georgia"));
+
+    let html =
+        format!("<p><span style=\"font-family:'{long}'\"><a href=\"https://e.com/{long}\">kept</a></span> <font face=\"{long}\">too</font></p>");
+    let sp = spans(&crate::html::parse(&html));
+    assert!(sp.iter().any(|(t, _)| t.contains("kept")) && sp.iter().any(|(t, _)| t.contains("too")));
+    assert!(sp.iter().all(|(_, f)| f.font.is_none() && f.link.is_none()), "{:?}", sp.iter().map(|s| &s.0).collect::<Vec<_>>());
+
+    let sp = spans(&crate::markdown::parse(&format!("[kept](https://e.com/{long})")));
+    assert_eq!(sp.len(), 1);
+    assert_eq!((sp[0].0.as_str(), sp[0].1.link.is_none()), ("kept", true));
+}
+
+/// Spans of one link share its target, and so do references to one definition: a long
+/// definition and many references no longer copy the destination into each (#3713).
+#[test]
+fn spans_share_their_link_target() {
+    let dest = format!("https://e.com/{}", "x".repeat(4000));
+    let md = format!("{}\n\n[r]: {dest}\n", "[a][r] **[b][r]** ".repeat(10_000));
+    let sp = spans(&crate::markdown::parse(&md));
+    let links: Vec<_> = sp.iter().filter_map(|(_, f)| f.link.as_ref()).collect();
+    assert_eq!(links.len(), 20_000);
+    assert!(links.iter().all(|l| Arc::ptr_eq(l, links[0])), "one copy of the destination");
+
+    let html = format!("<a href=\"{dest}\">{}</a>", "<b>a</b>a".repeat(1000));
+    let sp = spans(&crate::html::parse(&html));
+    assert!(sp.len() >= 2000);
+    let first = sp[0].1.link.clone().unwrap();
+    assert!(sp.iter().all(|(_, f)| f.link.as_ref().is_some_and(|l| Arc::ptr_eq(l, &first))));
+}
+
+/// The document's runs own their link and font strings; past a budget further runs keep their
+/// text but lose them, so a flow of shared names can't expand into gigabytes (#3713).
+#[test]
+fn run_link_and_font_copies_are_budgeted() {
+    let link: Arc<str> = format!("https://e.com/{}", "x".repeat(model::MAX_LINK - 20)).into();
+    let mut p = model::Para::default();
+    for i in 0..20_000 {
+        let f = model::Fmt { bold: i % 2 == 0, link: Some(link.clone()), ..Default::default() };
+        p.push_text("a", &f);
+    }
+    model::begin_import();
+    let (doc, warned) = crate::test_log::warnings(|| model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() }));
+    let paras: Vec<_> = doc.body.iter().filter_map(|b| if let Block::Para(p) = &**b { Some(p) } else { None }).collect();
+    assert_eq!(paras.iter().map(|p| p.text.len()).sum::<usize>(), 20_000, "all text kept");
+    let runs: Vec<_> = paras.iter().flat_map(|p| p.runs.iter()).collect();
+    let kept: usize = runs.iter().filter_map(|r| r.props.link.as_ref()).map(String::len).sum();
+    assert!(kept > 0 && kept <= 64 << 20, "{kept}");
+    // The runs that lose theirs are said to, once for the document (review of #3873).
+    assert_eq!(warned.iter().filter(|w| w.contains("later runs lose them")).count(), 1, "{warned:?}");
+}
+
+/// Every limit that leaves a font name, link or style name out says so, once per kind per
+/// document rather than once per item (review of #3873; the tracker complains of silent loss).
+#[test]
+fn dropped_names_and_links_are_logged_once_per_document() {
+    let long = "x".repeat(model::MAX_LINK + 1);
+    let html = format!(
+        "<p><span style=\"font-family:'{long}'\"><a href=\"https://e.com/{long}\">a</a></span> <font face=\"{long}\">b</font> <a href=\"https://e.com/{long}\">c</a></p>"
+    );
+    let count = |w: &[String], what: &str| w.iter().filter(|l| l.contains(what)).count();
+    for _ in 0..2 {
+        // Each import is its own document: the second is reported too.
+        let (doc, warned) = crate::test_log::warnings(|| crate::html::import(&html));
+        assert!(doc.body.len() == 1, "the text is kept");
+        assert_eq!(count(&warned, "font names longer"), 1, "{warned:?}");
+        assert_eq!(count(&warned, "links longer"), 1, "{warned:?}");
+    }
+    let (_, warned) = crate::test_log::warnings(|| crate::html::import("<p><a href=\"https://e.com\" style=\"font-family:Georgia\">fine</a></p>"));
+    assert!(warned.is_empty(), "nothing left out, nothing said: {warned:?}");
+
+    let md = format!("[a](https://e.com/{long}) [b](https://e.com/{long})");
+    let (_, warned) = crate::test_log::warnings(|| crate::markdown::import(&md));
+    assert_eq!(count(&warned, "links longer"), 1, "{warned:?}");
+
+    let rtf =
+        format!("{{\\rtf1{{\\fonttbl{{\\f0 Arial;}}{{\\f1 {long};}}{{\\f2 {long};}}}}{{\\stylesheet{{\\s1 {long};}}{{\\s2 {long};}}}}\\f1 a\\f2 b}}");
+    let (_, warned) = crate::test_log::warnings(|| crate::rtf::import(rtf.as_bytes()).unwrap());
+    assert_eq!(count(&warned, "font names longer"), 1, "{warned:?}");
+    assert_eq!(count(&warned, "style names longer"), 1, "{warned:?}");
+
+    let tex = format!("\\href{{https://e.com/{long}}}{{a}} \\url{{https://e.com/{long}}}");
+    let (_, warned) = crate::test_log::warnings(|| crate::latex::import(tex.as_bytes()));
+    assert_eq!(count(&warned, "links longer"), 1, "{warned:?}");
 }

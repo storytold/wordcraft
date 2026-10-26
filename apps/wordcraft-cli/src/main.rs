@@ -36,7 +36,11 @@ USAGE:
                                               {\"file\"?, \"template\"?, \"commands\": [{\"command\": id,
                                               \"params\"?: {…}} | id, …], \"save\"?: [OUT, …]}; save
                                               formats follow the extension (docx and pdf in one run);
-                                              relative paths resolve against the script's folder
+                                              relative paths resolve against the script's folder.
+                                              file.new and file.open open another document and
+                                              make it active; later commands and the saves work on
+                                              the active one; view.switchWindows lists the open
+                                              documents and with {\"id\": N} makes one active
   wordcraft-cli commands [--json]             list every command
   wordcraft-cli parity [--markdown]           feature-catalog parity
   wordcraft-cli mcp [--connect HOST:PORT | --author NAME] [--automation-read-root DIR] [--automation-write-root DIR]
@@ -379,6 +383,16 @@ fn script_operand<S: AsRef<OsStr>>(raw: &[S]) -> Option<PathBuf> {
     raw.get(at + 1).map(|a| PathBuf::from(a.as_ref()))
 }
 
+/// Whether `addr` (`HOST:PORT`, as `--connect` gives it) is at least shaped like an address: a
+/// host of some kind and a numeric port. Malformed addresses fail at startup — a lazy remote
+/// would otherwise retry one on every call and never say why nothing connects.
+fn valid_connect_addr(addr: &str) -> bool {
+    let Some((host, port)) = addr.rsplit_once(':') else { return false };
+    !host.is_empty() && port.parse::<u16>().is_ok()
+}
+
+/// Run the subcommand named by `args` (the command line after the program name). Files named
+/// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
     let script_path = script_operand(args);
     let (args, file) = text_args(args)?;
@@ -474,10 +488,14 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let mut s = match (from_file, from_template) {
                 (Some(f), _) => open(&f, password.as_deref())?,
                 // Both go through `file.new`, which puts a blank document on the region's paper (#3152).
+                // `file.new` opens beside the session's first document, which is then closed: the
+                // run starts with one open document.
                 (None, t) => {
                     let mut s = session(wordcraft_doc::Document::new());
+                    let first = s.document_id();
                     let params = t.map_or_else(|| json!({}), |t| json!({"template": t}));
                     s.run("file.new", &params).map_err(|e| e.to_string())?;
+                    s.close_document(first).map_err(|e| e.to_string())?;
                     s
                 }
             };
@@ -582,11 +600,27 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
                     return Err("mcp: --author applies to the headless server; with --connect, run file.setAuthor".into());
                 }
                 Some(addr) => {
-                    let remote = wordcraft_mcp::Remote::connect(&addr).map_err(|e| format!("can't reach the WordCraft app at {addr}: {e}"))?;
-                    if let Some(w) = remote.key_warning() {
-                        eprintln!("wordcraft-cli: {w}");
+                    // A malformed address must fail at startup, not on every tool call the lazy
+                    // remote would retry it with.
+                    if !valid_connect_addr(&addr) {
+                        return Err(format!("mcp: --connect needs HOST:PORT with a numeric port, got `{addr}`").into());
                     }
-                    Box::new(remote)
+                    match wordcraft_mcp::Remote::connect(&addr) {
+                        Ok(remote) => {
+                            eprintln!("wordcraft-cli mcp: connected to WordCraft at {addr}");
+                            if let Some(w) = remote.key_warning() {
+                                eprintln!("wordcraft-cli: {w}");
+                            }
+                            Box::new(remote)
+                        }
+                        // The app may start after the client does: serve anyway and connect on the
+                        // first call, or the client marks the server failed for its whole session
+                        // (#4078).
+                        Err(e) => {
+                            eprintln!("wordcraft-cli mcp: WordCraft is not reachable at {addr} yet ({e}); will retry on each call");
+                            Box::new(wordcraft_mcp::Remote::lazy(&addr))
+                        }
+                    }
                 }
                 None => {
                     let mut headless = wordcraft_mcp::Headless::default();
@@ -633,14 +667,14 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let out = wordcraft_zotero::client::run_command(&opts, command, &mut |call| {
                 let r = bridge.handle(&mut s, &mut host, call);
                 if trace {
-                    eprintln!("← {} {}", call.method, clip(&Value::Array(call.args.clone()).to_string()));
-                    eprintln!("→ {}", clip(&String::from_utf8_lossy(&wordcraft_zotero::wire::encode_reply(&r))));
+                    eprintln!("← {} {}", escape_peer(&call.method), escape_peer(&clip(&Value::Array(call.args.clone()).to_string())));
+                    eprintln!("→ {}", escape_peer(&clip(&String::from_utf8_lossy(&wordcraft_zotero::wire::encode_reply(&r)))));
                 }
                 r
             })
             .map_err(|e| e.to_string())?;
             for a in &host.alerts {
-                eprintln!("Zotero: {a}");
+                eprintln!("Zotero: {}", escape_peer(a));
             }
             eprintln!("{} calls, {}", out.calls, if out.completed { "completed" } else { "ended without completing (cancelled?)" });
             if let Some(o) = arg_value(&rest, "--save") {
@@ -661,6 +695,27 @@ fn clip(s: &str) -> String {
         Some((i, _)) => format!("{}…", s.get(..i).unwrap_or(s)),
         None => s.to_string(),
     }
+}
+
+/// Text from another program (Zotero, or whatever answered on its port) for one diagnostic
+/// line: backslashes, control characters (newline, escape, C1…), line separators and bidi
+/// overrides are shown as escapes (`\\`, `\n`, `\u{1b}`), so it can't end its line, drive the
+/// terminal or pass for other output.
+fn escape_peer(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if c.is_control() || matches!(c, '\u{061c}' | '\u{200e}' | '\u{200f}' | '\u{2028}'..='\u{202e}' | '\u{2066}'..='\u{2069}') => {
+                out.extend(c.escape_unicode())
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 fn parity_markdown(p: &Value) -> String {
@@ -707,6 +762,15 @@ mod tests {
 
     fn args(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).into()).collect()
+    }
+
+    #[test]
+    fn peer_text_stays_on_one_visible_line() {
+        let alert = "Done.\nwrote /etc/passwd\r\u{1b}[2J\u{9b}31m\u{202e}txt.exe\\n\tok é";
+        let shown = escape_peer(alert);
+        assert_eq!(shown, "Done.\\nwrote /etc/passwd\\r\\u{1b}[2J\\u{9b}31m\\u{202e}txt.exe\\\\n\\tok é");
+        assert!(!shown.chars().any(|c| c.is_control()));
+        assert_eq!(escape_peer("Citation (Doe, 2020) — “ok”"), "Citation (Doe, 2020) — “ok”");
     }
 
     #[test]
@@ -807,6 +871,9 @@ mod tests {
         assert!(run(&args(&["run", "--author", "Claude", "--cmd", "review.trackChanges={\"value\":true}"])).is_ok());
         // The app's user name is the person's own; a bridge flag must not rewrite it.
         assert!(run(&args(&["mcp", "--connect", "127.0.0.1:9", "--author", "Claude"])).is_err_and(|e| e.to_string().contains("--author")));
+        // A malformed address fails at startup, not on every retried call.
+        assert!(run(&args(&["mcp", "--connect", "127.0.0.1:notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
+        assert!(run(&args(&["mcp", "--connect", "notaport"])).is_err_and(|e| e.to_string().contains("numeric port")));
         // The flag goes through the same protection check as the command.
         let mut s = Session::new(wordcraft_doc::Document::new());
         s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();

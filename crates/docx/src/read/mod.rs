@@ -129,7 +129,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
 pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
-    let Some(root) = pkg.xml(&main)? else {
+    let Some(root) = pkg.xml_strict(&main)? else {
         return Err(DocxError::MissingPart(main));
     };
     if root.name != "w:document" {
@@ -513,7 +513,9 @@ fn toc_control_to_toc(body: &mut Blocks) {
             let _ = p.insert_object(len, InlineObject::FieldEnd, &props);
         }
     }
-    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty() && p.section.is_none()) {
+    // An empty paragraph opening the control takes the field. It may end a section, as above
+    // entries in columns (#3889).
+    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty()) {
         field_to_heading(&mut engine, s + 1);
     } else {
         toc_field_to_heading(&mut engine);
@@ -901,6 +903,24 @@ impl Reader<'_> {
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
         }
+        // Word in other languages names the TOC styles' ids in that language (`toc 1` is `Sumrio1`
+        // in Portuguese): they take the engine's ids, which Update Table and the writer's TOC
+        // recognise the entries by (#3889). Not when the file or an earlier style has that id.
+        let mut taken: Vec<String> = root.children("w:style").take(10_000).filter_map(|s| s.attr("w:styleId")).map(str::to_string).collect();
+        for s in root.children("w:style").take(10_000).filter(|s| s.attr("w:type").is_none_or(|t| t == "paragraph")) {
+            let (Some(id), Some(name)) = (s.attr("w:styleId"), s.child_val("w:name")) else { continue };
+            let canonical = match name.trim().to_ascii_lowercase().as_str() {
+                "toc heading" => "TOCHeading".to_string(),
+                n => match n.strip_prefix("toc ").and_then(|d| d.parse::<u8>().ok()).filter(|d| (1..=9).contains(d)) {
+                    Some(d) => format!("TOC{d}"),
+                    None => continue,
+                },
+            };
+            if !taken.contains(&canonical) && !self.pc.alias.contains_key(id) {
+                taken.push(canonical.clone());
+                self.pc.alias.insert(id.to_string(), canonical);
+            }
+        }
         let mut sheet = StyleSheet::empty();
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
         if let Some(dd) = root.child("w:docDefaults") {
@@ -1192,6 +1212,7 @@ impl Reader<'_> {
                         s.compat_mode = m.clamp(11, 99);
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
+                    s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:doNotTrackMoves" => s.track_moves = !on_off(k),
@@ -1342,6 +1363,10 @@ impl Reader<'_> {
         let mut by_para: HashMap<String, u32> = HashMap::new();
         let mut next_id = 0u32;
         let mut entries: BTreeMap<u32, Comment> = BTreeMap::new();
+        // Ids given before this part, looked up rather than scanned for every generated id: a
+        // scan per comment made many non-numeric ids quadratic (#3692). Ids given here are in
+        // `entries`.
+        let given: HashSet<u32> = self.comment_map.values().copied().collect();
         for c in root.children("w:comment") {
             if self.doc.parts.len() >= MAX_PARTS {
                 break;
@@ -1353,7 +1378,7 @@ impl Reader<'_> {
             let id = match file_id.parse::<u32>() {
                 Ok(v) if !entries.contains_key(&v) => v,
                 _ => {
-                    while entries.contains_key(&next_id) || self.comment_map.values().any(|v| *v == next_id) {
+                    while entries.contains_key(&next_id) || given.contains(&next_id) {
                         next_id += 1;
                     }
                     next_id

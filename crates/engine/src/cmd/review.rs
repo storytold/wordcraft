@@ -36,10 +36,14 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool (omit to toggle)}"#)
         .key("Mod+Shift+E"),
-        CommandSpec::new("review.acceptAll", "Accept All Changes", "Review › Changes", |s, _| resolve_all(s, true)),
-        CommandSpec::new("review.rejectAll", "Reject All Changes", "Review › Changes", |s, _| resolve_all(s, false)),
-        CommandSpec::new("review.accept", "Accept", "Review › Changes", |s, _| resolve_sel(s, true)),
-        CommandSpec::new("review.reject", "Reject", "Review › Changes", |s, _| resolve_sel(s, false)),
+        CommandSpec::new("review.acceptAll", "Accept All Changes", "Review › Changes", |s, v| resolve_all_then(s, v, true))
+            .params(r#"{"stopTracking"?: bool (also turn Track Changes off)}"#),
+        CommandSpec::new("review.rejectAll", "Reject All Changes", "Review › Changes", |s, v| resolve_all_then(s, v, false))
+            .params(r#"{"stopTracking"?: bool (also turn Track Changes off)}"#),
+        CommandSpec::new("review.accept", "Accept", "Review › Changes", |s, v| resolve_sel_then(s, v, true))
+            .params(r#"{"next"?: bool (then select the next change)}"#),
+        CommandSpec::new("review.reject", "Reject", "Review › Changes", |s, v| resolve_sel_then(s, v, false))
+            .params(r#"{"next"?: bool (then select the next change)}"#),
         CommandSpec::new("review.nextChange", "Next Change", "Review › Changes", |s, _| nav_change(s, 1)).pure(),
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
         CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
@@ -141,9 +145,20 @@ fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(&text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
-    s.doc
-        .comments
-        .insert(id, Comment { author: s.author.clone(), initials, date: now_iso(), parent: None, resolved: false, part, ..Default::default() });
+    let now = now_iso();
+    s.doc.comments.insert(
+        id,
+        Comment {
+            author: s.author.clone(),
+            initials,
+            date: now.clone(),
+            date_utc: Some(now),
+            parent: None,
+            resolved: false,
+            part,
+            ..Default::default()
+        },
+    );
     let props = Default::default();
     s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
     s.doc.insert_object(&a, InlineObject::CommentStart { id }, &props)?;
@@ -170,9 +185,19 @@ fn reply(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
+    let now = now_iso();
     s.doc.comments.insert(
         id,
-        Comment { author: s.author.clone(), initials, date: now_iso(), parent: Some(parent), resolved: false, part, ..Default::default() },
+        Comment {
+            author: s.author.clone(),
+            initials,
+            date: now.clone(),
+            date_utc: Some(now),
+            parent: Some(parent),
+            resolved: false,
+            part,
+            ..Default::default()
+        },
     );
     Ok(json!({"id": id}))
 }
@@ -363,20 +388,8 @@ fn nav_comment(s: &mut Session, dir: i32) -> CmdResult {
     sel_result(s)
 }
 
-/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
-/// the section break on it), `props` the paragraph's own formatting change.
-#[allow(clippy::too_many_arguments)]
-fn resolve_para(
-    s: &mut Session,
-    story: StoryRef,
-    path: &wordcraft_doc::Path,
-    from: usize,
-    to: usize,
-    mark: bool,
-    props: bool,
-    accept: bool,
-) -> Result<(), CmdError> {
-    let para = s.doc.para_mut(story, path)?;
+/// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
+fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
     if props && (para.props.fmt_change.is_some() || para.props.num_change.is_some()) {
         fmt_revisions::resolve_para(&mut para.props, accept);
         para.touch();
@@ -397,6 +410,24 @@ fn resolve_para(
             })?;
         }
     }
+    Ok(())
+}
+
+/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
+/// the section break on it), `props` the paragraph's own formatting change.
+#[allow(clippy::too_many_arguments)]
+fn resolve_para(
+    s: &mut Session,
+    story: StoryRef,
+    path: &wordcraft_doc::Path,
+    from: usize,
+    to: usize,
+    mark: bool,
+    props: bool,
+    accept: bool,
+) -> Result<(), CmdError> {
+    let para = s.doc.para_mut(story, path)?;
+    resolve_runs(para, from, to, props, accept)?;
     if !mark {
         return Ok(());
     }
@@ -513,6 +544,28 @@ pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
     out
 }
 
+/// Accept or reject the tracked text and paragraph marks of the top-level paragraphs in a block
+/// list that is not a story (a note separator).
+fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Result<(), CmdError> {
+    for b in blocks.iter_mut() {
+        let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
+        let len = p.len();
+        resolve_runs(p, 0, len, true, accept)?;
+        if p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
+            fmt_revisions::resolve_char(&mut p.mark, accept);
+            if let Some(sec) = p.section.as_deref_mut() {
+                fmt_revisions::resolve_section(sec, accept);
+            }
+        }
+        // A mark can't be removed here (no neighbour to join), so it just stops being a revision.
+        p.mark.ins = None;
+        p.mark.del = None;
+        p.touch();
+    }
+    fmt_revisions::resolve_containers(blocks, accept, 0);
+    Ok(())
+}
+
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
@@ -527,12 +580,33 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    // The note separators are block lists of their own, not stories; they must not keep ids of
+    // revisions that are about to be dropped.
+    for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {
+        for blocks in [&mut sep.separator, &mut sep.continuation_separator, &mut sep.continuation_notice].into_iter().flatten() {
+            resolve_loose_blocks(blocks, accept)?;
+        }
+    }
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)
 }
 
-fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
+/// Accept or Reject All; with `stopTracking`, Track Changes is turned off as well.
+fn resolve_all_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
+    let out = resolve_all(s, accept)?;
+    if p::bool(v, "stopTracking") == Some(true) {
+        s.doc.settings.track_changes = false;
+    }
+    Ok(out)
+}
+
+/// Accept or Reject at the selection; with `next`, the next change is selected afterwards.
+fn resolve_sel_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
+    resolve_sel(s, accept, p::bool(v, "next") == Some(true))
+}
+
+fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
@@ -594,7 +668,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
             }
             None => {
                 if resolve_cell(s, a.story, &a.path, accept)? {
-                    return sel_result(s);
+                    return if next { select_next_unresolved(s) } else { sel_result(s) };
                 }
                 return nav_change(s, 1);
             }
@@ -619,7 +693,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     super::moves::resolve(s, &moves, accept)?;
     s.sel = Selection::caret(a);
     s.clamp_selection();
-    sel_result(s)
+    if next { select_next_unresolved(s) } else { sel_result(s) }
 }
 
 fn changes(s: &Session) -> Vec<Change> {
@@ -803,6 +877,18 @@ fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
         list.iter().rev().find(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or(list.last())
     };
     if let Some(c) = t {
+        s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
+    }
+    sel_result(s)
+}
+
+/// After a change at the caret is resolved: select the first change from the caret on, including
+/// one that starts and ends there (an empty paragraph's, a paragraph mark's or a table's
+/// formatting), else the first change in the document.
+fn select_next_unresolved(s: &mut Session) -> CmdResult {
+    let list = changes(s);
+    let caret = s.sel.ordered().0;
+    if let Some(c) = list.iter().find(|c| c.a >= caret).or(list.first()) {
         s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
     }
     sel_result(s)
@@ -1616,6 +1702,119 @@ mod tests {
             // The comment's anchors are objects in the text; read past them.
             let shown: String = p.text.chars().filter(|c| *c != wordcraft_doc::para::OBJ).collect();
             assert_eq!(shown.contains("hello"), accept, "{:?}", p.text);
+        }
+    }
+
+    /// "one two three" with "new " typed at the start, "two " deleted and " end" typed at the end,
+    /// under Track Changes: three changes.
+    fn three_changes() -> Session {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.author = "Ana".into();
+        s.run("document.setText", &json!({"text": "one two three"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "new "})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 8}, "focus": {"block": 0, "off": 12}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": " end"})).unwrap();
+        s
+    }
+
+    fn change_spans(s: &mut Session) -> Vec<(String, u64, u64)> {
+        let list = s.run("review.changes", &json!({})).unwrap();
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|c| (c["kind"].as_str().unwrap().to_string(), c["start"]["off"].as_u64().unwrap(), c["end"]["off"].as_u64().unwrap()))
+            .collect()
+    }
+
+    fn selected(s: &Session) -> (usize, usize) {
+        let (a, b) = s.sel.ordered();
+        (a.off, b.off)
+    }
+
+    /// Accept and Move to Next, Reject and Move to Next: the change at the caret is resolved and
+    /// the next one is selected; without `next` the caret stays where the change was.
+    #[test]
+    fn accept_and_reject_can_move_to_the_next_change() {
+        for (cmd, accept) in [("review.accept", true), ("review.reject", false)] {
+            let mut s = three_changes();
+            let before = change_spans(&mut s);
+            assert_eq!(before.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["insert", "delete", "insert"], "{cmd}");
+            s.run("caret.docStart", &json!({})).unwrap();
+            s.run(cmd, &json!({"next": true})).unwrap();
+            let after = change_spans(&mut s);
+            assert_eq!(after.len(), 2, "{cmd}: the first insertion is resolved");
+            assert_eq!(after[0].0, "delete", "{cmd}");
+            let deletion = (after[0].1 as usize, after[0].2 as usize);
+            assert_eq!(selected(&s), deletion, "{cmd}: the deletion is selected next");
+            assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("new "), accept, "{cmd}");
+
+            // Without `next`, the caret stays at the resolved change.
+            let mut s = three_changes();
+            s.run("caret.docStart", &json!({})).unwrap();
+            s.run(cmd, &json!({})).unwrap();
+            assert_eq!(selected(&s), (0, 0), "{cmd}");
+        }
+    }
+
+    /// With the caret on no change, Accept and Move to Next selects the next change without
+    /// resolving it, as Accept and Next Change do.
+    #[test]
+    fn accept_and_move_to_next_off_a_change_selects_it_unresolved() {
+        let mut s = three_changes();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}})).unwrap();
+        s.run("review.accept", &json!({"next": true})).unwrap();
+        let after = change_spans(&mut s);
+        assert_eq!(after.len(), 3, "nothing is resolved");
+        assert_eq!(selected(&s), (after[1].1 as usize, after[1].2 as usize), "the deletion after the caret is selected");
+    }
+
+    /// Reject and Move to Next on the only text of a centered paragraph: the paragraph's formatting
+    /// change, now empty at the caret, is selected next, not the insertion after it.
+    #[test]
+    fn move_to_next_selects_a_change_left_at_the_caret() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.author = "Ana".into();
+        s.run("document.setText", &json!({"text": "one\n\nthree"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 0}})).unwrap();
+        s.run("para.align", &json!({"value": "center"})).unwrap();
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "!"})).unwrap();
+        let before = change_spans(&mut s);
+        assert_eq!(before.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["format", "insert", "insert"], "{before:?}");
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 1}, "focus": {"block": 1, "off": 1}})).unwrap();
+        s.run("review.reject", &json!({"next": true})).unwrap();
+        let after = change_spans(&mut s);
+        assert_eq!(after.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["format", "insert"], "{after:?}");
+        let (a, b) = s.sel.ordered();
+        let at = (wordcraft_doc::Path::top(1), 0);
+        assert_eq!(((a.path.clone(), a.off), (b.path.clone(), b.off)), (at.clone(), at), "the centering is selected");
+    }
+
+    /// Accept All Changes and Stop Tracking, Reject All Changes and Stop Tracking: every change is
+    /// resolved and Track Changes is off; plain Accept All and Reject All leave it on.
+    #[test]
+    fn accept_and_reject_all_can_stop_tracking() {
+        for cmd in ["review.acceptAll", "review.rejectAll"] {
+            let mut s = three_changes();
+            s.run(cmd, &json!({"stopTracking": true})).unwrap();
+            assert!(change_spans(&mut s).is_empty(), "{cmd}");
+            assert!(!s.doc.settings.track_changes, "{cmd}: Track Changes is off");
+            s.run("edit.undo", &json!({})).unwrap();
+            assert!(s.doc.settings.track_changes, "{cmd}: one undo step brings tracking and the changes back");
+            assert_eq!(change_spans(&mut s).len(), 3, "{cmd}");
+
+            let mut s = three_changes();
+            s.run(cmd, &json!({})).unwrap();
+            assert!(change_spans(&mut s).is_empty(), "{cmd}");
+            assert!(s.doc.settings.track_changes, "{cmd}: Track Changes stays on");
         }
     }
 

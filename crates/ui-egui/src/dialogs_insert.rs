@@ -1039,9 +1039,15 @@ pub const FIELDS: &[(&str, &str, &str)] = &[
     ("SAVEDATE", "Date and Time", "When this document was most recently saved"),
     ("TIME", "Date and Time", "The time right now"),
     ("AUTHOR", "Document Information", "Who the document properties name as author"),
+    ("COMMENTS", "Document Information", "Comments from the document properties"),
     ("FILENAME", "Document Information", "Name of the file this document is saved as"),
+    ("KEYWORDS", "Document Information", "Keywords from the document properties"),
+    ("LASTSAVEDBY", "Document Information", "Who last saved the document"),
+    ("NUMCHARS", "Document Information", "How many characters the document holds"),
     ("NUMPAGES", "Document Information", "How many pages the whole document has"),
     ("NUMWORDS", "Document Information", "How many words the document holds"),
+    ("REVNUM", "Document Information", "How many times the document has been saved"),
+    ("SUBJECT", "Document Information", "Subject from the document properties"),
     ("TITLE", "Document Information", "Title from the document properties"),
     ("PAGE", "Numbering", "Number of the page the field sits on"),
     ("SECTION", "Numbering", "Number of the section the field sits in"),
@@ -1104,7 +1110,7 @@ pub const NUMBER_FORMATS: &[(&str, &str)] = &[
 pub fn field_kind(name: &str) -> FieldKind {
     match name {
         "DATE" | "TIME" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => FieldKind::Date,
-        "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "NUMWORDS" => FieldKind::Number,
+        "PAGE" | "NUMPAGES" | "SECTION" | "SECTIONPAGES" | "NUMWORDS" | "NUMCHARS" | "REVNUM" => FieldKind::Number,
         "REF" | "PAGEREF" => FieldKind::Bookmark,
         "SEQ" => FieldKind::Sequence,
         "MERGEFIELD" => FieldKind::Merge,
@@ -1573,5 +1579,23 @@ mod tests {
         assert_eq!(f.final_code(), "NUMPAGES \\* Arabic");
         f.code = "  ".into();
         assert!(f.params().is_none());
+    }
+
+    /// The Field dialog lists Word's document information fields, and the counts take a number
+    /// format.
+    #[test]
+    fn field_dialog_lists_the_document_information_fields() {
+        let listed: Vec<&str> = FIELDS.iter().filter(|(_, cat, _)| *cat == "Document Information").map(|(n, _, _)| *n).collect();
+        for name in ["COMMENTS", "KEYWORDS", "LASTSAVEDBY", "NUMCHARS", "REVNUM", "SUBJECT"] {
+            assert!(listed.contains(&name), "{name} in {listed:?}");
+        }
+        let a = app();
+        let mut f = FieldForm::new(&a);
+        f.select("REVNUM");
+        f.number_format = "ROMAN".into();
+        f.preserve = false;
+        assert_eq!(f.instruction(), r"REVNUM \* ROMAN");
+        f.select("SUBJECT");
+        assert_eq!(f.instruction(), "SUBJECT");
     }
 }

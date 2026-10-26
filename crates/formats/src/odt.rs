@@ -19,6 +19,7 @@
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
+use std::sync::Arc;
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
@@ -440,7 +441,7 @@ impl Writer {
     /// Paragraph `p`, or with `chain` the paragraphs joined at deleted paragraph marks (`p`
     /// is the first).
     fn para_in(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String) {
-        let paras: &[Para] = chain.map(|c| c.as_slice()).unwrap_or(std::slice::from_ref(p));
+        let paras: &[Para] = chain.map(Vec::as_slice).unwrap_or(std::slice::from_ref(p));
         let start = self.master.take();
         self.chain = chain.map(|c| c.iter().map(|q| self.para_style(q)).collect()).unwrap_or_default();
         self.part = 0;
@@ -1034,7 +1035,7 @@ struct FmtDelta {
     color: Option<Rgb>,
     background: Option<Rgb>,
     size: Option<f32>,
-    font: Option<String>,
+    font: Option<Arc<str>>,
     code: Option<bool>,
 }
 
@@ -1340,7 +1341,7 @@ impl Styles {
                             if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
                                 d.code = Some(true);
                             } else if !fam.is_empty() {
-                                d.font = Some(fam);
+                                d.font = model::kept_font(&fam);
                             }
                         }
                     }
@@ -1446,7 +1447,7 @@ impl Styles {
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
     fn doc_font(&self) -> Option<String> {
-        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.clone()).or_else(|| self.default_font.clone())
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }
 
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
@@ -2053,7 +2054,7 @@ impl Body<'_> {
             "a" => {
                 let mut f = self.cur_fmt();
                 if let Some(h) = get(a, "xlink:href").filter(|h| !h.is_empty()) {
-                    f.link = Some(h.to_string());
+                    f.link = model::kept_link(h);
                 }
                 if let Some(s) = get(a, "text:style-name") {
                     f = self.styles.text_fmt(s, &f);
@@ -2530,6 +2531,8 @@ fn read_meta(xml: &[u8]) -> Meta {
     let mut m = Meta::default();
     let mut cur: Option<String> = None;
     let mut keywords: Vec<String> = Vec::new();
+    let mut creator = String::new();
+    let mut mod_date = String::new();
     events(xml, |ev| match ev {
         Ev::Start(q, _) => cur = Some(q),
         Ev::End(_) => cur = None,
@@ -2538,16 +2541,32 @@ fn read_meta(xml: &[u8]) -> Meta {
             Some("dc:subject") => m.subject.push_str(&t),
             Some("dc:description") => m.description.push_str(&t),
             Some("meta:initial-creator") => m.author.push_str(&t),
-            Some("dc:creator") if m.author.is_empty() => m.author.push_str(&t),
+            Some("dc:creator") => creator.push_str(&t),
             Some("meta:keyword") => keywords.push(t),
             Some("meta:creation-date") => m.created.push_str(&t),
+            Some("dc:date") => mod_date.push_str(&t),
             _ => {}
         },
     });
+    if m.author.is_empty() {
+        m.author = creator;
+    }
+    if m.created.is_empty() {
+        m.created = mod_date;
+    }
     m.keywords = keywords.join(", ");
-    if !m.created.is_empty() && !m.created.ends_with('Z') && !m.created.contains('+') {
-        let base = m.created.split('.').next().unwrap_or("").to_string();
-        m.created = format!("{base}Z");
+    let created = m.created.trim();
+    if !created.is_empty() {
+        let has_tz =
+            created.ends_with(['Z', 'z']) || created.contains('+') || created.split_once('T').map(|(_, time)| time.contains('-')).unwrap_or(false);
+        if !has_tz {
+            let base = created.split('.').next().unwrap_or("");
+            m.created = format!("{base}Z");
+        } else {
+            m.created = created.to_string();
+        }
+    } else {
+        m.created.clear();
     }
     m
 }
@@ -2608,6 +2627,7 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    model::begin_import();
     let (flow, last, track, font, parts) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
@@ -3829,5 +3849,40 @@ mod tests {
         assert!(!fmt(ps[0]).italic, "complex-script italic does not make Latin text italic");
         assert!(!fmt(ps[1]).underline, "a line type does not override a line style of none");
         assert!(!fmt(ps[1]).strike);
+    }
+
+    #[test]
+    fn meta_creation_date_timezones_and_fallbacks() {
+        let xml_neg = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00-05:00</meta:creation-date>
+            <dc:creator>Modifier</dc:creator>
+            <meta:initial-creator>Original Author</meta:initial-creator>
+        </office:meta></office:document-meta>"#;
+        let m = read_meta(xml_neg);
+        assert_eq!(m.created, "2024-03-05T13:45:00-05:00");
+        assert_eq!(m.author, "Original Author");
+
+        let xml_neg_frac = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00.500-05:00</meta:creation-date>
+        </office:meta></office:document-meta>"#;
+        assert_eq!(read_meta(xml_neg_frac).created, "2024-03-05T13:45:00.500-05:00");
+
+        let xml_local_frac = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00.123</meta:creation-date>
+        </office:meta></office:document-meta>"#;
+        assert_eq!(read_meta(xml_local_frac).created, "2024-03-05T13:45:00Z");
+
+        let xml_z_lower = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00z</meta:creation-date>
+        </office:meta></office:document-meta>"#;
+        assert_eq!(read_meta(xml_z_lower).created, "2024-03-05T13:45:00z");
+
+        let xml_dc_date_fallback = br#"<office:document-meta><office:meta>
+            <dc:date>2024-03-05T13:45:00Z</dc:date>
+            <dc:creator>Solo Creator</dc:creator>
+        </office:meta></office:document-meta>"#;
+        let m2 = read_meta(xml_dc_date_fallback);
+        assert_eq!(m2.created, "2024-03-05T13:45:00Z");
+        assert_eq!(m2.author, "Solo Creator");
     }
 }

@@ -1545,6 +1545,33 @@ fn watermark_roundtrips() {
     }
 }
 
+/// #3994: a watermark font name round-trips through the textpath's CSS-like style whatever it
+/// carries — apostrophes, semicolons, colons, quotes, backslashes. Before, those characters
+/// were deleted (the font was saved under a different name) and a trailing backslash escaped
+/// the style's closing quote.
+#[test]
+fn watermark_font_roundtrips_through_the_textpath_style() {
+    for font in ["Georgia", "Bob's Serif", "A;Named:Font", "Quote\"Inside", "Ends with \\", "All \"of\" ;it: 'here\\", "'Serif'", "Trailing'"] {
+        let mut d = doc_with(vec![Paragraph::with_text("Body", CharProps::default())]);
+        d.settings.watermark = Some(Watermark { font: font.into(), ..Default::default() });
+        assert_eq!(rt(&d).settings.watermark.map(|w| w.font), Some(font.into()), "{font:?}");
+    }
+}
+
+/// #3994: the written textpath style stays well-formed CSS whatever the font name: control
+/// characters are dropped (no font name carries one) and a backslash or quote is a CSS escape
+/// (`\5c `, `\22 `) instead of escaping the string's closing quote.
+#[test]
+fn watermark_font_name_writes_wellformed_css() {
+    let mut d = doc_with(vec![Paragraph::with_text("Body", CharProps::default())]);
+    d.settings.watermark = Some(Watermark { font: "Ends with \\ and \n\"quoted\"".into(), ..Default::default() });
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let hdr = part_xml(&bytes, "word/header1.xml");
+    let style = hdr.split("v:textpath style=\"").nth(1).and_then(|s| s.split('"').next()).unwrap_or_default();
+    assert!(!style.contains('\n'), "control characters are dropped: {style}");
+    assert!(style.contains(r#"font-family:&quot;Ends with \5c  and \22 quoted\22 &quot;;"#), "CSS escapes: {style}");
+}
+
 /// #1290: a document without headers gains one default header holding only the watermark (an
 /// empty paragraph once read back); saving again neither adds another nor duplicates the shape.
 #[test]

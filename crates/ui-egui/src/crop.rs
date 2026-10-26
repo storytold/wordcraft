@@ -285,11 +285,11 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// it can't be decoded (then the cropped-away area is just dimmed).
 fn source(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<egui::TextureHandle> {
     let bytes = app.session.doc.media.get(media)?;
-    let id = egui::Id::new(("crop_source", media, bytes.len()));
+    let id = egui::Id::unique(("crop_source", media, bytes.len()));
     if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return t;
     }
-    let tex = image::load_from_memory(bytes).ok().map(|img| {
+    let tex = wordcraft_geom::picture::decode(bytes, wordcraft_geom::MAX_DECODED_BYTES).ok().map(|img| {
         let img = if img.width().max(img.height()) > SOURCE_MAX_PX { img.thumbnail(SOURCE_MAX_PX, SOURCE_MAX_PX) } else { img };
         let rgba = img.to_rgba8();
         let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());

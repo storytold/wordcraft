@@ -19,6 +19,84 @@ pub const MONO_FONT: &str = "Courier New";
 pub const CODE_STYLE: &str = "Code";
 /// Nesting limit for tables in tables (hostile input).
 pub const MAX_DEPTH: usize = 8;
+/// Longest font name the importers keep, in bytes (as the .docx reader); a longer one (no real
+/// font has one) is dropped (#3713).
+pub const MAX_FONT_NAME: usize = 256;
+/// Longest hyperlink target the importers keep, in bytes; a longer link is dropped and its text
+/// kept (#3713).
+pub const MAX_LINK: usize = 8 << 10;
+/// Link and font bytes the document's runs may carry between them. A flow's spans share one
+/// copy of a name ([`Fmt`]), but every run of a document owns its own: past this budget, runs
+/// lose their link and font rather than multiply a small file into gigabytes (#3713).
+const MAX_RUN_STRINGS: usize = 64 << 20;
+
+/// `name` as a span's font, unless it is longer than [`MAX_FONT_NAME`] (then reported, see
+/// [`dropped`]).
+pub fn kept_font(name: &str) -> Option<Arc<str>> {
+    let kept = (name.len() <= MAX_FONT_NAME).then(|| name.into());
+    if kept.is_none() {
+        dropped(Dropped::Font);
+    }
+    kept
+}
+
+/// `target` as a span's link, unless it is longer than [`MAX_LINK`] (then reported, see
+/// [`dropped`]).
+pub fn kept_link(target: &str) -> Option<Arc<str>> {
+    let kept = (target.len() <= MAX_LINK).then(|| target.into());
+    if kept.is_none() {
+        dropped(Dropped::Link);
+    }
+    kept
+}
+
+/// What an importer leaves out to stay within a limit (review of #3873: no limit drops data
+/// without saying so).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Dropped {
+    /// A font name over [`MAX_FONT_NAME`].
+    Font,
+    /// A link target over [`MAX_LINK`].
+    Link,
+    /// Runs' links and fonts past [`MAX_RUN_STRINGS`].
+    RunStrings,
+    /// A style name cut to [`MAX_FONT_NAME`].
+    StyleName,
+}
+
+impl Dropped {
+    fn message(self) -> String {
+        match self {
+            Dropped::Font => format!("import: font names longer than {MAX_FONT_NAME} bytes are dropped; that text keeps the surrounding font"),
+            Dropped::Link => format!("import: links longer than {MAX_LINK} bytes are dropped; their text is kept"),
+            Dropped::RunStrings => {
+                format!("import: the document's runs carry more than {MAX_RUN_STRINGS} bytes of links and font names; later runs lose them")
+            }
+            Dropped::StyleName => format!("import: style names longer than {MAX_FONT_NAME} bytes are cut short"),
+        }
+    }
+}
+
+thread_local! {
+    /// The kinds of [`Dropped`] already reported for the document being imported on this thread.
+    /// Per thread because a document is parsed and built on one, and the parsers drop things
+    /// from places that have no log of their own to hand.
+    static REPORTED: std::cell::Cell<u8> = const { std::cell::Cell::new(0) };
+}
+
+/// Log that the importer left something of `kind` out: once per kind per imported document
+/// ([`begin_import`]), not once per item.
+pub(crate) fn dropped(kind: Dropped) {
+    let bit = 1u8 << (kind as u8);
+    if REPORTED.with(|r| r.replace(r.get() | bit)) & bit == 0 {
+        log::warn!("{}", kind.message());
+    }
+}
+
+/// Start a new document's reports: each importer's entry point calls this first.
+pub(crate) fn begin_import() {
+    REPORTED.with(|r| r.set(0));
+}
 
 /// Character formatting the text formats can express.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -30,11 +108,13 @@ pub struct Fmt {
     pub code: bool,
     pub sup: bool,
     pub sub: bool,
-    pub link: Option<String>,
+    /// Shared: every span of a link holds the same target.
+    pub link: Option<Arc<str>>,
     pub color: Option<Rgb>,
     /// Points.
     pub size: Option<f32>,
-    pub font: Option<String>,
+    /// Shared, as `link`.
+    pub font: Option<Arc<str>>,
     /// Background (highlight / shading).
     pub background: Option<Rgb>,
     /// Tracked insertion of this text (formats that keep revisions: RTF).
@@ -239,15 +319,13 @@ impl Para {
     /// Remove the characters in `start` from the start of the paragraph's text and those in
     /// `end` from its end.
     pub fn trim_with(&mut self, start: &[char], end: &[char]) {
-        while let Some(Inline::Text(t, _)) = self.inlines.first_mut() {
-            let n = t.trim_start_matches(start).len();
-            let cut = t.len() - n;
+        // The leading spans that trim to nothing go in one `drain`: removing them one at a time
+        // shifted the rest each time, quadratic in a run of separately formatted line breaks.
+        let k = self.inlines.iter().take_while(|i| matches!(i, Inline::Text(t, _) if t.trim_start_matches(start).is_empty())).count();
+        self.inlines.drain(..k);
+        if let Some(Inline::Text(t, _)) = self.inlines.first_mut() {
+            let cut = t.len() - t.trim_start_matches(start).len();
             t.replace_range(..cut, "");
-            if t.is_empty() {
-                self.inlines.remove(0);
-            } else {
-                break;
-            }
         }
         while let Some(Inline::Text(t, _)) = self.inlines.last_mut() {
             let n = t.trim_end_matches(end).len();
@@ -431,10 +509,10 @@ pub fn char_props(f: &Fmt) -> CharProps {
         } else {
             None
         },
-        link: f.link.clone().filter(|l| !l.is_empty()),
+        link: f.link.as_deref().filter(|l| !l.is_empty()).map(str::to_string),
         color: f.color.map(TextColor::Rgb),
         size: f.size.filter(|s| s.is_finite() && *s >= 1.0 && *s <= 1638.0),
-        font: if f.code { Some(MONO_FONT.to_string()) } else { f.font.clone().filter(|s| !s.is_empty()) },
+        font: if f.code { Some(MONO_FONT.to_string()) } else { f.font.as_deref().filter(|s| !s.is_empty()).map(str::to_string) },
         shading: f.background,
         ..Default::default()
     }
@@ -518,6 +596,8 @@ struct Builder<'a> {
     doc: &'a mut Document,
     /// Revisions already in `doc` by (kind, author, date), so each change is added once.
     revs: std::collections::HashMap<(u8, RevMark), u32>,
+    /// Link and font bytes given to runs so far ([`MAX_RUN_STRINGS`]).
+    run_strings: usize,
 }
 
 fn rev_key(kind: RevisionKind) -> u8 {
@@ -537,7 +617,7 @@ impl<'a> Builder<'a> {
                 revs.entry((rev_key(r.kind), mark)).or_insert(i as u32);
             }
         }
-        Builder { doc, revs }
+        Builder { doc, revs, run_strings: 0 }
     }
 
     /// The document revision for a tracked change, added the first time it is seen.
@@ -550,6 +630,22 @@ impl<'a> Builder<'a> {
         self.doc.revisions.push(Revision::new(kind, m.author.clone(), m.date.clone()));
         self.revs.insert(key, i);
         i
+    }
+
+    /// `cp` as a run may keep it: without its link and font once the runs' copies of them are
+    /// over budget.
+    fn budget(&mut self, mut cp: CharProps) -> CharProps {
+        let n = cp.link.as_ref().map_or(0, String::len).saturating_add(cp.font.as_ref().map_or(0, String::len));
+        match self.run_strings.checked_add(n).filter(|&t| t <= MAX_RUN_STRINGS) {
+            Some(t) => self.run_strings = t,
+            None => {
+                if cp.link.is_some() || cp.font.is_some() {
+                    dropped(Dropped::RunStrings);
+                }
+                (cp.link, cp.font) = (None, None);
+            }
+        }
+        cp
     }
 
     fn para(&mut self, p: &Para, list_num: Option<u32>) -> Paragraph {
@@ -577,11 +673,12 @@ impl<'a> Builder<'a> {
             match i {
                 Inline::Text(t, f) => {
                     let t = clean_text(t);
-                    let mut cp = char_props(f);
+                    let mut cp = self.budget(char_props(f));
                     cp.ins = f.ins.as_ref().map(|m| self.revision(RevisionKind::Insert, m));
                     cp.del = f.del.as_ref().map(|m| self.revision(RevisionKind::Delete, m));
                     if let Some(c) = &f.fmt_change {
-                        cp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), char_props(&c.old));
+                        let old = self.budget(char_props(&c.old));
+                        cp.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, &c.mark), old);
                     }
                     if p.kind == Kind::Code {
                         // Code's font comes from its style, before a change as after it.
@@ -616,7 +713,7 @@ impl<'a> Builder<'a> {
                 }
                 Inline::Ruby { base, ruby, fmt } => {
                     let (base, ruby) = (clean_text(base), clean_text(ruby));
-                    let cp = char_props(fmt);
+                    let cp = self.budget(char_props(fmt));
                     // A source without a base or without a reading (malformed markup) is just its
                     // text: a guide that annotates nothing is no guide.
                     if base.is_empty() || ruby.is_empty() {
@@ -883,13 +980,13 @@ fn fmt_of(doc: &Document, cp: &CharProps, in_code: bool) -> Fmt {
         code,
         sup: e.vert_align == Some(VertAlign::Superscript),
         sub: e.vert_align == Some(VertAlign::Subscript),
-        link: e.link.clone(),
+        link: e.link.as_deref().map(Arc::from),
         color: match e.color {
             Some(TextColor::Rgb(c)) => Some(c),
             _ => None,
         },
         size: e.size,
-        font: if code || in_code { None } else { e.shown_font().map(str::to_string) },
+        font: if code || in_code { None } else { e.shown_font().map(Arc::from) },
         background: e.highlight.and_then(|h| h.rgb()).or(e.shading),
         ins: None,
         del: None,
@@ -1203,19 +1300,11 @@ pub fn image_px(data: &[u8]) -> Option<(u32, u32)> {
     image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?.into_dimensions().ok()
 }
 
-/// Largest allocation one decoded picture may make when it is re-encoded on export: the `image`
-/// crate's default, stated here so the bound doesn't depend on a library default that may change.
-const MAX_DECODE_ALLOC: u64 = 512 << 20;
-
-/// Decode an encoded image with a bounded allocation, so a small file that declares huge
-/// dimensions can't exhaust memory when a picture is re-encoded on export. `None` when it would
-/// be too large or doesn't decode.
+/// Decode an encoded image within the budget pictures are drawn within, so a small file that
+/// declares huge dimensions can't exhaust memory when a picture is re-encoded on export. `None`
+/// when it would be too large or doesn't decode.
 pub fn decode_bounded(data: &[u8]) -> Option<image::DynamicImage> {
-    let mut reader = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?;
-    let mut limits = image::Limits::default();
-    limits.max_alloc = Some(MAX_DECODE_ALLOC);
-    reader.limits(limits);
-    reader.decode().ok()
+    wordcraft_geom::picture::decode(data, wordcraft_geom::MAX_DECODED_BYTES).ok()
 }
 
 /// A picture from bytes with an optional display size (points); the natural size (96 dpi) is
@@ -1565,5 +1654,30 @@ mod tests {
         t.insert_covered();
         assert_eq!(t.rows[1].len(), 2);
         assert!(t.rows[1][0].covered);
+    }
+
+    #[test]
+    fn trim_drops_a_long_run_of_blank_spans_in_linear_time() {
+        // Separately formatted line breaks don't merge; each used to be removed with
+        // `Vec::remove(0)`, shifting all the rest (quadratic).
+        let mut p = Para::default();
+        let (b, i) = (Fmt { bold: true, ..Default::default() }, Fmt { italic: true, ..Default::default() });
+        for _ in 0..200_000 {
+            p.push_text("\n", &b);
+            p.push_text(" ", &i);
+        }
+        p.push_text("  x ", &Fmt::default());
+        let t = std::time::Instant::now();
+        p.trim();
+        // A fraction of a second; `Vec::remove(0)` per span ran past 6 minutes.
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        assert_eq!(p.inlines, vec![Inline::Text("x".into(), Fmt::default())]);
+        // The first span left keeps its formatting and loses only its leading blanks.
+        let mut p = Para::default();
+        p.push_text(" \t", &b);
+        p.push_text(" a ", &i);
+        p.push_text("b ", &b);
+        p.trim();
+        assert_eq!(p.inlines, vec![Inline::Text("a ".into(), i), Inline::Text("b".into(), b)]);
     }
 }

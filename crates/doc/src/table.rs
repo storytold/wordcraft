@@ -48,6 +48,12 @@ impl Row {
     pub fn first_grid(&self) -> usize {
         (self.props.grid_before as usize).min(MAX_COLS)
     }
+
+    /// Grid columns `w:gridAfter` leaves empty after the row's last cell, bounded as the DOCX
+    /// reader bounds them (a native document can say anything).
+    pub fn grid_after(&self) -> usize {
+        (self.props.grid_after as usize).min(MAX_COLS)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -97,7 +103,8 @@ impl Table {
     }
 
     pub fn cols(&self) -> usize {
-        let row_cols = |r: &Row| r.first_grid() + r.cells.iter().map(Cell::span).sum::<usize>() + r.props.grid_after as usize;
+        let row_cols =
+            |r: &Row| r.first_grid().saturating_add(r.cells.iter().map(Cell::span).fold(0, usize::saturating_add)).saturating_add(r.grid_after());
         self.grid.len().max(self.rows.iter().map(row_cols).max().unwrap_or(0))
     }
 
@@ -163,6 +170,54 @@ impl Table {
             }
         }
         self.rows.remove(r);
+    }
+
+    /// Split the table before row `at`: the rows from `at` on move to the returned table, which
+    /// has this table's properties and grid. A vertical merge that the split cuts ends in this
+    /// table's last row and starts again in the new table's first row. A row content control
+    /// around rows on both sides closes after this table's last row and opens again (without its
+    /// `w:id`) before the new table's first row. Content controls that close after this table
+    /// close after the new one.
+    pub fn split_off(&mut self, at: usize) -> Table {
+        let at = at.min(self.rows.len());
+        let mut open = Vec::new();
+        for row in self.rows.iter().take(at) {
+            open.extend(row.controls.open.iter().cloned());
+            let close = usize::try_from(row.controls.close).unwrap_or(usize::MAX).min(open.len());
+            open.truncate(open.len() - close);
+        }
+        let mut tail = Table {
+            props: self.props.clone(),
+            grid: self.grid.clone(),
+            rows: self.rows.split_off(at),
+            controls: ControlWrap { open: Vec::new(), close: std::mem::take(&mut self.controls.close) },
+        };
+        if let Some(last) = self.rows.last_mut() {
+            last.controls.close = last.controls.close.saturating_add(u32::try_from(open.len()).unwrap_or(u32::MAX));
+            for c in &mut last.cells {
+                if c.props.vmerge == VMerge::Restart {
+                    c.props.vmerge = VMerge::None;
+                }
+            }
+        }
+        for c in &mut open {
+            c.id = None;
+        }
+        if let Some(first) = tail.rows.first_mut() {
+            let own = std::mem::replace(&mut first.controls.open, open);
+            first.controls.open.extend(own);
+        }
+        let starts: Vec<(usize, usize)> = (0..tail.rows.first().map_or(0, |row| row.cells.len()))
+            .filter(|&c| tail.rows.first().and_then(|row| row.cells.get(c)).is_some_and(|x| x.props.vmerge == VMerge::Continue))
+            .map(|c| (c, tail.grid_col(0, c)))
+            .collect();
+        for (c, g) in starts {
+            let more = tail.cell_at_grid(1, g).and_then(|i| tail.rows.get(1)?.cells.get(i)).is_some_and(|x| x.props.vmerge == VMerge::Continue);
+            if let Some(x) = tail.rows.first_mut().and_then(|r| r.cells.get_mut(c)) {
+                x.props.vmerge = if more { VMerge::Restart } else { VMerge::None };
+            }
+        }
+        tail
     }
 
     /// Insert a grid column at grid index `g` (cells spanning it widen instead).

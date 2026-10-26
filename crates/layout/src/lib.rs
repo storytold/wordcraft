@@ -22,6 +22,7 @@ mod table;
 mod textbox;
 mod vertical;
 pub mod wordart;
+mod work;
 
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
@@ -58,9 +59,9 @@ pub enum ViewMode {
 /// How digits look on screen (Word › File › Options › Advanced › Numeral).
 ///
 /// Display only: the document text keeps the typed codepoints, so find, spelling, copying and
-/// the saved file all see the original digits. Extended Arabic-Indic digits (U+06F0–U+06F9,
-/// Persian/Urdu ۰۱۲۳…) always show as typed; only ASCII and Arabic-Indic (U+0660–U+0669) digits
-/// are substituted.
+/// the saved file all see the original digits. Only ASCII digits are substituted: Arabic-Indic
+/// (U+0660–U+0669) and Extended Arabic-Indic digits (U+06F0–U+06F9, Persian/Urdu ۰۱۲۳…) always
+/// show as typed, so fonts that ligate them (e.g. the end-of-ayah mark U+06DD) keep working.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Default, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum NumeralMode {
@@ -121,13 +122,7 @@ impl NumeralMode {
             NumeralMode::Context => rtl,
             NumeralMode::System => false,
         };
-        if hindi {
-            if c.is_ascii_digit() { char::from_u32(0x660 + (c as u32 - '0' as u32)).unwrap_or(c) } else { c }
-        } else if ('\u{660}'..='\u{669}').contains(&c) {
-            (b'0' + (c as u32 - 0x660) as u8) as char
-        } else {
-            c
-        }
+        if hindi { if c.is_ascii_digit() { char::from_u32(0x660 + (c as u32 - '0' as u32)).unwrap_or(c) } else { c } } else { c }
     }
 }
 
@@ -539,8 +534,10 @@ pub struct LayoutCache {
     /// Narrowest and widest content of paragraphs measured for table autofit ([`Ctx::para_measured`]).
     measures: HashMap<Key, (f32, f32)>,
     /// Outlines of pictures' opaque pixels (Tight and Through wrapping), by media key, the
-    /// media's bytes (address and length) and crop.
-    outlines: HashMap<(String, usize, usize, [u32; 4]), Option<Arc<Vec<(f32, f32)>>>>,
+    /// media's bytes (address and length) and crop. Kept from one layout to the next, so each
+    /// entry holds a weak reference to its bytes: their allocation isn't freed while the entry is
+    /// kept, so no other picture's bytes can come to have its address ([`Outlines`]).
+    outlines: Outlines,
     env: u64,
     used: HashSet<Key>,
     /// The STYLEREF style index of the last pass and what it was built from: the body blocks
@@ -744,6 +741,10 @@ struct Ctx<'a> {
     /// Each body float's latest placement: on which page and with what wrap area, when it is
     /// above its anchor paragraph with text before it ([`EarlyFloats`]).
     floats_above: HashMap<(usize, usize), Option<(usize, WrapArea)>>,
+    /// The document's sections with their headers and footers linked ([`HfLinks`]).
+    hf: Arc<HfLinks<'a>>,
+    /// Pictures' transparency, decoded for Tight and Through wrapping ([`Ctx::wrap_outline`]).
+    alphas: contour::Alphas,
 }
 
 /// A header or footer (`story`) laid out for page `number` of a section (`sect`, `mirror`): its
@@ -794,23 +795,42 @@ fn with_pin<T>(ctx: &mut Ctx, id: u32, sect: &SectionProps, number: u32, f: impl
     (out, behind, front)
 }
 
+/// Picture outlines by media name, bytes (address and length) and crop ([`LayoutCache`]), each
+/// with a weak reference to those bytes. The cache outlives the documents it is used with, and
+/// an address names the same bytes only while their allocation lives: the weak reference keeps
+/// it (not the bytes in it), so a picture loaded later can't be given a freed picture's address
+/// and length and be taken for it.
+type Outlines = HashMap<(String, usize, usize, [u32; 4]), (std::sync::Weak<Vec<u8>>, Option<Arc<Vec<(f32, f32)>>>)>;
+
+/// Picture `bytes`'s outline within `crop`, kept in `outlines` under `key`. One refused for this
+/// layout's decoding budget wraps as its rectangle and isn't kept: a later layout may decode it.
+fn picture_outline(
+    outlines: &mut Outlines,
+    alphas: &mut contour::Alphas,
+    key: (String, usize, usize, [u32; 4]),
+    bytes: &Arc<Vec<u8>>,
+    crop: [f32; 4],
+) -> Option<Arc<Vec<(f32, f32)>>> {
+    if let Some((_, o)) = outlines.get(&key) {
+        return o.clone();
+    }
+    let outline = alphas.outline(bytes, crop).ok()?.map(Arc::new);
+    if outlines.len() >= 256 {
+        outlines.clear();
+    }
+    outlines.insert(key, (Arc::downgrade(bytes), outline.clone()));
+    outline
+}
+
 impl Ctx<'_> {
     /// The outline Tight and Through wrapping follow around `o` (see [`contour::wrap_outline`]);
     /// pictures' are worked out once per picture and crop.
     fn wrap_outline(&mut self, o: &InlineObject) -> Option<Arc<Vec<(f32, f32)>>> {
-        let (doc, cache) = (self.doc, &mut *self.cache);
+        let (doc, cache, alphas) = (self.doc, &mut *self.cache, &mut self.alphas);
         contour::wrap_outline(o, |media, crop| {
             let bytes = doc.media.get(media)?;
             let key = (media.to_string(), Arc::as_ptr(bytes) as usize, bytes.len(), crop.map(f32::to_bits));
-            if let Some(o) = cache.outlines.get(&key) {
-                return o.clone();
-            }
-            if cache.outlines.len() >= 256 {
-                cache.outlines.clear();
-            }
-            let outline = contour::picture_outline(bytes, crop).map(Arc::new);
-            cache.outlines.insert(key, outline.clone());
-            outline
+            picture_outline(&mut cache.outlines, alphas, key, bytes, crop)
         })
     }
 
@@ -1274,6 +1294,9 @@ fn layout_box(
                 } else if i > 0 && before > 0.0 && prev_after > 0.0 && !ctx.doc.settings.sum_paragraph_spacing {
                     before = (before - prev_after).max(0.0);
                 }
+                // Paragraph-relative floats start above the effective space before, as in the
+                // body path. Keep text and wrap exclusions relative to the text's actual top.
+                let para_top = y;
                 y += if i == 0 { before } else { before.max(0.0) };
                 // Floating objects anchored here: place them, then wrap the text around them.
                 // One left out of the layout (hidden, or deleted in the final text) takes no room.
@@ -1288,12 +1311,15 @@ fn layout_box(
                     }
                     if let Some(pin) = ctx.pin.as_ref().filter(|pin| in_cell && pin.story == story && float.outside_cell && page_anchored(float)) {
                         let page = PageFrame { sect: &pin.sect, origin: (0.0, 0.0), number: pin.number, mirror: pin.mirror };
-                        pinned.insert(oi, float_rect(Some(page), (0.0, width), y, w, h, float));
+                        pinned.insert(oi, float_rect(Some(page), (0.0, width), para_top, w, h, float));
                         continue;
                     }
-                    let r = float_rect(frame, (0.0, width), y, w, h, float);
+                    // Only paragraph-relative placement excludes space-before. Line anchors
+                    // and frameless page/margin fallbacks retain the text-top origin.
+                    let float_y = if float.v_rel == Anchor::Paragraph { para_top } else { y };
+                    let r = float_rect(frame, (0.0, width), float_y, w, h, float);
                     let outline = ctx.wrap_outline(o);
-                    excl.extend(wrap_area(r, float, outline.as_deref().map(|v| v.as_slice())));
+                    excl.extend(wrap_area(r, float, outline.as_deref().map(Vec::as_slice)));
                     floats.insert(oi, r);
                 }
                 let rel = rel_exclusions(&excl, 0.0, y);
@@ -1317,7 +1343,7 @@ fn layout_box(
                 prev_end = push_para(&mut items, story, &path, &pl, 0, pl.lines.len(), 0.0, y + lead, width, edges);
                 // Pictures, shapes and text boxes: drawn, their areas and text boxes' text.
                 if !p.objects.is_empty() {
-                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: y, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
+                    let at = ObjFrame { page: frame, col: (0.0, width), para_y: para_top, table_chr: table.map(|t| &t.chr), pinned: Some(&pinned) };
                     let (back, front) = place_objects(ctx, story, &path, p, &pl, (0, pl.lines.len()), (0.0, y + lead), &at, &floats, depth);
                     for placed in back.iter().chain(front.iter()) {
                         if let Placed::Object { rect, spin, wrap, .. } = placed
@@ -1358,11 +1384,11 @@ fn layout_box(
                     Some(f) => {
                         let legacy = if ctx.doc.settings.compat_mode < 15 { table::first_cell_left_margin(ctx, t) } else { 0.0 };
                         let (r, area) = box_float_table_rect(frame, width, y, &tl, &f, legacy, &float_tables);
-                        excl.push((area, false, None, WrapText::BothSides));
+                        excl.push((area, false, None, WrapText::BothSides, true));
                         float_tables.push(area);
                         table_areas.push(area);
                         if f.v_rel == Anchor::Page {
-                            page_table_wraps.push((area, false, None, WrapText::BothSides));
+                            page_table_wraps.push((area, false, None, WrapText::BothSides, true));
                         }
                         (r.x, r.y)
                     }
@@ -2334,8 +2360,11 @@ fn layout_pass(
         footer_wraps: HashMap::new(),
         pin: None,
         floats_above: HashMap::new(),
+        hf: Arc::new(HfLinks::new(doc.sections())),
+        alphas: Default::default(),
     };
-    let sections = doc.sections();
+    let hf = Arc::clone(&ctx.hf);
+    let sections = &hf.sections;
     let web = matches!(opts.view, ViewMode::Web | ViewMode::Draft | ViewMode::Outline);
     let read = opts.view == ViewMode::Read;
     let reflow = web || read;
@@ -2465,9 +2494,9 @@ fn layout_pass(
         ctx.fields.section = u32::try_from(si).unwrap_or(u32::MAX).saturating_add(1);
         ctx.fields.section_pages = totals.section(si);
         // Headers and footers left out are linked to the previous section's, and take its room.
-        let (heads, feet) = (linked(&sections, si, |s| s.headers), linked(&sections, si, |s| s.footers));
-        let hb = |i: Option<u32>| defining_width(&sections, si, |s| s.headers, i);
-        let fb = |i: Option<u32>| defining_width(&sections, si, |s| s.footers, i);
+        let (heads, feet) = (hf.heads.set(si), hf.feet.set(si));
+        let hb = |i: Option<u32>| hf.defining_width(false, si, i);
+        let fb = |i: Option<u32>| hf.defining_width(true, si, i);
         let body_top = if reflow || turn.is_turned() {
             sect.margin_top
         } else {
@@ -2507,7 +2536,7 @@ fn layout_pass(
             {
                 pb.sect = prev;
                 pb.sect_idx = si - 1;
-                let (ph, pf) = (linked(&sections, si - 1, |s| s.headers), linked(&sections, si - 1, |s| s.footers));
+                let (ph, pf) = (hf.heads.set(si - 1), hf.feet.set(si - 1));
                 let top = body_top_for(&mut ctx, prev, ph.default);
                 pb.foot_top = foot_top_for(&mut ctx, prev, pf.default);
                 pb.new_page(block, top);
@@ -2621,7 +2650,7 @@ fn layout_pass(
         }
     }
     if !reflow {
-        let found = Totals::of(&pages, &sections);
+        let found = Totals::of(&pages, sections);
         if ctx.uses_totals && may_repeat && found != *totals {
             return Pass::Again(found);
         }
@@ -2629,13 +2658,13 @@ fn layout_pass(
         // Page references in headers and footers are filled in after pagination, like their page
         // totals: they don't make the body lay out again.
         if headers_footers_refer_to_pages(doc) {
-            let marks = bookmark_pages(doc, &pages, &sections);
+            let marks = bookmark_pages(doc, &pages, sections);
             ctx.fields.bookmarks_key = marks_key(&marks);
             ctx.fields.bookmark_pages = Arc::new(marks);
         }
-        headers_footers(&mut ctx, &mut pages, &sections, &found);
+        headers_footers(&mut ctx, &mut pages, sections, &found);
         if doc.settings.mirror_margins {
-            mirror_even_pages(&mut pages, &sections);
+            mirror_even_pages(&mut pages, sections);
         }
     }
     // Evict paragraph layouts that weren't used this pass if the cache grew large.
@@ -2918,23 +2947,77 @@ fn section_side(start: SectionStart, restart: Option<u32>, last: u32, pages: usi
     }
 }
 
-/// The text width of the section that defines header or footer `id`, when section `si` inherits
-/// it rather than naming it (`None` when it names it). Measured in Word: an inherited part's
-/// percentage-width tables are sized by that section, though it's laid out on `si`'s pages.
-fn defining_width(sections: &[(usize, &SectionProps)], si: usize, get: fn(&SectionProps) -> HeaderSet, id: Option<u32>) -> Option<f32> {
-    let id = id?;
-    let names = |s: &SectionProps| {
-        let h = get(s);
-        [h.default, h.first, h.even].contains(&Some(id))
-    };
-    let own = sections.get(si)?.1;
-    if names(own) {
-        return None;
-    }
-    sections.iter().take(si).rev().find(|(_, s)| names(s)).map(|(_, s)| s.text_width()).filter(|w| (w - own.text_width()).abs() > 0.01)
+/// The document's sections with their headers and footers (Word's "link to previous"), each
+/// section's resolved once for the whole layout in document order rather than by looking back
+/// over the sections before it whenever one is needed.
+struct HfLinks<'a> {
+    sections: Vec<(usize, &'a SectionProps)>,
+    heads: Linked,
+    feet: Linked,
 }
 
-/// Lay out with percentage-width tables sized by `base` (see [`defining_width`]).
+impl<'a> HfLinks<'a> {
+    fn new(sections: Vec<(usize, &'a SectionProps)>) -> Self {
+        let heads = Linked::new(&sections, |s| s.headers);
+        let feet = Linked::new(&sections, |s| s.footers);
+        HfLinks { sections, heads, feet }
+    }
+
+    /// The text width of the section that defines header (or, `footer`, footer) `id`, when
+    /// section `si` inherits it rather than naming it (`None` when it names it). Measured in
+    /// Word: an inherited part's percentage-width tables are sized by that section, though it's
+    /// laid out on `si`'s pages.
+    fn defining_width(&self, footer: bool, si: usize, id: Option<u32>) -> Option<f32> {
+        let id = id?;
+        work::steps(1);
+        let linked = if footer { &self.feet } else { &self.heads };
+        let own = self.sections.get(si)?.1;
+        if linked.own.get(si).is_some_and(|h| [h.default, h.first, h.even].contains(&Some(id))) {
+            return None;
+        }
+        // The last section before `si` naming it.
+        let namers = linked.namers.get(&id)?;
+        let k = *namers.get(namers.partition_point(|&k| k < si).checked_sub(1)?)?;
+        self.sections.get(k).map(|(_, s)| s.text_width()).filter(|w| (w - own.text_width()).abs() > 0.01)
+    }
+}
+
+/// The headers (or footers) of every section: those it names, and with those it leaves out
+/// inherited from the sections before it.
+struct Linked {
+    own: Vec<HeaderSet>,
+    linked: Vec<HeaderSet>,
+    /// The sections naming each part, in order.
+    namers: HashMap<u32, Vec<usize>>,
+}
+
+impl Linked {
+    fn new(sections: &[(usize, &SectionProps)], get: fn(&SectionProps) -> HeaderSet) -> Self {
+        let own: Vec<HeaderSet> = sections.iter().map(|(_, s)| get(s)).collect();
+        let mut linked = Vec::with_capacity(own.len());
+        let mut namers: HashMap<u32, Vec<usize>> = HashMap::new();
+        let mut prev = HeaderSet::default();
+        for (si, o) in own.iter().enumerate() {
+            work::steps(1);
+            prev = HeaderSet { default: o.default.or(prev.default), first: o.first.or(prev.first), even: o.even.or(prev.even) };
+            linked.push(prev);
+            for id in [o.default, o.first, o.even].into_iter().flatten() {
+                let v = namers.entry(id).or_default();
+                if v.last() != Some(&si) {
+                    v.push(si);
+                }
+            }
+        }
+        Linked { own, linked, namers }
+    }
+
+    /// Section `si`'s headers (or footers), those it leaves out inherited.
+    fn set(&self, si: usize) -> HeaderSet {
+        self.linked.get(si).copied().unwrap_or_default()
+    }
+}
+
+/// Lay out with percentage-width tables sized by `base` (see [`HfLinks::defining_width`]).
 fn with_pct_base<T>(ctx: &mut Ctx, base: Option<f32>, f: impl FnOnce(&mut Ctx) -> T) -> T {
     let before = std::mem::replace(&mut ctx.pct_base, base);
     let out = f(ctx);
@@ -3033,8 +3116,8 @@ impl PageFrame<'_> {
     /// Alignment `a` across the page: inside and outside become right and left on an even page.
     fn h_align(frame: Option<&Self>, a: Option<FloatAlign>) -> Option<FloatAlign> {
         match a {
-            Some(FloatAlign::Inside) if frame.is_some_and(|f| f.even()) => Some(FloatAlign::End),
-            Some(FloatAlign::Outside) if frame.is_some_and(|f| f.even()) => Some(FloatAlign::Start),
+            Some(FloatAlign::Inside) if frame.is_some_and(Self::even) => Some(FloatAlign::End),
+            Some(FloatAlign::Outside) if frame.is_some_and(Self::even) => Some(FloatAlign::Start),
             a => a,
         }
     }
@@ -3097,8 +3180,9 @@ fn align_in((start, extent): (f32, f32), offset: f32, size: f32, align: Option<F
 }
 
 /// An area text keeps clear of: its bounds, whether text may only go above and below it, and
-/// (Tight and Through wrapping) the outline text follows inside it, and the sides text may go on.
-type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText);
+/// (Tight and Through wrapping) the outline text follows inside it, the sides text may go on,
+/// and whether it comes from a floating table (inclusive line-bottom contact, #3977).
+type WrapArea = (Rect, bool, Option<Arc<contour::Contour>>, WrapText, bool);
 
 /// Wrap areas a page starts with (#2048): by page index, the floating objects (block, object
 /// index) placed above the top of their anchor paragraph, with text before it on the page, and
@@ -3111,14 +3195,15 @@ type EarlyFloats = HashMap<usize, Vec<(usize, usize, WrapArea)>>;
 /// out before it ([`settle_early`]).
 const MAX_REWRAP_PASSES: usize = 3;
 
-/// Whether the text kept clear of `seed` is kept clear of `area` too: the same wrap side, `area`
-/// inside `seed`, and no outline on `seed` other than `area`'s own in the same place.
+/// Whether the text kept clear of `seed` is kept clear of `area` too: the same table-contact
+/// rule and wrap side, `area` inside `seed`, and no outline on `seed` other than `area`'s own
+/// in the same place.
 fn covers(seed: &WrapArea, area: &WrapArea) -> bool {
     let (s, r) = (seed.0, area.0);
     let inside = r.x >= s.x - 0.5 && r.y >= s.y - 0.5 && r.right() <= s.right() + 0.5 && r.bottom() <= s.bottom() + 0.5;
     let same_place = (r.x - s.x).abs() < 0.5 && (r.y - s.y).abs() < 0.5 && (r.w - s.w).abs() < 0.5 && (r.h - s.h).abs() < 0.5;
     let outline = seed.2.is_none() || (same_place && seed.2 == area.2);
-    (seed.3 == area.3 || seed.1) && (seed.1 || !area.1) && inside && outline
+    seed.4 == area.4 && (seed.3 == area.3 || seed.1) && (seed.1 || !area.1) && inside && outline
 }
 
 /// In a pass no other follows ([`MAX_REWRAP_PASSES`]), a float at `r` with wrap area `area`
@@ -3169,7 +3254,7 @@ fn merge_early(early: &mut EarlyFloats, found: EarlyFloats) {
             match have.iter_mut().find(|(eb, ek, _)| (*eb, *ek) == (b, k)) {
                 Some((_, _, seed)) if !covers(seed, &area) => {
                     let beside = seed.3 == area.3 && !seed.1 && !area.1;
-                    *seed = (seed.0.union(&area.0), !beside, None, area.3);
+                    *seed = (seed.0.union(&area.0), !beside, None, area.3, area.4);
                 }
                 Some(_) => {}
                 None => have.push((b, k, area)),
@@ -3189,19 +3274,19 @@ fn wrap_area(r: Rect, float: &Float, outline: Option<&[(f32, f32)]>) -> Option<W
     if matches!(float.wrap, Wrap::Tight | Wrap::Through)
         && let Some((area, c)) = outline.and_then(|o| contour::contour_area(r, float, o))
     {
-        return Some((area, false, Some(Arc::new(c)), float.wrap_text));
+        return Some((area, false, Some(Arc::new(c)), float.wrap_text, false));
     }
     let d = |v: f32| if v.is_finite() { v.clamp(0.0, 1584.0) } else { 0.0 };
     let (side, top, bottom) = (d(float.dist), d(float.dist_top), d(float.dist_bottom));
     // A rotated object keeps text clear of its rotated bounds.
     let r = float.spin().bounds(r);
-    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text))
+    Some((Rect::new(r.x - side, r.y - top, r.w + side * 2.0, r.h + top + bottom), float.wrap == Wrap::TopAndBottom, None, float.wrap_text, false))
 }
 
 /// Wrap areas relative to a paragraph whose column starts at `x0` and whose top is `y0`.
 fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
     excl.iter()
-        .map(|(r, tb, c, side)| para::Exclusion {
+        .map(|(r, tb, c, side, table)| para::Exclusion {
             top: r.y - y0,
             bottom: r.bottom() - y0,
             left: r.x - x0,
@@ -3209,6 +3294,7 @@ fn rel_exclusions(excl: &[WrapArea], x0: f32, y0: f32) -> Vec<para::Exclusion> {
             top_bottom: *tb,
             contour: c.clone(),
             side: *side,
+            table: *table,
         })
         .filter(|e| e.bottom > 0.0)
         .collect()
@@ -3350,7 +3436,7 @@ fn anchor_floats(
             // Positions relative to the paragraph start above its space before (Word for Windows).
             let mut r = float_rect(Some(frame), (col_x, width), y0 - before, w, h, float);
             let outline = ctx.wrap_outline(o);
-            let outline = outline.as_deref().map(|v| v.as_slice());
+            let outline = outline.as_deref().map(Vec::as_slice);
             let mut area = wrap_area(r, float, outline);
             if pb.settle && text_before {
                 let seed = early.and_then(|v| v.iter().find(|(b, k, _)| (*b, *k) == (block, oi))).map(|(_, _, a)| a);
@@ -3391,12 +3477,12 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     }
     ctx.footer_wraps.insert(key, Vec::new());
     let doc = ctx.doc;
-    let sections = doc.sections();
-    let Some((_, sect)) = sections.get(page.section) else { return Vec::new() };
+    let hf = Arc::clone(&ctx.hf);
+    let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
     }
-    let set = linked(&sections, page.section, |s| s.footers);
+    let set = hf.feet.set(page.section);
     let id = if sect.title_page && first {
         set.first
     } else if doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
@@ -3408,7 +3494,7 @@ fn footer_table_wraps(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<WrapArea> {
     let Some(part) = doc.parts.get(&id) else { return Vec::new() };
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
-    let base = defining_width(&sections, page.section, |s| s.footers, Some(id));
+    let base = hf.defining_width(true, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
@@ -3902,7 +3988,23 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
                 - new_notes.iter().map(|n| n.h).sum::<f32>()
                 - if pb.notes.is_empty() && !new_notes.is_empty() { pb.seps.sep_h(false) } else { 0.0 }
                 - extra;
-            let bottom = pb.y + lead + (l.top + l.height - first.top);
+            // Multiple spacing above single puts its extra leading below the text (see
+            // `baseline_offset`), and Word lets that leading of a page's last line run into the
+            // bottom margin: only the text has to fit (observed: a double-spaced 12pt line stays on
+            // the page while its text ends above the margin, about half a line lower than when the
+            // whole line must fit). Only the bottom margin takes that leading: a footer taller than
+            // the margin, or footnotes, keep the whole line clear of them.
+            let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
+            let fit_h = match pl.rp.line_spacing {
+                wordcraft_doc::props::LineSpacing::Multiple(m)
+                    if m > 1.0 && at_margin && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
+                {
+                    // `baseline` is from the paragraph's top; the text ends a descent below it.
+                    (l.baseline - l.top + l.text_desc).clamp(0.0, l.height)
+                }
+                _ => l.height,
+            };
+            let bottom = pb.y + lead + (l.top + fit_h - first.top);
             // On a page with footnotes the paragraph's last line keeps its space after clear of
             // the separator (Word): if the space doesn't fit, the line goes to the next page (and,
             // with widow control, one more with it). Without notes the space after may run past
@@ -4326,6 +4428,14 @@ fn row_can_start(row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, p
     table::split_row(laid, room).is_some()
 }
 
+/// Header rows are re-placed on every page a table spills onto, so a table is O(header items ×
+/// pages) placed items — and an exact-height header row keeps all its overflowing text without
+/// growing, so a few KB of document could otherwise fill memory. Once this many items (a row
+/// counts at least one) have been repeated across a table, later pages carry no header rows;
+/// pagination still finishes. Far above any real table (three ordinary header rows over some
+/// 5 000 pages).
+const MAX_HEADER_ITEMS: usize = 500_000;
+
 fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, block: usize, body_top: f32) {
     pb.prev = None;
     let width = pb.col_w();
@@ -4346,13 +4456,10 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
     // A table in the text flow starts below the floating objects in its way.
     below_floats(ctx, pb, pb.col_x() + tl.x, pb.col_x() + tl.x + tl.width);
     let header_rows: Vec<usize> = (0..t.rows.len()).take_while(|r| t.rows.get(*r).is_some_and(|row| row.props.header)).collect();
-    // Header rows are re-placed on every page a table spills onto, so a table with many header
-    // rows that each spill onto their own page is O(header rows × pages) placed items — a few KB
-    // of document can otherwise fill memory. Once this many header rows have been repeated across
-    // the whole table, later pages carry none; pagination still finishes. Far above any real
-    // table (e.g. 3 header rows over 30 000 pages).
-    const MAX_HEADER_REPEATS: usize = 200_000;
+    // Items repeated so far, and what one more repeat of the header rows costs (see
+    // `MAX_HEADER_ITEMS`).
     let mut header_repeats = 0usize;
+    let header_cost = header_rows.iter().filter_map(|i| tl.rows.get(*i)).map(|r| r.items.len().max(1)).fold(0, usize::saturating_add);
     // Resolve kept chains once; nested paragraphs cannot keep their enclosing row.
     let mut kept: Vec<(usize, f32)> = (0..tl.rows.len()).map(|i| (i, 0.0)).collect();
     for i in (0..tl.rows.len().saturating_sub(1)).rev() {
@@ -4452,15 +4559,10 @@ fn place_table(ctx: &mut Ctx, pb: &mut PageBuilder, t: &wordcraft_doc::Table, bl
             }
             pb.advance(block, body_top);
             // Repeat header rows, up to this table's cap.
-            if !header_rows.contains(&ri) && header_repeats < MAX_HEADER_REPEATS {
-                for hr in &header_rows {
-                    if header_repeats >= MAX_HEADER_REPEATS {
-                        break;
-                    }
-                    if let Some(h) = tl.rows.get(*hr) {
-                        place(pb, h);
-                        header_repeats += 1;
-                    }
+            if !header_rows.contains(&ri) && header_repeats.saturating_add(header_cost) <= MAX_HEADER_ITEMS {
+                header_repeats += header_cost;
+                for h in header_rows.iter().filter_map(|hr| tl.rows.get(*hr)) {
+                    place(pb, h);
                 }
             }
             fresh = true;
@@ -4510,12 +4612,12 @@ fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     if let Some(areas) = ctx.header_tables.get(&key) {
         return areas.clone();
     }
-    let sections = ctx.doc.sections();
-    let Some((_, sect)) = sections.get(page.section) else { return Vec::new() };
+    let hf = Arc::clone(&ctx.hf);
+    let Some((_, sect)) = hf.sections.get(page.section) else { return Vec::new() };
     if sect.text_direction.is_turned() {
         return Vec::new();
     }
-    let set = linked(&sections, page.section, |s| s.headers);
+    let set = hf.heads.set(page.section);
     let id = if sect.title_page && first {
         set.first
     } else if ctx.doc.settings.even_odd_headers && page.number.is_multiple_of(2) {
@@ -4528,7 +4630,7 @@ fn header_table_areas(ctx: &mut Ctx, pb: &PageBuilder) -> Vec<Rect> {
     let blocks = part.blocks.clone();
     let x = sect.margin_left + sect.gutter;
     let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
-    let base = defining_width(&sections, page.section, |s| s.headers, Some(id));
+    let base = hf.defining_width(false, page.section, Some(id));
     let counters = std::mem::take(&mut ctx.counters);
     let boxes = std::mem::take(&mut ctx.boxes);
     let chains = std::mem::take(&mut ctx.chains);
@@ -4599,7 +4701,7 @@ fn place_floating_table(ctx: &mut Ctx, pb: &mut PageBuilder, tl: &table::TableLa
             pg.float_tables.push(Path::top(block));
         }
         let area = r.inset(-dl, -dt, -dr, -db);
-        pb.excl.push((area, false, None, WrapText::BothSides));
+        pb.excl.push((area, false, None, WrapText::BothSides, true));
         pb.float_tables.push(area);
         return;
     }
@@ -4681,22 +4783,6 @@ fn below(excl: &[WrapArea], mut y: f32, x0: f32, x1: f32) -> f32 {
     y
 }
 
-/// Section `si`'s headers (or footers, as `get` picks), with those it leaves out inherited from
-/// the sections before it (Word's "link to previous").
-fn linked(sections: &[(usize, &SectionProps)], si: usize, get: fn(&SectionProps) -> HeaderSet) -> HeaderSet {
-    let mut set = sections.get(si).map(|(_, s)| get(s)).unwrap_or_default();
-    for (_, s) in sections.iter().take(si).rev() {
-        if set.default.is_some() && set.first.is_some() && set.even.is_some() {
-            break;
-        }
-        let o = get(s);
-        set.default = set.default.or(o.default);
-        set.first = set.first.or(o.first);
-        set.even = set.even.or(o.even);
-    }
-    set
-}
-
 /// Whether a header, a footer or a text box shows a `PAGEREF` field, which they resolve from the
 /// paginated body (see [`bookmark_pages`]).
 fn headers_footers_refer_to_pages(doc: &Document) -> bool {
@@ -4775,6 +4861,7 @@ fn marks_key(marks: &fields::BookmarkPages) -> u64 {
 
 fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &SectionProps)], totals: &Totals) {
     let total = pages.len() as u32;
+    let hf = Arc::clone(&ctx.hf);
     let even_odd = ctx.doc.settings.even_odd_headers;
     let styles = styleref::headers_use_styleref(ctx.doc).then(|| ctx.cache.style_index(ctx.doc));
     let mut first_of_section: HashSet<usize> = HashSet::new();
@@ -4787,8 +4874,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
     for (i, page) in pages.iter_mut().enumerate() {
         let Some((_, sect)) = sections.get(page.section) else { continue };
         // Inherit header/footer references from earlier sections (Word's "link to previous").
-        let pick = |get: fn(&SectionProps) -> HeaderSet| -> Option<u32> {
-            let set = linked(sections, page.section, get);
+        let pick = |linked: &Linked| -> Option<u32> {
+            let set = linked.set(page.section);
             if sect.title_page && first_of_section.contains(&i) {
                 return set.first;
             }
@@ -4797,8 +4884,8 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             }
             set.default
         };
-        let hid = pick(|s| s.headers);
-        let fid = pick(|s| s.footers);
+        let hid = pick(&hf.heads);
+        let fid = pick(&hf.feet);
         page.hf_slot = if sect.title_page && first_of_section.contains(&i) {
             HfSlot::First
         } else if even_odd && page.number % 2 == 0 {
@@ -4826,7 +4913,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
         {
             let blocks = part.blocks.clone();
             let frame = PageFrame { sect, origin: (x, sect.header), number: page.number, mirror: ctx.mirror };
-            let base = defining_width(sections, page.section, |s| s.headers, hid);
+            let base = hf.defining_width(false, page.section, hid);
             let (mut items, behind, front) = with_pin(ctx, id, sect, page.number, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, Some(frame)).items)
             });
@@ -4840,7 +4927,7 @@ fn headers_footers(ctx: &mut Ctx, pages: &mut [Page], sections: &[(usize, &Secti
             && let Some(part) = ctx.doc.parts.get(&id)
         {
             let blocks = part.blocks.clone();
-            let base = defining_width(sections, page.section, |s| s.footers, fid);
+            let base = hf.defining_width(true, page.section, fid);
             // The footer's height fixes where it sits, which page-relative floats need.
             let (h, ..) = with_pin(ctx, id, sect, page.number, |ctx| {
                 with_pct_base(ctx, base, |c| layout_box(c, StoryRef::Part(id), &blocks, &[], w, BoxContext::Other, 0, None).height)
@@ -4904,17 +4991,25 @@ mod tests_autospace;
 #[cfg(test)]
 mod tests_bidi;
 #[cfg(test)]
+mod tests_budget;
+#[cfg(test)]
 mod tests_complex;
 #[cfg(test)]
 mod tests_grid;
 #[cfg(test)]
 mod tests_ligature;
 #[cfg(test)]
+mod tests_linear;
+#[cfg(test)]
+mod tests_nbsp;
+#[cfg(test)]
 mod tests_numeral;
 #[cfg(test)]
 mod tests_pages;
 #[cfg(test)]
 mod tests_styleref;
+#[cfg(test)]
+mod tests_table_contact;
 #[cfg(test)]
 mod tests_textbox;
 #[cfg(test)]

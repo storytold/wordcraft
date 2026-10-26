@@ -11,6 +11,202 @@ fn lay(doc: &Document) -> DocLayout {
     layout(doc, &mut c, &LayoutOptions::default())
 }
 
+/// These pagination fixtures test physical boundaries, not the host's Aptos substitution.
+/// Keep their explicit spacing local; ordinary document/layout defaults remain unchanged.
+pub(super) fn pagination_fixture_document(text: &str) -> Document {
+    let mut doc = Document::from_text(text);
+    doc.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+    doc.styles.default_chr.size = Some(12.0);
+    for block in &mut doc.body {
+        if let Block::Para(para) = Arc::make_mut(block) {
+            para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(14.0));
+            para.props.space_before = Some(0.0);
+            para.props.space_after = Some(8.0);
+        }
+    }
+    doc
+}
+
+/// Asserts that every laid-out fixture paragraph uses the bundled Source Sans 3 Regular bytes at
+/// 12 pt and that at least one paragraph was actually inspected.
+pub(super) fn assert_pagination_fixture_font(layout: &DocLayout) {
+    let mut paragraphs = 0;
+    for page in &layout.pages {
+        for item in &page.items {
+            if let Placed::Lines { para, .. } = item {
+                paragraphs += 1;
+                for style in &para.styles {
+                    assert_eq!(style.rc.font, WRAP_TEST_FONT, "the fixture requests its bundled face");
+                    assert_eq!(style.face.family, WRAP_TEST_FONT, "the fixture must not silently substitute another family");
+                    assert_eq!(style.face.style, "Regular", "the fixture must resolve the intended regular face");
+                    assert_eq!(style.size, 12.0, "the fixture keeps its explicit point size");
+                    assert!(
+                        style.face.data() == include_bytes!("../../../assets/fonts/SourceSans3-Regular.ttf").as_slice(),
+                        "the selected face must be the exact already-bundled regular font bytes"
+                    );
+                }
+            }
+        }
+    }
+    assert!(paragraphs > 0, "font assertions must inspect actual laid-out paragraphs");
+}
+
+/// Preserve the 22 short filler paragraphs while giving the following row a measured boundary.
+fn pagination_filler_leaving(room: f32) -> Document {
+    let lines: Vec<String> = (1..=22).map(|i| format!("Filler {i}")).collect();
+    let mut doc = pagination_fixture_document(&lines.join("\n"));
+    let after = doc.last_section.text_height() - room - 22.0 * 14.0 - 21.0 * 8.0;
+    assert!(after >= 8.0, "the last gap may add room-taking space, not remove filler content");
+    doc.para_mut(StoryRef::Body, &Path::top(21)).unwrap().props.space_after = Some(after);
+    let probe = lay(&doc);
+    assert_pagination_fixture_font(&probe);
+    assert_eq!(probe.pages.len(), 1, "all filler must precede the row on page one");
+    let lines: Vec<_> = probe.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, y, l0, l1, .. } if path.0.len() == 1 => Some((para, *y, l1 - l0)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(lines.len(), 22, "every filler paragraph remains");
+    assert!(lines.iter().all(|(_, _, count)| *count == 1), "filler text must remain one line per paragraph");
+    let (last, y, _) = lines.last().unwrap();
+    let remaining = probe.pages[0].body.bottom() - y - last.height - last.rp.space_after;
+    assert!((remaining - room).abs() < 0.02, "requested {room}pt of actual row room, got {remaining}pt");
+    assert!(remaining > 0.0 && (remaining < 63.6) == (room < 63.6), "the measured room must be on the intended side of the row boundary");
+    doc
+}
+
+/// The top-level body text bottom and its trailing space-after, if the page has one.
+fn pagination_body_bottom(page: &Page) -> Option<(f32, f32)> {
+    let mut body_bottom = None::<(f32, f32)>;
+    for item in &page.items {
+        if let Placed::Lines { story: StoryRef::Body, path, para, l0, l1, y, .. } = item
+            && path.0.len() == 1
+            && let (Some(first), Some(last)) = (para.lines.get(*l0), para.lines.get(l1.saturating_sub(1)))
+        {
+            let bottom = y + last.top + last.height - first.top;
+            if body_bottom.is_none_or(|(prior, _)| bottom > prior) {
+                body_bottom = Some((bottom, para.rp.space_after));
+            }
+        }
+    }
+    body_bottom
+}
+
+/// Report the page's top-level body text bottom, when there is one.
+fn pagination_write_body_bottom(out: &mut String, page: &Page) {
+    use std::fmt::Write as _;
+    if let Some((bottom, after)) = pagination_body_bottom(page) {
+        let _ = writeln!(
+            out,
+            "  top-level body text bottom={bottom:.3} trailing_space_after={after:.3} remaining_to_body_bottom={:.3} remaining_after_unadjusted_space={:.3}",
+            page.body.bottom() - bottom,
+            page.body.bottom() - bottom - after
+        );
+    }
+}
+
+/// The first and last line of the placed range, with their physical extents.
+fn pagination_write_line_rows(out: &mut String, para: &ParaLayout, l0: usize, l1: usize) {
+    use std::fmt::Write as _;
+    for (li, line) in para.lines.iter().enumerate().filter(|(i, _)| *i >= l0 && *i < l1 && (*i == l0 || i.saturating_add(1) == l1)) {
+        let _ = writeln!(
+            out,
+            "    line={li} bytes={}..{} top={:.3} height={:.3} baseline={:.3} text_asc={:.3} text_desc={:.3} end={:?}",
+            line.start, line.stop, line.top, line.height, line.baseline, line.text_asc, line.text_desc, line.end
+        );
+    }
+}
+
+/// The styles this paragraph actually uses (plus the first), with their resolved metrics.
+fn pagination_write_styles(out: &mut String, para: &ParaLayout) {
+    use std::fmt::Write as _;
+    for (si, st) in para.styles.iter().enumerate().filter(|(i, _)| *i == 0 || para.clusters.iter().any(|c| c.style as usize == *i)).take(4) {
+        let (asc, desc) = wordcraft_fonts::word::line_metrics(&st.face);
+        let raw_height = (asc + desc) * f64::from(st.size) / st.face.upem;
+        let _ = writeln!(
+            out,
+            "    style={si} requested={:?} actual={:?}/{:?} face_id={} upem={} size={} word_asc={} word_desc={} raw_height_pt={raw_height:.3} resolved_asc={:.3} resolved_desc={:.3}",
+            st.rc.font,
+            st.face.family,
+            st.face.style,
+            st.face.id(),
+            st.face.upem,
+            st.size,
+            asc,
+            desc,
+            st.ascent,
+            st.descent
+        );
+    }
+}
+
+/// One placed paragraph line range and its styles.
+fn pagination_write_lines(out: &mut String, ii: usize, item: &Placed, doc: Option<&Document>) {
+    use std::fmt::Write as _;
+    let Placed::Lines { story, path, para, l0, l1, x, y, turn } = item else {
+        return;
+    };
+    let text = doc.and_then(|d| d.para(*story, path)).map(|p| p.text.chars().take(96).collect::<String>());
+    let _ = writeln!(
+        out,
+        "  item={ii} Lines story={story:?} path={path:?} text={text:?} xy=({x:.3},{y:.3}) turn={turn:?} lines={l0}..{l1}/{} para_height={:.3} before={:.3} after={:.3} spacing={:?}",
+        para.lines.len(),
+        para.height,
+        para.rp.space_before,
+        para.rp.space_after,
+        para.rp.line_spacing
+    );
+    pagination_write_line_rows(out, para, *l0, *l1);
+    pagination_write_styles(out, para);
+}
+
+/// One retained placed item (the middle items are omitted by the caller).
+fn pagination_write_item(out: &mut String, ii: usize, item: &Placed, doc: Option<&Document>) {
+    use std::fmt::Write as _;
+    match item {
+        Placed::Lines { .. } => pagination_write_lines(out, ii, item, doc),
+        Placed::Cell { rect, table, row, cell, story, clip, .. } => {
+            let _ = writeln!(out, "  item={ii} Cell table={table:?} story={story:?} row={row} cell={cell} rect={rect:?} clip={clip}");
+        }
+        Placed::Object { rect, story, path, off, text_box, .. } => {
+            let _ = writeln!(out, "  item={ii} Object story={story:?} path={path:?} off={off} textbox={text_box:?} rect={rect:?}");
+        }
+        _ => {}
+    }
+}
+
+/// Failure-only evidence for the selected pagination fixtures below. Inspect the already produced
+/// styles and placements, not a second run.
+pub(super) fn pagination_fixture_diagnostics(label: &str, doc: Option<&Document>, layout: &DocLayout) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::new();
+    let _ = writeln!(out, "\npagination fixture {label}: {} pages", layout.pages.len());
+    for (pi, page) in layout.pages.iter().enumerate().take(8) {
+        let _ = writeln!(
+            out,
+            "page={pi} body={:?} first_block={} floats={:?} items={}",
+            page.body,
+            page.first_block,
+            page.float_tables,
+            page.items.len()
+        );
+        pagination_write_body_bottom(&mut out, page);
+        for (ii, item) in page.items.iter().enumerate().filter(|(i, _)| *i < 32 || i.saturating_add(16) >= page.items.len()) {
+            pagination_write_item(&mut out, ii, item, doc);
+        }
+        if page.items.len() > 48 {
+            let _ = writeln!(out, "  omitted {} middle items (first32/last16 retained)", page.items.len() - 48);
+        }
+    }
+    if layout.pages.len() > 8 {
+        let _ = writeln!(out, "omitted {} later pages", layout.pages.len() - 8);
+    }
+    out
+}
+
 #[derive(Clone, Copy)]
 enum SpacingLocation {
     Cell,
@@ -542,7 +738,7 @@ fn hidden_text_adds_no_line_break_opportunity_when_not_shown() {
 
 /// How much bigger the second document is in the linear-time tests. At 8x a linear layout costs
 /// about 8x as much and a quadratic one about 64x, so a limit of 24x stays far from both.
-const SCALE: usize = 8;
+pub(crate) const SCALE: usize = 8;
 
 /// The CPU time `f` takes on this thread, in seconds. On Linux it is the scheduler's count of the
 /// time the thread actually ran, so the time it waits while other work on a busy machine has the
@@ -565,7 +761,7 @@ fn cpu_cost(f: &mut impl FnMut()) -> f64 {
 /// cheapest of several runs after a warm-up, the runs alternating so a busy spell slows both sizes
 /// alike; `small` is timed `scale` times over per run, so both timings are long against the clock's
 /// resolution.
-fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
+pub(crate) fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (f64, f64, f64) {
     small();
     big();
     let mut small_scaled = || (0..scale).for_each(|_| small());
@@ -578,7 +774,7 @@ fn cost_ratio(scale: usize, mut small: impl FnMut(), mut big: impl FnMut()) -> (
 }
 
 /// [`cost_ratio`] of laying out `doc(SCALE * n)` against `doc(n)`.
-fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts: &LayoutOptions) -> (f64, f64, f64) {
+pub(crate) fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts: &LayoutOptions) -> (f64, f64, f64) {
     let (small, big) = (doc(n), doc(SCALE * n));
     cost_ratio(
         SCALE,
@@ -847,6 +1043,26 @@ fn hidden_separators_with_automatic_hyphenation_lay_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(doc, 800, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
     assert!(ratio < 24.0, "8x the text took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
+/// n one-line paragraphs, each starting a page.
+fn page_break_paragraphs(n: usize) -> Document {
+    let mut d = Document::from_text(&"hello\n".repeat(n));
+    for i in 0..n {
+        d.para_mut(StoryRef::Body, &Path::top(i)).unwrap().props.page_break_before = Some(true);
+    }
+    d
+}
+
+/// A document of many paragraphs lays out in linear time. Every page asks the layout for the
+/// section properties (for the wrap areas of the headers and footers), and that used to rebuild
+/// the section list by walking the whole body, so a document of n paragraphs paid n body-length
+/// scans: a two-megabyte file took half a minute before the first page was drawn.
+#[test]
+fn a_document_of_many_paragraphs_lays_out_in_linear_time() {
+    let (t1, tk, ratio) = layout_time_ratio(page_break_paragraphs, 2_500, &LayoutOptions::default());
+    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "8x the paragraphs took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
 }
 
 #[test]
@@ -1421,6 +1637,35 @@ fn a_bookmark_before_a_left_tab_past_the_right_indent_is_not_a_line() {
         para.lines.iter().map(|l| (l.c0.saturating_sub(m), l.c1 - m)).collect::<Vec<_>>()
     };
     assert_eq!(lines(true), lines(false));
+}
+
+/// A bookmark is not text: where a line breaks is the same with it as without it. U+FFFC has the
+/// line-break class CB, which on its own would allow a break before and after it.
+#[test]
+fn a_bookmark_is_no_line_break_opportunity() {
+    // (the bookmark's offset in "Oremus", or none) -> the lines' clusters, not counting the bookmarks'
+    let lines = |marks: &[usize]| {
+        let mut d = Document::from_text("Oremus");
+        // A column too narrow for the word, which then breaks inside it.
+        d.last_section.page_w = d.last_section.margin_left + d.last_section.margin_right + 30.0;
+        // From the end, so the offsets stay those of "Oremus".
+        for (n, &at) in marks.iter().enumerate().rev() {
+            let mark = InlineObject::BookmarkStart { name: format!("b{n}") };
+            d.insert_object(&Pos::body(0, at), mark, &Default::default()).unwrap();
+        }
+        let l = lay(&d);
+        let Some(para) = l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }) else {
+            panic!("no lines")
+        };
+        para.lines
+            .iter()
+            .map(|l| para.clusters.get(l.c0..l.c1).map_or(0, |cs| cs.iter().filter(|c| c.kind != para::ClKind::Marker).count()))
+            .collect::<Vec<_>>()
+    };
+    let plain = lines(&[]);
+    assert!(plain.len() > 1, "the word is meant to break inside: {plain:?}");
+    assert_eq!(lines(&[0, 0]), plain, "two bookmarks before the word leave no line of their own");
+    assert_eq!(lines(&[3]), plain, "a bookmark inside the word is no place to wrap");
 }
 
 #[test]
@@ -4694,11 +4939,11 @@ fn exact_rows_add_only_the_bottom_margin() {
     assert!((tops[0] - (72.0 + 0.5 + 4.0)).abs() < 0.01, "first cell text at {}", tops[0]);
 }
 
+/// A 63.6 pt exact row moves whole to page two with only 50 pt left and stays on page one with
+/// 90 pt.
 #[test]
 fn exact_row_moves_whole() {
     use wordcraft_doc::props::HeightRule;
-    let lines: Vec<String> = (1..=200).map(|i| format!("Filler {i}")).collect();
-    let one_page = lay(&Document::from_text(&lines.join("\n"))).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
     let mut t = Table::new(1, 1, 400.0);
     t.rows[0].props.height = Some(63.6);
     t.rows[0].props.height_rule = HeightRule::Exact;
@@ -4707,12 +4952,27 @@ fn exact_row_moves_whole() {
         p.insert_object(0, picture(30.0, height, Default::default()), &Default::default()).unwrap();
         t.rows[0].cells[0].blocks.push(wordcraft_doc::para_block(p));
     }
-    let mut d = Document::from_text(&lines[..one_page - 2].join("\n"));
-    let end = d.body.len();
-    d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Table(t)).unwrap();
-    let l = lay(&d);
-    let row_page = l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Cell { row: 0, .. })));
-    assert_eq!(row_page, Some(1), "Word keeps an exact row together when it fits on the next page");
+    // The same intact row moves with only 50pt left, and stays when 90pt is available.
+    for (room, expected_page) in [(50.0, 1), (90.0, 0)] {
+        assert_eq!(room < 63.6, expected_page == 1);
+        let mut d = pagination_filler_leaving(room);
+        let end = d.body.len();
+        d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Table(t.clone())).unwrap();
+        let l = lay(&d);
+        assert_pagination_fixture_font(&l);
+        let row_pages: Vec<_> = l
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page, p)| p.items.iter().filter_map(move |i| matches!(i, Placed::Cell { row: 0, .. }).then_some(page)))
+            .collect();
+        assert_eq!(
+            row_pages,
+            vec![expected_page],
+            "Word keeps an exact row whole; available={room} height=63.6{}",
+            pagination_fixture_diagnostics("exact_row_moves_whole", Some(&d), &l)
+        );
+    }
 }
 
 /// `cell_margins` is what the layout uses: a cell's own margins, else the table's, else Word's;
@@ -4836,6 +5096,41 @@ fn space_shrinking_is_only_for_justified_text() {
     for align in [Align::Left, Align::Center, Align::Right] {
         assert_eq!(justified_lines(&text, 15, align).0, justified_lines(&text, 14, align).0, "{align:?}");
     }
+}
+
+/// #3924: a justified line that ends in a manual line break is stretched to the margin like a
+/// wrapped one; the last line of the paragraph stays short. `w:doNotExpandShiftReturn` keeps it short.
+#[test]
+fn justified_line_ending_in_line_break_is_stretched() {
+    let text = "We tie the spend\nto a pipe";
+    let ends = |no_expand: bool| {
+        let mut d = Document::from_text("");
+        d.settings.do_not_expand_shift_return = no_expand;
+        let mut p = wordcraft_doc::Paragraph::with_text(text, Default::default());
+        p.props = ParaProps { align: Some(Align::Justify), ..Default::default() };
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let l = lay(&d);
+        let mut out = Vec::new();
+        for pg in &l.pages {
+            for it in &pg.items {
+                if let Placed::Lines { para, l0, l1, x, .. } = it {
+                    for li in *l0..*l1 {
+                        let line = &para.lines[li];
+                        let content = text[line.start..line.stop].trim_end().len();
+                        out.push(para.x_of(li, line.start + content).unwrap() + x);
+                    }
+                }
+            }
+        }
+        out
+    };
+    let stretched = ends(false);
+    assert_eq!(stretched.len(), 2, "{stretched:?}");
+    assert!((stretched[0] - 540.0).abs() < 0.05, "the line before the break ends at {}", stretched[0]);
+    assert!(stretched[1] < 400.0, "the last line stays short: {}", stretched[1]);
+    let kept = ends(true);
+    assert_eq!(kept.len(), 2, "{kept:?}");
+    assert!(kept[0] < 400.0, "doNotExpandShiftReturn keeps the line before the break short: {}", kept[0]);
 }
 
 #[test]
@@ -5007,6 +5302,79 @@ fn floats_in_headers_and_table_cells_are_drawn() {
     let c = shapes(&l.pages[0].items);
     assert_eq!(c.len(), 1, "cell float drawn");
     assert!(c[0].x > 72.0 && c[0].x < 72.0 + 234.0, "inside the first cell: {:?}", c[0]);
+}
+
+/// Paragraph anchors exclude space-before; line and frameless page/margin anchors retain it.
+#[test]
+fn box_float_origins_respect_vertical_anchor_with_space_before() {
+    use wordcraft_doc::{
+        PartKind,
+        para::{Anchor, Float, Wrap},
+    };
+    for context in ["header", "footer", "cell", "textbox"] {
+        for anchor in [
+            Anchor::Paragraph,
+            Anchor::Line,
+            Anchor::Page,
+            Anchor::Margin,
+            Anchor::TopMargin,
+            Anchor::BottomMargin,
+            Anchor::InsideMargin,
+            Anchor::OutsideMargin,
+        ] {
+            if matches!(context, "header" | "footer") && !matches!(anchor, Anchor::Paragraph | Anchor::Line) {
+                continue;
+            }
+            let gap = |before| {
+                let mut d = Document::from_text("Body");
+                let mut p = wordcraft_doc::Paragraph::with_text("Anchor", Default::default());
+                p.props.space_before = Some(before);
+                let float = Float { wrap: Wrap::BehindText, v_rel: anchor, y: 7.0, ..Default::default() };
+                p.insert_object(0, rect_shape(37.0, 9.0, float), &Default::default()).unwrap();
+                let story = match context {
+                    "header" | "footer" => {
+                        let kind = if context == "header" { PartKind::Header } else { PartKind::Footer };
+                        let id = d.add_part(kind, vec![wordcraft_doc::para_block(p)]);
+                        if context == "header" {
+                            d.last_section.headers.default = Some(id);
+                        } else {
+                            d.last_section.footers.default = Some(id);
+                        }
+                        StoryRef::Part(id)
+                    }
+                    "cell" => {
+                        let mut t = Table::new(1, 1, 468.0);
+                        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(p)];
+                        d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
+                        StoryRef::Body
+                    }
+                    _ => {
+                        let id = text_box(&mut d, 0, "", 200.0, 100.0, page_float(100.0, 200.0));
+                        d.parts.get_mut(&id).unwrap().blocks = vec![wordcraft_doc::para_block(p)];
+                        StoryRef::Part(id)
+                    }
+                };
+                let l = lay(&d);
+                let page = &l.pages[0];
+                let items = match context {
+                    "header" => &page.header,
+                    "footer" => &page.footer,
+                    _ => &page.items,
+                };
+                let y = items
+                    .iter()
+                    .find_map(|i| match i {
+                        Placed::Lines { story: s, y, path, .. } if *s == story && (context != "cell" || path.0.len() > 1) => Some(*y),
+                        _ => None,
+                    })
+                    .unwrap();
+                let r = shapes(items).into_iter().find(|r| (r.w - 37.0).abs() < 0.01).unwrap();
+                r.y - y
+            };
+            let expected = if anchor == Anchor::Paragraph { -24.0 } else { 0.0 };
+            assert!((gap(24.0) - gap(0.0) - expected).abs() < 0.01, "{context} {anchor:?}: float/text gap must change by {expected}");
+        }
+    }
 }
 
 /// Inside a text box whose shape style gives its text a colour (`a:fontRef`, typically white on
@@ -5312,14 +5680,43 @@ fn floating_tables_take_no_room_and_text_wraps_beside_them() {
     assert!(bx + bleft > nx + 200.0, "body text at {}, right of the narrow table", bx + bleft);
 }
 
+/// A margin-anchored floating table is placed from the anchor page's margin even when a body
+/// paragraph keeps trailing empty lines: all 24 preceding paragraphs stay on page one and every
+/// table row is drawn exactly once there.
 #[test]
 fn a_floating_table_ignores_a_paragraphs_empty_lines() {
     use wordcraft_doc::para::Anchor;
     use wordcraft_doc::props::TableFloat;
 
-    let mut doc = Document::from_text(&[""; 9].join("\n"));
+    let mut doc = pagination_fixture_document(&[""; 9].join("\n"));
+    // Visible's line breaks belong inside its paragraph, not separate body paragraphs.
     doc.body.push(wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Visible\n\n\n", Default::default())));
     doc.body.extend((0..14).map(|_| wordcraft_doc::para_block(wordcraft_doc::Paragraph::new())));
+    for block in &mut doc.body {
+        if let Block::Para(para) = Arc::make_mut(block) {
+            para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(14.0));
+            para.props.space_before = Some(0.0);
+            para.props.space_after = Some(8.0);
+        }
+    }
+    let before_table = lay(&doc);
+    assert_pagination_fixture_font(&before_table);
+    assert_eq!(doc.body.len(), 24, "all original body paragraphs remain");
+    assert_eq!(before_table.pages.len(), 1, "the table's preceding body/anchor must be on page zero");
+    let preceding: Vec<_> = before_table.pages[0]
+        .items
+        .iter()
+        .filter_map(|it| match it {
+            Placed::Lines { story: StoryRef::Body, path, para, y, .. } if path.0.len() == 1 => Some((path.0[0], *y + para.height)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(preceding.iter().map(|(block, _)| *block).collect::<Vec<_>>(), (0..24).collect::<Vec<_>>());
+    assert!(preceding.last().unwrap().1 < before_table.pages[0].body.bottom(), "the final preceding paragraph actually fits the anchor page");
+    assert!(
+        before_table.pages[0].items.iter().any(|it| matches!(it, Placed::Lines { path, para, .. } if path.0 == [9] && para.lines.len() == 4)),
+        "the visible paragraph retains all three trailing empty lines"
+    );
     let mut table = Table::new(12, 1, 300.0);
     for (i, row) in table.rows.iter_mut().enumerate() {
         row.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Approval {i}"), Default::default()))];
@@ -5329,6 +5726,18 @@ fn a_floating_table_ignores_a_paragraphs_empty_lines() {
     doc.insert_block(StoryRef::Body, &Path::top(at), wordcraft_doc::Block::Table(table)).unwrap();
 
     let layout = lay(&doc);
+    assert_pagination_fixture_font(&layout);
+    let cells: Vec<_> = layout
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|it| match it {
+            Placed::Cell { row, rect, .. } => Some((*row, *rect)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(cells.iter().map(|(row, _)| *row).collect::<Vec<_>>(), (0..12).collect::<Vec<_>>(), "every floating row remains once");
+    assert!((cells[0].1.y - (before_table.pages[0].body.y + 50.0)).abs() < 0.01, "the table keeps its margin-relative 50pt anchor");
     let table_pages: Vec<usize> = layout
         .pages
         .iter()
@@ -5340,7 +5749,11 @@ fn a_floating_table_ignores_a_paragraphs_empty_lines() {
             })
         })
         .collect();
-    assert!(!table_pages.is_empty() && table_pages.iter().all(|page| *page == 0), "table rows on pages {table_pages:?}");
+    assert!(
+        !table_pages.is_empty() && table_pages.iter().all(|page| *page == 0),
+        "table rows on pages {table_pages:?}; table_block={at} margin_anchor_y=50{}",
+        pagination_fixture_diagnostics("a_floating_table_ignores_a_paragraphs_empty_lines", Some(&doc), &layout)
+    );
 }
 
 #[test]
@@ -6140,44 +6553,120 @@ fn an_inherited_footer_sizes_its_percentage_table_by_its_own_section() {
     assert!((own - landscape_w).abs() < 1.0, "own footer: {own} wide, landscape text {landscape_w}");
 }
 
+/// With exactly 50 pt left, an eight-paragraph row without a minimum splits on page one, while
+/// the same row with an at-least height of 63.6 pt moves to page two whole; all eight paragraphs
+/// remain.
 #[test]
 fn a_row_with_less_room_than_its_minimum_height_moves_on_whole() {
     use wordcraft_doc::props::HeightRule;
-    // Measured in Word: with 49 pt left on the page, a row of eight lines splits, but the same row
-    // with an at-least height of 63.6 pt goes to the next page whole.
+    // Exactly 50pt of measured room remains. The same eight paragraphs split without a minimum,
+    // but an at-least height of 63.6pt moves the row to the next page whole.
     let first_row_line_page = |min: Option<f32>| {
-        let lines: Vec<String> = (1..=200).map(|i| format!("Filler {i}")).collect();
-        let one_page = lay(&Document::from_text(&lines.join("\n"))).pages[0].items.iter().filter(|i| matches!(i, Placed::Lines { .. })).count();
+        let mut d = pagination_filler_leaving(50.0);
         let mut t = Table::new(1, 1, 400.0);
         t.rows[0].props.height = min;
         t.rows[0].props.height_rule = HeightRule::AtLeast;
         t.rows[0].cells[0].blocks =
             (1..=8).map(|k| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("Row line {k}"), Default::default()))).collect();
-        // Fill the page, leaving two filler paragraphs' room (less than 63.6 pt) for the row.
-        let mut d = Document::from_text(&lines[..one_page - 2].join("\n"));
         let end = d.body.len();
         d.insert_block(StoryRef::Body, &Path::top(end), wordcraft_doc::Block::Table(t)).unwrap();
         let l = lay(&d);
-        l.pages.iter().position(|p| p.items.iter().any(|i| matches!(i, Placed::Lines { path, .. } if path.0.first() == Some(&(end as u32)))))
+        assert_pagination_fixture_font(&l);
+        let row_lines: Vec<_> = l
+            .pages
+            .iter()
+            .enumerate()
+            .flat_map(|(page, p)| {
+                p.items.iter().filter_map(move |i| match i {
+                    Placed::Lines { path, l0, l1, .. } if path.0.first() == Some(&(end as u32)) => Some((page, l1 - l0)),
+                    _ => None,
+                })
+            })
+            .collect();
+        assert_eq!(row_lines.iter().map(|(_, count)| count).sum::<usize>(), 8, "all eight row paragraphs remain");
+        (row_lines.first().map(|(page, _)| *page), d, l)
     };
-    assert_eq!(first_row_line_page(None), Some(0), "a row without a minimum height splits");
-    assert_eq!(first_row_line_page(Some(63.6)), Some(1), "a row with a minimum height that doesn't fit moves on");
+    let (page, d, l) = first_row_line_page(None);
+    assert_eq!(page, Some(0), "a row without a minimum height splits{}", pagination_fixture_diagnostics("at_least_row/no_minimum", Some(&d), &l));
+    let (page, d, l) = first_row_line_page(Some(63.6));
+    assert_eq!(
+        page,
+        Some(1),
+        "a row with a minimum height that doesn't fit moves on; available=50 height=63.6{}",
+        pagination_fixture_diagnostics("at_least_row/minimum", Some(&d), &l)
+    );
 }
 
-/// #1742: a paragraph that leaves `room` points of the letter page's 648 pt body, then the table
-/// `build` shapes (one 468 pt column, `rows` rows of one short line each); with `room` 648 the
-/// table comes first, at the top of the page. Returns the layout and, per page, the table rows
-/// that have a cell there.
-fn at_least_rows(room: f32, rows: usize, build: impl Fn(&mut Table)) -> (DocLayout, Vec<Vec<usize>>) {
-    let mut d = Document::from_text("Text above the table");
-    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(648.0 - room - 14.0);
-    let mut t = Table::new(rows, 1, 468.0);
-    build(&mut t);
+/// Build the filler paragraph and insert-room setting for [`at_least_rows`].
+fn at_least_rows_filler(room: f32) -> (Document, usize) {
+    let mut d = pagination_fixture_document("Text above the table");
     let at = if room >= 648.0 { 0 } else { 1 };
-    d.insert_block(StoryRef::Body, &Path::top(at), wordcraft_doc::Block::Table(t)).unwrap();
-    let l = lay(&d);
-    let pages = l
-        .pages
+    d.para_mut(StoryRef::Body, &Path::top(0)).unwrap().props.space_after = Some(if at == 0 { 0.0 } else { 648.0 - room - 14.0 });
+    let before_table = lay(&d);
+    assert_pagination_fixture_font(&before_table);
+    assert_eq!(before_table.pages.len(), 1);
+    if at == 1 {
+        let (para, y) = before_table.pages[0]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, y, .. } if path.0 == [0] => Some((para, *y)),
+                _ => None,
+            })
+            .unwrap();
+        let remaining = before_table.pages[0].body.bottom() - y - para.height - para.rp.space_after;
+        assert!((remaining - room).abs() < 0.02, "the measured filler leaves {remaining}pt, expected {room}pt");
+    }
+    (d, at)
+}
+
+/// Give every cell paragraph the fixture's exact one-line spacing.
+fn set_at_least_row_spacing(t: &mut Table) {
+    for row in &mut t.rows {
+        for cell in &mut row.cells {
+            for block in &mut cell.blocks {
+                if let Block::Para(para) = Arc::make_mut(block) {
+                    para.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(14.0));
+                    para.props.space_before = Some(0.0);
+                    para.props.space_after = Some(0.0);
+                }
+            }
+        }
+    }
+}
+
+/// The pages holding the real paragraph that remains before/after the table.
+fn at_least_rows_trailing(l: &DocLayout, at: usize) -> Vec<usize> {
+    l.pages
+        .iter()
+        .enumerate()
+        .flat_map(|(page, p)| {
+            p.items.iter().filter_map(move |it| match it {
+                Placed::Lines { story: StoryRef::Body, path, .. } if path.0 == [if at == 0 { 1 } else { 0 }] => Some(page),
+                _ => None,
+            })
+        })
+        .collect()
+}
+
+/// Prove that the table begins at the page top and the retained paragraph follows it.
+fn assert_at_least_table_at_page_top(l: &DocLayout, trailing: &[usize]) {
+    let first_cell = l.pages[0]
+        .items
+        .iter()
+        .find_map(|it| match it {
+            Placed::Cell { row: 0, rect, .. } => Some(rect),
+            _ => None,
+        })
+        .unwrap();
+    assert!((first_cell.y - l.pages[0].body.y).abs() < 0.01, "the tested table really begins at the page top");
+    let last_table_page = l.pages.iter().rposition(|p| p.items.iter().any(|it| matches!(it, Placed::Cell { .. }))).unwrap();
+    assert!(trailing[0] >= last_table_page, "the retained paragraph follows the table");
+}
+
+/// The table rows that have a cell on each page.
+fn at_least_rows_pages(l: &DocLayout) -> Vec<Vec<usize>> {
+    l.pages
         .iter()
         .map(|p| {
             let mut rows: Vec<usize> =
@@ -6185,7 +6674,28 @@ fn at_least_rows(room: f32, rows: usize, build: impl Fn(&mut Table)) -> (DocLayo
             rows.dedup();
             rows
         })
-        .collect();
+        .collect()
+}
+
+/// #1742: a paragraph that leaves `room` points of the letter page's 648 pt body, then the table
+/// `build` shapes (one 468 pt column, `rows` rows of one short line each); with `room` 648 the
+/// table comes first, at the top of the page. Returns the layout and, per page, the table rows
+/// that have a cell there.
+fn at_least_rows(room: f32, rows: usize, build: impl Fn(&mut Table)) -> (DocLayout, Vec<Vec<usize>>) {
+    let (mut d, at) = at_least_rows_filler(room);
+    let mut t = Table::new(rows, 1, 468.0);
+    build(&mut t);
+    set_at_least_row_spacing(&mut t);
+    d.insert_block(StoryRef::Body, &Path::top(at), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    assert_pagination_fixture_font(&l);
+    let trailing = at_least_rows_trailing(&l, at);
+    assert_eq!(trailing.len(), 1, "the real paragraph before/after the table is retained exactly once");
+    assert_eq!(d.para(StoryRef::Body, &Path::top(if at == 0 { 1 } else { 0 })).unwrap().text, "Text above the table");
+    if at == 0 {
+        assert_at_least_table_at_page_top(&l, &trailing);
+    }
+    let pages = at_least_rows_pages(&l);
     (l, pages)
 }
 
@@ -6250,17 +6760,41 @@ fn an_at_least_row_taller_than_a_page_splits_from_the_top_of_the_next_page() {
     assert!(pages.len() >= 3 && pages[1..].iter().all(|p| p == &vec![0]), "it splits from page 2 on: {pages:?}");
 }
 
+/// An at-least row taller than the page splits from the top of a fresh page instead of moving
+/// on, keeps all 80 cell paragraphs, and pagination terminates.
 #[test]
 fn an_at_least_row_at_the_top_of_a_page_splits_instead_of_moving_on() {
     use wordcraft_doc::props::HeightRule;
     // At the top of a page (or under the header rows repeated there) moving on gains nothing: a
     // row taller than the room splits, and pagination ends.
-    let (_, pages) = at_least_rows(648.0, 1, |t| {
+    let (l, pages) = at_least_rows(648.0, 1, |t| {
         t.rows[0].props.height = Some(700.0);
         t.rows[0].props.height_rule = HeightRule::AtLeast;
         t.rows[0].cells[0].blocks = lines_in_cell(80, "Line");
     });
-    assert!(pages.len() >= 2 && pages.iter().all(|p| p == &vec![0]), "{pages:?}");
+    assert!(
+        pages.len() >= 2 && pages.iter().all(|p| p == &vec![0]),
+        "{pages:?}; helper retains body block1 \"Text above the table\" after table block0{}",
+        pagination_fixture_diagnostics("at_least_row/top_of_page", None, &l)
+    );
+    let data_lines = |layout: &DocLayout, row: u32| {
+        let mut paragraphs = std::collections::BTreeSet::new();
+        let count = layout
+            .pages
+            .iter()
+            .flat_map(|p| &p.items)
+            .filter_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, l0, l1, .. } if path.0.len() == 4 && path.0[..3] == [0, row, 0] => {
+                    paragraphs.insert(path.0[3]);
+                    Some(l1 - l0)
+                }
+                _ => None,
+            })
+            .sum::<usize>();
+        assert_eq!(paragraphs.into_iter().collect::<Vec<_>>(), (0..80).collect::<Vec<_>>(), "all eighty original cell paragraphs remain");
+        assert_eq!(count, 80, "every short cell paragraph is drawn exactly once");
+    };
+    data_lines(&l, 0);
     // A 100 pt header row, then a row at least 600 pt with 80 lines: under the header only 548 pt
     // are left on each page, so the row splits there instead of running past the bottom margin.
     let (l, pages) = at_least_rows(648.0, 2, |t| {
@@ -6271,10 +6805,19 @@ fn an_at_least_row_at_the_top_of_a_page_splits_instead_of_moving_on() {
         t.rows[1].props.height_rule = HeightRule::AtLeast;
         t.rows[1].cells[0].blocks = lines_in_cell(80, "Line");
     });
-    assert!(pages.len() >= 3 && pages.iter().all(|p| p == &vec![0, 1]), "{pages:?}");
+    assert!(
+        pages.len() >= 3 && pages.iter().all(|p| p == &vec![0, 1]),
+        "{pages:?}; repeated100pt header plus minimum600pt row{}",
+        pagination_fixture_diagnostics("at_least_row/repeated_header", None, &l)
+    );
+    data_lines(&l, 1);
     for p in &l.pages {
         let bottom = p.items.iter().filter_map(|i| if let Placed::Cell { rect, .. } = i { Some(rect.y + rect.h) } else { None }).fold(0.0, f32::max);
-        assert!(bottom <= 720.0 + 0.5, "a row part runs past the bottom margin to {bottom}");
+        assert!(
+            bottom <= 720.0 + 0.5,
+            "a row part runs past the bottom margin to {bottom}{}",
+            pagination_fixture_diagnostics("at_least_row/repeated_header_bottom", None, &l)
+        );
     }
 }
 
@@ -8881,15 +9424,29 @@ fn space_after_stays_clear_of_the_footnote_separator() {
 #[test]
 fn space_after_may_overflow_the_bottom_margin_without_notes() {
     // Without footnotes nothing changes: the last line only has to fit, its space after may run
-    // past the bottom margin (Word).
+    // past the bottom margin (Word). "Fit" means its text: the leading multiple spacing adds below
+    // the text (this paragraph's 1.15) may run past the margin too (observed in Word at 1.15, 1.5
+    // and double spacing; see `a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits`).
     let mut tight = 0;
     for before in 0..=300 {
         let (d, t, _) = space_after_doc(before as f32, false);
         let l = lay(&d);
         let bottom_margin = d.last_section.page_h - d.last_section.margin_bottom;
         let (pieces, _) = para_pieces(&l, t);
-        let &(_, _, _, bottom) = pieces.last().unwrap();
-        assert!(bottom <= bottom_margin + 0.01, "before {before}: {bottom}");
+        let &(page, _, l1, bottom) = pieces.last().unwrap();
+        let leading = l.pages[page]
+            .items
+            .iter()
+            .find_map(|it| match it {
+                Placed::Lines { story: StoryRef::Body, path, para, .. } if path.0 == [t as u32] => {
+                    para.lines.get(l1 - 1).map(|ln| ln.height - (ln.baseline - ln.top + ln.text_desc))
+                }
+                _ => None,
+            })
+            .unwrap()
+            .max(0.0);
+        let bottom = bottom - leading;
+        assert!(bottom <= bottom_margin + 0.01, "before {before}: the last line's text ends at {bottom}");
         if bottom > bottom_margin - 6.0 {
             tight += 1;
         }

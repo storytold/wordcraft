@@ -532,6 +532,16 @@ fn keep_lasso(s: &mut Session, sel: LassoSelection) {
     s.view.draw.lasso = Some(LassoSelection { rev: s.rev().wrapping_add(1), ..sel });
 }
 
+/// After a command that changed nothing, which puts the revision back from `touched` to `rev`: a
+/// lasso selection the command kept for the revision it would have reached stays selected.
+pub(crate) fn rekey_lasso(s: &mut Session, touched: u64, rev: u64) {
+    if let Some(l) = s.view.draw.lasso.as_mut()
+        && (l.rev == touched || l.rev == touched.wrapping_add(1))
+    {
+        l.rev = rev;
+    }
+}
+
 /// Whether (`x`, `y`) is inside the closed loop `poly` (even–odd rule).
 fn inside(poly: &[[f32; 2]], x: f32, y: f32) -> bool {
     let n = poly.len();
@@ -1081,6 +1091,15 @@ mod tests {
         let objs = ink(&s);
         let blue = objs.iter().filter(|o| matches!(o, InlineObject::Shape { stroke: Some(c), .. } if c.hex() == "0070C0")).count();
         assert_eq!(blue, 1);
+        // Recolouring to the colour it has changes nothing, and the selection stays; an edit
+        // elsewhere ends it.
+        s.run("draw.lassoColor", &json!({"color": "0070C0"})).unwrap();
+        assert_eq!(s.undo_depth(), steps + 2);
+        assert_eq!(super::lasso_selection(&s).map(|l| l.items.clone()), Some(vec![sel.clone()]));
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(super::lasso_selection(&s).is_none());
+        let r = s.run("draw.lasso", &json!({"page": 0, "points": [[80, 80], [260, 80], [260, 180], [80, 180]]})).unwrap();
+        assert_eq!(r["count"], 1);
         // Deleted: only the selected stroke goes, and the selection with it.
         s.run("draw.lassoDelete", &json!({})).unwrap();
         assert_eq!(ink(&s).len(), 1);

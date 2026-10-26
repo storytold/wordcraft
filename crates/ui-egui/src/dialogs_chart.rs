@@ -82,16 +82,17 @@ impl ChartDataForm {
         Ok(json!({"data": {"categories": self.categories, "series": series}}))
     }
 
+    // Default names become document text (saved and exported), so no isolate marks.
     fn add_row(&mut self) {
         if self.categories.len() < MAX_POINTS {
-            self.categories.push(crate::i18n::fmt(tl!("Category {n}"), &[("n", &(self.categories.len() + 1).to_string())]));
+            self.categories.push(crate::i18n::fmt_plain(tl!("Category {n}"), &[("n", &(self.categories.len() + 1).to_string())]));
             self.cells.push(vec![String::new(); self.names.len()]);
         }
     }
 
     fn add_series(&mut self) {
         if self.names.len() < MAX_SERIES {
-            self.names.push(crate::i18n::fmt(tl!("Series {n}"), &[("n", &(self.names.len() + 1).to_string())]));
+            self.names.push(crate::i18n::fmt_plain(tl!("Series {n}"), &[("n", &(self.names.len() + 1).to_string())]));
             for r in &mut self.cells {
                 r.push(String::new());
             }
@@ -287,7 +288,7 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
                         }
                         if let Some(row) = f.cells.get_mut(i) {
                             for cell in row.iter_mut() {
-                                ui.add_sized([CELL_W, ROW_H - 4.0], egui::TextEdit::singleline(cell).horizontal_align(egui::Align::Max));
+                                ui.add_sized([CELL_W, ROW_H - 4.0], value_cell(cell));
                                 ui.allocate_exact_size(vec2(X_W, ROW_H - 4.0), Sense::hover());
                             }
                         }
@@ -336,6 +337,13 @@ pub fn data_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ChartDataForm) -> bool {
     }
 }
 
+/// A numeric chart-data cell. `RIGHT_TOP` preserves the old deprecated
+/// `horizontal_align(Align::Max)` behaviour: numbers are right-aligned but stay on the cell's
+/// first line, rather than becoming vertically centred.
+fn value_cell(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).align(egui::Align2::RIGHT_TOP)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -355,5 +363,44 @@ mod tests {
         assert!(p["data"]["series"][3]["values"][1].is_null());
         f.cells[1][0] = "abc".into();
         assert!(f.params().is_err());
+    }
+
+    /// The chart-data grid kept Word's top line when the deprecated `horizontal_align(Align::Max)`
+    /// became `align(Align2)`: `RIGHT_CENTER` silently changed vertical alignment too.
+    #[test]
+    fn chart_value_cells_are_right_and_top_aligned() {
+        /// Finds the first text shape's position, descending into a vector of shapes.
+        fn text_pos(shape: &egui::Shape) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(text) => Some(text.pos),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(text_pos),
+                _ => None,
+            }
+        }
+        let ctx = egui::Context::default();
+        let raw = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(120.0, 120.0))), ..Default::default() };
+        let mut text = "7".to_owned();
+        let output = ctx.run_ui(raw, |ui| {
+            ui.add_sized([100.0, 100.0], value_cell(&mut text));
+        });
+        let pos = output.shapes.iter().find_map(|clipped| text_pos(&clipped.shape)).expect("the cell's text is painted");
+        output.drop_without_applying_deltas();
+        assert!(pos.y < 20.0, "RIGHT_TOP leaves the number on the first line, not centred (pos={pos:?})");
+        assert!(pos.x > 40.0, "the number is right-aligned (pos={pos:?})");
+    }
+
+    /// Default names are saved into the document, so an RTL interface must not add isolate marks.
+    #[test]
+    fn default_names_in_an_rtl_interface_have_no_isolates() {
+        crate::i18n::set_current(crate::i18n::fixture_lang("ar", "\tCategory {n}\tالفئة {n}\n\tSeries {n}\tالسلسلة {n}\n"));
+        let mut f = ChartDataForm::of(&ChartSpec::sample(ChartType::Column));
+        f.add_row();
+        f.add_series();
+        crate::i18n::set_current(crate::i18n::Lang::EN);
+        let (category, series) = (f.categories.last().unwrap(), f.names.last().unwrap());
+        assert!(category.starts_with("الفئة") && series.starts_with("السلسلة"), "{category:?} {series:?}");
+        for name in [category, series] {
+            assert!(!name.chars().any(|c| ('\u{2066}'..='\u{2069}').contains(&c)), "{name:?}");
+        }
     }
 }

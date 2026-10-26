@@ -406,6 +406,8 @@ fn check_formatting(s: &Session, id: &str, params: &Value) -> Result<(), CmdErro
                 | "table.modifyStyle"
                 | "table.deleteStyle"
                 | "tools.updateStyles"
+                // Copies style definitions in from another file, locked flags included (#3692).
+                | "styles.copyFrom"
         )
         // Attach Template updates the styles from it when asked (`linkStyles` is only a setting).
         || (id == "tools.attachTemplate" && p::bool(params, "update") == Some(true));
@@ -637,6 +639,35 @@ pub(crate) fn protection_lifted(before: &Document, after: &Document) -> bool {
     b.protection.is_some() && (a.protection != b.protection || a.protect_formatting != b.protect_formatting || a.protect_hash != b.protect_hash)
 }
 
+/// Where typing at the caret `p` goes in a document that is read only or open to comments only: a
+/// caret right before the start of an exception this author may edit goes inside it, and one right
+/// after its end goes back inside it. The markers take no room, so the start of a line that an
+/// exception starts, and the end of a line that one ends, are those carets.
+pub(crate) fn typing_pos(s: &Session, p: &Pos) -> Pos {
+    if !matches!(s.doc.settings.protection.as_deref(), Some("readOnly" | "comments")) {
+        return p.clone();
+    }
+    let Some(para) = s.doc.para_at(p) else { return p.clone() };
+    if para.objects.is_empty() {
+        return p.clone();
+    }
+    let editable: Vec<u32> = s.doc.perm_ranges().iter().filter(|r| editable_by(r, &s.author)).map(|r| r.id).collect();
+    let is_start = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermStart { id, .. }) if editable.contains(id));
+    let is_end = |off: usize| matches!(para.object_at(off), Some(InlineObject::PermEnd { id }) if editable.contains(id));
+    let w = OBJ.len_utf8();
+    let mut off = p.off;
+    if is_start(off) {
+        while is_start(off) {
+            off += w;
+        }
+        return Pos { off, ..p.clone() };
+    }
+    while off >= w && is_end(off - w) {
+        off -= w;
+    }
+    Pos { off, ..p.clone() }
+}
+
 /// The first position in an editable range after `from` (wrapping round), for Find Next Region
 /// I Can Edit; with it, the range's end. Filling in forms: the next fillable control's content.
 pub fn next_region(s: &Session, from: &Pos) -> Option<(Pos, Pos)> {
@@ -687,6 +718,49 @@ mod tests {
             let _ = s.run("edit.undo", &json!({}));
         }
         assert_eq!(s.doc.settings.protection.as_deref(), Some("readOnly"));
+    }
+
+    /// An exception that starts a line: Home, Left and Down put the caret before its start
+    /// marker, and Enter and typing there go inside the exception. A caret after the end marker at
+    /// the end of the line goes back inside it too.
+    #[test]
+    fn typing_at_the_start_or_end_of_an_exception_line_goes_inside_it() {
+        let visible = |s: &Session| s.doc.plain_text(StoryRef::Body).replace(OBJ, "");
+        let mut s = Session::new(Document::from_text("Title\nBody text\nEnd."));
+        select(&mut s, "Body text");
+        s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+        s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+        s.run("caret.home", &json!({})).unwrap();
+        assert_eq!(s.sel.focus, Pos::body(1, 0), "the caret is before the start marker");
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "New "})).unwrap();
+        assert_eq!(visible(&s), "Title\n\nNew Body text\nEnd.");
+        s.run("caret.end", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "!"})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        assert_eq!(visible(&s), "Title\n\nNew Body text!\n\nEnd.");
+        // Outside the exception stays refused: the start of "Title" and the end of "End.".
+        for at in [Pos::body(0, 0), s.doc.end_of(StoryRef::Body)] {
+            s.sel = Selection::caret(at);
+            assert!(s.run("text.newParagraph", &json!({})).is_err());
+            assert!(s.run("text.insert", &json!({"text": "x"})).is_err());
+        }
+
+        // An empty editable line right after a protected short line, with Built-in Heading styles
+        // on: two Enters break the paragraph, and the protected line stays Normal text.
+        let mut s = Session::new(Document::from_text("Title\n\nEnd."));
+        s.run("tools.autocorrect", &json!({"headingStyles": true})).unwrap();
+        s.sel = Selection { anchor: Pos::body(1, 0), focus: Pos::body(2, 0) };
+        s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+        s.run("review.restrict", &json!({"mode": "readOnly"})).unwrap();
+        s.sel = Selection::caret(Pos::body(0, 2));
+        s.run("caret.down", &json!({})).unwrap();
+        assert_eq!(s.sel.focus, Pos::body(1, 0), "the caret is before the start marker");
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Notes"})).unwrap();
+        assert_eq!(visible(&s), "Title\n\n\nNotes\nEnd.");
+        assert!(s.doc.body.iter().filter_map(|b| b.as_para()).all(|p| p.props.style.is_none()));
     }
 
     /// Table, row and cell formatting reaches protected text, so an exception inside one cell
@@ -745,7 +819,8 @@ mod tests {
     }
 
     /// Formatting limited to styles: attaching a template refuses to update the styles from it
-    /// (it would bypass the Update Styles block); attaching without updating still works.
+    /// (it would bypass the Update Styles block), nor can Copy Styles; attaching without
+    /// updating still works.
     #[test]
     fn formatting_restriction_refuses_attach_template_update() {
         let mut t = Document::from_text("Template.");
@@ -757,6 +832,12 @@ mod tests {
         s.run("review.restrict", &json!({"mode": "none", "formatting": true})).unwrap();
         let before = s.doc.clone();
         let e = s.run("tools.attachTemplate", &json!({"path": "Report.dotx", "update": true, "data": data})).unwrap_err().to_string();
+        assert!(e.contains("formatting is limited"), "{e}");
+        assert_eq!(s.doc, before);
+        // Copying styles in replaces their definitions, locked flag included (#3692).
+        s.doc.styles.styles.iter_mut().filter(|st| st.id == "Heading1").for_each(|st| st.locked = true);
+        let before = s.doc.clone();
+        let e = s.run("styles.copyFrom", &json!({"path": "Report.dotx", "styles": ["Heading 1"], "data": data})).unwrap_err().to_string();
         assert!(e.contains("formatting is limited"), "{e}");
         assert_eq!(s.doc, before);
         s.run("tools.attachTemplate", &json!({"path": "Report.dotx"})).unwrap();

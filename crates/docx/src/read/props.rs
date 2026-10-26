@@ -231,22 +231,11 @@ impl PropCtx {
                     // `w:ascii`, `w:hAnsiTheme` over `w:hAnsi`).
                     let named = |a: &str| k.attr(a).filter(|f| !f.is_empty()).map(str::to_string);
                     let themed = |a: &str| k.attr(a).and_then(|t| self.theme_font(t));
-                    c.font =
-                        themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi")).or_else(
-                            || {
-                                // `w:eastAsia` and `w:cs` name fonts for other scripts; they stand in for the
-                                // Latin font only when the run is hinted as that script. Otherwise the Latin
-                                // font is inherited (a Normal style with only `w:eastAsia`/`w:cs` keeps the
-                                // `docDefaults` font, as in Word).
-                                match k.attr("w:hint") {
-                                    Some("eastAsia") => k.attr("w:eastAsia"),
-                                    Some("cs") => k.attr("w:cs"),
-                                    _ => None,
-                                }
-                                .filter(|f| !f.is_empty())
-                                .map(str::to_string)
-                            },
-                        );
+                    // `w:eastAsia` and `w:cs` name fonts for other scripts and stay in `font_ea` /
+                    // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
+                    // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
+                    // `docDefaults` font, and so does a hinted run, as in Word.
+                    c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);
