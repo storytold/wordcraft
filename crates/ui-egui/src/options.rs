@@ -573,7 +573,7 @@ fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
         chosen.as_deref().map_or_else(|| tl!("Automatic").to_string(), |id| voices.iter().find(|v| v.id == id).map_or_else(|| id.to_string(), label));
     let mut pick: Option<Option<String>> = None;
     ui.horizontal(|ui| {
-        ui.label(tl!("Voice"));
+        let name = ui.label(tl!("Voice"));
         let list = egui::ComboBox::from_id_salt("read-aloud-voice").selected_text(shown).width(260.0).show_ui(ui, |ui| {
             if ui.selectable_label(chosen.is_none(), tl!("Automatic")).clicked() {
                 pick = Some(None);
@@ -584,6 +584,7 @@ fn voice_picker(app: &mut WordApp, ui: &mut Ui) {
                 }
             }
         });
+        list.response.labelled_by(name.id);
         // Opening the list asks for the voices once more, and may start Speech Dispatcher for them.
         let open = list.inner.is_some();
         if open && !app.voice_picker_open {
