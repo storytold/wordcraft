@@ -746,6 +746,7 @@ struct SystemSpeaker {
 
 #[cfg(not(target_arch = "wasm32"))]
 impl SystemSpeaker {
+    /// An empty speaker; the Windows host starts on the first system sentence.
     fn new() -> Self {
         Self {
             #[cfg(target_os = "windows")]
@@ -755,6 +756,7 @@ impl SystemSpeaker {
         }
     }
 
+    /// Speak one sentence with the persistent Windows host, or with a fresh process per sentence.
     fn speak(&mut self, text: &str, lang: Option<&str>, rate: f32, changed: &dyn Fn() -> bool) -> Spoken {
         #[cfg(target_os = "windows")]
         {
@@ -786,6 +788,7 @@ impl SystemSpeaker {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+/// The Read Aloud worker loop; it owns the system speaker for one reading.
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
     let mut speaker = SystemSpeaker::new();
@@ -882,6 +885,7 @@ fn windows_command(system_root: Option<std::ffi::OsString>, script: &str) -> Win
 
 #[cfg(target_os = "windows")]
 impl WindowsSpeech {
+    /// Build the PowerShell `Command` from the stored program, arguments and flags.
     fn command(&self) -> std::process::Command {
         let mut command = std::process::Command::new(&self.program);
         command.args(&self.args);
@@ -897,6 +901,7 @@ fn sapi_rate(rate: f32) -> i64 {
 }
 
 #[cfg(any(target_os = "windows", test))]
+/// Build the per-sentence PowerShell script for `rate` and `lang`, and return its command.
 fn windows_speech(system_root: Option<std::ffi::OsString>, rate: f32, lang: Option<&str>) -> WindowsSpeech {
     let r = sapi_rate(rate);
     // The voice of the sentence's language, when one is installed (the default voice would spell
