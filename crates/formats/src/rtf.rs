@@ -2036,7 +2036,8 @@ impl Reader {
                 }
                 return;
             }
-            Dest::StyleSheet => {
+            // Style names take Unicode escapes (with fallback skipping) like the body.
+            Dest::StyleSheet if !matches!(w, "u" | "uc") => {
                 let d = &mut self.style_def_cur;
                 match w {
                     "s" | "cs" | "ds" | "ts" => {
@@ -2053,6 +2054,7 @@ impl Reader {
                 }
                 return;
             }
+            Dest::StyleSheet => {}
             Dest::ListTable => {
                 match w {
                     "list" => {
@@ -2160,7 +2162,7 @@ impl Reader {
                     self.pending_high = Some(u);
                 } else {
                     let c = match self.pending_high.take() {
-                        Some(h) if (0xDC00..0xE000).contains(&u) => char::decode_utf16([h, u]).next().and_then(Result::ok).unwrap_or('\u{FFFD}'),
+                        Some(h) if (0xDC00..0xE000).contains(&u) => char::decode_utf16([h, u]).next().and_then(|r| r.ok()).unwrap_or('\u{FFFD}'),
                         _ => char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'),
                     };
                     self.ch(c);
@@ -2648,7 +2650,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                 let Some(&n) = bytes.get(i + 1) else { break };
                 if n.is_ascii_alphabetic() {
                     let mut j = i + 1;
-                    while bytes.get(j).is_some_and(u8::is_ascii_alphabetic) && j - i <= 32 {
+                    while bytes.get(j).is_some_and(|b| b.is_ascii_alphabetic()) && j - i <= 32 {
                         j += 1;
                     }
                     let word = std::str::from_utf8(bytes.get(i + 1..j).unwrap_or(b"")).unwrap_or("");
@@ -2658,7 +2660,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         k += 1;
                     }
                     let d0 = k;
-                    while bytes.get(k).is_some_and(u8::is_ascii_digit) && k - d0 < 10 {
+                    while bytes.get(k).is_some_and(|b| b.is_ascii_digit()) && k - d0 < 10 {
                         k += 1;
                     }
                     let param = if k > d0 {
@@ -2714,7 +2716,13 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                 }
                 match n {
                     b'\'' => {
-                        let h = bytes.get(i + 2..i + 4).and_then(|h| std::str::from_utf8(h).ok()).and_then(|h| u8::from_str_radix(h, 16).ok());
+                        // `from_str_radix` takes a leading `+`: a pair that isn't both hex digits
+                        // is not an escape at all.
+                        let h = bytes
+                            .get(i + 2..i + 4)
+                            .and_then(|h| std::str::from_utf8(h).ok())
+                            .filter(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
+                            .and_then(|h| u8::from_str_radix(h, 16).ok());
                         match h {
                             Some(v) => {
                                 if r.st.dest == Dest::Pict {
@@ -2729,7 +2737,17 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                                 }
                                 i += 4;
                             }
-                            None => i += 2,
+                            // Not two hex digits: the escape is malformed. Consume the escape and
+                            // any hex digits of a truncated pair, and leave every other byte —
+                            // `}`, a control word's `\` — to be read as the structure it is.
+                            None => {
+                                i += 2;
+                                let mut n = 0;
+                                while n < 2 && bytes.get(i).is_some_and(|b| b.is_ascii_hexdigit()) {
+                                    i += 1;
+                                    n += 1;
+                                }
+                            }
                         }
                     }
                     b'*' => {
@@ -2942,6 +2960,66 @@ mod tests {
         assert!(p.inlines.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "red" && f.color == Some(Rgb(255, 0, 0)))));
         let FBlock::Para(l) = &f.blocks[2] else { panic!() };
         assert!(matches!(&l.inlines[0], Inline::Text(_, f) if f.link.as_deref() == Some("http://a.b")));
+    }
+
+    #[test]
+    fn stylesheet_names_take_unicode_escapes() {
+        // \u116?=t \u105?=i \u116?=t \u108?=l \u101?=e — how Word writes a non-Latin style name.
+        let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u116?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+        let f = parse(rtf).unwrap();
+        assert_eq!(texts(&f)[0], "Title:T");
+    }
+
+    #[test]
+    fn stylesheet_names_take_negative_escapes() {
+        // 't' as a signed 16-bit escape: 116 - 65536 = -65420.
+        let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \u-65420?\u105?\u116?\u108?\u101?;}}\pard\s2 T\par}";
+        let f = parse(rtf).unwrap();
+        assert_eq!(texts(&f)[0], "Title:T");
+    }
+
+    #[test]
+    fn stylesheet_names_honour_the_uc_fallback_count() {
+        // \uc2: two fallback bytes follow each \uN? — here a second `?`.
+        let rtf = br"{\rtf1\ansi{\stylesheet{\s0 Normal;}{\s2 \uc2\u116??\u105??\u116??\u108??\u101??;}}\pard\s2 T\par}";
+        let f = parse(rtf).unwrap();
+        assert_eq!(texts(&f)[0], "Title:T");
+    }
+
+    #[test]
+    fn a_malformed_hex_escape_leaves_no_stray_text() {
+        // A `\'` that is not followed by two hex digits is malformed: the escape itself goes, any
+        // hex digits of a truncated pair go with it, and everything else — non-hex bytes, `}` —
+        // is read as what it is. `\'gZ` keeps "gZ" as text; `\'4}` keeps the closing brace.
+        let rtf = br"{\rtf1\ansi \'gZok\par}";
+        let f = parse(rtf).unwrap();
+        assert_eq!(texts(&f)[0], "Normal:gZok");
+
+        // The bytes after a truncated pair must not swallow the group's closing brace or the next
+        // control word: the group and its destination state end where they should. Paragraph text
+        // alone would not show that: `survivor` reads the same inside the bold group, so the run's
+        // formatting is checked too.
+        let rtf = br"{\rtf1\ansi{\b \'4}survivor\par}";
+        let f = parse(rtf).unwrap();
+        assert!(texts(&f).iter().any(|t| t.contains("survivor")), "{:?}", texts(&f));
+        let survivor_bold = f.blocks.iter().find_map(|b| match b {
+            FBlock::Para(p) => p.inlines.iter().find_map(|i| match i {
+                Inline::Text(t, fmt) if t.contains("survivor") => Some(fmt.bold),
+                _ => None,
+            }),
+            FBlock::Table(_) => None,
+        });
+        assert_eq!(survivor_bold, Some(false), "survivor must not be inside the bold group: {:?}", f.blocks);
+
+        let rtf = br"{\rtf1\ansi{\'}}after\par}";
+        let f = parse(rtf).unwrap();
+        assert!(texts(&f).iter().any(|t| t.contains("after")), "{:?}", texts(&f));
+
+        // A hex digit that starts a valid pair with the byte after it is part of the escape:
+        // \'4} reads '4' as the escape's byte and leaves `}` to close the group.
+        let rtf = br"{\rtf1\ansi\'4}x\par}";
+        let f = parse(rtf).unwrap();
+        assert!(texts(&f).iter().any(|t| t.contains('x') && !t.contains('}')), "{:?}", texts(&f));
     }
 
     #[test]
