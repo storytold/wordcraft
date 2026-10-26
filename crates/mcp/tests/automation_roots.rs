@@ -236,3 +236,35 @@ fn a_link_outside_the_write_root_into_it_is_not_written() {
     ok(&mut server, "save_document", json!({"path": s(&base.join("out/doc.docx"))}));
     assert_ne!(std::fs::read(base.join("out/doc.docx")).unwrap(), b"inside");
 }
+
+/// Through the protocol with two read and two write roots (#3582): files open from each read root
+/// and save into each write root, names with spaces, accents, `·` and `–` included; nothing opens or
+/// saves outside them.
+#[test]
+fn several_roots_each_open_and_save_and_nothing_else() {
+    let (_, base) = confined("several", true, true);
+    let shared = base.join("Proj · Dé – shared");
+    std::fs::create_dir_all(&shared).unwrap();
+    std::fs::write(shared.join("Smart Society 5.0 – WP leader meeting.txt"), "Shared text").unwrap();
+    let (r_in, r_out) = (base.join("in"), base.join("out"));
+    let roots = AutomationRoots::with_roots(&[r_in.as_path(), shared.as_path()], &[r_out.as_path(), shared.as_path()]).unwrap();
+    let mut server = Server::new(Box::new(Headless::default().with_automation_roots(roots)));
+    let sep = std::path::MAIN_SEPARATOR;
+
+    ok(&mut server, "open_document", json!({"path": s(&base.join("in/a.txt"))}));
+    ok(&mut server, "open_document", json!({"path": s(&shared.join("Smart Society 5.0 – WP leader meeting.txt"))}));
+    ok(&mut server, "save_document", json!({"path": s(&shared.join("Desktop home · target.docx"))}));
+    assert!(shared.join("Desktop home · target.docx").is_file());
+    ok(&mut server, "save_document", json!({"path": s(&base.join("out/copy.docx"))}));
+
+    refused(&mut server, "open_document", json!({"path": s(&base.join("outside/secret.txt"))}), "outside the read roots");
+    refused(&mut server, "open_document", json!({"path": s(&base.join("in2/c.txt"))}), "outside the read roots");
+    refused(&mut server, "open_document", json!({"path": format!("{}{sep}..{sep}outside{sep}secret.txt", s(&shared))}), "outside the read roots");
+    refused(&mut server, "save_document", json!({"path": s(&base.join("in/doc.docx"))}), "outside the write roots");
+    refused(&mut server, "save_document", json!({"path": format!("{} x{sep}doc.docx", s(&shared))}), "outside the write roots");
+    let mut written: Vec<String> =
+        std::fs::read_dir(base.join("outside")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+    written.sort();
+    assert_eq!(written, ["pic.png", "secret.txt", "t.docx"], "nothing was written outside the roots");
+    assert!(!base.join("in/doc.docx").exists());
+}
