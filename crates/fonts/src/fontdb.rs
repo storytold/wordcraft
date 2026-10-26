@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex, RwLock};
 
 use kurbo::BezPath;
 use skrifa::instance::{Location, LocationRef, Size};
-use skrifa::outline::{DrawSettings, Engine, GlyphStyles, Hinting, HintingInstance, HintingOptions, OutlineGlyphFormat, OutlinePen, SmoothMode, Target};
+use skrifa::outline::{
+    DrawSettings, Engine, GlyphStyles, Hinting, HintingInstance, HintingOptions, OutlineGlyphFormat, OutlinePen, SmoothMode, Target,
+};
 use skrifa::raw::FileRef;
 use skrifa::string::StringId;
 use skrifa::{GlyphId, MetadataProvider};
