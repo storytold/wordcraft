@@ -147,6 +147,9 @@ real_name = "Marco Arnulfo"
 display_name = "Marco Arnulfo"
 sync_github_name = false
 
+[people.moogabe]
+display_name = "Jan de la Alderaan"
+
 [people.rem5411]
 real_name = "Vivien Janny"
 sync_github_name = true

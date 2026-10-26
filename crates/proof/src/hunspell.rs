@@ -124,10 +124,23 @@ pub fn search_dirs(lo_exts: Option<&[String]>) -> Vec<PathBuf> {
     dirs
 }
 
+/// The LibreOffice extension directories for every one of `names`, without repeats
+/// (`ro_RO`, `ro_MD` → `dict-ro`, `dict-ro-RO`, `dict-ro-MD`), or `None` for no names.
+fn lo_ext_dirs_all(names: &[&str]) -> Option<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for ext in names.iter().flat_map(|n| lo_ext_dirs(n)) {
+        if !out.contains(&ext) {
+            out.push(ext);
+        }
+    }
+    (!out.is_empty()).then_some(out)
+}
+
 /// The first `<name>.aff`/`<name>.dic` pair found for any of `names` (`pl_PL`, `pl`), searching
-/// [`search_dirs`] (including LibreOffice's extension folder for the first name).
+/// [`search_dirs`] (including LibreOffice's extension folders for every name, so a regional
+/// dictionary such as `ro_MD` in `dict-ro-MD` is found too).
 pub fn find(names: &[&str]) -> Option<(PathBuf, PathBuf)> {
-    let lo = names.first().copied().map(lo_ext_dirs);
+    let lo = lo_ext_dirs_all(names);
     search_dirs(lo.as_deref()).into_iter().find_map(|dir| find_in(&dir, names))
 }
 
@@ -303,6 +316,12 @@ mod tests {
         let dirs = search_dirs(Some(&super::lo_ext_dirs("pt_BR")));
         assert!(dirs.iter().any(|d| d.ends_with("dict-pt-BR")), "{dirs:?}");
         assert!(search_dirs(None).iter().all(|d| !d.to_string_lossy().contains("dict-")), "no language: no LibreOffice guess");
+        // Every name's folders are searched, once each: a Moldovan `ro_MD` lives in `dict-ro-MD`.
+        assert_eq!(
+            super::lo_ext_dirs_all(&["ro_RO", "ro-RO", "ro_MD", "ro"]).as_deref(),
+            Some(["dict-ro", "dict-ro-RO", "dict-ro-MD"].map(String::from).as_slice())
+        );
+        assert_eq!(super::lo_ext_dirs_all(&[]), None);
     }
 
     #[test]

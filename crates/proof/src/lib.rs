@@ -34,6 +34,12 @@
 //! - **Indonesian** ([`ProofLang::Id`], module [`id`]): the installed Hunspell `id_ID`
 //!   dictionary (not bundled), dictionary-driven suggestions and generic checks with Indonesian
 //!   messages. Hyphenation uses the existing English fallback.
+//! - **Romanian** ([`ProofLang::Ro`], module [`ro`]): spelling against the Hunspell `ro_RO`
+//!   dictionary installed on the system (rospell, e.g. LibreOffice's; not bundled), cedilla
+//!   `ş`/`ţ` read as comma-below `ș`/`ț`, hyphenated forms (`într-o`, `s-a`) part by part,
+//!   suggestions tuned for Romanian (missing diacritics, `î`/`â`, missing hyphens and spaces),
+//!   and conservative grammar rules with Romanian messages (`nici un` → `niciun`, a comma
+//!   before `ci`/`dar`). No Romanian hyphenation patterns yet.
 //! - **Spanish** ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`], [`ProofLang::EsUy`],
 //!   module [`es`]): each variety's installed Hunspell dictionary (`es_ES`, `es_MX`, `es_419`,
 //!   `es_UY`, with fallbacks; not bundled), dictionary-driven suggestions, Uruguayan `vos` forms,
@@ -64,6 +70,7 @@ pub mod lang;
 pub mod patterns;
 pub mod pl;
 pub mod pt;
+pub mod ro;
 pub mod ru;
 pub mod tr;
 pub mod vi;
@@ -170,6 +177,7 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
     ru::reload_dictionary();
     cs::reload_dictionary();
     id::reload_dictionary();
+    ro::reload_dictionary();
     es::reload_dictionary();
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
 }
@@ -190,6 +198,7 @@ pub fn installed_dictionaries() -> Vec<(ProofLang, Option<std::path::PathBuf>)> 
         (ProofLang::EsMx, es::installed_path(ProofLang::EsMx)),
         (ProofLang::Es419, es::installed_path(ProofLang::Es419)),
         (ProofLang::EsUy, es::installed_path(ProofLang::EsUy)),
+        (ProofLang::Ro, ro::installed_path()),
     ]
 }
 
@@ -204,6 +213,7 @@ pub fn dictionary_load_error(lang: ProofLang) -> Option<String> {
         ProofLang::Hr => "hr_HR",
         ProofLang::Tr => "tr_TR",
         ProofLang::Id => "id_ID",
+        ProofLang::Ro => "ro_RO",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::dictionary_name(lang),
         _ => return None,
     };
@@ -447,6 +457,7 @@ fn dictionary_loaded(lang: ProofLang) -> Option<bool> {
         ProofLang::Ru => ru::has_dictionary(),
         ProofLang::Cs => cs::has_dictionary(),
         ProofLang::Id => id::has_dictionary(),
+        ProofLang::Ro => ro::has_dictionary(),
         l if l.is_spanish() => es::has_dictionary(l),
         _ => return None,
     })
@@ -465,6 +476,7 @@ fn dictionary_needed(lang: ProofLang, installed: bool) -> Option<&'static str> {
         ProofLang::Ru => Some("ru_RU"),
         ProofLang::Cs => Some("cs_CZ"),
         ProofLang::Id => Some("id_ID"),
+        ProofLang::Ro => Some("ro_RO"),
         l if l.is_spanish() => Some(es::dictionary_name(l)),
         _ => None,
     }
@@ -748,6 +760,7 @@ fn spelling_issue(text: &str, a: usize, b: usize, lang: ProofLang, opts: &Option
         ProofLang::Ru => "Возможна орфографическая ошибка",
         ProofLang::Cs => "Možná pravopisná chyba",
         ProofLang::Id => "Kemungkinan salah eja",
+        ProofLang::Ro => "Posibilă greșeală de ortografie",
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => "Posible error ortográfico",
         _ => "Possible spelling mistake",
     };
@@ -787,6 +800,7 @@ pub fn is_correct_in_with(word: &str, lang: ProofLang, opts: &Options) -> bool {
         }
         ProofLang::Cs => accepted_by_options(word, opts) || cs::is_correct_with_options(word, opts),
         ProofLang::Id => accepted_by_options(word, opts) || id::is_correct_with_options(word, opts),
+        ProofLang::Ro => accepted_by_options(word, opts) || ro::is_correct(word),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => true,
     }
 }
@@ -805,6 +819,7 @@ pub fn suggest_in(word: &str, max: usize, lang: ProofLang) -> Vec<String> {
         ProofLang::Ru => ru::suggest(word, max),
         ProofLang::Cs => cs::suggest(word, max),
         ProofLang::Id => id::suggest(word, max),
+        ProofLang::Ro => ro::suggest(word, max),
         ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy => es::suggest(word, max, lang),
         ProofLang::Bg | ProofLang::De | ProofLang::Other => Vec::new(),
     }
@@ -830,6 +845,7 @@ fn grammar_in(text: &str, lang: ProofLang, capital_first: bool) -> Vec<Issue> {
         ProofLang::It => it::grammar::check_with(text, capital_first),
         ProofLang::Tr => tr::grammar::check_with(text, capital_first),
         ProofLang::Ru => ru::grammar::check_with(text, capital_first),
+        ProofLang::Ro => ro::grammar::check_with(text, capital_first),
         // Czech has no sentence-capital rule, so a list item needs no exception.
         ProofLang::Cs => cs::grammar::check(text),
         ProofLang::Id => id::grammar::check(text),
@@ -1032,6 +1048,7 @@ mod tests {
             (ProofLang::Ru, "ru_RU"),
             (ProofLang::Cs, "cs_CZ"),
             (ProofLang::Id, "id_ID"),
+            (ProofLang::Ro, "ro_RO"),
             // #3360: each Spanish variety names its own.
             (ProofLang::Es, "es_ES"),
             (ProofLang::EsMx, "es_MX"),
@@ -1080,6 +1097,7 @@ mod tests {
             ("ru_RU", ru::test_dict::AFF, ru::test_dict::DIC),
             ("cs_CZ", cs::test_dict::AFF, cs::test_dict::DIC),
             ("id_ID", id::test_dict::AFF, id::test_dict::DIC),
+            ("ro_RO", ro::test_dict::AFF, ro::test_dict::DIC),
             ("es_ES", es::test_dict::AFF, es::test_dict::DIC),
             ("es_MX", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
             ("es_419", es::test_dict::AFF, es::test_dict::DIC_AMERICAS),
@@ -1096,7 +1114,7 @@ mod tests {
         let before = dictionary_generation();
         set_dictionaries_folder(Some(dir.clone()));
         assert!(dictionary_generation() > before, "cached checks are dropped");
-        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian and the Spanishes follow it.
+        // Turkish has no test dictionary to put in the folder; Russian, Czech, Indonesian, the Spanishes and Romanian follow it.
         let found = installed_dictionaries();
         assert_eq!(found.get(4).map(|(lang, _)| *lang), Some(ProofLang::Tr));
         assert_eq!(
@@ -1107,6 +1125,7 @@ mod tests {
                 (ProofLang::EsMx, Some(dir.join("es_MX.dic"))),
                 (ProofLang::Es419, Some(dir.join("es_419.dic"))),
                 (ProofLang::EsUy, Some(dir.join("es_UY.dic"))),
+                (ProofLang::Ro, Some(dir.join("ro_RO.dic"))),
             ]
         );
         assert_eq!(
@@ -1150,6 +1169,7 @@ mod tests {
             (ProofLang::Tr, "elma ve armut"),
             (ProofLang::Pt, "maçãs e peras"),
             (ProofLang::Ru, "яблоки и груши"),
+            (ProofLang::Ro, "mere și pere"),
         ] {
             let first = text.split(' ').next().unwrap();
             assert!(grammar(text, lang, true).is_empty(), "{lang:?} list item: {:?}", grammar(text, lang, true));
@@ -1159,6 +1179,7 @@ mod tests {
         // Later sentences in a list item are still checked.
         assert_eq!(grammar("item one. then two", ProofLang::En, true), ["then"]);
         assert_eq!(grammar("elma ve armut. sonra kiraz", ProofLang::Tr, true), ["sonra"]);
+        assert_eq!(grammar("mere și pere. apoi cireșe", ProofLang::Ro, true), ["apoi"]);
     }
 
     #[test]
@@ -1818,6 +1839,25 @@ mod tests {
     }
 
     #[test]
+    fn romanian_uses_its_own_tools() {
+        ro::test_dict::install();
+        let ro = "Fata merge acasă și citește o carte într-o zi frumoasă.";
+        assert!(check_spelling_in(ro, ProofLang::Ro).is_empty(), "{:?}", check_spelling_in(ro, ProofLang::Ro));
+        assert!(check_spelling_in(ro, ProofLang::En).len() >= 3, "Romanian words are English misspellings");
+        let v = check_spelling_in("Merg la Brașov cu cîine.", ProofLang::Ro);
+        assert_eq!(flagged("Merg la Brașov cu cîine.", &v), ["cîine"]);
+        assert_eq!((v[0].lang, v[0].message.as_str()), (ProofLang::Ro, "Posibilă greșeală de ortografie"));
+        assert!(suggest_in("cîine", 5, ProofLang::Ro).contains(&"câine".to_string()));
+        // Text typed with cedilla letters is not flagged word by word.
+        assert!(check_spelling_in("Ştiinţă şi ţară.", ProofLang::Ro).is_empty());
+        // Romanian grammar speaks Romanian and has no English a/an rule.
+        let g = check_grammar_in("acesta acesta este a apple, nici un test", ProofLang::Ro);
+        assert!(g.iter().any(|i| i.message == "Cuvânt repetat: „acesta”"), "{g:?}");
+        assert!(g.iter().any(|i| i.message == "Se scrie legat: „niciun”"), "{g:?}");
+        assert!(!g.iter().any(|i| i.message.contains("\"an\"")), "{g:?}");
+    }
+
+    #[test]
     fn mixed_language_paragraphs_check_each_run_in_its_language() {
         pl::test_dict::install();
         // A Polish paragraph quoting English: English spelling and rules inside the quote only.
@@ -1848,6 +1888,14 @@ mod tests {
         let v = check_text(t, &[(0..t.len(), ProofLang::It)]);
         assert_eq!(flagged(t, &v), ["lbiro", "caffe"], "{v:?}");
         assert!(v.iter().all(|i| i.lang == ProofLang::It && i.message == "Possibile errore di ortografia"), "{v:?}");
+        // Romanian checks in its span only, with the Romanian message; an English quote inside it
+        // is spelled in English.
+        ro::test_dict::install();
+        let t = "El a spus „hello wrold” și a plecat cu cîine.";
+        let (a, b) = (t.find("hello").unwrap(), t.find('”').unwrap());
+        let v = check_text(t, &[(0..a, ProofLang::Ro), (a..b, ProofLang::En), (b..t.len(), ProofLang::Ro)]);
+        assert_eq!(flagged(t, &v), ["wrold", "cîine"], "{v:?}");
+        assert!(v.iter().all(|i| (i.lang == ProofLang::Ro) == (i.message == "Posibilă greșeală de ortografie")), "{v:?}");
     }
 
     proptest::proptest! {
@@ -1859,7 +1907,7 @@ mod tests {
             let _ = has_dictionary(Some(&s));
             let _ = is_correct_for(&s, Some(&s));
             let _ = hyphen::hyphen_points(&s, &hyphen::Limits::default());
-            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
+            for lang in [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Hr, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Ro, ProofLang::De, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other] {
                 let _ = check_spelling_in(&s, lang);
                 let _ = check_grammar_in(&s, lang);
                 let _ = is_correct_in(&s, lang);
@@ -1912,8 +1960,8 @@ mod tests {
         }
 
         #[test]
-        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..15), 0..6)) {
-            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
+        fn mixed_spans_never_panic(s in "\\PC{0,60}", cuts in proptest::collection::vec((0usize..80, 0usize..80, 0u8..16), 0..6)) {
+            let langs = [ProofLang::En, ProofLang::EnGb, ProofLang::EnCa, ProofLang::Pl, ProofLang::Pt, ProofLang::It, ProofLang::Tr, ProofLang::Ru, ProofLang::Cs, ProofLang::Id, ProofLang::Ro, ProofLang::Es, ProofLang::EsMx, ProofLang::Es419, ProofLang::EsUy, ProofLang::Other];
             let spans: Vec<(Range<usize>, ProofLang)> = cuts.iter().map(|&(a, b, l)| (a.min(b)..a.max(b), langs[l as usize % langs.len()])).collect();
             for i in check_text(&s, &spans) {
                 proptest::prop_assert!(i.start <= i.end && i.end <= s.len());
