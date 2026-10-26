@@ -156,6 +156,7 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
     {
         match action {
             wordcraft_doc::thai_input::ThaiInputAction::Reject => {
+                // Rejected: document unchanged — no ImeEditOutcome needed.
                 return sel_result(s);
             }
             wordcraft_doc::thai_input::ThaiInputAction::Replace { slot_offset, slot_bytes, cons_swap, replacement } => {
@@ -200,6 +201,13 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
                 let new_off = original_off.saturating_sub(slot_bytes).saturating_add(insert_len);
                 let pos = Pos { off: new_off, ..s.sel.focus.clone() };
                 s.sel = crate::Selection { anchor: pos.clone(), focus: pos };
+                s.set_ime_edit_outcome(crate::ImeEditOutcome {
+                    classified: true,
+                    content_changed: true,
+                    state_changed: true,
+                    transformed: false,
+                    selection_changed: false,
+                });
                 return sel_result(s);
             }
             wordcraft_doc::thai_input::ThaiInputAction::DeleteThenAppend { slot_offset, slot_bytes, cons_swap, replacement } => {
@@ -236,6 +244,13 @@ fn insert(s: &mut Session, v: &Value) -> CmdResult {
                 let new_off = insert_off.saturating_add(insert_len);
                 let pos = Pos { off: new_off, ..s.sel.focus.clone() };
                 s.sel = crate::Selection { anchor: pos.clone(), focus: pos };
+                s.set_ime_edit_outcome(crate::ImeEditOutcome {
+                    classified: true,
+                    content_changed: true,
+                    state_changed: true,
+                    transformed: false,
+                    selection_changed: false,
+                });
                 return sel_result(s);
             }
             wordcraft_doc::thai_input::ThaiInputAction::Accept => {}

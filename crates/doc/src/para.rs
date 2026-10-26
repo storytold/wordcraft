@@ -845,7 +845,7 @@ mod tests {
         assert_eq!(mixed.word_at(13), (13, 22), "on 'ล'");
         assert_eq!(mixed.word_at(16), (13, 22), "inside ลาว");
         assert_eq!(mixed.word_at(26), (26, 35), "on 'ไ' of ไม่");
-        assert_eq!(mixed.word_at(35), (26, 35), "boundary inside Thai run → left word ไม่");
+        assert_eq!(mixed.word_at(35), (35, 44), "boundary inside Thai run → right word รวม (like Latin)");
         assert_eq!(mixed.word_at(38), (35, 44), "inside รวม");
         assert_eq!(mixed.word_at(44), (44, 49), "on 'K' → Khmer");
         // Ctrl+Left across a space into a Thai run: "อนุรักษ์ภาษาไทย abc"
