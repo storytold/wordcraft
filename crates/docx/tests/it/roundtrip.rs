@@ -94,6 +94,7 @@ fn every_char_prop_round_trips() {
         position: Some(3.0),
         kern: Some(8.0),
         ligatures: Some(wordcraft_doc::props::Ligatures { standard: true, historical: true, ..Default::default() }),
+        ot: Some(Box::new(wordcraft_doc::props::OpenTypeSettings { num_spacing: Some(2), num_form: Some(1), stylistic_sets: Some(vec![4]), contextual_alts: Some(false) })),
         outline: Some(true),
         shadow: Some(true),
         emboss: Some(false),

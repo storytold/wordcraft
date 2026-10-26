@@ -1095,7 +1095,10 @@ impl<'a> Builder<'a> {
             };
             let from = usize::from(rc.kerned());
             let to = if ligatures.is_some() { all.len() } else { 1 };
-            let features: &[wordcraft_fonts::Feature] = all.get(from..to).unwrap_or_default();
+            // Word's other typography settings (tabular figures, stylistic sets) go to the shaper too.
+            let mut feats: Vec<wordcraft_fonts::Feature> = all.get(from..to).unwrap_or_default().to_vec();
+            feats.extend(rc.ot_tags.iter().filter_map(|t| wordcraft_fonts::feature(t)));
+            let features: &[wordcraft_fonts::Feature] = &feats;
             let shaped = if use_levels {
                 wordcraft_fonts::shape_run(&st.face, shape_text, features, map, key.rtl)
             } else {

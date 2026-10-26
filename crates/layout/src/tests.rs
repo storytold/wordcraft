@@ -6482,6 +6482,22 @@ fn autofit_sizes_columns_by_their_content() {
 }
 
 #[test]
+fn a_saved_grid_of_an_automatic_table_stands() {
+    // Word opens an automatic-width table at its saved grid while it holds every column's longest word.
+    let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
+    let mut t = Table::new(1, 2, 468.0);
+    t.grid = vec![100.0, 368.0];
+    t.rows[0].cells[0].blocks = vec![text("Short")];
+    t.rows[0].cells[1].blocks = vec![text(&"A long cell that needs most of the width. ".repeat(4))];
+    t.rows[0].cells.iter_mut().for_each(|c| c.props.width = None);
+    let mut d = Document::from_text("After");
+    d.insert_block(StoryRef::Body, &Path::top(0), wordcraft_doc::Block::Table(t)).unwrap();
+    let l = lay(&d);
+    let (&[(sx, _, _)], &[(lx, _, _)]) = (&para_at(&l, &[0, 0, 0, 0])[..], &para_at(&l, &[0, 0, 1, 0])[..]) else { panic!("lines missing") };
+    assert!((lx - sx - 100.0).abs() < 0.5, "the first column is {}pt wide", lx - sx);
+}
+
+#[test]
 fn autofit_handles_spanning_cells_long_words_and_empty_tables() {
     let text = |s: &str| wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(s, Default::default()));
     let table_x = |t: Table, path: &[u32]| {

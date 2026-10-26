@@ -3994,10 +3994,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // the page while its text ends above the margin, about half a line lower than when the
             // whole line must fit). Only the bottom margin takes that leading: a footer taller than
             // the margin, or footnotes, keep the whole line clear of them.
-            let at_margin = pb.bottom >= pb.sect.page_h - pb.sect.margin_bottom - 0.01;
             let fit_h = match pl.rp.line_spacing {
                 wordcraft_doc::props::LineSpacing::Multiple(m)
-                    if m > 1.0 && at_margin && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
+                    if m > 1.0 && pb.notes.is_empty() && new_notes.is_empty() && line_notes.is_empty() =>
                 {
                     // `baseline` is from the paragraph's top; the text ends a descent below it.
                     (l.baseline - l.top + l.text_desc).clamp(0.0, l.height)
@@ -4038,7 +4037,9 @@ fn place_para_in_flow(ctx: &mut Ctx, pb: &mut PageBuilder, p: &Paragraph, block:
             // An empty paragraph closing a section before a new page: measured in Word, it stays
             // on a full page instead of starting one of its own.
             let closing_mark = pb.next_starts_page && p.section.is_some() && p.text.is_empty();
-            if over && l1 == l0 && !pb.at_top() && !split && !only_break && !closing_mark {
+            // (A line with only a page break in it is moved like any other when its text does not fit, leaving the page blank, as Word does;
+            // `only_break` is kept for exact line height and for column breaks.)
+            if over && l1 == l0 && !pb.at_top() && !split && !(only_break && (matches!(l.end, LineEnd::ColumnBreak) || matches!(pl.rp.line_spacing, wordcraft_doc::props::LineSpacing::Exactly(_)))) && !closing_mark {
                 break;
             }
             new_notes.extend(line_notes);

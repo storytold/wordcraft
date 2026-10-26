@@ -299,6 +299,35 @@ impl PropCtx {
                     c.lang_ea = k.attr("w:eastAsia").map(str::trim).filter(|v| !v.is_empty() && v.len() < 64).map(str::to_string);
                 }
                 "w14:ligatures" => c.ligatures = k.attr("w14:val").and_then(wordcraft_doc::props::Ligatures::from_ooxml),
+                // Word's OpenType typography: figure spacing and form, stylistic sets, contextual alternates
+                "w14:numSpacing" => {
+                    let v = match k.attr("w14:val") {
+                        Some("proportional") => 1,
+                        Some("tabular") => 2,
+                        _ => 0,
+                    };
+                    c.ot.get_or_insert_with(Default::default).num_spacing = Some(v);
+                }
+                "w14:numForm" => {
+                    let v = match k.attr("w14:val") {
+                        Some("lining") => 1,
+                        Some("oldStyle") => 2,
+                        _ => 0,
+                    };
+                    c.ot.get_or_insert_with(Default::default).num_form = Some(v);
+                }
+                "w14:stylisticSets" => {
+                    let ids: Vec<u8> = k
+                        .children("w14:styleSet")
+                        .filter(|s| s.attr("w14:val").is_none_or(|v| !matches!(v, "0" | "false" | "off")))
+                        .filter_map(|s| s.attr("w14:id").and_then(|i| i.parse::<u8>().ok()))
+                        .filter(|i| (1..=20).contains(i))
+                        .collect();
+                    c.ot.get_or_insert_with(Default::default).stylistic_sets = Some(ids);
+                }
+                "w14:cntxtAlts" => {
+                    c.ot.get_or_insert_with(Default::default).contextual_alts = Some(k.attr("w14:val").is_none_or(|v| !matches!(v, "0" | "false" | "off")));
+                }
                 n if n.starts_with("w14:") => {
                     let fx = c.text_effects.get_or_insert_with(Default::default);
                     super::wordart::read(k, &self.theme, fx);

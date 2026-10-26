@@ -571,6 +571,37 @@ fn a_roman_page_number_in_the_footer_stays_roman_with_the_page_count_in_the_body
 }
 
 #[test]
+fn a_multiple_spaced_last_line_may_run_into_a_footer_that_is_taller_than_the_margin() {
+    // The leading below a last line's text may pass the body's bottom wherever that is, also above a footer that pushed the body up
+    // (Word, a Google Docs file with a page number footer: one more line stays on the page than when the whole line box must fit).
+    use wordcraft_doc::props::LineSpacing;
+    let mut past = 0;
+    for shift in (0..28).step_by(2) {
+        let mut d = Document::from_text(&"Several words wrap onto many lines of a long paragraph. ".repeat(60));
+        if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(Arc::make_mut) {
+            p.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+            p.props.space_before = Some(shift as f32);
+            p.props.widow_control = Some(false);
+        }
+        let id = d.add_part(PartKind::Footer, paras("Footer line", 5));
+        d.last_section.footers.default = Some(id);
+        let l = lay(&d);
+        let bottom = l.pages[0].body.bottom();
+        assert!(bottom < d.last_section.page_h - d.last_section.margin_bottom - 1.0, "the footer pushes the body up: {bottom}");
+        let Some(Placed::Lines { y, para, l0, l1, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+            panic!("shift {shift}: no body lines")
+        };
+        let (first, last) = (&para.lines[*l0], &para.lines[*l1 - 1]);
+        let top = y + last.top - first.top;
+        assert!(top + (last.baseline - last.top) + last.text_desc <= bottom + 0.01, "shift {shift}: the last line's text is below the body");
+        if top + last.height > bottom + 0.01 {
+            past += 1;
+        }
+    }
+    assert!(past > 0, "some shift leaves the last line's leading past the body's bottom");
+}
+
+#[test]
 fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
     // Multiple spacing puts its extra leading below the text, and Word lets that leading of a
     // page's last line run into the bottom margin: a multiple-spaced line stays on the page while

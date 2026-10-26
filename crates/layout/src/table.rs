@@ -1290,6 +1290,12 @@ fn autofit(grid: &mut [f32], content: &[(f32, f32)], t: &Table, avail: f32) {
     }
     if is_automatic(t) {
         let (lo, hi) = content.iter().fold((0.0f32, 0.0f32), |(l, h), c| (l + c.0, h + c.1.max(c.0)));
+        // Word opens the table at its saved grid when that holds every column's longest word (an evenly split grid is a new table's, not a saved one).
+        let saved: f32 = grid.iter().sum();
+        let uniform = grid.iter().all(|w| (w - grid[0]).abs() < 0.5);
+        if !uniform && saved <= avail + 0.5 && grid.iter().all(|w| *w >= 4.0) && grid.iter().zip(content).all(|(w, c)| *w >= c.0) {
+            return;
+        }
         let k = if hi <= avail {
             1.0
         } else if lo >= avail || hi - lo < 0.01 {
