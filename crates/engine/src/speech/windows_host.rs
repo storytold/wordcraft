@@ -1,14 +1,14 @@
 //! The persistent Windows speech host: one PowerShell process per reading, so System.Speech and
 //! the synthesizer load once instead of once per sentence. The current `speak` path remains the
-//! fallback when the host cannot start or fails before a sentence starts; once a sentence has
-//! started, a dead host is reported as an error so the sentence is not repeated. The Windows
-//! default voice is captured when the host starts and restored before every sentence, so
-//! changing it mid-reading takes effect on the next reading.
+//! fallback when the host cannot start or fails at any point; a failure after a sentence starts
+//! repeats it on that path, so no text is dropped (the part already spoken may be heard twice).
+//! The Windows default voice is captured when the host starts and restored before every sentence,
+//! so changing it mid-reading takes effect on the next reading.
 
 #[cfg(target_os = "windows")]
 use std::io::{BufRead, BufReader, Write};
 #[cfg(target_os = "windows")]
-use std::process::{Child, ChildStdin, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
 #[cfg(target_os = "windows")]
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 #[cfg(target_os = "windows")]
@@ -162,7 +162,8 @@ fn speak_message(id: u64, text: &str, lang: Option<&str>, rate: f32) -> String {
 pub(super) enum HostError {
     /// The requested voice could not be selected; the caller retries with the default voice.
     Voice,
-    /// The host is gone or did not answer before the sentence started; the caller falls back.
+    /// The host is gone or did not answer; the caller falls back. If the sentence had started,
+    /// the caller repeats it from the beginning on the fallback path.
     Unavailable,
 }
 
@@ -179,7 +180,10 @@ pub(super) struct Host {
 #[cfg(target_os = "windows")]
 impl Host {
     pub(super) fn start(changed: &dyn Fn() -> bool) -> Result<Self, String> {
-        let mut command = super::windows_command(std::env::var_os("SystemRoot"), HOST_SCRIPT).command();
+        Self::start_with(super::windows_command(std::env::var_os("SystemRoot"), HOST_SCRIPT).command(), changed)
+    }
+
+    fn start_with(mut command: Command, changed: &dyn Fn() -> bool) -> Result<Self, String> {
         command.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null());
         let mut child = command.spawn().map_err(|e| e.to_string())?;
         let Some(stdin) = child.stdin.take() else {
@@ -241,8 +245,8 @@ impl Host {
             self.broken = true;
             return Err(HostError::Unavailable);
         }
-        // A failure before `started` falls back to the per-sentence path; after it, the sentence
-        // is reported as failed so the caller does not repeat the part already spoken.
+        // Any failure falls back to the per-sentence path. If the sentence had started, that path
+        // repeats it from the beginning, so the part already spoken may be heard twice.
         let mut started = false;
         let deadline = Instant::now() + SPEAK_TIMEOUT;
         loop {
@@ -255,18 +259,12 @@ impl Host {
                     Some(Reply::Started(got)) if got == id => started = true,
                     Some(Reply::Done(got)) if got == id => return Ok(Spoken::Done),
                     Some(Reply::Stopped(got)) if got == id => return Ok(Spoken::Interrupted),
-                    Some(Reply::Error(0, code)) => {
+                    Some(Reply::Error(0, _)) => {
                         // Id 0 is the host's parser sentinel, never a sentence id.
-                        if started {
-                            return Ok(Spoken::Failed(format!("Read Aloud host protocol error: {code}")));
-                        }
                         return Err(HostError::Unavailable);
                     }
                     Some(Reply::Error(got, code)) if got == id => {
-                        if started {
-                            return Ok(Spoken::Failed(format!("Read Aloud host error: {code}")));
-                        }
-                        if code == "voice" {
+                        if !started && code == "voice" {
                             return Err(HostError::Voice);
                         }
                         return Err(HostError::Unavailable);
@@ -276,12 +274,12 @@ impl Host {
                 Err(RecvTimeoutError::Timeout) => {
                     if Instant::now() >= deadline {
                         self.broken = true;
-                        return if started { Ok(Spoken::Failed("Read Aloud host stopped answering".into())) } else { Err(HostError::Unavailable) };
+                        return Err(HostError::Unavailable);
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => {
                     self.broken = true;
-                    return if started { Ok(Spoken::Failed("Read Aloud host stopped".into())) } else { Err(HostError::Unavailable) };
+                    return Err(HostError::Unavailable);
                 }
             }
         }
@@ -349,6 +347,83 @@ fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stand-in for the real host: no System.Speech, so these tests run without audio and can
+    /// drive the failure paths the real host cannot be made to hit on demand.
+    #[cfg(target_os = "windows")]
+    const FAKE_HOST_SCRIPT: &str = r#"$utf8 = New-Object System.Text.UTF8Encoding($false)
+$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), $utf8)
+$out = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8)
+$out.AutoFlush = $true
+$out.WriteLine('ready')
+while ($null -ne ($line = $reader.ReadLine())) {
+    $m = $line | ConvertFrom-Json
+    $id = [string]$m.id
+    switch ([string]$m.cmd) {
+        'speak' {
+            $text = [string]$m.text
+            if ($text -eq 'voice') {
+                $out.WriteLine('error ' + $id + ' voice')
+            } elseif ($text -eq 'parse') {
+                $out.WriteLine('error 0 other')
+            } elseif ($text -eq 'crash') {
+                $out.WriteLine('started ' + $id)
+                exit 1
+            } elseif ($text -eq 'late') {
+                $out.WriteLine('done ' + $id)
+            } elseif ($text -eq 'wait') {
+                $out.WriteLine('started ' + $id)
+                Start-Sleep -Milliseconds 200
+                $out.WriteLine('done ' + $id)
+            } else {
+                $out.WriteLine('started ' + $id)
+                $out.WriteLine('done ' + $id)
+            }
+        }
+        'stop' { $out.WriteLine('stopped ' + $id) }
+        'quit' { exit 0 }
+    }
+}
+"#;
+
+    #[cfg(target_os = "windows")]
+    fn fake_host() -> Host {
+        Host::start_with(super::super::windows_command(None, FAKE_HOST_SCRIPT).command(), &|| false).unwrap()
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fake_host_reports_done_including_before_started() {
+        let mut host = fake_host();
+        assert!(matches!(host.speak("ok", None, 1.0, &|| false), Ok(Spoken::Done)));
+        assert!(matches!(host.speak("late", None, 1.0, &|| false), Ok(Spoken::Done)));
+        assert!(matches!(host.speak("wait", None, 1.0, &|| false), Ok(Spoken::Done)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fake_host_reports_voice_and_protocol_errors() {
+        let mut host = fake_host();
+        assert!(matches!(host.speak("voice", None, 1.0, &|| false), Err(HostError::Voice)));
+        assert!(matches!(host.speak("parse", None, 1.0, &|| false), Err(HostError::Unavailable)));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fake_host_falls_back_when_it_dies_after_started() {
+        let mut host = fake_host();
+        assert!(matches!(host.speak("crash", None, 1.0, &|| false), Err(HostError::Unavailable)));
+        assert!(host.broken);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn fake_host_stops_when_idle_and_quits() {
+        let mut host = fake_host();
+        host.stop(99);
+        assert!(!host.broken);
+        drop(host);
+    }
 
     #[test]
     fn host_script_keeps_one_synthesizer_alive() {

@@ -15,11 +15,11 @@
 //! The speech itself runs on a worker thread (desktop only): it starts `say` (macOS), `espeak`
 //! / `spd-say` (Linux, BSD) or the Windows speech synthesizer for the current sentence, and moves
 //! on when it finishes. On Windows one PowerShell host stays alive for the whole reading and
-//! loads System.Speech once; if it cannot start, or fails before a sentence starts, the reading
-//! falls back to a fresh PowerShell process per sentence. If the host dies after a sentence has
-//! started, the reading stops with an error rather than repeating the part already spoken.
-//! Commands only change the shared state and wake the worker, which stops the running sentence
-//! when the state changed under it.
+//! loads System.Speech once; if it cannot start, or fails at any point, the reading falls back to
+//! a fresh PowerShell process per sentence. A failure after a sentence starts repeats that
+//! sentence on the fallback path, so no text is dropped, though the part already spoken may be
+//! heard twice. The next reading tries the host again. Commands only change the shared state and
+//! wake the worker, which stops the running sentence when the state changed under it.
 
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
@@ -734,8 +734,8 @@ enum Spoken {
 }
 
 /// The system voice for one reading. On Windows it keeps one PowerShell host alive from the
-/// first system sentence; if the host cannot start, or fails before a sentence starts, it falls
-/// back to a process per sentence.
+/// first system sentence; if the host cannot start, or fails, it falls back to a process per
+/// sentence (repeating the sentence if it had started).
 #[cfg(not(target_arch = "wasm32"))]
 struct SystemSpeaker {
     #[cfg(target_os = "windows")]
