@@ -446,6 +446,12 @@ pub struct ParaEnv<'a> {
     /// Areas text must flow around (floating objects), relative to the paragraph: x from the
     /// column's left edge, y from the top of the first line.
     pub exclusions: &'a [Exclusion],
+    /// Room below the paragraph's last line kept clear of `exclusions`: its space after (Word
+    /// moves a last line whose space after reaches a floating object below or beside it).
+    pub wrap_after: f32,
+    /// The paragraph's space before, kept between a floating object its first line moves below
+    /// and that line (Word).
+    pub wrap_before: f32,
     /// Automatic equation numbers used before this paragraph.
     pub eq_number: u32,
     pub read_line_spacing: Option<f32>,
@@ -2103,6 +2109,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     // The document grid's line pitch, for paragraphs that snap to it.
     let grid = Some(env.grid).filter(|g| g.line.is_some() && rp.snap_to_grid);
     let grid = grid.as_ref();
+    let natural_clear = grid.is_none() && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
+    let centred_clear = grid.is_some() && env.doc.settings.compat_mode >= wordcraft_doc::COMPAT_MODE_CURRENT;
     let bidi = rtl_para || !pl.bidi_levels.is_empty();
     let mirrored: Vec<Exclusion>;
     let exclusions: &[Exclusion] = if rtl_para {
@@ -2135,15 +2143,23 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     let mut i = 0usize;
     let mut top = 0.0f32;
     let mut first = true;
-    let est_h = pl
-        .styles
-        .get(mark_style as usize)
-        .map(|st| (st.ascent + st.descent) * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 })
-        .unwrap_or(14.0)
-        .max(1.0);
+    let natural = pl.styles.get(mark_style as usize).map(|st| st.ascent + st.descent);
+    let snap = |h: f32| grid.map_or(h, |g| g.snap_height(h));
+    let est_h = match rp.line_spacing {
+        LineSpacing::Multiple(m) => natural.map_or(14.0, |h| snap(h) * m),
+        LineSpacing::AtLeast(v) => snap(natural.unwrap_or(14.0)).max(v),
+        LineSpacing::Exactly(v) => natural.unwrap_or(14.0).max(v),
+    }
+    .max(1.0);
+    let est_clear = match rp.line_spacing {
+        LineSpacing::Multiple(m) if natural_clear && m > 1.0 => (est_h / m).max(1.0),
+        LineSpacing::Multiple(_) if centred_clear => natural.map_or(est_h, |n| (((est_h - n) / 2.0).max(0.0) + n).min(est_h)).max(1.0),
+        _ => est_h,
+    };
     // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
     // Keep the existing estimate for shapes and for non-exact spacing.
     let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h };
+    let table_clear = if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { table_h } else { est_clear };
     // The rest of the current row: spans on the far side of floating objects, left to right.
     let mut row_rest: VecDeque<(f32, f32)> = VecDeque::new();
     let mut row_first = 0usize;
@@ -2151,6 +2167,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     let mut skipped = 0;
     // A left tab past the right indent that wrapped to start the next line.
     let mut wrapped_tab: Option<usize> = None;
+    // The height a row is checked against floating objects with, when a line laid out on it
+    // turned out taller than estimated (see `need`), and how many times it was laid out again.
+    let mut row_need = 0.0f32;
+    let mut row_need_table = 0.0f32;
+    let mut retries = 0usize;
+    // The left edge the current row's spans were found from (`None`: the row isn't beside or
+    // above a floating object).
+    let mut row_lo_used: Option<f32> = None;
     loop {
         // A line already sits on this row (a span before this one may have been skipped).
         let beside = !row_rest.is_empty() && lines.len() > row_first;
@@ -2170,7 +2194,10 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 {
                     lo = first_left.max(rp.indent_left) + dw;
                 }
-                match row_spans(exclusions, top, est_h, table_h, lo, base_right).map(|mut spans| (spans.pop_front(), spans)) {
+                row_lo_used = Some(lo);
+                match row_spans(exclusions, top, est_clear.max(row_need), table_clear.max(row_need_table), lo, base_right)
+                    .map(|mut spans| (spans.pop_front(), spans))
+                {
                     Ok((Some((a, b)), rest)) => {
                         narrowed = !rest.is_empty() || a > lo || b < base_right;
                         row_rest = rest;
@@ -2178,7 +2205,8 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                         break (a, b.max(a + MIN_LINE_WIDTH));
                     }
                     Err(below) if below > top && guard < 50 => {
-                        top = below;
+                        // The first line keeps the paragraph's space before below the object.
+                        top = below + if lines.is_empty() { env.wrap_before.max(0.0) } else { 0.0 };
                         guard += 1;
                     }
                     Ok((None, _)) | Err(_) => {
@@ -2501,6 +2529,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         // The tallest picture on the line (it sits on the baseline).
         let mut obj_asc = 0.0f32;
         let mut any = false;
+        let mut text = false;
         let dropped = pl.drop_cap.map_or(0, |d| d.0);
         for (k, c) in pl.clusters.get(c0..c1).into_iter().flatten().enumerate() {
             // Spaces and tabs never make a line taller, whatever their size: Word sizes a line by
@@ -2516,8 +2545,10 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 // and descent, and grows above the baseline to fit a taller picture.
                 let (a, d) = if matches!(c.kind, ClKind::Object(_)) && c.obj_h > 0.0 {
                     if pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k)) {
+                        // An equation is text: its ascent and descent count like the text's.
                         // Exact spacing keeps the run's baseline; tall math may overflow the
                         // fixed line box without moving adjacent text up by its denominator.
+                        text = true;
                         if matches!(rp.line_spacing, LineSpacing::Exactly(_)) { (st.ascent, st.descent) } else { (c.obj_h, c.obj_d) }
                     } else {
                         obj_asc = obj_asc.max(c.obj_h);
@@ -2525,6 +2556,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     }
                 } else {
                     // `obj_h` is set on text clusters only under ruby text, which the line grows to fit.
+                    text = true;
                     let (a, d) = st.line_extent();
                     (a.max(c.obj_h + st.shift), d)
                 };
@@ -2592,6 +2624,16 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
             }
         }
         let slack = right_edge - content_end;
+        let clear = match rp.line_spacing {
+            LineSpacing::Multiple(_) if natural_clear => (text_natural + label_extra).max(if text { text_pictures } else { obj_asc }).min(height),
+            LineSpacing::Multiple(_) if centred_clear => (baseline - top + desc).min(height),
+            LineSpacing::Multiple(_) if grid.is_none() && !text && obj_asc > 0.0 => {
+                let wrapped = slack < -0.01 && c1 > c0 && pl.clusters.get(c1 - 1).is_some_and(|c| c.kind == ClKind::Space);
+                let mark = if j >= n && !wrapped { pl.styles.get(mark_style as usize).map_or(0.0, |s| s.descent) } else { 0.0 };
+                (obj_asc + mark).min(height)
+            }
+            _ => height,
+        };
         let last_tab = (c0..c1).rev().find(|k| pl.clusters.get(*k).is_some_and(|c| c.kind == ClKind::Tab));
         let align_from = last_tab.map(|k| k + 1).unwrap_or(c0);
         let display = pl.displays.iter().find(|(ci, _)| *ci >= c0 && *ci < c1).map(|d| d.1);
@@ -2655,6 +2697,32 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                 }
             }
         }
+        // Word keeps a whole line clear of floating objects, and the paragraph's last line its space
+        // after too: one that reaches an object goes below it, or beside it (measured in Word for
+        // Mac with tables and shapes, exact and automatic line spacing).
+        // A row too low for one of its lines is laid out again from its start: beside or below
+        // the objects in the way of the taller row (Word moves the whole row).
+        let need = clear + if j >= n && end == LineEnd::Para { env.wrap_after.max(0.0) } else { 0.0 };
+        let checked = (est_clear.max(row_need), table_clear.max(row_need_table));
+        if let Some(lo) = row_lo_used
+            && (need > checked.0 + 0.01 || need > checked.1 + 0.01)
+            && retries < 8
+            && row_spans(exclusions, top, need.max(checked.0), need.max(checked.1), lo, base_right)
+                != row_spans(exclusions, top, checked.0, checked.1, lo, base_right)
+        {
+            let restart = lines.get(row_first).map_or(c0, |l| l.c0);
+            lines.truncate(row_first);
+            if lines.is_empty() {
+                first = true;
+                first_x0 = None;
+            }
+            i = restart;
+            skipped = 0;
+            (row_need, row_need_table) = (row_need.max(need), row_need_table.max(need));
+            retries += 1;
+            row_rest.clear();
+            continue;
+        }
         let start = pl.clusters.get(c0).map(|c| c.start).unwrap_or(pl.text_len);
         let stop = if c1 > c0 { pl.clusters.get(c1 - 1).map(|c| c.end).unwrap_or(pl.text_len) } else { start };
         if first_x0.is_none() {
@@ -2693,6 +2761,7 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
         }
         if row_rest.is_empty() {
             top += even_row(lines.get_mut(row_first..).unwrap_or_default());
+            (row_need, row_need_table, retries, row_lo_used) = (0.0, 0.0, 0, None);
         }
         if i >= n {
             // A paragraph ending with a line break gets an empty last line.
@@ -2706,8 +2775,23 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
                     (LineSpacing::AtLeast(v), None) => natural.max(v),
                     (LineSpacing::Exactly(v), _) => v,
                 };
-                let x0 = rp.indent_left;
-                let (x0, left, right) = if rtl_para { (width - x0, width - base_right, width - x0) } else { (x0, x0, base_right) };
+                let clear = if natural_clear && matches!(rp.line_spacing, LineSpacing::Multiple(_)) { natural.min(h) } else { h };
+                // As the paragraph's last line it keeps clear of floating objects with its space
+                // after (Word): below one in its way, or in the first strip beside it.
+                let mut span = (rp.indent_left, base_right);
+                for _ in 0..50 {
+                    let reach = clear + env.wrap_after.max(0.0);
+                    match row_spans(exclusions, top, reach, reach, rp.indent_left, base_right) {
+                        Err(below) if below > top => top = below,
+                        Ok(spans) => {
+                            span = spans.front().copied().unwrap_or(span);
+                            break;
+                        }
+                        Err(_) => break,
+                    }
+                }
+                let (x0, x1) = (span.0, span.1.max(span.0));
+                let (x0, left, right) = if rtl_para { (width - x0, width - x1, width - x0) } else { (x0, x0, x1) };
                 lines.push(Line {
                     top,
                     height: h,
@@ -3394,6 +3478,8 @@ mod label_spacing_tests {
             field_codes: false,
             grid: Grid::default(),
             exclusions: &[],
+            wrap_after: 0.0,
+            wrap_before: 0.0,
             eq_number: 0,
             numeral: crate::NumeralMode::default(),
             read_line_spacing: None,

@@ -212,6 +212,8 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 // Measurement uses a fixed environment (like show_hidden/proofing above).
                 numeral: crate::NumeralMode::default(),
                 exclusions: &[],
+                wrap_after: 0.0,
+                wrap_before: 0.0,
                 eq_number: 0,
                 read_line_spacing: None,
                 grid: crate::para::Grid::default(),

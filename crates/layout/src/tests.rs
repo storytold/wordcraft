@@ -7300,6 +7300,9 @@ fn tight_wrap_follows_an_ellipse() {
     let spans = |wrap| {
         let mut d = wrapped_shape_doc(ShapeKind::Ellipse, 160.0, 160.0, Float { wrap, ..Default::default() });
         d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+        if let Some(Block::Para(p)) = d.body.first_mut().map(Arc::make_mut) {
+            p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        }
         line_spans(&lay(&d))
     };
     let (square, tight, through) = (spans(Wrap::Square), spans(Wrap::Tight), spans(Wrap::Through));
