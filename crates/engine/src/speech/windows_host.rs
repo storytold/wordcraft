@@ -41,8 +41,8 @@ $out.AutoFlush = $true
 $out.WriteLine('ready')
 $task = $reader.ReadLineAsync()
 $speaking = $null
+$prompt = $null
 $stopId = $null
-$grace = 0
 while ($true) {
     if ($task.IsCompleted) {
         try { $line = $task.Result } catch { break }
@@ -56,7 +56,9 @@ while ($true) {
             if ($id -eq '') { $id = '0' }
             switch ([string]$m.cmd) {
                 'speak' {
-                    if ($null -ne $speaking) { $synth.SpeakAsyncCancelAll(); $speaking = $null }
+                    $synth.SpeakAsyncCancelAll()
+                    $speaking = $null
+                    $prompt = $null
                     $synth.Rate = [int]$m.rate
                     $voice = [string]$m.voice
                     $lang = [string]$m.lang
@@ -75,14 +77,15 @@ while ($true) {
                     if ($voiceError) {
                         $out.WriteLine('error ' + $id + ' voice')
                     } else {
-                        $synth.SpeakAsync([string]$m.text) | Out-Null
+                        $prompt = $synth.SpeakAsync([string]$m.text)
                         $out.WriteLine('started ' + $id)
                         $speaking = $id
-                        $grace = 2
                     }
                 }
                 'stop' {
-                    if ($null -ne $speaking) { $synth.SpeakAsyncCancelAll(); $speaking = $null }
+                    $synth.SpeakAsyncCancelAll()
+                    $speaking = $null
+                    $prompt = $null
                     if ($synth.State -eq [System.Speech.Synthesis.SynthesizerState]::Ready) {
                         $out.WriteLine('stopped ' + $id)
                     } else {
@@ -104,11 +107,10 @@ while ($true) {
         $out.WriteLine('stopped ' + $stopId)
         $stopId = $null
     }
-    if ($grace -gt 0) {
-        $grace = $grace - 1
-    } elseif ($null -ne $speaking -and $synth.State -eq [System.Speech.Synthesis.SynthesizerState]::Ready) {
+    if ($null -ne $speaking -and $null -ne $prompt -and $prompt.IsCompleted) {
         $out.WriteLine('done ' + $speaking)
         $speaking = $null
+        $prompt = $null
     }
     if ($null -eq $speaking -and $null -eq $stopId) {
         # Nothing is speaking: wait for the next command instead of polling.
@@ -439,6 +441,7 @@ while ($null -ne ($line = $reader.ReadLine())) {
             "SpeechSynthesizer",
             "SpeakAsync",
             "SpeakAsyncCancelAll",
+            "IsCompleted",
             "ReadLineAsync",
             "ConvertFrom-Json",
             "AutoFlush",
