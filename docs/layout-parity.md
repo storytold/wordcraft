@@ -208,6 +208,9 @@ is a lookup rather than another pass over it. The answer and the layout are the 
 times the word costs about eighteen times the time, not the sixty-four a quadratic would; the
 same test with the fix reverted measured 59.6.
 
+## Final row closing strokes
+
+Unmerged, non-exact final rows paint their closing border inside the reserved band, including whole rows and repeated page continuations. Original fixtures cover automatic and minimum heights, multiple stroke widths and cell margins. Closing rules retain their owning cell and item index through splits. Unrotated nested exact rows keep their closing rule on the page where that row starts, even when it ends outside the page. They do not acquire a continuation rule. Other row types keep their border offsets. Row sizing and fit decisions are unchanged. Native Word for Mac 16.113.2 controls confirm the bounded rule. Separate pagination and stroke-thickness differences remain, including an existing roughly 2pt exact-row stroke-placement difference in the nested control.
 TOC refresh includes heading and outline paragraphs inside tables, including nested cells. Links and page numbers retain their full paragraph paths when entries move body blocks. The existing link picker still accepts top-level heading block indices.
 
 Explicit DrawingML preset and custom outline dashes retain their stroke-width units on import
@@ -294,6 +297,8 @@ layout suite are pending; this is not a new Word/native-IME acceptance claim.
 | 2026-10-15 | trivial | A float placed above its anchor paragraph (fixed on the page, or moved up from it) has the text of the paragraphs above the anchor on its page wrap around it, as in Word, instead of running behind it (#2048) |
 | 2026-10-20 | trivial | A picture cropped to a sliver of its source (under 5% of an axis) is drawn at the size the file gives, on screen and in PDF, bitmap or metafile, and Tight/Through wrapping follows the part drawn; it was widened to 5%, so a header bar that is 2.7% of a page-sized WMF came out half as tall and the text box over it fell below it (#1899) |
 | 2026-10-19 | trivial | An object dragged near the bottom of a page lands where it is dropped: its paragraph's place is measured with the object already there, not at the paragraph's top, where it could push the paragraph onto the next page (#3169) |
+| 2026-10-17 | trivial | Preserve nested exact-row closing-rule anchors through outer row splits, as observed in a native mode15 control. |
+| 2026-10-16 | trivial | Keep unmerged, non-exact final-row closing strokes inside their reserved bands and preserve closing-rule ownership through splits. |
 | 2026-10-18 | trivial | A word after a slash (" /word") wraps whole instead of splitting between two letters (#2963) |
 | 2026-10-19 | trivial | #2964: a centred or end-aligned list label after a leading page break uses its text line's alignment. Synthetic LTR/RTL numbered/bulleted controls and the issue's DOCX export; broader pagination gaps and readiness estimates unchanged |
 | 2026-10-15 | trivial | An at-least table row with less room than its minimum on a page that holds something starts the next page whole, as checked in Word (#1742); the taller-than-a-page case (it then splits from the top of that page) and repeated header rows (they go with it) follow the issue and synthetic tests, not a Word check |
