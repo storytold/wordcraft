@@ -1,6 +1,6 @@
 # Installing spelling dictionaries
 
-> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-23 · **Change:** minor (ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
+> **Last reviewed:** 2026-10-16 · **Last updated:** 2026-10-26 · **Change:** trivial (downloading a dictionary from File › Options › Proofing, pinned and checksummed; previously minor: ISO 8859-9 Turkish dictionaries are read, #3692; previously minor: Spanish: `es_ES`, `es_MX`, `es_419` and `es_UY` with their fallbacks, #3360, #3553; previously trivial: every Hunspell language shows (no dictionary), not only Polish and Portuguese, and Indonesian is listed, #3150; previously trivial: ISO 8859-1 dictionaries are read, #2824)
 
 English spelling works out of the box. Polish, Russian, Portuguese, Czech, Italian, Croatian,
 Turkish, Indonesian and Spanish spelling use a standard **Hunspell** dictionary (an `.aff` and a `.dic` file) that
@@ -55,8 +55,10 @@ The first folder holding a matching pair wins:
 1. The folder set in **File › Options › Proofing › Dictionaries folder**. This is the easiest
    way on every system, and it works for an app started from the Start menu, Finder or the Dock.
    The same pane lists the dictionary file each language found.
-2. The folder in the `WORDCRAFT_DICTIONARIES` environment variable.
-3. The system's usual places:
+2. `dictionaries` in WordCraft's settings folder, where a download goes when no Dictionaries
+   folder is set (see [Downloading one from WordCraft](#downloading-one-from-wordcraft)).
+3. The folder in the `WORDCRAFT_DICTIONARIES` environment variable.
+4. The system's usual places:
 
 | System | Folders |
 |---|---|
@@ -65,6 +67,12 @@ The first folder holding a matching pair wins:
 | Linux and BSD | `~/.local/share/hunspell`, `/usr/share/hunspell`, `/usr/share/myspell`, `/usr/share/myspell/dicts`, `/usr/local/share/hunspell`, `/usr/local/share/myspell`, LibreOffice's `share/extensions/dict-*` under `/usr/lib/libreoffice` or `/opt/libreoffice` |
 
 The web version can't read these folders, so these languages aren't spell-checked there.
+
+## Downloading one from WordCraft
+
+For Polish, Portuguese, Italian, Russian and Czech, **File › Options › Proofing › Dictionaries** shows a **Download** button beside a language with no dictionary, or with one that can't be read. It fetches the pair from [LibreOffice's dictionary collection](https://github.com/LibreOffice/dictionaries) and saves it in the Dictionaries folder above, or, when none is set, in `dictionaries` in WordCraft's settings folder, which is always searched. Nothing is bundled: each dictionary keeps its own licence (GPL, LGPL or MPL) and stays a separate file that WordCraft only reads.
+
+The download is pinned. It comes from one fixed commit of the collection, and each file must match the SHA-256 WordCraft records for it (`crates/proof/src/libreoffice.rs`) before it is parsed or saved. A changed, truncated or tampered file is refused and nothing is written. Croatian, Turkish and Indonesian have no button yet: their collection dictionaries use `FLAG long` or `FLAG num`, which WordCraft doesn't read yet.
 
 ## Example: Brazilian Portuguese (`pt_BR`)
 
@@ -140,6 +148,7 @@ Never commit dictionary files to this repository: they stay on the user's system
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | trivial | Downloading a dictionary from File › Options › Proofing: pinned to one commit of LibreOffice's collection, each file checked against its SHA-256 (#1698) |
 | 2026-10-22 | minor | Spanish (#3360, #3553): the file names for Spain, Mexico, Latin America and Uruguay and their fallbacks |
 | 2026-10-22 | trivial | Italian, Croatian, Turkish, Russian, Czech and Indonesian without a dictionary now show **(no dictionary)** (or **(dictionary unreadable)**) too, as this page already said; before, only Polish and Portuguese did. Indonesian is listed with its file names (#3150) |
 | 2026-10-23 | trivial | ISO 8859-9 (`SET ISO8859-9`) dictionaries are read, so an older Turkish `tr_TR` loads without converting it to UTF-8; the Turkish dictionary is read through the same size-capped reader and `SET` decoding as the others (#3692) |

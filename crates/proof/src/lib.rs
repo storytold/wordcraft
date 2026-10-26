@@ -62,6 +62,7 @@ pub mod hyphen;
 pub mod id;
 pub mod it;
 pub mod lang;
+pub mod libreoffice;
 pub mod patterns;
 pub mod pl;
 pub mod pt;
@@ -291,6 +292,21 @@ pub fn set_dictionaries_folder(dir: Option<std::path::PathBuf>) {
         l.slot.reload();
     }
     DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+}
+
+/// Look for `lang`'s Hunspell dictionary again (after one was downloaded into the dictionaries
+/// folder, [`libreoffice`]), and tell cached proofing results to refresh.
+pub fn reload_dictionary(lang: ProofLang) {
+    let spanish = |l: ProofLang| matches!(l, ProofLang::Es | ProofLang::EsMx | ProofLang::Es419 | ProofLang::EsUy);
+    // A Spanish region falls back to another region's dictionary, so all of them look again.
+    let mut found = false;
+    for l in LANGUAGES.iter().filter(|l| l.lang == lang || (spanish(lang) && spanish(l.lang))) {
+        l.slot.reload();
+        found = true;
+    }
+    if found {
+        DICTIONARY_GENERATION.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Each language that reads an installed Hunspell dictionary, with the `.dic` file found for it
@@ -1096,6 +1112,18 @@ mod tests {
     /// mid-test, and by those that save the whole user dictionary and load it back, which would
     /// bring back a word another test just removed.
     static DICTIONARY_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// Russian and Czech report why their dictionary didn't load, as the other Hunspell
+    /// languages do (File › Options › Proofing shows the reason).
+    #[test]
+    fn russian_and_czech_load_errors_are_reported() {
+        for (lang, key) in [(ProofLang::Ru, "ru_RU"), (ProofLang::Cs, "cs_CZ")] {
+            let _ = hunspell::note_load::<()>(key, std::path::Path::new("/nowhere/x.dic"), Err("FLAG long is not supported".into()));
+            assert_eq!(dictionary_load_error(lang).as_deref(), Some("FLAG long is not supported"), "{lang:?}");
+            hunspell::clear_load_error(key);
+            assert_eq!(dictionary_load_error(lang), None);
+        }
+    }
 
     /// #1063: the dictionaries folder is searched before the system locations; the dictionaries
     /// in it are reported and used, and cached checks are dropped. The folder holds the same test

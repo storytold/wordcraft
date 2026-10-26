@@ -6893,6 +6893,7 @@ dependencies = [
  "log",
  "miniz_oxide 0.9.1",
  "proptest",
+ "sha2 0.11.1",
  "unicode-normalization",
 ]
 
