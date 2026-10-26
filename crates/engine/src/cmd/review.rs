@@ -2308,5 +2308,4 @@ mod spelling_navigation_tests {
             assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentense.");
         }
     }
-
 }
