@@ -103,7 +103,9 @@ fn action_link(ui: &mut Ui, text: &str) -> bool {
 
 fn context(ui: &mut Ui, app: &mut WordApp, form: &mut SpellingForm, spelling: bool) {
     let t = Tokens::get(ui.ctx());
+    let width = ui.available_width();
     egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.input_border)).corner_radius(2.0).inner_margin(8).show(ui, |ui| {
+        ui.set_min_width((width - 18.0).max(0.0));
         ui.horizontal(|ui| {
             let mut job = egui::text::LayoutJob::default();
             let format = egui::TextFormat { font_id: regular(12.0), color: t.text, ..Default::default() };
@@ -157,56 +159,58 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
     } else {
         egui::Frame::NONE.fill(t.input).stroke(Stroke::new(1.0, t.input_border)).corner_radius(2.0).show(ui, |ui| {
             ui.spacing_mut().item_spacing.y = 0.0;
-            for (index, suggestion) in suggestions.iter().enumerate() {
-                ui.push_id(index, |ui| {
-                    if index > 0 {
-                        ui.separator();
-                    }
-                    ui.horizontal(|ui| {
-                        let width = (ui.available_width() - 34.0).max(20.0);
-                        let (rect, response) = ui.allocate_exact_size(vec2(width, 64.0), Sense::click());
-                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, suggestion));
-                        if response.hovered() {
-                            ui.painter().rect_filled(rect, 0.0, t.hover);
+            egui::ScrollArea::vertical().id_salt("proofing_suggestions").max_height(210.0).show(ui, |ui| {
+                for (index, suggestion) in suggestions.iter().enumerate() {
+                    ui.push_id(index, |ui| {
+                        if index > 0 {
+                            ui.separator();
                         }
-                        ui.painter().with_clip_rect(rect.shrink2(vec2(10.0, 0.0))).text(
-                            rect.left_center() + vec2(12.0, 0.0),
-                            Align2::LEFT_CENTER,
-                            suggestion,
-                            semibold(12.5),
-                            t.text,
-                        );
-                        if response.clicked() {
-                            change = Some(suggestion.clone());
-                        }
-                        ui.menu_button("⌄", |ui| {
-                            if ui.button(tl!("Change…")).clicked() {
-                                form.replacement.clone_from(suggestion);
-                                form.manual = true;
-                                ui.close();
+                        ui.horizontal(|ui| {
+                            let width = (ui.available_width() - 34.0).max(20.0);
+                            let (rect, response) = ui.allocate_exact_size(vec2(width, 64.0), Sense::click());
+                            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, suggestion));
+                            if response.hovered() {
+                                ui.painter().rect_filled(rect, 0.0, t.hover);
                             }
-                            if spelling && ui.button(tl!("Add to AutoCorrect")).clicked() {
-                                let word = form.issue.get("text").and_then(Value::as_str).unwrap_or("");
-                                let params = json!({"add": {"from": word, "to": suggestion}});
-                                if form.current(app) {
-                                    if let Err(e) = app.run("tools.autocorrect", params) {
-                                        form.message = e;
-                                    }
-                                } else {
-                                    form.message = tl!("The document or selection changed. Check again to continue.").into();
+                            ui.painter().with_clip_rect(rect.shrink2(vec2(10.0, 0.0))).text(
+                                rect.left_center() + vec2(12.0, 0.0),
+                                Align2::LEFT_CENTER,
+                                suggestion,
+                                semibold(12.5),
+                                t.text,
+                            );
+                            if response.clicked() {
+                                change = Some(suggestion.clone());
+                            }
+                            ui.menu_button("⌄", |ui| {
+                                if ui.button(tl!("Change…")).clicked() {
+                                    form.replacement.clone_from(suggestion);
+                                    form.manual = true;
+                                    ui.close();
                                 }
-                                ui.close();
-                            }
-                            if ui.button(tl!("AutoCorrect Options…")).clicked() {
-                                let _ = app.run("tools.autocorrect", json!({}));
-                                ui.close();
-                            }
-                        })
-                        .response
-                        .on_hover_text(tl!("More options"));
+                                if spelling && ui.button(tl!("Add to AutoCorrect")).clicked() {
+                                    let word = form.issue.get("text").and_then(Value::as_str).unwrap_or("");
+                                    let params = json!({"add": {"from": word, "to": suggestion}});
+                                    if form.current(app) {
+                                        if let Err(e) = app.run("tools.autocorrect", params) {
+                                            form.message = e;
+                                        }
+                                    } else {
+                                        form.message = tl!("The document or selection changed. Check again to continue.").into();
+                                    }
+                                    ui.close();
+                                }
+                                if ui.button(tl!("AutoCorrect Options…")).clicked() {
+                                    let _ = app.run("tools.autocorrect", json!({}));
+                                    ui.close();
+                                }
+                            })
+                            .response
+                            .on_hover_text(tl!("More options"));
+                        });
                     });
-                });
-            }
+                }
+            });
         });
     }
     if let Some(replacement) = change {
@@ -276,9 +280,10 @@ mod tests {
     fn spelling_review_dialog_changes_a_suggestion_and_undo_restores_the_word() {
         let mut h = harness("The quick brwn fox.");
         assert!(!h.state().canvas.context_menu_open);
-        h.get_by_label("brown").click();
+        let replacement = form(h.state()).issue["suggestions"][0].as_str().unwrap().to_string();
+        h.get_by_label(&replacement).click();
         h.run_steps(3);
-        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), "The quick brown fox.");
+        assert_eq!(h.state().session.doc.plain_text(StoryRef::Body), format!("The quick {replacement} fox."));
         assert!(form(h.state()).done());
         h.get_by_label("Close").click();
         h.run_steps(2);

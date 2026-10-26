@@ -1,6 +1,6 @@
 # Spelling and grammar task pane
 
-> **Last updated:** 2026-10-26 · **Status:** implementation proposed; hosted checks and rendered comparison remain required before integration.
+> **Last updated:** 2026-10-26 · **Status:** first hosted gate and three-platform UI checks passed; rendered comparison found layout gaps now being corrected and revalidated.
 
 ## Word reference
 
@@ -25,9 +25,12 @@ This work is independent of French contribution #3185. It consumes language-awar
 - Offscreen: the ignored spelling_review_dialog_preview test writes light/dark PNGs for comparison with the recorded Word arrangement.
 - Required gate: cargo xtask ci. Cargo is unavailable on the preparation PC; hosted validation is required, and test definitions alone do not establish success.
 
+The first light/dark artifacts at `20205a5` were inspected: the sentence frame shrank to its text and the unbounded suggestion list pushed actions below the viewport. The revised layout fills the pane width and scrolls the suggestion list after approximately three cards, keeping the actions below it visible. A new preview and hosted gate must validate this revision; exact pixel parity is not claimed.
+
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Inspect first successful light/dark artifacts; fill the sentence frame and bound suggestion-list height, retaining all suggestions through scrolling |
 | 2026-10-26 | minor | Actual Word for Windows observation replaces the modal proposal with a right-side Proofing pane, sentence context and directly clickable suggestion cards |
 | 2026-10-26 | minor | Separate language-independent correction-form proposal and verification scope |
