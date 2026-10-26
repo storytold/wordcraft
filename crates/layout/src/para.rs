@@ -95,19 +95,21 @@ fn is_below_or_phinthu(c: char) -> bool {
 /// 1. **Short-tail ฐ/ญ** (WTT 2.0 fonts only) — ฐ (U+0E10) and ญ (U+0E0D) have descending
 ///    tails that collide with below-vowels (◌ุ ◌ู) and phinthu (◌ฺ).  When immediately
 ///    followed by one of those marks, swap to PUA short-tail forms U+F700 / U+F70F.
-///    Detection is by font name ([`wordcraft_fonts::word::is_wtt2_thai_font`]) AND the
-///    resolved face must cover U+F700: when a WTT 2.0 font is not installed, the OpenType
-///    substitute (Thonburi, Noto Serif Thai, …) handles short-tails via GSUB automatically.
+///    Both the *requested* font name and the *actual rendering face* family must be WTT 2.0
+///    ([`wordcraft_fonts::word::is_wtt2_thai_font`]).  When a WTT 2.0 font is not installed
+///    the rendering face is an OpenType substitute (Thonburi, Noto Serif Thai, …) whose
+///    family name is not in the WTT 2.0 list; that substitute handles short-tails via GSUB
+///    automatically, so emitting PUA codepoints would produce .notdef glyphs.
+///    Checking the face family name avoids the unreliable `face.covers(U+F700)` cmap path.
 ///
 /// 2. **RU/LU + Sara_AA → LAKKHANGYAO** — ฤ (U+0E24) and ฦ (U+0E26) followed by sara aa
 ///    (า U+0E32) render sara aa as lakkhangyao (ๅ U+0E45).  Applied for all Thai fonts.
 fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
-    // Name check: only WTT 2.0 families carry PUA short-tail glyphs.
-    // Face check: the *resolved* face must actually have U+F700 — when the WTT 2.0 font is
-    // missing and a substitute (e.g. Thonburi, Noto) is used instead, that substitute is an
-    // OpenType font that handles short-tails via GSUB automatically; emitting U+F700 would
-    // produce a .notdef glyph because the substitute has no PUA mapping.
-    let is_wtt2 = wordcraft_fonts::word::is_wtt2_thai_font(font) && face.covers('\u{F700}');
+    // Both the requested font and the actual rendering face must be known WTT 2.0 families.
+    // This avoids the skrifa cmap path (face.covers) which may miss PUA entries in old fonts,
+    // while still correctly skipping OpenType substitutes whose family name is not WTT 2.0.
+    let is_wtt2 = wordcraft_fonts::word::is_wtt2_thai_font(font)
+               && wordcraft_fonts::word::is_wtt2_thai_font(&face.family);
     let needs_short_tail = is_wtt2 && (text.contains('\u{0E10}') || text.contains('\u{0E0D}'));
     let needs_ru_lu = text.contains('\u{0E24}') || text.contains('\u{0E26}');
     if !needs_short_tail && !needs_ru_lu {
