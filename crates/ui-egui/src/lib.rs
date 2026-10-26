@@ -117,6 +117,26 @@ pub struct Services {
     /// sender counts as cancelled. An `Err` says no system dialog could be shown, and the app shows
     /// its built-in file browser instead (#576). The app shows one dialog at a time ([`file_dialogs`]).
     pub file_dialog: Option<Box<dyn Fn(FileDialogRequest) -> std::sync::mpsc::Receiver<FileDialogAnswer>>>,
+    /// Android (and any host with no system picker): the app-private storage directory the
+    /// in-app browser may reach. When set and [`Self::file_dialog`] is `None`,
+    /// [`WordApp::ask_file`] serves every request in the built-in
+    /// [`file_browser`](crate::file_browser) instead of answering none (cancelled).
+    pub app_files_dir: Option<std::path::PathBuf>,
+    /// Android's shared internal-storage root (`/storage/emulated/0`): the browser's **second**
+    /// root, offered as a switcher beside `app_files_dir` only while this is set — only the
+    /// Android build sets it. Navigating it still needs the grant below: without it the switcher
+    /// asks for the grant instead of going there. `None` on the desktop and the web, where no
+    /// switcher is drawn at all.
+    pub shared_storage_root: Option<std::path::PathBuf>,
+    /// Whether Android's "All files access" (`MANAGE_EXTERNAL_STORAGE`) holds right now, checked
+    /// whenever the browser is about to enter the shared root — the settings page the user is
+    /// sent to backgrounds the app, so the next tap re-checks without a callback. `None`
+    /// elsewhere (and when no JVM was reachable): shared storage then reads as not granted.
+    pub shared_storage_granted: Option<Box<dyn Fn() -> bool>>,
+    /// Asks Android for "All files access": its system settings page on Android 11+, the
+    /// ordinary permission dialog before that. Best effort — a build or device that cannot ask
+    /// says so in the browser and stays where it is. `None` elsewhere.
+    pub shared_storage_grant: Option<Box<dyn Fn()>>,
     /// Web: open a file picker; the file arrives later through `inbox`.
     pub open_async: Option<Box<dyn Fn(&str)>>,
     /// Web: files (name, bytes) delivered asynchronously (picker, drag and drop).
