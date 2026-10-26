@@ -394,6 +394,10 @@ fn the_voice_picker_may_start_the_server_once() {
     assert!(ask_voices_now(true, false, Some(VOICES_RETRY), false));
     assert!(ask_voices_now(false, false, Some(VOICES_REFRESH), false));
     assert!(ask_voices_now(true, false, None, false), "never asked");
+    // The request is only for an ask that happens now: never left for a later refresh.
+    assert!(server_for_voices(true, false));
+    assert!(!server_for_voices(false, false), "a list is there: no server started later");
+    assert!(!server_for_voices(true, true), "being asked: no request left behind");
     // A silent backend never asks the system, picker or not.
     let r = ReadAloud::default();
     r.ask_voices_starting_server();
@@ -478,6 +482,11 @@ fn a_chosen_voice_reads_its_own_language() {
     assert!(is_latin_text("123 – !"), "no letters at all");
     assert_eq!(voice_for(Some(&hu), Some("en-US"), "5 µm vastag réteg"), Some(&hu));
     assert_eq!(voice_for(Some(&hu), Some("en-US"), "A ﬁnom ﬁlm ﬂottul fut."), Some(&hu));
+    // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
+    // document (every run `ru-RU`), or a Greek-tagged Latin sentence.
+    assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "This sentence is English."), Some(&gb));
+    assert_eq!(voice_for(Some(&gb), Some("el"), "Plain Latin text."), Some(&gb));
+    assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "Это русский текст."), None, "Cyrillic keeps the Russian voice");
     // A voice whose language the program doesn't name reads Latin text, as before.
     for lang in ["", "none", "x"] {
         let unnamed = Voice { id: "v".into(), name: "Voice".into(), lang: lang.into(), kind: VoiceKind::Mac };

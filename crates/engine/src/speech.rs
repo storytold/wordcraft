@@ -505,7 +505,9 @@ fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Op
     if let Some(own_script) = own.as_deref().and_then(script_language) {
         return (script == Some(own_script)).then_some(voice);
     }
-    (script.is_none() && !own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) && is_latin_text(text)).then_some(voice)
+    // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
+    // document (every run `ru-RU`) goes to the chosen English voice.
+    (!own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) && is_latin_text(text)).then_some(voice)
 }
 
 /// The voices in `espeak-ng --voices`' `listing`: a header, then `Pty Language Age/Gender
@@ -719,6 +721,13 @@ static VOICES: Mutex<VoiceList> = Mutex::new(VoiceList { voices: None, asked: No
 fn ask_voices_now(empty: bool, asking: bool, since: Option<std::time::Duration>, start_server: bool) -> bool {
     let again = if empty { VOICES_RETRY } else { VOICES_REFRESH };
     !asking && (since.is_none_or(|t| t >= again) || (empty && start_server))
+}
+
+/// May the voice list asked for now start Speech Dispatcher? Only when the list is empty and
+/// nothing is being asked already.
+#[cfg(not(target_arch = "wasm32"))]
+fn server_for_voices(empty: bool, asking: bool) -> bool {
+    empty && !asking
 }
 
 /// The list to keep after asking: a good list is never replaced by an empty answer (a server
@@ -1197,7 +1206,13 @@ impl ReadAloud {
     pub fn ask_voices_starting_server(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         if self.backend == Backend::System {
-            VOICES.lock().unwrap_or_else(PoisonError::into_inner).start_server = true;
+            {
+                // Only for an ask that happens now: a list already there, or one being asked
+                // for, leaves no request behind for a later background refresh to act on.
+                let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+                let empty = l.voices.as_ref().is_none_or(|v| v.is_empty());
+                l.start_server = server_for_voices(empty, l.asking);
+            }
             let _ = installed_voices();
         }
     }
