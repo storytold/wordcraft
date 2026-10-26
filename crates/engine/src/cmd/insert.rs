@@ -8,12 +8,22 @@ use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para
 use super::{delete_selection, sel_result, split_para, type_text};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+/// Insert a page break at the caret. At the end of a paragraph the caret moves on to a new
+/// paragraph, which starts the next page (Word); otherwise it would stay after the break, drawn
+/// on the page the break ends, and a second press would be needed to reach the new one.
+pub(super) fn page_break(s: &mut Session) -> CmdResult {
+    type_text(s, "\u{000C}")?;
+    let at = s.sel.focus.clone();
+    if s.sel.is_collapsed() && s.doc.para_at(&at).is_some_and(|p| at.off >= p.len()) {
+        let at = split_para(s, &at)?;
+        s.sel = Selection::caret(at);
+    }
+    sel_result(s)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        CommandSpec::new("insert.pageBreak", "Page Break", "Insert › Pages", |s, _| {
-            type_text(s, "\u{000C}")?;
-            sel_result(s)
-        }),
+        CommandSpec::new("insert.pageBreak", "Page Break", "Insert › Pages", |s, _| page_break(s)),
         CommandSpec::new("insert.blankPage", "Blank Page", "Insert › Pages", |s, _| {
             type_text(s, "\u{000C}")?;
             let at = s.sel.focus.clone();
