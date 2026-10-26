@@ -334,24 +334,14 @@ pub fn thai_input_action(
                 };
             }
 
-            // Nikhahit (◌ํ) typed after Sara_I or Sara_II fuses into Sara_UE / Sara_UEE.
-            // Any slot-2 character (tone/karan/diac) that follows the vowel stays in place.
-            //   [cons, Sara_I]        + ◌ํ → [cons, ◌ึ]
-            //   [cons, Sara_I, Tone]  + ◌ํ → [cons, ◌ึ, Tone]
-            //   [cons, Sara_II]       + ◌ํ → [cons, ◌ื]
-            //   [cons, Sara_II, Tone] + ◌ํ → [cons, ◌ื, Tone]
-            if new_char == NIKHAHIT {
-                if let Some(&(sara_off, sara_ch)) =
-                    tcb.iter().find(|(_, c)| *c == SARA_I || *c == SARA_II)
-                {
-                    let fused = if sara_ch == SARA_I { SARA_UE } else { SARA_UEE };
-                    return ThaiInputAction::Replace {
-                        slot_offset: sara_off,
-                        slot_bytes: sara_ch.len_utf8(),
-                        cons_swap: None,
-                        replacement: Some(fused),
-                    };
-                }
+            // Nikhahit (◌ํ) typed after Sara_I or Sara_II: Accept and append.
+            // The document stores the sequence as-is; the renderer maps
+            //   ◌ิ + ◌ํ → ◌ึ glyph  and  ◌ี + ◌ํ → ◌ื glyph at display time.
+            // (Same principle as Thai short-tail PUA substitution — render-only.)
+            if new_char == NIKHAHIT
+                && tcb.iter().any(|(_, c)| *c == SARA_I || *c == SARA_II)
+            {
+                return ThaiInputAction::Accept;
             }
 
             // Pali marks cannot co-exist with vowels, tone, diacritics, karan, or sara_am.
@@ -943,38 +933,12 @@ mod tests {
         assert_eq!(action("ก", nikhahit), ThaiInputAction::Accept);
         assert_eq!(action("ก", phinthu), ThaiInputAction::Accept);
 
-        // ── Nikhahit after Sara_I / Sara_II fuses into Sara_UE / Sara_UEE ──────────
-        let sara_ii   = '\u{0E35}'; // ี  sara ii (upper vowel)
-        let sara_ue   = '\u{0E36}'; // ึ  sara ue
-        let sara_uee  = '\u{0E37}'; // ื  sara uee
-
-        // กิ + ํ → replace ิ with ึ at offset 3 (fuse: Sara_I + Nikhahit = Sara_UE)
-        match action("กิ", nikhahit) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
-                if r == sara_ue => {}
-            other => panic!("nikhahit after sara_i must fuse to sara_ue, got {other:?}"),
-        }
-
-        // กิ้ + ํ → replace ิ(3,3) with ึ; tone ้ at offset 6 stays untouched
-        match action("กิ้", nikhahit) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
-                if r == sara_ue => {}
-            other => panic!("nikhahit after sara_i+tone must fuse sara_i→sara_ue, keep tone; got {other:?}"),
-        }
-
-        // กี + ํ → replace ี with ื at offset 3 (Sara_II fuses to Sara_UEE)
-        match action("กี", nikhahit) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
-                if r == sara_uee => {}
-            other => panic!("nikhahit after sara_ii must fuse to sara_uee, got {other:?}"),
-        }
-
-        // กี้ + ํ → replace ี with ื, keep ้
-        match action("กี้", nikhahit) {
-            ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: Some(r) }
-                if r == sara_uee => {}
-            other => panic!("nikhahit after sara_ii+tone must fuse sara_ii→sara_uee, keep tone; got {other:?}"),
-        }
+        // ── Nikhahit after Sara_I / Sara_II → Accept (store as-is; render layer handles display) ─
+        // The document keeps ◌ิ + ◌ํ  or  ◌ี + ◌ํ; the renderer maps them to ◌ึ / ◌ื glyphs.
+        assert_eq!(action("กิ",  nikhahit), ThaiInputAction::Accept);  // [cons, Sara_I] + ํ
+        assert_eq!(action("กิ้", nikhahit), ThaiInputAction::Accept);  // [cons, Sara_I, Tone] + ํ
+        assert_eq!(action("กี",  nikhahit), ThaiInputAction::Accept);  // [cons, Sara_II] + ํ
+        assert_eq!(action("กี้", nikhahit), ThaiInputAction::Accept);  // [cons, Sara_II, Tone] + ํ
 
         // ── Pali mark after other upper/lower vowels → replaces vowel (and any tone/diac) ─
         // กั = ก(0) + ั(3); nikhahit must delete ั (3 bytes) and insert nikhahit at 3
@@ -988,8 +952,6 @@ mod tests {
             ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 6, cons_swap: None, replacement: None } => {}
             other => panic!("phinthu must replace vowel+diac (6 B) at 3, got {other:?}"),
         }
-
-        let _ = (sara_ii, sara_ue, sara_uee);
 
         // ก้ = ก(0) + ้(3) (tone with no vowel); pali mark replaces tone
         match action("ก้", nikhahit) {
