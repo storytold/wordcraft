@@ -509,18 +509,24 @@ impl Writer<'_> {
             InlineObject::CommentStart { id } => {
                 if self.doc.comments.contains_key(id) {
                     w.empty("w:commentRangeStart", &[("w:id", &id.to_string())]);
+                    for reply in self.unanchored_replies.get(id).into_iter().flatten() {
+                        w.empty("w:commentRangeStart", &[("w:id", &reply.to_string())]);
+                    }
                 }
             }
             InlineObject::CommentEnd { id } => {
                 if self.doc.comments.contains_key(id) {
-                    let s = id.to_string();
-                    w.empty("w:commentRangeEnd", &[("w:id", &s)]);
-                    w.open("w:r", &[]);
-                    w.open("w:rPr", &[]);
-                    w.val("w:rStyle", comment_reference_style(self.doc));
-                    w.close("w:rPr");
-                    w.empty("w:commentReference", &[("w:id", &s)]);
-                    w.close("w:r");
+                    let replies = self.unanchored_replies.get(id).cloned().unwrap_or_default();
+                    for id in std::iter::once(*id).chain(replies) {
+                        let s = id.to_string();
+                        w.empty("w:commentRangeEnd", &[("w:id", &s)]);
+                        w.open("w:r", &[]);
+                        w.open("w:rPr", &[]);
+                        w.val("w:rStyle", comment_reference_style(self.doc));
+                        w.close("w:rPr");
+                        w.empty("w:commentReference", &[("w:id", &s)]);
+                        w.close("w:r");
+                    }
                 }
             }
             InlineObject::Equation { linear, display, math } => {

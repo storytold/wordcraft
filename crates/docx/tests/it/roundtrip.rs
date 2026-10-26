@@ -536,7 +536,16 @@ fn comments_round_trip() {
     p.insert_object(end, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
     d.body = vec![para_block(p.clone())];
     let r = rt(&d);
-    assert_eq!(paras(&r)[0].objects, p.objects);
+    // The reply made here is written with its parent's anchors, as Word saves a reply (Word for
+    // Mac drops a reply without them), and comes back with them; a second save keeps them as they are.
+    let anchored = [
+        InlineObject::CommentStart { id: 0 },
+        InlineObject::CommentStart { id: 1 },
+        InlineObject::CommentEnd { id: 0 },
+        InlineObject::CommentEnd { id: 1 },
+    ];
+    assert_eq!(paras(&r)[0].objects, anchored);
+    assert_eq!(paras(&rt(&r))[0].objects, anchored);
     assert_eq!(r.comments.len(), 2);
     for (id, c) in &d.comments {
         let g = r.comments.get(id).expect("comment");
@@ -544,6 +553,35 @@ fn comments_round_trip() {
         assert_eq!(part_text(&r, Some(g.part)), part_text(&d, Some(c.part)));
         assert_eq!(r.parts.get(&g.part).unwrap().kind, PartKind::Comment);
     }
+}
+
+/// A reply to a reply made here (neither has anchors yet) takes the thread's anchors too, so Word
+/// shows both.
+#[test]
+fn a_reply_to_a_new_reply_is_anchored_too() {
+    let mut d = Document::new();
+    for (id, parent, text) in [(0, None, "Please check this."), (1, Some(0), "Done."), (2, Some(1), "Thanks.")] {
+        let part = d.add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, CharProps::default()))]);
+        d.comments.insert(id, Comment { author: "Ann".into(), initials: "A".into(), parent, part, ..Default::default() });
+    }
+    let mut p = Paragraph::with_text("commented text", CharProps::default());
+    p.insert_object(0, InlineObject::CommentStart { id: 0 }, &CharProps::default()).unwrap();
+    let end = p.len();
+    p.insert_object(end, InlineObject::CommentEnd { id: 0 }, &CharProps::default()).unwrap();
+    d.body = vec![para_block(p)];
+    let r = rt(&d);
+    assert_eq!(
+        paras(&r)[0].objects,
+        [
+            InlineObject::CommentStart { id: 0 },
+            InlineObject::CommentStart { id: 1 },
+            InlineObject::CommentStart { id: 2 },
+            InlineObject::CommentEnd { id: 0 },
+            InlineObject::CommentEnd { id: 1 },
+            InlineObject::CommentEnd { id: 2 },
+        ]
+    );
+    assert_eq!(r.comments.get(&2).and_then(|c| c.parent), Some(1));
 }
 
 /// A table style's cell text formatting, whole-table shading, cell margins and its header row and
