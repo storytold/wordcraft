@@ -139,7 +139,7 @@ document beside the ones already open and make it the active one; their reply ca
 active again (`alreadyOpen`). `list_documents` lists the open documents with their ids.
 
 Tools work on the active document. `execute`, `batch`, `type_text`, `select_text`, `get_text`,
-`inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
+`insert_table`, `inspect_document`, `render_page` and `save_document` also take `doc`, the id of another open
 document: the tool works on that document and the active one stays active.
 
 ```json
