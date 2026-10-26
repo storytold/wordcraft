@@ -440,7 +440,10 @@ impl<'e> Breaker<'e> {
             ex.asc = ex.asc.max(a);
             ex.desc = ex.desc.max(d);
             any = true;
-            ex.text |= !matches!(c.kind, ClKind::Object(_));
+            // Text needs its descent below the line; so does inline math (an object with its own
+            // descent). A line break ending the line is no text.
+            let math = pl.maths.iter().any(|(k, _)| c.kind == ClKind::Object(*k));
+            ex.text |= math || !matches!(c.kind, ClKind::Object(_) | ClKind::LineBreak | ClKind::PageBreak | ClKind::ColumnBreak);
         }
         if (!any || (ex.asc == 0.0 && ex.desc == 0.0))
             && let Some(st) = pl.styles.get(self.mark_style as usize)

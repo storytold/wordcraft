@@ -12862,6 +12862,17 @@ fn a_line_of_only_pictures_takes_no_descent() {
     }
     let (h, base, desc) = line_of("Text ");
     assert!((h - (30.0 + desc)).abs() < 0.01 && (base - 30.0).abs() < 0.01, "with text: line {h}, baseline {base}");
+    // A line break ending the picture's line is no text.
+    let mut d = Document::from_text("");
+    if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(std::sync::Arc::make_mut) {
+        p.props.line_spacing = Some(LineSpacing::Multiple(1.0));
+        p.insert_object(0, picture(60.0, 30.0, Default::default()), &Default::default()).unwrap();
+        let at = p.len();
+        p.insert_text(at, &format!("{}Next", wordcraft_doc::para::LINE_BREAK), &Default::default()).unwrap();
+    }
+    let l = lay(&d);
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
+    assert!(para.lines.len() == 2 && (para.lines[0].height - 30.0).abs() < 0.01, "picture, then a line break: {}", para.lines[0].height);
 }
 
 /// A kept-together paragraph starting a continuous section low on a page, with room there for
