@@ -105,7 +105,12 @@ while ($true) {
         $out.WriteLine('done ' + $speaking)
         $speaking = $null
     }
-    Start-Sleep -Milliseconds 15
+    if ($null -eq $speaking -and $null -eq $stopId) {
+        # Nothing is speaking: wait for the next command instead of polling.
+        try { [void]$task.Wait() } catch { break }
+    } else {
+        Start-Sleep -Milliseconds 15
+    }
 }
 $synth.Dispose()
 "#;
