@@ -878,7 +878,11 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
             continue;
         }
         let mut n = 1;
-        while chars.get(i + n) == Some(&c) {
+        while chars.get(i + n).copied().is_some_and(|ch| match c {
+            'y' | 'Y' => ch == 'y' || ch == 'Y',
+            'd' | 'D' => ch == 'd' || ch == 'D',
+            _ => ch == c,
+        }) {
             n += 1;
         }
         match (c, n) {
@@ -1428,5 +1432,24 @@ mod tests {
         assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
         assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
         assert_eq!(date_picture("DATE"), None);
+
+        // #3486: Uppercase D and Y in date pictures
+        use super::format_date_parts;
+        assert_eq!(format_date_parts("YYYY-MM-DD", 2026, 10, 21, (0, 0, 0), 0), "2026-10-21");
+        assert_eq!(format_date_parts("D MMMM YYYY", 2026, 10, 21, (0, 0, 0), 0), "21 October 2026");
+        assert_eq!(format_date_parts("DD/MM/YY", 2026, 10, 21, (0, 0, 0), 0), "21/10/26");
+        assert_eq!(format_date_parts("Yyyy-MM-Dd", 2026, 10, 7, (0, 0, 0), 0), "2026-10-07");
+        assert_eq!(format_date_parts("DDDD", 2026, 10, 22, (0, 0, 0), 0), "Thursday");
+        assert_eq!(format_date_parts("DDD", 2026, 10, 22, (0, 0, 0), 0), "Thu");
+    }
+
+    #[test]
+    fn insert_date_time_uppercase_d_and_y() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("insert.dateTime", &serde_json::json!({"format": "MM/DD/YYYY"})).unwrap();
+        let p = s.doc.para(StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+        assert!(!p.text.contains("DD"), "text should format day: {}", p.text);
+        assert!(!p.text.contains("YYYY"), "text should format year: {}", p.text);
+        assert_eq!(p.text.matches('/').count(), 2);
     }
 }
