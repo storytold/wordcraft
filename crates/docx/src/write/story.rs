@@ -1432,7 +1432,15 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             ],
         );
         if let Some(b) = &s.page_borders {
-            borders(w, "w:pgBorders", b, None, &[("w:offsetFrom", "text")]);
+            let mut a = Vec::new();
+            if let Some(d) = &s.page_borders_display {
+                a.push(("w:display", d.as_str()));
+            }
+            a.push(("w:offsetFrom", if s.page_borders_from_text { "text" } else { "page" }));
+            if let Some(z) = &s.page_borders_z_order {
+                a.push(("w:zOrder", z.as_str()));
+            }
+            borders(w, "w:pgBorders", b, None, &a);
         }
         if let Some(l) = &s.line_numbers {
             let restart = match l.restart {
