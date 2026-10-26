@@ -1,6 +1,35 @@
-//! Thai number-to-words (บาท/สตางค์) for the BAHTTEXT field and `\* BahtText` format switch.
+//! Thai number formatting for fields and format switches:
+//!
+//! - `\* BahtText` / `{ BAHTTEXT … }` — number in Thai Baht words (บาทถ้วน / สตางค์)
+//! - `\* ThaiNumbers` — traditional Thai numeral glyphs (๐–๙ replacing 0–9)
+//! - `\* ThaiCounting` — number spelled out as Thai counting words (สิบสอง for 12)
 //!
 //! Ported from the gridcraft `BAHTTEXT` function; the algorithm is identical.
+
+/// Thai numeral glyphs U+0E50–U+0E59 (๐๑๒๓๔๕๖๗๘๙), indexed by digit value 0–9.
+const THAI_GLYPH_DIGITS: [char; 10] = ['๐', '๑', '๒', '๓', '๔', '๕', '๖', '๗', '๘', '๙'];
+
+/// Replace every ASCII digit in `s` with its Thai numeral glyph; all other characters pass through.
+fn digits_to_thai(s: &str) -> String {
+    s.chars()
+        .map(|c| match c.to_digit(10) {
+            Some(d) => THAI_GLYPH_DIGITS.get(d as usize).copied().unwrap_or(c),
+            None => c,
+        })
+        .collect()
+}
+
+/// Traditional Thai numeral glyphs for `n`.
+/// Each decimal digit of `n` is replaced by its Thai glyph (1 → ๑, 12 → ๑๒, 0 → ๐).
+pub(crate) fn thai_digits(n: u32) -> String {
+    digits_to_thai(&n.to_string())
+}
+
+/// Thai counting words for integer `n` (สิบสอง for 12, ศูนย์ for 0).
+/// Used by `\* ThaiCounting` and page/list numbering with `NumFormat::ThaiCounting`.
+pub(crate) fn thai_counting_int(n: u32) -> String {
+    thai_number(&n.to_string())
+}
 
 const THAI_DIGITS: [&str; 10] = ["ศูนย์", "หนึ่ง", "สอง", "สาม", "สี่", "ห้า", "หก", "เจ็ด", "แปด", "เก้า"];
 /// Units, tens, hundreds, thousands, ten thousands, hundred thousands.
@@ -158,6 +187,33 @@ pub(crate) fn baht_text_f64(x: f64) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thai_digits_cases() {
+        assert_eq!(thai_digits(0), "๐");
+        assert_eq!(thai_digits(1), "๑");
+        assert_eq!(thai_digits(9), "๙");
+        assert_eq!(thai_digits(12), "๑๒");
+        assert_eq!(thai_digits(100), "๑๐๐");
+        assert_eq!(thai_digits(1234), "๑๒๓๔");
+        assert_eq!(thai_digits(u32::MAX), digits_to_thai(&u32::MAX.to_string()));
+    }
+
+    #[test]
+    fn thai_counting_int_cases() {
+        assert_eq!(thai_counting_int(0),    "ศูนย์");
+        assert_eq!(thai_counting_int(1),    "หนึ่ง");
+        assert_eq!(thai_counting_int(10),   "สิบ");
+        assert_eq!(thai_counting_int(11),   "สิบเอ็ด");
+        assert_eq!(thai_counting_int(12),   "สิบสอง");
+        assert_eq!(thai_counting_int(20),   "ยี่สิบ");
+        assert_eq!(thai_counting_int(21),   "ยี่สิบเอ็ด");
+        assert_eq!(thai_counting_int(100),  "หนึ่งร้อย");
+        assert_eq!(thai_counting_int(101),  "หนึ่งร้อยเอ็ด");
+        assert_eq!(thai_counting_int(1000), "หนึ่งพัน");
+        assert_eq!(thai_counting_int(1234), "หนึ่งพันสองร้อยสามสิบสี่");
+        assert_eq!(thai_counting_int(1_000_000), "หนึ่งล้าน");
+    }
 
     #[test]
     fn baht_text_f64_cases() {

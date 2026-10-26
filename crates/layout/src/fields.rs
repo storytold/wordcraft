@@ -170,6 +170,8 @@ pub fn format_switch(instr: &str) -> Option<NumFormat> {
                 v if v.eq_ignore_ascii_case("ChineseNum2") => NumFormat::ChineseLegalSimplified,
                 v if v.eq_ignore_ascii_case("ChineseNum3") => NumFormat::IdeographDigital,
                 v if v.eq_ignore_ascii_case("BahtText") => NumFormat::BahtText,
+                v if v.eq_ignore_ascii_case("ThaiNumbers") => NumFormat::ThaiNumbers,
+                v if v.eq_ignore_ascii_case("ThaiCounting") => NumFormat::ThaiCounting,
                 _ => continue,
             };
             return Some(fmt);
