@@ -184,8 +184,9 @@ pub struct SavedPane {
     /// `[x, y, width, height]` of the floating pane, also kept while it is docked.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub float: Option<[f32; 4]>,
-    /// The docked width this run; like the Styles pane's, not kept between runs.
-    #[serde(skip)]
+    /// The docked width, kept between runs (#2571): the pane opens as wide as it was left.
+    /// Clamped on load, so a damaged file cannot make a pane fill the window.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<f32>,
 }
 
@@ -212,7 +213,11 @@ pub(crate) fn lenient_places<'de, D: serde::Deserializer<'de>>(d: D) -> Result<B
         .filter(|pane| **pane != Pane::Styles)
         .filter_map(|pane| {
             let saved = map.get(pane.key())?;
-            let place = SavedPane { dock: saved.get("dock").and_then(dock), float: saved.get("float").and_then(float_rect), width: None };
+            let place = SavedPane {
+                dock: saved.get("dock").and_then(dock),
+                float: saved.get("float").and_then(float_rect),
+                width: saved.get("width").and_then(number).map(pane_width),
+            };
             Some((pane.key().to_string(), place))
         })
         .collect())
@@ -224,6 +229,33 @@ pub(crate) fn float_rect(v: &Value) -> Option<[f32; 4]> {
     let [x, y, w, h] = v.as_array().map(Vec::as_slice)? else { return None };
     let n = |v: &Value| v.as_f64().map(|n| n as f32).filter(|n| n.is_finite());
     n(x).zip(n(y)).zip(n(w)).zip(n(h)).map(|(((x, y), w), h)| [x, y, w, h])
+}
+
+/// A finite number as an `f32`.
+fn number(v: &Value) -> Option<f32> {
+    v.as_f64().map(|n| n as f32).filter(|n| n.is_finite())
+}
+
+/// A docked pane's width, clamped to the range a pane may take: a damaged or hand-edited
+/// `ui.json` cannot give a pane the whole window or no room at all.
+pub(crate) fn pane_width(w: f32) -> f32 {
+    w.clamp(MIN_PANE_WIDTH, MAX_PANE_WIDTH)
+}
+
+/// The narrowest and widest a docked task pane may be, points (≈ 1.7 in to 16.7 in).
+pub(crate) const MIN_PANE_WIDTH: f32 = 96.0;
+pub(crate) const MAX_PANE_WIDTH: f32 = 1200.0;
+
+/// `stylesPaneWidth` as saved: a width outside the range is clamped, not the whole file dropped.
+pub(crate) fn lenient_width<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<f32>, D::Error> {
+    let v = <Value as serde::Deserialize>::deserialize(d)?;
+    Ok(match v {
+        Value::Null => None,
+        // An unreadable width (`1e40` overflows an f32) is dropped, not clamped: the pane then
+        // opens at its default, as with a missing key.
+        Value::Number(n) => n.as_f64().map(|n| n as f32).filter(|w| w.is_finite()).map(pane_width),
+        _ => None,
+    })
 }
 
 /// A pane's place and size: Styles' from `view.stylesPaneDock` and its own preferences, the
@@ -240,7 +272,7 @@ fn pane_state(app: &WordApp, pane: Pane) -> PaneState {
         Some(SavedDock::Float) => Place::Floating,
         None => default.place,
     };
-    PaneState { place, size: saved.width.or(default.size), float_rect: saved.float }
+    PaneState { place, size: saved.width.map(pane_width).or(default.size), float_rect: saved.float }
 }
 
 /// The Styles pane's place and size, from `view.stylesPaneDock` and the UI preferences (#1756).
@@ -250,7 +282,7 @@ fn styles_state(app: &WordApp) -> PaneState {
         StylesPaneDock::Left => Place::Docked(Edge::Start),
         StylesPaneDock::Floating => Place::Floating,
     };
-    PaneState { place, size: app.ui.styles_pane_width.or(Pane::Styles.default_state().size), float_rect: app.ui.styles_pane_float }
+    PaneState { place, size: app.ui.styles_pane_width.map(pane_width).or(Pane::Styles.default_state().size), float_rect: app.ui.styles_pane_float }
 }
 
 fn labels() -> PaneLabels {
@@ -1328,6 +1360,33 @@ mod tests {
                 assert!(!h.state().canvas.focused && h.state().dialog.is_some(), "panes open: {panes}, shift: {shift}");
             }
         }
+    }
+
+    /// #2571: the docked widths — the Navigation pane's among them — are saved with the other
+    /// preferences and come back on the next run.
+    #[test]
+    fn pane_widths_are_kept_between_runs() {
+        let mut app = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+        app.ui.pane_places.entry(Pane::Navigation.key().into()).or_default().width = Some(320.0);
+        app.ui.styles_pane_width = Some(280.0);
+        let saved = serde_json::to_vec(&app.prefs()).expect("the preferences serialize");
+
+        let mut next = crate::WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("")), crate::Services::default());
+        next.apply_prefs(crate::UiState::from_json(&saved).expect("the saved preferences"));
+        assert_eq!(super::pane_state(&next, Pane::Navigation).size, Some(320.0), "the Navigation pane's width");
+        assert_eq!(super::styles_state(&next).size, Some(280.0), "the Styles pane's width");
+    }
+
+    /// A damaged or hand-edited width is clamped (or dropped), so a pane never takes the window.
+    #[test]
+    fn hostile_pane_widths_are_clamped() {
+        let ui = crate::UiState::from_json(br#"{"panePlaces":{"navigation":{"width":1e9},"comments":{"width":-20}},"stylesPaneWidth":50000}"#)
+            .expect("the preferences");
+        assert_eq!(ui.pane_places["navigation"].width, Some(super::MAX_PANE_WIDTH));
+        assert_eq!(ui.pane_places["comments"].width, Some(super::MIN_PANE_WIDTH));
+        assert_eq!(ui.styles_pane_width, Some(super::MAX_PANE_WIDTH), "a huge but readable width");
+        let overflow = crate::UiState::from_json(br#"{"stylesPaneWidth":1e40}"#).expect("the preferences");
+        assert_eq!(overflow.styles_pane_width, None, "a width that overflows f32 is dropped");
     }
 
     /// Ctrl and F-key shortcuts run while F6 has put the keyboard on a pane's title bar; a pane's

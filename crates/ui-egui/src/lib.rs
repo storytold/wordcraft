@@ -301,8 +301,8 @@ pub struct UiState {
     /// The floating Styles pane's `[x, y, width, height]`, also kept while it is docked.
     #[serde(deserialize_with = "lenient_float_rect")]
     pub styles_pane_float: Option<[f32; 4]>,
-    /// The docked Styles pane's width this run; like the other panes' widths, not kept between runs.
-    #[serde(skip)]
+    /// The docked Styles pane's width, kept between runs like the other panes' widths (#2571).
+    #[serde(default, deserialize_with = "panes::lenient_width", skip_serializing_if = "Option::is_none")]
     pub styles_pane_width: Option<f32>,
     /// Where each of the other task panes sits, by [`panes::Pane::key`] (#1756).
     #[serde(deserialize_with = "panes::lenient_places")]
