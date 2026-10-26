@@ -113,7 +113,9 @@ fn context(ui: &mut Ui, app: &mut WordApp, form: &mut SpellingForm, spelling: bo
             let marked = egui::TextFormat { underline: Stroke::new(1.0, if spelling { t.red } else { t.blue }), ..format.clone() };
             job.append(form.issue.get("text").and_then(Value::as_str).unwrap_or(""), 0.0, marked);
             job.append(&form.context_after, 0.0, format);
-            ui.allocate_ui_with_layout(vec2((ui.available_width() - 36.0).max(20.0), 30.0), egui::Layout::top_down(Align::Min), |ui| {
+            let text_width = (ui.available_width() - 36.0).max(20.0);
+            ui.allocate_ui_with_layout(vec2(text_width, 30.0), egui::Layout::top_down(Align::Min), |ui| {
+                ui.set_min_width(text_width);
                 ui.add(egui::Label::new(job).wrap());
             });
             let (rect, response) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
