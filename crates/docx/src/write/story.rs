@@ -1413,11 +1413,15 @@ fn sectpr_body(w: &mut W, s: &SectionProps) {
             SectionStart::NextColumn => "nextColumn",
         };
         w.val("w:type", start);
-        let (pw, ph) = (s.page_w.clamp(36.0, crate::units::MAX_LEN_PT), s.page_h.clamp(36.0, crate::units::MAX_LEN_PT));
+        // A page may be up to 600 cm (LibreOffice's custom size): the size goes into the file as
+        // it is, so WordCraft and Writer read it back. Word itself stops at 22" when it opens the
+        // file — a Word limit, shown in the app's save note, not something to truncate here.
+        let page_side = |v: f32| v.clamp(36.0, wordcraft_doc::section::MAX_PAGE_SIDE);
+        let (pw, ph) = (page_side(s.page_w), page_side(s.page_h));
         if s.landscape {
-            w.empty("w:pgSz", &[("w:w", &twips(pw)), ("w:h", &twips(ph)), ("w:orient", "landscape")]);
+            w.empty("w:pgSz", &[("w:w", &crate::units::twips_page(pw)), ("w:h", &crate::units::twips_page(ph)), ("w:orient", "landscape")]);
         } else {
-            w.empty("w:pgSz", &[("w:w", &twips(pw)), ("w:h", &twips(ph))]);
+            w.empty("w:pgSz", &[("w:w", &crate::units::twips_page(pw)), ("w:h", &crate::units::twips_page(ph))]);
         }
         w.empty(
             "w:pgMar",

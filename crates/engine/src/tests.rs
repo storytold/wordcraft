@@ -2635,7 +2635,11 @@ fn layout_size_takes_a_custom_size_and_clamps_it() {
     assert_eq!(size(&s), (300.0, 500.0));
     run(&mut s, "layout.margins", json!({"top": 0.0, "bottom": 0.0, "left": 0.0, "right": 0.0}));
     run(&mut s, "layout.size", json!({"width": 40.0, "height": 5000.0}));
-    assert_eq!(size(&s), (40.0, 1584.0), "clamped to 22\"");
+    // A 600 cm page is a real page now: 5000 pt stays, and only past the model's maximum is it
+    // clamped.
+    assert_eq!(size(&s), (40.0, 5000.0), "5000 pt is under 600 cm");
+    run(&mut s, "layout.size", json!({"width": 40.0, "height": 1e6}));
+    assert_eq!(size(&s), (40.0, wordcraft_doc::section::MAX_PAGE_SIDE), "clamped to 600 cm");
     for junk in [
         json!({"width": 1e300, "height": 400.0}),
         json!({"width": "NaN", "height": 400.0}),
@@ -2646,7 +2650,7 @@ fn layout_size_takes_a_custom_size_and_clamps_it() {
         json!({"width": 1.0, "height": 400.0}),
     ] {
         assert!(s.run("layout.size", &junk).is_err(), "{junk}");
-        assert_eq!(size(&s), (40.0, 1584.0), "{junk} leaves the size alone");
+        assert_eq!(size(&s), (40.0, wordcraft_doc::section::MAX_PAGE_SIDE), "{junk} leaves the size alone");
     }
     // A landscape section keeps its orientation: the long side goes across.
     run(&mut s, "layout.orientation", json!({"value": "landscape"}));

@@ -408,7 +408,7 @@ pub fn columns_preset_at(s: &Session) -> Option<&'static str> {
 /// Checks a whole section handed to `layout.pageSetup` by the rules of Size, Margins, Columns,
 /// Line Numbers, Footnotes and Page Borders: a non-finite number or margins that leave no room
 /// for text is an error; the rest is clamped to the ranges those commands use.
-fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
+pub(crate) fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
     let bad = |what: &str| CmdError::Params(format!("section: {what} must be a finite number"));
     let finite = [x.page_w, x.page_h, x.margin_top, x.margin_bottom, x.margin_left, x.margin_right, x.header, x.footer, x.gutter, x.columns.space];
     if finite.iter().any(|n| !n.is_finite()) {
@@ -542,9 +542,11 @@ pub fn margins_fit(page: (f32, f32), (t, b, l, r): (f32, f32, f32, f32), gutter:
     l + r + gutter <= page.0 - MIN_TEXT_ROOM && t + b <= page.1 - MIN_TEXT_ROOM
 }
 
-/// The smallest and largest page side, points (0.1" and 22", as Word allows).
+/// The smallest page side, points (0.1", as Word allows).
 pub const MIN_PAGE_SIDE: f32 = 7.2;
-pub const MAX_PAGE_SIDE: f32 = 1584.0;
+/// The largest page side, points: 600 cm (LibreOffice's custom page limit), so a Writer document
+/// with a 600 cm page keeps its height. Word's own 22" limit only matters when Word opens it.
+pub const MAX_PAGE_SIDE: f32 = wordcraft_doc::section::MAX_PAGE_SIDE;
 
 fn size(s: &mut Session, v: &Value) -> CmdResult {
     let (w, h) = if let Some(n) = p::str(v, "name") {
@@ -779,6 +781,37 @@ mod tests {
         json!({"section": v})
     }
 
+    /// A 600 cm page (LibreOffice's custom size) is a real page: accepted as-is by the model and
+    /// by `layout.pageSetup`; only a value beyond the maximum is clamped.
+    #[test]
+    fn a_six_hundred_centimetre_page_is_accepted() {
+        let cm = 72.0 / 2.54;
+        let mut s = doc();
+        let tall = cm * 600.0;
+        s.run(
+            "layout.pageSetup",
+            &with_section(|v| {
+                v["pageW"] = json!(cm * 19.0);
+                v["pageH"] = json!(tall);
+                v["marginTop"] = json!(11.34);
+                v["marginBottom"] = json!(11.34);
+                v["marginLeft"] = json!(11.34);
+                v["marginRight"] = json!(11.34);
+            }),
+        )
+        .unwrap();
+        let got = sect(&s);
+        assert!((got.page_h - tall).abs() < 0.01, "600 cm kept: {}", got.page_h);
+        assert!((got.page_w - cm * 19.0).abs() < 0.01, "the width is untouched");
+
+        // Just past the maximum: clamped to it, not kept and not refused.
+        s.run("layout.pageSetup", &with_section(|v| v["pageH"] = json!(tall + 50.0))).unwrap();
+        assert_eq!(sect(&s).page_h, wordcraft_doc::section::MAX_PAGE_SIDE);
+        // Junk is still refused.
+        assert!(s.run("layout.pageSetup", &with_section(|v| v["pageH"] = json!(f64::INFINITY))).is_err());
+        assert!(s.run("layout.pageSetup", &with_section(|v| v["pageH"] = json!(-1.0))).is_err());
+    }
+
     /// `layout.pageSetup {section}` checks the values like the dedicated commands do.
     #[test]
     fn page_setup_section_is_validated() {
@@ -860,7 +893,7 @@ mod tests {
         )
         .unwrap();
         let x = sect(&s);
-        assert_eq!(x.page_w, 1584.0);
+        assert_eq!(x.page_w, wordcraft_doc::section::MAX_PAGE_SIDE, "clamped to 600 cm");
         assert!(x.landscape, "wider than tall is landscape");
         assert_eq!(x.columns.widths.len(), 12);
         assert_eq!(x.columns.count, 12, "the count follows the widths");

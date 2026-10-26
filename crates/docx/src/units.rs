@@ -9,6 +9,12 @@ pub const MAX_LEN_PT: f32 = 14_400.0;
 /// `3mm`, `1pc`, `1pi`). `per_pt` is how many file units make a point when there's no unit
 /// suffix (20 for twips, 2 for half-points, 8 for eighths, 12700 for EMU). Returns points.
 pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
+    measure_capped(s, per_pt, MAX_LEN_PT)
+}
+
+/// `measure` with an explicit cap, for the few measures that may exceed a normal length: a page
+/// side goes up to 600 cm (LibreOffice's custom size), past the 200" bound of other lengths.
+fn measure_capped(s: &str, per_pt: f32, cap: f32) -> Option<f32> {
     let t = s.trim();
     if t.is_empty() || t.len() > 40 {
         return None;
@@ -57,7 +63,17 @@ pub fn measure(s: &str, per_pt: f32) -> Option<f32> {
         _ => return None,
     };
     let pt = pt as f32;
-    pt.is_finite().then_some(pt.clamp(-MAX_LEN_PT, MAX_LEN_PT))
+    pt.is_finite().then_some(pt.clamp(-cap, cap))
+}
+
+/// `w:pgSz`'s `w:w`/`w:h`: a page side, up to 600 cm.
+pub fn tw_page(e: &El, attr: &str) -> Option<f32> {
+    e.attr(attr).and_then(|v| measure_capped(v, 20.0, wordcraft_doc::section::MAX_PAGE_SIDE))
+}
+
+/// Twips for a page side, which may be 600 cm — beyond [`twips`]'s 200" bound.
+pub fn twips_page(pt: f32) -> String {
+    wordcraft_geom::to_twips(pt.clamp(-wordcraft_doc::section::MAX_PAGE_SIDE, wordcraft_doc::section::MAX_PAGE_SIDE)).to_string()
 }
 
 /// `w:line` under `lineRule="auto"`: the multiple of single line spacing, in 240ths (240 =

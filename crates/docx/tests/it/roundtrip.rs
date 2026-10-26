@@ -14,6 +14,19 @@ use wordcraft_doc::styles::{Style, StyleKind};
 use wordcraft_doc::table::{Cell, Table};
 use wordcraft_doc::{Block, Blocks, Comment, Document, InlineObject, Paragraph, PartKind, Revision, RevisionKind, Source, Watermark, para_block};
 
+/// A 600 cm page (LibreOffice's custom size) goes through DOCX too: Word's own 22" limit is a
+/// Word limit, not WordCraft's, and WordCraft must read back what it wrote.
+#[test]
+fn a_six_hundred_centimetre_page_roundtrips() {
+    let cm = 72.0 / 2.54;
+    let mut d = Document::from_text("Body");
+    d.last_section.page_w = cm * 19.0;
+    d.last_section.page_h = cm * 600.0;
+    let back = rt(&d);
+    assert!((back.last_section.page_h - cm * 600.0).abs() < 0.5, "{}", back.last_section.page_h);
+    assert!((back.last_section.page_w - cm * 19.0).abs() < 0.5);
+}
+
 fn rt(doc: &Document) -> Document {
     let bytes = wordcraft_docx::write(doc).expect("write");
     wordcraft_docx::read(&bytes).expect("read")

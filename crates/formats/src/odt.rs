@@ -24,7 +24,7 @@ use std::sync::Arc;
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
 use wordcraft_doc::props::VAlign;
-use wordcraft_doc::section::{Columns, SectionStart};
+use wordcraft_doc::section::{Columns, MAX_PAGE_SIDE, SectionStart};
 use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
 
 use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img, mime_of};
@@ -2717,9 +2717,10 @@ fn apply_page_layout(xml: &[u8], sec: &mut SectionProps) {
 /// A `style:page-layout-properties` element's page size, orientation and margins into `sec`.
 fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
     let len = |k: &str| get(a, k).and_then(length).filter(|v| *v >= 0.0);
-    // Like the DOCX reader: a page is at least half an inch; at most 22 inches (Word's limit), so a hostile
-    // `1e30pt` can't reach layout.
-    let page = |k: &str| len(k).filter(|v| *v >= 36.0).map(|v| v.min(1584.0));
+    // Like the DOCX reader: a page is at least half an inch; at most 600 cm (the model's limit,
+    // LibreOffice's custom size), so a hostile `1e30pt` can't reach layout but a Writer page of
+    // 600 cm still opens instead of being truncated to Word's 22 inches.
+    let page = |k: &str| len(k).filter(|v| *v >= 36.0).map(|v| v.min(MAX_PAGE_SIDE));
     if let (Some(w), Some(h)) = (page("fo:page-width"), page("fo:page-height")) {
         sec.page_w = w;
         sec.page_h = h;
@@ -3033,11 +3034,13 @@ mod tests {
                 </office:document-styles>"#
             )
         };
-        // Huge values: the page is capped at 22 inches and margins at the page's longer side.
+        // Huge values: the page is capped at the model's 600 cm and margins at the page's
+        // longer side.
+        let max = wordcraft_doc::section::MAX_PAGE_SIDE;
         let mut sec = wordcraft_doc::SectionProps::default();
         apply_page_layout(styles("1e30pt", "1e30in", "1e30pt").as_bytes(), &mut sec);
-        assert_eq!((sec.page_w, sec.page_h), (1584.0, 1584.0));
-        assert_eq!((sec.margin_top, sec.margin_left), (1584.0, 1584.0));
+        assert_eq!((sec.page_w, sec.page_h), (max, max));
+        assert_eq!((sec.margin_top, sec.margin_left), (max, max));
         // Negative, zero, tiny and non-numeric values leave the defaults alone.
         let def = wordcraft_doc::SectionProps::default();
         for (w, h, m) in [("-10in", "-5in", "-1in"), ("0pt", "0pt", "NaNpt"), ("1pt", "2pt", "infpt"), ("NaN", "inf", "x")] {
@@ -3695,6 +3698,20 @@ mod tests {
         assert_eq!(marks(&doc), want);
         let back = import(&export(&doc).unwrap()).unwrap();
         assert_eq!(marks(&back), want, "after a save");
+    }
+
+    /// A 600 cm page (LibreOffice's custom size) survives ODT: the reader used to clamp page
+    /// sides to 22 inches (55.88 cm), which truncated the Writer document.
+    #[test]
+    fn a_six_hundred_centimetre_page_survives_odt() {
+        let cm = 72.0 / 2.54;
+        let mut d = wordcraft_doc::Document::new();
+        d.ensure_nonempty();
+        d.last_section.page_w = cm * 19.0;
+        d.last_section.page_h = cm * 600.0;
+        let back = super::import(&super::export(&d).unwrap()).unwrap();
+        assert!((back.last_section.page_h - cm * 600.0).abs() < 0.5, "{}", back.last_section.page_h);
+        assert!((back.last_section.page_w - cm * 19.0).abs() < 0.5);
     }
 
     #[test]

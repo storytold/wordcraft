@@ -697,11 +697,15 @@ pub fn sectpr(e: &El) -> (SectionProps, Vec<HfRef>) {
                 }
             }
             "w:pgSz" => {
-                if let Some(w) = tw(k, "w:w").filter(|v| *v >= 36.0) {
-                    s.page_w = w;
+                // A page is at least half an inch and at most 600 cm (LibreOffice's limit): a
+                // hostile size can't reach layout, and the 600 cm pages WordCraft writes back
+                // still open.
+                let side = |v: f32| v.clamp(36.0, wordcraft_doc::section::MAX_PAGE_SIDE);
+                if let Some(w) = crate::units::tw_page(k, "w:w").filter(|v| *v >= 36.0) {
+                    s.page_w = side(w);
                 }
-                if let Some(h) = tw(k, "w:h").filter(|v| *v >= 36.0) {
-                    s.page_h = h;
+                if let Some(h) = crate::units::tw_page(k, "w:h").filter(|v| *v >= 36.0) {
+                    s.page_h = side(h);
                 }
                 s.landscape = match k.attr("w:orient") {
                     Some("landscape") => true,

@@ -82,6 +82,9 @@ pub(crate) fn parse(word: &[u8], table: &[u8], fib: &Fib) -> Vec<Section> {
 /// carry 16-bit twip operands ([MS-DOC] §2.6.4).
 fn apply_section(s: &mut SectionProps, prl: &Prl) {
     let tw = |v: i32| (v as f32 / 20.0).clamp(0.0, 1584.0);
+    // A page side is not one of the lengths the 1,584 pt (22 in) cap is for: the document model
+    // takes up to 600 cm, so convert it straight from twips and bound it there.
+    let page_tw = |v: i32| (v as f32 / 20.0).clamp(7.2, wordcraft_doc::section::MAX_PAGE_SIDE);
     let s16 = |prl: &Prl| -> Option<i16> {
         match prl.operand {
             [b0, b1, ..] => Some(i16::from_le_bytes([*b0, *b1])),
@@ -130,12 +133,12 @@ fn apply_section(s: &mut SectionProps, prl: &Prl) {
         }
         S_XA_PAGE => {
             if let Some(v) = s16(prl) {
-                s.page_w = tw(v as i32).max(7.2);
+                s.page_w = page_tw(v as i32);
             }
         }
         S_YA_PAGE => {
             if let Some(v) = s16(prl) {
-                s.page_h = tw(v as i32).max(7.2);
+                s.page_h = page_tw(v as i32);
             }
         }
         S_DXA_LEFT => {
