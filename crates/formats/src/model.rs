@@ -1497,24 +1497,59 @@ fn hsl_to_rgb(h: f64, s: f64, l: f64) -> Rgb {
     Rgb(r, g, b)
 }
 
+/// Composite `rgb` over the white page a paste lands on, at CSS alpha `a` (0..1): `rgba(0, 0, 0,
+/// 0.45)` reads like the rgb(140, 140, 140) it looks like on the site, instead of solid black.
+fn over_white(r: u8, g: u8, b: u8, a: f32) -> Rgb {
+    let mix = |c: u8| (c as f32 * a + 255.0 * (1.0 - a)).round().clamp(0.0, 255.0) as u8;
+    Rgb(mix(r), mix(g), mix(b))
+}
+
+/// The alpha of a CSS colour's `/ alpha` or 4th-value part, where present: 1.0 (opaque) otherwise.
+fn css_alpha(after: Option<&str>) -> f32 {
+    let Some(a) = after else { return 1.0 };
+    let a = a.trim();
+    // CSS Colour 4's `none` is a missing component, and a missing alpha is transparent.
+    if a.eq_ignore_ascii_case("none") {
+        return 0.0;
+    }
+    // A value that is not a finite number (`nan`, `inf`) is no alpha at all: clamp would keep
+    // NaN, and `over_white` would turn the colour black.
+    let parse = |t: &str| t.parse::<f32>().ok().filter(|f| f.is_finite());
+    if let Some(p) = a.strip_suffix('%') {
+        return parse(p.trim()).map(|f| f.clamp(0.0, 100.0) / 100.0).unwrap_or(1.0);
+    }
+    parse(a).map(|f| f.clamp(0.0, 1.0)).unwrap_or(1.0)
+}
+
 /// Parse a CSS / HTML colour: `#rgb`, `#rgba`, `#rrggbb`, `#rrggbbaa`, `rgb(...)`, `hsl(...)` or a basic name.
+/// A colour with alpha is composited over white: the model keeps opaque colours, and a paste lands
+/// on a white page.
 pub fn parse_color(s: &str) -> Option<Rgb> {
     let s = s.trim().to_ascii_lowercase();
     if let Some(h) = s.strip_prefix('#') {
         if (h.len() == 3 || h.len() == 4) && h.is_ascii() {
             let d = |i: usize| h.get(i..i + 1).and_then(|x| u8::from_str_radix(x, 16).ok()).map(|v| v * 17);
-            return Some(Rgb(d(0)?, d(1)?, d(2)?));
+            let (r, g, b) = (d(0)?, d(1)?, d(2)?);
+            // A 4th digit is the alpha, composited over the page like `rgba(...)`'s is.
+            let a = if h.len() == 4 { d(3)? as f32 / 255.0 } else { 1.0 };
+            return Some(over_white(r, g, b, a));
         }
         if h.len() == 8 && h.is_ascii() {
             let p = |i: usize| h.get(i..i + 2).and_then(|x| u8::from_str_radix(x, 16).ok());
-            return Some(Rgb(p(0)?, p(2)?, p(4)?));
+            return Some(over_white(p(0)?, p(2)?, p(4)?, p(6)? as f32 / 255.0));
         }
         return Rgb::parse(h);
     }
     if let Some(inner) = s.strip_prefix("rgb(").or_else(|| s.strip_prefix("rgba(")) {
         let inner = inner.trim_end_matches(')').trim();
-        let before_slash = inner.split('/').next().unwrap_or(inner);
-        let parts: Vec<&str> = if before_slash.contains(',') { before_slash.split(',').collect() } else { before_slash.split_whitespace().collect() };
+        let (rgb_part, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
+        // Legacy comma syntax carries the alpha as a 4th value (`rgba(0, 0, 0, 0.45)`).
+        let parts: Vec<&str> = if rgb_part.contains(',') { rgb_part.split(',').collect() } else { rgb_part.split_whitespace().collect() };
+        let alpha = match alpha_part {
+            Some(a) => css_alpha(Some(a)),
+            None if parts.len() >= 4 => css_alpha(Some(parts[3])),
+            _ => 1.0,
+        };
         let v: Vec<u8> = parts
             .iter()
             .take(3)
@@ -1528,14 +1563,19 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
             })
             .collect();
         if let [r, g, b] = v[..] {
-            return Some(Rgb(r, g, b));
+            return Some(over_white(r, g, b, alpha));
         }
         return None;
     }
     if let Some(inner) = s.strip_prefix("hsl(").or_else(|| s.strip_prefix("hsla(")) {
         let inner = inner.trim_end_matches(')').trim();
-        let before_slash = inner.split('/').next().unwrap_or(inner);
-        let parts: Vec<&str> = if before_slash.contains(',') { before_slash.split(',').collect() } else { before_slash.split_whitespace().collect() };
+        let (hsl_part, alpha_part) = inner.split_once('/').map_or((inner, None), |(a, b)| (a, Some(b)));
+        let parts: Vec<&str> = if hsl_part.contains(',') { hsl_part.split(',').collect() } else { hsl_part.split_whitespace().collect() };
+        let alpha = match alpha_part {
+            Some(a) => css_alpha(Some(a)),
+            None if parts.len() >= 4 => css_alpha(Some(parts[3])),
+            _ => 1.0,
+        };
         if parts.len() < 3 {
             return None;
         }
@@ -1559,7 +1599,8 @@ pub fn parse_color(s: &str) -> Option<Rgb> {
         };
         let s = parse_pct(parts[1])?;
         let l = parse_pct(parts[2])?;
-        return Some(hsl_to_rgb(h, s, l));
+        let Rgb(r, g, b) = hsl_to_rgb(h, s, l);
+        return Some(over_white(r, g, b, alpha));
     }
     Some(match s.as_str() {
         "black" => Rgb(0, 0, 0),
@@ -1621,16 +1662,40 @@ mod tests {
         assert_eq!(parse_color("#f00"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("#f00f"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("#0080FF"), Some(Rgb(0, 128, 255)));
-        assert_eq!(parse_color("#0080ff80"), Some(Rgb(0, 128, 255)));
+        assert_eq!(parse_color("#0080FFff"), Some(Rgb(0, 128, 255)));
+        // A colour with alpha is composited over the white page it lands on (#0080ff at 50%).
+        assert_eq!(parse_color("#0080ff80"), Some(Rgb(127, 191, 255)));
         assert_eq!(parse_color("rgb(1, 2, 3)"), Some(Rgb(1, 2, 3)));
         assert_eq!(parse_color("rgb(1 2 3)"), Some(Rgb(1, 2, 3)));
-        assert_eq!(parse_color("rgb(1 2 3 / 50%)"), Some(Rgb(1, 2, 3)));
+        assert_eq!(parse_color("rgb(1 2 3 / 50%)"), Some(Rgb(128, 129, 129)));
         assert_eq!(parse_color("hsl(0, 100%, 50%)"), Some(Rgb(255, 0, 0)));
         assert_eq!(parse_color("hsl(120deg 100% 50%)"), Some(Rgb(0, 255, 0)));
-        assert_eq!(parse_color("hsla(240, 100%, 50%, 0.8)"), Some(Rgb(0, 0, 255)));
+        assert_eq!(parse_color("hsla(240, 100%, 50%, 0.8)"), Some(Rgb(51, 51, 255)));
         assert_eq!(parse_color("navy"), Some(Rgb(0, 0, 128)));
         assert_eq!(parse_color("#zz"), None);
         assert_eq!(parse_color("rgb(1)"), None);
+    }
+
+    #[test]
+    fn colors_with_alpha_composite_over_white() {
+        // The secondary text colour of dark-theme sites: solid black would read as the site's
+        // own emphasis, white is invisible on the page; the composite is what the eye saw.
+        assert_eq!(parse_color("rgba(0, 0, 0, 0.45)"), Some(Rgb(140, 140, 140)));
+        assert_eq!(parse_color("rgb(0 0 0 / 0.45)"), Some(Rgb(140, 140, 140)));
+        assert_eq!(parse_color("rgba(0, 0, 0, 0)"), Some(Rgb(255, 255, 255)));
+        assert_eq!(parse_color("rgba(255, 0, 0, 1)"), Some(Rgb(255, 0, 0)));
+        assert_eq!(parse_color("rgba(255, 0, 0, 45%)"), Some(Rgb(255, 140, 140)));
+        assert_eq!(parse_color("hsla(120, 100%, 50%, 0.5)"), Some(Rgb(128, 255, 128)));
+        // A 4-digit hex's last digit is the alpha, too: #0008 is black at 8/15 over white.
+        assert_eq!(parse_color("#0008"), Some(Rgb(119, 119, 119)));
+        // `none` is a missing alpha, and a missing alpha is transparent — not the opaque default
+        // an omitted alpha takes.
+        assert_eq!(parse_color("rgb(0 0 0 / none)"), Some(Rgb(255, 255, 255)));
+        assert_eq!(parse_color("rgb(0 0 0)"), Some(Rgb(0, 0, 0)));
+        // An alpha that is not a finite number is no alpha: the colour stays opaque, not black.
+        assert_eq!(parse_color("rgba(0, 0, 0, nan)"), Some(Rgb(0, 0, 0)));
+        assert_eq!(parse_color("rgba(0, 0, 0, inf)"), Some(Rgb(0, 0, 0)));
+        assert_eq!(parse_color("rgba(0, 0, 0, nan%)"), Some(Rgb(0, 0, 0)));
     }
 
     #[test]
