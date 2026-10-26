@@ -307,7 +307,7 @@ impl FontFace {
     fn hinted_glyph_outline(&self, gid: u32, hinter: &HintingInstance) -> Option<BezPath> {
         let f = self.skrifa()?;
         let g = f.outline_glyphs().get(GlyphId::new(gid))?;
-        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false };
+        let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
         g.draw(DrawSettings::hinted(hinter, false), &mut pen).map_err(|e| log::warn!("Cannot hint glyph {gid} in {:?}: {e}", self.family)).ok()?;
         Some(pen.path)
     }
@@ -2306,7 +2306,7 @@ mod tests {
         let target = Target::Smooth { mode: SmoothMode::Light, symmetric_rendering: true, preserve_linear_metrics: true };
         let drawn = |engine: Engine, gid: u32| {
             let h = HintingInstance::new(&outlines, Size::new(ppem), face.location(), HintingOptions { engine, target }).unwrap();
-            let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false };
+            let mut pen = FlipPen { path: BezPath::new(), room: usize::MAX, over: false, hinted: true };
             outlines.get(GlyphId::new(gid)).unwrap().draw(DrawSettings::hinted(&h, false), &mut pen).unwrap();
             pen.path
         };
