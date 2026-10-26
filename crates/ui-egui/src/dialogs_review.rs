@@ -621,7 +621,7 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     if st.formatting && st.show_styles {
         let allowed = st.allowed.get_or_insert_with(Vec::new);
         ui.label(egui::RichText::new(tl!("Checked styles are allowed:")).small());
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.small_button(tl!("All")).clicked() {
                 *allowed = styles.iter().map(|(id, _)| id.clone()).collect();
             }
@@ -643,14 +643,16 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
         });
     }
     heading(ui, "2. Editing restrictions");
-    ui.checkbox(&mut st.editing, tl!("Only allow this kind of editing:"));
+    let editing = ui.checkbox(&mut st.editing, tl!("Only allow this kind of editing:"));
     ui.add_enabled_ui(st.editing, |ui| {
         let current = EDIT_MODES.get(st.mode).map(|m| m.1).unwrap_or("");
-        egui::ComboBox::from_id_salt("restrict_mode").selected_text(tl!(current)).width(220.0).show_ui(ui, |ui| {
-            for (i, (_, label)) in EDIT_MODES.iter().enumerate() {
-                ui.selectable_value(&mut st.mode, i, tl!(label));
-            }
-        });
+        let combo =
+            egui::ComboBox::from_id_salt("restrict_mode").selected_text(tl!(current)).width(ui.available_width().min(220.0)).show_ui(ui, |ui| {
+                for (i, (_, label)) in EDIT_MODES.iter().enumerate() {
+                    ui.selectable_value(&mut st.mode, i, tl!(label));
+                }
+            });
+        combo.response.labelled_by(editing.id);
     });
     let mode = EDIT_MODES.get(st.mode).map(|m| m.0).unwrap_or("readOnly");
     if st.editing && matches!(mode, "readOnly" | "comments") {
@@ -677,7 +679,7 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     } else {
         ui.label(egui::RichText::new(tl!("The password is optional; without it anyone can stop the protection.")).small());
         passwords(ui, st, true);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // macOS puts Cancel before OK.
             let mac = cfg!(target_os = "macos");
             let mut cancel = mac && ui.button(tl!("Cancel")).clicked();
@@ -715,17 +717,15 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     error(ui, &st.message);
 }
 
+/// Each label above its field, so both fit the narrowest pane.
 fn passwords(ui: &mut Ui, st: &mut RestrictPane, confirm: bool) {
-    egui::Grid::new("restrict_pw").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
-        ui.label(tl!("Password:"));
-        ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(140.0));
-        ui.end_row();
-        if confirm {
-            ui.label(tl!("Confirm password:"));
-            ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(140.0));
-            ui.end_row();
-        }
-    });
+    let width = ui.available_width().min(220.0);
+    let label = ui.label(tl!("Password:"));
+    ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(width)).labelled_by(label.id);
+    if confirm {
+        let label = ui.label(tl!("Confirm password:"));
+        ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(width)).labelled_by(label.id);
+    }
 }
 
 fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str) {
@@ -765,7 +765,7 @@ fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str
     } else {
         ui.label(egui::RichText::new(tl!("Type the password to stop the protection.")).small());
         passwords(ui, st, false);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // macOS puts Cancel before OK.
             let mac = cfg!(target_os = "macos");
             let cancel_first = mac && ui.button(tl!("Cancel")).clicked();

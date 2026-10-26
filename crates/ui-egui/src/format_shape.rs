@@ -80,10 +80,6 @@ fn apply(app: &mut WordApp, ui: &Ui, fill: Option<&Fill>, resp: Option<&Response
 
 /// The pane, while open.
 pub fn pane(app: &mut WordApp, ui: &mut Ui) {
-    if crate::panes::header(ui, "Format Shape") {
-        let _ = app.run("view.formatShapePane", serde_json::json!({"value": false}));
-        return;
-    }
     // A drag that applied as it went ends as one undo step.
     if !ui.input(|i| i.pointer.any_down())
         && let Some(mark) = ui.data_mut(|d| {

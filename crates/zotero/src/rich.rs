@@ -42,7 +42,7 @@ fn style_props(base: &CharProps, src: &CharProps) -> CharProps {
 
 /// The body paragraphs of `d` (Zotero's RTF or HTML, read), at most [`MAX_PARAS`], formatted on
 /// top of `base` with the run styling they carry (past [`MAX_RUNS`] runs, text keeps the
-/// formatting before it). Objects are dropped.
+/// formatting before it; each paragraph still needs its first run, so at most [`MAX_PARAS`] more). Objects are dropped.
 fn from_doc(d: &Document, base: &CharProps) -> Vec<Paragraph> {
     let mut out = Vec::new();
     let mut runs = 0usize;

@@ -49,6 +49,7 @@ pub mod dialogs_ribbon;
 pub mod dialogs_smart_art;
 pub mod dialogs_table_style;
 pub mod dialogs_templates;
+pub mod documents;
 pub mod equation_tab;
 /// The built-in file browser, for desktops without a system file dialog (#576).
 #[cfg(not(target_arch = "wasm32"))]
@@ -87,6 +88,8 @@ pub mod updates_ui;
 pub mod widgets;
 pub mod window_close;
 pub mod window_geometry;
+mod window_ui;
+mod windows;
 pub mod wordart_menus;
 pub mod zotero;
 
@@ -292,6 +295,22 @@ pub struct UiState {
     /// View › Navigation Pane: open or closed as the person left it, kept between runs (#2526).
     /// The session owns it while running (see [`WordApp::prefs`]).
     pub nav_pane: bool,
+    /// Where the Styles pane sits (#1756). The session owns it while running (see [`WordApp::prefs`]).
+    #[serde(deserialize_with = "lenient_styles_pane_dock")]
+    pub styles_pane_dock: wordcraft_engine::StylesPaneDock,
+    /// The floating Styles pane's `[x, y, width, height]`, also kept while it is docked.
+    #[serde(deserialize_with = "lenient_float_rect")]
+    pub styles_pane_float: Option<[f32; 4]>,
+    /// The docked Styles pane's width this run; like the other panes' widths, not kept between runs.
+    #[serde(skip)]
+    pub styles_pane_width: Option<f32>,
+    /// Where each of the other task panes sits, by [`panes::Pane::key`] (#1756).
+    #[serde(deserialize_with = "panes::lenient_places")]
+    pub pane_places: std::collections::BTreeMap<String, panes::SavedPane>,
+    /// The task panes in the order the user put them, by [`panes::Pane::key`]: each edge shows its
+    /// panes in this order, the first outermost. Empty: the default order.
+    #[serde(deserialize_with = "panes::lenient_order", skip_serializing_if = "Vec::is_empty")]
+    pub pane_order: Vec<String>,
     /// Headings whose sub-headings the Navigation pane hides (#1997); per session, not saved.
     #[serde(skip)]
     pub nav_collapsed: std::collections::HashSet<wordcraft_doc::Path>,
@@ -380,6 +399,9 @@ pub struct UiState {
 /// no longer applies (a contextual tab after the selection moved away, a tab hidden in Customize
 /// Ribbon). Word opens on Home every launch; see [`UiState::tab`].
 pub const DEFAULT_TAB: &str = "Home";
+
+/// ⌘Q, which only the Mac sends: quit.
+const QUIT: egui::KeyboardShortcut = egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q);
 /// Most recent documents kept (File › Options › Advanced offers 0–50, as Word does).
 pub const MAX_RECENT: usize = 50;
 /// Most custom dictionary words read back from `ui.json`.
@@ -409,6 +431,11 @@ impl Default for UiState {
             legacy_dark: None,
             nav_tab: "headings".into(),
             nav_pane: false,
+            styles_pane_dock: wordcraft_engine::StylesPaneDock::Right,
+            styles_pane_float: None,
+            styles_pane_width: None,
+            pane_places: Default::default(),
+            pane_order: Vec::new(),
             nav_collapsed: Default::default(),
             show_discord: true,
             author: String::new(),
@@ -498,6 +525,18 @@ pub fn recent_fonts_from<'a>(names: impl IntoIterator<Item = &'a str>) -> Vec<St
         }
     }
     out
+}
+
+/// An unknown saved position reads as the default.
+fn lenient_styles_pane_dock<'de, D: serde::Deserializer<'de>>(d: D) -> Result<wordcraft_engine::StylesPaneDock, D::Error> {
+    let v = Value::deserialize(d)?;
+    Ok(v.as_str().and_then(wordcraft_engine::StylesPaneDock::parse).unwrap_or_default())
+}
+
+/// Anything but four finite numbers reads as no saved rect; `craft_ui::panes` brings a saved one
+/// back inside the window.
+fn lenient_float_rect<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<[f32; 4]>, D::Error> {
+    Ok(panes::float_rect(&Value::deserialize(d)?))
 }
 
 /// `recentFonts` as saved, through [`recent_fonts_from`]: an entry that isn't a name is dropped,
@@ -691,6 +730,16 @@ pub struct WordApp {
     no_document: Option<u64>,
     /// Comment and reply text typed but not yet written to the document (#1348).
     pub(crate) comment_drafts: panes::CommentDrafts,
+    /// The document the window's per-document state belongs to; when the session's active
+    /// document is another, [`WordApp::sync_document`] puts that state aside and brings the
+    /// other's.
+    shown_document: u64,
+    /// The per-document state of the open documents not shown.
+    parked: std::collections::HashMap<u64, documents::Parked>,
+    /// The open windows ([`windows`]).
+    pub(crate) windows: windows::Windows,
+    /// The document the last print job was for: its window reports how the job went.
+    print_document: Option<u64>,
 }
 
 /// The answer to "Do you want to save changes?" (`ui.saveChanges`).
@@ -721,22 +770,75 @@ impl WordApp {
         if let Some(tag) = sys_locale::get_locale() {
             wordcraft_engine::set_system_locale(&tag);
         }
+        // What the window shows starts as a new window's.
+        let window_ui::WindowUi {
+            canvas,
+            controls,
+            dialog,
+            colors,
+            restrict,
+            status_msg,
+            previews,
+            change_picture_target,
+            recipient_list_pending,
+            dialog_pick,
+            focus_ribbon,
+            control_click,
+            keytip_rects,
+            nav_search_focus,
+            comment_fonts_for,
+            find_fonts_for,
+            sent_title,
+            sent_full_screen,
+            seen_full_screen,
+            escape_free,
+            word_count,
+            last_autosave,
+            equation_prev_tab,
+            smart_art_item,
+            smart_art_row_focused,
+            smart_art_typing,
+            outline_prev_tab,
+            read_aloud_at,
+            awaiting_save,
+            file_dialog,
+            info_editing,
+            shown_document,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_browser,
+            tab,
+            backstage,
+            backstage_page,
+            print,
+            nav_collapsed,
+            keytip_prefix,
+            keytips,
+            alt_pressed,
+            alt_chord_used,
+            alt_key_down,
+            alt_modifier_seen,
+        } = window_ui::WindowUi::new(session.document_id());
         WordApp {
             session,
-            ui: UiState::default(),
+            ui: UiState {
+                tab,
+                backstage,
+                backstage_page,
+                print,
+                nav_collapsed,
+                keytip_prefix,
+                keytips,
+                alt_pressed,
+                alt_chord_used,
+                alt_key_down,
+                alt_modifier_seen,
+                ..UiState::default()
+            },
             services,
             printing: Default::default(),
             print_feedback_seen: None,
-            canvas: canvas::CanvasState::default(),
-            controls: Default::default(),
-            dialog: None,
-            colors: None,
-            restrict: Default::default(),
-            status_msg: None,
-            previews: previews::Previews::default(),
             integrated_titlebar: false,
             mac_titlebar: chrome::MacTitleBar::default(),
-            focus_ribbon: false,
             updates_rt: updates_ui::Runtime::default(),
             control_rx: None,
             shots: control::Shots::default(),
@@ -746,18 +848,13 @@ impl WordApp {
             synthetic: Vec::new(),
             synthetic_pending: false,
             synthetic_injected: 0,
-            control_click: false,
-            keytip_rects: Vec::new(),
-            nav_search_focus: false,
             styled: false,
             fonts_hans: false,
             fonts_korean: false,
             fonts_system_cjk: false,
             want_system_cjk: false,
-            comment_fonts_for: None,
             recover_fonts_for: None,
             recent_fonts_for: Vec::new(),
-            find_fonts_for: None,
             fonts_frames: 0,
             applied_theme: None,
             native_scale: 1.0,
@@ -769,38 +866,55 @@ impl WordApp {
             system_animations: None,
             applied_animations: None,
             frame_ms: 0.0,
-            sent_title: String::new(),
-            sent_full_screen: false,
-            seen_full_screen: None,
-            escape_free: false,
             quit_requested: false,
             autosave: true,
-            word_count: (0, 0),
-            last_autosave: 0.0,
-            equation_prev_tab: None,
-            smart_art_item: None,
-            smart_art_typing: None,
-            smart_art_row_focused: false,
-            outline_prev_tab: None,
             zotero: zotero::ZoteroLink::default(),
             ctx: None,
             ime_origin: false,
-            read_aloud_at: None,
             read_aloud_error: None,
             autosave_path: None,
             saves_in_flight: Vec::new(),
-            awaiting_save: None,
-            change_picture_target: None,
-            recipient_list_pending: false,
             font_generation: wordcraft_fonts::FontDb::global().generation(),
-            dialog_pick: None,
-            file_dialog: None,
-            #[cfg(not(target_arch = "wasm32"))]
-            file_browser: file_browser::State::default(),
-            info_editing: None,
             recovery_seen: false,
             no_document: None,
             comment_drafts: Default::default(),
+            parked: Default::default(),
+            windows: windows::Windows::new(shown_document),
+            print_document: None,
+            canvas,
+            controls,
+            dialog,
+            colors,
+            restrict,
+            status_msg,
+            previews,
+            change_picture_target,
+            recipient_list_pending,
+            dialog_pick,
+            focus_ribbon,
+            control_click,
+            keytip_rects,
+            nav_search_focus,
+            comment_fonts_for,
+            find_fonts_for,
+            sent_title,
+            sent_full_screen,
+            seen_full_screen,
+            escape_free,
+            word_count,
+            last_autosave,
+            equation_prev_tab,
+            smart_art_item,
+            smart_art_row_focused,
+            smart_art_typing,
+            outline_prev_tab,
+            read_aloud_at,
+            awaiting_save,
+            file_dialog,
+            info_editing,
+            shown_document,
+            #[cfg(not(target_arch = "wasm32"))]
+            file_browser,
         }
     }
 
@@ -821,6 +935,7 @@ impl WordApp {
             self.ui.backstage = true;
             self.ui.backstage_page = "home".into();
             self.no_document = Some(self.session.document_id());
+            self.session.release_untitled_name();
         }
         self.ui.start_screen
     }
@@ -843,6 +958,7 @@ impl WordApp {
         ui.read_aloud_skip_citations = self.session.read_aloud.skip_citations;
         ui.dark_page = self.session.view.dark_mode;
         ui.nav_pane = self.session.view.nav_pane;
+        ui.styles_pane_dock = self.session.view.styles_pane_dock;
         ui.check_spelling = self.session.view.proofing;
         ui.keyboard = self.session.keymap.clone();
         ui.ribbon = self.session.ribbon.clone();
@@ -891,6 +1007,7 @@ impl WordApp {
         self.session.read_aloud.skip_citations = self.ui.read_aloud_skip_citations;
         self.session.view.dark_mode = self.ui.dark_page;
         self.session.view.nav_pane = self.ui.nav_pane;
+        self.session.view.styles_pane_dock = self.ui.styles_pane_dock;
         self.session.view.proofing = self.ui.check_spelling;
         // Keys for commands this version doesn't have are dropped.
         self.session.keymap = std::mem::take(&mut self.ui.keyboard);
@@ -956,7 +1073,10 @@ impl WordApp {
             self.dialog = dialogs::Dialog::open(name, self);
             return Ok(json!({"pending": name}));
         }
-        if (self.session.dirty || self.save_unconfirmed() || refused.is_some()) && discards_document(id, &params) {
+        if (self.session.dirty || self.save_unconfirmed() || refused.is_some())
+            && discards_document(id, &params)
+            && !self.closes_only_its_window(id, &params)
+        {
             let name = self.prompt_name();
             self.dialog = Some(dialogs::Dialog::SaveChanges {
                 name,
@@ -1156,17 +1276,13 @@ impl WordApp {
             // Its HTML too when it has some (an equation as MathML, #816).
             crate::system_clipboard::put_result(self, ctx, v);
         }
-        // When the document has been replaced (not when Open only showed its picker), a pending
-        // "Save changes?" and AutoSave's go-ahead were both about the old one.
+        // Another document is shown (not when Open only showed its picker): the window's state
+        // for the one it showed is put aside.
         if self.session.document_id() != document {
             // A requested New/Open wins over the asynchronous startup recovery scan.
             // Older copies remain available through File > Recover.
             self.recovery_seen = true;
-            self.autosave_path = None;
-            if matches!(self.dialog, Some(dialogs::Dialog::SaveChanges { .. })) {
-                self.dialog = None;
-            }
-            crate::table_pen::stop(self);
+            self.sync_document();
         }
         // An explicit save to the document's own file lets AutoSave keep writing there.
         if let Ok(v) = &r
@@ -1385,6 +1501,9 @@ impl WordApp {
                     async_saves::SaveOutcome::Cancelled | async_saves::SaveOutcome::Failed(_) => {
                         if save.marked_saved && save.document == current {
                             self.session.dirty = true;
+                        } else if save.marked_saved {
+                            // Another document is shown: the one saved is unsaved again where it waits.
+                            let _ = self.session.with_document(save.document, |s| s.dirty = true);
                         }
                     }
                 }
@@ -1448,39 +1567,67 @@ impl WordApp {
         if self.quit_requested {
             return true;
         }
-        // No document open (#1129): nothing to save.
-        if !self.has_document() {
+        // Nothing to save, also with no document open in this window (#1129) and none elsewhere.
+        if !self.has_unsaved_documents() {
             return true;
         }
         // A comment draft the document refuses is an unsaved change: the prompt can drop it.
-        let refused = panes::flush_comment_drafts(self).is_err();
-        if !self.session.dirty && !self.save_unconfirmed() && !refused {
+        if self.has_document() {
+            let _ = panes::flush_comment_drafts(self);
+        }
+        if !self.has_unsaved_documents() {
             return true;
         }
-        // `quit`: once the prompt is answered the window closes too, not just the document.
-        let _ = self.run("file.close", json!({"quit": true}));
-        false
+        // Each document with unsaved work is shown and asked about in turn; Cancel stops.
+        self.ask_before_quit();
+        self.quit_requested
     }
 
-    /// File › Close (Mod+W, Mod+F4) closes the document and keeps the window, as Word does
-    /// (#1712): it shows no page, as after Esc on the Start screen (#1129), and File › New or Open
-    /// goes on from there. `{"quit": true}`, from the window's close button, quits instead. With no
-    /// document open there is nothing to close. Unsaved changes are never discarded unasked: a
-    /// dirty document closes only with `{"force": true}` (Don't Save in the prompt passes it).
+    /// File › Close (Mod+W, Mod+F4) closes the shown document, or only its window while other
+    /// windows show the document (View › New Window), asking nothing then. Its window closes too while other
+    /// windows are open, and the one focused before it comes forward (in the web app's one window,
+    /// the next document shows). The last window stays, as Word's does (#1712), with no page, as
+    /// after Esc on the Start screen (#1129), and File › New or Open goes on from there. `{"quit": true}`,
+    /// from the window's close button, goes on quitting: the shown document's prompt has been
+    /// answered, so it closes and the next document with unsaved changes is asked about
+    /// ([`WordApp::ask_before_quit`]). With no document open there is nothing to close. Unsaved
+    /// changes are never discarded unasked: a dirty document closes only with `{"force": true}`
+    /// (Don't Save in the prompt passes it).
     fn close_document(&mut self, params: &Value) -> Result<Value, String> {
+        if self.closes_only_its_window("file.close", params) && self.close_window_only() {
+            return Ok(json!({"closed": true, "window": true}));
+        }
         if let Some(e) = control::close_refused(self, "file.close", params) {
             return Err(e.into());
         }
+        let last = self.session.documents().len() <= 1;
         if params.get("quit").and_then(Value::as_bool) == Some(true) {
-            self.quit_requested = true;
-            return Ok(json!({"quit": true}));
+            if last {
+                // Don't Save: the document stays open until the app exits, but its changes,
+                // and so its recovery copy, are discarded.
+                if params.get("force").and_then(Value::as_bool) == Some(true) {
+                    self.session.discard_recovery_copy();
+                }
+                self.quit_requested = true;
+                return Ok(json!({"quit": true}));
+            }
+            self.close_shown_document()?;
+            return Ok(self.ask_before_quit());
         }
         if !self.has_document() {
             return Ok(json!({"closed": false}));
         }
-        self.execute("file.new", json!({}))?;
-        self.no_document = Some(self.session.document_id());
-        self.ui.backstage = false;
+        self.close_shown_document()?;
+        self.recovery_seen = true;
+        if last {
+            self.no_document = Some(self.session.document_id());
+            self.session.release_untitled_name();
+        }
+        // The window that stays leaves the File page; another window that came forward keeps
+        // its own.
+        if last || !self.windows.native() {
+            self.ui.backstage = false;
+        }
         Ok(json!({"closed": true}))
     }
 
@@ -1552,7 +1699,18 @@ impl WordApp {
     }
 
     /// Requests commands make of the UI (open a dialog…).
-    fn handle_request(&mut self, req: &Value) {
+    pub(crate) fn handle_request(&mut self, req: &Value) {
+        // Made for a document that isn't shown (an agent's command run there): its window handles
+        // it when it draws.
+        if let Some(document) = req.get("document").and_then(Value::as_u64)
+            && document != self.session.document_id()
+        {
+            let app_wide = req.get("interfaceTheme").is_some() || req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme");
+            if app_wide || req.get("close").is_some() || !self.queue_for_window(document, req) {
+                self.handle_request_for(document, req);
+            }
+            return;
+        }
         // Ctrl+F: type straight into the Navigation pane's search box (#712).
         if req.get("focus").and_then(Value::as_str) == Some("navSearch") {
             self.nav_search_focus = true;
@@ -1590,12 +1748,40 @@ impl WordApp {
                     }
                 }
                 "pasteSpecial" => self.dialog = Some(dialogs::Dialog::paste_special(self, req)),
+                "newWindow" => self.new_window(),
                 other => self.dialog = dialogs::Dialog::open(other, self),
             }
         }
         if req.get("close").is_some() {
             self.quit_requested = true;
         }
+    }
+
+    /// A request made for document `document`, which isn't shown and which no other window
+    /// handles: the interface theme is the app's and changes; Close closes that document if it
+    /// has nothing unsaved; the rest (dialogs, panes, focus, scrolling) are about a window's page
+    /// and are dropped, as no window shows the document.
+    fn handle_request_for(&mut self, document: u64, req: &Value) {
+        let theme_only = req.get("interfaceTheme").is_some() || req.get("toggle").and_then(Value::as_str) == Some("interfaceTheme");
+        if theme_only {
+            let mut req = req.clone();
+            if let Some(o) = req.as_object_mut() {
+                o.remove("document");
+            }
+            self.handle_request(&req);
+            return;
+        }
+        if req.get("close").is_some() {
+            let dirty = self.session.documents().iter().any(|d| d.id == document && d.dirty);
+            if dirty {
+                log::warn!("not closing document {document}: it has unsaved changes");
+            } else if let Err(e) = self.session.close_document(document) {
+                log::warn!("closing document {document}: {e}");
+            }
+            self.sync_document();
+            return;
+        }
+        log::warn!("dropped a request for document {document}, which no window shows: {req}");
     }
 
     /// Follow the desktop's light/dark choice while the app runs (Linux, where winit reports no
@@ -1696,6 +1882,7 @@ impl WordApp {
                 self.canvas.want_focus = true;
                 json!({"pending": "contextMenu"})
             }
+            "ui.paneDock" => return Some(panes::dock_command(self, p)),
             "ui.collapseRibbon" => {
                 self.ui.ribbon_collapsed = !self.ui.ribbon_collapsed;
                 json!({"collapsed": self.ui.ribbon_collapsed})
@@ -1930,6 +2117,7 @@ impl WordApp {
 
     /// Submit the selected print job; the implementation lives beside its localized controls.
     fn print_to_system(&mut self, p: &Value) -> Result<Value, String> {
+        self.print_document = Some(self.session.document_id());
         printing::submit(self, p)
     }
 
@@ -2220,7 +2408,9 @@ impl WordApp {
             Some(p) => p.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_else(|| tl!("Document1").into()),
             None => match &self.session.file_name {
                 Some(name) => name.clone(),
-                None if self.session.doc.core.title.is_empty() => tl!("Document1").into(),
+                None if self.session.doc.core.title.is_empty() => {
+                    documents::untitled_title(&self.session.resolved_filenames().0).unwrap_or_else(|| tl!("Document1").into())
+                }
                 None => self.session.doc.core.title.clone(),
             },
         }
@@ -2229,6 +2419,11 @@ impl WordApp {
     /// Terminal feedback also reaches the normal window when printing starts through control.
     pub fn poll_printing(&mut self, ctx: &egui::Context) {
         self.printing.poll(ctx);
+        self.print_feedback();
+    }
+
+    /// Say how the print job went, once, in the window showing the printed document.
+    fn print_feedback(&mut self) {
         if self.printing.message == self.print_feedback_seen {
             return;
         }
@@ -2327,31 +2522,29 @@ impl WordApp {
         if self.ctx.is_none() {
             self.ctx = Some(ctx.clone());
         }
-        // Capture geometry/document identity is current before control admission and completion.
-        // The epoch is monotonic: resizing back to an earlier size is still a new epoch.
-        let capture_geometry = self.surface_geometry.map(|surface| surface.with_document(self.session.document_id()));
-        if let Some(geometry) = capture_geometry
-            && self.capture_geometry != Some(geometry)
-        {
-            self.capture_geometry = Some(geometry);
-            self.capture_epoch = self.capture_epoch.wrapping_add(1);
+        // Capture geometry/window/document identity is current before control admission and
+        // completion.
+        self.refresh_capture_geometry(ctx);
+        let native = self.windows.native();
+        if native {
+            self.printing.poll(ctx);
+        } else {
+            self.poll_printing(ctx);
         }
-        self.poll_printing(ctx);
         self.drain_control(ctx);
-        zotero::poll(self, ctx);
-        read_aloud::poll(self, ctx);
-        self.clear_stale_change_picture();
-        let _ = self.poll_file_dialog();
+        // The active window's own work; with native windows each window does it again as it
+        // draws, for itself.
+        self.window_work(ctx);
         self.drain_inbox();
         self.drain_pasted();
         self.watch_fonts(ctx);
+        // A script, an agent or a later result may have made another document the active one.
+        self.sync_document();
         let document = self.session.document_id();
         self.session.recovery_tick();
         if self.session.document_id() != document {
-            self.autosave_path = None;
-            self.dialog = None;
             self.ui.backstage = false;
-            self.canvas.want_focus = true;
+            self.sync_document();
         }
         if !self.recovery_seen && self.session.recovery_ready() {
             self.recovery_seen = true;
@@ -2363,21 +2556,67 @@ impl WordApp {
         if let Some(wait) = self.session.recovery_wait() {
             ctx.request_repaint_after(wait);
         }
+        if !native {
+            self.window_input(ctx);
+        }
+        self.send_control_input(ctx);
+        // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
+        // callback command belongs to `ui` (`flush_shot_and_synthetic`). A queued/settling capture
+        // needs a real UI pass, and so does an injected synthetic step, even while the window is
+        // hidden.
+        control::drain_screenshots(self, ctx);
+        if self.shots.in_flight() || self.synthetic_pending || !self.synthetic.is_empty() {
+            let viewport = self.active_viewport();
+            if ctx.input_for(viewport, |i| i.viewport().visible()) != Some(true) {
+                ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::RequestPaintWhileHidden);
+            }
+            ctx.request_repaint_of(viewport);
+            ctx.request_repaint();
+        }
+        // The open above may have changed the file name the caption draws.
+        self.ensure_caption_fonts();
+        self.ensure_comment_fonts();
+        self.ensure_recover_fonts();
+        self.ensure_recent_fonts();
+        self.ensure_find_fonts();
+        self.install_ui_fonts(ctx, lang);
+        self.report_dirty();
+    }
+
+    /// A window's own work, with its state in place: print feedback for its document, Zotero,
+    /// Read Aloud, its file dialog, AutoSave of its document. Runs in [`WordApp::logic`] for the
+    /// active window and, with native windows, as each window draws.
+    fn window_work(&mut self, ctx: &egui::Context) {
+        if self.windows.native() {
+            let doc = self.session.document_id();
+            if self.print_document.is_none_or(|d| d == doc || !self.session.is_open(d)) {
+                self.print_feedback();
+            }
+        }
+        zotero::poll(self, ctx);
+        read_aloud::poll(self, ctx);
+        self.clear_stale_change_picture();
+        let _ = self.poll_file_dialog();
         self.autosave_tick(now_ms());
         if self.autosaves() && self.session.dirty {
             ctx.request_repaint_after(std::time::Duration::from_millis(1000));
         }
-        // Screenshot deadlines, geometry and completions belong to `logic`; issuing the one
-        // callback command belongs to `ui` (below). A queued/settling capture needs a real UI
-        // pass, and so does an injected synthetic step, even while the window is hidden.
-        control::drain_screenshots(self, ctx);
-        if self.shots.in_flight() || self.synthetic_pending || !self.synthetic.is_empty() {
-            if ctx.input(|i| i.viewport().visible()) != Some(true) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::RequestPaintWhileHidden);
-            }
-            ctx.request_repaint();
+    }
+
+    /// A window's own input before it draws: ⌘Q. Runs in [`WordApp::logic`] with one window,
+    /// else as each window draws (each native window has its own input). The SmartArt Text
+    /// Pane's Tab keys and dropped files are read in the first UI pass
+    /// ([`WordApp::handle_ui_input_events`]).
+    fn window_input(&mut self, ctx: &egui::Context) {
+        if self.windows.native() && ctx.input_mut(|i| i.consume_shortcut(&QUIT)) {
+            self.quit();
         }
-        self.report_dirty();
+        // The drawn window's caption, comments and Find results borrow faces it may not have.
+        if self.windows.native() {
+            self.ensure_caption_fonts();
+            self.ensure_comment_fonts();
+            self.ensure_find_fonts();
+        }
     }
 
     /// Files dropped on the native window. Raw input is taken only in the first UI pass: a
@@ -2403,7 +2642,7 @@ impl WordApp {
             } else if wordcraft_fonts::is_font_file_name(&lp) {
                 self.run("font.add", json!({"path": path}))
             } else {
-                self.run("file.open", json!({"path": path}))
+                self.open_file(&path, None)
             };
         }
         if self.session.document_id() != before {
@@ -2427,17 +2666,29 @@ impl WordApp {
         let system_cjk = self.fonts_system_cjk || self.want_system_cjk || lang.uses_cjk();
         if !self.styled || lang.prefers_hans() != self.fonts_hans || lang.prefers_korean() != self.fonts_korean || system_cjk != self.fonts_system_cjk
         {
-            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, &self.canvas.ime_faces);
+            // Every window's borrowed faces: the fonts are the app's.
+            let mut faces = self.canvas.ime_faces.clone();
+            for w in self.other_windows() {
+                for face in &w.canvas.ime_faces {
+                    if !faces.iter().any(|f| f.id() == face.id()) {
+                        faces.push(face.clone());
+                    }
+                }
+            }
+            theme::install_fonts_language_extra(ctx, lang.prefers_hans(), lang.prefers_korean(), system_cjk, &faces);
             self.fonts_hans = lang.prefers_hans();
             self.fonts_korean = lang.prefers_korean();
             self.fonts_system_cjk = system_cjk;
             // Mod with -, = and 0 are Word shortcuts (optional hyphen, subscript, paragraph spacing);
             // egui's keyboard zoom would also scale the whole window on them. Zoom is View › Zoom.
             // egui quits on Command-Q, which is Ctrl+Q off the Mac: Word's Reset Paragraph
-            // Formatting there (#1218). Keep ⌘Q, which only the Mac sends.
+            // Formatting there (#1218). Keep ⌘Q, which only the Mac sends. egui would close only the
+            // window it was pressed in, so with native windows the app quits itself
+            // ([`WordApp::window_logic_before`]).
+            let quit = (!self.windows.native()).then_some(QUIT).into_iter().collect();
             ctx.options_mut(|o| {
                 o.zoom_with_keyboard = false;
-                o.quit_shortcuts = vec![egui::KeyboardShortcut::new(egui::Modifiers::MAC_CMD, egui::Key::Q)];
+                o.quit_shortcuts = quit;
             });
             self.styled = true;
         }
@@ -2512,7 +2763,9 @@ impl WordApp {
         // Capture the surface from the raw input itself. `InputState::viewport_rect` and the
         // last painted screen rect are stale in a hidden `run_logic` tick; RawInput is the host's
         // current answer, including minimized/occluded and a Wayland `inner_rect: None`.
-        if let Some(geometry) = control::SurfaceGeometry::from_raw(raw, ctx) {
+        if raw.viewport_id == egui::ViewportId::ROOT
+            && let Some(geometry) = control::SurfaceGeometry::from_raw(raw, ctx)
+        {
             // A hidden resize and change back still invalidate an older capture, even if
             // neither intermediate geometry reaches a drawing or logic pass.
             if self.surface_geometry != Some(geometry) {
@@ -2523,18 +2776,11 @@ impl WordApp {
         if cfg!(target_os = "macos") {
             control_click_as_secondary(&mut raw.events, &mut self.control_click);
         }
-        if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 {
+        if self.synthetic_pending || self.synthetic.is_empty() || self.fonts_frames < 2 || !self.control_input_is_roots(ctx) {
             return;
         }
-        let n = match self.synthetic.first() {
-            Some(egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }) => 1,
-            _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
-        };
-        if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
-            raw.events.push(egui::Event::PointerMoved(*p));
-        }
-        let n = n.min(self.synthetic.len());
-        if self.synthetic.iter().take(n).any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
+        let Some((events, n)) = self.peek_synthetic() else { return };
+        if events.iter().any(|e| matches!(e, egui::Event::Key { .. } | egui::Event::Text(_))) {
             // Control input belongs to this window's remembered widget even while another app
             // is active. Give only this input frame egui focus, without requesting OS activation.
             raw.focused = true;
@@ -2543,13 +2789,53 @@ impl WordApp {
                 self.canvas.focused = ctx.memory(|m| m.has_focus(id));
             }
         }
-        raw.events.extend(self.synthetic.iter().take(n).cloned());
+        raw.events.extend(events);
         self.synthetic_pending = true;
         self.synthetic_injected = n;
     }
 
-    /// Lay out the window.
+    /// The control channel's next input frame, taken off the queue.
+    fn next_synthetic(&mut self) -> Option<Vec<egui::Event>> {
+        let (events, n) = self.peek_synthetic()?;
+        self.synthetic.drain(..n);
+        Some(events)
+    }
+
+    /// The control channel's next input frame: one pointer event (after a move to it), or keys
+    /// and text up to the next key release; with how many queued events it takes.
+    fn peek_synthetic(&self) -> Option<(Vec<egui::Event>, usize)> {
+        if self.synthetic.is_empty() {
+            return None;
+        }
+        let n = match self.synthetic.first() {
+            Some(egui::Event::PointerMoved(_) | egui::Event::PointerButton { .. }) => 1,
+            _ => self.synthetic.iter().position(|e| matches!(e, egui::Event::Key { pressed: false, .. })).map_or(self.synthetic.len(), |i| i + 1),
+        };
+        let mut events = Vec::new();
+        if let Some(egui::Event::PointerMoved(p) | egui::Event::PointerButton { pos: p, .. }) = self.synthetic.first() {
+            events.push(egui::Event::PointerMoved(*p));
+        }
+        let n = n.min(self.synthetic.len());
+        events.extend(self.synthetic.iter().take(n).cloned());
+        Some((events, n))
+    }
+
+    /// Lay out the windows: on the desktop each open document's in its own native window
+    /// ([`windows`]), on the web the one window.
     pub fn ui(&mut self, ui: &mut egui::Ui) {
+        if self.windows.native() {
+            self.windows_ui(ui);
+        } else {
+            self.window_ui(ui);
+        }
+    }
+
+    /// Lay out the drawn window. A command that brings another window's state in (New, Open,
+    /// Switch Windows) ends this window's drawing for the frame: the rest would be the other
+    /// window's.
+    fn window_ui(&mut self, ui: &mut egui::Ui) {
+        let window = self.windows.shown();
+        let moved = |app: &WordApp| app.windows.shown() != window;
         let t0 = now_ms();
         let ctx = ui.ctx().clone();
         i18n::set_current(i18n::Lang::from_pref(&self.ui.language));
@@ -2576,8 +2862,13 @@ impl WordApp {
             backstage::forget_save_as_error(&ctx);
         }
         self.paint_window(ui, &ctx, t);
-        self.show_overlays(ui, &ctx);
-        self.sync_title_and_frame(&ctx, t0);
+        if !moved(self) {
+            self.show_overlays(ui, &ctx);
+        }
+        if !moved(self) {
+            self.sync_title_and_frame(&ctx, t0);
+        }
+        // The synthetic step this frame took is done even when drawing ended early.
         self.flush_shot_and_synthetic(&ctx);
     }
 
@@ -2611,6 +2902,8 @@ impl WordApp {
 
     /// Draw the File page, the empty-window chrome, or the normal document window.
     fn paint_window(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, t: theme::Tokens) {
+        let window = self.windows.shown();
+        let moved = |app: &WordApp| app.windows.shown() != window;
         if self.ui.backstage {
             backstage::show(self, ui);
         } else if !self.has_document() {
@@ -2627,24 +2920,39 @@ impl WordApp {
                 chrome::screen_bar(self, ui, screen);
             } else {
                 chrome::title_bar(self, ui);
+                if moved(self) {
+                    return;
+                }
                 ribbon::show(self, ui);
+                if moved(self) {
+                    return;
+                }
                 chrome::status_bar(self, ui);
                 panes::show(self, ui);
+            }
+            if moved(self) {
+                return;
             }
             let fill = if screen == chrome::Screen::Focus { chrome::FOCUS_CANVAS } else { t.canvas };
             egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
                 canvas::show(self, ui);
             });
-            if self.focus_ribbon {
+            if self.focus_ribbon && !moved(self) {
                 chrome::focus_ribbon(self, ctx);
             }
         }
     }
 
-    /// Dialogs, panes and other overlays drawn over the window.
+    /// Dialogs, panes and other overlays drawn over the window. A command that brings another
+    /// window's state in ends the drawing: the rest would be the other window's.
     fn show_overlays(&mut self, ui: &mut egui::Ui, ctx: &egui::Context) {
+        let window = self.windows.shown();
+        let moved = |app: &WordApp| app.windows.shown() != window;
         content_controls::popup(self, ctx);
         dialogs::show(self, ctx);
+        if moved(self) {
+            return;
+        }
         updates_ui::show(self, ctx);
         #[cfg(not(target_arch = "wasm32"))]
         file_browser::show(self, ctx);
@@ -2652,7 +2960,13 @@ impl WordApp {
         zotero::show_alert(self, ctx);
         read_aloud::show(self, ctx);
         crate::keytips::show(self, ctx, ui);
+        if moved(self) {
+            return;
+        }
         keys::global_shortcuts(self, ctx);
+        if moved(self) {
+            return;
+        }
         self.refocus_after_chrome_click(ctx);
         if let Some(url) = self.canvas.open_url.take() {
             ctx.open_url(egui::OpenUrl::new_tab(url));
@@ -2661,13 +2975,12 @@ impl WordApp {
 
     /// Keep the window title and full-screen state in sync, then record this frame's time.
     fn sync_title_and_frame(&mut self, ctx: &egui::Context, t0: f64) {
-        let title = if self.has_document() {
-            format!("{}{} - WordCraft", self.title_stem(), if self.session.dirty { " •" } else { "" })
-        } else {
-            "WordCraft".to_string()
-        };
+        // With native windows the viewport driver gives the window its title.
+        let title = self.window_title();
         if title != self.sent_title {
-            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            if !self.windows.driven() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            }
             self.sent_title = title;
         }
         self.sync_full_screen(ctx);
@@ -2817,6 +3130,17 @@ impl WordApp {
                 continue;
             }
             let _ = self.insert_or_change_picture(json!({"data": wordcraft_engine::cmd::insert::base64_encode(&bytes)}));
+        }
+    }
+
+    /// Make the capture geometry the active window's surface, viewport and document. The epoch is
+    /// monotonic: resizing back to an earlier size is still a new epoch.
+    pub(crate) fn refresh_capture_geometry(&mut self, ctx: &egui::Context) {
+        let (viewport, surface) = self.active_surface_geometry(ctx);
+        let geometry = surface.map(|surface| surface.with_target(viewport, self.session.document_id()));
+        if self.capture_geometry != geometry {
+            self.capture_geometry = geometry;
+            self.capture_epoch = self.capture_epoch.wrapping_add(1);
         }
     }
 
@@ -3050,20 +3374,11 @@ fn flushes_comment_drafts(id: &str, params: &Value) -> bool {
     ) || discards_document(id, params)
 }
 
-/// User commands that replace or close the document (New, also from a template; `file.open` without a path only shows the
-/// file picker; the open that follows is checked). Envelopes, Labels and Finish & Merge make a
-/// new document in its place; a merge written to a file (`path`) and an envelope added to this
-/// document (`add`) leave it alone.
-pub(crate) fn discards_document(id: &str, params: &Value) -> bool {
-    match id {
-        "file.new" | "file.newFromTemplate" | "file.close" | "mailings.labels" => true,
-        "mailings.envelopes" => params.get("add").and_then(Value::as_bool) != Some(true),
-        "file.open" => params.get("path").is_some(),
-        "file.recover" => params.get("restore").is_some(),
-        "mailings.finish" => params.get("path").and_then(Value::as_str).is_none(),
-        "mailings.printDocuments" => true,
-        _ => false,
-    }
+/// User commands that close the shown document: Close. New, Open, restoring a recovered copy,
+/// Envelopes, Labels, Finish & Merge and Print Documents open their document beside it (Open and restoring
+/// replace only an untouched blank document, which has nothing to lose).
+pub(crate) fn discards_document(id: &str, _params: &Value) -> bool {
+    id == "file.close"
 }
 
 /// Monotonic milliseconds for deadlines, settling and animation. `web_time::Instant` is a real
@@ -5677,27 +5992,19 @@ mod tests {
         path
     }
 
-    /// Surfaces finding 1: Mod+N (and the File › New tiles) replaced unsaved work without asking.
+    /// Mod+N (and the File › New tiles) open a new document beside unsaved work, asking nothing:
+    /// nothing is replaced.
     #[test]
-    fn new_asks_before_discarding_unsaved_work() {
+    fn new_opens_beside_unsaved_work() {
         let mut a = typed();
-        a.run("file.new", json!({})).unwrap();
-        assert_eq!(prompt(&a), Some("saveChanges"));
-        assert!(body_text(&a).contains(UNSAVED), "the document is untouched while the prompt is up");
-        assert!(a.session.dirty);
-
-        // Cancel: nothing happens.
-        a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-        assert_eq!(prompt(&a), None);
-        assert!(body_text(&a).contains(UNSAVED));
-
-        // Don't Save: the new document replaces it.
+        let first = a.session.document_id();
         a.run("file.new", json!({"template": "letter"})).unwrap();
-        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
         assert_eq!(prompt(&a), None);
         assert!(!body_text(&a).contains(UNSAVED));
         assert!(!a.session.dirty);
         assert!(!body_text(&a).trim().is_empty(), "the template the user picked was used");
+        a.run("view.switchWindows", json!({"id": first})).unwrap();
+        assert!(body_text(&a).contains(UNSAVED) && a.session.dirty, "the unsaved document is still open");
     }
 
     #[test]
@@ -5721,9 +6028,8 @@ mod tests {
         assert!(a.execute("file.open", json!({"path": path.to_string_lossy()})).is_err(), "a script gets the error");
         assert_eq!(prompt(&a), None);
         a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
-        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
         assert_eq!(prompt(&a), Some("password"));
-        assert!(body_text(&a).contains(UNSAVED), "nothing is replaced until the password fits");
+        assert!(body_text(&a).contains(UNSAVED), "nothing opens until the password fits");
         let state = serde_json::to_string(&a.dialog).unwrap();
         assert!(state.contains("locked.docx") && !state.contains("sesame"));
 
@@ -5736,20 +6042,24 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// Open (after the file is picked), recent files and dropped files all go through `file.open`.
+    /// Open (after the file is picked), recent files and dropped files all go through `file.open`:
+    /// the file opens beside unsaved work, asking nothing, and opening it again shows it.
     #[test]
-    fn open_asks_before_discarding_unsaved_work() {
+    fn open_opens_beside_unsaved_work() {
         let dir = scratch("open");
         let path = docx_on_disk(&dir, "Signed contract");
         let mut a = typed();
+        let first = a.session.document_id();
         a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
-        assert_eq!(prompt(&a), Some("saveChanges"));
-        assert!(body_text(&a).contains(UNSAVED));
-        assert_eq!(a.session.path, None);
-
-        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+        assert_eq!(prompt(&a), None);
         assert!(body_text(&a).contains("Signed contract"));
         assert_eq!(a.session.path.as_deref(), Some(path.as_path()));
+        let opened = a.session.document_id();
+        a.run("view.switchWindows", json!({"id": first})).unwrap();
+        assert!(body_text(&a).contains(UNSAVED) && a.session.dirty);
+        a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
+        assert_eq!(a.session.document_id(), opened, "an open file is shown, not opened twice");
+        assert_eq!(a.session.documents().len(), 2);
         let _ = std::fs::remove_dir_all(&dir);
     }
 
@@ -6471,15 +6781,15 @@ mod tests {
         }
     }
 
-    /// A prompt about document A outlived an agent replacing A with B, and Don't Save then ran
-    /// the pending New against B, throwing away B's edits under a question naming A.
+    /// A prompt about document A outlived an agent showing B instead, and Don't Save then ran
+    /// the pending Close against B, throwing away B's edits under a question naming A.
     #[test]
     fn a_prompt_is_dropped_when_its_document_is_replaced() {
         let dir = scratch("stale");
         let path = docx_on_disk(&dir, "Agent document");
         let ctx = egui::Context::default();
         let mut a = typed();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         assert_eq!(prompt(&a), Some("saveChanges"));
         let asked = a.dialog.clone();
         for command in [
@@ -6831,6 +7141,70 @@ mod tests {
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Kilns");
     }
 
+    /// PR #4241: Ctrl/Cmd+Shift+C copies the selection's formatting and Ctrl/Cmd+Shift+V pastes it
+    /// onto another selection, as in Word — not the text. egui 0.37 delivers those chords as keys
+    /// (only Cmd/Ctrl without extra modifiers become copy/paste events), so the registry's
+    /// `Mod+Shift+C`/`Mod+Shift+V` commands must run.
+    #[test]
+    fn ctrl_shift_c_and_v_copy_and_paste_formatting_not_text() {
+        // A native event carries ⌘ (mac_cmd and command) on macOS, Ctrl (ctrl and command)
+        // elsewhere; COMMAND+SHIFT is the logical chord both platforms resolve.
+        let native = if cfg!(target_os = "macos") {
+            egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
+        } else {
+            egui::Modifiers::CTRL | egui::Modifiers::COMMAND | egui::Modifiers::SHIFT
+        };
+        let copied = |h: &egui_kittest::Harness<WordApp>| -> Vec<String> {
+            h.output()
+                .platform_output
+                .commands
+                .iter()
+                .filter_map(|c| match c {
+                    egui::OutputCommand::CopyText(t) => Some(t.clone()),
+                    _ => None,
+                })
+                .collect()
+        };
+        let bold = |h: &mut egui_kittest::Harness<WordApp>| -> Option<bool> {
+            h.state_mut().run("format.state", json!({})).unwrap().get("bold").and_then(Value::as_bool)
+        };
+        for modifiers in [egui::Modifiers::COMMAND | egui::Modifiers::SHIFT, native] {
+            let mut a = app();
+            a.run("text.insert", json!({"text": "Bold plain"})).unwrap();
+            a.run("select.text", json!({"text": "Bold"})).unwrap();
+            a.run("format.bold", json!({})).unwrap();
+            a.run("select.text", json!({"text": "plain"})).unwrap();
+            a.run("edit.copy", json!({})).unwrap();
+            let clipboard_entries = a.session.clip_history.len();
+            assert_eq!(a.session.clipboard_text, "plain");
+            assert!(clipboard_entries > 0);
+            a.run("select.text", json!({"text": "Bold"})).unwrap();
+            let mut h = harness(a);
+            h.run_steps(6);
+            assert!(h.state().canvas.focused, "the canvas's key handler has the keyboard");
+            assert_eq!(bold(&mut h), Some(true), "the source selection is bold");
+            let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
+            h.event(key(egui::Key::C, modifiers));
+            h.step();
+            assert!(h.state().session.painter.is_some(), "{modifiers:?}: Copy Formatting picked up the selection's formatting");
+            assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Copy Formatting preserved clipboard history");
+            assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: the existing clipboard text was preserved");
+            assert!(copied(&h).is_empty(), "{modifiers:?}: no text reached the system clipboard: {:?}", copied(&h));
+            assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: copying formatting left the document text alone");
+
+            h.state_mut().run("select.text", json!({"text": "plain"})).unwrap();
+            assert_eq!(bold(&mut h), Some(false), "the target selection is plain before the paste");
+            h.event(key(egui::Key::V, modifiers));
+            h.step();
+            assert_eq!(bold(&mut h), Some(true), "{modifiers:?}: Paste Formatting made the target bold");
+            assert!(h.state().session.painter.is_none(), "{modifiers:?}: the non-sticky painter is used up");
+            assert_eq!(body_text(h.state()), "Bold plain", "{modifiers:?}: pasting formatting left the document text alone");
+            assert_eq!(h.state().session.clip_history.len(), clipboard_entries, "{modifiers:?}: Paste Formatting preserved clipboard history");
+            assert_eq!(h.state().session.clipboard_text, "plain", "{modifiers:?}: Paste Formatting preserved the clipboard text");
+            assert!(copied(&h).is_empty(), "{modifiers:?}: pasting formatting put no text on the system clipboard: {:?}", copied(&h));
+        }
+    }
+
     /// #1669: with Shift held, Backspace still erases (#707) and Delete cuts the selection, doing
     /// nothing without one, as in Word for Windows. (Windows sends Shift+Delete as a Cut; macOS and
     /// Linux send the key, which reached no command.)
@@ -6921,7 +7295,8 @@ mod tests {
         assert!(!closes(&h), "Ctrl+Q doesn't close the window");
         h.event(key(egui::Key::Q, egui::Modifiers::MAC_CMD | egui::Modifiers::COMMAND));
         h.step();
-        assert!(closes(&h), "⌘Q still quits on the Mac");
+        // Quitting asks about the typed text first, in the document's window.
+        assert_eq!(h.state().dialog.as_ref().map(|d| d.name()), Some("saveChanges"), "⌘Q still quits on the Mac");
     }
 
     /// #3424: Pressing Ctrl+Alt+Q (German shortcut for @, or AltGr+Q) types '@' and does not
@@ -7038,11 +7413,11 @@ mod tests {
         let mut a = app();
         a.run("file.open", json!({"path": path.to_string_lossy()})).unwrap();
         a.run("text.insert", json!({"text": "Revised "})).unwrap();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         assert_eq!(prompt(&a), Some("saveChanges"));
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         assert_eq!(prompt(&a), None);
-        assert_eq!(a.session.path, None, "the new document replaced the saved one");
+        assert!(!a.has_document(), "the saved document closed");
         let saved = wordcraft_engine::io::open_path(&path).unwrap();
         assert!(saved.plain_text(wordcraft_doc::StoryRef::Body).contains("Revised Draft"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -7057,10 +7432,10 @@ mod tests {
             let picked = dir.join(format!("novel.{ext}")).to_string_lossy().to_string();
             let mut a = typed();
             a.services.pick_save = Some(Box::new(move |_| Some(picked.clone())));
-            a.run("file.new", json!({})).unwrap();
+            a.run("file.close", json!({})).unwrap();
             a.status_msg = None;
             let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-            assert_eq!(r["done"], false, "{ext}: the New was cancelled");
+            assert_eq!(r["done"], false, "{ext}: the Close was cancelled");
             assert!(dir.join(format!("novel.{ext}")).exists(), "{ext}: the copy was written");
             assert_eq!(prompt(&a), None);
             assert!(body_text(&a).contains(UNSAVED), "{ext}: the document is kept");
@@ -7259,9 +7634,9 @@ mod tests {
         assert!(a.execute("file.save", json!({})).is_err());
         assert!(a.session.dirty);
 
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         a.status_msg = None;
-        // A failed save is an error, not a quiet Cancel (#1445); the New doesn't run.
+        // A failed save is an error, not a quiet Cancel (#1445); the Close doesn't run.
         let err = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap_err();
         assert!(err.contains("still open") && err.contains("blocked by the browser"), "{err}");
         assert!(body_text(&a).contains(UNSAVED));
@@ -7286,21 +7661,21 @@ mod tests {
         (a, saves, last)
     }
 
-    /// #1315: Save in the prompt before New waits for the picker: New runs only once the file
+    /// #1315: Save in the prompt before Close waits for the picker: Close runs only once the file
     /// is written and closed.
     #[test]
-    fn web_save_before_new_waits_for_the_picker_to_finish() {
+    fn web_save_before_close_waits_for_the_picker_to_finish() {
         let (mut a, saves, last) = web_picker_app();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         assert_eq!(prompt(&a), Some("saveChanges"));
         let r = a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         assert_eq!(r["pending"], "save", "{r}");
         assert_eq!(saves.pending(), 1);
         a.settle_async_saves();
-        assert!(body_text(&a).contains(UNSAVED), "nothing is replaced while the picker is open");
+        assert!(body_text(&a).contains(UNSAVED), "nothing closes while the picker is open");
         saves.finish(last.get(), async_saves::SaveOutcome::Saved);
         a.settle_async_saves();
-        assert!(!body_text(&a).contains(UNSAVED), "the New ran once the save finished");
+        assert!(!body_text(&a).contains(UNSAVED), "the Close ran once the save finished");
         assert!(!a.session.dirty);
         assert_eq!(prompt(&a), None);
     }
@@ -7308,12 +7683,12 @@ mod tests {
     /// #1315: cancelling the picker, or a write/close that fails, keeps the document: its text,
     /// its undo, still unsaved, and the prompt back with the reason. Nothing is replaced.
     #[test]
-    fn web_save_before_new_that_is_cancelled_or_fails_keeps_the_document() {
+    fn web_save_before_close_that_is_cancelled_or_fails_keeps_the_document() {
         for (outcome, reason) in
             [(async_saves::SaveOutcome::Cancelled, "cancel"), (async_saves::SaveOutcome::Failed("the disk is full".into()), "the disk is full")]
         {
             let (mut a, saves, last) = web_picker_app();
-            a.run("file.new", json!({})).unwrap();
+            a.run("file.close", json!({})).unwrap();
             a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
             a.status_msg = None;
             saves.finish(last.get(), outcome.clone());
@@ -7333,11 +7708,11 @@ mod tests {
 
     /// #1315 review: the prompt's Save is in the picker (ticket 1), the user edits and saves
     /// again (ticket 2, which marks the document saved at once). Ticket 1 ending doesn't let the
-    /// held-back New replace the document while ticket 2 hasn't written its edits.
+    /// held-back Close close the document while ticket 2 hasn't written its edits.
     #[test]
     fn web_overlapping_saves_hold_the_replacement() {
         let (mut a, saves, last) = web_picker_app();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         let first = last.get();
         a.run("text.insert", json!({"text": "Later edit "})).unwrap();
@@ -7350,11 +7725,11 @@ mod tests {
     }
 
     /// #1315 review: edited while the picker was open, then the save ends: those edits aren't
-    /// in the file, so the prompt asks again instead of running New.
+    /// in the file, so the prompt asks again instead of running Close.
     #[test]
     fn web_save_that_ends_after_an_edit_asks_again() {
         let (mut a, saves, last) = web_picker_app();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         a.run("text.insert", json!({"text": "Later edit "})).unwrap();
         saves.finish(last.get(), async_saves::SaveOutcome::Saved);
@@ -7365,12 +7740,12 @@ mod tests {
         assert_eq!(prompt_message(&a).as_deref(), Some(""));
     }
 
-    /// #1315 review: the status bar says New/Open is waiting for the save; a cancelled picker
+    /// #1315 review: the status bar says Close is waiting for the save; a cancelled picker
     /// says it was cancelled, not that saving failed.
     #[test]
     fn web_save_prompt_says_it_waits_and_that_a_cancel_was_a_cancel() {
         let (mut a, saves, last) = web_picker_app();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         a.status_msg = None;
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         let status = a.status_msg.as_ref().map(|(m, _)| m.clone()).unwrap_or_default();
@@ -7382,62 +7757,61 @@ mod tests {
         assert!(!message.contains("Couldn't save"), "a cancel isn't a failure: {message}");
     }
 
-    /// #1315 review: a document dropped or picked on the web (`file.open` with its bytes) waits
-    /// for the save too, then opens.
+    /// #1315 review: a document dropped or picked on the web (`file.open` with its bytes) opens
+    /// beside one whose save is still in the picker, asking nothing.
     #[test]
-    fn web_save_before_open_opens_the_file_once_saved() {
+    fn web_open_opens_beside_a_save_in_flight() {
         let dir = scratch("web-open-after-save");
         let bytes = std::fs::read(docx_on_disk(&dir, "Picked document")).unwrap();
-        let (mut a, saves, last) = web_picker_app();
+        let (mut a, _saves, _last) = web_picker_app();
+        let first = a.session.document_id();
+        a.execute("file.save", json!({})).unwrap();
         let data = wordcraft_engine::cmd::insert::base64_encode(&bytes);
         a.run("file.open", json!({"path": "picked.docx", "data": data})).unwrap();
-        assert_eq!(prompt(&a), Some("saveChanges"));
-        a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-        a.settle_async_saves();
-        assert!(body_text(&a).contains(UNSAVED), "nothing opened while the picker is open");
-        saves.finish(last.get(), async_saves::SaveOutcome::Saved);
-        a.settle_async_saves();
+        assert_eq!(prompt(&a), None);
         assert!(body_text(&a).contains("Picked document"), "the picked file opened: {:?}", body_text(&a));
+        a.run("view.switchWindows", json!({"id": first})).unwrap();
+        assert!(body_text(&a).contains(UNSAVED), "the first document is still open");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// #1315: while the picker save is in flight the document's save isn't confirmed, so New
-    /// asks again instead of replacing it.
+    /// #1315: while the picker save is in flight the document's save isn't confirmed, so Close
+    /// asks again instead of closing it.
     #[test]
-    fn web_new_while_a_picker_save_is_in_flight_asks_first() {
+    fn web_close_while_a_picker_save_is_in_flight_asks_first() {
         let (mut a, _saves, _last) = web_picker_app();
         a.execute("file.save", json!({})).unwrap();
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         assert_eq!(prompt(&a), Some("saveChanges"));
         assert!(body_text(&a).contains(UNSAVED), "nothing was replaced");
     }
 
-    /// #1315: a save that ends after the document was replaced neither runs the held-back New on
-    /// the new document nor marks it unsaved.
+    /// #1315: a save that ends after another document is shown neither runs the held-back Close
+    /// on that document nor marks it unsaved.
     #[test]
     fn web_picker_save_ending_after_the_document_changed_leaves_the_new_one_alone() {
         for outcome in [async_saves::SaveOutcome::Saved, async_saves::SaveOutcome::Failed("gone".into())] {
             let (mut a, saves, last) = web_picker_app();
-            a.run("file.new", json!({})).unwrap();
+            a.run("file.close", json!({})).unwrap();
             a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-            // Another document replaces it (an agent's or a script's command) while the picker is open.
+            // Another document is shown (an agent's or a script's command) while the picker is open.
             a.execute("file.new", json!({})).unwrap();
             a.execute("text.insert", json!({"text": "Second document"})).unwrap();
             a.session.dirty = false;
             saves.finish(last.get(), outcome.clone());
             a.settle_async_saves();
-            assert!(body_text(&a).contains("Second document"), "{outcome:?}: the held-back New didn't run on it");
+            assert!(body_text(&a).contains("Second document"), "{outcome:?}: the held-back Close didn't run on it");
             assert!(!a.session.dirty, "{outcome:?}: the new document isn't marked unsaved");
             assert_eq!(prompt(&a), None, "{outcome:?}");
         }
     }
 
-    /// A new document has no path: Save goes through Save As, and cancelling that cancels the New.
+    /// A new document has no path: Save goes through Save As, and cancelling that cancels the Close.
     #[test]
     fn save_as_cancelled_keeps_the_document() {
         let mut a = typed();
         a.services.pick_save = Some(Box::new(|_| None));
-        a.run("file.new", json!({})).unwrap();
+        a.run("file.close", json!({})).unwrap();
         a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
         assert_eq!(prompt(&a), None);
         assert!(body_text(&a).contains(UNSAVED));
@@ -7555,35 +7929,28 @@ mod tests {
         }
     }
 
-    /// Envelopes, Labels and Finish & Merge replace the document with a new one, like New, but
-    /// the ribbon ran them at once and the unsaved document was gone without a question.
+    /// Envelopes, Labels and Finish & Merge open their result as a new document beside the
+    /// unsaved one, like New, asking nothing.
     #[test]
-    fn mailings_ask_before_replacing_unsaved_work() {
+    fn mailings_open_beside_unsaved_work() {
         for id in MAILINGS {
             let mut a = typed();
             a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
             let document = a.session.document_id();
             a.run(id, mailing(id)).unwrap();
-            assert_eq!(prompt(&a), Some("saveChanges"), "{id}");
-            assert_eq!(a.session.document_id(), document, "{id}: untouched while the prompt is up");
-
-            a.run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-            assert_eq!(prompt(&a), None);
-            assert_eq!(a.session.document_id(), document, "{id}: Cancel keeps the document");
-            assert!(body_text(&a).contains(UNSAVED));
-            assert!(a.session.dirty);
-
-            a.run(id, mailing(id)).unwrap();
-            a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-            assert_eq!(prompt(&a), None);
-            assert_ne!(a.session.document_id(), document, "{id}: Don't Save makes the new document");
+            assert_eq!(prompt(&a), None, "{id}");
+            assert_ne!(a.session.document_id(), document, "{id}: the result is a new document");
             assert_eq!(a.session.path, None);
+            a.run("view.switchWindows", json!({"id": document})).unwrap();
+            assert!(body_text(&a).contains(UNSAVED) && a.session.dirty, "{id}: the unsaved document is still open");
         }
-        // A `path` that isn't text merges into a new document, like no path at all.
+        // A `path` that isn't text merges into a new document beside this one, like no path at all.
         let mut a = typed();
         a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+        let document = a.session.document_id();
         a.run("mailings.finish", json!({"path": null, "records": "all"})).unwrap();
-        assert_eq!(prompt(&a), Some("saveChanges"));
+        assert_eq!(prompt(&a), None);
+        assert_ne!(a.session.document_id(), document);
     }
 
     /// A clean document is replaced straight away, like New; a merge written to a file
@@ -7612,7 +7979,7 @@ mod tests {
     }
 
     /// The result is a new, untitled document: Save, AutoSave and the title never point at the
-    /// file the original came from, even after Save in the prompt wrote that file.
+    /// file the original came from.
     #[test]
     fn mailings_results_never_save_over_the_original() {
         for id in MAILINGS {
@@ -7625,14 +7992,9 @@ mod tests {
             assert!(a.autosaves());
             a.run("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
             a.run("text.insert", json!({"text": "Again "})).unwrap();
-            a.run(id, mailing(id)).unwrap();
-            a.run("ui.saveChanges", json!({"answer": "save"})).unwrap();
-            assert_eq!(prompt(&a), None);
             let saved = std::fs::read(&path).unwrap();
-            assert!(
-                wordcraft_engine::io::open_path(&path).unwrap().plain_text(wordcraft_doc::StoryRef::Body).contains("Revised Again Signed"),
-                "{id}: Save wrote the document first"
-            );
+            a.run(id, mailing(id)).unwrap();
+            assert_eq!(prompt(&a), None);
 
             assert_eq!(a.session.path, None, "{id}");
             assert!(!a.saved_here() && !a.autosaves(), "{id}: AutoSave doesn't cover the result");
@@ -7665,26 +8027,28 @@ mod tests {
         }
     }
 
-    /// Review finding: with undo kept across the swap, an agent's Undo brought document A back
-    /// under the id of the mailing result B while a prompt about B was up, and Don't Save then
-    /// threw away A. The history starts afresh instead, so the prompt only ever discards B.
+    /// Review finding: an agent's Undo while a prompt about the mailing result B was up must not
+    /// bring document A back under B, where Don't Save would throw A away. The result is its
+    /// own document: Undo stays in B, and Don't Save closes B and shows A, unsaved work intact.
     #[test]
     fn undo_after_a_mailing_cannot_redirect_a_pending_prompt() {
         for id in MAILINGS {
             let mut a = typed();
             a.execute("mailings.recipients", json!({"csv": "Name\nAda"})).unwrap();
+            let first = a.session.document_id();
             a.execute(id, json!({})).unwrap();
-            let result = body_text(&a);
             let b = a.session.document_id();
-            assert!(a.session.dirty, "{id}: the result is unsaved");
-            a.run("file.new", json!({})).unwrap();
+            assert_ne!(b, first, "{id}");
+            a.run("text.insert", json!({"text": "Edited result "})).unwrap();
+            a.run("file.close", json!({})).unwrap();
             assert_eq!(prompt(&a), Some("saveChanges"), "{id}");
 
             a.execute("edit.undo", json!({})).unwrap();
             assert_eq!(a.session.document_id(), b, "{id}");
-            assert_eq!(body_text(&a), result, "{id}: nothing from before the mailing comes back");
             a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-            assert_ne!(a.session.document_id(), b, "{id}: Don't Save discarded the document it asked about");
+            assert!(!a.session.is_open(b), "{id}: Don't Save closed the document it asked about");
+            assert_eq!(a.session.document_id(), first, "{id}");
+            assert!(body_text(&a).contains(UNSAVED) && a.session.dirty, "{id}");
         }
     }
 
@@ -7914,6 +8278,125 @@ mod tests {
         let mut old = app();
         old.apply_prefs(serde_json::from_str(r#"{"navTab": "headings"}"#).unwrap());
         assert!(!old.session.view.nav_pane, "no saved value: closed");
+    }
+
+    /// Task panes: two open panes on one edge sit side by side, the first outermost; a pane's ×
+    /// runs its command; the Styles pane's place and float rect survive a restart (#1756).
+    #[test]
+    fn task_panes_share_an_edge_close_and_keep_the_styles_place() {
+        use egui_kittest::kittest::Queryable;
+        let bars = |h: &egui_kittest::Harness<'_, WordApp>| {
+            let mut bars: Vec<egui::Rect> = h.get_all_by_label_contains("Move Pane: ").map(|n| n.rect()).collect();
+            bars.sort_by(|a, b| a.left().total_cmp(&b.left()));
+            bars
+        };
+        // A title bar's ▾ and × sit right of the bar, on its row.
+        fn click_button(h: &egui_kittest::Harness<'_, WordApp>, bar: egui::Rect, label: &str) {
+            let on_row = |r: egui::Rect| r.center().y > bar.top() && r.center().y < bar.bottom() && r.left() >= bar.right() - 1.0;
+            let node = h.get_all_by_label(label).filter(|n| on_row(n.rect())).min_by(|a, b| a.rect().left().total_cmp(&b.rect().left()));
+            node.unwrap_or_else(|| panic!("no {label} beside the title bar")).click();
+        }
+        let mut a = app();
+        a.run("view.stylesPane", json!({"value": true})).unwrap();
+        a.run("view.commentsPane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+        let [comments, styles] = bars(&h)[..] else { panic!("two pane title bars") };
+        assert!(comments.right() <= styles.left() + 1.0, "side by side");
+        assert!(comments.left() > 720.0, "both on the right");
+        // Default widths 290 and 250: Styles, opened first, is the outer one.
+        assert!((comments.width() - styles.width() - 40.0).abs() < 2.0, "Styles is outermost: {comments:?} {styles:?}");
+
+        click_button(&h, styles, "Close");
+        h.run_steps(3);
+        assert!(!h.state().session.view.styles_pane, "× ran view.stylesPane");
+        assert!(h.state().session.view.comments_pane);
+        assert_eq!(bars(&h).len(), 1);
+
+        h.state_mut().run("view.stylesPane", json!({"value": true})).unwrap();
+        h.run_steps(3);
+        let styles = *bars(&h).last().unwrap();
+        click_button(&h, styles, "Pane Options");
+        h.run_steps(2);
+        h.get_by_label("Float").click();
+        h.run_steps(3);
+        assert_eq!(h.state().session.view.styles_pane_dock, wordcraft_engine::StylesPaneDock::Floating);
+        let rect = h.state().ui.styles_pane_float.expect("the float rect is kept");
+
+        let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+        let mut next = app();
+        next.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        assert_eq!(next.session.view.styles_pane_dock, wordcraft_engine::StylesPaneDock::Floating);
+        assert_eq!(next.ui.styles_pane_float, Some(rect));
+
+        let mut junk = app();
+        junk.apply_prefs(serde_json::from_str(r#"{"stylesPaneDock": "top", "stylesPaneFloat": [1, "x", 3, 4], "navPane": true}"#).unwrap());
+        assert_eq!(junk.session.view.styles_pane_dock, wordcraft_engine::StylesPaneDock::Right, "junk reads as the default");
+        assert_eq!(junk.ui.styles_pane_float, None);
+        assert!(junk.session.view.nav_pane, "the rest of the file still loads");
+    }
+
+    /// A pointer drag on a pane's resize edge leaves no keyboard focus behind, so Ctrl and
+    /// F-key shortcuts run right after it, docked or floating. A resize edge focused from the
+    /// keyboard takes the arrow keys until Escape (#1756).
+    #[test]
+    fn shortcuts_run_after_a_pane_resize() {
+        use egui_kittest::kittest::Queryable;
+        type H = egui_kittest::Harness<'static, WordApp>;
+        fn key(h: &mut H, key: egui::Key, modifiers: egui::Modifiers) {
+            h.event(egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers });
+            h.run_steps(2);
+        }
+        fn drag(h: &mut H, from: egui::Pos2, by: egui::Vec2) {
+            let button =
+                |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+            h.event(egui::Event::PointerMoved(from));
+            h.step();
+            h.event(button(from, true));
+            h.step();
+            for t in [0.5, 1.0] {
+                h.event(egui::Event::PointerMoved(from + by * t));
+                h.step();
+            }
+            h.event(button(from + by, false));
+            h.run_steps(2);
+        }
+        // Ctrl+H opens Replace; Escape closes it again.
+        fn replace_opens(h: &mut H) -> bool {
+            key(h, egui::Key::H, egui::Modifiers::COMMAND);
+            let opened = h.state().dialog.as_ref().map(|d| d.name()) == Some("replace");
+            key(h, egui::Key::Escape, egui::Modifiers::NONE);
+            opened && h.state().dialog.is_none()
+        }
+        let mut a = app();
+        a.run("view.stylesPane", json!({"value": true})).unwrap();
+        let mut h = harness(a);
+        h.run_steps(4);
+
+        let edge = h.get_by_label("Resize Pane").rect();
+        // On the pane's side of the edge: the document's scroll bar lies under its outer half.
+        drag(&mut h, edge.center() + egui::vec2(1.5, 0.0), egui::vec2(-40.0, 0.0));
+        let width = h.state().ui.styles_pane_width.unwrap_or_default();
+        assert!((width - 290.0).abs() <= 2.0, "the drag widened the docked pane: {width}");
+        assert!(replace_opens(&mut h), "Ctrl+H runs after the drag");
+
+        h.get_by_label("Resize Pane").focus();
+        h.run_steps(2);
+        key(&mut h, egui::Key::ArrowLeft, egui::Modifiers::NONE);
+        assert!(h.state().ui.styles_pane_width.is_some_and(|w| w > width), "arrow keys move the focused edge");
+        key(&mut h, egui::Key::Escape, egui::Modifiers::NONE);
+        assert_eq!(h.ctx.memory(|m| m.focused()), None, "Escape leaves the edge");
+        assert!(replace_opens(&mut h), "Ctrl+H runs after Escape");
+
+        h.state_mut().run("view.stylesPaneDock", json!({"dock": "float"})).unwrap();
+        h.run_steps(3);
+        // The bottom-right grip.
+        let corner = |r: &egui::Rect| r.max.x + r.max.y;
+        let grip = h.get_all_by_label("Resize Pane").map(|n| n.rect()).max_by(|a, b| corner(a).total_cmp(&corner(b))).unwrap();
+        let before = h.state().ui.styles_pane_float;
+        drag(&mut h, grip.center(), egui::vec2(30.0, 30.0));
+        assert_ne!(h.state().ui.styles_pane_float, before, "the drag resized the floating pane");
+        assert!(replace_opens(&mut h), "Ctrl+H runs after the floating pane's resize");
     }
 
     #[test]
@@ -9092,10 +9575,11 @@ mod tests {
         assert!(!a.recipient_list_pending);
         inbox.lock().unwrap().push(("notes.txt".into(), b"A plain text document.\nAnother line.\n".to_vec()));
         a.drain_inbox();
-        assert_eq!(prompt(&a), Some("saveChanges"), "the TXT opens like any document");
-        a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        assert_eq!(a.session.merge.headers, vec!["Name", "City"], "the recipients stay");
+        assert_eq!(prompt(&a), None, "the TXT opens like any document, beside the first");
         assert!(body_text(&a).contains("A plain text document."), "the TXT opened as a document");
+        let first = a.session.documents().first().map(|d| d.id).unwrap();
+        a.run("view.switchWindows", json!({"id": first})).unwrap();
+        assert_eq!(a.session.merge.headers, vec!["Name", "City"], "the recipients stay with their document");
         // A cancelled picker leaves nothing pending once the user does something else.
         a.run("ui.openRecipientList", json!({})).unwrap();
         a.run("format.bold", json!({})).unwrap();
@@ -9309,7 +9793,8 @@ mod tests {
         let key = |key, modifiers| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers };
         h.event(egui::Event::Text("Kilns fire clay. Kilns cool.".into()));
         h.step();
-        let nav_query = |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(egui::Id::unique("nav_query"))).unwrap_or_default();
+        let nav_query =
+            |h: &egui_kittest::Harness<WordApp>| h.ctx.data(|d| d.get_temp::<String>(h.state().window_id("nav_query"))).unwrap_or_default();
         // Ctrl+F: the pane, and typing goes into its search box.
         h.event(key(egui::Key::F, egui::Modifiers::COMMAND));
         h.step();
@@ -9494,7 +9979,7 @@ mod tests {
         let mut raw = egui::RawInput { screen_rect: Some(rect), ..Default::default() };
         raw.viewports.get_mut(&egui::ViewportId::ROOT).unwrap().native_pixels_per_point = Some(1.5);
         let surface = control::SurfaceGeometry::from_raw(&raw, &ctx).expect("screen rect fallback");
-        let geometry = surface.with_document(7);
+        let geometry = surface.with_target(egui::ViewportId::ROOT, 7);
         assert_eq!(geometry.expected_size(), Some([480, 300]));
         assert_eq!(geometry.expected_bytes(), Some(480 * 300 * 4));
     }
@@ -9911,13 +10396,14 @@ mod tests {
         h.step();
         assert!(h.state().session.view.focus_mode);
         assert!(!shown(&h, "Ruler") && !shown(&h, "Focus"), "the ribbon is hidden");
-        assert!(!shown(&h, "Navigation"), "and so is the Navigation pane");
+        // The pane's title bar: the only pane open is Navigation.
+        assert!(!shown(&h, "Move Pane: Navigation"), "and so is the Navigation pane");
         h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE });
         h.step();
         h.step();
         assert!(!h.state().session.view.focus_mode, "Escape leaves Focus");
         assert!(shown(&h, "Ruler"), "and the ribbon is back");
-        assert!(shown(&h, "Navigation"), "with the pane");
+        assert!(shown(&h, "Move Pane: Navigation"), "with the pane");
         // Immersive Reader is Read Mode, not Focus: its status bar stays.
         h.state_mut().run("view.immersive", json!({})).unwrap();
         h.step();

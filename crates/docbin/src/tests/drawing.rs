@@ -247,7 +247,7 @@ fn dib_becomes_png_and_compressed_metafiles_inflate() {
     dib.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
     let r = rec(0, 0x7A8, 0xF01F, &[[0u8; 16].as_slice(), &[0xFF], &dib].concat());
     let (dib_rec, _) = officeart::record(&r).unwrap();
-    let blip = officeart::blip(&dib_rec, 1 << 20, &mut { usize::MAX }).expect("DIB decodes");
+    let blip = officeart::blip(&dib_rec, 1 << 20, &mut officeart::Decode::new(usize::MAX)).expect("DIB decodes");
     assert_eq!(blip.ext, "png");
     let img = image::load_from_memory(&blip.bytes).unwrap().to_rgb8();
     assert_eq!((img.width(), img.height(), img.get_pixel(0, 0).0), (2, 1, [255, 0, 0]));
@@ -262,7 +262,7 @@ fn dib_becomes_png_and_compressed_metafiles_inflate() {
     hdr.extend_from_slice(&[0x00, 0xFE]); // compression = deflate, filter
     let r = rec(0, 0x216, 0xF01B, &[[0u8; 16].as_slice(), &hdr, &packed].concat());
     let (wmf_rec, _) = officeart::record(&r).unwrap();
-    let blip = officeart::blip(&wmf_rec, 1 << 20, &mut { usize::MAX }).expect("WMF inflates");
+    let blip = officeart::blip(&wmf_rec, 1 << 20, &mut officeart::Decode::new(usize::MAX)).expect("WMF inflates");
     assert_eq!((blip.ext, blip.bytes), ("wmf", wmf));
 }
 
@@ -281,10 +281,10 @@ fn deeply_nested_groups_and_lying_lengths_are_bounded() {
     hdr.extend_from_slice(&[0, 0]);
     let r = rec(0, 0x3D4, 0xF01A, &[[0u8; 16].as_slice(), &hdr, &[0x78, 0x9C, 1, 2, 3]].concat());
     let (emf, _) = officeart::record(&r).unwrap();
-    assert!(officeart::blip(&emf, 1 << 20, &mut { usize::MAX }).is_none());
+    assert!(officeart::blip(&emf, 1 << 20, &mut officeart::Decode::new(usize::MAX)).is_none());
     let mut fbse = vec![0u8; 36];
     fbse[28..32].copy_from_slice(&u32::MAX.to_le_bytes());
-    assert!(officeart::fbse_blip(&fbse, &[0u8; 64], 1 << 20, &mut { usize::MAX }).is_none());
+    assert!(officeart::fbse_blip(&fbse, &[0u8; 64], 1 << 20, &mut officeart::Decode::new(usize::MAX)).is_none());
 }
 
 proptest! {
@@ -322,12 +322,12 @@ fn dib_conversion_caps_header_and_encoded_bytes() {
     let record = rec(0, 0x7A8, officeart::rt::BLIP_DIB, &[[0u8; 16].as_slice(), &[0xFF], &dib].concat());
     let (record, _) = officeart::record(&record).unwrap();
     let bmp_size = 14 + dib.len();
-    assert!(officeart::blip(&record, bmp_size - 1, &mut { usize::MAX }).is_none(), "the BMP header also needs room");
-    let fallback = officeart::blip(&record, bmp_size, &mut { usize::MAX }).expect("the BMP fallback fits exactly");
+    assert!(officeart::blip(&record, bmp_size - 1, &mut officeart::Decode::new(usize::MAX)).is_none(), "the BMP header also needs room");
+    let fallback = officeart::blip(&record, bmp_size, &mut officeart::Decode::new(usize::MAX)).expect("the BMP fallback fits exactly");
     assert_eq!((fallback.ext, fallback.placeholder, fallback.bytes.len()), ("bmp", true, bmp_size));
     let img = image::load_from_memory(&fallback.bytes).unwrap().to_rgb8();
     assert_eq!((img.width(), img.height(), img.get_pixel(0, 0).0), (1, 1, [90, 60, 30]));
-    let normal = officeart::blip(&record, 512, &mut { usize::MAX }).expect("normal conversion fits");
+    let normal = officeart::blip(&record, 512, &mut officeart::Decode::new(usize::MAX)).expect("normal conversion fits");
     assert_eq!((normal.ext, normal.placeholder), ("png", false));
     assert!(normal.bytes.len() > bmp_size && normal.bytes.len() <= 512);
     assert_eq!(image::load_from_memory(&normal.bytes).unwrap().width(), 1);
@@ -434,10 +434,10 @@ fn store_entries_aliasing_one_delayed_metafile_decode_it_once() {
     let fbse = delayed_fbse(delay.len(), 0);
     let store: Vec<&[u8]> = vec![&fbse; 5_000];
     let mut pics = crate::media::Pictures::default();
-    pics.work = 8 << 20;
+    pics.work = officeart::Decode::new(8 << 20);
     let keys: Vec<_> = (1..=store.len() as u32).map(|pib| pics.bse(pib, &store, &delay)).collect();
     assert!(keys.iter().all(|k| k.is_some() && *k == keys[0]), "every entry shares one picture");
-    assert_eq!(pics.work, (8 << 20) - wmf.len(), "inflated once");
+    assert_eq!(pics.work.left, (8 << 20) - wmf.len(), "inflated once");
 }
 
 /// #3711: distinct metafiles that fail to inflate are charged their declared size anyway, so
@@ -456,11 +456,11 @@ fn failing_metafile_inflations_spend_the_decode_budget() {
         .collect();
     let store: Vec<&[u8]> = fbses.iter().map(Vec::as_slice).collect();
     let mut pics = crate::media::Pictures::default();
-    pics.work = 3 << 20;
+    pics.work = officeart::Decode::new(3 << 20);
     for pib in 1..=store.len() as u32 {
         assert!(pics.bse(pib, &store, &delay).is_none());
     }
-    assert_eq!(pics.work, 0, "three attempts spent the budget; the rest weren't tried");
+    assert_eq!(pics.work.left, 0, "three attempts spent the budget; the rest weren't tried");
 }
 
 /// #3712: a DIB's declared pixels are charged before decoding (an RLE bitmap is tiny on disk but
@@ -470,12 +470,13 @@ fn dib_decoding_is_charged_its_declared_pixels() {
     let blip_of = |dib: &[u8]| rec(0, 0x7A8, officeart::rt::BLIP_DIB, &[[0u8; 16].as_slice(), &[0xFF], dib].concat());
     let one = blip_of(&one_pixel_dib());
     let (one, _) = officeart::record(&one).unwrap();
-    let mut work = 3;
-    assert_eq!(officeart::blip(&one, 512, &mut work).map(|b| (b.ext, b.placeholder)), Some(("bmp", true)));
-    assert_eq!(work, 3, "nothing decoded, nothing charged");
-    let mut work = 4;
+    let mut work = officeart::Decode::new(3);
+    assert!(officeart::blip(&one, 512, &mut work).is_none(), "not even the copy fits: nothing is copied");
+    assert_eq!(work.left, 3, "nothing decoded, nothing charged");
+    let dib_len = one.body.len() - 17;
+    let mut work = officeart::Decode::new(dib_len);
     assert_eq!(officeart::blip(&one, 512, &mut work).map(|b| (b.ext, b.placeholder)), Some(("png", false)));
-    assert_eq!(work, 0);
+    assert_eq!(work.left, 0, "the copy is charged, not just 4 bytes a pixel");
 
     // 8-bit RLE declaring 16384 × 16384 (1 GiB decoded) in a few bytes.
     let mut big = [40u32, 16_384, 16_384].iter().flat_map(|v| v.to_le_bytes()).collect::<Vec<_>>();
@@ -489,7 +490,128 @@ fn dib_decoding_is_charged_its_declared_pixels() {
     big.extend_from_slice(&[0, 0, 0, 1]); // end of line, end of bitmap
     let big = blip_of(&big);
     let (big, _) = officeart::record(&big).unwrap();
-    let mut work = 512 << 20;
+    let mut work = officeart::Decode::new(512 << 20);
     assert_eq!(officeart::blip(&big, 1 << 20, &mut work).map(|b| (b.ext, b.placeholder)), Some(("bmp", true)));
-    assert_eq!(work, 512 << 20);
+    assert_eq!(work.left, (512 << 20) - (big.body.len() - 17), "only the copy of the DIB was charged, not its declared pixels");
+}
+
+/// An EMF `OfficeArtBlip` record (compressed) with `raw` as its stream, claiming `cb_size`.
+fn emf_blip(cb_size: u32, raw: &[u8]) -> Vec<u8> {
+    let mut hdr = vec![0u8; 34];
+    hdr[0..4].copy_from_slice(&cb_size.to_le_bytes());
+    hdr[28..32].copy_from_slice(&(raw.len() as u32).to_le_bytes());
+    hdr[32] = 0; // compressed
+    hdr[33] = 0xFE;
+    rec(0, 0x3D4, 0xF01A, &[[0u8; 16].as_slice(), &hdr, raw].concat())
+}
+
+/// #3871 review: the zlib input is charged to the decode budget, not just what it inflates to.
+#[test]
+fn compressed_metafile_input_is_charged_to_the_decode_budget() {
+    let raw = vec![0x5Au8; 1 << 20]; // not even zlib: costs its input all the same
+    let r = emf_blip(1, &raw);
+    let (emf, _) = officeart::record(&r).unwrap();
+    let mut work = officeart::Decode::new(10 << 20);
+    assert!(officeart::blip(&emf, 64 << 20, &mut work).is_none());
+    assert_eq!(work.left, (10 << 20) - raw.len(), "1 MB of input charged, however little it claims to inflate to");
+    // Ten more of them exhaust the budget; none is inflated past it.
+    let mut work = officeart::Decode::new(3 << 20);
+    for _ in 0..10 {
+        let _ = officeart::blip(&emf, 64 << 20, &mut work);
+    }
+    assert_eq!(work.left, 0, "three attempts fit, the rest are refused");
+}
+
+/// An inline `PICFAndOfficeArtData` (shape, FBSE) whose BLIP sits at `fo_delay` in Data; the
+/// FBSE claims `size` bytes.
+fn inline_pic(fo_delay: u32, size: u32) -> Vec<u8> {
+    let mut fbse = vec![0u8; 36];
+    fbse[20..24].copy_from_slice(&size.to_le_bytes());
+    fbse[28..32].copy_from_slice(&fo_delay.to_le_bytes());
+    let body = [container(0xF004, &[]), rec(2, 6, 0xF007, &fbse)].concat();
+    let mut picf = vec![0u8; 0x44];
+    picf[0..4].copy_from_slice(&((0x44 + body.len()) as u32).to_le_bytes());
+    picf[4..6].copy_from_slice(&0x44u16.to_le_bytes());
+    picf[6..8].copy_from_slice(&0x64u16.to_le_bytes()); // MM_SHAPE
+    picf[28..30].copy_from_slice(&1440i16.to_le_bytes());
+    picf[30..32].copy_from_slice(&1440i16.to_le_bytes());
+    [picf, body].concat()
+}
+
+/// #3871 review: inline pictures that alias one BLIP record share one decode, whatever sizes
+/// their FBSEs claim and wherever their PICFs sit.
+#[test]
+fn inline_pictures_aliasing_one_blip_record_are_decoded_once() {
+    let blip = emf_blip(1, &vec![0x5Au8; 64 << 10]);
+    let a = inline_pic(0, 70_000);
+    let b = inline_pic(0, 80_000);
+    let c = inline_pic(0, 90_000);
+    let blip_at = (a.len() + b.len() + c.len()) as u32;
+    let (a, b, c) = (inline_pic(blip_at, 70_000), inline_pic(blip_at, 80_000), inline_pic(blip_at, 90_000));
+    let data = [a.clone(), b.clone(), c, blip].concat();
+    let mut pics = crate::media::Pictures::default();
+    let start = pics.work.left;
+    let _ = pics.get(&data, 0);
+    let _ = pics.get(&data, a.len() as u32);
+    let _ = pics.get(&data, (a.len() + b.len()) as u32);
+    assert_eq!(start - pics.work.left, 64 << 10, "one record, one charge");
+}
+
+/// A 1-bit-per-pixel DIB of `side`×`side` pixels with `bytes` of pixel data.
+fn dib_1bpp(side: u32, bytes: usize) -> Vec<u8> {
+    let mut d = vec![0u8; 40];
+    d[0..4].copy_from_slice(&40u32.to_le_bytes());
+    d[4..8].copy_from_slice(&side.to_le_bytes());
+    d[8..12].copy_from_slice(&side.to_le_bytes());
+    d[12..14].copy_from_slice(&1u16.to_le_bytes());
+    d[14..16].copy_from_slice(&1u16.to_le_bytes());
+    d.extend_from_slice(&[0, 0, 0, 0, 255, 255, 255, 0]); // palette
+    d.extend(std::iter::repeat_n(0u8, bytes));
+    d
+}
+
+fn dib_record(dib: &[u8]) -> Vec<u8> {
+    rec(0, 0x7A8, 0xF01F, &[[0u8; 16].as_slice(), &[0xFF], dib].concat())
+}
+
+/// #3871 review: the decode budget scales with the input, so a document of many legitimate
+/// large scans decodes them all; a high-ratio set is still capped.
+#[test]
+fn the_decode_budget_scales_with_the_input_but_still_caps_bombs() {
+    let floor = 1 << 20;
+    // 20 legitimate 1024² 1-bit scans: 4 MB charged each, 128 KB of file each.
+    let real = dib_record(&dib_1bpp(1024, 1024 * 1024 / 8));
+    let (rec_real, _) = officeart::record(&real).unwrap();
+    let input = 20 * real.len();
+    let mut work = officeart::Decode::new(crate::media::decode_work(input, floor));
+    for i in 0..20 {
+        let b = officeart::blip(&rec_real, 64 << 20, &mut work).unwrap();
+        assert!(!b.placeholder, "scan {i} decodes");
+    }
+    // Declared 20000² (1.6 GB each) in a few dozen bytes each: a placeholder, never decoded.
+    let bomb = dib_record(&dib_1bpp(20_000, 16));
+    let (rec_bomb, _) = officeart::record(&bomb).unwrap();
+    let mut work = officeart::Decode::new(crate::media::decode_work(20 * bomb.len(), floor));
+    for _ in 0..20 {
+        assert!(officeart::blip(&rec_bomb, 64 << 20, &mut work).unwrap().placeholder);
+    }
+    assert!(work.left <= crate::media::decode_work(20 * bomb.len(), floor), "nothing was refunded or invented");
+}
+
+/// #3871 review: the copy of a DIB into a BMP is charged before it is made, however few pixels
+/// the header declares; with the budget spent nothing is copied at all.
+#[test]
+fn a_dib_with_a_large_tail_is_charged_for_its_copy() {
+    let big = dib_record(&dib_1bpp(1, 1 << 20)); // 1 pixel declared, 1 MB of trailing bytes
+    let (big, _) = officeart::record(&big).unwrap();
+    let dib_len = big.body.len() - 17;
+    let mut work = officeart::Decode::new(10 << 20);
+    assert!(!officeart::blip(&big, 64 << 20, &mut work).unwrap().placeholder);
+    assert_eq!(10 << 20, work.left + dib_len, "charged for the bytes, not just 4 per pixel");
+    // Room for the copy: decoded. Not even that: nothing is copied.
+    let mut work = officeart::Decode::new(dib_len + 1);
+    assert!(officeart::blip(&big, 64 << 20, &mut work).is_some());
+    let mut work = officeart::Decode::new(dib_len - 1);
+    assert!(officeart::blip(&big, 64 << 20, &mut work).is_none());
+    assert_eq!(work.left, dib_len - 1);
 }
