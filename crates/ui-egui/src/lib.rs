@@ -1121,7 +1121,9 @@ impl WordApp {
         }
         // User proofing opens the persistent task pane; scripts keep structured results.
         // Right-click and Shift+F10 retain their compact suggestions menu.
-        if matches!(id, "review.spelling" | "review.editor") && let Ok(v) = &r {
+        if matches!(id, "review.spelling" | "review.editor")
+            && let Ok(v) = &r
+        {
             self.spelling_review = Some(proofing_pane::SpellingForm::new(self, v.clone()));
         }
         let r = system_clipboard::explain(self, id, r);

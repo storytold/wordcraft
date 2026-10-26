@@ -999,9 +999,12 @@ fn next_issue(s: &mut Session, v: &Value) -> CmdResult {
     // Scan forward first, including the rest of the caret's paragraph. A second pass
     // optionally visits the earlier part; never select the first typo repeatedly in
     // a single-paragraph story. Dialogs disable wrapping so Ignore Once can finish.
-    for (path, before) in paths.iter().skip(start).map(|path| (path, false)).chain(
-        paths.iter().take(if wrap { start.saturating_add(1) } else { 0 }).map(|path| (path, true)),
-    ) {
+    for (path, before) in paths
+        .iter()
+        .skip(start)
+        .map(|path| (path, false))
+        .chain(paths.iter().take(if wrap { start.saturating_add(1) } else { 0 }).map(|path| (path, true)))
+    {
         for (a, b, i) in para_issues(s, story, path) {
             if *path == caret.path && (a.off < caret.off) != before {
                 continue;

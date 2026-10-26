@@ -52,8 +52,8 @@ impl SpellingForm {
 
     #[cfg(test)]
     pub(crate) fn content_text(&self) -> Vec<String> {
-        let mut text: Vec<String> = self.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten()
-            .filter_map(Value::as_str).map(str::to_string).collect();
+        let mut text: Vec<String> =
+            self.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
         text.push(format!("{}{}{}", self.context_before, self.issue.get("text").and_then(Value::as_str).unwrap_or(""), self.context_after));
         text
     }
@@ -149,8 +149,8 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
     context(ui, app, form, spelling);
     ui.add_space(12.0);
     ui.label(egui::RichText::new(tl!("Suggestions")).font(regular(11.0)).color(t.text_dim));
-    let suggestions: Vec<String> = form.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten()
-        .filter_map(Value::as_str).map(str::to_string).collect();
+    let suggestions: Vec<String> =
+        form.issue.get("suggestions").and_then(Value::as_array).into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
     let mut change = None;
     if suggestions.is_empty() {
         ui.label(egui::RichText::new(tl!("(no suggestions)")).italics());
@@ -170,7 +170,11 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
                             ui.painter().rect_filled(rect, 0.0, t.hover);
                         }
                         ui.painter().with_clip_rect(rect.shrink2(vec2(10.0, 0.0))).text(
-                            rect.left_center() + vec2(12.0, 0.0), Align2::LEFT_CENTER, suggestion, semibold(12.5), t.text,
+                            rect.left_center() + vec2(12.0, 0.0),
+                            Align2::LEFT_CENTER,
+                            suggestion,
+                            semibold(12.5),
+                            t.text,
                         );
                         if response.clicked() {
                             change = Some(suggestion.clone());
@@ -197,7 +201,9 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
                                 let _ = app.run("tools.autocorrect", json!({}));
                                 ui.close();
                             }
-                        }).response.on_hover_text(tl!("More options"));
+                        })
+                        .response
+                        .on_hover_text(tl!("More options"));
                     });
                 });
             }
