@@ -389,7 +389,9 @@ impl WordApp {
     /// Ask where to save, save there, then do `after`.
     pub(crate) fn save_as(&mut self, after: AfterSave) -> Asked {
         let name = self.default_save_name();
-        self.ask_file(FileDialogRequest::Save { name, dir: None }, AfterPick::SaveAs { after, document: self.session.document_id() })
+        // Start in the open file's folder (#4143); a document never saved has none.
+        let dir = self.session.path.as_deref().and_then(std::path::Path::parent).map(|d| d.to_string_lossy().into_owned());
+        self.ask_file(FileDialogRequest::Save { name, dir }, AfterPick::SaveAs { after, document: self.session.document_id() })
     }
 
     /// The user templates folder (#2852): the one File › Options names, else the app's own.
@@ -539,7 +541,7 @@ mod tests {
             let revision = a.session.rev();
             let result = a.run("file.save", json!({})).unwrap();
             assert_eq!(result["pending"], "saveAs");
-            assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+            assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
             answer(&shown, None);
             assert_eq!(a.poll_file_dialog().unwrap().unwrap()["saved"], false);
             assert_eq!(a.session.doc, draft);
@@ -689,7 +691,7 @@ mod tests {
         h.get_by_label("Save").click();
         h.run_steps(3);
         assert!(h.state().file_dialog_open(), "the Save button asks for a supported target");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
         answer(&shown, None);
         h.run_steps(3);
 
@@ -700,7 +702,7 @@ mod tests {
         h.event(egui::Event::Key { key: egui::Key::S, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND });
         h.run_steps(3);
         assert!(h.state().file_dialog_open(), "the focused editor's Mod+S asks too");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: None });
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "contract.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
         answer(&shown, None);
         h.run_steps(3);
         assert!(h.state().session.dirty);
@@ -793,6 +795,30 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// #4143: Save As starts in the folder of the open file, not in the home folder; a document
+    /// that was never saved has no folder to offer.
+    #[test]
+    fn save_as_starts_in_the_folder_of_the_open_file() {
+        let dir = scratch("save-as-folder");
+        let opened = dir.join("one.docx");
+        wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("original"))
+            .run("file.save", &json!({"path": opened.to_string_lossy()}))
+            .unwrap();
+        let (mut a, shown) = async_app();
+        a.services.templates_dir = Some(dir.join("Templates"));
+        a.run("file.open", json!({"path": opened.to_string_lossy()})).unwrap();
+        a.save_as_dialog();
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "one.docx".into(), dir: Some(dir.to_string_lossy().into_owned()) });
+        answer(&shown, None);
+
+        let (mut fresh, shown) = async_app();
+        typed(&mut fresh);
+        fresh.save_as_dialog();
+        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "Document1.docx".into(), dir: None });
+        answer(&shown, None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// Save As returns at once (the UI keeps running); the frame loop saves once the answer arrives.
     #[test]
     fn save_as_answer_arriving_later_is_saved() {
@@ -840,7 +866,10 @@ mod tests {
         let r = a.run("file.saveAs", json!({})).unwrap();
         assert_eq!(r, json!({"saved": false}));
         assert!(a.file_dialog_open(), "F12's saveAs request opens the dialog");
-        assert_eq!(shown.borrow()[0].0, FileDialogRequest::Save { name: "two.docx".into(), dir: None });
+        assert_eq!(
+            shown.borrow()[0].0,
+            FileDialogRequest::Save { name: "two.docx".into(), dir: Some(dir.join("sub").to_string_lossy().into_owned()) }
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 
