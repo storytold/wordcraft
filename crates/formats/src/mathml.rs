@@ -88,10 +88,10 @@ fn run(r: &MRun, o: &mut String, eq_arr: bool) {
     let cs: Vec<char> = r.text.chars().collect();
     let mut i = 0;
     while let Some(&c) = cs.get(i) {
-        if c.is_ascii_digit() || (c == '.' && cs.get(i + 1).is_some_and(|d| d.is_ascii_digit())) {
+        if c.is_ascii_digit() || (c == '.' && cs.get(i + 1).is_some_and(char::is_ascii_digit)) {
             let mut num = String::new();
             while let Some(&d) =
-                cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.' || **d == ',' && cs.get(i + 1).is_some_and(|n| n.is_ascii_digit()))
+                cs.get(i).filter(|d| d.is_ascii_digit() || **d == '.' || **d == ',' && cs.get(i + 1).is_some_and(char::is_ascii_digit))
             {
                 num.push(d);
                 i += 1;
@@ -578,8 +578,11 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
             vec![MNode::Run(MRun { text: t, nor: true, ..Default::default() })]
         }
         "mfrac" => {
-            let thin = e.attr("linethickness").is_some_and(|t| t.trim().trim_end_matches(|c: char| c.is_alphabetic()).trim() == "0");
-            let kind = if e.attr("bevelled") == Some("true") {
+            let thin = e.attr("linethickness").is_some_and(|t| {
+                let s = t.trim();
+                s.eq_ignore_ascii_case("none") || s.trim_end_matches(|c: char| c.is_alphabetic() || c == '%').trim() == "0"
+            });
+            let kind = if e.attr("bevelled").is_some_and(|b| b.eq_ignore_ascii_case("true")) {
                 FracKind::Skewed
             } else if thin {
                 FracKind::NoBar
@@ -743,19 +746,25 @@ fn elem(e: &El, depth: usize, budget: &mut usize) -> Arg {
         "mphantom" => vec![MNode::Phant { show: false, zero_wid: false, zero_asc: false, zero_desc: false, e: children(e, d, budget) }],
         "menclose" => {
             let n = e.attr("notation").unwrap_or("longdiv");
-            let has = |k: &str| n.split_whitespace().any(|w| w == k);
+            let has = |k: &str| n.split_whitespace().any(|w| w.eq_ignore_ascii_case(k));
+            if has("radical") {
+                return vec![MNode::Rad { deg: Vec::new(), deg_hide: true, e: children(e, d, budget) }];
+            }
+            // An actuarial symbol is the top and right edges.
+            let actuarial = has("actuarial");
             let is_box = has("box") || has("roundedbox") || has("circle");
-            let has_border = is_box || has("top") || has("bottom") || has("left") || has("right");
-            let has_strike = has("horizontalstrike") || has("verticalstrike") || has("updiagonalstrike") || has("downdiagonalstrike");
-            if has_border || has_strike {
+            let (top, right) = (has("top") || actuarial, has("right") || actuarial);
+            let has_border = is_box || top || has("bottom") || has("left") || right;
+            let strike =
+                [has("horizontalstrike"), has("verticalstrike"), has("updiagonalstrike") || has("cross"), has("downdiagonalstrike") || has("cross")];
+            if has_border || strike.iter().any(|&s| s) {
                 let hide = if is_box {
                     [false; 4]
                 } else if has_border {
-                    [!has("top"), !has("bottom"), !has("left"), !has("right")]
+                    [!top, !has("bottom"), !has("left"), !right]
                 } else {
                     [true; 4]
                 };
-                let strike = [has("horizontalstrike"), has("verticalstrike"), has("updiagonalstrike"), has("downdiagonalstrike")];
                 return vec![MNode::BorderBox { hide, strike, e: children(e, d, budget) }];
             }
             children(e, d, budget)
@@ -984,5 +993,47 @@ mod tests {
         }
         let m = to_mathml(&n, false, "z");
         assert!(m.ends_with("</math>"));
+    }
+
+    #[test]
+    fn test_mfrac_linethickness_none_and_menclose_notations() {
+        let el_frac = El {
+            name: "mfrac".into(),
+            attrs: vec![("linethickness".into(), "none".into())],
+            children: vec![
+                Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("n".into())] }),
+                Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("k".into())] }),
+            ],
+        };
+        let mut budget = MAX_NODES;
+        let tree_frac = elem(&el_frac, 0, &mut budget);
+        assert!(matches!(tree_frac.as_slice(), [MNode::Frac { kind: FracKind::NoBar, .. }]), "{tree_frac:?}");
+
+        let el_strike = El {
+            name: "menclose".into(),
+            attrs: vec![("notation".into(), "horizontalstrike".into())],
+            children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
+        };
+        let mut budget = MAX_NODES;
+        let tree_strike = elem(&el_strike, 0, &mut budget);
+        assert!(matches!(tree_strike.as_slice(), [MNode::BorderBox { strike: [true, false, false, false], .. }]), "{tree_strike:?}");
+
+        let el_cross = El {
+            name: "menclose".into(),
+            attrs: vec![("notation".into(), "cross".into())],
+            children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
+        };
+        let mut budget = MAX_NODES;
+        let tree_cross = elem(&el_cross, 0, &mut budget);
+        assert!(matches!(tree_cross.as_slice(), [MNode::BorderBox { strike: [false, false, true, true], .. }]), "{tree_cross:?}");
+
+        let el_rad = El {
+            name: "menclose".into(),
+            attrs: vec![("notation".into(), "radical".into())],
+            children: vec![Item::El(El { name: "mi".into(), attrs: vec![], children: vec![Item::Text("x".into())] })],
+        };
+        let mut budget = MAX_NODES;
+        let tree_rad = elem(&el_rad, 0, &mut budget);
+        assert!(matches!(tree_rad.as_slice(), [MNode::Rad { deg_hide: true, .. }]), "{tree_rad:?}");
     }
 }

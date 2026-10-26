@@ -149,8 +149,24 @@ pub fn decode_font_file(bytes: &[u8]) -> Result<Vec<u8>, UserFontError> {
     }
     let decoded = match sniff(bytes).ok_or(UserFontError::NotAFont)? {
         FontFormat::TrueType | FontFormat::OpenType | FontFormat::Collection => return Ok(bytes.to_vec()),
-        FontFormat::Woff => unwrap_web_font(|| wuff::decompress_woff1(bytes))?,
-        FontFormat::Woff2 => unwrap_web_font(|| wuff::decompress_woff2(bytes))?,
+        FontFormat::Woff => {
+            check_woff1_size(bytes)?;
+            unwrap_web_font(|| wuff::decompress_woff1(bytes))?
+        }
+        FontFormat::Woff2 => {
+            let mut too_many_points = false;
+            let unwrapped = unwrap_web_font(|| {
+                wuff::decompress_woff2_with_custom_brotli(bytes, &mut |data, size| {
+                    let stream = unbrotli(data, size)?;
+                    too_many_points = !woff2_points_fit(bytes, &stream);
+                    if too_many_points { Err(TOO_MANY_POINTS.into()) } else { Ok(stream) }
+                })
+            });
+            if too_many_points {
+                return Err(UserFontError::BadWebFont(TOO_MANY_POINTS.into()));
+            }
+            unwrapped?
+        }
     };
     if decoded.len() > MAX_DECODED_BYTES {
         return Err(UserFontError::TooLarge { bytes: decoded.len() });
@@ -159,6 +175,128 @@ pub fn decode_font_file(bytes: &[u8]) -> Result<Vec<u8>, UserFontError> {
         Some(FontFormat::TrueType | FontFormat::OpenType | FontFormat::Collection) => Ok(decoded),
         _ => Err(UserFontError::BadWebFont("it doesn't hold a TrueType or OpenType font".into())),
     }
+}
+
+/// WOFF 1.0: the font its table directory describes must fit [`MAX_DECODED_BYTES`]. The decoder
+/// sizes each table's buffer from the directory's `origLength` before inflating it (#3703).
+/// A short header or directory is left to the decoder to report.
+fn check_woff1_size(bytes: &[u8]) -> Result<(), UserFontError> {
+    let u32_at = |at: usize| bytes.get(at..at.saturating_add(4)).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes);
+    let tables = bytes.get(12..14).and_then(|n| n.try_into().ok()).map_or(0, |n| usize::from(u16::from_be_bytes(n)));
+    let mut total = 12 + 16 * tables;
+    for i in 0..tables {
+        let entry = 44 + 20 * i;
+        let (Some(compressed), Some(orig)) = (u32_at(entry + 8), u32_at(entry + 12)) else { break };
+        total = total.saturating_add((compressed.max(orig) as usize).saturating_add(3) & !3);
+    }
+    if total > MAX_DECODED_BYTES {
+        return Err(UserFontError::TooLarge { bytes: total });
+    }
+    Ok(())
+}
+
+/// Why a WOFF2 file whose glyph has more points than a glyph may is refused.
+const TOO_MANY_POINTS: &str = "a glyph has more than 65536 points";
+
+/// WOFF2's brotli stream, which must decompress to exactly `size` bytes (the decoder has checked
+/// `size` against its own cap and the compression ratio).
+fn unbrotli(data: &[u8], size: usize) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    use std::io::Read;
+    let mut out = Vec::with_capacity(size);
+    brotli_decompressor::Decompressor::new(data, 4096).take(size as u64 + 1).read_to_end(&mut out)?;
+    if out.len() != size {
+        return Err("the compressed data doesn't have the size the directory gives".into());
+    }
+    Ok(out)
+}
+
+/// Does every glyph in the WOFF2 file's transformed `glyf` tables have at most 65536 points, as
+/// the decoder requires? It allocates a glyph's points from its counts before checking them, so a
+/// small file could claim gigabytes (#3703). `stream` is the decompressed table data; anything
+/// that doesn't parse is refused too (the decoder would refuse it).
+fn woff2_points_fit(file: &[u8], stream: &[u8]) -> bool {
+    woff2_transformed_glyf(file, stream).is_some_and(|tables| tables.iter().all(|t| glyf_points_fit(t).unwrap_or(false)))
+}
+
+/// The transformed `glyf` tables in `stream`, found from the WOFF2 table directory in `file`
+/// (tables follow each other in directory order).
+fn woff2_transformed_glyf<'a>(file: &[u8], stream: &'a [u8]) -> Option<Vec<&'a [u8]>> {
+    let tables = u16::from_be_bytes(file.get(12..14)?.try_into().ok()?);
+    let (mut at, mut offset, mut glyf) = (48usize, 0usize, Vec::new());
+    for _ in 0..tables {
+        let flags = *file.get(at)?;
+        at += 1;
+        let tag: Option<&[u8]> = if flags & 63 == 63 {
+            at += 4;
+            Some(file.get(at - 4..at)?)
+        } else {
+            None
+        };
+        let is = |index: u8, name: &[u8]| flags & 63 == index || tag == Some(name);
+        let (is_glyf, is_loca) = (is(10, b"glyf"), is(11, b"loca"));
+        let orig = base128(file, &mut at)?;
+        // glyf and loca are transformed at version 0, other tables at any other version.
+        let transformed = if is_glyf || is_loca { flags >> 6 == 0 } else { flags >> 6 != 0 };
+        let len = if transformed { base128(file, &mut at)? } else { orig };
+        let end = offset.checked_add(len)?;
+        if is_glyf && transformed {
+            glyf.push(stream.get(offset..end)?);
+        }
+        offset = end;
+    }
+    Some(glyf)
+}
+
+/// WOFF2's UIntBase128.
+fn base128(b: &[u8], at: &mut usize) -> Option<usize> {
+    let mut v: u32 = 0;
+    for i in 0..5 {
+        let byte = *b.get(*at)?;
+        *at += 1;
+        if (i == 0 && byte == 0x80) || v >> 25 != 0 {
+            return None;
+        }
+        v = v << 7 | u32::from(byte & 0x7f);
+        if byte & 0x80 == 0 {
+            return usize::try_from(v).ok();
+        }
+    }
+    None
+}
+
+/// Does every glyph of the transformed `glyf` table `t` have at most 65536 points?
+fn glyf_points_fit(t: &[u8]) -> Option<bool> {
+    let u32_at = |at: usize| t.get(at..at + 4).and_then(|b| b.try_into().ok()).map(u32::from_be_bytes).map(|v| v as usize);
+    let glyphs = usize::from(u16::from_be_bytes(t.get(4..6)?.try_into().ok()?));
+    let contours_end = 36usize.checked_add(u32_at(8)?)?;
+    let contours = t.get(36..contours_end)?;
+    let points = t.get(contours_end..contours_end.checked_add(u32_at(12)?)?)?;
+    let mut at = 0;
+    for g in 0..glyphs {
+        // The decoder reads the count as unsigned and only 0xFFFF is a composite glyph (no points
+        // here): 0x8000..=0xFFFE are that many contours, so they are counted, not read as negative.
+        let n = u16::from_be_bytes(contours.get(2 * g..2 * g + 2)?.try_into().ok()?);
+        let mut total = 0usize;
+        for _ in 0..if n == 0xFFFF { 0 } else { n } {
+            // 255UInt16
+            let code = *points.get(at)?;
+            at += 1;
+            let mut byte = || {
+                at += 1;
+                points.get(at - 1).copied().map(usize::from)
+            };
+            total += match code {
+                253 => byte()? << 8 | byte()?,
+                254 => byte()? + 253 * 2,
+                255 => byte()? + 253,
+                v => usize::from(v),
+            };
+            if total > 1 << 16 {
+                return Some(false);
+            }
+        }
+    }
+    Some(true)
 }
 
 /// Run a WOFF/WOFF2 decoder. The decoder checks its input, but it is third-party code reading
@@ -230,7 +368,8 @@ impl FontDb {
                     None
                 }
                 Err(e) => {
-                    log::warn!("couldn't store the font {name} in {}: {e}", dir.display());
+                    // Debug-quoted: a line break in the supplied name must not start a forged log record.
+                    log::warn!("couldn't store the font {name:?} in {}: {e}", dir.display());
                     Some(format!("added for this session only: couldn't store it in {}: {e}", dir.display()))
                 }
             },
@@ -266,7 +405,7 @@ impl FontDb {
         if FileRef::new(&sfnt).is_err() {
             return Err(UserFontError::Unusable("not a valid OpenType file".into()));
         }
-        let found = enumerate_faces(&sfnt);
+        let found = enumerate_faces(&sfnt, MAX_FACES_PER_FILE + 1);
         if found.is_empty() {
             return Err(UserFontError::Unusable("no face with a family name".into()));
         }
@@ -368,7 +507,7 @@ impl FontDb {
             .flatten()
             .map(|e| e.path())
             .filter(|p| p.is_file())
-            .filter(|p| p.extension().and_then(|e| e.to_str()).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
+            .filter(|p| p.extension().and_then(std::ffi::OsStr::to_str).is_some_and(|e| STORED_EXTS.contains(&e.to_ascii_lowercase().as_str())))
             .collect();
         paths.sort();
         for p in paths {
@@ -412,12 +551,29 @@ fn unique_name(name: &str, taken: impl Fn(&str) -> bool) -> String {
 /// Write `bytes` to a new file in `dir` named `name` (or a numbered variant when that exists),
 /// through a temporary file so a crash never leaves half a font.
 fn write_unique(dir: &Path, name: &str, bytes: &[u8]) -> std::io::Result<PathBuf> {
+    // One store at a time: two adds racing for the same name would otherwise pick the same file
+    // and unlink each other's temporary. ponytail: in-process only; two app instances adding the
+    // same name at the same instant can still collide (the later rename wins).
+    static STORE: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _held = STORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     std::fs::create_dir_all(dir)?;
     let name = unique_name(name, |n| dir.join(n).exists());
     let path = dir.join(&name);
     let tmp = dir.join(format!(".{name}.part"));
-    std::fs::write(&tmp, bytes)?;
-    if let Err(e) = std::fs::rename(&tmp, &path) {
+    // Created afresh, never opened through what is there: a link planted at the temporary name
+    // would otherwise carry the write to a file outside the folder. A leftover from a crash (or
+    // such a link) is unlinked, not followed, and the create tried once more.
+    let create = || std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp);
+    let mut file = match create() {
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            std::fs::remove_file(&tmp)?;
+            create()?
+        }
+        r => r?,
+    };
+    let written = std::io::Write::write_all(&mut file, bytes);
+    drop(file);
+    if let Err(e) = written.and_then(|()| std::fs::rename(&tmp, &path)) {
         let _ = std::fs::remove_file(&tmp);
         return Err(e);
     }
@@ -564,23 +720,111 @@ pub(crate) mod tests {
             base128(data.len() as u32, &mut dir);
             stream.extend_from_slice(data);
         }
-        let compressed = brotli_stored(&stream);
+        let sfnt: usize = 12 + 16 * t.len() + t.iter().map(|(_, d)| d.len().next_multiple_of(4)).sum::<usize>();
+        woff2_file(&font[..4], t.len(), &dir, &stream, sfnt)
+    }
+
+    /// A WOFF2 file: header, the table directory `dir` of `n` tables, `stream` in stored brotli blocks.
+    fn woff2_file(flavor: &[u8], n: usize, dir: &[u8], stream: &[u8], sfnt: usize) -> Vec<u8> {
+        let compressed = brotli_stored(stream);
         let mut out = Vec::new();
         out.extend_from_slice(b"wOF2");
-        out.extend_from_slice(&font[..4]);
+        out.extend_from_slice(flavor);
         let total = (48 + dir.len() + compressed.len()).next_multiple_of(4);
         out.extend_from_slice(&(total as u32).to_be_bytes());
-        out.extend_from_slice(&(t.len() as u16).to_be_bytes());
+        out.extend_from_slice(&(n as u16).to_be_bytes());
         out.extend_from_slice(&0u16.to_be_bytes());
-        let sfnt: usize = 12 + 16 * t.len() + t.iter().map(|(_, d)| d.len().next_multiple_of(4)).sum::<usize>();
         out.extend_from_slice(&(sfnt as u32).to_be_bytes());
         out.extend_from_slice(&(compressed.len() as u32).to_be_bytes());
         out.extend_from_slice(&[0, 1, 0, 0]);
         out.extend_from_slice(&[0; 20]);
-        out.extend(dir);
+        out.extend_from_slice(dir);
         out.extend(compressed);
         out.resize(total, 0);
         out
+    }
+
+    /// A WOFF2 file holding a transformed `glyf` (and `loca`) whose one glyph has two contours of
+    /// `points` points each (and no coordinates: the decoder finds it damaged in the end).
+    fn woff2_glyph_with(points: u16) -> Vec<u8> {
+        let [hi, lo] = points.to_be_bytes();
+        woff2_glyph_with_contours(2, &[253, hi, lo].repeat(2), 2 * points as usize)
+    }
+
+    /// As [`woff2_glyph_with`], for a glyph whose contour count is `n` and whose point-count stream
+    /// is `counts`, with `total` flags.
+    fn woff2_glyph_with_contours(n: u16, counts: &[u8], total: usize) -> Vec<u8> {
+        let mut glyf = vec![0, 0, 0, 0, 0, 1, 0, 0]; // reserved, optionFlags, numGlyphs 1, indexFormat
+        // nContour, nPoints, flag, glyph, composite, bbox and instruction stream sizes.
+        for size in [2, counts.len(), total, 0, 0, 4, 0] {
+            glyf.extend_from_slice(&(size as u32).to_be_bytes());
+        }
+        glyf.extend_from_slice(&n.to_be_bytes());
+        glyf.extend_from_slice(counts); // 255UInt16 point counts
+        glyf.resize(glyf.len() + total, 1); // on-curve flags
+        glyf.extend_from_slice(&[0; 4]); // no explicit bounding boxes
+        let mut dir = vec![10]; // glyf, transform version 0
+        base128(4096, &mut dir);
+        base128(glyf.len() as u32, &mut dir);
+        dir.push(11); // loca, transformed away
+        base128(8, &mut dir);
+        base128(0, &mut dir);
+        woff2_file(&[0, 1, 0, 0], 2, &dir, &glyf, 12 + 32 + 4096 + 8)
+    }
+
+    /// A WOFF 1.0 file whose one table is a zlib stream of nothing that claims to inflate to `orig`
+    /// bytes.
+    fn woff1_claiming(orig: u32) -> Vec<u8> {
+        let mut out = b"wOFF\0\x01\0\0".to_vec();
+        out.extend_from_slice(&72u32.to_be_bytes()); // length
+        out.extend_from_slice(&1u16.to_be_bytes()); // numTables
+        out.extend_from_slice(&0u16.to_be_bytes());
+        out.extend_from_slice(&orig.saturating_add(28).to_be_bytes()); // totalSfntSize
+        out.extend_from_slice(&[0, 1, 0, 0]);
+        out.extend_from_slice(&[0; 20]);
+        out.extend_from_slice(b"glyf");
+        for v in [64, 8, orig, 0] {
+            out.extend_from_slice(&u32::to_be_bytes(v)); // offset, compLength, origLength, checksum
+        }
+        out.extend_from_slice(&[0x78, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01]);
+        out
+    }
+
+    #[test]
+    fn a_woff_claiming_a_huge_table_is_refused_before_inflating() {
+        // #3703: the decoder sizes a table's buffer from the directory before inflating it.
+        for orig in [200 << 20, u32::MAX] {
+            assert!(matches!(decode_font_file(&woff1_claiming(orig)), Err(UserFontError::TooLarge { .. })), "{orig}");
+        }
+        // A small claim reaches the decoder, which finds the data doesn't inflate to it.
+        assert!(matches!(decode_font_file(&woff1_claiming(64)), Err(UserFontError::BadWebFont(_))));
+    }
+
+    #[test]
+    fn a_woff2_glyph_with_too_many_points_is_refused_before_unpacking() {
+        // #3703: the decoder allocates a glyph's points from these counts before checking them.
+        assert_eq!(decode_font_file(&woff2_glyph_with(40_000)), Err(UserFontError::BadWebFont(TOO_MANY_POINTS.into())));
+        // Within the limit the scan passes the file on, to the decoder.
+        assert!(matches!(decode_font_file(&woff2_glyph_with(3)), Err(UserFontError::BadWebFont(e)) if e != TOO_MANY_POINTS));
+    }
+
+    #[test]
+    fn a_woff2_glyph_with_a_contour_count_past_i16_max_is_counted() {
+        // #3703: the decoder reads the contour count as unsigned (only 0xFFFF is a composite), so
+        // 0x8000..=0xFFFE are that many contours; read as negative they counted no points and the
+        // decoder then allocated about 1 GB for a 1.3 MB font.
+        for n in [0x7FFFu16, 0x8000, 0xFFFE] {
+            let file = woff2_glyph_with_contours(n, &vec![3; usize::from(n)], 3 * usize::from(n));
+            assert_eq!(decode_font_file(&file), Err(UserFontError::BadWebFont(TOO_MANY_POINTS.into())), "{n:#x}");
+        }
+    }
+
+    #[test]
+    fn a_woff2_composite_glyph_is_not_counted_as_having_points() {
+        // 0xFFFF marks a composite glyph: the point check skips it (the decoder reads its own
+        // streams), so it is not refused for its points.
+        let file = woff2_glyph_with_contours(0xFFFF, &[], 0);
+        assert!(matches!(decode_font_file(&file), Err(UserFontError::BadWebFont(e)) if e != TOO_MANY_POINTS));
     }
 
     #[test]
@@ -703,6 +947,44 @@ pub(crate) mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The messages logged while this test binary runs.
+    fn logged() -> &'static std::sync::Mutex<Vec<String>> {
+        static LOG: std::sync::OnceLock<std::sync::Mutex<Vec<String>>> = std::sync::OnceLock::new();
+        struct Capture;
+        impl log::Log for Capture {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, r: &log::Record) {
+                if let Some(l) = LOG.get() {
+                    l.lock().unwrap().push(r.args().to_string());
+                }
+            }
+            fn flush(&self) {}
+        }
+        LOG.get_or_init(|| {
+            let _ = log::set_logger(&Capture);
+            log::set_max_level(log::LevelFilter::Warn);
+            std::sync::Mutex::new(Vec::new())
+        })
+    }
+
+    #[test]
+    fn a_supplied_name_is_logged_escaped() {
+        // #3692: a line break in the name must not start a forged record in the log file.
+        let log = logged();
+        let not_a_folder = temp_dir("not-a-folder");
+        std::fs::write(&not_a_folder, b"x").unwrap();
+        let db = db();
+        db.load_user_fonts(&not_a_folder);
+        let r = db.install_font("a\nERROR forged record.ttf", &renamed("SourceSans3-Regular.ttf", FAMILY)).unwrap();
+        assert!(r.warning.is_some(), "the font can't be stored");
+        let lines = log.lock().unwrap();
+        let line = lines.iter().find(|l| l.contains("forged record")).unwrap();
+        assert!(!line.contains('\n'), "{line}");
+        let _ = std::fs::remove_file(&not_a_folder);
+    }
+
     #[test]
     fn stored_names_are_safe_and_unique() {
         let ttf = renamed("SourceSans3-Regular.ttf", FAMILY);
@@ -710,5 +992,51 @@ pub(crate) mod tests {
         assert_eq!(stored_name("", &ttf), "font.ttf");
         assert_eq!(stored_name("-rf.otf", b"OTTO"), "font-rf.otf");
         assert_eq!(unique_name("a.ttf", |n| n == "a.ttf" || n == "a-2.ttf"), "a-3.ttf");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_planted_at_the_temporary_name_is_not_written_through() {
+        // #3703 review: the temporary file is created afresh, so a planted link can't carry the
+        // font bytes to a file outside the folder.
+        let root = std::env::temp_dir().join(format!("wordcraft-font-part-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("fonts");
+        std::fs::create_dir_all(&dir).unwrap();
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, b"keep me").unwrap();
+        std::os::unix::fs::symlink(&outside, dir.join(".a.ttf.part")).unwrap();
+        let path = write_unique(&dir, "a.ttf", b"font bytes").unwrap();
+        assert_eq!(std::fs::read(&outside).unwrap(), b"keep me");
+        assert_eq!(path, dir.join("a.ttf"));
+        assert_eq!(std::fs::read(&path).unwrap(), b"font bytes");
+        assert!(!std::fs::symlink_metadata(&path).unwrap().file_type().is_symlink());
+        assert!(std::fs::symlink_metadata(dir.join(".a.ttf.part")).is_err(), "the temporary name is gone");
+        // A leftover from a crash doesn't block the next add either.
+        std::fs::write(dir.join(".b.ttf.part"), b"half a font").unwrap();
+        assert_eq!(std::fs::read(write_unique(&dir, "b.ttf", b"whole").unwrap()).unwrap(), b"whole");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn fonts_stored_at_once_under_one_name_each_get_their_own_file() {
+        // #3703 review: concurrent adds of one name never share a temporary or a destination.
+        let dir = std::env::temp_dir().join(format!("wordcraft-font-race-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let paths: Vec<_> = (0..8u8)
+            .map(|i| {
+                let dir = dir.clone();
+                std::thread::spawn(move || (i, write_unique(&dir, "a.ttf", &[i; 64]).unwrap()))
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|t| t.join().unwrap())
+            .collect();
+        let distinct: std::collections::HashSet<_> = paths.iter().map(|(_, p)| p.clone()).collect();
+        assert_eq!(distinct.len(), 8);
+        for (i, p) in &paths {
+            assert_eq!(std::fs::read(p).unwrap(), vec![*i; 64], "{}", p.display());
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

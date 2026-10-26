@@ -19,8 +19,8 @@ use crate::WordApp;
 use crate::frame::{self, Handle};
 use crate::theme::Tokens;
 
-/// The most of the source one side can crop away (as `picture.crop` clamps).
-const MAX_SIDE: f32 = 0.45;
+/// The most of the source one side can crop away (as `picture.crop` and the renderer clamp).
+const MAX_SIDE: f32 = 0.95;
 /// Pointer travel that turns a press on a handle into a drag (screen points).
 const DRAG_START: f32 = 3.0;
 /// Crop handles: arm length of a corner's L, length of an edge bar, thickness (screen points).
@@ -51,10 +51,10 @@ const MAX_SIZE: f32 = 4000.0;
 /// stops there), unless it was already outside it.
 fn axis(len: f32, lo: f32, hi: f32, grab: i8, d: f32) -> (f32, f32, f32, f32) {
     // The source's full length at this scale; the visible part is 1-lo-hi of it.
-    let full = len / (1.0 - lo - hi).max(0.1);
+    let full = len / (1.0 - lo - hi).max(0.05);
     // How far the grabbed side's crop may go: at most MAX_SIDE, and the length within its range.
     let range = |cur: f32, other: f32| {
-        let most = (1.0 - other - MIN_SIZE / full).min(MAX_SIDE).max(cur);
+        let most = (1.0 - other - MIN_SIZE / full).min(MAX_SIDE - other).max(cur);
         let least = (1.0 - other - MAX_SIZE / full).max(0.0).min(cur);
         (least, most)
     };
@@ -285,11 +285,11 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// it can't be decoded (then the cropped-away area is just dimmed).
 fn source(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<egui::TextureHandle> {
     let bytes = app.session.doc.media.get(media)?;
-    let id = egui::Id::new(("crop_source", media, bytes.len()));
+    let id = egui::Id::unique(("crop_source", media, bytes.len()));
     if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return t;
     }
-    let tex = image::load_from_memory(bytes).ok().map(|img| {
+    let tex = wordcraft_geom::picture::decode(bytes, wordcraft_geom::MAX_DECODED_BYTES).ok().map(|img| {
         let img = if img.width().max(img.height()) > SOURCE_MAX_PX { img.thumbnail(SOURCE_MAX_PX, SOURCE_MAX_PX) } else { img };
         let rgba = img.to_rgba8();
         let ci = egui::ColorImage::from_rgba_unmultiplied([rgba.width() as usize, rgba.height() as usize], rgba.as_raw());
@@ -316,8 +316,8 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
     // The crop as it shows: a flipped picture shows its source's right on the left.
     let c = on_screen(c, flip_h, flip_v);
     // The whole source, at the picture's scale, around the visible part.
-    let fw = frame_pt.w / (1.0 - c[0] - c[2]).max(0.1);
-    let fh = frame_pt.h / (1.0 - c[1] - c[3]).max(0.1);
+    let fw = frame_pt.w / (1.0 - c[0] - c[2]).max(0.05);
+    let fh = frame_pt.h / (1.0 - c[1] - c[3]).max(0.05);
     let full_pt = wordcraft_geom::Rect::new(frame_pt.x - c[0] * fw, frame_pt.y - c[1] * fh, fw, fh);
     let (Some(f), Some(full)) = (screen(pages, scale, page, frame_pt), screen(pages, scale, page, full_pt)) else { return false };
     let tex = source(app, painter.ctx(), &media);
@@ -410,14 +410,26 @@ mod tests {
 
     #[test]
     fn crops_are_clamped_and_never_go_past_the_source() {
-        // At most 0.45 a side.
+        // At most 0.95 a side.
         let r = cropped(200.0, 100.0, [0.0; 4], H(-1, 0), 1000.0, 0.0);
-        assert!((r.crop[0] - 0.45).abs() < 1e-4 && (r.w - 110.0).abs() < 1e-3 && (r.dx - 90.0).abs() < 1e-3, "{r:?}");
+        assert!((r.crop[0] - 0.95).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3 && (r.dx - 190.0).abs() < 1e-3, "{r:?}");
         // Out past the original edge: back to uncropped, no further.
         let r = cropped(160.0, 100.0, [0.0, 0.0, 0.2, 0.0], H(1, 0), 100.0, 0.0);
         assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: 0.0 }), "{r:?}");
         let r = cropped(200.0, 90.0, [0.0, 0.1, 0.0, 0.0], H(0, -1), 0.0, -500.0);
         assert!(close(r, Cropped { crop: [0.0; 4], w: 200.0, h: 100.0, dx: 0.0, dy: -10.0 }), "{r:?}");
+    }
+
+    /// #3135: a side can take almost the whole source (5% stays), so any part of the picture can
+    /// be kept, not only its middle; the two sides of an axis keep their 5%.
+    #[test]
+    fn either_side_can_crop_almost_all_the_source_away() {
+        // Drag the left handle 190 pt across a 200 pt picture: 10 pt (5%) stay.
+        let r = cropped(200.0, 100.0, [0.0; 4], H(-1, 0), 190.0, 0.0);
+        assert!((r.crop[0] - 0.95).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3 && (r.dx - 190.0).abs() < 1e-3, "{r:?}");
+        // The right side already takes 0.6: the left stops at 0.35, leaving 5%.
+        let r = cropped(80.0, 100.0, [0.0, 0.0, 0.6, 0.0], H(-1, 0), 1000.0, 0.0);
+        assert!((r.crop[0] - 0.35).abs() < 1e-4 && (r.crop[2] - 0.6).abs() < 1e-4 && (r.w - 10.0).abs() < 1e-3, "{r:?}");
     }
 
     #[test]
@@ -439,9 +451,9 @@ mod tests {
         assert_eq!(cropped(0.0, 100.0, [0.0; 4], H(-1, 0), 10.0, 0.0), same(0.0, 100.0, [0.0; 4]));
         assert_eq!(cropped(-5.0, 100.0, [0.0; 4], H(1, 1), 10.0, 10.0), same(-5.0, 100.0, [0.0; 4]));
         assert_eq!(cropped(200.0, f32::NAN, [0.0; 4], H(0, 1), 0.0, 10.0), same(200.0, 0.0, [0.0; 4]));
-        // A junk crop reads as uncropped / at most 0.45 a side; a zero drag leaves that be.
+        // A junk crop reads as uncropped / at most 0.95 a side; a zero drag leaves that be.
         let r = cropped(200.0, 100.0, [f32::NAN, -1.0, 0.7, 0.0], H(-1, -1), 0.0, 0.0);
-        assert_eq!(r, same(200.0, 100.0, [0.0, 0.0, 0.45, 0.0]));
+        assert_eq!(r, same(200.0, 100.0, [0.0, 0.0, 0.7, 0.0]));
     }
 
     /// Sizes stay within what `picture.crop` accepts (1–4000 pt) at the same scale, so the

@@ -106,6 +106,16 @@ fn code_char(n: u32) -> Option<char> {
     })
 }
 
+/// A Windows-1252 code as its Unicode scalar: 128–159 hold typographic characters there (151 is
+/// an em dash); the five undefined slots and every other code stay as they are.
+fn ansi(n: u32) -> u32 {
+    const HIGH: [u32; 32] = [
+        0x20AC, 0x81, 0x201A, 0x0192, 0x201E, 0x2026, 0x2020, 0x2021, 0x02C6, 0x2030, 0x0160, 0x2039, 0x0152, 0x8D, 0x017D, 0x8F, 0x90, 0x2018,
+        0x2019, 0x201C, 0x201D, 0x2022, 0x2013, 0x2014, 0x02DC, 0x2122, 0x0161, 0x203A, 0x0153, 0x9D, 0x017E, 0x0178,
+    ];
+    n.checked_sub(128).and_then(|k| HIGH.get(k as usize)).copied().unwrap_or(n)
+}
+
 /// Read a numeric code after `^` (`13`, `0151`, `u8212`) starting at `chars[i]`; returns the
 /// character and how many characters it took.
 fn numeric_code(chars: &[char], i: usize) -> Option<(char, usize)> {
@@ -115,6 +125,8 @@ fn numeric_code(chars: &[char], i: usize) -> Option<(char, usize)> {
         return None;
     }
     let n: u32 = digits.parse().ok()?;
+    // `^0nnn` is a Windows-1252 (ANSI) code; `^nnn` and `^unnnn` are Unicode.
+    let n = if start == i && digits.starts_with('0') { ansi(n) } else { n };
     Some((code_char(n)?, start - i + digits.chars().count()))
 }
 
@@ -333,15 +345,20 @@ pub enum Piece {
     Lit(String),
     /// `^&`: the text found.
     Found,
-    /// `\n` with wildcards: group `n`.
+    /// `\n` with wildcards, or `$n` / `${n}` / `\n` with a regex: group `n` (0 is the match).
     Group(usize),
+    /// `${name}` / `$name` with a regex: a named group, resolved to a [`Piece::Group`] once the
+    /// pattern is built ([`resolve_names`]); one left unresolved expands to nothing.
+    Named(String),
     /// `^c`: the clipboard.
     Clip,
 }
 
-/// Read Replace with text: `^` codes (unless `literal`), and `\1`–`\9` with wildcards.
+/// Read Replace with text: `^` codes (unless `literal`), `\1`–`\9` with wildcards, and with a
+/// regex also `$n`, `${n}`, `${name}`, `$name`, `$$`, `\n` (paragraph mark), `\t` and `\\`.
 pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
-    if o.literal || o.regex {
+    // With a regex, `special: false` turns off only the `^` codes; group references still expand.
+    if o.literal && !o.regex {
         return vec![Piece::Lit(with.to_string())];
     }
     let chars: Vec<char> = with.chars().collect();
@@ -355,6 +372,22 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
     let mut i = 0;
     while let Some(&c) = chars.get(i) {
         i += 1;
+        if o.regex && (c == '$' || c == '\\') {
+            match regex_ref(&chars, i, c) {
+                Some((Ref::Char(ch), used)) => {
+                    cur.push(ch);
+                    i += used;
+                }
+                Some((Ref::Group(pc), used)) => {
+                    flush(&mut cur, &mut out);
+                    out.extend(pc);
+                    i += used;
+                }
+                // Not a reference or an escape: the character as written.
+                None => cur.push(c),
+            }
+            continue;
+        }
         if c == '\\' && o.wildcards {
             match chars.get(i) {
                 Some(d) if d.is_ascii_digit() && *d != '0' => {
@@ -372,6 +405,7 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
             }
         }
         if c == '^'
+            && !o.literal
             && let Some(&n) = chars.get(i)
         {
             if n == '&' || n == 'c' {
@@ -397,6 +431,67 @@ pub fn parse_replace(with: &str, o: &Opts) -> Vec<Piece> {
     out
 }
 
+/// What a `$` or `\` starts in regex Replace with text.
+enum Ref {
+    /// An escape: `$$`, `\n`, `\t`, `\\`.
+    Char(char),
+    /// A group reference; `None` for a number too large to be a group (expands to nothing).
+    Group(Option<Piece>),
+}
+
+/// A group named by its number or name, as the `regex` crate reads it.
+fn group_ref(name: &str) -> Option<Piece> {
+    if name.bytes().all(|b| b.is_ascii_digit()) { name.parse().ok().map(Piece::Group) } else { Some(Piece::Named(name.to_string())) }
+}
+
+/// Read a regex reference or escape after `c` (`$` or `\`) at `chars[i..]`: what it is and how
+/// many characters it uses after `c`, or `None` when `c` is a plain character.
+fn regex_ref(chars: &[char], i: usize, c: char) -> Option<(Ref, usize)> {
+    let next = *chars.get(i)?;
+    if c == '\\' {
+        return match next {
+            'n' => Some((Ref::Char(PARA_MARK), 1)),
+            't' => Some((Ref::Char('\t'), 1)),
+            // `\$` and `\^` keep a `$` or `^` as typed (no group, no `^` code).
+            '\\' | '$' | '^' => Some((Ref::Char(next), 1)),
+            '1'..='9' => Some((Ref::Group(next.to_digit(10).map(|d| Piece::Group(d as usize))), 1)),
+            _ => None,
+        };
+    }
+    if next == '$' {
+        return Some((Ref::Char('$'), 1));
+    }
+    let rest = chars.get(i..).unwrap_or_default();
+    if next == '{' {
+        // `${…}`: everything up to the closing brace; unclosed or empty, the `$` is literal.
+        let close = rest.iter().position(|&ch| ch == '}')?;
+        let name: String = rest.get(1..close)?.iter().collect();
+        if name.is_empty() {
+            return None;
+        }
+        return Some((Ref::Group(group_ref(&name)), close + 1));
+    }
+    // `$name`: the longest run of letters, digits and `_`.
+    let len = rest.iter().take_while(|ch| ch.is_ascii_alphanumeric() || **ch == '_').count();
+    if len == 0 {
+        return None;
+    }
+    let name: String = rest.get(..len)?.iter().collect();
+    Some((Ref::Group(group_ref(&name)), len))
+}
+
+/// Turn named group references into numbered ones with `index` (a name's group number);
+/// an unknown name is dropped, so it expands to nothing.
+pub fn resolve_names(pieces: Vec<Piece>, index: &dyn Fn(&str) -> Option<usize>) -> Vec<Piece> {
+    pieces
+        .into_iter()
+        .filter_map(|p| match p {
+            Piece::Named(n) => index(&n).map(Piece::Group),
+            p => Some(p),
+        })
+        .collect()
+}
+
 /// Searched text as it is inserted again: marks become paragraph breaks.
 fn as_inserted(s: &str) -> String {
     s.replace(SECT_MARK, "\r")
@@ -411,7 +506,45 @@ pub fn expand(pieces: &[Piece], found: &str, group: &dyn Fn(usize) -> Option<Str
             Piece::Found => out.push_str(&as_inserted(found)),
             Piece::Group(n) => out.push_str(&as_inserted(&group(*n).unwrap_or_default())),
             Piece::Clip => out.push_str(&clip.replace("\r\n", "\r").replace('\n', "\r")),
+            Piece::Named(_) => {}
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn finds(query: &str, hay: &str) -> bool {
+        let c = compile(query, &Opts::default()).unwrap();
+        regex::Regex::new(&c.pattern).unwrap().is_match(hay)
+    }
+
+    fn replaced(with: &str) -> String {
+        expand(&parse_replace(with, &Opts::default()), "", &|_| None, "")
+    }
+
+    #[test]
+    fn ansi_codes_128_to_159_are_windows_1252() {
+        for (code, ch) in [("^0151", '\u{2014}'), ("^0150", '\u{2013}'), ("^0128", '\u{20AC}'), ("^0145", '\u{2018}')] {
+            let hay = format!("a{ch}b");
+            assert!(finds(code, &hay), "{code} should find {ch:?}");
+            assert!(!finds(code, code), "{code} should not match its literal text");
+            let w = Opts { wildcards: true, ..Opts::default() };
+            let c = compile(code, &w).unwrap();
+            assert!(regex::Regex::new(&c.pattern).unwrap().is_match(&hay), "wildcard {code} should find {ch:?}");
+        }
+        assert_eq!(replaced("x^0151y"), "x\u{2014}y");
+        assert_eq!(replaced("^0128"), "\u{20AC}");
+        // Unchanged: other codes and the undefined Windows-1252 slots.
+        assert!(finds("^13", "a\rb"));
+        assert!(finds("^0065", "A"));
+        for undefined in ["^0129", "^0141", "^0143", "^0144", "^0157"] {
+            assert_eq!(replaced(undefined), undefined);
+        }
+        // Without the leading zero the code is not read as Windows-1252.
+        assert!(!finds("^151", "\u{2014}"));
+        assert!(!finds("^150", "\u{2013}"));
+    }
 }

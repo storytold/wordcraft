@@ -10,13 +10,18 @@
 //! Import: a tolerant reader for groups and destinations (unknown `\*` destinations, headers,
 //! footers, notes and objects are skipped), `\par \line \tab \page`, `\uN` with `\ucN`
 //! fallback skipping, `\'hh` and 8-bit text in the document's code page (`\ansicpg`, `\mac`, `\pc`, `\pca`) or
-//! the current font's (`\fcharset`, `\cpg`: Cyrillic, Central European, Greek, Mac OS Roman…;
-//! Windows-1252 when none is named), the formatting words above, stylesheet-based
+//! the current font's (`\fcharset`, `\cpg`: Cyrillic, Central European, Greek, Mac OS Roman, the
+//! East Asian multibyte pages 932/936/949/950…; Windows-1252 when none is named). A multibyte
+//! code page's bytes stream through one decoder, so a lead byte and its trail byte decode
+//! together and a run that looks like a UTF-8 BOM is not mistaken for one; the formatting words
+//! above, stylesheet-based
 //! headings and `\outlinelevel`, lists through `\ls`/`\ilvl`, fields, bookmarks, pictures and
 //! tables. Group nesting and picture sizes are capped.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
+use wordcraft_doc::props::VAlign;
 use wordcraft_doc::{Align, Document, Rgb};
 
 use crate::model::{self, Cell, FBlock, FTable, Flow, Fmt, Inline, Kind, ListInfo, Meta, Para, RevMark, make_img};
@@ -27,6 +32,12 @@ const MAX_GROUPS: usize = 512;
 const MAX_PICT: usize = 64 << 20;
 /// Most sections we read (`\sect`); later breaks end paragraphs only.
 const MAX_SECTIONS: usize = 10_000;
+/// The encoding of an East Asian multibyte code page (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5),
+/// which [`Reader::finish_multibyte`] decodes a run with; `None` for the single-byte code pages.
+fn multibyte_encoding(code_page: u16) -> Option<&'static encoding_rs::Encoding> {
+    let label = wordcraft_doc::encoding::multibyte_encoding_name(code_page)?;
+    encoding_rs::Encoding::for_label(label.as_bytes())
+}
 
 // ---------------------------------------------------------------------------------------------
 // Export
@@ -42,6 +53,7 @@ pub fn esc(s: &str) -> String {
             '\t' => o.push_str("\\tab "),
             '\n' => o.push_str("\\line "),
             '\u{000C}' => o.push_str("\\page "),
+            '\u{000E}' => o.push_str("\\column "),
             '\u{00A0}' => o.push_str("\\~"),
             '\u{00AD}' => o.push_str("\\-"),
             '\u{2011}' => o.push_str("\\_"),
@@ -295,11 +307,13 @@ impl Writer {
                 "\\nosupersub"
             });
         }
-        let font = |f: &Fmt| if f.code { Some(model::MONO_FONT.to_string()) } else { f.font.clone() };
+        fn font(f: &Fmt) -> Option<&str> {
+            if f.code { Some(model::MONO_FONT) } else { f.font.as_deref() }
+        }
         let old_font = font(old);
         if old_font != font(cur) {
             // No font is the document's default font, font 0 (Normal's).
-            let i = old_font.map_or(0, |n| self.t.font(&n));
+            let i = old_font.map_or(0, |n| self.t.font(n));
             ctl.push_str(&format!("\\f{i}"));
         }
         let half_points = |s: Option<f32>| s.map(|s| (s * 2.0).round().clamp(2.0, 3276.0) as i32);
@@ -403,6 +417,8 @@ impl Writer {
                     let a = esc(a);
                     out.push_str(&format!("{{\\*\\bkmkstart {a}}}{{\\*\\bkmkend {a}}}"));
                 }
+                // RTF keeps no ruby yet: its base text, in the run's formatting.
+                Inline::Ruby { base, fmt, .. } => self.run(base, fmt, out),
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
         }
@@ -468,7 +484,8 @@ impl Writer {
         match p.align {
             Some(Align::Center) => out.push_str("\\qc"),
             Some(Align::Right) => out.push_str("\\qr"),
-            Some(Align::Justify) | Some(Align::Distribute) => out.push_str("\\qj"),
+            Some(Align::Justify) => out.push_str("\\qj"),
+            Some(Align::Distribute) => out.push_str("\\qd"),
             _ => out.push_str("\\ql"),
         }
         if p.page_break {
@@ -597,6 +614,12 @@ impl Writer {
                     out.push_str("\\clvmrg");
                 } else if c.rowspan > 1 {
                     out.push_str("\\clvmgf");
+                }
+                match c.valign {
+                    Some(VAlign::Top) => out.push_str("\\clvertalt"),
+                    Some(VAlign::Center) => out.push_str("\\clvertalc"),
+                    Some(VAlign::Bottom) => out.push_str("\\clvertalb"),
+                    None => {}
                 }
                 self.cell_borders(c.borders.as_ref(), t.borderless, out);
                 if let Some(s) = c.shading {
@@ -974,6 +997,7 @@ struct CellDef {
     /// The borders the cell names (`\clbrdrt` … `\clbrdrr`, each with its line style, `\brdrw`
     /// width and `\brdrcf` colour).
     borders: wordcraft_doc::props::Borders,
+    valign: Option<VAlign>,
 }
 
 /// Page size and margins in twips (`\paperw`, `\margl`… and their `…sxn` section forms).
@@ -1085,7 +1109,7 @@ struct Reader {
     st: St,
     stack: Vec<St>,
     overflow: usize,
-    fonts: HashMap<i32, String>,
+    fonts: HashMap<i32, Arc<str>>,
     font_cur: i32,
     font_name: String,
     /// Code pages of the fonts whose charset names one (`\fcharset204` → 1251).
@@ -1114,8 +1138,11 @@ struct Reader {
     colors: Vec<Option<Rgb>>,
     color_cur: (u8, u8, u8, bool),
     styles: HashMap<i32, String>,
+    /// Each style's own character formatting, as its `\stylesheet` entry writes it.
+    style_defs: HashMap<i32, StyleDef>,
     style_cur: i32,
     style_name: String,
+    style_def_cur: StyleDef,
     meta: Meta,
     info_text: String,
     // Lists: list id → ordered per level; override ls → list id.
@@ -1141,6 +1168,11 @@ struct Reader {
     rev_name: String,
     skip_chars: usize,
     pending_high: Option<u16>,
+    /// A streaming decoder for the current multibyte code page, and the code page it was made for.
+    /// A lead byte and its trail byte decode together even when a text word, a group boundary or the
+    /// end of a chunk falls between them, so a run of any length never splits a character.
+    mb_decoder: Option<encoding_rs::Decoder>,
+    mb_cp: u16,
     // Output.
     body: Vec<FBlock>,
     para: Para,
@@ -1288,6 +1320,8 @@ impl Reader {
     }
 
     fn close(&mut self) {
+        // A group end decodes the multibyte bytes read in it, before the state is restored.
+        self.finish_multibyte();
         self.skip_chars = 0;
         if self.overflow > 0 {
             self.overflow -= 1;
@@ -1367,7 +1401,9 @@ impl Reader {
 
     fn commit_font(&mut self) {
         let name = std::mem::take(&mut self.font_name).trim().trim_end_matches(';').trim().to_string();
-        if !name.is_empty() && self.fonts.len() < 4096 {
+        if let Some(name) = model::kept_font(&name).filter(|n| !n.is_empty())
+            && self.fonts.len() < 4096
+        {
             self.fonts.insert(self.font_cur, name);
             if let Some(cp) = self.font_cp_cur.take() {
                 self.font_cps.insert(self.font_cur, cp);
@@ -1375,18 +1411,179 @@ impl Reader {
         }
     }
 
-    /// A byte of 8-bit text (`\'hh` or raw) as a char, in the current font's code page, else the
-    /// default font's, else the document's.
-    fn byte_char(&self, b: u8) -> char {
-        let cp = self.st.cp.or_else(|| self.font_cps.get(&self.deff).copied()).unwrap_or(if self.ansicpg == 0 { 1252 } else { self.ansicpg });
-        wordcraft_doc::encoding::code_page_byte(cp, b)
+    /// The code page 8-bit text is read in: the current font's, else the default font's, else the
+    /// document's (Windows-1252 when none is named).
+    fn code_page(&self) -> u16 {
+        self.st.cp.or_else(|| self.font_cps.get(&self.deff).copied()).unwrap_or(if self.ansicpg == 0 { 1252 } else { self.ansicpg })
+    }
+
+    /// A byte of 8-bit text (`\'hh` or raw): a single-byte code page decodes it at once; a
+    /// multibyte one is fed to a streaming decoder ([`Reader::finish_multibyte`]), so a lead byte decodes
+    /// together with its trail byte.
+    fn byte(&mut self, b: u8) {
+        if self.skip_chars > 0 {
+            self.skip_chars -= 1;
+            return;
+        }
+        let cp = self.code_page();
+        let Some(encoding) = multibyte_encoding(cp) else {
+            self.finish_multibyte();
+            let c = wordcraft_doc::encoding::code_page_byte(cp, b);
+            self.ch(c);
+            return;
+        };
+        // A code page switch ends the previous run (a lead byte left then becomes U+FFFD, as Word
+        // writes it) before the new decoder starts.
+        if self.mb_cp != cp || self.mb_decoder.is_none() {
+            self.finish_multibyte();
+            self.mb_cp = cp;
+            self.mb_decoder = Some(encoding.new_decoder_without_bom_handling());
+        }
+        self.decode_run(&[b]);
+    }
+
+    /// Feed 8-bit text bytes to the open multibyte decoder and append what it emits. A single
+    /// `\'hh` byte decodes into a stack buffer (no heap allocation per byte of escaped text); a
+    /// raw run decodes in one call, so a long ASCII run in a Japanese, Chinese or Korean document
+    /// costs one append instead of one per byte. The destination's spare capacity is all
+    /// `decode_to_*` writes into, so a full buffer is drained and decoding continues.
+    fn decode_run(&mut self, bytes: &[u8]) {
+        // The decoder is taken out so the text it produced can be appended (which borrows the
+        // reader) before it goes back.
+        let Some(mut decoder) = self.mb_decoder.take() else { return };
+        let mut read = 0;
+        if bytes.len() <= 16 {
+            // A character is at most 4 UTF-8 bytes, and a byte may also replace a pending lead
+            // byte (3 more), so one escaped byte always fits the stack buffer.
+            let mut buf = [0u8; 16];
+            let (result, got, written, _) = decoder.decode_to_utf8(bytes, &mut buf, false);
+            read = got;
+            let full = matches!(result, encoding_rs::CoderResult::OutputFull);
+            if written > 0
+                && let Ok(s) = std::str::from_utf8(&buf[..written])
+            {
+                self.text(s);
+            }
+            if !full {
+                self.mb_decoder = Some(decoder);
+                return;
+            }
+        }
+        let mut out = String::with_capacity(bytes.len().saturating_mul(2));
+        let mut rest = bytes.get(read..).unwrap_or_default();
+        loop {
+            let (result, got, _) = decoder.decode_to_string(rest, &mut out, false);
+            rest = rest.get(got..).unwrap_or_default();
+            if !matches!(result, encoding_rs::CoderResult::OutputFull) {
+                break;
+            }
+            out.reserve(16.max(rest.len().saturating_mul(2)));
+        }
+        self.mb_decoder = Some(decoder);
+        if !out.is_empty() {
+            self.text(&out);
+        }
+    }
+
+    /// A run of raw 8-bit text from the file (not `\'hh` escapes): a single-byte code page maps
+    /// each byte to a char; a multibyte one decodes the whole run in one pass, so a long ASCII run
+    /// in a Japanese, Chinese or Korean document costs one decode and one append instead of one
+    /// per byte.
+    ///
+    /// The decoder is created without BOM handling: the code page comes from `\ansicpg`, `\cpg` or
+    /// `\fcharset` and must not change. With BOM sniffing, a run that starts `EF BB BF` in GBK,
+    /// Big5 or UHC (a valid character pair followed by a lead byte) would be dropped as a UTF-8
+    /// BOM and the rest decoded as UTF-8.
+    fn run(&mut self, chunk: &[u8]) {
+        if self.skip_chars > 0 {
+            for b in chunk {
+                self.byte(*b);
+            }
+            return;
+        }
+        let cp = self.code_page();
+        let Some(encoding) = multibyte_encoding(cp) else {
+            self.finish_multibyte();
+            let mut out = String::with_capacity(chunk.len());
+            for b in chunk {
+                out.push(wordcraft_doc::encoding::code_page_byte(cp, *b));
+            }
+            if !out.is_empty() {
+                self.text(&out);
+            }
+            return;
+        };
+        if self.mb_cp != cp || self.mb_decoder.is_none() {
+            self.finish_multibyte();
+            self.mb_cp = cp;
+            self.mb_decoder = Some(encoding.new_decoder_without_bom_handling());
+        }
+        self.decode_run(chunk);
+    }
+
+    /// Ends the current multibyte run: the streaming decoder emits whatever it still holds (a lone
+    /// lead byte becomes U+FFFD, as Word writes it) and is dropped. A code page switch, a single-byte
+    /// run, a group end and the end of the document finish the run this way.
+    fn finish_multibyte(&mut self) {
+        let Some(mut decoder) = self.mb_decoder.take() else { return };
+        let mut out = String::with_capacity(16);
+        let _ = decoder.decode_to_string(&[], &mut out, true);
+        if !out.is_empty() {
+            self.text(&out);
+        }
     }
 
     fn commit_style(&mut self) {
         let name = std::mem::take(&mut self.style_name).trim().trim_end_matches(';').trim().to_string();
+        let def = std::mem::take(&mut self.style_def_cur);
         if self.styles.len() < 4096 {
             self.styles.insert(self.style_cur, name);
+            self.style_defs.insert(self.style_cur, def);
         }
+        // The next entry is style 0 (Normal) unless it names a number.
+        self.style_cur = 0;
+    }
+
+    /// The character formatting style `id` gives its runs in this file: its stylesheet entry's,
+    /// then its `\sbasedon` ancestors' (a bounded walk: loops and missing ids end it).
+    fn file_style(&self, id: i32) -> StyleDef {
+        let mut out = StyleDef::default();
+        let mut seen: Vec<i32> = Vec::new();
+        let mut cur = Some(id);
+        while let Some(i) = cur {
+            if seen.len() >= 16 || seen.contains(&i) {
+                break;
+            }
+            seen.push(i);
+            let Some(d) = self.style_defs.get(&i) else { break };
+            out.bold = out.bold.or(d.bold);
+            out.italic = out.italic.or(d.italic);
+            out.size = out.size.or(d.size);
+            out.font = out.font.or(d.font);
+            cur = d.based_on;
+        }
+        out
+    }
+
+    /// The formatting a paragraph of kind `kind` in style `id` gives its runs. A style whose
+    /// entry and `\sbasedon` chain set no character formatting (a bare `{\s2 heading 2;}`) has
+    /// WordCraft's own (`style_fmt`); otherwise what the chain doesn't set is RTF's default (not
+    /// bold, not italic, 12 pt). The font alone falls back per property: WordCraft writes the code
+    /// font on each code paragraph, not in its Code entry.
+    fn style_base(&self, kind: Kind, id: i32) -> Fmt {
+        let mut f = style_fmt(kind);
+        let d = self.file_style(id);
+        if d.bold.is_some() || d.italic.is_some() || d.size.is_some() || d.font.is_some() {
+            f.bold = d.bold.unwrap_or(false);
+            f.italic = d.italic.unwrap_or(false);
+            f.size = Some(d.size.unwrap_or(12.0));
+        }
+        // A font is matched the way `\f` sets a run's: a monospaced one is the code font.
+        if let Some(name) = d.font.and_then(|i| self.fonts.get(&i)) {
+            f.code = model::is_mono(name);
+            f.font = (!f.code).then(|| name.clone());
+        }
+        f
     }
 
     fn finish_pict(&mut self) {
@@ -1434,7 +1631,8 @@ impl Reader {
                 for c in s.chars() {
                     if c == ';' {
                         self.commit_font();
-                    } else {
+                    } else if self.font_name.len() <= model::MAX_FONT_NAME {
+                        // One past the limit is enough for `commit_font` to drop the name.
                         self.font_name.push(c);
                     }
                 }
@@ -1454,8 +1652,10 @@ impl Reader {
                 for c in s.chars() {
                     if c == ';' {
                         self.commit_style();
-                    } else {
+                    } else if self.style_name.len() < model::MAX_FONT_NAME {
                         self.style_name.push(c);
+                    } else {
+                        model::dropped(model::Dropped::StyleName);
                     }
                 }
             }
@@ -1522,22 +1722,31 @@ impl Reader {
             self.skip_chars -= 1;
             return;
         }
+        self.finish_multibyte();
         let mut buf = [0u8; 4];
         self.text(c.encode_utf8(&mut buf));
     }
 
-    fn para_kind(&self, st: &St) -> Kind {
+    /// The paragraph kind `st`'s style names, if it names one.
+    fn style_kind(&self, st: &St) -> Option<Kind> {
         let name = self.styles.get(&st.style).map(|s| s.to_ascii_lowercase()).unwrap_or_default();
         if let Some(n) = name.strip_prefix("heading").and_then(|r| r.trim().parse::<u8>().ok()) {
-            return Kind::Heading(n.clamp(1, 6));
+            return Some(Kind::Heading(n.clamp(1, 6)));
         }
         if st.style != 0 {
             match name.as_str() {
-                "title" => return Kind::Title,
-                "quote" | "intense quote" => return Kind::Quote,
-                "code" | "html preformatted" | "plain text" => return Kind::Code,
+                "title" => return Some(Kind::Title),
+                "quote" | "intense quote" => return Some(Kind::Quote),
+                "code" | "html preformatted" | "plain text" => return Some(Kind::Code),
                 _ => {}
             }
+        }
+        None
+    }
+
+    fn para_kind(&self, st: &St) -> Kind {
+        if let Some(k) = self.style_kind(st) {
+            return k;
         }
         if let Some(o) = st.outline.filter(|o| *o < 9) {
             return Kind::Heading((o + 1).min(6));
@@ -1556,7 +1765,7 @@ impl Reader {
             let list = self.overrides.get(&ls).and_then(|id| self.lists.get(id));
             let lv = st.ilvl.min(8);
             let ordered = list.and_then(|l| l.get(lv as usize).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv });
+            p.list = Some(ListInfo { ordered, level: lv, start: 1 });
         }
         p
     }
@@ -1584,12 +1793,14 @@ impl Reader {
             p.fmt_change = Some(Box::new(model::FmtChange { mark: self.rev_mark(c.auth, c.date), old: (**old).clone() }));
         }
         // Headings, code, titles and quotes keep their style formatting implicit, in the text's
-        // formatting and in the formatting before a tracked change alike.
+        // formatting and in the formatting before a tracked change alike. The style is the
+        // file's when its name gave the kind (not an outline level on another style).
+        let base = if self.style_kind(&self.st) == Some(p.kind) { self.style_base(p.kind, self.st.style) } else { style_fmt(p.kind) };
         for i in &mut p.inlines {
             if let Inline::Text(_, f) = i {
-                drop_style_formatting(p.kind, f);
+                drop_style_formatting(p.kind, &base, f);
                 if let Some(c) = f.fmt_change.as_deref_mut() {
-                    drop_style_formatting(p.kind, &mut c.old);
+                    drop_style_formatting(p.kind, &base, &mut c.old);
                 }
             }
         }
@@ -1631,6 +1842,7 @@ impl Reader {
             c.shading = d.shading;
             c.borders = d.borders.any_visible().then_some(d.borders);
             c.header = self.row_header;
+            c.valign = d.valign;
             match d.vmerge {
                 1 => c.rowspan = 2,
                 2 => c.covered = true,
@@ -1669,6 +1881,9 @@ impl Reader {
     }
 
     fn word(&mut self, w: &str, p: Option<i32>, starred: bool, first_in_group: bool) {
+        // Every control word ends a multibyte run: the code page it is read in may change here
+        // (`\f`, `\fcharset`, `\cpg`, `\ansicpg`, `\pard`), and `\par` must see the text before it.
+        self.finish_multibyte();
         let on = p != Some(0);
         let pv = p.unwrap_or(0);
         if self.st.dest == Dest::Skip && !(self.in_info() && matches!(w, "title" | "author" | "subject" | "keywords" | "doccomm" | "creatim")) {
@@ -1791,9 +2006,9 @@ impl Reader {
                         self.font_cp_cur = None;
                     }
                     "fcharset" => self.font_cp_cur = wordcraft_doc::encoding::charset_code_page(pv),
-                    // A font's explicit code page (`\cpg1251`) wins over its charset.
+                    // A font's explicit code page (`\cpg1251`, `\cpg932`) wins over its charset.
                     "cpg" => {
-                        if let Some(cp) = u16::try_from(pv).ok().filter(|cp| wordcraft_doc::encoding::is_byte_code_page(*cp)) {
+                        if let Some(cp) = u16::try_from(pv).ok().filter(|cp| wordcraft_doc::encoding::is_text_code_page(*cp)) {
                             self.font_cp_cur = Some(cp);
                         }
                     }
@@ -1822,11 +2037,18 @@ impl Reader {
                 return;
             }
             Dest::StyleSheet => {
+                let d = &mut self.style_def_cur;
                 match w {
                     "s" | "cs" | "ds" | "ts" => {
                         self.style_cur = if w == "s" { pv } else { -1 - pv.saturating_abs() };
                         self.style_name.clear();
+                        *d = StyleDef::default();
                     }
+                    "sbasedon" => d.based_on = Some(pv),
+                    "b" => d.bold = Some(on),
+                    "i" => d.italic = Some(on),
+                    "fs" => d.size = (pv > 0).then(|| (pv as f32 / 2.0).clamp(1.0, 1638.0)),
+                    "f" => d.font = Some(pv),
                     _ => {}
                 }
                 return;
@@ -1914,9 +2136,10 @@ impl Reader {
             "cell" => self.end_cell(),
             "nestcell" => self.end_para(true),
             "row" => self.end_row(),
-            "line" => self.ch('\n'),
+            "line" | "softline" => self.ch('\n'),
             "tab" => self.ch('\t'),
-            "page" => self.ch('\u{000C}'),
+            "page" | "softpage" => self.ch('\u{000C}'),
+            "column" => self.ch('\u{000E}'),
             "emdash" => self.ch('—'),
             "endash" => self.ch('–'),
             "bullet" => self.ch('•'),
@@ -1929,13 +2152,15 @@ impl Reader {
             "qmspace" => self.ch('\u{2005}'),
             "zwj" => self.ch('\u{200D}'),
             "zwnj" => self.ch('\u{200C}'),
+            "zwbo" => self.ch('\u{200B}'),
+            "zwnbo" => self.ch('\u{2060}'),
             "u" => {
                 let u = (pv as i64).rem_euclid(65_536) as u16;
                 if (0xD800..0xDC00).contains(&u) {
                     self.pending_high = Some(u);
                 } else {
                     let c = match self.pending_high.take() {
-                        Some(h) if (0xDC00..0xE000).contains(&u) => char::decode_utf16([h, u]).next().and_then(|r| r.ok()).unwrap_or('\u{FFFD}'),
+                        Some(h) if (0xDC00..0xE000).contains(&u) => char::decode_utf16([h, u]).next().and_then(Result::ok).unwrap_or('\u{FFFD}'),
                         _ => char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'),
                     };
                     self.ch(c);
@@ -1988,7 +2213,7 @@ impl Reader {
             }
             "fs" => self.st.fmt.size = if pv > 0 { Some((pv as f32 / 2.0).clamp(1.0, 1638.0)) } else { None },
             "ansicpg" => {
-                if let Some(cp) = u16::try_from(pv).ok().filter(|cp| wordcraft_doc::encoding::is_byte_code_page(*cp)) {
+                if let Some(cp) = u16::try_from(pv).ok().filter(|cp| wordcraft_doc::encoding::is_text_code_page(*cp)) {
                     self.ansicpg = cp;
                 }
             }
@@ -2019,7 +2244,8 @@ impl Reader {
             "ql" => self.st.align = Some(Align::Left),
             "qc" => self.st.align = Some(Align::Center),
             "qr" => self.st.align = Some(Align::Right),
-            "qj" | "qd" => self.st.align = Some(Align::Justify),
+            "qj" => self.st.align = Some(Align::Justify),
+            "qd" => self.st.align = Some(Align::Distribute),
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,
@@ -2042,6 +2268,9 @@ impl Reader {
             "clvmrg" => self.def_cur.vmerge = 2,
             "clmgf" => self.def_cur.hmerge = 1,
             "clmrg" => self.def_cur.hmerge = 2,
+            "clvertalt" => self.def_cur.valign = Some(VAlign::Top),
+            "clvertalc" => self.def_cur.valign = Some(VAlign::Center),
+            "clvertalb" => self.def_cur.valign = Some(VAlign::Bottom),
             "clcbpat" => self.def_cur.shading = self.colors.get(pv.max(0) as usize).copied().flatten(),
             "sb" => self.st.sb = Some(pv),
             "sa" => self.st.sa = Some(pv),
@@ -2108,7 +2337,7 @@ impl Reader {
             "fldrslt" => {
                 let link = self.st.field.and_then(|i| self.fields.get(i)).and_then(|s| hyperlink(s));
                 if link.is_some() {
-                    self.st.fmt.link = link;
+                    self.st.fmt.link = link.as_deref().and_then(model::kept_link);
                 }
             }
             _ => {}
@@ -2153,21 +2382,48 @@ fn styled(base: &Fmt, f: &Fmt) -> Fmt {
     e
 }
 
-/// Clear from `f` the formatting a paragraph of kind `kind` gets from its style (as main's
-/// import always has: any direct size, bold or code font there is taken as the style's).
-fn drop_style_formatting(kind: Kind, f: &mut Fmt) {
-    if matches!(kind, Kind::Heading(_) | Kind::Code | Kind::Title) {
-        f.size = None;
-        if kind != Kind::Title {
+/// A `\stylesheet` entry's character formatting; `None` where the entry doesn't set it.
+#[derive(Clone, Copy, Debug, Default)]
+struct StyleDef {
+    based_on: Option<i32>,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    size: Option<f32>,
+    /// A `\fonttbl` index, named when it's used (the table may follow).
+    font: Option<i32>,
+}
+
+/// Clear from `f` the formatting a paragraph of kind `kind` gets from its style, whose
+/// formatting is `base`: a heading's or title's size and bold when they equal the style's, a
+/// quote's italic, a code run's font when it's the style's (and, as before, its size and bold).
+fn drop_style_formatting(kind: Kind, base: &Fmt, f: &mut Fmt) {
+    match kind {
+        Kind::Heading(_) | Kind::Title => {
+            if f.size.is_some() && f.size == base.size {
+                f.size = None;
+            }
+            if base.bold {
+                f.bold = false;
+            }
+        }
+        Kind::Code => {
+            f.size = None;
             f.bold = false;
+            let same_font = match (&f.font, &base.font) {
+                (Some(a), Some(b)) => a.eq_ignore_ascii_case(b),
+                (a, b) => a.is_none() && b.is_none(),
+            };
+            if f.code == base.code && same_font {
+                f.code = false;
+                f.font = None;
+            }
         }
-        if kind == Kind::Code {
-            f.code = false;
-            f.font = None;
+        Kind::Quote => {
+            if base.italic {
+                f.italic = false;
+            }
         }
-    }
-    if kind == Kind::Quote {
-        f.italic = false;
+        Kind::Normal | Kind::Rule => {}
     }
 }
 
@@ -2392,7 +2648,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                 let Some(&n) = bytes.get(i + 1) else { break };
                 if n.is_ascii_alphabetic() {
                     let mut j = i + 1;
-                    while bytes.get(j).is_some_and(|b| b.is_ascii_alphabetic()) && j - i <= 32 {
+                    while bytes.get(j).is_some_and(u8::is_ascii_alphabetic) && j - i <= 32 {
                         j += 1;
                     }
                     let word = std::str::from_utf8(bytes.get(i + 1..j).unwrap_or(b"")).unwrap_or("");
@@ -2402,7 +2658,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         k += 1;
                     }
                     let d0 = k;
-                    while bytes.get(k).is_some_and(|b| b.is_ascii_digit()) && k - d0 < 10 {
+                    while bytes.get(k).is_some_and(u8::is_ascii_digit) && k - d0 < 10 {
                         k += 1;
                     }
                     let param = if k > d0 {
@@ -2462,10 +2718,14 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         match h {
                             Some(v) => {
                                 if r.st.dest == Dest::Pict {
-                                    r.text(&format!("{v:02x}"));
+                                    // Hex digits, two at a time, without a String per picture byte.
+                                    const HEX: &[u8; 16] = b"0123456789abcdef";
+                                    let h = [HEX[usize::from(v >> 4)], HEX[usize::from(v & 0x0f)]];
+                                    if let Ok(s) = std::str::from_utf8(&h) {
+                                        r.text(s);
+                                    }
                                 } else {
-                                    let c = r.byte_char(v);
-                                    r.ch(c);
+                                    r.byte(v);
                                 }
                                 i += 4;
                             }
@@ -2477,7 +2737,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         i += 2;
                         continue;
                     }
-                    b'~' => {
+                    b'~' | b' ' => {
                         r.ch('\u{00A0}');
                         i += 2;
                     }
@@ -2509,22 +2769,27 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                     j += 1;
                 }
                 let chunk = bytes.get(i..j).unwrap_or(b"");
-                if r.skip_chars == 0 && chunk.is_ascii() {
+                if r.st.dest == Dest::Pict && r.skip_chars == 0 && chunk.is_ascii() {
+                    // Picture hex is not text: it needs no decoder, so neither a pending lead byte
+                    // nor the code page's single-byte path applies to it.
+                    if let Ok(s) = std::str::from_utf8(chunk) {
+                        r.text(s);
+                    }
+                } else if r.skip_chars == 0 && chunk.is_ascii() && r.mb_decoder.is_none() {
+                    // Plain ASCII with no multibyte run open: append it as it is.
                     if let Ok(s) = std::str::from_utf8(chunk) {
                         r.text(s);
                     }
                 } else {
-                    for b in chunk {
-                        let c = r.byte_char(*b);
-                        r.ch(c);
-                    }
+                    r.run(chunk);
                 }
                 i = j;
                 first_in_group = false;
             }
         }
     }
-    // A header or footer left open by a truncated file ends here.
+    // A header or footer left open by a truncated file ends here, and so does a multibyte run.
+    r.finish_multibyte();
     r.end_header_footer();
     if r.para_has || !r.para.inlines.is_empty() {
         r.end_para(false);
@@ -2550,7 +2815,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
     }
-    let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).cloned();
+    let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
     Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
 }
 
@@ -2593,6 +2858,7 @@ fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
 
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    model::begin_import();
     let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
@@ -2931,6 +3197,126 @@ mod tests {
         // A code page number out of range is ignored, not truncated to another one.
         let f = parse(br"{\rtf1\ansi\ansicpg65973 caf\'e9\par}").unwrap();
         assert_eq!(texts(&f), ["Normal:café"]);
+        // The OEM charset (255) is DOS code page 437, like 254.
+        let f = parse(br"{\rtf1\ansi\deff0{\fonttbl{\f0\fcharset255 Courier New;}}\f0 caf\'82\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:café"]);
+    }
+
+    /// #1653: the East Asian code pages (932 Shift-JIS, 936 GBK, 949 UHC, 950 Big5) decode their
+    /// bytes as a run, so a lead byte and its trail byte decode together, escaped or raw.
+    #[test]
+    fn east_asian_multibyte_code_pages() {
+        // Japanese `\ansicpg932` (CP932: 日 = 93 fa, 本 = 96 7b, 語 = 8c ea).
+        let f = parse(br"{\rtf1\ansi\ansicpg932 \'93\'fa\'96\'7b\'8c\'ea\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語"]);
+        // Raw 8-bit text (not `\'hh`), and raw bytes mixed with one escaped byte: RTF can't carry a
+        // raw `{`, `}` or `\`, so 本's trail byte 7b is written `\'7b` here.
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg932 \x8a\xbf\x8e\x9a\\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:漢字"]);
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg932 \x93\xfa\x96\\'7b\x8c\xea\\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語"]);
+        // A font names the code page with `\fcharset128` or with `\cpg932`, and `\f0` selects it.
+        let f = parse(br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\fcharset128 MS Mincho;}}\f0 \'93\'fa\'96\'7b\'8c\'ea\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語"]);
+        let f = parse(br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0\cpg932 MS Mincho;}}\f0 \'93\'fa\'96\'7b\'8c\'ea\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語"]);
+        // Raw 8-bit bytes in the font table (the font's name) decode in the document's code page.
+        let d = import(b"{\\rtf1\\ansi\\ansicpg932\\deff0{\\fonttbl{\\f0\\fcharset128 \x96\xbe\x92\xa9;}}\\f0 x\\par}").unwrap();
+        assert_eq!(d.styles.default_chr.font.as_deref(), Some("明朝"));
+        // Korean `\ansicpg949` (UHC: 한국어 = c7 d1 b1 b9 be ee).
+        let f = parse(br"{\rtf1\ansi\ansicpg949 \'c7\'d1\'b1\'b9\'be\'ee\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:한국어"]);
+        // Simplified Chinese `\ansicpg936` (GBK: 中文 = d6 d0 ce c4).
+        let f = parse(br"{\rtf1\ansi\ansicpg936 \'d6\'d0\'ce\'c4\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:中文"]);
+        // Traditional Chinese `\ansicpg950` (Big5: 中文 = a4 a4 a4 e5).
+        let f = parse(br"{\rtf1\ansi\ansicpg950 \'a4\'a4\'a4\'e5\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:中文"]);
+        // `\uN?` escapes still decode alongside multibyte text (`\u26412?` is 本, its `?` fallback
+        // skipped by `\uc1`).
+        let f = parse(br"{\rtf1\ansi\ansicpg932 \'93\'fa\u26412?\'8c\'ea x\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語 x"]);
+        // An invalid sequence decodes as U+FFFD, as Word writes it, and doesn't lose the rest.
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg932 \x93\\par after\\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:\u{FFFD}", "Normal:after"]);
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg932 \x93\xfa\x93 x\x96\x8c\\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日\u{FFFD} x膜"]);
+    }
+
+    /// The decoder never sniffs a BOM: the code page is named by `\ansicpg`, `\cpg` or `\fcharset`,
+    /// so a run that starts `EF BB BF` is a character pair and a lead byte, not a UTF-8 BOM (which
+    /// would switch the rest of the document to UTF-8 and garble it).
+    #[test]
+    fn a_bom_like_byte_triple_is_text_in_a_multibyte_code_page() {
+        // GBK EF BB = 锘, then BF B5 = 康; UHC EF BB = 癤, then BF C0 = 오; Big5 EF BB = 嚜, then
+        // BF 40 = 濃.
+        let f = parse(br"{\rtf1\ansi\ansicpg936 \'ef\'bb\'bf\'b5\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:锘康"]);
+        let f = parse(br"{\rtf1\ansi\ansicpg949 \'ef\'bb\'bf\'c0\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:癤오"]);
+        let f = parse(br"{\rtf1\ansi\ansicpg950 \'ef\'bb\'bf\'40\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:嚜濃"]);
+    }
+
+    /// A multibyte run longer than any fixed buffer keeps every character: the streaming decoder
+    /// holds a lead byte and its trail byte together across decode steps instead of cutting the
+    /// character at a buffer size (the review's finding on the byte-capped flush).
+    #[test]
+    fn a_long_multibyte_run_never_splits_a_character() {
+        let mut bytes = b"{\\rtf1\\ansi\\ansicpg932 ".to_vec();
+        bytes.push(b'A');
+        // 2048 × あ (CP932 82 a0) is 4096 bytes after the one ASCII byte: a fixed 4096-byte buffer
+        // would flush with the last あ's lead byte in one step and its trail byte in the next.
+        for _ in 0..2048 {
+            bytes.extend_from_slice(&[0x82, 0xA0]);
+        }
+        bytes.extend_from_slice(b"\\par}");
+        let f = parse(&bytes).unwrap();
+        let expected: String = std::iter::once('A').chain((0..2048).map(|_| 'あ')).collect();
+        assert_eq!(texts(&f), [format!("Normal:{expected}")]);
+    }
+
+    /// A lead byte with no trail byte at the end of the document becomes U+FFFD, as Word writes a
+    /// malformed sequence — the streaming decoder is finalised, not left holding it.
+    #[test]
+    fn an_incomplete_lead_byte_at_the_end_is_replacement() {
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg932 \x93}").unwrap();
+        assert_eq!(texts(&f), ["Normal:\u{FFFD}"]);
+    }
+
+    /// #1653: a code page switch (`\f`, `\fcharset`, `\cpg`, `\ansicpg`), a group end and the end
+    /// of the document decode the multibyte bytes read so far, before the new code page applies.
+    #[test]
+    fn multibyte_code_page_switches_flush_pending_bytes() {
+        // Japanese (932) → ASCII → Cyrillic (`\fcharset204` with `\cpg1251`): each run decodes in
+        // its own code page, the last bytes before the switch included.
+        let f = parse(
+            br"{\rtf1\ansi\ansicpg932\deff0{\fonttbl{\f0 MS Mincho;}{\f1\fcharset204\cpg1251 Arial CYR;}}\f0 \'93\'fa\'96\'7b\'8c\'ea mixed \f1 \'cf\'f0\'e8\'e2\'e5\'f2\par}",
+        )
+        .unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語 mixed Привет"]);
+        // A group end flushes: the group's 932 bytes decode before the outer 1252 text.
+        let f =
+            parse(br"{\rtf1\ansi\ansicpg1252\deff0{\fonttbl{\f0 Arial;}{\f1\fcharset128 MS Mincho;}}\f0 {\f1 \'93\'fa\'96\'7b\'8c\'ea}caf\'e9\par}")
+                .unwrap();
+        assert_eq!(texts(&f), ["Normal:日本語café"]);
+        // An `\ansicpg` switch mid-document flushes too.
+        let f = parse(br"{\rtf1\ansi\ansicpg932 \'93\'fa\ansicpg1251 \'cf\'f0\'e8\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:日При"]);
+        // A run left open at the end of the document isn't lost.
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg932 \x93\xfa").unwrap();
+        assert_eq!(texts(&f), ["Normal:日"]);
+    }
+
+    /// A Windows-1252 document (the default) reads exactly as before: high bytes one at a time.
+    #[test]
+    fn windows_1252_text_is_unchanged() {
+        let f = parse(b"{\\rtf1\\ansi\\ansicpg1252 caf\xe9 na\xefve \x93quoted\x94 \\'80 5\\'b0\\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:café naïve “quoted” € 5°"]);
+        // No `\ansicpg`: the default is 1252; the byte values of an East Asian code page keep
+        // their 1252 meaning.
+        let f = parse(b"{\\rtf1\\ansi \xe9\\'92\\'93 \\'fa\\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:é’“ ú"]);
     }
 
     #[test]
@@ -3264,7 +3650,7 @@ mod tests {
     fn list_item_with_a_formatting_change_keeps_its_list_on_reject() {
         use model::{FmtChange, ListInfo};
         // A numbered item Alice centred (it was left-aligned), and a second plain item.
-        let li = Some(ListInfo { ordered: true, level: 0 });
+        let li = Some(ListInfo { ordered: true, level: 0, start: 1 });
         let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
         let old = Para { list: li, align: Some(Align::Left), ..Default::default() };
         let mut item = Para { list: li, align: Some(Align::Center), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
@@ -3294,7 +3680,7 @@ mod tests {
         use model::{FmtChange, ListInfo};
         // Alice took the paragraph out of a numbered list: it is no list item now, but was one.
         let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-        let old = Para { list: Some(ListInfo { ordered: true, level: 0 }), ..Default::default() };
+        let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
         let mut item = Para { fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
         item.push_text("Item", &Fmt::default());
         let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
@@ -3310,9 +3696,12 @@ mod tests {
     fn numbered_item_made_bulleted_gets_its_numbered_list_back_on_reject() {
         use model::{FmtChange, ListInfo};
         let mark = RevMark { author: "Alice".into(), date: "2024-03-15T10:30:00Z".into(), id: None };
-        let old = Para { list: Some(ListInfo { ordered: true, level: 0 }), ..Default::default() };
-        let mut item =
-            Para { list: Some(ListInfo { ordered: false, level: 0 }), fmt_change: Some(Box::new(FmtChange { mark, old })), ..Default::default() };
+        let old = Para { list: Some(ListInfo { ordered: true, level: 0, start: 1 }), ..Default::default() };
+        let mut item = Para {
+            list: Some(ListInfo { ordered: false, level: 0, start: 1 }),
+            fmt_change: Some(Box::new(FmtChange { mark, old })),
+            ..Default::default()
+        };
         item.push_text("Item", &Fmt::default());
         let flow = Flow { blocks: vec![FBlock::Para(item)], meta: Meta::default() };
         let doc = model::to_doc(&flow);
@@ -3491,26 +3880,210 @@ mod tests {
         assert!(out.contains(&format!("{{\\*\\oldcprops \\f{mono}\\crauth1}}")), "{out}");
     }
 
+    /// The text runs of `rtf`'s paragraphs, in order, with their formatting.
+    fn text_runs(rtf: &[u8]) -> Vec<(String, Fmt)> {
+        let f = parse(rtf).unwrap();
+        f.blocks
+            .iter()
+            .filter_map(|b| if let FBlock::Para(p) = b { Some(p) } else { None })
+            .flat_map(|p| p.inlines.iter())
+            .filter_map(|i| if let Inline::Text(t, f) = i { Some((t.clone(), f.clone())) } else { None })
+            .collect()
+    }
+
+    /// The formatting of the run whose text is `t`.
+    fn run_fmt<'a>(runs: &'a [(String, Fmt)], t: &str) -> &'a Fmt {
+        runs.iter().find(|r| r.0 == t).map(|r| &r.1).unwrap_or_else(|| panic!("no run {t:?} in {runs:?}"))
+    }
+
     #[test]
     fn heading_and_code_runs_take_their_style_formatting_on_import() {
-        // As on main: a heading's or code paragraph's runs drop their direct size, bold and
-        // (code) font; a size set by hand there isn't kept through RTF.
-        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}}{\stylesheet{\s0 Normal;}{\s2 heading 2;}{\s9 Code;}}
-\pard\s2\b\fs26 Head\par
-\pard\s9\f1\b\fs21 code\par}";
-        let f = parse(rtf).unwrap();
-        let runs: Vec<&Fmt> = f
-            .blocks
-            .iter()
-            .filter_map(|b| match b {
-                FBlock::Para(p) => p.inlines.first().and_then(|i| if let Inline::Text(_, f) = i { Some(f) } else { None }),
-                _ => None,
-            })
-            .collect();
-        let head = runs.first().expect("heading run");
+        // A stylesheet entry without formatting words (WordCraft's older files, minimal
+        // stylesheets): WordCraft's own heading and code formatting stand in for the style's.
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Times New Roman;}{\f1 Arial;}{\f2 Courier New;}}{\stylesheet{\s0 Normal;}{\s2 heading 2;}{\s9 Code;}}
+\pard\s2\b\fs32 Head\par
+\pard\s2\b\fs26 Small\par
+\pard\s9\f2\b\fs21 code\par
+\pard\s9\f1\fs21 arial\par}";
+        let runs = text_runs(rtf);
+        let head = run_fmt(&runs, "Head");
         assert_eq!((head.size, head.bold), (None, false));
-        let code = runs.get(1).expect("code run");
+        // 13 pt isn't heading 2's 16 pt: a size set by hand.
+        let small = run_fmt(&runs, "Small");
+        assert_eq!((small.size, small.bold), (Some(13.0), false));
+        let code = run_fmt(&runs, "code");
         assert_eq!((code.size, code.bold, code.font.as_deref(), code.code), (None, false, None, false));
+        // Arial isn't the code font: set by hand.
+        let arial = run_fmt(&runs, "arial");
+        assert_eq!((arial.size, arial.font.as_deref(), arial.code), (None, Some("Arial"), false));
+    }
+
+    #[test]
+    fn heading_runs_are_compared_with_the_files_heading_style() {
+        // Word writes resolved values: a 13 pt bold Heading 2 has `\b\fs26` in its stylesheet
+        // entry and on its runs. Only what differs from the entry is direct formatting.
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Times New Roman;}}{\stylesheet{\ql \f0\fs24 Normal;}
+{\s2\ql \keepn\outlinelevel1 \b\fs26 \sbasedon0 \snext0 heading 2;}{\s3\ql \keepn\b0\fs24 \sbasedon0 \snext0 heading 3;}}
+\pard\s2\b\fs26 Head\par
+\pard\s2\b\fs40 Big\par
+\pard\s3\b\fs24 Bolded\par}";
+        let runs = text_runs(rtf);
+        let head = run_fmt(&runs, "Head");
+        assert_eq!((head.size, head.bold), (None, false));
+        let big = run_fmt(&runs, "Big");
+        assert_eq!((big.size, big.bold), (Some(20.0), false));
+        // Heading 3 isn't bold in this file: the bold is the user's.
+        let bolded = run_fmt(&runs, "Bolded");
+        assert_eq!((bolded.size, bolded.bold), (None, true));
+    }
+
+    #[test]
+    fn style_formatting_is_resolved_through_sbasedon() {
+        // LibreOffice's stylesheet: Heading 2 is based on Heading, which sets the boldness and
+        // font; Code is based on a style that sets the font.
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Liberation Serif;}{\f1 Liberation Sans;}{\f2 Iosevka;}{\f3 Courier New;}}
+{\stylesheet{\s0\f0\fs24 Normal;}{\s1\sbasedon0\snext2\f1\b0\fs28 Heading;}{\s2\sbasedon1\snext3\ql\fs32 Heading 2;}
+{\s10\sbasedon0\f2\fs20 Source Base;}{\s9\sbasedon10 Code;}}
+\pard\s2\f1\fs32 Plain\par
+\pard\s2\f1\b\fs32 Bolded\par
+\pard\s9\f2\fs20 base\par
+\pard\s9\f3\fs20 courier\par}";
+        let runs = text_runs(rtf);
+        let plain = run_fmt(&runs, "Plain");
+        assert_eq!((plain.size, plain.bold), (None, false));
+        // Heading isn't bold, so neither is Heading 2.
+        let bolded = run_fmt(&runs, "Bolded");
+        assert_eq!((bolded.size, bolded.bold), (None, true));
+        let base = run_fmt(&runs, "base");
+        assert_eq!((base.size, base.font.as_deref(), base.code), (None, None, false));
+        // Code's font is Iosevka here, so Courier New was set by hand.
+        let courier = run_fmt(&runs, "courier");
+        assert_eq!((courier.size, courier.font.as_deref(), courier.code), (None, None, true));
+    }
+
+    #[test]
+    fn code_runs_in_the_files_code_font_have_no_direct_font() {
+        let rtf =
+            br"{\rtf1\ansi{\fonttbl{\f0 Times New Roman;}{\f1 Courier New;}{\f2 Arial;}}{\stylesheet{\s0 Normal;}{\s9\sbasedon0\sa0\f1\fs21 Code;}}
+\pard\s9\f1\fs21 mono\par
+\pard\s9\f2\fs21 arial\par}";
+        let runs = text_runs(rtf);
+        let mono = run_fmt(&runs, "mono");
+        assert_eq!((mono.size, mono.font.as_deref(), mono.code), (None, None, false));
+        let arial = run_fmt(&runs, "arial");
+        assert_eq!((arial.size, arial.font.as_deref(), arial.code), (None, Some("Arial"), false));
+    }
+
+    #[test]
+    fn hostile_sbasedon_chains_are_harmless() {
+        let mut chain = String::new();
+        // s100 (heading 5) based on s101 … s139, the last one not bold: past the bound, so
+        // heading 5 takes WordCraft's bold.
+        for i in 100..140 {
+            let name = if i == 100 { "heading 5".to_string() } else { format!("x{i}") };
+            let b0 = if i == 139 { "\\b0" } else { "" };
+            chain.push_str(&format!("{{\\s{i}\\sbasedon{}{b0} {name};}}", i + 1));
+        }
+        let rtf = format!(
+            r"{{\rtf1{{\stylesheet{{\s0 Normal;}}{{\s1\sbasedon1 heading 1;}}{{\s3\sbasedon4\b0 heading 3;}}{{\s4\sbasedon3 heading 4;}}
+{{\s6\sbasedon-5 heading 6;}}{{\s2\sbasedon2147483647\fs-40 heading 2;}}{{\s-2147483648\sbasedon-2147483648 Title;}}{chain}}}
+\pard\s1\b\fs40 one\par
+\pard\s3\b\fs24 three\par
+\pard\s4\b\fs24 four\par
+\pard\s6\b\fs22 six\par
+\pard\s2\b\fs32 two\par
+\pard\s100\b\fs24 five\par
+\pard\s-2147483648\fs56 title\par}}"
+        );
+        let runs = text_runs(rtf.as_bytes());
+        // Self-based heading 1: WordCraft's values.
+        assert_eq!((run_fmt(&runs, "one").size, run_fmt(&runs, "one").bold), (None, false));
+        // A loop between heading 3 and 4: both take heading 3's `\b0`.
+        assert!(run_fmt(&runs, "three").bold);
+        assert!(run_fmt(&runs, "four").bold);
+        assert_eq!((run_fmt(&runs, "six").size, run_fmt(&runs, "six").bold), (None, false));
+        assert_eq!((run_fmt(&runs, "two").size, run_fmt(&runs, "two").bold), (None, false));
+        assert!(!run_fmt(&runs, "five").bold);
+        let _ = run_fmt(&runs, "title");
+    }
+
+    #[test]
+    fn a_word_365_heading_is_not_bold_so_a_bold_run_there_is_the_users() {
+        // Word 365's Heading 1 isn't bold: its entry sets the font and size but no `\b`, so a
+        // bold run, or a tracked change to or from bold, is the user's.
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f1 Aptos;}{\f2 Aptos Display;}}{\colortbl;\red15\green71\blue97;}
+{\stylesheet{\ql \f1\fs24 Normal;}{\s1\ql \keepn\outlinelevel0 \f2\fs40\cf1 \sbasedon0 \snext0 heading 1;}}
+{\*\revtbl {Unknown;}{Alice;}}
+\pard\s1\f2\fs40 Plain\par
+\pard\s1\f2\b\fs40 Bold\par
+\pard\s1\f2\fs40 {\b{\*\oldcprops \b0\crauth1}Bolded}{\b0{\*\oldcprops \b\crauth1}Unbolded}\par}";
+        let runs = text_runs(rtf);
+        let plain = run_fmt(&runs, "Plain");
+        assert_eq!((plain.size, plain.bold), (None, false));
+        let bold = run_fmt(&runs, "Bold");
+        assert_eq!((bold.size, bold.bold), (None, true));
+        let bolded = run_fmt(&runs, "Bolded");
+        let old = &bolded.fmt_change.as_deref().expect("change kept").old;
+        assert_eq!((bolded.bold, old.bold, old.size), (true, false, None));
+        let unbolded = run_fmt(&runs, "Unbolded");
+        let old = &unbolded.fmt_change.as_deref().expect("change kept").old;
+        assert_eq!((unbolded.bold, old.bold), (false, true));
+    }
+
+    #[test]
+    fn a_style_chain_without_a_size_has_rtfs_default_size() {
+        // The entries carry formatting words but no `\fs`: the style's size is RTF's 12 pt.
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Times New Roman;}}{\stylesheet{\s0\f0 Normal;}{\s2\sbasedon0\b heading 2;}}
+\pard\s2\b\fs24 Twelve\par
+\pard\s2\b\fs40 Twenty\par}";
+        let runs = text_runs(rtf);
+        let twelve = run_fmt(&runs, "Twelve");
+        assert_eq!((twelve.size, twelve.bold), (None, false));
+        let twenty = run_fmt(&runs, "Twenty");
+        assert_eq!((twenty.size, twenty.bold), (Some(20.0), false));
+    }
+
+    #[test]
+    fn a_code_paragraph_round_trips_without_a_direct_code_font() {
+        // WordCraft's Code entry has no `\f` (the code font is on the paragraph): the code font
+        // stands in for the style's.
+        let mut code = Para { kind: Kind::Code, ..Default::default() };
+        code.push_text("let x", &Fmt::default());
+        let flow = Flow { blocks: vec![FBlock::Para(code)], meta: Meta::default() };
+        let rtf = export(&model::to_doc(&flow));
+        let runs = text_runs(rtf.as_bytes());
+        let f = run_fmt(&runs, "let x");
+        assert_eq!((f.size, f.bold, f.code, f.font.as_deref()), (None, false, false, None), "{rtf}");
+    }
+
+    #[test]
+    fn a_stylesheet_entry_without_a_number_is_normal() {
+        // An entry without `\sN` is style 0; it doesn't replace the entry before it.
+        let rtf = br"{\rtf1\ansi{\stylesheet{\s2\b\fs26 heading 2;}{\b0\fs30 Normal;}}
+\pard\s2\b\fs26 Head\par
+\pard\s2\b\fs30 Other\par}";
+        let runs = text_runs(rtf);
+        let head = run_fmt(&runs, "Head");
+        assert_eq!((head.size, head.bold), (None, false));
+        let other = run_fmt(&runs, "Other");
+        assert_eq!((other.size, other.bold), (Some(15.0), false));
+    }
+
+    #[test]
+    fn a_heading_size_set_by_hand_survives_in_the_old_formatting() {
+        // Reject puts back a size set by hand: it isn't the file's heading size.
+        let rtf = br"{\rtf1\ansi{\fonttbl{\f0 Times New Roman;}}{\stylesheet{\ql \fs24 Normal;}{\s2\ql \b\fs26 \sbasedon0 \snext0 heading 2;}}
+{\*\revtbl {Unknown;}{Alice;}}
+\pard\s2 {\b\fs26{\*\oldcprops \fs40\crauth1}Shrunk}{\b\fs40{\*\oldcprops \fs26\crauth1}Grown}\par}";
+        let runs = text_runs(rtf);
+        let shrunk = run_fmt(&runs, "Shrunk");
+        assert_eq!(shrunk.size, None);
+        let old = &shrunk.fmt_change.as_deref().expect("change kept").old;
+        assert_eq!((old.size, old.bold), (Some(20.0), false));
+        let grown = run_fmt(&runs, "Grown");
+        assert_eq!(grown.size, Some(20.0));
+        let old = &grown.fmt_change.as_deref().expect("change kept").old;
+        assert_eq!((old.size, old.bold), (None, false));
     }
 
     #[test]
@@ -3783,6 +4356,13 @@ mod tests {
     #[test]
     fn escapes() {
         assert_eq!(esc("a{b}\\c\té😀"), "a\\{b\\}\\\\c\\tab \\u233?\\u-10179?\\u-8704?");
+        assert_eq!(esc("col1\u{000E}col2"), "col1\\column col2");
+    }
+
+    #[test]
+    fn column_break_import() {
+        let f = parse(br"{\rtf1\ansi \pard a\column b\par}").unwrap();
+        assert_eq!(texts(&f), ["Normal:a\u{000E}b"]);
     }
 
     #[test]
@@ -3792,5 +4372,48 @@ mod tests {
         assert_eq!(hyperlink(r#"Hyperlink "http://example.com""#), Some("http://example.com".into()));
         assert_eq!(hyperlink(r#"HYPERLINK "http://example.com/path\latest""#), Some("http://example.com/path\\latest".into()));
         assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \o "Help text""#), Some("http://example.com".into()));
+    }
+
+    #[test]
+    fn distributed_alignment_round_trips() {
+        let rtf = br"{\rtf1\ansi\pard\qd Distributed\par\pard\qj Justified\par}";
+        let flow = parse(rtf).unwrap();
+        let p0 = match &flow.blocks[0] {
+            FBlock::Para(p) => p.align,
+            _ => panic!("expected para"),
+        };
+        let p1 = match &flow.blocks[1] {
+            FBlock::Para(p) => p.align,
+            _ => panic!("expected para"),
+        };
+        assert_eq!(p0, Some(Align::Distribute));
+        assert_eq!(p1, Some(Align::Justify));
+
+        let doc = import(rtf).unwrap();
+        let exported = export(&doc);
+        assert!(exported.contains("\\qd"), "expected \\qd in: {exported}");
+        assert!(exported.contains("\\qj"), "expected \\qj in: {exported}");
+    }
+
+    #[test]
+    fn table_cell_vertical_alignment() {
+        let rtf = br"{\rtf1\ansi\trowd\clvertalt\cellx1000\clvertalc\cellx2000\clvertalb\cellx3000\intbl top\cell center\cell bottom\cell\row}";
+        let doc = import(rtf).unwrap();
+        let wordcraft_doc::Block::Table(t) = &*doc.body[0] else { panic!() };
+        assert_eq!(t.rows[0].cells[0].props.valign, Some(VAlign::Top));
+        assert_eq!(t.rows[0].cells[1].props.valign, Some(VAlign::Center));
+        assert_eq!(t.rows[0].cells[2].props.valign, Some(VAlign::Bottom));
+        let exported = export(&doc);
+        assert!(exported.contains("\\clvertalt"));
+        assert!(exported.contains("\\clvertalc"));
+        assert!(exported.contains("\\clvertalb"));
+    }
+
+    #[test]
+    fn rtf_backslash_space_and_special_breaks() {
+        let rtf = br"{\rtf1\ansi A\ B\~C\zwbo D\softline E\softpage F\par}";
+        let doc = import(rtf).unwrap();
+        let p = doc.body.first().unwrap().as_para().unwrap();
+        assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
     }
 }

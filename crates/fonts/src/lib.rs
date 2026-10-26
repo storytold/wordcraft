@@ -21,7 +21,7 @@ pub use fontdb::{
 pub use harfrust::Feature;
 use harfrust::{Direction, ShapeOptions, Tag, UnicodeBuffer};
 pub use kurbo::BezPath;
-pub use script::{fallback_rank, needs_layout_tables, script_fallbacks};
+pub use script::{fallback_rank, is_emoji, needs_layout_tables, script_fallbacks};
 use skrifa::MetadataProvider;
 use skrifa::instance::Size;
 pub use ui_fallback::{SystemUiFont, is_cjk, system_cjk_ui_font, system_cjk_ui_font_for, ui_needs_system_cjk, ui_uncovered_cjk};
@@ -68,6 +68,11 @@ pub fn chinese_fonts() -> impl Iterator<Item = &'static CraftFont> {
 /// The craft-fonts faces for Korean (`"Kore"`), in manifest order. Empty without craft-fonts.
 pub fn korean_fonts() -> impl Iterator<Item = &'static CraftFont> {
     CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Kore"))
+}
+
+/// The craft-fonts Georgian (`"Geor"`) Regular face for the interface. Empty without craft-fonts.
+pub fn georgian_fonts() -> impl Iterator<Item = &'static CraftFont> {
+    CRAFT_FONTS.iter().filter(|f| f.scripts.contains(&"Geor") && f.style == "Regular")
 }
 
 /// The CJK interface faces, Regular styles only (the UI fakes no bold), with the Japanese UI,

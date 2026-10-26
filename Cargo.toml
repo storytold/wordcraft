@@ -4,7 +4,7 @@ members = ["crates/*", "apps/*", "xtask"]
 default-members = ["crates/*", "apps/wordcraft", "apps/wordcraft-cli", "xtask"]
 
 [workspace.package]
-version = "0.8.0"
+version = "0.11.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 rust-version = "1.95"
@@ -35,6 +35,8 @@ thiserror = "2"
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 log = "0.4"
+# All date/time conversion goes through chrono (no hand-rolled calendar code beyond the 400-year range extension; AGENTS.md).
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 proptest = "1"
 rayon = "1"
 unicode-bidi = "0.3"
@@ -50,13 +52,18 @@ harfrust = "0.13"
 # WOFF / WOFF2 web fonts added by the user (#582): pure Rust (MIT); its brotli and zlib decoders
 # (brotli-decompressor, flate2) are already in the tree.
 wuff = "0.2.9"
+# WOFF2's brotli stream, decoded ahead of wuff so its glyph point counts are checked first (#3703).
+# The same crate and version wuff already decodes it with (no new code in the build): pure Rust,
+# `forbid(unsafe_code)` in its default build, no_std-capable (builds for wasm), BSD-3-Clause/MIT.
+brotli-decompressor = "5"
 vello_cpu = "0.2"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp", "gif", "bmp", "tiff"] }
-craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "c3487320b2d1de657b860b3c8abb44e1f2b32bd8", version = "=0.1.0", default-features = false, features = ["write"] }
+craft-pdf = { git = "https://github.com/storytold/craft-libs", rev = "b926b5c03e256c86ca10934f58d03f628810b5b7", version = "=0.1.0", default-features = false, features = ["write"] }
+craft-update = { git = "https://github.com/storytold/craft-libs", version = "=0.1.0", rev = "b926b5c03e256c86ca10934f58d03f628810b5b7", features = ["egui"] }
 quick-xml = "0.41"
 zip = { version = "3", default-features = false, features = ["deflate"] }
 # zlib streams (compressed metafile pictures in `.doc` drawings); already in the lock as a dependency of other crates.
-miniz_oxide = "0.8"
+miniz_oxide = "0.9"
 cfb = "0.15"
 # Legacy text encodings (GBK/GB18030, Big5, Shift_JIS, EUC-KR, single-byte code pages) for plain
 # text and CSV recipient lists (#778): encoding_rs ((Apache-2.0 OR MIT) AND BSD-3-Clause) and its
@@ -68,17 +75,22 @@ aes = "0.9"
 sha1 = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
-base64 = "0.22"
+base64 = "0.23"
 getrandom = "0.3"
 zeroize = "1"
+# Unix open flags (O_NONBLOCK for the engine's checked file reads, #3666); already in the lock as a
+# dependency of other crates.
+libc = "0.2"
 
 # ui
-egui = "0.36"
-egui_extras = { version = "0.36", default-features = false }
-eframe = { version = "0.36", default-features = false }
-egui_kittest = "0.36"
+egui = "0.37"
+egui_extras = { version = "0.37", default-features = false }
+eframe = { version = "0.37", default-features = false }
+egui_kittest = "0.37"
+# A monotonic clock that works on native and in the browser (`performance.now()`).
+web-time = "1.1"
 rfd = "0.17"
-arboard = { version = "3.6", default-features = false, features = ["wayland-data-control"] }
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [workspace.lints.rust]
 unsafe_code = "forbid"
@@ -89,11 +101,16 @@ todo = "warn"
 too_many_arguments = "allow"
 type_complexity = "allow"
 
+# Line tables keep file and line in panics and backtraces; full debug info
+# for every test binary and dependency would multiply the target dir size.
+# The test profile inherits both settings.
 [profile.dev.package."*"]
 opt-level = 2
+debug = false
 
 [profile.dev]
 opt-level = 1
+debug = "line-tables-only"
 
 [profile.release]
 opt-level = 3
@@ -103,4 +120,19 @@ debug = 0
 
 # Required by craft-pdf: the backend rejects writers that failed during unwinding.
 [patch.crates-io]
-krilla = { git = "https://github.com/storytold/craft-libs", rev = "c3487320b2d1de657b860b3c8abb44e1f2b32bd8" }
+krilla = { git = "https://github.com/storytold/craft-libs", rev = "b926b5c03e256c86ca10934f58d03f628810b5b7" }
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }

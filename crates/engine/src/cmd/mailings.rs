@@ -439,6 +439,15 @@ pub fn specs() -> Vec<CommandSpec> {
         .when(has_recipients),
         CommandSpec::new("mailings.next", "Next Record", "Mailings › Preview Results", |s, _| step(s, 1)).when(has_recipients),
         CommandSpec::new("mailings.previous", "Previous Record", "Mailings › Preview Results", |s, _| step(s, -1)).when(has_recipients),
+        CommandSpec::new("mailings.first", "First Record", "Mailings › Preview Results", |s, _| go_to(s, 0)).when(has_recipients),
+        CommandSpec::new("mailings.last", "Last Record", "Mailings › Preview Results", |s, _| go_to(s, i64::MAX)).when(has_recipients),
+        CommandSpec::new("mailings.goToRecord", "Go to Record", "Mailings › Preview Results", |s, v| {
+            let n = v.get("record").and_then(|r| r.as_i64().or_else(|| r.as_str().and_then(|t| t.trim().parse().ok())));
+            let n = n.ok_or_else(|| CmdError::Params("`record` must be a record number (1 = the first)".into()))?;
+            go_to(s, n.saturating_sub(1))
+        })
+        .params(r#"{"record": n (1 = the first; past either end goes to the first or last record)}"#)
+        .when(has_recipients),
         CommandSpec::new("mailings.findRecipient", "Find Recipient", "Mailings › Preview Results", |s, v| {
             let q = p::req_str(v, "text")?.to_lowercase();
             let idx = s
@@ -464,9 +473,21 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .pure(),
         CommandSpec::new("mailings.finish", "Finish & Merge", "Mailings › Finish", finish)
-            .params(r#"{"path"?: string (save the merged document), "from"?: n, "to"?: n}"#)
+            .params(r#"{"path"?: string (save the merged document), "records"?: "all|current" (current: the previewed record; default all, or from/to), "from"?: n, "to"?: n (record numbers, 1 = the first)}"#)
             .key(super::non_mac("Alt+Shift+N"))
             .when(has_recipients),
+        CommandSpec::new("mailings.printDocuments", "Print Documents", "Mailings › Finish › Finish & Merge", |s, v| {
+            let mut v = v.clone();
+            if let Some(o) = v.as_object_mut() {
+                o.remove("path");
+            }
+            let r = finish(s, &v)?;
+            s.push_ui_request(json!({"open": "print"}));
+            Ok(r)
+        })
+        .params(r#"{"records"?: "all|current", "from"?: n, "to"?: n} (merges into a new document, as Finish & Merge does, and opens Print for it)"#)
+        .key(super::non_mac("Alt+Shift+M"))
+        .when(has_recipients),
         CommandSpec::new("mailings.envelopes", "Envelopes", "Mailings › Create", envelopes).params(
             r#"{"delivery": string, "return"?: string, "size"?: "Envelope #10|#9|Monarch|DL|C4|C5|C6|B5", "width"?: pt, "height"?: pt, "add"?: bool (add to this document instead of a new one)}"#,
         ),
@@ -501,9 +522,32 @@ fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
 }
 
 /// Parse CSV (RFC 4180-ish: quotes, doubled quotes, commas/semicolons/tabs).
-pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
+/// The field separator: whichever of `,` `;` and tab the first line (outside quotes) uses most.
+fn csv_separator(text: &str) -> char {
     let first = text.lines().next().unwrap_or("");
-    let sep = [',', ';', '\t'].into_iter().max_by_key(|c| first.matches(*c).count()).unwrap_or(',');
+    let mut quoted = false;
+    let mut unquoted = String::new();
+    for c in first.chars() {
+        if c == '"' {
+            quoted = !quoted;
+        } else if !quoted {
+            unquoted.push(c);
+        }
+    }
+    [',', ';', '\t'].into_iter().max_by_key(|c| unquoted.matches(*c).count()).unwrap_or(',')
+}
+
+/// Ends the current row: kept when it has any non-empty field, otherwise dropped.
+fn push_csv_row(rows: &mut Vec<Vec<String>>, row: &mut Vec<String>) {
+    if row.iter().any(|x| !x.is_empty()) {
+        rows.push(std::mem::take(row));
+    } else {
+        row.clear();
+    }
+}
+
+pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    let sep = csv_separator(text);
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut cell = String::new();
@@ -530,11 +574,7 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
                 chars.next();
             }
             row.push(std::mem::take(&mut cell));
-            if row.iter().any(|x| !x.is_empty()) {
-                rows.push(std::mem::take(&mut row));
-            } else {
-                row.clear();
-            }
+            push_csv_row(&mut rows, &mut row);
         } else {
             cell.push(c);
         }
@@ -543,9 +583,7 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
         }
     }
     row.push(cell);
-    if row.iter().any(|x| !x.is_empty()) {
-        rows.push(row);
-    }
+    push_csv_row(&mut rows, &mut row);
     rows
 }
 
@@ -724,8 +762,13 @@ fn header_split(mut all: Vec<Vec<String>>, headers: bool) -> Result<(Vec<String>
 }
 
 fn step(s: &mut Session, d: i64) -> CmdResult {
+    go_to(s, (s.merge.record as i64).saturating_add(d))
+}
+
+/// Preview record `idx` (0-based), clamped to the list.
+fn go_to(s: &mut Session, idx: i64) -> CmdResult {
     let n = s.merge.rows.len().max(1) as i64;
-    s.merge.record = (s.merge.record as i64 + d).clamp(0, n - 1) as usize;
+    s.merge.record = idx.clamp(0, n - 1) as usize;
     s.merge.preview = true;
     refresh(s);
     Ok(json!({"record": s.merge.record + 1, "of": n}))
@@ -750,7 +793,13 @@ fn merge_fields(doc: &Document) -> Vec<String> {
 }
 
 fn mergefield_name(instr: &str) -> Option<String> {
-    let rest = instr.trim().strip_prefix("MERGEFIELD")?.trim();
+    // The field type ignores case and ends at a space or a quote, so `MERGEFIELDX` is another field.
+    let t = instr.trim();
+    let (kind, rest) = t.split_at_checked(t.find(|c: char| c.is_whitespace() || c == '"').unwrap_or(t.len()))?;
+    if !kind.eq_ignore_ascii_case("MERGEFIELD") {
+        return None;
+    }
+    let rest = rest.trim();
     let name = if let Some(r) = rest.strip_prefix('"') { r.split('"').next().unwrap_or("") } else { rest.split_whitespace().next().unwrap_or("") };
     Some(name.to_string())
 }
@@ -805,13 +854,17 @@ enum Act {
     Skip,
 }
 
+/// The merge field a rule tests: the name in its first nested field, if that is a MERGEFIELD.
+fn rule_field(t: &str) -> Option<String> {
+    mergefield_name(t.split_once('{').and_then(|(_, r)| r.split('}').next())?)
+}
+
 /// Comparison of a rule condition `{ MERGEFIELD X } op "value" …` (IF, SKIPIF, NEXTIF) for
 /// `row`: whether it holds, and the quoted texts after the value (IF's true / false text).
 fn condition<'a>(s: &Session, t: &'a str, row: usize) -> (bool, Vec<&'a str>) {
-    let inner = t.split_once('{').and_then(|(_, r)| r.split('}').next()).unwrap_or("");
-    let field = mergefield_name(inner).unwrap_or_default();
+    let field = rule_field(t).unwrap_or_default();
     let rest = t.split_once('}').map(|(_, r)| r).unwrap_or("");
-    let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '=' | '<' | '>')).collect();
+    let op: String = rest.trim_start().chars().take_while(|c| matches!(c, '<'..='>')).collect();
     let mut quoted = rest.split('"').skip(1).step_by(2);
     let cmp = quoted.next().unwrap_or("");
     let v = value(s, row, &field);
@@ -852,7 +905,7 @@ fn act(s: &Session, instr: &str, row: usize) -> Option<Act> {
         "SKIPIF" if condition(s, t, row).0 => Act::Skip,
         "NEXTIF" | "SKIPIF" => Act::Text(String::new()),
         // IF { MERGEFIELD X } = "v" "then" "else" (an IF on other fields isn't ours to touch).
-        "IF" if t.contains("MERGEFIELD") => {
+        "IF" if rule_field(t).is_some() => {
             let (holds, texts) = condition(s, t, row);
             Act::Text(texts.get(if holds { 0 } else { 1 }).copied().unwrap_or("").to_string())
         }
@@ -869,7 +922,7 @@ fn placeholder(instr: &str) -> Option<String> {
         "ADDRESSBLOCK" => Some("«AddressBlock»".into()),
         "GREETINGLINE" => Some("«GreetingLine»".into()),
         "NEXT" | "NEXTIF" | "SKIPIF" | "MERGEREC" => Some(String::new()),
-        "IF" if instr.contains("MERGEFIELD") => Some(String::new()),
+        "IF" if rule_field(instr).is_some() => Some(String::new()),
         _ => None,
     }
 }
@@ -933,6 +986,23 @@ pub fn refresh(s: &mut Session) {
     s.touch();
 }
 
+/// The records Finish & Merge and Print Documents take (0-based, end exclusive): `records`
+/// all or current, or `from` and `to` by record number. A range with none is an error.
+pub fn merge_range(s: &Session, v: &Value) -> Result<(usize, usize), CmdError> {
+    let n = s.merge.rows.len();
+    let (from, to) = match p::str(v, "records").map(str::trim) {
+        Some("current") => (s.merge.record.min(n.saturating_sub(1)), s.merge.record.saturating_add(1).min(n)),
+        None | Some("all") => {
+            ((p::u64(v, "from").unwrap_or(1).max(1) as usize).saturating_sub(1), (p::u64(v, "to").unwrap_or(n as u64).min(n as u64)) as usize)
+        }
+        Some(_) => return Err(CmdError::Params("`records` must be all or current".into())),
+    };
+    if from >= to {
+        return Err(CmdError::Failed(format!("no records from {} to {to} (the list has {n})", from.saturating_add(1))));
+    }
+    Ok((from, to))
+}
+
 /// Most merged documents' worth of body blocks Finish & Merge builds.
 const MAX_MERGED_BLOCKS: usize = 200_000;
 
@@ -942,9 +1012,7 @@ const MAX_MERGED_BLOCKS: usize = 200_000;
 /// are merged too: with merge fields in them, each letter becomes its own section with its own
 /// header/footer copies.
 fn finish(s: &mut Session, v: &Value) -> CmdResult {
-    let n = s.merge.rows.len();
-    let from = (p::u64(v, "from").unwrap_or(1).max(1) as usize).saturating_sub(1);
-    let to = (p::u64(v, "to").unwrap_or(n as u64).min(n as u64)) as usize;
+    let (from, to) = merge_range(s, v)?;
     let directory = s.merge.kind == "directory";
     let hf: Vec<u32> =
         header_footer_ids(&s.doc).into_iter().filter(|id| s.doc.story(StoryRef::Part(*id)).is_some_and(|b| has_merge_fields(b, 0))).collect();
@@ -1036,10 +1104,8 @@ fn finish(s: &mut Session, v: &Value) -> CmdResult {
         crate::io::save_path(std::path::Path::new(path), &out).map_err(CmdError::Failed)?;
         return Ok(json!({"records": count, "path": path}));
     }
-    s.set_document(out);
-    s.path = None;
+    s.add_document(out);
     s.dirty = true;
-    s.merge.preview = false;
     Ok(json!({"records": count}))
 }
 
@@ -1139,13 +1205,24 @@ fn envelope_size(v: &Value) -> Result<(f32, f32), CmdError> {
         .ok_or_else(|| CmdError::Params(format!("unknown envelope size `{name}`")))
 }
 
+/// Longest label or envelope address text accepted.
+const MAX_LABEL_TEXT: usize = 2_000;
+
+/// An optional label/envelope text parameter, rejected when longer than `MAX_LABEL_TEXT` characters.
+fn label_text(v: &Value, key: &str) -> Result<Option<String>, CmdError> {
+    match p::str(v, key) {
+        Some(t) if t.chars().count() > MAX_LABEL_TEXT => Err(CmdError::Params(format!("`{key}` is longer than {MAX_LABEL_TEXT} characters"))),
+        t => Ok(t.map(str::to_string)),
+    }
+}
+
 /// Envelopes: a landscape page with the return address at the top left and the delivery address
 /// in the middle. As a new document, or (`add`) as a section of its own at the start of this one.
 fn envelopes(s: &mut Session, v: &Value) -> CmdResult {
-    let delivery = p::str(v, "delivery").map(str::to_string).unwrap_or_else(|| {
+    let delivery = label_text(v, "delivery")?.unwrap_or_else(|| {
         if s.merge.rows.is_empty() { "Recipient Name\nStreet Address\nCity, ST 00000".into() } else { address_block(s, s.merge.record) }
     });
-    let ret = p::str(v, "return").unwrap_or("").to_string();
+    let ret = label_text(v, "return")?.unwrap_or_default();
     let (w, h) = envelope_size(v)?;
     let sect = SectionProps {
         page_w: w,
@@ -1190,8 +1267,7 @@ fn envelopes(s: &mut Session, v: &Value) -> CmdResult {
     let mut d = Document::new();
     d.last_section = sect;
     d.body = blocks;
-    s.set_document(d);
-    s.path = None;
+    s.add_document(d);
     Ok(json!({"width": w, "height": h}))
 }
 
@@ -1367,7 +1443,7 @@ fn labels(s: &mut Session, v: &Value) -> CmdResult {
         (at("row").min(rows), at("col").min(cols))
     });
     let from_rec = single.is_none() && p::bool(v, "fromRecipients").unwrap_or(!s.merge.rows.is_empty() && p::str(v, "text").is_none());
-    let text = p::str(v, "text").unwrap_or("Name\nAddress\nCity, ST 00000").to_string();
+    let text = label_text(v, "text")?.unwrap_or_else(|| "Name\nAddress\nCity, ST 00000".into());
     let (page_w, page_h) = if prod.paper == "A4" { (595.3, 841.9) } else { (612.0, 792.0) };
     let h_gap = (prod.h_pitch - prod.width).max(0.0);
     let v_gap = (prod.v_pitch - prod.height).max(0.0);
@@ -1423,8 +1499,7 @@ fn labels(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     d.body = vec![std::sync::Arc::new(Block::Table(t)), para_block(Paragraph::new())];
-    s.set_document(d);
-    s.path = None;
+    s.add_document(d);
     let _ = Pos::body(0, 0);
     Ok(json!({"labels": if single.is_some() { 1 } else { rows * cols }, "filled": made, "product": prod.id}))
 }
@@ -1438,6 +1513,86 @@ mod tests {
         let r = parse_csv("Name,City\n\"Smith, Ann\",Paris\r\nBo,\"Oslo \"\"N\"\"\"\n\n");
         assert_eq!(r, vec![vec!["Name", "City"], vec!["Smith, Ann", "Paris"], vec!["Bo", "Oslo \"N\""]]);
         assert_eq!(parse_csv("a;b\n1;2")[1], vec!["1", "2"]);
+    }
+
+    /// #4001: finishing a merge opens a new document, with a new undo history. It is not an
+    /// edit of the open document, even when the merged document holds the same content.
+    #[test]
+    fn finishing_a_merge_opens_a_new_document_with_a_new_history() {
+        let mut s = Session::new(Document::from_text("Hello"));
+        s.run("text.insert", &json!({"text": "!"})).unwrap();
+        assert_eq!(s.undo_depth(), 1);
+        s.run("caret.docStart", &json!({})).unwrap();
+        // One recipient and no merge fields: the merged document holds the same content.
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Ada"}]})).unwrap();
+        let id = s.document_id();
+        s.run("mailings.finish", &json!({})).unwrap();
+        assert_ne!(s.document_id(), id, "the document was replaced");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "!Hello");
+        assert_eq!(s.undo_depth(), 0, "the new document starts with an empty undo history");
+        // Undo cannot bring the old document's text back.
+        s.run("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "!Hello", "the old text does not come back");
+    }
+
+    /// #4004: finishing a merge to a file saves the merged copy there and leaves the open
+    /// document alone: it changes nothing, so it is not an edit.
+    #[test]
+    fn finishing_a_merge_to_a_file_is_not_an_edit() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-merge-to-file-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let out = dir.join("merged.docx");
+        let mut s = Session::new(Document::from_text("Hello"));
+        s.run("text.insert", &json!({"text": "!"})).unwrap();
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Ada"}]})).unwrap();
+        let (depth, dirty, text) = (s.undo_depth(), s.dirty, s.doc.plain_text(StoryRef::Body));
+        s.run("mailings.finish", &json!({"path": out.to_string_lossy()})).unwrap();
+        assert!(out.exists(), "the merged copy was written");
+        assert_eq!(s.doc.plain_text(StoryRef::Body), text, "the open document is unchanged");
+        assert_eq!(s.undo_depth(), depth, "no undo step");
+        assert_eq!(s.dirty, dirty, "the unsaved-changes flag is unchanged");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn csv_delimiter_ignores_quoted_text() {
+        let r = parse_csv("\"Name, first, last\";City\nAnn;Paris\n");
+        assert_eq!(r, vec![vec!["Name, first, last", "City"], vec!["Ann", "Paris"]]);
+    }
+
+    /// Field types ignore case (ECMA-376 Part 1, 17.16.1), and `MERGEFIELDX` is another field.
+    #[test]
+    fn merge_field_types_ignore_case() {
+        assert_eq!(mergefield_name(" mergefield City ").as_deref(), Some("City"));
+        assert_eq!(mergefield_name(r#"MergeField "First Name""#).as_deref(), Some("First Name"));
+        assert_eq!(mergefield_name(r#"MERGEFIELD"City""#).as_deref(), Some("City"));
+        assert_eq!(mergefield_name("MERGEFIELDX City"), None);
+        assert_eq!(placeholder("mergefield City").as_deref(), Some("«City»"));
+        assert_eq!(placeholder(r#"if { mergefield City } = "x" "y" "z""#).as_deref(), Some(""));
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Alpha"}, {"Name": "Beta"}]})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        s.run("insert.field", &json!({"instr": "mergefield Name", "result": ""})).unwrap();
+        s.run("insert.field", &json!({"instr": r#"if { mergefield Name } = "Beta" " (b)" """#, "result": ""})).unwrap();
+        s.run("mailings.finish", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha\nBeta (b)");
+    }
+
+    /// An IF is a merge rule only when the field it tests is a MERGEFIELD: the word in a quoted
+    /// value doesn't make `IF { PAGE } = "mergefield" …` one.
+    #[test]
+    fn an_if_on_another_field_is_not_a_merge_rule() {
+        let other = r#"IF { PAGE } = "mergefield" "yes" "no""#;
+        assert_eq!(placeholder(other), None);
+        assert_eq!(placeholder(r#"IF { PAGE } = { MERGEFIELD City } "yes" "no""#), None);
+        assert_eq!(placeholder(r#"IF { MERGEFIELD City } = "mergefield" "yes" "no""#).as_deref(), Some(""));
+        let mut s = Session::new(Document::new());
+        s.run("mailings.recipients", &json!({"rows": [{"Name": "Alpha"}]})).unwrap();
+        s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+        s.run("insert.field", &json!({"instr": "mergefield Name", "result": ""})).unwrap();
+        s.run("insert.field", &json!({"instr": other, "result": " kept"})).unwrap();
+        s.run("mailings.finish", &json!({})).unwrap();
+        assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha kept");
     }
 
     #[test]
@@ -1580,6 +1735,65 @@ mod tests {
         assert_eq!(s.doc.plain_text(StoryRef::Body), "Alpha / Beta\nGamma / ");
     }
 
+    /// #3028: First, Last and Go to Record move the preview; Finish & Merge and Print Documents
+    /// take all records, the current one, or a range by record number.
+    #[test]
+    fn record_navigation_and_merge_ranges() {
+        let names = ["Alpha", "Beta", "Gamma", "Delta"];
+        let fresh = || {
+            let mut s = Session::new(Document::new());
+            s.run("mailings.recipients", &json!({"rows": names.map(|n| json!({"Name": n}))})).unwrap();
+            s.run("mailings.start", &json!({"kind": "directory"})).unwrap();
+            s.run("mailings.insertField", &json!({"field": "Name"})).unwrap();
+            s
+        };
+        let mut s = fresh();
+        let body = |s: &Session| s.doc.plain_text(StoryRef::Body);
+        assert_eq!(s.run("mailings.last", &json!({})).unwrap(), json!({"record": 4, "of": 4}));
+        assert_eq!(body(&s), "Delta");
+        assert_eq!(s.run("mailings.first", &json!({})).unwrap()["record"], 1);
+        assert_eq!(body(&s), "Alpha");
+        assert_eq!(s.run("mailings.goToRecord", &json!({"record": 3})).unwrap()["record"], 3);
+        assert_eq!(body(&s), "Gamma");
+        assert_eq!(s.run("mailings.goToRecord", &json!({"record": " 2 "})).unwrap()["record"], 2);
+        // Past either end: the last or first record, as the step buttons do.
+        assert_eq!(s.run("mailings.goToRecord", &json!({"record": 1141})).unwrap()["record"], 4);
+        assert_eq!(s.run("mailings.goToRecord", &json!({"record": -5})).unwrap()["record"], 1);
+        for bad in [json!({}), json!({"record": "two"}), json!({"record": 2.5})] {
+            assert!(matches!(s.run("mailings.goToRecord", &bad), Err(CmdError::Params(_))), "{bad}");
+        }
+
+        s.run("mailings.goToRecord", &json!({"record": 3})).unwrap();
+        assert_eq!(s.run("mailings.finish", &json!({"records": "current"})).unwrap()["records"], 1);
+        assert_eq!(body(&s), "Gamma");
+        let mut s = fresh();
+        assert_eq!(s.run("mailings.finish", &json!({"from": 2, "to": 3})).unwrap()["records"], 2);
+        assert_eq!(body(&s), "Beta\nGamma");
+        let mut s = fresh();
+        assert_eq!(s.run("mailings.finish", &json!({"records": "all", "from": 3, "to": 99})).unwrap()["records"], 2);
+        assert_eq!(body(&s), "Gamma\nDelta");
+        // An empty range is refused and the document is kept, not replaced by an empty one.
+        let mut s = fresh();
+        let before = body(&s);
+        for bad in [json!({"from": 3, "to": 2}), json!({"from": 5}), json!({"records": "some"})] {
+            assert!(s.run("mailings.finish", &bad).is_err(), "{bad}");
+            assert_eq!(body(&s), before, "{bad}");
+        }
+        let e = s.run("mailings.finish", &json!({"from": 5})).unwrap_err().to_string();
+        assert_eq!(e, "no records from 5 to 4 (the list has 4)", "a plain message for the dialog");
+
+        // Print Documents merges the same way, then asks the interface for Print.
+        let mut s = fresh();
+        s.ui_requests.clear();
+        assert_eq!(s.run("mailings.printDocuments", &json!({"from": 4, "path": "ignored.docx"})).unwrap()["records"], 1);
+        assert_eq!(body(&s), "Delta");
+        assert!(s.ui_requests.contains(&json!({"open": "print"})));
+        let mut s = fresh();
+        s.ui_requests.clear();
+        assert!(s.run("mailings.printDocuments", &json!({"from": 9})).is_err());
+        assert!(s.ui_requests.is_empty(), "nothing to print, no Print dialog");
+    }
+
     /// #429: an IF rule shows its true / false text in Preview Results, as Finish & Merge does.
     #[test]
     fn if_rule_previews_its_result() {
@@ -1621,6 +1835,17 @@ mod tests {
         let texts: Vec<String> = secs.iter().map(|(_, sp)| header(&s, sp.headers.default.unwrap())).collect();
         assert_eq!(texts, ["Recipient: Alpha", "Recipient: Beta"]);
         assert!(!s.doc.parts.contains_key(&hdr), "the template header is replaced by the letters' copies");
+    }
+
+    #[test]
+    fn label_and_envelope_text_is_capped() {
+        let mut s = Session::new(Document::new());
+        let long = "x".repeat(2001);
+        assert!(matches!(s.run("mailings.labels", &json!({"text": long})), Err(CmdError::Params(_))));
+        assert!(matches!(s.run("mailings.envelopes", &json!({"delivery": long})), Err(CmdError::Params(_))));
+        assert!(matches!(s.run("mailings.envelopes", &json!({"return": long})), Err(CmdError::Params(_))));
+        s.run("mailings.labels", &json!({"text": "x".repeat(2000), "rows": 40, "cols": 10})).unwrap();
+        assert!(s.doc.plain_text(StoryRef::Body).chars().count() <= 400 * 2000 + 400 * 20);
     }
 
     #[test]

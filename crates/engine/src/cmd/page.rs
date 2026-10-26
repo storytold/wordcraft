@@ -45,7 +45,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 validate_section(&mut new)?;
                 return with_sect(s, |x| *x = new.clone());
             }
-            s.ui_requests.push(json!({"open": "pageSetup"}));
+            s.push_ui_request(json!({"open": "pageSetup"}));
             Ok(serde_json::to_value(sect(s)).unwrap_or(Value::Null))
         })
         .params(r#"{"section"?: SectionProps} (replaces the whole section, headers and footers included; checked like Size, Margins, Columns, Line Numbers, Footnotes and Page Borders: non-finite numbers and margins that leave no room for text are refused; page sides 7.2–1584 pt, 1–12 columns with 0–300 pt gaps, header/footer/gutter 0–1584 pt, page border width 0.25–6 pt and distance 0–31 pt, note start 1–32767, line numbers start 1–32767, countBy 1–100, distance 0–1584 pt are clamped)"#),
@@ -72,15 +72,21 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         CommandSpec::new("layout.pageNumberFormat", "Format Page Numbers", "Insert › Header & Footer › Page Number", |s, v| {
             let fmt = p::str(v, "format").map(wordcraft_doc::section::NumFormat::from_ooxml);
-            let start = p::u64(v, "start").map(|x| x.min(100_000) as u32);
             with_sect(s, |x| {
                 if let Some(f) = fmt {
                     x.page_num_format = f;
                 }
-                x.page_num_start = start;
+                // Left out entirely: the numbering keeps its start. Given as null: the pages
+                // number on from the section before (the dialog's "Continue from previous
+                // section"). A number: numbering starts there.
+                if v.get("start").is_some() {
+                    x.page_num_start = p::u64(v, "start").map(|n| n.min(100_000) as u32);
+                }
             })
         })
-        .params(r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n}"#),
+        .params(
+            r#"{"format"?: "decimal|lowerRoman|upperRoman|lowerLetter|upperLetter", "start"?: n | null} ("start" left out: the numbering keeps its start; null: the pages number on from the section before; a number: numbering starts there)"#,
+        ),
         CommandSpec::new("layout.documentGrid", "Document Grid", "Layout › Page Setup › Document Grid", document_grid).params(
             r#"{"type"?: "none|lines|linesAndChars|snapToChars", "linesPerPage"?: n (sets the line pitch from the text height), "charsPerLine"?: n (sets the character pitch from the text width), "linePitch"?: pt, "charSpace"?: n (4096ths of a point added to the default font size: the character pitch)} — left out stays as it is; returns the grid with its lines per page and characters per line"#,
         ),
@@ -234,7 +240,7 @@ fn section_of_part(s: &Session, id: u32) -> usize {
     0
 }
 
-fn section_index_of_focus(s: &Session) -> usize {
+pub fn section_index_of_focus(s: &Session) -> usize {
     match s.sel.focus.story {
         wordcraft_doc::StoryRef::Body => s.doc.section_index_of(s.sel.focus.path.0.first().copied().unwrap_or(0) as usize),
         wordcraft_doc::StoryRef::Part(id) => section_of_part(s, id),
@@ -1170,5 +1176,28 @@ mod tests {
         assert!(found > 0, "no candidates");
         assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).matches('\u{ad}').count(), found);
         assert!(s.run("layout.manualHyphenation", &json!({"from": {"block": 999, "off": 0}})).unwrap()["done"] == true);
+    }
+
+    /// `layout.pageNumberFormat` sets the section's number format and start; a call without
+    /// `start` keeps it (the ribbon's old plain call cleared it), and a null `start` numbers on
+    /// from the section before — the Format Page Numbers dialog's "Continue from previous
+    /// section" (#1113).
+    #[test]
+    fn page_number_format_keeps_or_clears_the_start() {
+        use wordcraft_doc::section::NumFormat;
+        let mut s = doc();
+        s.run("layout.pageNumberFormat", &json!({"format": "upperRoman", "start": 3})).unwrap();
+        let x = sect(&s);
+        assert_eq!((x.page_num_format, x.page_num_start), (NumFormat::UpperRoman, Some(3)));
+        s.run("layout.pageNumberFormat", &json!({"format": "lowerLetter"})).unwrap();
+        let x = sect(&s);
+        assert_eq!((x.page_num_format, x.page_num_start), (NumFormat::LowerLetter, Some(3)), "a format change keeps the start");
+        s.run("layout.pageNumberFormat", &json!({"start": null})).unwrap();
+        let x = sect(&s);
+        assert_eq!((x.page_num_format, x.page_num_start), (NumFormat::LowerLetter, None), "continue numbers on from the section before");
+        // The result carries the section back (scripts read it instead of the dialog).
+        let back = s.run("layout.pageNumberFormat", &json!({"format": "decimal", "start": 1})).unwrap();
+        assert_eq!(back["pageNumFormat"], "decimal");
+        assert_eq!(back["pageNumStart"], 1);
     }
 }

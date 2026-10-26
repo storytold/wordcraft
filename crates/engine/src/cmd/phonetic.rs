@@ -23,7 +23,7 @@ pub fn specs() -> Vec<CommandSpec> {
 /// dialog and returns the selection's phonetic guide (`base`, `ruby`, `align`, `size`, `offset`).
 fn phonetic(s: &mut Session, v: &Value) -> CmdResult {
     let Some(rv) = v.get("ruby") else {
-        s.ui_requests.push(json!({"open": "phonetic"}));
+        s.push_ui_request(json!({"open": "phonetic"}));
         return Ok(state(s));
     };
     let text: String = match rv {

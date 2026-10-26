@@ -113,6 +113,16 @@ impl MathLayout {
     pub fn hit(&self, x: f32, y: f32) -> Option<&Slot> {
         self.slots.iter().min_by(|a, b| slot_dist(a, x, y).total_cmp(&slot_dist(b, x, y)))
     }
+    /// The extent of the argument at `path` (a numerator, a radicand…): left and right x, and
+    /// how far it reaches above and below the equation's baseline. Spans its caret positions,
+    /// within the equation.
+    pub fn arg_extent(&self, path: &[(usize, usize)]) -> Option<(f32, f32, f32, f32)> {
+        let mut slots = self.slots.iter().filter(|s| s.path == path);
+        let first = slots.next()?;
+        let init = (first.x, first.x, first.y + first.a, first.d - first.y);
+        let (x0, x1, up, down) = slots.fold(init, |(x0, x1, up, down), s| (x0.min(s.x), x1.max(s.x), up.max(s.y + s.a), down.max(s.d - s.y)));
+        Some((x0, x1, up.min(self.ascent), down.min(self.descent)))
+    }
 }
 
 fn slot_dist(s: &Slot, x: f32, y: f32) -> f32 {
@@ -621,19 +631,19 @@ impl Ctx {
             last_gid = Some(g.gid);
         }
         b.w = x;
-        // Character boundaries: where the first glyph of each character starts.
+        // Character boundaries: where the first glyph of each character starts. The glyph for a
+        // boundary is never before the previous boundary's, so one walk of the glyphs finds all.
         let mut cuts = Vec::with_capacity(text.len() + 1);
+        let (mut j, mut gx) = (0usize, 0.0f32);
         for (cb, _) in text.char_indices() {
-            let mut gx = 0.0f32;
-            let mut found = None;
-            for g in &shaped {
-                if g.cluster >= cb {
-                    found = Some(gx);
-                    break;
-                }
+            while let Some(g) = shaped.get(j)
+                && g.cluster < cb
+            {
+                crate::work::steps(1);
                 gx += g.x_advance as f32 * k;
+                j += 1;
             }
-            cuts.push(found.unwrap_or(x));
+            cuts.push(if j < shaped.len() { gx } else { x });
         }
         cuts.push(x);
         b.cuts = cuts;
@@ -1508,39 +1518,38 @@ impl Ctx {
             }
             segs_rows.push(segs.into_iter().map(hcat).collect());
         }
-        let ncols = segs_rows.iter().map(|r| r.len()).max().unwrap_or(1);
+        let ncols = segs_rows.iter().map(Vec::len).max().unwrap_or(1);
+        // Rows without `&` are centred below, so they don't widen the aligned columns.
         let mut col_w = vec![0.0f32; ncols];
+        let mut lone_w = 0.0f32;
         for r in &segs_rows {
+            if let [b] = r.as_slice() {
+                lone_w = lone_w.max(b.w);
+                continue;
+            }
             for (i, b) in r.iter().enumerate() {
                 if let Some(c) = col_w.get_mut(i) {
                     *c = c.max(b.w);
                 }
             }
         }
-        let total: f32 = col_w.iter().sum();
+        let cols: f32 = col_w.iter().sum();
+        let total = cols.max(lone_w);
         let mut placed = Vec::new();
         for (r, path) in segs_rows.into_iter().zip(row_paths) {
             let mut row = Bx::default();
             let mut x = 0.0f32;
-            let single = r.len() == 1 && ncols > 1;
+            // A row without `&` is centred in the array, as Word does (#2617).
+            let single = r.len() == 1;
             for (i, b) in r.into_iter().enumerate() {
                 let cw = col_w.get(i).copied().unwrap_or(0.0);
                 let bw = b.w;
-                let dx = if ncols == 1 {
-                    0.0
-                } else if single {
-                    // A row without `&` aligns with the first column's right edge.
-                    cw - bw
-                } else if i % 2 == 0 {
-                    cw - bw
-                } else {
-                    0.0
-                };
+                let dx = if single || i % 2 == 1 { 0.0 } else { cw - bw };
                 row.put(b, x + dx, 0.0);
-                x += cw;
+                x += if single { bw } else { cw };
                 row.w = row.w.max(x);
             }
-            let rx = if ncols == 1 { (total - row.w) / 2.0 } else { 0.0 };
+            let rx = (total - if single { row.w } else { cols }) / 2.0;
             finalize(&mut row, &path, em);
             placed.push((row, rx.max(0.0)));
         }
@@ -1820,7 +1829,7 @@ impl Ctx {
             }
             cells.push(row);
         }
-        let ncols = cells.iter().map(|r| r.len()).max().unwrap_or(0);
+        let ncols = cells.iter().map(Vec::len).max().unwrap_or(0);
         let mut col_w = vec![0.0f32; ncols];
         for r in &cells {
             for (i, b) in r.iter().enumerate() {
@@ -2004,6 +2013,36 @@ mod tests {
 
     fn lay_in(math: &Math, lin: &str, display: bool, avail: f32, mp: &MathProps) -> MathLayout {
         layout_equation(math, lin, &rc(), display, avail, mp, &mut 0)
+    }
+
+    #[test]
+    fn eq_array_rows_without_ampersand_are_centred() {
+        // Word centres a row with no `&` in the array (#2617: a case row "a, n odd" above
+        // "|a|, &n even"), whether or not the other rows have one.
+        use wordcraft_doc::math::*;
+        let run = |s: &str| vec![MNode::Run(MRun::new(s))];
+        let w_a = lay("a", true).width;
+        for other in ["bbbbbb&c", "bbbbbbc"] {
+            let math = Math { nodes: vec![MNode::EqArr { rows: vec![run("a"), run(other)] }], ..Default::default() };
+            let m = lay_in(&math, "", true, 400.0, &MathProps::default());
+            let ls = lines(&m);
+            let xa = ls.first().and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+            let x0 = ls.get(1).and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+            let want = x0 + (m.width - x0 - w_a) / 2.0;
+            assert!((xa - want).abs() < 1.0, "{other}: a at {xa}, want {want} ({ls:?}, width {})", m.width);
+            // The lone row doesn't widen the aligned columns.
+            assert!(x0.abs() < 0.5 && m.width < lay("bbbbbbc", true).width + 1.0, "{other}: {ls:?}, width {}", m.width);
+        }
+        // A lone row wider than the aligned columns sets the array's width; the aligned
+        // rows are centred under it as one block.
+        let math = Math { nodes: vec![MNode::EqArr { rows: vec![run("bbbbbbbbbb"), run("a&c")] }], ..Default::default() };
+        let m = lay_in(&math, "", true, 400.0, &MathProps::default());
+        let ls = lines(&m);
+        let xw = ls.first().and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+        let x0 = ls.get(1).and_then(|l| l.1.first()).map(|g| g.0).unwrap_or(f32::NAN);
+        assert!(xw.abs() < 0.5 && (m.width - lay("bbbbbbbbbb", true).width).abs() < 1.0, "wide lone row: {ls:?}, width {}", m.width);
+        let want = (m.width - w_a - lay("c", true).width) / 2.0;
+        assert!(want > 1.0 && (x0 - want).abs() < 1.0, "aligned row at {x0}, want {want} ({ls:?})");
     }
 
     #[test]
@@ -2212,6 +2251,23 @@ mod tests {
     }
 
     #[test]
+    fn an_arguments_extent_spans_its_caret_positions() {
+        let math = Math { nodes: wordcraft_doc::math::parse_linear("y=(a+b)/c"), ..Default::default() };
+        let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
+        let (nx0, nx1, nup, ndown) = m.arg_extent(&[(1, 0)]).unwrap();
+        let (dx0, dx1, dup, ddown) = m.arg_extent(&[(1, 1)]).unwrap();
+        // The numerator sits above the baseline and the denominator below it, both inside the equation.
+        assert!(nx0 > 0.0 && nx1 > nx0 && nx1 <= m.width, "{nx0} {nx1} {}", m.width);
+        assert!(dx1 > dx0 && dx1 <= m.width);
+        assert!(-ndown > 0.0 && nup <= m.ascent + 0.01, "numerator {nup} {ndown}");
+        assert!(dup < -ndown && ddown > 0.0 && ddown <= m.descent + 0.01, "denominator {dup} {ddown}");
+        // The whole equation's argument is as wide as the equation.
+        let (x0, x1, ..) = m.arg_extent(&[]).unwrap();
+        assert!(x0.abs() < 0.01 && (x1 - m.width).abs() < 0.01, "{x0} {x1} {}", m.width);
+        assert!(m.arg_extent(&[(9, 0)]).is_none());
+    }
+
+    #[test]
     fn empty_slots_show_placeholders_on_screen_only() {
         let math = Math { nodes: wordcraft_doc::math::parse_linear("⬚/⬚"), ..Default::default() };
         let m = layout_equation(&math, "", &rc(), true, 400.0, &MathProps::default(), &mut 0);
@@ -2251,6 +2307,45 @@ mod tests {
     }
 
     #[test]
+    fn eqarr_rows_without_an_align_marker_are_centred() {
+        use wordcraft_doc::math::*;
+        // A row without `&` must not widen the alignment columns; it centres across the
+        // array instead of right-aligning at the first column's edge.
+        let rows: Vec<Vec<MNode>> = vec![vec![MNode::Run(MRun::new("mmm"))], vec![MNode::Run(MRun::new("x&yyyyyyyy"))]];
+        let math = Math { nodes: vec![MNode::EqArr { rows }], ..Default::default() };
+        let ls = lines(&lay_in(&math, "", true, 400.0, &MathProps::default()));
+        assert_eq!(ls.len(), 2, "{ls:?}");
+        let left: Vec<f32> = ls.iter().map(|(_, gs)| gs.iter().map(|(x, _)| *x).fold(f32::MAX, |a, b| if b < a { b } else { a })).collect();
+        assert!(left.iter().all(|x| *x >= -0.5), "nothing hangs left of the array: {left:?}");
+        // The short row starts right of the aligned row's first segment.
+        assert!(ls[0].1.first().is_some_and(|(x, _)| *x > left[1] + 1.0), "short row centred, not flush left: {ls:?}");
+    }
+
+    #[test]
+    fn eqarr_row_without_an_align_marker_wider_than_the_columns_widens_the_array() {
+        use wordcraft_doc::math::*;
+        // The `&`-less row is wider than the aligned columns: it must not hang left of the
+        // origin, the array is as wide as it, and the aligned rows centre under it.
+        let rows: Vec<Vec<MNode>> = vec![vec![MNode::Run(MRun::new("bbbbbbbbbb"))], vec![MNode::Run(MRun::new("a&c"))]];
+        let math = Math { nodes: vec![MNode::EqArr { rows }], ..Default::default() };
+        let m = lay_in(&math, "", true, 400.0, &MathProps::default());
+        let ls = lines(&m);
+        assert_eq!(ls.len(), 2, "{ls:?}");
+        let left: Vec<f32> = ls.iter().map(|(_, gs)| gs.iter().map(|(x, _)| *x).fold(f32::MAX, f32::min)).collect();
+        assert!(left.iter().all(|x| *x >= -0.5), "nothing hangs left of the array: {left:?}");
+        assert!(left[0].abs() < 0.5, "the wide row starts at the origin: {left:?}");
+        let narrow = lay_in(
+            &Math { nodes: vec![MNode::EqArr { rows: vec![vec![MNode::Run(MRun::new("a&c"))]] }], ..Default::default() },
+            "",
+            true,
+            400.0,
+            &MathProps::default(),
+        );
+        assert!(m.width > narrow.width + 1.0, "the array is as wide as its widest row: {} vs {}", m.width, narrow.width);
+        assert!(left[1] > 1.0, "the aligned row is centred under the wide one: {left:?}");
+    }
+
+    #[test]
     fn hostile_trees_never_panic() {
         use wordcraft_doc::math::*;
         // Deep nesting.
@@ -2278,5 +2373,16 @@ mod tests {
                 assert!(m.width.is_finite() && m.descent.is_finite());
             }
         }
+    }
+
+    /// Finding 23: each character's boundary in a run of text was found by walking the run's
+    /// glyphs from the first.
+    #[test]
+    fn a_long_text_run_lays_out_in_linear_time() {
+        use crate::tests_linear::assert_linear_steps;
+        use wordcraft_doc::math::*;
+        let eq = |n: usize| Math { nodes: vec![MNode::Run(MRun { nor: true, ..MRun::new("a".repeat(n)) })], ..Default::default() };
+        let lay = |m: &Math| drop(std::hint::black_box(lay_in(m, "", false, 1e6, &MathProps::default())));
+        assert_linear_steps("math text run", 400, eq, lay);
     }
 }

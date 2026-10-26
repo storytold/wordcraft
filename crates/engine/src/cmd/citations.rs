@@ -8,6 +8,7 @@ use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::{CharProps, TabAlign, TabLeader, TabStop};
 use wordcraft_doc::{Block, Document, Paragraph, Path, Pos, Source, StoryRef};
 
+use super::references::FieldCode;
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
@@ -312,12 +313,9 @@ pub fn specs() -> Vec<CommandSpec> {
             sel_result(s)
         })
         .params(r#"{"title"?: string}"#),
-        CommandSpec::new("references.tableOfFigures", "Insert Table of Figures", "References › Captions", |s, v| {
-            let label = p::str(v, "label").unwrap_or("Figure").to_string();
-            generated_list(s, &format!("TOC \\c \"{label}\""), "")?;
-            sel_result(s)
-        })
-        .params(r#"{"label"?: "Figure|Table|Equation"}"#),
+        CommandSpec::new("references.tableOfFigures", "Insert Table of Figures", "References › Captions", table_of_figures).params(
+            r#"{"label"?: "Figure|Table|Equation" or a caption label of your own, "includeLabel"?: bool, "pageNumbers"?: bool, "rightAlign"?: bool, "tabLeader"?: "dot|hyphen|underscore|none"}"#,
+        ),
         CommandSpec::new("references.updateFigures", "Update Table", "References › Captions", |s, _| {
             update_generated(s)?;
             sel_result(s)
@@ -531,6 +529,7 @@ fn auto_tag(doc: &Document, src: &Source) -> String {
 }
 
 /// The author of a source for matching untagged entries: the editor when there is no author.
+#[cfg(not(target_arch = "wasm32"))]
 fn by_author(x: &Source) -> &str {
     if x.author.is_empty() { x.editor.as_str() } else { x.author.as_str() }
 }
@@ -771,9 +770,43 @@ fn refresh_citations(s: &mut Session) -> Result<(), CmdError> {
     Ok(())
 }
 
+/// The TOC field for `references.tableOfFigures` (ECMA-376 §17.16.5.68): `\c "<label>"` lists the
+/// captions that label's SEQ field numbers, `\a "<label>"` lists them without their label and
+/// number; `\n` leaves page numbers out and `\p " "` puts them right after the text.
+pub fn figures_instr(v: &Value) -> String {
+    let label: String = p::str(v, "label").unwrap_or("Figure").chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect();
+    let ident = seq_ident(&label);
+    let ident = if ident.is_empty() { "Figure".to_string() } else { ident };
+    let on = |k: &str| p::bool(v, k).unwrap_or(true);
+    let mut s = format!("TOC \\{} \"{ident}\"", if on("includeLabel") { 'c' } else { 'a' });
+    if !on("pageNumbers") {
+        s.push_str(" \\n");
+    } else if !on("rightAlign") {
+        s.push_str(" \\p \" \"");
+    }
+    s
+}
+
+/// The SEQ identifier of a caption label: Word joins a multi-word label with underscores.
+fn seq_ident(label: &str) -> String {
+    label.split_whitespace().collect::<Vec<_>>().join("_")
+}
+
+fn table_of_figures(s: &mut Session, v: &Value) -> CmdResult {
+    generated_list_with(s, &figures_instr(v), "", p::str(v, "tabLeader").map(super::references::leader))?;
+    sel_result(s)
+}
+
 /// Generated lists (BIBLIOGRAPHY, INDEX, table of figures, TOA): a heading paragraph holding
 /// the field, then entry paragraphs marked with the "GeneratedEntry" style family.
 pub(crate) fn generated_list(s: &mut Session, instr: &str, title: &str) -> Result<(), CmdError> {
+    generated_list_with(s, instr, title, None)
+}
+
+/// [`generated_list`] whose entries take `leader`. The leader lives in the entries' tab stops (as
+/// in a table of contents) and an update keeps the first entry's, so a placeholder entry carries
+/// it through the rebuild, however the lists above it change.
+fn generated_list_with(s: &mut Session, instr: &str, title: &str, leader: Option<TabLeader>) -> Result<(), CmdError> {
     let at = delete_selection(s)?;
     if at.story != StoryRef::Body || at.path.depth() > 0 {
         return Err(CmdError::Failed("lists go in the main text".into()));
@@ -787,6 +820,11 @@ pub(crate) fn generated_list(s: &mut Session, instr: &str, title: &str) -> Resul
     )?;
     let i = if s.doc.para_at(&at).is_some_and(|p| p.is_empty()) { at.path.last() } else { s.doc.split_paragraph(&at)?.path.last() };
     s.doc.insert_block(StoryRef::Body, &Path::top(i), Block::Para(head))?;
+    if let Some(leader) = leader {
+        let mut seed = Paragraph::new().styled(ENTRY_STYLE);
+        seed.props.tabs = Some(vec![TabStop { pos: 0.0, align: TabAlign::Right, leader }]);
+        s.doc.insert_block(StoryRef::Body, &Path::top(i.saturating_add(1)), Block::Para(seed))?;
+    }
     update_generated(s)
 }
 
@@ -794,10 +832,81 @@ fn list_kind(p: &Paragraph) -> Option<String> {
     p.objects.iter().find_map(|o| match o {
         InlineObject::Field { instr, .. } => {
             let t = instr.trim_start();
-            (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || t.starts_with("TOC \\c")).then(|| t.to_string())
+            (t.starts_with("BIBLIOGRAPHY") || t.starts_with("INDEX") || t.starts_with("TOA") || figures_label(t).is_some()).then(|| t.to_string())
         }
         _ => None,
     })
+}
+
+/// The caption label (SEQ identifier) a table-of-figures field lists, `\c` or `\a`.
+fn figures_label(instr: &str) -> Option<String> {
+    let f = FieldCode::parse(instr);
+    if !f.is_table_of_figures() {
+        return None;
+    }
+    Some(f.arg('c').or_else(|| f.arg('a')).map_or_else(|| "Figure".to_string(), seq_ident))
+}
+
+/// Whether `p` is a caption numbered by SEQ identifier `ident` (any case, as Word matches it). A
+/// caption typed by hand, without a SEQ field, goes by its label.
+fn captioned_as(p: &Paragraph, ident: &str) -> bool {
+    if p.props.style.as_deref() != Some("Caption") {
+        return false;
+    }
+    let seq = p.objects.iter().find_map(|o| match o {
+        InlineObject::Field { instr, .. } => Some(FieldCode::parse(instr)).filter(|f| f.name == "SEQ"),
+        _ => None,
+    });
+    match seq {
+        Some(f) => f.args.first().is_some_and(|id| id.eq_ignore_ascii_case(ident)),
+        None => caption_label(p, &p.plain_text()).is_some_and(|l| seq_ident(&l).eq_ignore_ascii_case(ident)),
+    }
+}
+
+/// A caption's text without its label and number (`\a`): what follows its SEQ field, or for a
+/// caption typed by hand what follows the label and the number, less the separator.
+fn caption_body(p: &Paragraph, label: &str) -> String {
+    let seq_end = p.object_offsets().into_iter().find_map(|o| match p.object_at(o) {
+        Some(InlineObject::Field { instr, .. }) if FieldCode::parse(instr).name == "SEQ" => Some(o + wordcraft_doc::para::OBJ.len_utf8()),
+        _ => None,
+    });
+    let rest = match seq_end {
+        Some(end) => {
+            let mut k = 0;
+            let mut rest = String::new();
+            for (at, c) in p.text.char_indices() {
+                if c == wordcraft_doc::para::OBJ {
+                    if at >= end
+                        && let Some(o) = p.objects.get(k)
+                    {
+                        rest.push_str(o.plain_text());
+                    }
+                    k += 1;
+                } else if at >= end {
+                    rest.push(c);
+                }
+            }
+            rest
+        }
+        None => {
+            let text = p.plain_text();
+            // The label in any case, as captions are matched (ASCII case keeps the byte length).
+            let start = text.trim_start();
+            let after = start
+                .get(..label.len())
+                .filter(|head| head.eq_ignore_ascii_case(label))
+                .and_then(|_| start.get(label.len()..))
+                .unwrap_or(&text)
+                .trim_start();
+            // The number: the word after the label, when it starts with a digit.
+            match after.find(char::is_whitespace) {
+                Some(n) if after.starts_with(|c: char| c.is_ascii_digit()) => after[n..].to_string(),
+                _ if after.starts_with(|c: char| c.is_ascii_digit()) => String::new(),
+                _ => after.to_string(),
+            }
+        }
+    };
+    rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '.' | '-' | '\u{2013}' | '\u{2014}')).trim_end().to_string()
 }
 
 const ENTRY_STYLE: &str = "ListEntry";
@@ -817,7 +926,38 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
             i += 1;
             continue;
         }
-        // Remove old entries.
+        // A table of figures from Word can hold the list it saved as the field's result, in the
+        // field's own paragraph: the rebuilt entries replace it, keeping its leader.
+        let mut saved_leader = None;
+        if figures_label(&kind).is_some()
+            && let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(i))
+        {
+            let leader = p.props.tabs.as_ref().and_then(|t| t.last()).map(|t| t.leader);
+            let mut cleared = false;
+            for o in &mut p.objects {
+                if let InlineObject::Field { instr, result, .. } = o
+                    && !result.is_empty()
+                    && figures_label(instr).is_some()
+                {
+                    result.clear();
+                    cleared = true;
+                }
+            }
+            if cleared {
+                saved_leader = leader;
+                p.touch();
+            }
+        }
+        // Remove old entries, keeping their tab leader.
+        let leader = s
+            .doc
+            .body
+            .get(i + 1)
+            .and_then(|b| b.as_para())
+            .filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE))
+            .and_then(|p| p.props.tabs.as_ref()?.last().map(|t| t.leader))
+            .or(saved_leader)
+            .unwrap_or(TabLeader::Dot);
         while s.doc.body.get(i + 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)) {
             s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
         }
@@ -830,7 +970,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
                 para.props.indent_first = Some(-36.0);
             }
             if text.contains('\t') {
-                para.props.tabs = Some(vec![TabStop { pos: width - 0.5, align: TabAlign::Right, leader: TabLeader::Dot }]);
+                para.props.tabs = Some(vec![TabStop { pos: width - 0.5, align: TabAlign::Right, leader }]);
             }
             s.doc.insert_block(StoryRef::Body, &Path::top(i + 1 + k), Block::Para(para))?;
         }
@@ -874,12 +1014,14 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
     }
     // Collect marks with positions.
     let mut marks: Vec<(String, Pos)> = Vec::new();
-    let caption_label = kind.split('"').nth(1).unwrap_or("Figure").to_string();
+    let figures = figures_label(kind);
+    let bare = FieldCode::parse(kind).has('a');
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        if kind.starts_with("TOC \\c") {
-            if p.props.style.as_deref() == Some("Caption") && p.plain_text().starts_with(&caption_label) {
-                marks.push((p.plain_text(), Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
+        if let Some(ident) = &figures {
+            if captioned_as(p, ident) {
+                let text = if bare { caption_body(p, &ident.replace('_', " ")) } else { p.plain_text() };
+                marks.push((text, Pos { story: StoryRef::Body, path: path.clone(), off: 0 }));
             }
             continue;
         }
@@ -900,8 +1042,8 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
         let mut v = Vec::new();
         for path in s.doc.para_paths(StoryRef::Body) {
             let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-            if kind.starts_with("TOC \\c") {
-                if p.props.style.as_deref() == Some("Caption") && p.plain_text().starts_with(&caption_label) {
+            if let Some(ident) = &figures {
+                if captioned_as(p, ident) {
                     v.push(Pos { story: StoryRef::Body, path: path.clone(), off: 0 });
                 }
                 continue;
@@ -923,8 +1065,11 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
             x.1 = pg;
         }
     }
-    if kind.starts_with("TOC \\c") {
-        return with_pages.into_iter().map(|(t, p)| (format!("{t}\t{p}"), false)).collect();
+    if figures.is_some() {
+        // `\n` without page numbers; `\p` the separator before them (a tab by default).
+        let f = FieldCode::parse(kind);
+        let sep = f.arg('p').unwrap_or("\t");
+        return with_pages.into_iter().map(|(t, p)| (if f.has('n') { t } else { format!("{t}{sep}{p}") }, false)).collect();
     }
     // Index / TOA: group by entry, sort, list pages.
     let lang = super::default_lang(s);
@@ -945,7 +1090,7 @@ fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
                 out.push((l, false));
             }
         }
-        let list = pages.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(", ");
+        let list = pages.iter().map(ToString::to_string).collect::<Vec<_>>().join(", ");
         out.push(if kind.starts_with("INDEX") { (format!("{e}, {list}"), true) } else { (format!("{e}\t{list}"), false) });
     }
     out
@@ -1295,6 +1440,190 @@ mod tests {
         s.run("caret.docEnd", &json!({})).unwrap();
         s.run("insert.crossReference", &json!({"to": "label:Photo Plate", "target": "Photo Plate I", "show": "number"})).unwrap();
         assert!(s.doc.plain_text(StoryRef::Body).ends_with("See Photo Plate I"), "{}", s.doc.plain_text(StoryRef::Body));
+    }
+
+    /// The entries of every generated list, in order, with their last tab stop's leader.
+    fn list_entries(s: &Session) -> Vec<(String, Option<TabLeader>)> {
+        s.doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE))
+            .map(|p| (p.plain_text(), p.props.tabs.as_ref().and_then(|t| t.last()).map(|t| t.leader)))
+            .collect()
+    }
+
+    /// #3013: a table of figures for any caption label, so a document can have a list of figures
+    /// and a list of tables; each keeps its own label and leader when updated.
+    #[test]
+    fn table_of_figures_for_each_caption_label() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\nPress\nRock\nTablet\n"));
+        for (text, label) in [("Kiln", "Figure"), ("Press", "Table"), ("Rock", "Photo Plate"), ("Tablet", "Figure")] {
+            s.run("select.text", &json!({"text": text})).unwrap();
+            s.run("references.caption", &json!({"label": label, "text": text})).unwrap();
+        }
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({"label": "Table", "tabLeader": "hyphen"})).unwrap();
+        assert_eq!(list_entries(&s), [("Table 1: Press\t1".to_string(), Some(TabLeader::Hyphen))]);
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({"label": "Photo Plate"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({})).unwrap();
+        let instrs: Vec<String> = fields(&s).into_iter().map(|(i, _)| i).filter(|i| i.starts_with("TOC")).collect();
+        assert_eq!(instrs, [r#"TOC \c "Table""#, r#"TOC \c "Photo_Plate""#, r#"TOC \c "Figure""#]);
+        let want = [
+            ("Table 1: Press\t1", TabLeader::Hyphen),
+            ("Photo Plate 1: Rock\t1", TabLeader::Dot),
+            ("Figure 1: Kiln\t1", TabLeader::Dot),
+            ("Figure 2: Tablet\t1", TabLeader::Dot),
+        ];
+        let want: Vec<(String, Option<TabLeader>)> = want.iter().map(|(t, l)| (t.to_string(), Some(*l))).collect();
+        assert_eq!(list_entries(&s), want);
+        // Update Table rebuilds each list with its own label and keeps the leader.
+        s.run("references.updateFigures", &json!({})).unwrap();
+        assert_eq!(list_entries(&s), want);
+        // A table of figures is not the table of contents.
+        assert!(s.run("references.updateToc", &json!({})).is_ok());
+        assert_eq!(list_entries(&s), want);
+    }
+
+    /// #3013: Insert Table of Figures' options as TOC switches: `\a` without the label and number,
+    /// `\n` without page numbers, `\p " "` with the page right after the text.
+    #[test]
+    fn table_of_figures_options() {
+        assert_eq!(figures_instr(&json!({})), r#"TOC \c "Figure""#);
+        assert_eq!(figures_instr(&json!({"label": "Table", "includeLabel": false})), r#"TOC \a "Table""#);
+        assert_eq!(figures_instr(&json!({"pageNumbers": false})), r#"TOC \c "Figure" \n"#);
+        assert_eq!(figures_instr(&json!({"rightAlign": false})), r#"TOC \c "Figure" \p " ""#);
+        assert_eq!(figures_instr(&json!({"label": "\"\\ "})), r#"TOC \c "Figure""#, "an empty label is Figure");
+        for (params, entry) in [
+            (json!({"includeLabel": false}), "The kiln\t1"),
+            (json!({"pageNumbers": false}), "Figure 1: The kiln"),
+            (json!({"rightAlign": false, "includeLabel": false}), "The kiln 1"),
+        ] {
+            let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\n"));
+            s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+            s.run("references.caption", &json!({"label": "Figure", "text": "The kiln"})).unwrap();
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("references.tableOfFigures", &params).unwrap();
+            let entries = list_entries(&s);
+            assert_eq!(entries.iter().map(|(t, _)| t.as_str()).collect::<Vec<_>>(), [entry], "{params}");
+            assert_eq!(entries.first().and_then(|(_, l)| *l).is_some(), entry.contains('\t'), "a tab stop only for a tab");
+        }
+    }
+
+    /// #3013: a table of figures from Word (`TOC \h \z \c "Figure"`, switches in any order) and
+    /// hand-typed captions are listed (the label in any case); a caption whose label only starts
+    /// with another's is not.
+    #[test]
+    fn table_of_figures_from_word_and_typed_captions() {
+        let mut d = wordcraft_doc::Document::from_text("Figure 1: Typed\nFigures 2: Not a figure\nFigure 3 \u{2014} Dashed\nfigure 4: Lower\nList");
+        for path in d.para_paths(StoryRef::Body).into_iter().take(4) {
+            d.para_mut(StoryRef::Body, &path).unwrap().props.style = Some("Caption".into());
+        }
+        let mut s = Session::new(d);
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        let at = s.sel.focus.clone();
+        let field = InlineObject::Field {
+            instr: r#"TOC \h \z \a "Figure""#.into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        s.doc.insert_object(&at, field, &CharProps::default()).unwrap();
+        s.run("references.updateFigures", &json!({})).unwrap();
+        let entries: Vec<String> = list_entries(&s).into_iter().map(|(t, _)| t).collect();
+        assert_eq!(entries, ["Typed\t1", "Dashed\t1", "Lower\t1"]);
+    }
+
+    /// #3013 review: the leader asked for lands on the new list even when a list above it is out
+    /// of date and gains entries (moving the new one down) while every list is rebuilt.
+    #[test]
+    fn table_of_figures_leader_survives_a_stale_list_above() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\nPress\nRock\n"));
+        for (text, label) in [("Kiln", "Figure"), ("Press", "Table")] {
+            s.run("select.text", &json!({"text": text})).unwrap();
+            s.run("references.caption", &json!({"label": label, "text": text})).unwrap();
+        }
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({})).unwrap();
+        s.run("select.text", &json!({"text": "Rock"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "Rock"})).unwrap();
+        assert_eq!(list_entries(&s).len(), 1, "the list of figures is out of date");
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.newParagraph", &json!({})).unwrap();
+        s.run("references.tableOfFigures", &json!({"label": "Table", "tabLeader": "hyphen"})).unwrap();
+        let want = [("Figure 1: Kiln\t1", TabLeader::Dot), ("Figure 2: Rock\t1", TabLeader::Dot), ("Table 1: Press\t1", TabLeader::Hyphen)];
+        let want: Vec<(String, Option<TabLeader>)> = want.iter().map(|(t, l)| (t.to_string(), Some(*l))).collect();
+        assert_eq!(list_entries(&s), want);
+    }
+
+    /// #3013 review: a table of figures from Word whose saved list sits in the field's result (one
+    /// paragraph) is replaced by the rebuilt entries, not listed twice, and keeps its leader.
+    #[test]
+    fn table_of_figures_from_word_replaces_its_saved_list() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Kiln\nList"));
+        s.run("select.text", &json!({"text": "Kiln"})).unwrap();
+        s.run("references.caption", &json!({"label": "Figure", "text": "Kiln"})).unwrap();
+        let last = s.doc.body.len() - 1;
+        let p = s.doc.para_mut(StoryRef::Body, &Path::top(last)).unwrap();
+        p.props.style = Some("TableofFigures".into());
+        p.props.tabs = Some(vec![TabStop { pos: 400.0, align: TabAlign::Right, leader: TabLeader::Hyphen }]);
+        let end = p.len();
+        p.delete(0, end).unwrap();
+        let field = InlineObject::Field {
+            instr: r#"TOC \h \z \c "Figure""#.into(),
+            result: "Figure 1: Kiln\t1".into(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        p.insert_object(0, field, &CharProps::default()).unwrap();
+        for _ in 0..2 {
+            s.run("references.updateFigures", &json!({})).unwrap();
+            let text = s.doc.plain_text(StoryRef::Body);
+            assert_eq!(text.matches("Figure 1: Kiln\t1").count(), 1, "{text:?}");
+            assert_eq!(list_entries(&s), [("Figure 1: Kiln\t1".to_string(), Some(TabLeader::Hyphen))]);
+        }
+    }
+
+    /// #3013 review: `\c` picks captions by their SEQ identifier, as Word does, not by the text
+    /// before the number (`STYLEREF`, " Specimen ", `SEQ Figure` is a figure).
+    #[test]
+    fn table_of_figures_goes_by_the_seq_identifier() {
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Rock\n"));
+        let field = |instr: &str| InlineObject::Field {
+            instr: instr.into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        };
+        let plain = CharProps::default();
+        let mut imported = Paragraph::new().styled("Caption");
+        imported.insert_object(0, field("STYLEREF 1 \\s"), &plain).unwrap();
+        imported.insert_text(imported.len(), " Specimen ", &plain).unwrap();
+        imported.insert_object(imported.len(), field("SEQ Figure \\* ARABIC"), &plain).unwrap();
+        imported.insert_text(imported.len(), ": A rock", &plain).unwrap();
+        s.doc.insert_block(StoryRef::Body, &Path::top(1), Block::Para(imported)).unwrap();
+        for (label, listed) in [("Figure", true), ("Specimen", false)] {
+            let mut s = Session::new(s.doc.clone());
+            s.run("caret.docEnd", &json!({})).unwrap();
+            s.run("text.newParagraph", &json!({})).unwrap();
+            s.run("references.tableOfFigures", &json!({"label": label, "includeLabel": false})).unwrap();
+            let entries: Vec<String> = list_entries(&s).into_iter().map(|(t, _)| t).collect();
+            assert_eq!(entries.len(), usize::from(listed), "{label}: {entries:?}");
+            if listed {
+                assert_eq!(entries.first().map(|t| t.split('\t').next()), Some(Some("A rock")));
+            }
+        }
     }
 
     /// #2940: a caption may start with its chapter number (`STYLEREF`) and carry its label text

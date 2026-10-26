@@ -106,11 +106,18 @@ pub fn rpr_inner(w: &mut W, c: &CharProps) {
     }
     toggle(w, "w:rtl", c.rtl);
     toggle(w, "w:cs", c.cs);
-    match (&c.lang, &c.lang_bidi) {
-        (Some(l), Some(b)) => w.empty("w:lang", &[("w:val", l), ("w:bidi", b)]),
-        (Some(l), None) => w.val("w:lang", l),
-        (None, Some(b)) => w.empty("w:lang", &[("w:bidi", b)]),
-        (None, None) => {}
+    let mut lang_attrs: Vec<(&str, &str)> = Vec::with_capacity(3);
+    if let Some(l) = &c.lang {
+        lang_attrs.push(("w:val", l));
+    }
+    if let Some(ea) = &c.lang_ea {
+        lang_attrs.push(("w:eastAsia", ea));
+    }
+    if let Some(b) = &c.lang_bidi {
+        lang_attrs.push(("w:bidi", b));
+    }
+    if !lang_attrs.is_empty() {
+        w.empty("w:lang", &lang_attrs);
     }
     // After w:lang (CT_RPr's sequence).
     if let Some(l) = &c.east_asian_layout {

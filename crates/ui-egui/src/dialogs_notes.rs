@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use crate::WordApp;
 use crate::theme::semibold;
 
-/// Number formats notes offer: OOXML name and a sample (not translated).
-const FORMATS: [(&str, &str); 5] = [
+/// Number formats notes offer: OOXML name and a sample (not translated). The Format Page Numbers
+/// dialog offers the same list (#1113).
+pub(crate) const FORMATS: [(&str, &str); 5] = [
     ("decimal", "1, 2, 3, …"),
     ("lowerLetter", "a, b, c, …"),
     ("upperLetter", "A, B, C, …"),

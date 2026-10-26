@@ -335,6 +335,13 @@ fn persian_letters_join_and_brackets_mirror() {
     // ZWNJ (نیم‌فاصله) breaks the join: "می‌خواهم" keeps می separate.
     let with_zwnj = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "ب\u{200C}ب", &[], |c| c, true));
     assert_eq!(with_zwnj.first(), isolated.first(), "a letter before ZWNJ takes its isolated form");
+    // Farsi Yeh (ی, U+06CC) joins like any letter (#824).
+    let mi = wordcraft_fonts::shape_run(&face, "می", &[], |c| c, true);
+    let mi_cl = cluster_glyphs(&mi);
+    assert_eq!(mi_cl.len(), 2, "meem + Farsi Yeh: {mi_cl:?}");
+    assert!(mi.iter().all(|g| g.gid != 0), "the font has Farsi Yeh");
+    let meem_alone = cluster_glyphs(&wordcraft_fonts::shape_run(&face, "م", &[], |c| c, true));
+    assert_ne!(mi_cl[0], meem_alone[0], "meem takes its initial form before Yeh: {mi_cl:?} vs {meem_alone:?}");
     // In right-to-left text, "(" is drawn with the mirrored glyph.
     let open = wordcraft_fonts::shape_run(&face, "(", &[], |c| c, true);
     let close = wordcraft_fonts::shape_run(&face, ")", &[], |c| c, false);
@@ -558,6 +565,75 @@ fn list_label_moves_with_its_text_when_the_paragraph_is_aligned() {
             let (pl, x) = first_line(&l, i);
             let lab = pl.label.as_ref().unwrap();
             assert!(x + lab.x >= 71.5 && x + lab.x + lab.width <= 540.5, "rtl={rtl}: paragraph {i}");
+        }
+    }
+}
+
+/// A numbered label's brackets are mirrored in a right-to-left paragraph (UAX #9 L4), so a
+/// `(%1)` label reads `(1)` and not `)1(`.
+#[test]
+fn rtl_list_label_mirrors_its_brackets() {
+    let mut d = doc_of(&[("סעיף", true)]);
+    let lvl = wordcraft_doc::numbering::Level { text: "(%1)".into(), ..Default::default() };
+    let num = d.numbering.try_add_levels(None, vec![lvl]).unwrap();
+    d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p: &mut ParaProps| p.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 }))
+        .unwrap();
+    let l = lay(&d);
+    let (pl, _) = first_line(&l, 0);
+    let lab = pl.label.as_ref().expect("numbered");
+    assert_eq!(lab.text, "(1)");
+    let st = &pl.styles[lab.style as usize];
+    let (open, digit, close) = (st.face.glyph_for('('), st.face.glyph_for('1'), st.face.glyph_for(')'));
+    let mut drawn: Vec<(f32, u32)> = lab.glyphs.iter().map(|g| (g.dx, g.gid)).collect();
+    drawn.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+    let gids: Vec<u32> = drawn.iter().map(|(_, gid)| *gid).collect();
+    assert_eq!(gids, vec![open, digit, close], "left to right, the label reads (1)");
+}
+
+#[test]
+fn list_label_after_leading_page_break_uses_its_text_lines_alignment() {
+    // #2964: the number moved to page 2, but kept the centring of the empty break line.
+    // Adding the break must leave both the label and text at the same horizontal positions.
+    for (rtl, heading) in [(false, "SUBJECT OF THE AGREEMENT"), (true, "عنوان القسم")] {
+        for kind in [wordcraft_doc::ListKind::Numbered, wordcraft_doc::ListKind::Bullet] {
+            for align in [Align::Left, Align::Center, Align::Right, Align::Justify] {
+                for tab in [false, true] {
+                    let text = if tab { format!("{heading}\tTail") } else { heading.into() };
+                    let make = |page_break: bool| {
+                        let contents = if page_break { format!("\u{000C}{text}") } else { text.clone() };
+                        let mut d = doc_of(&[("Before", false), (&contents, rtl)]);
+                        let id = d.numbering.add_list(kind);
+                        for a in &mut d.numbering.abstracts {
+                            let level = a.levels.first_mut().unwrap();
+                            level.start = 2;
+                            level.indent = 14.2;
+                            level.hanging = 14.2;
+                        }
+                        let at = Pos::body(1, 0);
+                        d.format_paragraphs(&at, &at, &|p| {
+                            p.numbering = Some(wordcraft_doc::props::NumRef { num: id, level: 0 });
+                            p.align = Some(align);
+                        })
+                        .unwrap();
+                        lay(&d)
+                    };
+                    let without = make(false);
+                    let with = make(true);
+                    let (plain, plain_x) = first_line(&without, 1);
+                    let (broken, broken_x) = first_line(&with, 1);
+                    let plain_label = plain.label.as_ref().unwrap();
+                    let broken_label = broken.label.as_ref().unwrap();
+                    assert_eq!(broken.label_line(), 1);
+                    assert_eq!(with.pages.len(), 2);
+                    assert!(with.pages[1].items.iter().any(|item| matches!(item,
+                        Placed::Lines { path, l0, l1, .. } if path.0 == vec![1] && *l0 <= 1 && *l1 > 1
+                    )));
+                    let label_delta = broken_x + broken_label.x - plain_x - plain_label.x;
+                    assert!(label_delta.abs() < 0.01, "rtl={rtl}, kind={kind:?}, align={align:?}, tab={tab}: label moved {label_delta}");
+                    let text_delta = caret_x(&with, 1, 1) - caret_x(&without, 1, 0);
+                    assert!(text_delta.abs() < 0.01, "rtl={rtl}, kind={kind:?}, align={align:?}, tab={tab}: text moved {text_delta}");
+                }
+            }
         }
     }
 }

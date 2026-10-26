@@ -199,7 +199,7 @@ pub fn specs() -> Vec<CommandSpec> {
             r#"{"props": ParaProps, "onPage"?: {"align"?: "left|center|right|justify|distribute", "left"?: pt, "right"?: pt} (alignment and indents as seen on the page: each paragraph's own direction, after `props`, says which edge is its start)}"#,
         ),
         CommandSpec::new("para.dialog", "Paragraph Settings", "Home › Paragraph", |s, _| {
-            s.ui_requests.push(json!({"open": "paragraph"}));
+            s.push_ui_request(json!({"open": "paragraph"}));
             sel_result(s)
         })
         .pure(),
@@ -213,7 +213,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 return Err(CmdError::Params(format!("unknown sort `{sort}` (recommended|alphabetical)")));
             }
             let list = manage_list(s, sort == "alphabetical");
-            s.ui_requests.push(json!({"open": "manageStyles"}));
+            s.push_ui_request(json!({"open": "manageStyles"}));
             Ok(list)
         })
         .params(r#"{"sort"?: "recommended|alphabetical"} → [{id, name, type: "paragraph|character|linked|table", builtIn, inGallery, hidden, basedOn, priority, format}]"#)
@@ -398,7 +398,7 @@ pub fn indent(s: &mut Session, _: &Value) -> CmdResult {
         };
         let para = s.doc.para_mut(a.story, &path)?;
         match num {
-            Some(n) => para.props.numbering = Some(NumRef { num: n.num, level: (n.level + 1).min(8) }),
+            Some(n) => para.props.numbering = Some(NumRef { num: n.num, level: n.level.saturating_add(1).min(8) }),
             None => {
                 para.props.indent_left = Some(((left / tab).floor() + 1.0) * tab);
                 para.props.cancel_char_indents(true, false, false);
@@ -510,17 +510,20 @@ fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Toggle lists using effective paragraph numbering; an explicit off request removes numbering.
 fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     let kind = p::str(v, "kind").and_then(ListKind::parse).unwrap_or(default);
     let off = p::bool(v, "off").unwrap_or(false);
     let a = s.sel.ordered().0;
     // Toggle: if every selected paragraph already has this kind of list, remove it.
-    let current: Vec<Option<NumRef>> =
-        super::selected_paths(s).iter().map(|p| s.doc.para(a.story, p).and_then(|x| x.props.numbering).filter(|n| n.num != 0)).collect();
+    let current: Vec<Option<NumRef>> = super::selected_paths(s)
+        .iter()
+        .map(|p| s.doc.para(a.story, p).and_then(|x| s.doc.styles.resolve_para(&x.props).numbering).filter(|n| n.num != 0))
+        .collect();
     let same_kind = |n: &NumRef| {
-        s.doc.numbering.level(n.num, 0).is_some_and(|l| {
+        s.doc.numbering.level(n.num, n.level).is_some_and(|l| {
             let want = wordcraft_doc::numbering::levels_for(kind);
-            want.first().is_some_and(|w| {
+            want.get(usize::from(n.level)).is_some_and(|w| {
                 (w.format == wordcraft_doc::section::NumFormat::Bullet) == (l.format == wordcraft_doc::section::NumFormat::Bullet)
                     && (p::str(v, "kind").is_none() || w.text == l.text)
             })
@@ -528,13 +531,14 @@ fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
     };
     let remove = off || (!current.is_empty() && current.iter().all(|n| n.as_ref().is_some_and(same_kind)));
     if remove {
+        let keep_list_style = s.doc.styles.resolve_para(&ParaProps { style: Some("ListParagraph".into()), ..Default::default() }).numbering.is_some();
         return fmt(s, &|p| {
             p.numbering = Some(NumRef { num: 0, level: 0 });
             p.indent_left = None;
             p.indent_first = None;
             p.indent_left_chars = None;
             p.indent_first_chars = None;
-            if p.style.as_deref() == Some("ListParagraph") {
+            if p.style.as_deref() == Some("ListParagraph") && !keep_list_style {
                 p.style = None;
             }
         });
@@ -544,7 +548,7 @@ fn list(s: &mut Session, v: &Value, default: ListKind) -> CmdResult {
         .doc
         .prev_para(a.story, &a.path)
         .and_then(|q| s.doc.para(a.story, &q).and_then(|x| x.props.numbering))
-        .filter(|n| n.num != 0 && same_kind(n));
+        .filter(|n| n.num != 0 && same_kind(&NumRef { level: 0, ..*n }));
     let num = match prev_num {
         Some(n) => n.num,
         None => match kind {
@@ -806,7 +810,7 @@ fn outline_step(s: &mut Session, promote: bool) -> CmdResult {
         let list = p.props.numbering.filter(|n| n.num != 0);
         let target = match (list, heading_level(s, &p.props)) {
             (Some(n), _) => {
-                let level = if promote { n.level.saturating_sub(1) } else { (n.level + 1).min(8) };
+                let level = if promote { n.level.saturating_sub(1) } else { n.level.saturating_add(1).min(8) };
                 if level != n.level {
                     let para = s.doc.para_mut(a.story, &path)?;
                     para.props.numbering = Some(NumRef { num: n.num, level });

@@ -1,8 +1,9 @@
 //! References dialogs (#402): Caption (with New Label and Numbering), Cross-reference (#916),
-//! Index and Mark Index Entry, Custom Table of Contents (with Options and the TOC styles), and the
-//! Source Manager with Create / Edit Source. Each fills a form from the session and ends in a
-//! command (`references.caption`, `insert.crossReference`, `references.index`,
-//! `references.markEntry`, `references.toc`, `references.sources`, `references.citation`), so
+//! Index and Mark Index Entry, Custom Table of Contents (with Options and the TOC styles), Table of
+//! Figures (#3013), and the Source Manager with Create / Edit Source. Each fills a form from the
+//! session and ends in a command (`references.caption`, `insert.crossReference`, `references.index`,
+//! `references.markEntry`, `references.toc`, `references.tableOfFigures`, `references.sources`,
+//! `references.citation`), so
 //! agents get the same result without the dialog. Shown through [`crate::dialogs::Dialog::Refs`].
 
 use egui::{Sense, Ui, vec2};
@@ -44,6 +45,7 @@ pub enum RefsDialog {
         form: TocForm,
         level: u8,
     },
+    Figures(FiguresForm),
     Sources {
         selected: Option<usize>,
     },
@@ -62,6 +64,7 @@ impl RefsDialog {
             RefsDialog::Toc(_) => "toc",
             RefsDialog::TocOptions { .. } => "tocOptions",
             RefsDialog::TocStyles { .. } => "tocStyles",
+            RefsDialog::Figures(_) => "tableOfFigures",
             RefsDialog::Sources { .. } => "sourceManager",
             RefsDialog::Source(f) if f.edit => "editSource",
             RefsDialog::Source(_) => "createSource",
@@ -80,6 +83,7 @@ impl RefsDialog {
             RefsDialog::Toc(_) => "Table of Contents",
             RefsDialog::TocOptions { .. } => "Table of Contents Options",
             RefsDialog::TocStyles { .. } => "Table of Contents Styles",
+            RefsDialog::Figures(_) => "Table of Figures",
             RefsDialog::Sources { .. } => "Source Manager",
             RefsDialog::Source(f) if f.edit => "Edit Source",
             RefsDialog::Source(_) => "Create Source",
@@ -88,7 +92,7 @@ impl RefsDialog {
 }
 
 /// The dialog `ui.dialog` opens by `name`: `caption`, `crossReference`, `index`, `markEntry`, `toc`,
-/// `sourceManager` or `createSource` (which inserts a citation of the new source).
+/// `tableOfFigures`, `sourceManager` or `createSource` (which inserts a citation of the new source).
 pub fn open(name: &str, app: &WordApp) -> Option<RefsDialog> {
     Some(match name {
         "caption" => RefsDialog::Caption(CaptionForm::read(app)),
@@ -96,6 +100,7 @@ pub fn open(name: &str, app: &WordApp) -> Option<RefsDialog> {
         "index" => RefsDialog::Index(IndexForm::read(app)),
         "markEntry" => RefsDialog::MarkEntry(MarkForm::read(app)),
         "toc" => RefsDialog::Toc(TocForm::read(app)),
+        "tableOfFigures" => RefsDialog::Figures(FiguresForm::read(app)),
         "sourceManager" => RefsDialog::Sources { selected: None },
         "createSource" => RefsDialog::Source(Box::new(SourceForm::new(true, false))),
         _ => return None,
@@ -114,6 +119,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut RefsDialog) -> bool {
         RefsDialog::Toc(f) => toc_ui(app, ui, f),
         RefsDialog::TocOptions { form, was } => toc_options_ui(app, ui, form, was),
         RefsDialog::TocStyles { form, level } => toc_styles_ui(app, ui, form, level),
+        RefsDialog::Figures(f) => figures_ui(app, ui, f),
         RefsDialog::Sources { selected } => sources_ui(app, ui, selected),
         RefsDialog::Source(f) => source_ui(app, ui, f),
     };
@@ -143,14 +149,15 @@ fn heading(ui: &mut Ui, s: &str) {
     ui.label(egui::RichText::new(tl!(s)).font(semibold(12.5)));
 }
 
-/// A choice from `options` ((value, label)) in a drop-down.
-fn choice<T: PartialEq + Clone>(ui: &mut Ui, id: &str, value: &mut T, options: &[(T, &str)]) {
-    let label = options.iter().find(|(v, _)| v == value).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
-    egui::ComboBox::from_id_salt(id).selected_text(label).width(150.0).show_ui(ui, |ui| {
+/// A choice from `options` ((value, label)) in a drop-down, named by its visible label.
+fn choice<T: PartialEq + Clone>(ui: &mut Ui, id: &str, value: &mut T, options: &[(T, &str)], label: &egui::Response) {
+    let shown = options.iter().find(|(v, _)| v == value).map(|(_, l)| tl!(l).to_string()).unwrap_or_default();
+    let combo = egui::ComboBox::from_id_salt(id).selected_text(shown).width(150.0).show_ui(ui, |ui| {
         for (v, l) in options {
             ui.selectable_value(value, v.clone(), tl!(l));
         }
     });
+    combo.response.labelled_by(label.id);
 }
 
 const LEADERS: [(&str, &str); 4] = [("none", "(none)"), ("dot", "........"), ("hyphen", "--------"), ("underscore", "________")];
@@ -236,7 +243,7 @@ pub struct CaptionForm {
 
 impl CaptionForm {
     pub fn read(app: &WordApp) -> CaptionForm {
-        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(|l| l.to_string()).collect();
+        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(ToString::to_string).collect();
         for l in &app.ui.caption_labels {
             if !labels.contains(l) {
                 labels.push(l.clone());
@@ -251,8 +258,10 @@ impl CaptionForm {
                 .body
                 .get(app.session.sel.focus.path.0.first().copied().unwrap_or(0) as usize)
                 .is_some_and(|b| matches!(&**b, Block::Table(_)));
+        let last = &app.ui.last_caption_label;
+        let label = if labels.contains(last) { last.as_str() } else { "Figure" };
         CaptionForm {
-            label: if in_table { "Table" } else { "Figure" }.into(),
+            label: if in_table { "Table" } else { label }.into(),
             labels,
             text: String::new(),
             position: "below".into(),
@@ -294,27 +303,37 @@ impl CaptionForm {
         }
         v
     }
+
+    /// Insert the caption and remember its label for next time.
+    pub fn insert(&self, app: &mut WordApp) -> Result<(), String> {
+        app.run("references.caption", self.params())?;
+        app.ui.last_caption_label = self.label.clone();
+        Ok(())
+    }
 }
 
+/// Draws the Caption dialog's preview, text, label, position and numbering controls, with New
+/// Label, Delete Label and Numbering jumps, and inserts the caption on OK.
 fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
-    ui.label(tl!("Caption:"));
+    let caption_label = ui.label(tl!("Caption:"));
     ui.horizontal(|ui| {
         ui.label(f.preview());
-        ui.add(egui::TextEdit::singleline(&mut f.text).desired_width(220.0).hint_text(tl!("Caption text")));
+        ui.add(egui::TextEdit::singleline(&mut f.text).desired_width(220.0).hint_text(tl!("Caption text"))).labelled_by(caption_label.id);
     });
     ui.add_space(6.0);
     let mut then = None;
     egui::Grid::new("cap_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Label:"));
+        let label_label = ui.label(tl!("Label:"));
         let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
-        egui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
+        let combo = egui::ComboBox::from_id_salt("cap_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
             for (v, l) in &labels {
                 ui.selectable_value(&mut f.label, v.clone(), tl!(l));
             }
         });
+        combo.response.labelled_by(label_label.id);
         ui.end_row();
-        ui.label(tl!("Position:"));
-        choice(ui, "cap_pos", &mut f.position, &[("below".to_string(), "Below the item"), ("above".to_string(), "Above the item")]);
+        let position_label = ui.label(tl!("Position:"));
+        choice(ui, "cap_pos", &mut f.position, &[("below".to_string(), "Below the item"), ("above".to_string(), "Above the item")], &position_label);
         ui.end_row();
     });
     ui.checkbox(&mut f.exclude_label, tl!("Leave the label out of the caption"));
@@ -339,7 +358,7 @@ fn caption_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
         return go(g);
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
-    if ok && let Err(e) = app.run("references.caption", f.params()) {
+    if ok && let Err(e) = f.insert(app) {
         app.status(e);
     }
     if ok || cancel { Next::Close } else { Next::Stay }
@@ -403,17 +422,20 @@ impl CrossRefForm {
     }
 }
 
+/// Draws the Cross-reference dialog's reference-type and insert-reference-to selectors and the
+/// target list, reloading the form when the type changes, and runs `insert.crossReference` on
+/// Insert.
 fn cross_ref_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CrossRefForm) -> Next {
     let was = f.to.clone();
     egui::Grid::new("xref_opts").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Reference type:"));
+        let type_label = ui.label(tl!("Reference type:"));
         let types = ref_types(app);
         let types: Vec<(String, &str)> = types.iter().map(|(v, l)| (v.clone(), l.as_str())).collect();
-        choice(ui, "xref_type", &mut f.to, &types);
+        choice(ui, "xref_type", &mut f.to, &types, &type_label);
         ui.end_row();
-        ui.label(tl!("Insert reference to:"));
+        let show_label = ui.label(tl!("Insert reference to:"));
         let shows: Vec<(String, &str)> = f.shows().iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        choice(ui, "xref_show", &mut f.show, &shows);
+        choice(ui, "xref_show", &mut f.show, &shows, &show_label);
         ui.end_row();
     });
     if f.to != was {
@@ -444,28 +466,31 @@ fn cross_ref_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CrossRefForm) -> Next {
     if cancel { Next::Close } else { Next::Stay }
 }
 
+/// Draws the caption numbering format, chapter-number toggle and chapter level and separator
+/// controls, returning to the caption dialog with the edited or original form.
 fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) -> Next {
     egui::Grid::new("cap_num").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Format:"));
+        let format_label = ui.label(tl!("Format:"));
         let opts: Vec<(String, &str)> = NUMBER_FORMATS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-        choice(ui, "cap_fmt", &mut f.format, &opts);
+        choice(ui, "cap_fmt", &mut f.format, &opts, &format_label);
         ui.end_row();
     });
     ui.checkbox(&mut f.chapter, tl!("Add the chapter number"));
     ui.add_enabled_ui(f.chapter, |ui| {
         egui::Grid::new("cap_chap").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-            ui.label(tl!("Chapters begin at:"));
+            let chapter_label = ui.label(tl!("Chapters begin at:"));
             let opts: Vec<(u8, String)> = (1..=9u8).map(|l| (l, crate::i18n::fmt(tl!("Heading {n}"), &[("n", &l.to_string())]))).collect();
             let shown = opts.iter().find(|(l, _)| *l == f.chapter_level).map(|(_, s)| s.clone()).unwrap_or_default();
-            egui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
+            let combo = egui::ComboBox::from_id_salt("cap_level").selected_text(shown).width(150.0).show_ui(ui, |ui| {
                 for (l, s) in &opts {
                     ui.selectable_value(&mut f.chapter_level, *l, s);
                 }
             });
+            combo.response.labelled_by(chapter_label.id);
             ui.end_row();
-            ui.label(tl!("Separator:"));
+            let separator_label = ui.label(tl!("Separator:"));
             let opts: Vec<(String, &str)> = SEPARATORS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-            choice(ui, "cap_sep", &mut f.separator, &opts);
+            choice(ui, "cap_sep", &mut f.separator, &opts, &separator_label);
             ui.end_row();
         });
     });
@@ -481,10 +506,14 @@ fn numbering_ui(ui: &mut Ui, f: &mut CaptionForm, was: &CaptionForm) -> Next {
     Next::Stay
 }
 
+/// Draws the new caption label field with focus, sanitizes an accepted label, remembers custom
+/// labels, and returns to the caption dialog.
 fn new_label_ui(app: &mut WordApp, ui: &mut Ui, f: &mut CaptionForm) -> Next {
-    ui.label(tl!("Label:"));
-    let r = ui.add(egui::TextEdit::singleline(&mut f.new_label).desired_width(260.0));
-    r.request_focus();
+    let label = ui.label(tl!("Label:"));
+    let r = ui.add(egui::TextEdit::singleline(&mut f.new_label).desired_width(260.0)).labelled_by(label.id);
+    if !r.has_focus() {
+        r.request_focus();
+    }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     let name: String = f.new_label.chars().filter(|c| !matches!(c, '"' | '\\') && !c.is_control()).take(40).collect::<String>().trim().to_string();
     if ok && !name.is_empty() {
@@ -518,7 +547,7 @@ pub struct IndexForm {
 fn body_field(app: &WordApp, name: &str) -> Option<FieldCode> {
     app.session.doc.body.iter().filter_map(|b| b.as_para()).flat_map(|p| p.objects.iter()).find_map(|o| match o {
         wordcraft_doc::InlineObject::Field { instr, .. } => {
-            Some(FieldCode::parse(instr)).filter(|f| f.name == name && (name != "TOC" || !f.has('c')))
+            Some(FieldCode::parse(instr)).filter(|f| f.name == name && (name != "TOC" || !f.is_table_of_figures()))
         }
         _ => None,
     })
@@ -545,6 +574,8 @@ impl IndexForm {
     }
 }
 
+/// Draws the index preview and type, columns, right-alignment, tab-leader and heading controls,
+/// jumps to Mark Entry, and runs `references.index` on OK.
 fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Next {
     let page = |p: &str| p.to_string();
     let lines: Vec<(usize, String, String)> = {
@@ -570,16 +601,16 @@ fn index_ui(app: &mut WordApp, ui: &mut Ui, f: &mut IndexForm) -> Next {
             ui.radio_value(&mut f.kind, "runIn".to_string(), tl!("Run-in"));
         });
         ui.end_row();
-        ui.label(tl!("Columns:"));
-        ui.add(egui::DragValue::new(&mut f.columns).range(1..=4));
+        let columns_label = ui.label(tl!("Columns:"));
+        ui.add(egui::DragValue::new(&mut f.columns).range(1..=4)).labelled_by(columns_label.id);
         ui.end_row();
         ui.label("");
         ui.checkbox(&mut f.right_align, tl!("Page numbers at the right margin"));
         ui.end_row();
-        ui.label(tl!("Tab leader:"));
+        let leader_label = ui.label(tl!("Tab leader:"));
         ui.add_enabled_ui(f.right_align, |ui| {
             let opts: Vec<(String, &str)> = LEADERS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-            choice(ui, "idx_leader", &mut f.leader, &opts);
+            choice(ui, "idx_leader", &mut f.leader, &opts, &leader_label);
         });
         ui.end_row();
         ui.label("");
@@ -644,33 +675,35 @@ impl MarkForm {
     }
 }
 
+/// Draws the index-entry fields and page, cross-reference or bookmark-range options, with Mark
+/// and Mark All running `references.markEntry`.
 fn mark_ui(app: &mut WordApp, ui: &mut Ui, f: &mut MarkForm) -> Next {
     heading(ui, "Index");
     egui::Grid::new("xe").num_columns(2).spacing(vec2(10.0, 6.0)).show(ui, |ui| {
-        ui.label(tl!("Main entry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0));
+        let entry_label = ui.label(tl!("Main entry:"));
+        ui.add(egui::TextEdit::singleline(&mut f.entry).desired_width(220.0)).labelled_by(entry_label.id);
         ui.end_row();
-        ui.label(tl!("Subentry:"));
-        ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0));
+        let subentry_label = ui.label(tl!("Subentry:"));
+        ui.add(egui::TextEdit::singleline(&mut f.subentry).desired_width(220.0)).labelled_by(subentry_label.id);
         ui.end_row();
     });
     heading(ui, "Options");
     ui.horizontal(|ui| {
-        ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
-        ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0));
+        let see_label = ui.radio_value(&mut f.option, "see".to_string(), tl!("Cross-reference:"));
+        ui.add_enabled(f.option == "see", egui::TextEdit::singleline(&mut f.see).desired_width(160.0)).labelled_by(see_label.id);
     });
     ui.radio_value(&mut f.option, "page".to_string(), tl!("This page"));
     ui.horizontal(|ui| {
-        ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| {
-            ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"));
-        });
+        let bookmark_label =
+            ui.add_enabled_ui(!f.bookmarks.is_empty(), |ui| ui.radio_value(&mut f.option, "range".to_string(), tl!("Pages of bookmark:"))).inner;
         ui.add_enabled_ui(f.option == "range", |ui| {
             let opts: Vec<(String, &str)> = f.bookmarks.iter().map(|b| (b.clone(), b.as_str())).collect();
-            egui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
+            let combo = egui::ComboBox::from_id_salt("xe_bm").selected_text(f.bookmark.clone()).width(140.0).show_ui(ui, |ui| {
                 for (v, l) in &opts {
                     ui.selectable_value(&mut f.bookmark, v.clone(), *l);
                 }
             });
+            combo.response.labelled_by(bookmark_label.id);
         });
     });
     heading(ui, "Page number style");
@@ -794,6 +827,8 @@ impl TocForm {
     }
 }
 
+/// Draws the TOC preview and page-number, right-alignment, tab-leader, hyperlink and level
+/// controls, with Options and Modify jumps and `references.toc` on OK.
 fn toc_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm) -> Next {
     let lines: Vec<(usize, String, String)> = (1..=f.levels.min(3))
         .map(|l| {
@@ -807,17 +842,17 @@ fn toc_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm) -> Next {
     ui.add_enabled_ui(f.page_numbers, |ui| {
         ui.checkbox(&mut f.right_align, tl!("Page numbers at the right margin"));
         ui.horizontal(|ui| {
-            ui.label(tl!("Tab leader:"));
+            let leader_label = ui.label(tl!("Tab leader:"));
             ui.add_enabled_ui(f.right_align, |ui| {
                 let opts: Vec<(String, &str)> = LEADERS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
-                choice(ui, "toc_leader", &mut f.leader, &opts);
+                choice(ui, "toc_leader", &mut f.leader, &opts, &leader_label);
             });
         });
     });
     ui.checkbox(&mut f.hyperlinks, tl!("Link entries to their headings"));
     ui.horizontal(|ui| {
-        ui.label(tl!("Levels:"));
-        ui.add(egui::DragValue::new(&mut f.levels).range(1..=9));
+        let levels_label = ui.label(tl!("Levels:"));
+        ui.add(egui::DragValue::new(&mut f.levels).range(1..=9)).labelled_by(levels_label.id);
     });
     ui.add_space(4.0);
     let mut then = None;
@@ -839,6 +874,8 @@ fn toc_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm) -> Next {
     if ok || cancel { Next::Close } else { Next::Stay }
 }
 
+/// Draws the TOC sources: heading styles, per-style TOC levels, outline levels and TC entry
+/// fields, with Reset. OK returns the edited form and Cancel the original.
 fn toc_options_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, was: &TocForm) -> Next {
     heading(ui, "Collect entries from:");
     ui.checkbox(&mut f.heading_styles, crate::i18n::fmt(tl!("Heading styles (levels 1–{n})"), &[("n", &f.levels.to_string())]));
@@ -850,8 +887,9 @@ fn toc_options_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, was: &TocForm
             for (name, level) in f.style_levels.iter_mut() {
                 // Built-in styles read in the interface language; the document keeps the English name.
                 let shown = app.session.doc.styles.styles.iter().find(|st| st.name == *name).map_or_else(|| name.clone(), crate::i18n::style_name);
-                ui.label(shown);
-                ui.add(egui::DragValue::new(level).range(0..=9).custom_formatter(|v, _| if v < 0.5 { String::new() } else { format!("{v:.0}") }));
+                let style_label = ui.label(shown);
+                ui.add(egui::DragValue::new(level).range(0..=9).custom_formatter(|v, _| if v < 0.5 { String::new() } else { format!("{v:.0}") }))
+                    .labelled_by(style_label.id);
                 ui.end_row();
             }
         });
@@ -899,6 +937,88 @@ fn toc_styles_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TocForm, level: &mut u8
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok || cancel { go(RefsDialog::Toc(f.clone())) } else { Next::Stay }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Table of Figures
+
+/// The Table of Figures dialog's fields (#3013).
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FiguresForm {
+    /// The caption label whose captions are listed.
+    pub label: String,
+    /// Built-in labels, the user's own and any the document's captions use.
+    pub labels: Vec<String>,
+    pub include_label: bool,
+    pub page_numbers: bool,
+    pub right_align: bool,
+    pub leader: String,
+}
+
+impl FiguresForm {
+    pub fn read(app: &WordApp) -> FiguresForm {
+        let mut labels: Vec<String> = BUILT_IN_LABELS.iter().map(ToString::to_string).collect();
+        for l in app.ui.caption_labels.iter().cloned().chain(wordcraft_engine::cmd::citations::caption_labels(&app.session)) {
+            if !labels.contains(&l) {
+                labels.push(l);
+            }
+        }
+        FiguresForm { label: "Figure".into(), labels, include_label: true, page_numbers: true, right_align: true, leader: "dot".into() }
+    }
+
+    /// `references.tableOfFigures` parameters.
+    pub fn params(&self) -> Value {
+        json!({
+            "label": self.label,
+            "includeLabel": self.include_label,
+            "pageNumbers": self.page_numbers,
+            "rightAlign": self.right_align,
+            "tabLeader": self.leader,
+        })
+    }
+}
+
+/// Draws the table-of-figures preview and label, include-label, page-number, right-alignment and
+/// tab-leader controls, running `references.tableOfFigures` on OK.
+fn figures_ui(app: &mut WordApp, ui: &mut Ui, f: &mut FiguresForm) -> Next {
+    let lines: Vec<(usize, String, String)> = [(1, "1"), (2, "3")]
+        .iter()
+        .map(|(n, page)| {
+            let text = if f.include_label { format!("{} {n}: {}", tl!(&f.label), tl!("Text")) } else { tl!("Text").to_string() };
+            (0, text, if f.page_numbers { page.to_string() } else { String::new() })
+        })
+        .collect();
+    sample(ui, &lines, f.right_align, leader_char(&f.leader));
+    ui.add_space(6.0);
+    ui.horizontal(|ui| {
+        let label_label = ui.label(tl!("Label:"));
+        let labels: Vec<(String, &str)> = f.labels.iter().map(|l| (l.clone(), l.as_str())).collect();
+        let combo = egui::ComboBox::from_id_salt("tof_label").selected_text(tl!(&f.label)).width(150.0).show_ui(ui, |ui| {
+            for (v, l) in &labels {
+                ui.selectable_value(&mut f.label, v.clone(), tl!(l));
+            }
+        });
+        combo.response.labelled_by(label_label.id);
+    });
+    ui.checkbox(&mut f.include_label, tl!("Include label and number"));
+    ui.checkbox(&mut f.page_numbers, tl!("Include page numbers"));
+    ui.add_enabled_ui(f.page_numbers, |ui| {
+        ui.checkbox(&mut f.right_align, tl!("Page numbers at the right margin"));
+        ui.horizontal(|ui| {
+            let leader_label = ui.label(tl!("Tab leader:"));
+            ui.add_enabled_ui(f.right_align, |ui| {
+                let opts: Vec<(String, &str)> = LEADERS.iter().map(|(v, l)| (v.to_string(), *l)).collect();
+                choice(ui, "tof_leader", &mut f.leader, &opts, &leader_label);
+            });
+        });
+    });
+    ui.add_space(4.0);
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    if ok && let Err(e) = app.run("references.tableOfFigures", f.params()) {
+        app.status(e);
+    }
+    if ok || cancel { Next::Close } else { Next::Stay }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1044,26 +1164,30 @@ impl SourceForm {
     }
 }
 
+/// Draws a source's type and fields, optionally every bibliography field, and adds it as a
+/// bibliography source or inserts a citation on OK.
 fn source_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SourceForm) -> Next {
     egui::Grid::new("src").num_columns(2).spacing(vec2(10.0, 5.0)).show(ui, |ui| {
-        ui.label(tl!("Source type:"));
+        let kind_label = ui.label(tl!("Source type:"));
         let shown = SOURCE_TYPES.iter().find(|(k, ..)| *k == f.source.kind).map(|(_, l, _)| tl!(l).to_string()).unwrap_or_default();
-        egui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
+        let combo = egui::ComboBox::from_id_salt("src_kind").selected_text(shown).width(200.0).show_ui(ui, |ui| {
             for (k, l, _) in SOURCE_TYPES {
                 ui.selectable_value(&mut f.source.kind, k.to_string(), tl!(l));
             }
         });
+        combo.response.labelled_by(kind_label.id);
         ui.end_row();
         let edit = f.edit;
         for (key, label) in f.fields() {
-            ui.label(format!("{}:", tl!(label)));
+            let field_label = ui.label(format!("{}:", tl!(label)));
             if let Some(v) = field_mut(&mut f.source, key) {
                 let hint = match key {
                     "author" => tl!("Last, First; Last, First"),
                     "tag" => tl!("Made from the author and year when empty"),
                     _ => "",
                 };
-                ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint));
+                ui.add_enabled(!(edit && key == "tag"), egui::TextEdit::singleline(v).desired_width(260.0).hint_text(hint))
+                    .labelled_by(field_label.id);
             }
             ui.end_row();
         }
@@ -1221,6 +1345,46 @@ mod tests {
         assert_eq!(a.prefs().caption_labels, vec!["Plate".to_string()]);
     }
 
+    /// #3120: Insert Caption picks the label used last, and saves it with the preferences.
+    #[test]
+    fn caption_dialog_remembers_the_last_label() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut a = app("A chart\nA photo");
+        a.ui.caption_labels.push("Diagram".into());
+        a.run("select.text", json!({"text": "A chart"})).unwrap();
+        a.run("references.caption", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_value("Figure").click();
+        h.run_steps(3);
+        h.get_by_label("Diagram").click();
+        h.run_steps(3);
+        h.get_by_role_and_label(Role::Button, "OK").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().session.doc.plain_text(StoryRef::Body).contains("Diagram 1"));
+        h.state_mut().run("select.text", json!({"text": "A photo"})).unwrap();
+        h.state_mut().run("references.caption", json!({})).unwrap();
+        h.run_steps(4);
+        h.get_by_value("Diagram");
+        assert_eq!(h.state().prefs().last_caption_label, "Diagram");
+        // In a table it is still Table; a deleted label falls back to Figure.
+        let a = h.state_mut();
+        a.run("insert.table", json!({"rows": 1, "cols": 2})).unwrap();
+        assert_eq!(CaptionForm::read(a).label, "Table");
+        a.run("select.text", json!({"text": "A chart"})).unwrap();
+        a.ui.caption_labels.clear();
+        assert_eq!(CaptionForm::read(a).label, "Figure");
+    }
+
     /// #916: Cross-reference from the ribbon opens a dialog listing the targets of each type
     /// (equation captions too) and inserts a `REF` field to the one picked.
     #[test]
@@ -1354,6 +1518,72 @@ mod tests {
         let text = a.session.doc.plain_text(StoryRef::Body);
         assert!(text.contains("Intro\t1") && text.contains("Note\t1"), "{text}");
         assert_eq!(TocForm::read(&a), f);
+    }
+
+    /// #3013: Insert Table of Figures opens its dialog, which offers the document's own caption
+    /// labels, so a list of tables (or of a custom label) can be built next to a list of figures.
+    #[test]
+    fn table_of_figures_dialog_picks_the_caption_label() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let mut a = app("Kiln\nPress\nRock\n");
+        for (text, label) in [("Kiln", "Figure"), ("Press", "Table"), ("Rock", "Specimen")] {
+            a.run("select.text", json!({"text": text})).unwrap();
+            a.run("references.caption", json!({"label": label, "text": text})).unwrap();
+        }
+        a.run("caret.docEnd", json!({})).unwrap();
+        assert_eq!(a.run("references.tableOfFigures", json!({})).unwrap(), json!({"pending": "tableOfFigures"}));
+        let RefsDialog::Figures(mut f) = form(&a) else { panic!() };
+        assert_eq!(f.label, "Figure");
+        assert_eq!(f.labels, ["Equation", "Figure", "Table", "Specimen"]);
+        f.label = "Table".into();
+        f.leader = "underscore".into();
+        a.dialog = Some(Dialog::Refs(Box::new(RefsDialog::Figures(f))));
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        h.get_by_role_and_label(Role::Window, "Table of Figures");
+        // Without page numbers there is nothing to align: the margin choice is off until they are back.
+        let margin = |h: &egui_kittest::Harness<'_, WordApp>| {
+            h.get_by_role_and_label(Role::CheckBox, "Page numbers at the right margin").accesskit_node().is_disabled()
+        };
+        assert!(!margin(&h));
+        h.get_by_role_and_label(Role::CheckBox, "Include page numbers").click();
+        h.run_steps(2);
+        assert!(margin(&h), "no page numbers: no right margin choice");
+        h.get_by_role_and_label(Role::CheckBox, "Include page numbers").click();
+        h.run_steps(2);
+        assert!(!margin(&h));
+        h.get_all_by_role_and_label(Role::Button, "OK").last().expect("the dialog's OK button").click();
+        h.run_steps(3);
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        let mut a = h.into_state();
+        assert!(instrs(&a).contains(&r#"TOC \c "Table""#.to_string()), "{:?}", instrs(&a));
+        let entries: Vec<(String, Option<wordcraft_doc::props::TabLeader>)> = a
+            .session
+            .doc
+            .body
+            .iter()
+            .filter_map(|b| b.as_para())
+            .filter(|p| p.props.style.as_deref() == Some("ListEntry"))
+            .map(|p| (p.plain_text(), p.props.tabs.as_ref().and_then(|t| t.last()).map(|t| t.leader)))
+            .collect();
+        assert_eq!(entries, [("Table 1: Press\t1".to_string(), Some(wordcraft_doc::props::TabLeader::Underscore))]);
+        a.run("caret.docEnd", json!({})).unwrap();
+        a.run("ui.dialog", json!({"name": "tableOfFigures"})).unwrap();
+        let RefsDialog::Figures(mut f) = form(&a) else { panic!() };
+        f.label = "Specimen".into();
+        f.include_label = false;
+        f.right_align = false;
+        a.run("references.tableOfFigures", f.params()).unwrap();
+        assert!(instrs(&a).contains(&r#"TOC \a "Specimen" \p " ""#.to_string()), "{:?}", instrs(&a));
+        assert!(a.session.doc.plain_text(StoryRef::Body).contains("Rock 1"));
     }
 
     /// #402: Insert Citation without a source opens Create Source; the type picks the fields,

@@ -2,7 +2,8 @@
 //!
 //! Bar and column (clustered, stacked or 100% stacked), line, area, pie, doughnut and scatter
 //! charts are drawn from the first supported chart type of the plot area, with their values as
-//! data labels where `c:dLbls` shows them (`c:showVal`). A chart of only other types (radar, stock…)
+//! data labels where `c:dLbls` shows them (`c:showVal`). Radar charts (standard, with markers or
+//! filled) draw as spokes, concentric grid polygons and one polygon per series. A chart of only other types (stock, bubble…)
 //! draws a placeholder: its frame, its title and the type it is. Text widths are estimated ([`CHAR_W`] em a character), so label places are approximate.
 
 use std::f64::consts::{FRAC_PI_2, TAU};
@@ -23,6 +24,10 @@ const MAX_POINTS: usize = 10_000;
 const MAX_CELLS: usize = 100_000;
 /// Longest series name or category label kept.
 const MAX_LABEL: usize = 200;
+/// Most categories (spokes) of a radar chart.
+const MAX_SPOKES: usize = 100;
+/// Most series of a radar chart.
+const MAX_RADAR_SERIES: usize = 50;
 /// Most axis ticks drawn.
 const MAX_TICKS: usize = 20;
 /// Default text size, points.
@@ -75,6 +80,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     }
     match chart.kind {
         Kind::Pie | Kind::Doughnut => pie(&mut out, &chart, area),
+        Kind::Radar => radar(&mut out, &chart, area),
         _ => cartesian(&mut out, &chart, area),
     }
     out
@@ -87,7 +93,7 @@ fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect) -> Rect {
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
-/// A chart whose plot area holds only chart types WordCraft doesn't draw (radar, stock…): its
+/// A chart whose plot area holds only chart types WordCraft doesn't draw (stock, bubble…): its
 /// frame with a light border, its title and a line saying which type it is, so it isn't blank
 /// space. Nothing when the plot area has no chart type at all, or a supported one with nothing
 /// to draw.
@@ -114,7 +120,6 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
 /// What a placeholder calls a chart type element WordCraft doesn't draw.
 fn unsupported_name(name: &str) -> &'static str {
     match name {
-        "c:radarChart" => "Radar chart",
         "c:stockChart" => "Stock chart",
         "c:bubbleChart" => "Bubble chart",
         "c:surfaceChart" | "c:surface3DChart" => "Surface chart",
@@ -144,6 +149,7 @@ enum Kind {
     Pie,
     Doughnut,
     Scatter,
+    Radar,
 }
 
 impl Kind {
@@ -155,6 +161,7 @@ impl Kind {
             "c:pieChart" => Kind::Pie,
             "c:doughnutChart" => Kind::Doughnut,
             "c:scatterChart" => Kind::Scatter,
+            "c:radarChart" => Kind::Radar,
             _ => return None,
         })
     }
@@ -221,6 +228,10 @@ struct Chart {
     /// Doughnut hole, fraction of the outer radius.
     hole: f32,
     first_angle: f64,
+    /// Radar: series polygons are filled (`c:radarStyle` = `filled`).
+    radar_fill: bool,
+    /// Radar: points carry markers (`c:radarStyle` = `marker`).
+    radar_marks: bool,
     vary: bool,
     /// Number of categories (scatter: points per series at most).
     n: usize,
@@ -253,7 +264,9 @@ impl Chart {
             return None;
         }
         let cats = ty.children("c:ser").find_map(|s| s.child("c:cat")).map(|c| labels(Some(c), MAX_POINTS, date1904)).unwrap_or_default();
-        let n = if matches!(kind, Kind::Pie | Kind::Doughnut) {
+        let n = if kind == Kind::Radar {
+            series.iter().map(|s| s.values.len()).max().unwrap_or(0).max(cats.len()).min(MAX_SPOKES)
+        } else if matches!(kind, Kind::Pie | Kind::Doughnut) {
             series.first().map_or(0, |s| s.values.len()).max(cats.len())
         } else {
             series.iter().map(|s| s.values.len()).max().unwrap_or(0).max(cats.len())
@@ -262,6 +275,9 @@ impl Chart {
         if let Some(keep) = MAX_CELLS.checked_div(n) {
             series.truncate(keep.max(1));
         }
+        if kind == Kind::Radar {
+            series.truncate(MAX_RADAR_SERIES);
+        }
         let grouping = match ty.child("c:grouping").and_then(|g| g.attr("val")) {
             Some("stacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Stacked,
             Some("percentStacked") if matches!(kind, Kind::Bar | Kind::Area | Kind::Line) => Grouping::Percent,
@@ -269,6 +285,7 @@ impl Chart {
         };
         let mut cats = cats;
         cats.resize(n, String::new());
+        let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
         let type_labels = show_values(ty.child("c:dLbls"));
         for s in &mut series {
             s.values.resize(n, None);
@@ -296,6 +313,8 @@ impl Chart {
             overlap: num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
             hole: num("c:holeSize").unwrap_or(50).clamp(10, 90) as f32 / 100.0,
             first_angle: num("c:firstSliceAng").unwrap_or(0).clamp(0, 360) as f64,
+            radar_fill: radar_style == Some("filled"),
+            radar_marks: radar_style == Some("marker"),
             vary: matches!(kind, Kind::Pie | Kind::Doughnut) && ty.child("c:varyColors").and_then(|v| v.attr("val")).is_none_or(truthy),
             n,
             cats,
@@ -452,6 +471,9 @@ impl Series {
     }
 }
 
+/// Longest number-format code honoured (the limit spreadsheet apps use); longer ones are ignored.
+const MAX_FORMAT_CODE: usize = 255;
+
 /// Category labels of a `c:cat` (string or number cache), capped. Numbers show in the cache's
 /// format code (dates included); text and `General` numbers as they are stored.
 fn labels(el: Option<&El>, cap: usize, date1904: bool) -> Vec<String> {
@@ -459,7 +481,8 @@ fn labels(el: Option<&El>, cap: usize, date1904: bool) -> Vec<String> {
     let Some(cache) = el.find("c:strCache").or_else(|| el.find("c:numCache")).or_else(|| el.find("c:strLit")).or_else(|| el.find("c:numLit")) else {
         return Vec::new();
     };
-    let code = cache.child("c:formatCode").map(|f| f.text()).filter(|f| !f.is_empty() && !f.eq_ignore_ascii_case("General"));
+    let code =
+        cache.child("c:formatCode").map(|f| f.text()).filter(|f| !f.is_empty() && f.len() <= MAX_FORMAT_CODE && !f.eq_ignore_ascii_case("General"));
     pts(cache, cap)
         .into_iter()
         .map(|p| {
@@ -486,7 +509,7 @@ fn numbers(el: Option<&El>, cap: usize) -> (Vec<Option<f64>>, Option<String>) {
     let Some(cache) = el.and_then(|e| e.find("c:numCache").or_else(|| e.find("c:numLit"))) else {
         return (Vec::new(), None);
     };
-    let fmt = cache.child("c:formatCode").map(|f| f.text()).filter(|f| !f.is_empty());
+    let fmt = cache.child("c:formatCode").map(|f| f.text()).filter(|f| !f.is_empty() && f.len() <= MAX_FORMAT_CODE);
     let vals = pts(cache, cap).into_iter().map(|p| p.and_then(|t| t.trim().parse::<f64>().ok()).filter(|v| v.is_finite())).collect();
     (vals, fmt)
 }
@@ -522,7 +545,12 @@ fn axis(a: Option<&El>) -> Axis {
         mid: a.child("c:crossBetween").and_then(|c| c.attr("val")) == Some("midCat"),
         min: num("c:min"),
         max: num("c:max"),
-        fmt: a.child("c:numFmt").filter(|f| f.attr("sourceLinked") != Some("1")).and_then(|f| f.attr("formatCode")).map(str::to_string),
+        fmt: a
+            .child("c:numFmt")
+            .filter(|f| f.attr("sourceLinked") != Some("1"))
+            .and_then(|f| f.attr("formatCode"))
+            .filter(|f| f.len() <= MAX_FORMAT_CODE)
+            .map(str::to_string),
     }
 }
 
@@ -803,18 +831,27 @@ fn excel_stamp(serial: f64, date1904: bool) -> Option<Stamp> {
     Some(Stamp { y, m, d, weekday: (day - 1).rem_euclid(7) as u32, secs })
 }
 
-/// Calendar date (year, month, day) of day `n` counted from 30 December 1899 (Howard Hinnant's
-/// civil-from-days algorithm).
+/// Calendar date (year, month, day) of day `n` counted from 30 December 1899 (an Excel serial
+/// day number). Serial `n` is `n - 25_569` days from 1970-01-01.
+///
+/// The caller's serial guard keeps `n` inside chrono's range, but the Gregorian calendar repeats
+/// every 400 years (146_097 days), so this stays exact for any `n` without hand-rolled calendar
+/// math: chrono converts the day within its cycle and whole cycles go back into the year (an
+/// i128 so the extremes can't overflow). 1970-01-01 is `num_days_from_ce` 719_163, so serial `n`
+/// is CE day `n - 25_569 + 719_163`.
 fn civil(n: i64) -> (i64, u32, u32) {
-    let z = n - 25_569 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let m = (if mp < 10 { mp + 3 } else { mp - 9 }) as u32;
-    (yoe + era * 400 + i64::from(m <= 2), m, d)
+    use chrono::Datelike;
+    // CE day of serial `n`, in i128 so no `n` overflows.
+    let from_ce = i128::from(n) - 25_569 + 719_163;
+    let (cycles, rest) = (from_ce.div_euclid(146_097), from_ce.rem_euclid(146_097));
+    match i32::try_from(rest).ok().and_then(chrono::NaiveDate::from_num_days_from_ce_opt) {
+        Some(date) => {
+            let y = i128::from(date.year()) + cycles * 400;
+            (i64::try_from(y).unwrap_or(if y < 0 { i64::MIN } else { i64::MAX }), date.month(), date.day())
+        }
+        // Unreachable: every `rest` in 0..146_097 is a valid CE day.
+        None => (1900, 1, 1),
+    }
 }
 
 const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
@@ -1324,7 +1361,7 @@ fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         Kind::Line => lines(out, c, &g, &mut labels),
         Kind::Area => areas(out, c, &g, &mut labels),
         Kind::Scatter => draw_scatter(out, c, &g, &mut labels),
-        Kind::Pie | Kind::Doughnut => {}
+        Kind::Pie | Kind::Doughnut | Kind::Radar => {}
     }
     draw_axes(out, c, &g);
     draw_data_labels(out, &labels, c.text_size, g.horiz && c.kind == Kind::Bar);
@@ -1621,6 +1658,94 @@ fn pie(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     draw_data_labels(out, &labels, c.text_size, false);
 }
 
+/// A radar chart in `area`: category spokes from the centre, concentric grid polygons at the value
+/// ticks, one polygon per series (filled, or outlined with markers) and the category labels at the
+/// spoke ends. The lowest tick is the centre.
+fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
+    const MARKER: f32 = 5.0;
+    if c.n == 0 {
+        return;
+    }
+    let fs = c.text_size;
+    let lh = fs * LINE;
+    let labelled = c.cats.iter().any(|s| !s.is_empty());
+    let side = if labelled { widest(&c.cats, fs).min(area.w * 0.25) + GAP + 2.0 } else { 0.0 };
+    let vert = if labelled { lh + GAP } else { 0.0 };
+    let r = ((area.w / 2.0 - side).min(area.h / 2.0 - vert) - 2.0) as f64;
+    if r.is_nan() || r < 8.0 {
+        return;
+    }
+    let (cx, cy) = ((area.x + area.w / 2.0) as f64, (area.y + area.h / 2.0) as f64);
+    let vs = Axes::of(c).vs;
+    let span = vs.hi - vs.lo;
+    let angle = |i: usize| i as f64 / c.n as f64 * TAU;
+    let at = |v: f64, i: usize| {
+        let t = if span > 0.0 { ((v - vs.lo) / span).clamp(0.0, 1.0) } else { 0.0 };
+        polar(cx, cy, r * t, angle(i))
+    };
+    let ticks = vs.ticks();
+    if c.val.grid {
+        for t in ticks.iter().skip(1) {
+            let mut segs: Vec<PathSeg> = (0..c.n).map(|i| if i == 0 { pt(at(*t, i)) } else { line_to(at(*t, i)) }).collect();
+            segs.push(PathSeg::Close);
+            stroke(out, segs, GRID, 0.75);
+        }
+    }
+    for i in 0..c.n {
+        let end = polar(cx, cy, r, angle(i));
+        stroke(out, vec![pt((cx, cy)), line_to(end)], GRID, 0.75);
+    }
+    let mut labels = Vec::new();
+    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
+        let col = c.series_colour(j);
+        // A missing value counts as the centre, as Word draws it.
+        let ring: Vec<(f64, f64)> = (0..c.n).map(|i| at(s.values.get(i).copied().flatten().unwrap_or(vs.lo), i)).collect();
+        let mut segs: Vec<PathSeg> = ring.iter().enumerate().map(|(i, p)| if i == 0 { pt(*p) } else { line_to(*p) }).collect();
+        segs.push(PathSeg::Close);
+        if c.radar_fill {
+            fill(out, segs.clone(), col);
+        }
+        stroke(out, segs, col, s.line_w);
+        for (i, p) in ring.iter().enumerate() {
+            if c.radar_marks && s.values.get(i).copied().flatten().is_some() {
+                let rect = [p.0 as f32 - MARKER / 2.0, p.1 as f32 - MARKER / 2.0, MARKER, MARKER];
+                out.push(GraphicItem::Shape { rect, kind: ShapeKind::Ellipse, fill: Some(col), stroke: None, stroke_width: 0.0 });
+            }
+            if let Some(text) = label_of(s, i) {
+                labels.push(DataLabel { x: p.0 as f32, y: p.1 as f32, text, inside: false });
+            }
+        }
+    }
+    draw_data_labels(out, &labels, fs, false);
+    if !c.val.deleted {
+        for t in &ticks {
+            let y = at(*t, 0).1 as f32;
+            let s = format_value(*t, &c.val_fmt, vs.step);
+            let w = text_w(&s, fs) + 4.0;
+            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, false);
+        }
+    }
+    if labelled {
+        for (i, s) in c.cats.iter().enumerate().filter(|(_, s)| !s.is_empty()) {
+            let a = angle(i);
+            let (x, y) = polar(cx, cy, r + GAP as f64, a);
+            let (x, y) = (x as f32, y as f32);
+            let w = side - GAP;
+            let txt = clip_text(s, w, fs);
+            let (sx, sy) = (a.sin(), a.cos());
+            let (rect, align) = if sx > 0.2 {
+                (Rect { x, y: y - lh / 2.0, w, h: lh }, TextAlign::Left)
+            } else if sx < -0.2 {
+                (Rect { x: x - w, y: y - lh / 2.0, w, h: lh }, TextAlign::Right)
+            } else {
+                let cw = (text_w(&txt, fs) + 4.0).max(1.0);
+                (Rect { x: x - cw / 2.0, y: if sy > 0.0 { y - lh } else { y }, w: cw, h: lh }, TextAlign::Center)
+            };
+            text(out, rect, &txt, fs, align, false);
+        }
+    }
+}
+
 /// The data label of point `i` of series `s`, when it shows one: the value as the file has it,
 /// in the series' number format.
 fn label_of(s: &Series, i: usize) -> Option<String> {
@@ -1849,19 +1974,102 @@ mod tests {
     fn unsupported_chart_types_draw_a_placeholder() {
         let ser = r#"<c:ser><c:val><c:numLit><c:ptCount val="1"/><c:pt idx="0"><c:v>1</c:v></c:pt></c:numLit></c:val></c:ser>"#;
         let title = r#"<c:title><c:tx><c:rich><a:p><a:r><a:t>Skills</a:t></a:r></a:p></c:rich></c:tx></c:title>"#;
-        let x = format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:plotArea><c:radarChart>{ser}</c:radarChart></c:plotArea></c:chart></c:chartSpace>"#);
-        let radar = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
-        assert_eq!(texts(&radar), ["Skills", "Radar chart (not supported yet)"]);
-        let framed = radar.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 300.0, 200.0]));
-        assert!(framed, "a light border marks the chart's frame: {radar:?}");
+        let x =
+            format!(r#"<c:chartSpace {NS}><c:chart>{title}<c:plotArea><c:bubbleChart>{ser}</c:bubbleChart></c:plotArea></c:chart></c:chartSpace>"#);
+        let bubble = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
+        assert_eq!(texts(&bubble), ["Skills", "Bubble chart (not supported yet)"]);
+        let framed = bubble.iter().any(|it| matches!(it, GraphicItem::Shape { rect, stroke: Some(_), .. } if *rect == [0.0, 0.0, 300.0, 200.0]));
+        assert!(framed, "a light border marks the chart's frame: {bubble:?}");
 
         let stock = chart_items(&space(&format!("<c:stockChart>{ser}{ser}{ser}</c:stockChart>")), &theme(), 300.0, 200.0);
         assert_eq!(texts(&stock), ["Stock chart (not supported yet)"]);
         let other = chart_items(&space(&format!("<c:fancyChart>{ser}</c:fancyChart>")), &theme(), 300.0, 200.0);
         assert_eq!(texts(&other), ["Chart (not supported yet)"]);
         // A supported type in the plot area is drawn, an unsupported one beside it is skipped.
-        let combo = chart_items(&space(&format!("<c:radarChart>{ser}</c:radarChart><c:lineChart>{ser}</c:lineChart>")), &theme(), 300.0, 200.0);
+        let combo = chart_items(&space(&format!("<c:stockChart>{ser}</c:stockChart><c:lineChart>{ser}</c:lineChart>")), &theme(), 300.0, 200.0);
         assert!(!texts(&combo).iter().any(|t| t.contains("not supported")), "{combo:?}");
+    }
+
+    fn radar_chart(style: &str, sers: &[String]) -> Vec<GraphicItem> {
+        let plot = format!(r#"<c:radarChart><c:radarStyle val="{style}"/>{}</c:radarChart><c:valAx><c:majorGridlines/></c:valAx>"#, sers.concat());
+        chart_items(&space(&plot), &theme(), 300.0, 220.0)
+    }
+
+    #[test]
+    fn radar_charts_draw_spokes_grid_and_series_polygons() {
+        let cats = ["Speed", "Power", "Range", "Armor", "Luck"];
+        let sers = [ser(0, "A", Some("FF0000"), &cats, &["3", "4", "5", "2", "1"]), ser(1, "B", Some("0000FF"), &cats, &["2", "2", "3", "5", "4"])];
+        let std = radar_chart("standard", &sers);
+        assert!(!texts(&std).iter().any(|t| t.contains("not supported")), "{std:?}");
+        for c in cats {
+            assert!(texts(&std).contains(&c), "category label {c}: {:?}", texts(&std));
+        }
+        let stroked = |items: &[GraphicItem], col: Rgb| {
+            items.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), segs, .. } if *c == col && segs.len() == 6)).count()
+        };
+        assert_eq!(stroked(&std, Rgb(0xFF, 0, 0)), 1, "one closed pentagon per series: {std:?}");
+        assert_eq!(stroked(&std, Rgb(0, 0, 0xFF)), 1);
+        assert!(filled(&std).is_empty(), "standard radar is not filled");
+        assert!(!std.iter().any(|it| matches!(it, GraphicItem::Shape { kind: ShapeKind::Ellipse, .. })));
+        // 5 spokes (2 segs each) plus grid pentagons.
+        let spokes = std.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), segs, .. } if *c == GRID && segs.len() == 2)).count();
+        assert_eq!(spokes, 5);
+        assert!(std.iter().any(|it| matches!(it, GraphicItem::Path { stroke: Some(c), segs, .. } if *c == GRID && segs.len() == 6)));
+
+        let marked = radar_chart("marker", &sers);
+        let dots = marked.iter().filter(|it| matches!(it, GraphicItem::Shape { kind: ShapeKind::Ellipse, .. })).count();
+        assert_eq!(dots, 10, "a marker per point");
+
+        let solid = radar_chart("filled", &sers);
+        let f = filled(&solid);
+        assert_eq!(f.len(), 2);
+        assert!(f.iter().any(|(c, ..)| *c == Rgb(0xFF, 0, 0)) && f.iter().any(|(c, ..)| *c == Rgb(0, 0, 0xFF)));
+    }
+
+    #[test]
+    fn radar_charts_show_a_legend() {
+        let cats = ["a", "b", "c"];
+        let plot = format!("<c:radarChart>{}</c:radarChart>", ser(0, "Team", None, &cats, &["1", "2", "3"]));
+        let items = with_legend(&plot, "r", 300.0, 200.0);
+        assert!(texts(&items).contains(&"Team"), "{:?}", texts(&items));
+    }
+
+    #[test]
+    fn hostile_radar_charts_never_panic() {
+        // No categories and no values.
+        let empty =
+            r#"<c:ser><c:cat><c:strLit><c:ptCount val="0"/></c:strLit></c:cat><c:val><c:numLit><c:ptCount val="0"/></c:numLit></c:val></c:ser>"#;
+        let _ = chart_items(&space(&format!("<c:radarChart>{empty}</c:radarChart>")), &theme(), 300.0, 200.0);
+        let none = chart_items(&space("<c:radarChart/>"), &theme(), 300.0, 200.0);
+        assert!(none.is_empty(), "{none:?}");
+        // One category: a degenerate polygon, nothing to crash on; two as well.
+        for n in 1..=2 {
+            let cats: Vec<String> = (0..n).map(|i| format!("c{i}")).collect();
+            let refs: Vec<&str> = cats.iter().map(String::as_str).collect();
+            let vals = vec!["5"; n];
+            let items = radar_chart("filled", &[ser(0, "S", None, &refs, &vals)]);
+            assert!(texts(&items).contains(&"c0"), "{items:?}");
+        }
+        // NaN, infinities, junk and a tiny frame.
+        let junk = ser(0, "S", None, &["a", "b", "c"], &["NaN", "inf", "1e999"]);
+        let _ = radar_chart("filled", &[junk]);
+        let small = chart_items(
+            &space(&format!("<c:radarChart>{}</c:radarChart>", ser(0, "S", None, &["a", "b", "c"], &["1", "2", "3"]))),
+            &theme(),
+            20.0,
+            20.0,
+        );
+        let _ = small;
+        // Caps: thousands of categories and series stay bounded.
+        let cats: Vec<String> = (0..5000).map(|i| format!("c{i}")).collect();
+        let refs: Vec<&str> = cats.iter().map(String::as_str).collect();
+        let vals = vec!["1"; 5000];
+        let many: Vec<String> = (0..300).map(|i| ser(i, "S", None, &refs, &vals)).collect();
+        let items = radar_chart("marker", &many);
+        let polygons = items.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), .. } if *c != GRID)).count();
+        assert!(polygons <= MAX_RADAR_SERIES, "{polygons}");
+        let spokes = items.iter().filter(|it| matches!(it, GraphicItem::Path { stroke: Some(c), segs, .. } if *c == GRID && segs.len() == 2)).count();
+        assert_eq!(spokes, MAX_SPOKES);
     }
 
     /// Chart items for a chart with a legend at `pos` (`r`, `b`…).
@@ -1973,6 +2181,56 @@ mod tests {
         let ymd = |v: f64| excel_stamp(v, false).map(|t| (t.y, t.m, t.d));
         assert_eq!(ymd(61.0), Some((1900, 3, 1)));
         assert_eq!(ymd(45292.0), Some((2024, 1, 1)));
+    }
+
+    #[test]
+    fn category_format_code_length_is_capped() {
+        let cat = |code: &str| -> Vec<String> {
+            let x = format!(
+                r#"<c:cat {NS}><c:numRef><c:numCache><c:formatCode>{code}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numCache></c:numRef></c:cat>"#
+            );
+            labels(Some(&crate::xml::parse(x.as_bytes()).unwrap()), 10, false)
+        };
+        let ok = format!("{}0", "x".repeat(254));
+        assert!(cat(&ok)[0].starts_with("xxx"));
+        let long = format!("{}0", "x".repeat(300));
+        assert_eq!(cat(&long), ["5"]);
+    }
+
+    #[test]
+    fn value_format_code_length_is_capped() {
+        let val = |code: &str| -> Option<String> {
+            let x = format!(
+                r#"<c:val {NS}><c:numRef><c:numCache><c:formatCode>{code}</c:formatCode><c:ptCount val="1"/><c:pt idx="0"><c:v>5</c:v></c:pt></c:numCache></c:numRef></c:val>"#
+            );
+            numbers(Some(&crate::xml::parse(x.as_bytes()).unwrap()), 10).1
+        };
+        let ok = format!("{}0", "x".repeat(254));
+        assert_eq!(val(&ok), Some(ok.clone()));
+        assert_eq!(val(&format!("{}0", "x".repeat(300))), None);
+    }
+
+    #[test]
+    fn axis_format_code_length_is_capped() {
+        let fmt = |code: &str| -> Option<String> {
+            let x = format!(r#"<c:valAx {NS}><c:numFmt formatCode="{code}" sourceLinked="0"/></c:valAx>"#);
+            axis(Some(&crate::xml::parse(x.as_bytes()).unwrap())).fmt
+        };
+        let ok = format!("{}0", "x".repeat(254));
+        assert_eq!(fmt(&ok), Some(ok.clone()));
+        assert_eq!(fmt(&format!("{}0", "x".repeat(300))), None);
+    }
+
+    #[test]
+    fn civil_is_exact_beyond_chronos_range() {
+        // Serial 1 is 1899-12-31, serial 60 Excel's phantom 1900-02-29 handled by `excel_stamp`.
+        assert_eq!(civil(1), (1899, 12, 31));
+        // Past `NaiveDate`'s ±262143 the 400-year cycles carry the year, exactly, both sides of
+        // the epoch; values from the pre-chrono proleptic Gregorian formula.
+        assert_eq!(civil(100_000_000), (275_690, 9, 11));
+        assert_eq!(civil(-100_000_000), (-271_891, 4, 18));
+        // The extremes must not overflow or panic (i128 intermediates).
+        let _ = (civil(i64::MAX), civil(i64::MIN));
     }
 
     #[test]

@@ -76,6 +76,22 @@ fn moving_a_joined_shape_reroutes_its_connector() {
     assert_eq!(connector_ends(&mut s), ((172.0, 248.0), (300.0, 218.0)));
 }
 
+/// A command that changes nothing but reroutes a stale connector is still an edit: the
+/// reroute must not be left without an undo step (#23).
+#[test]
+fn a_rerouted_connector_is_still_undoable() {
+    let mut s = joined();
+    select(&mut s, 5);
+    let before = connector_ends(&mut s);
+    // A nudge by nothing moves nothing, but the connector is stale and gets rerouted.
+    run(&mut s, "arrange.nudge", json!({"dx": 0, "dy": 0}));
+    assert_ne!(connector_ends(&mut s), before, "the connector was rerouted");
+    assert_eq!(s.undo_depth(), 1, "the reroute is an undo step of its own");
+    // One undo takes the reroute back.
+    run(&mut s, "edit.undo", json!({}));
+    assert_eq!(connector_ends(&mut s), before, "one undo takes the reroute back");
+}
+
 #[test]
 fn dragging_a_connector_end_glues_it_to_the_nearest_site() {
     let mut s = joined();

@@ -1,6 +1,7 @@
 //! Blocks, paragraphs, runs, objects and tables → WordprocessingML.
 
 use wordcraft_doc::effects::ShapeEffects;
+use wordcraft_doc::fill::{Fill, GradientFlip, GradientKind, PathShape};
 use wordcraft_doc::para::{AltText, Anchor, Float, NoteKind, ShapeKind, Wrap};
 use wordcraft_doc::props::{CharProps, PropChange, Rgb, TextColor};
 use wordcraft_doc::section::{LineNumberRestart, NoteProps, SectionProps, SectionStart};
@@ -28,6 +29,43 @@ enum Piece<'a> {
 }
 
 impl Writer<'_> {
+    fn update_toc_before_block(&mut self, i: usize, toc: Option<(usize, usize)>, toc_field_open: bool, w: &mut W) {
+        if let Some((start, end)) = toc {
+            if i == start {
+                w.raw(TOC_SDT_OPEN);
+                self.toc_hold_end = true;
+            }
+            self.toc_begin_here = toc_field_open && i == start + 1;
+            self.toc_end_here = toc_field_open && i == end;
+        }
+    }
+
+    fn update_toc_after_block(&mut self, i: usize, toc: Option<(usize, usize)>, toc_field_open: &mut bool, w: &mut W) {
+        if let Some((start, end)) = toc {
+            if i == start {
+                // `field` holds the heading's TOC field back for the first entry.
+                self.toc_hold_end = false;
+                *toc_field_open = self.toc_field.is_some();
+            }
+            if i == end {
+                w.raw("</w:sdtContent></w:sdt>");
+            }
+        }
+    }
+
+    fn write_trailing_para(&mut self, w: &mut W, depth: usize) {
+        // A header with no paragraph of its own before: the watermark goes in this one.
+        if depth == 0
+            && let Some(run) = self.pending_watermark.take()
+        {
+            w.raw("<w:p>");
+            w.raw(&run);
+            w.raw("</w:p>");
+        } else {
+            w.raw("<w:p/>");
+        }
+    }
+
     /// Write a block list. `top` = body level (sections allowed).
     pub fn blocks(&mut self, w: &mut W, bl: &Blocks, rels: &mut PartRels, top: bool, depth: usize) {
         if depth > MAX_DEPTH {
@@ -35,22 +73,14 @@ impl Writer<'_> {
             return;
         }
         let plan = super::sdt::plan(bl);
-        // A TOC inside a content control already has one (read from a file).
-        let toc = if top { toc_span(bl).filter(|(start, _)| !plan.covers(*start)) } else { None };
+        let toc = if top { written_toc_span(bl) } else { None };
         // Whether the heading's TOC field was written and still needs its end.
         let mut toc_field_open = false;
         for (i, b) in bl.iter().enumerate() {
             for c in plan.opens.get(i).into_iter().flatten() {
                 super::sdt::open(w, c);
             }
-            if let Some((start, end)) = toc {
-                if i == start {
-                    w.raw(TOC_SDT_OPEN);
-                    self.toc_hold_end = true;
-                }
-                self.toc_begin_here = toc_field_open && i == start + 1;
-                self.toc_end_here = toc_field_open && i == end;
-            }
+            self.update_toc_before_block(i, toc, toc_field_open, w);
             match &**b {
                 Block::Para(p) => {
                     self.inline_controls = plan.inline_in(i);
@@ -58,16 +88,7 @@ impl Writer<'_> {
                 }
                 Block::Table(t) => self.table(w, t, rels, depth),
             }
-            if let Some((start, end)) = toc {
-                if i == start {
-                    // `field` holds the heading's TOC field back for the first entry.
-                    self.toc_hold_end = false;
-                    toc_field_open = self.toc_field.is_some();
-                }
-                if i == end {
-                    w.raw("</w:sdtContent></w:sdt>");
-                }
-            }
+            self.update_toc_after_block(i, toc, &mut toc_field_open, w);
             for _ in 0..plan.closes.get(i).copied().unwrap_or(0) {
                 super::sdt::close(w);
             }
@@ -76,16 +97,7 @@ impl Writer<'_> {
             self.move_ranges(w, &[]);
         }
         if bl.last().is_none_or(|b| matches!(**b, Block::Table(_))) {
-            // A header with no paragraph of its own before: the watermark goes in this one.
-            if depth == 0
-                && let Some(run) = self.pending_watermark.take()
-            {
-                w.raw("<w:p>");
-                w.raw(&run);
-                w.raw("</w:p>");
-            } else {
-                w.raw("<w:p/>");
-            }
+            self.write_trailing_para(w, depth);
         }
     }
 
@@ -158,6 +170,23 @@ impl Writer<'_> {
         self.para_inner(w, p, rels, top, depth, false);
     }
 
+    fn write_mark_rpr(&mut self, w: &mut W, mark: &CharProps, mark_revs: &[(u32, &str)]) {
+        w.open("w:rPr", &[]);
+        for (idx, tag) in mark_revs {
+            let (id, author, date) = self.rev_attrs(*idx);
+            if date.is_empty() {
+                w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
+            } else {
+                w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
+            }
+        }
+        rpr_inner(w, mark);
+        if let Some(ch) = mark.fmt_change.as_deref() {
+            self.rpr_change(w, ch);
+        }
+        w.close("w:rPr");
+    }
+
     fn para_inner(&mut self, w: &mut W, p: &Paragraph, rels: &mut PartRels, top: bool, depth: usize, framed: bool) {
         let para_id = self.take_para_id(p);
         match &para_id {
@@ -185,20 +214,7 @@ impl Writer<'_> {
             });
             ppr_inner(w, &pp, framed, num_change.as_ref());
             if has_mark {
-                w.open("w:rPr", &[]);
-                for (idx, tag) in mark_revs {
-                    let (id, author, date) = self.rev_attrs(idx);
-                    if date.is_empty() {
-                        w.empty(tag, &[("w:id", &id), ("w:author", &author)]);
-                    } else {
-                        w.empty(tag, &[("w:id", &id), ("w:author", &author), ("w:date", &date)]);
-                    }
-                }
-                rpr_inner(w, &p.mark);
-                if let Some(ch) = p.mark.fmt_change.as_deref() {
-                    self.rpr_change(w, ch);
-                }
-                w.close("w:rPr");
+                self.write_mark_rpr(w, &p.mark, &mark_revs);
             }
             if let Some(s) = section {
                 self.sectpr(w, s, rels);
@@ -720,14 +736,14 @@ impl Writer<'_> {
                         w.open("a:graphicData", &[("uri", "http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas")]);
                         w.open("wpc:wpc", &[]);
                         w.open("wpc:bg", &[]);
-                        solid_fill(w, c.fill);
+                        write_fill(w, c.fill.as_ref());
                         w.close("wpc:bg");
                         w.open("wpc:whole", &[]);
                         match c.stroke {
                             Some(_) => w.open("a:ln", &[("w", &emu(c.stroke_width.clamp(0.0, 100.0)))]),
                             None => w.open("a:ln", &[]),
                         }
-                        solid_fill(w, c.stroke);
+                        write_fill(w, c.stroke.map(Fill::solid).as_ref());
                         w.close("a:ln");
                         w.close("wpc:whole");
                         "wpc:wpc"
@@ -1059,28 +1075,28 @@ impl Writer<'_> {
         }
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
-        match fill.filter(|_| !ink && !kind.is_open()) {
-            Some(c) => {
-                w.open("a:solidFill", &[]);
-                w.empty("a:srgbClr", &[("val", &c.hex())]);
-                w.close("a:solidFill");
-            }
-            None => w.empty("a:noFill", &[]),
-        }
+        write_fill(w, fill.as_ref().filter(|_| !ink && !kind.is_open()));
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));
-                let ln: &[(&str, &str)] = if ink { &[("w", width.as_str()), ("cap", "rnd")] } else { &[("w", width.as_str())] };
+                let cap = if ink { "rnd" } else { extra.cap.ooxml() };
+                let ln: &[(&str, &str)] = if ink || !extra.cap.is_flat() { &[("w", width.as_str()), ("cap", cap)] } else { &[("w", width.as_str())] };
                 w.open("a:ln", ln);
-                w.open("a:solidFill", &[]);
-                if alpha < 1.0 {
-                    w.open("a:srgbClr", &[("val", &c.hex())]);
-                    w.empty("a:alpha", &[("val", &n((alpha.clamp(0.0, 1.0) * 100_000.0).round() as i64))]);
-                    w.close("a:srgbClr");
+                // An outline gradient read from a file, while the outline keeps its colour (#1500).
+                let grad = extra.outline_fill.as_ref().filter(|f| !ink && f.main_color() == *c);
+                if grad.is_some() {
+                    write_fill(w, grad);
                 } else {
-                    w.empty("a:srgbClr", &[("val", &c.hex())]);
+                    w.open("a:solidFill", &[]);
+                    if alpha < 1.0 {
+                        w.open("a:srgbClr", &[("val", &c.hex())]);
+                        w.empty("a:alpha", &[("val", &n((alpha.clamp(0.0, 1.0) * 100_000.0).round() as i64))]);
+                        w.close("a:srgbClr");
+                    } else {
+                        w.empty("a:srgbClr", &[("val", &c.hex())]);
+                    }
+                    w.close("a:solidFill");
                 }
-                w.close("a:solidFill");
                 line_dash(w, &extra.dash);
                 if ink {
                     w.empty("a:round", &[]);
@@ -1089,7 +1105,9 @@ impl Writer<'_> {
                 w.close("a:ln");
             }
             None => {
-                w.open("a:ln", &[]);
+                let cap = extra.cap.ooxml();
+                let ln: &[(&str, &str)] = if extra.cap.is_flat() { &[] } else { &[("cap", cap)] };
+                w.open("a:ln", ln);
                 w.empty("a:noFill", &[]);
                 line_dash(w, &extra.dash);
                 w.close("a:ln");
@@ -1112,8 +1130,12 @@ impl Writer<'_> {
                 None => w.open("wps:txbx", &[]),
             }
             w.open("w:txbxContent", &[]);
-            let blocks = part.blocks.clone();
-            self.blocks(w, &blocks, rels, false, depth + 1);
+            if self.written_boxes.insert(id) {
+                let blocks = part.blocks.clone();
+                self.blocks(w, &blocks, rels, false, depth + 1);
+            } else {
+                w.empty("w:p", &[]);
+            }
             w.close("w:txbxContent");
             w.close("wps:txbx");
             self.boxes.leave();
@@ -1169,7 +1191,9 @@ impl Writer<'_> {
         } else {
             let d = emu(float.dist.clamp(0.0, 1584.0));
             let (dt, db) = (emu(float.dist_top.clamp(0.0, 1584.0)), emu(float.dist_bottom.clamp(0.0, 1584.0)));
-            self.z += 1;
+            // The stacking order read from the file is kept; objects without one stack in
+            // document order above it.
+            self.z = if float.z > 0 { float.z } else { self.z.saturating_add(1) };
             let behind = if float.wrap == Wrap::BehindText { "1" } else { "0" };
             w.open(
                 "wp:anchor",
@@ -1673,14 +1697,19 @@ fn is_toc(instr: &str) -> bool {
     instr.split_whitespace().next().is_some_and(|k| k.eq_ignore_ascii_case("TOC"))
 }
 
+/// The body TOC the writer wraps in Word's Table of Contents control (`toc_span`): not one whose
+/// heading is inside a content control already (read from a file).
+pub(crate) fn written_toc_span(bl: &Blocks) -> Option<(usize, usize)> {
+    toc_span(bl).filter(|(start, _)| !super::sdt::plan(bl).covers(*start))
+}
+
 /// The engine's TOC: a paragraph holding an empty `TOC` field, then its TOC-styled entries.
 /// Returns (heading, last entry) so the field can be written spanning the entries, as Word does.
+/// The heading may end a section: entries in columns follow a continuous break (#3889).
 fn toc_span(bl: &Blocks) -> Option<(usize, usize)> {
     let start = bl.iter().position(|b| {
-        b.as_para().is_some_and(|p| {
-            p.section.is_none()
-                && p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, result, .. } if is_toc(instr) && result.is_empty()))
-        })
+        b.as_para()
+            .is_some_and(|p| p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, result, .. } if is_toc(instr) && result.is_empty())))
     })?;
     let entries = bl[start + 1..]
         .iter()
@@ -1719,15 +1748,68 @@ pub(super) fn nv_props(w: &mut W, tag: &str, id: &str, name: &str, descr: &str, 
     w.close(tag);
 }
 
-/// A DrawingML `a:solidFill` in `c`, or `a:noFill`.
-fn solid_fill(w: &mut W, c: Option<wordcraft_doc::props::Rgb>) {
-    match c {
-        Some(c) => {
-            w.open("a:solidFill", &[]);
+/// A shape's fill: `a:solidFill` (with `a:alpha` when transparent), `a:gradFill` with everything
+/// read from the file, or `a:noFill`.
+fn write_fill(w: &mut W, f: Option<&Fill>) {
+    let pct = |v: f32| n((v * 1000.0).round() as i64);
+    let color = |w: &mut W, c: Rgb, transparency: f32| {
+        if transparency > 0.0 {
+            w.open("a:srgbClr", &[("val", &c.hex())]);
+            w.empty("a:alpha", &[("val", &pct(100.0 - transparency))]);
+            w.close("a:srgbClr");
+        } else {
             w.empty("a:srgbClr", &[("val", &c.hex())]);
+        }
+    };
+    let rect = |r: [f32; 4]| [("l", pct(r[0])), ("t", pct(r[1])), ("r", pct(r[2])), ("b", pct(r[3]))];
+    match f.and_then(Fill::sanitized) {
+        None => w.empty("a:noFill", &[]),
+        Some(Fill::Solid { color: c, transparency }) => {
+            w.open("a:solidFill", &[]);
+            color(w, c, transparency);
             w.close("a:solidFill");
         }
-        None => w.empty("a:noFill", &[]),
+        Some(Fill::Gradient(g)) => {
+            // `rotWithShape` and `scaled` are written only when set: an absent one reads back off.
+            let mut attrs = if g.rot_with_shape { vec![("rotWithShape", "1")] } else { vec![] };
+            match g.flip {
+                GradientFlip::None => {}
+                GradientFlip::X => attrs.insert(0, ("flip", "x")),
+                GradientFlip::Y => attrs.insert(0, ("flip", "y")),
+                GradientFlip::Xy => attrs.insert(0, ("flip", "xy")),
+            }
+            w.open("a:gradFill", &attrs);
+            w.open("a:gsLst", &[]);
+            for s in &g.stops {
+                w.open("a:gs", &[("pos", &pct(s.pos))]);
+                color(w, s.color, s.transparency);
+                w.close("a:gs");
+            }
+            w.close("a:gsLst");
+            match g.kind {
+                GradientKind::Linear { angle, scaled } => {
+                    let ang = n((angle * 60_000.0).round() as i64);
+                    let attrs: &[(&str, &str)] = if scaled { &[("ang", &ang), ("scaled", "1")] } else { &[("ang", &ang)] };
+                    w.empty("a:lin", attrs)
+                }
+                GradientKind::Path { shape, focus } => {
+                    let path = match shape {
+                        PathShape::Circle => "circle",
+                        PathShape::Rect => "rect",
+                        PathShape::Shape => "shape",
+                    };
+                    w.open("a:path", &[("path", path)]);
+                    let r = rect(focus);
+                    w.empty("a:fillToRect", &r.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+                    w.close("a:path");
+                }
+            }
+            if let Some(t) = g.tile {
+                let r = rect(t);
+                w.empty("a:tileRect", &r.iter().map(|(k, v)| (*k, v.as_str())).collect::<Vec<_>>());
+            }
+            w.close("a:gradFill");
+        }
     }
 }
 

@@ -263,6 +263,16 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
     if !available(app) {
         return;
     }
+    // The caret's table shows it wherever the pointer is, as in Word.
+    for (page, _, h) in caret_handles(app, painter, layout, rects) {
+        if let Some(h) = h
+            && let (Some(a), Some(b)) = (s(page, h.x, h.y), s(page, h.right(), h.bottom()))
+        {
+            let r = Rect::from_two_pos(a, b);
+            painter.rect_filled(r, 0.0, egui::Color32::WHITE);
+            painter.rect_stroke(r, 0.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+        }
+    }
     // The handle shows while the pointer is over the table (or on the handle itself).
     let Some(p) = painter.ctx().input(|i| i.pointer.hover_pos()) else { return };
     let Some((page, x, y)) = crate::canvas::page_at(rects, layout, scale, p) else { return };
@@ -274,6 +284,29 @@ pub fn paint(app: &WordApp, painter: &egui::Painter, t: &Tokens, layout: &DocLay
         painter.rect_filled(r, 0.0, egui::Color32::WHITE);
         painter.rect_stroke(r, 0.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
     }
+}
+
+/// The move and resize handles (page points) of the caret's table on the pages in view: Word
+/// shows them while the caret is in a table, not only under the pointer.
+pub(crate) fn caret_handles(
+    app: &WordApp,
+    painter: &egui::Painter,
+    layout: &DocLayout,
+    rects: &[Rect],
+) -> Vec<(usize, Option<wordcraft_geom::Rect>, Option<wordcraft_geom::Rect>)> {
+    let focus = &app.session.sel.focus;
+    let Some((tp, _, _)) = focus.path.cell() else { return Vec::new() };
+    let clip = painter.clip_rect();
+    rects
+        .iter()
+        .enumerate()
+        .filter(|(_, r)| r.intersects(clip))
+        .map(|(page, _)| {
+            let (m, z) = wordcraft_engine::cmd::table_mouse::caret_handles(layout, &app.session.doc, focus.story, &tp, page);
+            (page, m, z)
+        })
+        .filter(|(_, m, z)| m.is_some() || z.is_some())
+        .collect()
 }
 
 #[cfg(test)]

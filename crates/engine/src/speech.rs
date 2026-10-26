@@ -25,6 +25,9 @@ use wordcraft_doc::{Document, InlineObject, Pos};
 
 /// Longest sentence handed to the speech program (longer ones are split at a space).
 const MAX_SENTENCE: usize = 600;
+/// Longest utterance, even with no space to split at (a long URL, a run of letters): it is cut
+/// there, mid-word.
+const MAX_UTTERANCE: usize = 2 * MAX_SENTENCE;
 /// Most sentences in one queue.
 const MAX_SENTENCES: usize = 20_000;
 /// Speed limits (1.0 = the normal speed).
@@ -72,7 +75,8 @@ impl Utterance {
 }
 
 /// The sentences from `from` (to `to`, if given) in `from`'s story, in reading order.
-/// With `skip_citations`, citation and bibliography fields are left out.
+/// With `skip_citations`, citation and bibliography fields are left out. At most
+/// [`MAX_SENTENCES`]; when that cuts the text short a warning is logged, so the stop is not silent.
 pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: bool) -> Vec<Utterance> {
     let story = from.story;
     // Spans to leave out: whole range fields, both markers included.
@@ -128,12 +132,16 @@ pub fn sentences(doc: &Document, from: &Pos, to: Option<&Pos>, skip_citations: b
                 }
             }
         }
+        // Sliced per sentence; skipping from the start each time was quadratic in the paragraph.
+        let text_chars: Vec<char> = text.chars().collect();
         for (a, b) in split_sentences(&text) {
             if out.len() >= MAX_SENTENCES {
+                log::warn!(
+                    "Read Aloud: the queue holds at most {MAX_SENTENCES} sentences; the rest of the text is not read (start again from where it stops)"
+                );
                 return out;
             }
-            let chars: Vec<char> = text.chars().skip(a).take(b - a).collect();
-            let spoken = tidy(&chars.iter().collect::<String>());
+            let spoken = tidy(&text_chars.get(a..b).unwrap_or(&[]).iter().collect::<String>());
             if !spoken.chars().any(char::is_alphanumeric) {
                 continue;
             }
@@ -249,6 +257,7 @@ pub fn speech_language(text: &str, explicit: Option<&str>, bidi: Option<&str>) -
 
 /// The primary language subtag of a plain tag, lowercased (`ru-RU` gives `ru`). `None` for tags
 /// without a two- or three-letter language, such as Word's `x-none`.
+#[cfg(any(unix, windows, test))]
 fn primary_tag(tag: &str) -> Option<String> {
     let t = plain_tag(tag)?;
     t.split('-').next().filter(|p| (2..=3).contains(&p.len()) && p.chars().all(|c| c.is_ascii_alphabetic())).map(str::to_ascii_lowercase)
@@ -256,7 +265,7 @@ fn primary_tag(tag: &str) -> Option<String> {
 
 /// The language to ask the speech program for, or `None` to keep its default voice: only when
 /// `lang` isn't the language the default voice speaks (`default`, a primary subtag) already.
-#[cfg(any(not(target_os = "windows"), test))]
+#[cfg(any(unix, test))]
 fn voice_language(lang: Option<&str>, default: &str) -> Option<String> {
     lang.and_then(primary_tag).filter(|p| !p.eq_ignore_ascii_case(default))
 }
@@ -425,6 +434,14 @@ fn push_trimmed(chars: &[char], mut a: usize, mut b: usize, out: &mut Vec<(usize
     while b > a && chars.get(b - 1).is_some_and(|c| c.is_whitespace()) {
         b -= 1;
     }
+    // No space to split at (a long URL, a run of letters or full stops): cut the span hard.
+    while b - a > MAX_UTTERANCE {
+        out.push((a, a + MAX_UTTERANCE));
+        a += MAX_UTTERANCE;
+        while a < b && chars.get(a).is_some_and(|c| c.is_whitespace()) {
+            a += 1;
+        }
+    }
     if a < b {
         out.push((a, b));
     }
@@ -449,18 +466,39 @@ fn is_abbreviation(chars: &[char], start: usize, dot: usize) -> bool {
 }
 
 /// Collapse whitespace and tidy what removed citations leave behind: "( )", "[]", " ." → ".".
+/// One pass, linear in `s` (#3680): a closing bracket right after its opening one (or after it
+/// and a space) removes the pair, so nested empty brackets "( [ ] )" go too.
 fn tidy(s: &str) -> String {
-    let mut t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    loop {
-        let before = t.len();
-        for (from, to) in [("()", ""), ("[]", ""), ("( )", ""), ("[ ]", ""), (" .", "."), (" ,", ","), (" ;", ";"), (" :", ":"), ("  ", " ")] {
-            t = t.replace(from, to);
+    let mut t = String::with_capacity(s.len());
+    for c in s.chars() {
+        if c.is_whitespace() {
+            if !t.is_empty() && !t.ends_with(' ') {
+                t.push(' ');
+            }
+            continue;
         }
-        if t.len() == before {
-            break;
+        let open = match c {
+            ')' => Some('('),
+            ']' => Some('['),
+            _ => None,
+        };
+        if let Some(open) = open {
+            let body = t.strip_suffix(' ').unwrap_or(&t);
+            if let Some(rest) = body.strip_suffix(open) {
+                let keep = rest.len();
+                t.truncate(keep);
+                continue;
+            }
         }
+        if matches!(c, '.' | ',' | ';' | ':') && t.ends_with(' ') {
+            t.pop();
+        }
+        t.push(c);
     }
-    t.trim().to_string()
+    if t.ends_with(' ') {
+        t.pop();
+    }
+    t
 }
 
 /// Reading state.
@@ -513,6 +551,9 @@ pub struct ReadAloud {
     pub skip_citations: bool,
     /// The player window is open (it stays open after the last sentence until closed).
     pub open: bool,
+    /// The document being read ([`crate::Session::document_id`]): the sentences' positions are
+    /// in it.
+    pub document: Option<u64>,
 }
 
 impl Default for ReadAloud {
@@ -526,6 +567,7 @@ impl Default for ReadAloud {
             backend: if off { Backend::Hold } else { Backend::System },
             skip_citations: true,
             open: false,
+            document: None,
         }
     }
 }
@@ -925,10 +967,70 @@ mod tests {
         assert!(spans.iter().all(|(a, b)| b - a <= MAX_SENTENCE + 5));
     }
 
+    /// A word with no space to split at, or a run of punctuation, is still cut into utterances of
+    /// at most `MAX_UTTERANCE` characters, covering all of it (#3680).
+    #[test]
+    fn sentences_without_spaces_are_split() {
+        for t in ["x".repeat(10_000), "!".repeat(10_000), format!("Go {} now.", "a.".repeat(5_000))] {
+            let spans = split_sentences(&t);
+            assert!(spans.len() >= 8, "{} spans", spans.len());
+            assert!(spans.iter().all(|(a, b)| a < b && b - a <= MAX_UTTERANCE));
+            assert_eq!(spans.first().map(|s| s.0), Some(0));
+            assert_eq!(spans.last().map(|s| s.1), Some(t.chars().count()));
+            assert!(spans.windows(2).all(|w| w[0].1 <= w[1].0));
+        }
+    }
+
     #[test]
     fn tidy_removes_citation_leftovers() {
         assert_eq!(tidy("as shown  ( ) ."), "as shown.");
         assert_eq!(tidy("as shown [] , and"), "as shown, and");
+        assert_eq!(tidy(" a ( ( [ ] ) ) b ( x ) [ ) ] ; "), "a b ( x ) [ ) ];");
+    }
+
+    /// The tidy that ran replacements until nothing changed, kept to check the one-pass tidy gives
+    /// the same text.
+    fn tidy_by_replacing(s: &str) -> String {
+        let mut t: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+        loop {
+            let before = t.len();
+            for (from, to) in [("()", ""), ("[]", ""), ("( )", ""), ("[ ]", ""), (" .", "."), (" ,", ","), (" ;", ";"), (" :", ":"), ("  ", " ")] {
+                t = t.replace(from, to);
+            }
+            if t.len() == before {
+                break;
+            }
+        }
+        t.trim().to_string()
+    }
+
+    #[test]
+    fn tidy_matches_replacing_until_nothing_changes() {
+        let alphabet = ['(', ')', '[', ']', ' ', ' ', '\t', '\u{a0}', '.', ',', ';', ':', 'a', 'é'];
+        let mut seed: u64 = 0x3680;
+        for _ in 0..20_000 {
+            seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            let len = (seed >> 59) as usize + 1;
+            let s: String = (0..len)
+                .map(|i| {
+                    let r = seed.rotate_left(5 * i as u32 + 1) ^ (i as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+                    alphabet[(r % alphabet.len() as u64) as usize]
+                })
+                .collect();
+            assert_eq!(tidy(&s), tidy_by_replacing(&s), "{s:?}");
+        }
+    }
+
+    /// Nested empty brackets are removed in one pass: 40,000 pairs took seconds when each pass
+    /// removed one level (#3680).
+    #[test]
+    fn tidy_is_linear_on_nested_brackets() {
+        let n = 40_000;
+        let started = std::time::Instant::now();
+        assert_eq!(tidy(&format!("a {}{} b", "( [".repeat(n), "] )".repeat(n))), "a b");
+        assert_eq!(tidy(&format!("{}x{}", "(".repeat(n), ")".repeat(n))).len(), 2 * n + 1);
+        // Milliseconds here; `tidy_by_replacing` (the old tidy) takes about 5 minutes on this input.
+        assert!(started.elapsed() < std::time::Duration::from_secs(10), "{:?}", started.elapsed());
     }
 
     #[test]

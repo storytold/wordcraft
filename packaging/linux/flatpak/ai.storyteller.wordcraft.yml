@@ -43,9 +43,13 @@ modules:
       env:
         CARGO_HOME: /run/build/wordcraft/cargo
         CARGO_NET_OFFLINE: 'true'
+        # The interface translations (the craft-i18n source below), embedded by build.rs.
+        CRAFT_I18N_DIR: /run/build/wordcraft/craft-i18n
+        CRAFT_I18N_REQUIRED: '1'
     build-commands:
       - cargo --offline build --release --locked -p wordcraft -p wordcraft-cli
       - install -Dm755 target/release/wordcraft /app/bin/wordcraft
+      - install -Dm644 NOTICE /app/share/doc/wordcraft/NOTICE
       - install -Dm755 target/release/wordcraft-cli /app/bin/wordcraft-cli
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.desktop /app/share/applications/ai.storyteller.wordcraft.desktop
       - install -Dm644 packaging/linux/ai.storyteller.wordcraft.mime.xml /app/share/mime/packages/ai.storyteller.wordcraft.xml
@@ -64,4 +68,9 @@ modules:
           - corpus
           - build-flatpak
           - .flatpak-builder
+      # The interface translations at the commit in craft-i18n.rev (a test keeps the two equal).
+      - type: git
+        url: https://github.com/storytold/craft-i18n
+        commit: 9205108cfdced5177706264038848b68b2422d2b
+        dest: craft-i18n
       - cargo-sources.json

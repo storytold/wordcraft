@@ -483,6 +483,7 @@ fn widow_control_moves_a_three_line_paragraph_whole() {
         for (fill, shift) in (30usize..60).flat_map(|f| (0..15).step_by(2).map(move |s| (f, s))) {
             let filler = "Filler line.\n".repeat(fill);
             let mut d = Document::from_text(&format!("{filler}{}\nAfter.", "word ".repeat(words)));
+            d.styles.default_chr.font = Some("Source Sans 3".into());
             d.format_paragraphs(&Pos::body(0, 0), &Pos::body(0, 0), &|p| p.space_before = Some(shift as f32)).unwrap();
             let l = lay(&d);
             let pieces: Vec<(usize, usize)> = l
@@ -566,5 +567,48 @@ fn a_roman_page_number_in_the_footer_stays_roman_with_the_page_count_in_the_body
         let glyphs: usize = p.footer.iter().map(|it| if let Placed::Lines { para, .. } = it { para.glyphs.len() } else { 0 }).sum();
         let want = wordcraft_doc::section::NumFormat::LowerRoman.format(p.number);
         assert_eq!(glyphs, want.chars().count(), "page {}: the footer should show {want}", p.number);
+    }
+}
+
+#[test]
+fn a_page_ends_when_a_multiple_spaced_lines_text_no_longer_fits() {
+    // Multiple spacing puts its extra leading below the text, and Word lets that leading of a
+    // page's last line run into the bottom margin: a multiple-spaced line stays on the page while
+    // its text ends above the margin (observed in Word at 1.15, 1.5 and double spacing: the page
+    // holds one more line than when the whole line box must fit, for shifts up to about the
+    // leading). Each shift moves the text down; on every page the last line's text ends within
+    // the margin, and the next line's would not.
+    use wordcraft_doc::props::LineSpacing;
+    for multiple in [1.15, 1.5, 2.0] {
+        let mut past_margin = 0;
+        for shift in (0..28).step_by(2) {
+            let mut d = Document::from_text(&"Several words wrap onto many lines of a long paragraph. ".repeat(60));
+            if let Some(wordcraft_doc::Block::Para(p)) = d.body.get_mut(0).map(Arc::make_mut) {
+                p.props.line_spacing = Some(LineSpacing::Multiple(multiple));
+                p.props.space_before = Some(shift as f32);
+                p.props.widow_control = Some(false);
+            }
+            let bottom = d.last_section.page_h - d.last_section.margin_bottom;
+            let l = lay(&d);
+            assert!(l.pages.len() >= 2, "{multiple} shift {shift}: the paragraph should run onto a second page");
+            let Some(Placed::Lines { y, para, l0, l1, .. }) =
+                l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. }))
+            else {
+                panic!("{multiple} shift {shift}: no body lines on page 1")
+            };
+            let (first, last, next) = (&para.lines[*l0], &para.lines[*l1 - 1], &para.lines[*l1]);
+            let top = y + last.top - first.top;
+            let text_end = top + (last.baseline - last.top) + last.text_desc;
+            assert!(text_end <= bottom + 0.01, "{multiple} shift {shift}: the last line's text ends at {text_end}, below the margin at {bottom}");
+            let next_text_end = top + last.height + (next.baseline - next.top) + next.text_desc;
+            assert!(
+                next_text_end > bottom + 0.01,
+                "{multiple} shift {shift}: the next line's text would end at {next_text_end}, within the margin at {bottom}"
+            );
+            if top + last.height > bottom + 0.01 {
+                past_margin += 1;
+            }
+        }
+        assert!(past_margin > 0, "{multiple}: some shift should leave the last line's leading past the margin");
     }
 }

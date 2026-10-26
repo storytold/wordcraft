@@ -166,6 +166,13 @@ pub(crate) fn dispatch(s: &mut Session, id: &str, mutates: bool, run: fn(&mut Se
     {
         return r;
     }
+    // Delete (and Backspace that doesn't delete them) empties whole cells to one paragraph each,
+    // as in Word (#2802).
+    if matches!(id, "text.delete" | "text.backspace" | "text.deleteWordBack" | "text.deleteWordForward")
+        && let Some(r) = super::table::clear_cells(s)
+    {
+        return r;
+    }
     let Some(segs) = s.column_segments().map(<[(Pos, Pos)]>::to_vec) else { return run(s, v) };
     let cells = s.cell_range().is_some();
     match id {

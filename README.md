@@ -7,14 +7,18 @@
   </a>
 </p>
 
+<p align="center">
+  <img src="assets/app-icon/hicolor/256x256/apps/ai.storyteller.wordcraft.png" width="128" height="128" alt="WordCraft icon: a document page and pen on a blue tile">
+</p>
+
 <h1 align="center">WordCraft</h1>
 
 <p align="center">
-  <b>Writing and document design; an open-source, clean-room reimplementation of Microsoft Word, rebuilt in pure Rust.</b>
+  <b>Writing and document design; an open-source, modern word processor, built in pure Rust.</b>
 </p>
 
 <p align="center">
-  A fast, open-source word processor with the Word workflow you already know: the ribbon, styles,
+  A fast, open-source word processor with a familiar workflow: the ribbon, styles,
   tables, track changes, references and mail merge. It reads and writes .docx, runs natively on
   macOS, Windows, Linux and BSD, and in the browser via WebAssembly.<br>
   <i>By the ArtCraft team.</i>
@@ -25,6 +29,9 @@
   <img alt="Runs on macOS, Windows, Linux, BSD and the web" src="https://img.shields.io/badge/runs%20on-macOS%20%C2%B7%20Windows%20%C2%B7%20Linux%20%C2%B7%20BSD%20%C2%B7%20Web-3b5bdb?style=flat-square">
   <img alt="License: MIT OR Apache-2.0" src="https://img.shields.io/badge/license-MIT%20%2F%20Apache--2.0-2b47b5?style=flat-square">
   <img alt="Agent-drivable over MCP" src="https://img.shields.io/badge/agents-MCP%20%C2%B7%20CLI-3b5bdb?style=flat-square">
+  <br>
+  <a href="https://sonarcloud.io/project/overview?id=storytold_wordcraft"><img alt="Scanned by SonarCloud" src="https://img.shields.io/badge/Scanned_by-SonarCloud-4b9fd5?style=flat-square&logo=sonarqubecloud&logoColor=white"></a>
+  <a href="https://coderabbit.ai"><img alt="Reviewed by CodeRabbit" src="https://img.shields.io/coderabbit/prs/github/storytold/wordcraft?style=flat-square&label=Reviewed%20by%20CodeRabbit&logo=coderabbit"></a>
 </p>
 
 <p align="center">
@@ -86,10 +93,10 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 
 ## Why WordCraft
 
-- **Familiar.** Word's ribbon tabs, groups, shortcuts and behaviour: Enter continues a list,
+- **Familiar.** Ribbon tabs, groups, shortcuts and behaviour: Enter continues a list,
   Tab demotes it, Ctrl/⌘+B bolds the word under the caret, the Styles gallery previews styles live,
   F4 repeats, F7 checks spelling, F8 extends the selection.
-- **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .tex (LaTeX), .txt; opens Word 97-2003 .doc; exports PDF
+- **Your files.** Opens and saves .docx (OOXML), and also .odt, .rtf, .html, .md, .tex (LaTeX), .txt; opens legacy 97-2003 .doc; exports PDF
   with real, selectable text, links and bookmarks.
 - **Fast.** Paragraph layout is cached, so typing in a 188-page document re-lays it out in about
   1.4 ms; pages render on demand.
@@ -117,8 +124,8 @@ Every screenshot below is WordCraft itself, rendered offscreen by its own UI tes
 | **References** | Table of contents, footnotes and endnotes, citations and bibliography (APA, MLA, Chicago, IEEE), captions, table of figures, cross-references, index, table of authorities |
 | **Review** | Spelling and grammar with suggestions (English and Polish, by each run's language), thesaurus, word count, comments in margin balloons or a pane, track changes, accept/reject, compare documents, restrict editing, accessibility checker, document inspector |
 | **Mailings** | Mail merge from CSV, merge fields, address block, greeting line, rules, preview, finish to a document; envelopes and labels |
-| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어 or Svenska (follows the system language by default) |
-| **Files** | .docx read/write (opens in Word), Word 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
+| **View** | Print layout, web layout, draft, read mode, focus, zoom, one/multiple pages, page width, Navigation pane, rulers, gridlines, dark mode; interface in English, 简体中文, 繁體中文, 日本語, Português (Brasil), Español, Українська, Српски / Srpski, Eesti, Türkçe, Русский, Italiano, Deutsch, Polski, Čeština, Magyar, Français, Български, Tiếng Việt, 한국어, Svenska, Hrvatski or Slovenščina (follows the system language by default) |
+| **Files** | .docx read/write, legacy 97-2003 .doc import, PDF export, .odt, .rtf, .html, .md, .tex, .txt import/export, page images |
 
 The honest picture, area by area, is in [ROADMAP.md](ROADMAP.md), the
 [parity assessment](docs/target-app-parity.md) and the generated
@@ -190,9 +197,9 @@ covers every target starting with it (`wordcraft*=debug`). The logger is
 | L1 | `wordcraft-doc`, `wordcraft-fonts`, `wordcraft-proof` | document model and editing; fonts and shaping; spelling, grammar, hyphenation |
 | L2 | `wordcraft-layout`, `wordcraft-docx`, `wordcraft-formats` | line breaking, pagination, tables, notes, hit testing; OOXML; ODT/RTF/HTML/Markdown/TXT |
 | L3 | `wordcraft-render`, `wordcraft-pdf` | rasteriser (vello_cpu); PDF ([craft-pdf](docs/shared-pdf.md), Krilla) |
-| L4 | `wordcraft-engine` | session, undo, 422 commands, Word feature catalog |
+| L4 | `wordcraft-engine` | session, undo, 422 commands, document feature catalog |
 | L5 | `wordcraft-mcp` | MCP server |
-| L6 | `wordcraft-ui-egui` | the Word-style front end (swappable) |
+| L6 | `wordcraft-ui-egui` | the word processor front end (swappable) |
 | apps | `wordcraft`, `wordcraft-cli`, `wordcraft-web` | desktop, command line, browser |
 
 `cargo xtask ci` runs formatting, clippy, ~800 tests, the asset-attribution check, the layering
@@ -200,12 +207,13 @@ check and the wasm build. Contributor and agent instructions: [AGENTS.md](AGENTS
 
 ## Roadmap
 
-WordCraft is in **alpha**. It covers 88% of Word's ribbon features with commands today; counting
-depth, file fidelity, stability and the rest, we estimate it is about 60% of the way to replacing
-all of Word for real work, about 55% for a typical professional's weekly work and about 63% for
-everyday essentials. Beta needs testing against real-world .docx files, keeping charts and SmartArt
-through a round trip, pagination closer to Word's, a stability sweep and native printing. Details
-and estimates: [ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
+WordCraft is in **alpha**. It has commands for 97% of the ribbon and menu features in its feature catalog
+([`docs/parity-checklist.md`](docs/parity-checklist.md)) today; counting
+depth, file fidelity, stability and the rest, we estimate it is about 60% ready for real work,
+about 55% for a typical professional's weekly work and about 63% for everyday essentials. Beta
+needs testing against real-world .docx files, keeping charts and SmartArt through a round trip,
+closer pagination fidelity, a stability sweep and native printing. Details and estimates:
+[ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
 
 ## Downloads
 
@@ -213,13 +221,16 @@ and estimates: [ROADMAP.md](ROADMAP.md) and [where we fall short](docs/gaps.md).
 
 ### Windows
 
-| Build | Installer | Portable |
-|---|---|---|
-| x64 (64-bit Intel/AMD) | `wordcraft-<ver>-windows-x64.msi` | `wordcraft-<ver>-windows-x64-portable.zip` |
-| arm64 (Snapdragon and other ARM PCs) | `wordcraft-<ver>-windows-arm64.msi` | `wordcraft-<ver>-windows-arm64-portable.zip` |
-| x86 (32-bit) | `wordcraft-<ver>-windows-x86.msi` | `wordcraft-<ver>-windows-x86-portable.zip` |
+| Build | Installer (all users) | Installer (just me) | Portable |
+|---|---|---|---|
+| x64 (64-bit Intel/AMD) | `wordcraft-<ver>-windows-x64.msi` | `wordcraft-<ver>-windows-user-x64.msi` | `wordcraft-<ver>-windows-x64-portable.zip` |
+| arm64 (Snapdragon and other ARM PCs) | `wordcraft-<ver>-windows-arm64.msi` | `wordcraft-<ver>-windows-user-arm64.msi` | `wordcraft-<ver>-windows-arm64-portable.zip` |
+| x86 (32-bit) | `wordcraft-<ver>-windows-x86.msi` | `wordcraft-<ver>-windows-user-x86.msi` | `wordcraft-<ver>-windows-x86-portable.zip` |
 
-Installers and executables are code-signed.
+The all-users installer puts WordCraft in Program Files and needs administrator rights. The
+just-me installer needs none: it installs into `%LOCALAPPDATA%\Programs\WordCraft` for your
+account only. Choose one: installing both gives two WordCraft entries in Settings › Apps and two
+in the Start menu. Installers and executables are code-signed.
 
 **If the app doesn't open on Windows:** the desktop app initializes only DirectX 12 by default.
 Letting wgpu also create an OpenGL instance can crash some graphics drivers (AMD's
@@ -248,9 +259,10 @@ WordCraft compiles DirectX 12 shaders with FXC, the compiler built into Windows,
 also avoids DirectX 12 altogether.
 
 **If the app is slow on an older Windows PC:** when DirectX 12 finds no graphics card with a
-driver for it (for example Intel 4th-generation graphics on Windows 11), it only offers Microsoft's
-software renderer, which draws every frame on the processor. In that case WordCraft uses OpenGL
-instead, without setting anything. The log file records the choice (lines starting with
+driver for it (for example Intel 4th-generation graphics on Windows 11), it only offers the built-in
+software renderer, which draws every frame on the processor. WordCraft normally uses OpenGL instead,
+without setting anything. If OpenGL has no usable adapter, it can use DirectX 12's WARP software
+adapter. The log file records the choice (lines starting with
 `graphics:`). `WGPU_BACKEND` still overrides it, e.g. `$env:WGPU_BACKEND = "gl"` or `"dx12"`.
 
 ### macOS
@@ -377,8 +389,6 @@ The ArtCraft name, wordmark and logos in [`docs/brand/`](docs/brand/) are tradem
 ArtCraft Team and are not covered by this license. They may be used only unmodified, and only as
 part of this repository and WordCraft, under [`docs/brand/LICENSE-brand.txt`](docs/brand/LICENSE-brand.txt).
 Forks and modified versions must remove them.
-
-<sub>Microsoft and Microsoft Word are trademarks of the Microsoft group of companies. Adobe, Photoshop, Illustrator, Premiere Pro, Lightroom, Acrobat, After Effects and InDesign are trademarks or registered trademarks of Adobe Inc. in the United States and/or other countries. WordCraft is an independent, open-source project and is not affiliated with, sponsored by or endorsed by Microsoft Corporation or Adobe Inc.; these names are used only to describe the workflows it is compatible with.</sub>
 
 <p align="center">
   <a href="https://getartcraft.com/"><img alt="ArtCraft" src="docs/brand/artcraft-mark.svg" width="28"></a><br>

@@ -99,7 +99,7 @@ pub fn anchor_rect(selection_top: f32, selection_left: f32, viewport: Rect) -> O
 /// Where the bar and the controls in it were drawn last frame (`[bar, controls]`), kept in the
 /// context's memory under this id so tests can check that no control spills out of the bar.
 pub fn shown_id() -> egui::Id {
-    egui::Id::new("wc_mini_toolbar").with("shown")
+    egui::Id::unique("wc_mini_toolbar").with("shown")
 }
 
 /// Whether the bar may be shown for the current app state.
@@ -181,7 +181,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: R
     // the topmost layer, so a click on the bar never reaches the document underneath. Clipped to
     // the document area (`constrain_to` without `constrain`, which would push it inside), the part
     // past its edge takes no clicks either, so the ribbon and the rulers under it keep them.
-    let area = egui::Area::new(egui::Id::new("wc_mini_toolbar")).order(Order::Middle).interactable(true);
+    let area = egui::Area::new(egui::Id::unique("wc_mini_toolbar")).order(Order::Middle).interactable(true);
     let area = area.constrain_to(viewport).constrain(false).fixed_pos(bar.min);
     area.show(ctx, |ui| {
         ui.set_clip_rect(shown);
@@ -198,12 +198,50 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context, selection: Rect, viewport: R
     });
 }
 
+/// A text context menu offers formatting at a caret too. Object and equation menus keep their
+/// own controls; the standalone selection toolbar remains hidden while this popup is open.
+pub fn context_menu_visible(app: &WordApp) -> bool {
+    app.ui.mini_toolbar
+        && !app.session.view.read_mode
+        && app.session.math.is_none()
+        && app.session.cell_range().is_none()
+        && !crate::ribbon::has_picture_selected(&app.session)
+        && wordcraft_engine::cmd::objects::object_selection(&app.session).is_none()
+}
+
+/// The existing two-row toolbar in the context menu's popup, above its command panel. Sharing
+/// the popup lets its font/size/colour lists stay open without dismissing the parent menu.
+pub fn show_in_context_menu(app: &mut WordApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 3)).show(ui, |ui| {
+        ui.push_id("context_mini_toolbar", |ui| {
+            // Menu styling removes input borders; use the same controls as the standalone bar.
+            ui.set_style(ui.ctx().global_style());
+            ui.set_width(ROW2_W);
+            ui.spacing_mut().item_spacing = Vec2::new(SPACING, ROW_GAP);
+            content(app, ui, &t);
+            if app.dialog.is_some() || app.colors.is_some() {
+                ui.close();
+            }
+        });
+    });
+}
+
 /// The controls in two rows like Word's mini toolbar, reusing the ribbon's widgets so the bar
 /// matches the ribbon exactly.
 fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
     let st: Value = app.session.run("format.state", &json!({})).unwrap_or_default();
     let flag = |k: &str| st.get(k).and_then(Value::as_bool).unwrap_or(false);
-    let align = app.session.doc.para_at(&app.session.sel.focus).map(|p| app.session.doc.styles.resolve_para(&p.props).align).unwrap_or_default();
+    // As on the ribbon, the buttons show alignment as seen on the page (#3579).
+    let align = app
+        .session
+        .doc
+        .para_at(&app.session.sel.focus)
+        .map(|p| {
+            let r = app.session.doc.styles.resolve_para(&p.props);
+            r.align.visual(r.bidi)
+        })
+        .unwrap_or_default();
     let row = |ui: &mut egui::Ui, app: &mut WordApp, add: &dyn Fn(&mut egui::Ui, &mut WordApp)| {
         ui.allocate_ui_with_layout(Vec2::new(ui.available_width(), ROW_H), Layout::left_to_right(Align::Center), |ui| {
             ui.set_min_height(ROW_H);
@@ -231,7 +269,7 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
             st.get("size").and_then(Value::as_f64).map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).unwrap_or_default();
         let sizes: Vec<String> =
             wordcraft_engine::cmd::format::SIZES.iter().map(|s| if s.fract() == 0.0 { format!("{s:.0}") } else { s.to_string() }).collect();
-        if let Some(v) = widgets::combo(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None)
+        if let Some(v) = widgets::combo_hint(ui, "mini_size", COMBO_SIZE_W, &size, &sizes, None, tl!("Font Size"))
             && let Ok(x) = v.trim().parse::<f64>()
         {
             let _ = app.run("format.size", json!({"size": x}));
@@ -249,7 +287,8 @@ fn content(app: &mut WordApp, ui: &mut egui::Ui, t: &Tokens) {
         sep(ui, t);
 
         let hl = app.canvas.last_highlight.clone();
-        widgets::split(ui, app, "highlight", "Text Highlight Color", "format.highlight", json!({"color": hl}), false, None, |ui, app| {
+        let (icon, sw, color) = highlight_button_appearance(&hl);
+        widgets::split(ui, app, icon, "Text Highlight Color", "format.highlight", json!({"color": color}), false, sw, |ui, app| {
             highlight_menu(ui, app);
         });
         let fc = app.canvas.last_font_color.clone();
@@ -272,6 +311,13 @@ fn sep(ui: &mut egui::Ui, t: &Tokens) {
     let (r, _) = ui.allocate_exact_size(Vec2::new(SEP_W, 20.0), Sense::hover());
     let p = ui.painter();
     p.vline(r.center().x, r.y_range().shrink(4.0), egui::Stroke::new(1.0, t.border));
+}
+
+/// The split-button icon and colour bar for the remembered highlight choice.
+pub(crate) fn highlight_button_appearance(name: &str) -> (&'static str, Option<egui::Color32>, &'static str) {
+    let highlight = wordcraft_doc::props::Highlight::from_ooxml(name);
+    let icon = if highlight == wordcraft_doc::props::Highlight::None { "highlightNoColor" } else { "highlight" };
+    (icon, highlight.rgb().map(crate::theme::c32), highlight.ooxml())
 }
 
 /// Highlight colour grid and No Color, shared by the ribbon and the mini toolbar. The pick,
@@ -318,6 +364,13 @@ fn font_color_menu(ui: &mut egui::Ui, app: &mut WordApp) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn highlight_button_appearance_follows_the_picked_colour() {
+        assert_eq!(highlight_button_appearance("cyan"), ("highlight", Some(egui::Color32::from_rgb(0, 255, 255)), "cyan"));
+        assert_eq!(highlight_button_appearance("none"), ("highlightNoColor", None, "none"));
+        assert_eq!(highlight_button_appearance("unknown"), ("highlightNoColor", None, "none"));
+    }
 
     fn vp() -> Rect {
         Rect::from_min_size(pos2(100.0, 50.0), Vec2::new(1200.0, 700.0))
@@ -495,7 +548,7 @@ mod tests {
 
     /// The bar's layer, when it was drawn last frame.
     fn bar_layer(h: &egui_kittest::Harness<'static, WordApp>) -> Option<egui::LayerId> {
-        h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().find(|l| l.id == egui::Id::new("wc_mini_toolbar")))
+        h.ctx.memory(|m| m.areas().visible_layer_ids().into_iter().find(|l| l.id == egui::Id::unique("wc_mini_toolbar")))
     }
 
     fn click_at(h: &mut egui_kittest::Harness<'static, WordApp>, at: egui::Pos2) {
@@ -508,6 +561,164 @@ mod tests {
 
     fn format_state(h: &mut egui_kittest::Harness<'static, WordApp>) -> Value {
         h.state_mut().session.run("format.state", &json!({})).unwrap()
+    }
+
+    /// #2959: formatting must be available alongside the text's right-click menu, using the
+    /// selection that was clicked. Its lists must remain usable inside the context popup.
+    #[test]
+    fn context_menu_toolbar_formats_the_selection_and_opens_its_size_list() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = bar_over("brown fox");
+        let selection = h.state().session.sel.clone();
+        let caret = h.state_mut().session.layout().caret(&wordcraft_doc::Pos::body(0, 12)).unwrap();
+        let at = crate::canvas::page_to_screen(h.state_mut(), caret.page, caret.x, caret.top + caret.height / 2.0).unwrap();
+        h.event(egui::Event::PointerMoved(at));
+        for pressed in [true, false] {
+            h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Secondary, pressed, modifiers: Default::default() });
+            h.step();
+        }
+        steps(&mut h);
+        assert!(h.state().canvas.context_menu_open);
+        assert_eq!(h.state().session.sel, selection, "right-click inside the selection keeps it");
+        assert!(bar_layer(&h).is_none(), "the standalone selection toolbar must not double up");
+        let viewport = h.state().canvas.viewport.unwrap();
+        let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the context menu has Bold");
+        click_at(&mut h, bold.center());
+        assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
+        assert_eq!(h.state().session.sel, selection);
+        assert!(h.state().canvas.context_menu_open, "formatting keeps the context toolbar available");
+
+        let size_box = h
+            .get_all_by_role(Role::TextInput)
+            .map(|n| n.rect())
+            .filter(|r| viewport.contains_rect(*r))
+            .max_by(|a, b| a.min.x.total_cmp(&b.min.x))
+            .expect("the context toolbar has a size box");
+        click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
+        let twenty = h.get_by_label("20").rect().center();
+        click_at(&mut h, twenty);
+        assert_eq!(format_state(&mut h).get("size").and_then(Value::as_f64), Some(20.0));
+        assert_eq!(h.state().session.sel, selection);
+        assert!(h.state().canvas.context_menu_open, "picking a font size keeps the parent menu available");
+        click_at(&mut h, pos2(size_box.max.x + 8.0, size_box.center().y));
+        assert!(egui::Popup::is_any_open(&h.ctx), "the child list is open");
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        steps(&mut h);
+        assert!(!egui::Popup::is_any_open(&h.ctx), "Escape closes the child list");
+        assert!(h.state().canvas.context_menu_open, "the parent toolbar remains after dismissing its list");
+        h.state_mut().run("edit.undo", json!({})).unwrap();
+        assert_ne!(format_state(&mut h).get("size").and_then(Value::as_f64), Some(20.0), "size is one undo step");
+        assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)), "the earlier Bold is a separate undo step");
+        let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the menu has Copy");
+        click_at(&mut h, copy.center());
+        assert!(!h.state().canvas.context_menu_open, "ordinary menu commands still close the popup");
+    }
+
+    #[test]
+    fn context_menu_toolbar_opens_at_a_caret_from_the_keyboard_and_dismisses() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = bar_over("brown fox");
+        h.state_mut().run("caret.docEnd", json!({})).unwrap();
+        steps(&mut h);
+        let caret = h.state().session.sel.clone();
+        h.event(egui::Event::Key { key: egui::Key::F10, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::SHIFT });
+        steps(&mut h);
+        let viewport = h.state().canvas.viewport.unwrap();
+        assert!(h.state().canvas.context_menu_open);
+        let bold =
+            h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| viewport.contains_rect(*r)).expect("the keyboard menu has Bold at a caret too");
+        click_at(&mut h, bold.center());
+        assert_eq!(format_state(&mut h).get("bold"), Some(&json!(true)));
+        assert_eq!(h.state().session.sel, caret);
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        steps(&mut h);
+        assert!(!h.state().canvas.context_menu_open);
+        h.event(egui::Event::Text(" typed".into()));
+        steps(&mut h);
+        assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).ends_with(" typed"), "typing resumes in the document");
+
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(&mut h);
+        assert!(h.state().canvas.context_menu_open);
+        click_at(&mut h, viewport.right_bottom() - Vec2::splat(10.0));
+        assert!(!h.state().canvas.context_menu_open, "an outside click dismisses both panels");
+    }
+
+    #[test]
+    fn context_menu_toolbar_fits_near_the_bottom_right_of_a_narrow_window() {
+        use egui_kittest::kittest::Queryable;
+        let mut h = bar_over("brown fox");
+        h.set_size(Vec2::new(380.0, 650.0));
+        steps(&mut h);
+        h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+        steps(&mut h);
+        h.state_mut().canvas.context_menu_at = Some(pos2(370.0, 640.0));
+        steps(&mut h);
+        let screen = h.ctx.content_rect();
+        let bold = h.get_all_by_label("Bold").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the context toolbar is shown");
+        assert!(screen.contains_rect(bold), "the toolbar stays inside the window: {bold:?} in {screen:?}");
+        let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the menu has Copy");
+        assert!(screen.contains_rect(copy), "the menu stays inside the window: {copy:?} in {screen:?}");
+        let align = h.get_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > 200.0).expect("the last toolbar control is shown");
+        assert!(screen.contains_rect(align), "all controls fit: {align:?} in {screen:?}");
+    }
+
+    #[test]
+    fn context_menu_toolbar_respects_read_mode_and_the_toolbar_preference() {
+        use egui_kittest::kittest::Queryable;
+        for read_mode in [false, true] {
+            let mut h = bar_over("brown fox");
+            h.state_mut().session.view.read_mode = read_mode;
+            h.state_mut().ui.mini_toolbar = read_mode;
+            h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+            steps(&mut h);
+            assert!(h.state().canvas.context_menu_open, "the text menu remains available");
+            let top = h.state().canvas.viewport.unwrap().top();
+            assert!(h.query_all_by_label("Bold").all(|n| n.rect().min.y < top), "the context toolbar is suppressed, read_mode={read_mode}");
+            assert!(h.query_all_by_label_contains("Copy").any(|n| n.rect().min.y > top), "the menu still offers Copy");
+        }
+    }
+
+    /// The command panel under the context toolbar was stretched to the toolbar's width; each
+    /// keeps its own width, so the panel matches the menu shown without the toolbar.
+    #[test]
+    fn context_menu_panel_keeps_its_own_width_under_the_toolbar() {
+        use egui_kittest::kittest::Queryable;
+        let copy_width = |toolbar: bool| {
+            let mut h = bar_over("brown fox");
+            h.state_mut().ui.mini_toolbar = toolbar;
+            h.state_mut().run("ui.contextMenu", json!({})).unwrap();
+            steps(&mut h);
+            let top = h.state().canvas.viewport.unwrap().top();
+            let copy = h.query_all_by_label_contains("Copy").map(|n| n.rect()).find(|r| r.min.y > top).expect("the menu has Copy");
+            let bar = h.query_all_by_label("Justify").map(|n| n.rect()).find(|r| r.min.y > top);
+            (copy, bar)
+        };
+        let (plain, _) = copy_width(false);
+        let (copy, justify) = copy_width(true);
+        let justify = justify.expect("the context toolbar is shown");
+        assert!((copy.width() - plain.width()).abs() < 0.5, "panel {} vs plain menu {}", copy.width(), plain.width());
+        assert!(copy.max.x + 20.0 < justify.max.x, "the panel ({copy:?}) is narrower than the toolbar ({justify:?})");
+    }
+
+    #[test]
+    fn escape_in_a_ribbon_list_does_not_open_the_context_menu() {
+        use egui::accesskit::Role;
+        use egui_kittest::kittest::Queryable;
+        let mut h = bar_over("brown fox");
+        let size = h
+            .get_all_by_role(Role::TextInput)
+            .filter(|n| n.value().as_deref() == Some("12"))
+            .map(|n| n.rect())
+            .min_by(|a, b| a.min.y.total_cmp(&b.min.y))
+            .expect("the ribbon has a size field");
+        click_at(&mut h, pos2(size.max.x + 8.0, size.center().y));
+        assert!(egui::Popup::is_any_open(&h.ctx));
+        h.event(egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: Default::default() });
+        steps(&mut h);
+        assert!(!egui::Popup::is_any_open(&h.ctx));
+        assert!(!h.state().canvas.context_menu_open, "dismissing another popup must not open the text context menu");
     }
 
     /// The bar was drawn on the Tooltip layer, over every drop-down: the ribbon's font size list
@@ -573,8 +784,8 @@ mod tests {
     }
 
     /// Scrolled until the selection went under the ribbon, the bar went with it and drew over the
-    /// ribbon and the ruler. It stays in the document area: the part past its edge neither shows
-    /// nor takes the pointer.
+    /// ribbon and the ruler (#1069). With no part of the selection on screen it has no anchor
+    /// (`visible_anchor`, #1501), so it hides: nothing over the ruler, which still takes the drag.
     #[test]
     // #1069 lets the bar slide under the ribbon with a selection scrolled past the document's
     // top; #1501, landed first, anchors it to the visible part of the selection only and drops it
@@ -583,33 +794,28 @@ mod tests {
     fn the_bar_scrolls_under_the_ribbon_not_over_it() {
         let mut h = bar_over("The quick");
         let page = h.state().canvas.canvas_rect.expect("the document is shown");
-        // Scroll the selection's line to 45 points above the document area: the bar, below the
-        // line now, has its first row past the edge, over the ruler, and its second showing.
+        // Scroll the selection's line to 45 points above the document area, under the ruler.
         let target = page.min.y - 45.0;
         let line = h.state().canvas.mini_anchor.expect("the selection is on screen");
         h.event(egui::Event::PointerMoved(page.center()));
         h.step();
         let delta = egui::vec2(0.0, target - line.min.y);
-        h.event(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta, phase: egui::TouchPhase::Start, modifiers: Default::default() });
+        h.event(egui::Event::MouseWheel {
+            unit: egui::MouseWheelUnit::Point,
+            delta,
+            phase: egui::TouchPhase::Start,
+            modifiers: Default::default(),
+            source: egui::MouseWheelSource::Unknown,
+        });
         h.step();
         h.state_mut().canvas.wheel = Default::default();
         steps(&mut h);
-        let line = h.state().canvas.mini_anchor.expect("the selection is still laid out");
-        assert!((line.min.y - target).abs() < 1.0, "the line scrolled to {}, not {target}", line.min.y);
-        let [bar, _] = h.ctx.data(|d| d.get_temp::<[Rect; 2]>(shown_id())).expect("the bar still shows in part");
-        assert!(bar.min.y < page.min.y && bar.max.y > page.min.y, "the bar {bar:?} should straddle the document's top {}", page.min.y);
+        assert!(h.state().canvas.mini_anchor.is_none(), "the selection scrolled off the document area");
+        assert!(bar_layer(&h).is_none(), "the bar hides with its selection, not over the ribbon");
 
-        let drawn: Vec<Rect> =
-            h.output().shapes.iter().filter(|s| matches!(&s.shape, egui::epaint::Shape::Rect(r) if r.rect == bar)).map(|s| s.clip_rect).collect();
-        assert!(!drawn.is_empty(), "the bar's background is painted");
-        for clip in drawn {
-            assert!(page.expand(0.5).contains_rect(clip), "the bar paints outside the document area {page:?}, over the ribbon: {clip:?}");
-        }
-
-        // The ruler's left-indent marker sits under the hidden part, at the line's start and the
-        // ruler's foot (`canvas::rulers`); dragging it still moves the indent.
+        // The ruler's left-indent marker sits at the line's start and the ruler's foot
+        // (`canvas::rulers`); dragging it moves the indent.
         let marker = pos2(line.min.x, page.min.y - 6.0);
-        assert!(bar.contains(marker), "the bar {bar:?} should cover the left-indent marker {marker:?}");
         h.event(egui::Event::PointerMoved(marker));
         h.event(egui::Event::PointerButton { pos: marker, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
         h.step();
@@ -622,7 +828,7 @@ mod tests {
         steps(&mut h);
         let s = &h.state().session;
         let indent = s.doc.para_at(&s.sel.focus).map(|p| s.doc.styles.resolve_para(&p.props).indent_left).unwrap_or_default();
-        assert!(indent > 0.0, "dragging the ruler's left-indent marker under the bar's hidden part left the indent at {indent}");
+        assert!(indent > 0.0, "dragging the ruler's left-indent marker where the bar was left the indent at {indent}");
     }
 
     /// Picking from one of the bar's own lists (popups below it) keeps the bar up.
@@ -677,6 +883,14 @@ mod tests {
         let arrow = highlight_arrow(&h);
         click_at(&mut h, pos2(arrow.min.x - 12.0, arrow.center().y));
         assert_eq!(format_state(&mut h).get("highlight"), Some(&Value::Null), "the button applies No Color, not yellow again");
+
+        // A stale or corrupted remembered value looks like No Color and must act like it too.
+        h.state_mut().canvas.last_highlight = "unknown".into();
+        h.state_mut().run("format.highlight", json!({"color": "yellow"})).unwrap();
+        steps(&mut h);
+        let arrow = highlight_arrow(&h);
+        click_at(&mut h, pos2(arrow.min.x - 12.0, arrow.center().y));
+        assert_eq!(format_state(&mut h).get("highlight"), Some(&Value::Null), "an unknown remembered colour is normalized to No Color");
     }
 
     /// #3039: picking Automatic from the bar's font-colour menu hands the keyboard back to the
@@ -688,7 +902,7 @@ mod tests {
         a.run("select.all", json!({})).unwrap();
         let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(400.0, 400.0)).build_ui_state(
             |ui, app: &mut WordApp| {
-                egui::Area::new(egui::Id::new("font_colour_probe")).fixed_pos(pos2(50.0, 50.0)).show(ui.ctx(), |ui| {
+                egui::Area::new(egui::Id::unique("font_colour_probe")).fixed_pos(pos2(50.0, 50.0)).show(ui.ctx(), |ui| {
                     font_color_menu(ui, app);
                 });
             },
@@ -707,10 +921,10 @@ mod tests {
     fn picking_a_highlight_swatch_returns_focus_to_the_document() {
         let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("Hello")), Default::default());
         a.run("select.all", json!({})).unwrap();
-        let origin = egui::Id::new("hl_swatch_origin");
+        let origin = egui::Id::unique("hl_swatch_origin");
         let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(400.0, 300.0)).build_ui_state(
             move |ui, app: &mut WordApp| {
-                egui::Area::new(egui::Id::new("hl_probe")).fixed_pos(pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
+                egui::Area::new(egui::Id::unique("hl_probe")).fixed_pos(pos2(100.0, 100.0)).show(ui.ctx(), |ui| {
                     ui.ctx().data_mut(|d| d.insert_temp(origin, ui.next_widget_position()));
                     highlight_menu(ui, app);
                 });
@@ -724,5 +938,61 @@ mod tests {
         click_at(&mut h, first + Vec2::new(9.0, 9.0));
         assert!(h.state().canvas.want_focus, "the swatch pick returns focus to the document");
         assert!(format_state(&mut h).get("highlight").is_some_and(|v| !v.is_null()), "the first swatch applied a highlight");
+    }
+
+    /// #3579: in a right-to-left paragraph the bar lit Align Left for a paragraph that sits on
+    /// the right. Like the ribbon, it marks the alignment as seen on the page, the one its buttons
+    /// set. Only the bar is drawn, so the ribbon's own alignment buttons can't answer for it.
+    #[test]
+    fn alignment_buttons_mark_the_alignment_seen_on_the_page_in_a_right_to_left_paragraph() {
+        use egui_kittest::kittest::Queryable;
+        // A left-to-right paragraph first: a bar that always swapped the two would pass the RTL cases alone.
+        for (rtl, cmd, lit, unlit) in [
+            (false, None, "Align Left", "Align Right"),
+            (true, None, "Align Right", "Align Left"),
+            (true, Some("para.alignLeft"), "Align Left", "Align Right"),
+        ] {
+            let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::from_text("سلام دنیا")), Default::default());
+            a.run("select.all", json!({})).unwrap();
+            if rtl {
+                a.run("para.rtl", json!({})).unwrap();
+            }
+            if let Some(cmd) = cmd {
+                a.run(cmd, json!({})).unwrap();
+            }
+            // The bar writes in the interface fonts, which take effect the frame after they are set.
+            let mut fonts = false;
+            let mut h = egui_kittest::Harness::builder().with_size(Vec2::new(500.0, 200.0)).build_ui_state(
+                move |ui, app: &mut WordApp| {
+                    if !fonts {
+                        crate::theme::install_fonts(ui.ctx());
+                        fonts = true;
+                        return;
+                    }
+                    egui::Area::new(egui::Id::unique("mini_align_probe")).fixed_pos(pos2(10.0, 10.0)).show(ui.ctx(), |ui| {
+                        let t = Tokens::get(ui.ctx());
+                        content(app, ui, &t);
+                    });
+                },
+                a,
+            );
+            steps(&mut h);
+            let checked = Tokens::get(&h.ctx).checked;
+            let marked: Vec<Rect> = h
+                .output()
+                .shapes
+                .iter()
+                .filter_map(|s| match &s.shape {
+                    egui::Shape::Rect(r) if r.fill == checked => Some(r.rect),
+                    _ => None,
+                })
+                .collect();
+            let is_marked = |label: &str| {
+                let r = h.get_by_label(label).rect();
+                marked.iter().any(|m| m.contains(r.center()))
+            };
+            assert!(is_marked(lit), "rtl={rtl} {cmd:?}: {lit} is marked");
+            assert!(!is_marked(unlit), "rtl={rtl} {cmd:?}: {unlit} is not marked");
+        }
     }
 }

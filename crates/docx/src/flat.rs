@@ -9,7 +9,7 @@
 //! or not (a repeated name), data is checked before it's copied, and nesting and elements are
 //! capped as the XML tree reader caps a part's.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use base64::Engine as _;
 use quick_xml::events::{BytesStart, Event};
@@ -340,14 +340,21 @@ fn with_scope(frag: &[u8], scope: &[Vec<(String, String)>]) -> Vec<u8> {
     let rest = frag.get(open..).unwrap_or_default();
     let name_end = rest.iter().position(|b| b.is_ascii_whitespace() || *b == b'>' || *b == b'/').unwrap_or(rest.len());
     let tag_end = rest.iter().position(|b| *b == b'>').unwrap_or(rest.len());
-    let tag = rest.get(..tag_end).unwrap_or_default();
+    let tag = String::from_utf8_lossy(rest.get(1..tag_end).unwrap_or_default());
+    let start = BytesStart::from_content(tag.as_ref(), name_end.saturating_sub(1));
+    let declared: HashSet<Vec<u8>> = start
+        .attributes()
+        .with_checks(false)
+        .flatten()
+        .filter(|a| a.key.as_ref() == b"xmlns" || a.key.as_ref().starts_with(b"xmlns:"))
+        .map(|a| a.key.as_ref().to_vec())
+        .collect();
     let mut out = Vec::with_capacity(rest.len() + 256);
     out.extend_from_slice(rest.get(..name_end).unwrap_or_default());
     // Innermost declarations win: walk from the data element out, skipping prefixes seen.
     let mut seen: Vec<&str> = Vec::new();
     for (k, v) in decls.iter().rev() {
-        let declared = tag.windows(k.len() + 1).any(|w| w.get(..k.len()) == Some(k.as_bytes()) && matches!(w.last(), Some(b'=' | b' ')));
-        if declared || seen.contains(&k.as_str()) {
+        if declared.contains(k.as_bytes()) || seen.contains(&k.as_str()) {
             continue;
         }
         seen.push(k);
@@ -430,7 +437,47 @@ fn xml_fragment<'a>(ct: &str, bytes: &'a [u8]) -> Option<&'a str> {
         Some(rest) => rest.split_once("?>").map(|(_, r)| r)?.trim_start(),
         None => s,
     };
-    (s.starts_with('<') && !s.contains("<!DOCTYPE")).then_some(s)
+    (s.starts_with('<') && !s.contains("<!DOCTYPE") && one_element(s)).then_some(s)
+}
+
+/// Whether `s` is exactly one well-formed element, with only whitespace, comments and processing
+/// instructions around it. Kept bytes are inlined into `pkg:xmlData` only then; anything else could
+/// close the wrapper and add parts of its own, so it goes out as `pkg:binaryData` (#3742).
+fn one_element(s: &str) -> bool {
+    let mut r = quick_xml::Reader::from_str(s);
+    r.config_mut().check_comments = true;
+    let (mut depth, mut roots) = (0usize, 0usize);
+    loop {
+        let attrs_ok = |e: &BytesStart| e.attributes().all(|a| a.is_ok());
+        match r.read_event() {
+            Ok(Event::Start(e)) => {
+                if !attrs_ok(&e) || (depth == 0 && roots > 0) {
+                    return false;
+                }
+                roots += usize::from(depth == 0);
+                depth += 1;
+            }
+            Ok(Event::Empty(e)) => {
+                if !attrs_ok(&e) || (depth == 0 && roots > 0) {
+                    return false;
+                }
+                roots += usize::from(depth == 0);
+            }
+            Ok(Event::End(_)) => match depth.checked_sub(1) {
+                Some(d) => depth = d,
+                None => return false,
+            },
+            Ok(Event::Text(t)) if depth == 0 => {
+                if !t.iter().all(u8::is_ascii_whitespace) {
+                    return false;
+                }
+            }
+            Ok(Event::CData(_) | Event::GeneralRef(_)) if depth == 0 => return false,
+            Ok(Event::Decl(_) | Event::DocType(_)) | Err(_) => return false,
+            Ok(Event::Eof) => return depth == 0 && roots == 1,
+            Ok(_) => {}
+        }
+    }
 }
 
 #[cfg(test)]
@@ -464,6 +511,15 @@ mod tests {
     }
 
     #[test]
+    fn inherited_namespaces_do_not_rescan_a_long_root_tag() {
+        let scope = vec![(0..256).map(|i| (format!("xmlns:p{i}"), format!("urn:{i}"))).collect::<Vec<_>>()];
+        let frag = format!("<w:document{}><w:body/></w:document>", " a=\"1\"".repeat(4_000_000));
+        let out = with_scope(frag.as_bytes(), &scope);
+        let out = String::from_utf8(out).unwrap();
+        assert_eq!(out.matches("xmlns:p").count(), 256);
+    }
+
+    #[test]
     fn nesting_is_capped_where_the_xml_tree_reader_stops() {
         let inline = |levels: usize| format!("{}<b/>{}", "<a>".repeat(levels), "</a>".repeat(levels));
         let package = |levels: usize| {
@@ -476,6 +532,64 @@ mod tests {
         assert!(unpack(package(xml::MAX_DEPTH).as_bytes()).is_ok());
         assert!(matches!(xml::parse(inline(xml::MAX_DEPTH + 1).as_bytes()), Err(DocxError::Limit(_))));
         assert!(matches!(unpack(package(xml::MAX_DEPTH + 1).as_bytes()), Err(DocxError::Limit(_))));
+    }
+
+    #[test]
+    fn kept_xml_that_would_break_out_of_its_part_is_written_in_base64() {
+        // A part kept from a file is written back as it was read; inlined as is, markup that
+        // closes the wrapper adds parts of its own (here a second core properties part, read
+        // before the real one) (#3742).
+        let evil = format!(
+            "<a/></pkg:xmlData></pkg:part><pkg:part pkg:name=\"/docProps/core.xml\" pkg:contentType=\"application/vnd.openxmlformats-package.core-properties+xml\"><pkg:xmlData><cp:coreProperties xmlns:cp=\"{}\" xmlns:dc=\"http://purl.org/dc/elements/1.1/\"><dc:title>Injected</dc:title></cp:coreProperties></pkg:xmlData></pkg:part><pkg:part pkg:name=\"/x.xml\"><pkg:xmlData><b>",
+            "http://schemas.openxmlformats.org/package/2006/metadata/core-properties"
+        );
+        let w_ns = "xmlns:w=\"http://schemas.openxmlformats.org/wordprocessingml/2006/main\"";
+        let rel = |id: &str, kind: &str, target: &str| format!("<Relationship Id=\"{id}\" Type=\"{kind}\" Target=\"{target}\"/>");
+        let rels = format!(
+            "<Relationships xmlns=\"http://schemas.openxmlformats.org/package/2006/relationships\">{}{}</Relationships>",
+            rel("rId1", crate::package::rt::OFFICE_DOC, "word/document.xml"),
+            rel("rId2", crate::package::rt::CUSTOM_XML, "customXml/item1.xml")
+        );
+        let types = "<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"xml\" ContentType=\"application/xml\"/></Types>";
+        let z = crate::package::zip_entries(&[
+            ("[Content_Types].xml".into(), types.as_bytes().to_vec()),
+            ("_rels/.rels".into(), rels.into_bytes()),
+            ("word/document.xml".into(), format!("<w:document {w_ns}><w:body><w:p/></w:body></w:document>").into_bytes()),
+            ("customXml/item1.xml".into(), evil.clone().into_bytes()),
+        ])
+        .unwrap();
+        let mut doc = crate::read(&z).unwrap();
+        assert!(doc.passthrough.values().any(|b| b.as_slice() == evil.as_bytes()), "the part is kept as read");
+        doc.core.title = "Real".into();
+        let flat = write(&doc).unwrap();
+        let text = String::from_utf8_lossy(&flat);
+        assert_eq!(text.matches("pkg:name=\"/docProps/core.xml\"").count(), 1, "{text}");
+        let back = read(&flat).unwrap();
+        assert_eq!(back.core.title, "Real");
+        assert!(back.passthrough.values().any(|b| b.as_slice() == evil.as_bytes()), "the part survives, in base64");
+    }
+
+    #[test]
+    fn only_one_well_formed_element_is_inlined() {
+        let ct = "application/xml";
+        for ok in ["<a/>", "<?xml version=\"1.0\"?>\n<a x=\"1\"><b>t &amp; <![CDATA[c]]></b></a>\n<!-- end -->", "<!-- c --><a/><?pi x?>"] {
+            assert!(xml_fragment(ct, ok.as_bytes()).is_some(), "{ok}");
+        }
+        for bad in [
+            "<a/><b/>",
+            "<a></b>",
+            "<a>",
+            "<a/></x>",
+            "<a/>text",
+            "<a/>&amp;",
+            "<a x=1/>",
+            "<a/><?xml version=\"1.0\"?>",
+            "<a></a></pkg:xmlData>",
+            "<a><!-- x -- y --></a>",
+            "<a/><!-- x--->",
+        ] {
+            assert!(xml_fragment(ct, bad.as_bytes()).is_none(), "{bad}");
+        }
     }
 
     #[test]

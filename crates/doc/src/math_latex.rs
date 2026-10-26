@@ -47,7 +47,7 @@ fn tokenize(s: &str) -> Vec<Tok> {
         match c {
             '\\' => {
                 let start = i;
-                while cs.get(i).is_some_and(|c| c.is_ascii_alphabetic()) {
+                while cs.get(i).is_some_and(char::is_ascii_alphabetic) {
                     i += 1;
                 }
                 if i == start {
@@ -323,6 +323,21 @@ impl Lp {
                 let num = self.arg();
                 let den = self.arg();
                 one(MNode::Frac { kind: FracKind::Bar, num, den })
+            }
+            "genfrac" => {
+                let beg = delim_arg(&self.arg());
+                let end = delim_arg(&self.arg());
+                let thickness = self.arg();
+                let _style = self.arg();
+                let num = self.arg();
+                let den = self.arg();
+                let kind = if is_zero_length(&thickness) { FracKind::NoBar } else { FracKind::Bar };
+                let frac = MNode::Frac { kind, num, den };
+                if beg.is_none() && end.is_none() {
+                    one(frac)
+                } else {
+                    one(MNode::Delim { beg, end, sep: None, grow: true, shp_match: false, elems: vec![vec![frac]] })
+                }
             }
             "binom" | "dbinom" | "tbinom" => {
                 let n = self.arg();
@@ -801,6 +816,31 @@ fn text_chars(text: &str, s: &mut String) {
     }
 }
 
+/// The delimiter of a `\genfrac` argument: one character, or none for `{}` and anything else.
+fn delim_arg(a: &[MNode]) -> Option<char> {
+    let [MNode::Run(r)] = a else { return None };
+    let mut cs = r.text.chars();
+    match (cs.next(), cs.next()) {
+        (Some(c), None) if c != '.' => Some(c),
+        _ => None,
+    }
+}
+
+/// Whether a `\genfrac` thickness is a zero length such as `0pt`, `0.0pt` or `0 em`. An empty
+/// thickness means the default rule and anything that is not a plain number and unit is not zero.
+fn is_zero_length(a: &[MNode]) -> bool {
+    let mut text = String::new();
+    for n in a {
+        let MNode::Run(r) = n else { return false };
+        text.extend(r.text.chars().filter(|c| !c.is_whitespace() && !matches!(c, '\u{2009}' | '\u{205F}' | '\u{2005}')));
+    }
+    let number = text.trim_end_matches(|c: char| c.is_ascii_alphabetic());
+    let unit = &text[number.len()..];
+    !number.is_empty()
+        && matches!(unit, "pt" | "em" | "ex" | "mm" | "cm" | "in" | "bp" | "pc" | "sp" | "mu")
+        && number.parse::<f64>().is_ok_and(|v| v == 0.0)
+}
+
 fn delim_tex(c: Option<char>) -> String {
     match c {
         None => ".".into(),
@@ -1074,6 +1114,34 @@ mod tests {
         let n = parse_latex(r"\mathbb{R}\hat{x}\text{ if }\overbrace{a+b}^{k}");
         assert!(matches!(&n[0], MNode::Run(r) if r.scr == MScr::DoubleStruck));
         let _ = (LimLoc::UndOvr, MathJc::Center);
+    }
+
+    #[test]
+    fn latex_binom_round_trip() {
+        let a = parse_latex(r"\binom{n}{k}");
+        let l = to_latex(&a);
+        assert_eq!(parse_latex(&l), a, "exported as {l}");
+        let nobar = |n: &str, k: &str| MNode::Frac { kind: FracKind::NoBar, num: parse_latex(n), den: parse_latex(k) };
+        let b = parse_latex(r"\genfrac{}{}{0pt}{}{n}{k}");
+        assert_eq!(b, vec![nobar("n", "k")]);
+        assert_eq!(parse_latex(&to_latex(&b)), b);
+        // Other spellings of a zero thickness.
+        for z in ["0 pt", "0.0pt", r"0\,pt", "0em"] {
+            let c = parse_latex(&format!(r"\genfrac{{}}{{}}{{{z}}}{{}}{{n}}{{k}}"));
+            assert_eq!(c, vec![nobar("n", "k")], "thickness {z}");
+        }
+        // A non-zero or default thickness keeps the bar.
+        for t in ["1pt", "0.4pt", ""] {
+            let c = parse_latex(&format!(r"\genfrac{{}}{{}}{{{t}}}{{}}{{n}}{{k}}"));
+            let bar = MNode::Frac { kind: FracKind::Bar, num: parse_latex("n"), den: parse_latex("k") };
+            assert_eq!(c, vec![bar], "thickness {t:?}");
+        }
+        // Delimiters are kept.
+        let d = parse_latex(r"\genfrac(){0pt}{}{n}{k}");
+        assert_eq!(d, a);
+        let e = parse_latex(r"\genfrac[]{0pt}{}{n}{k}");
+        assert!(matches!(&e[..], [MNode::Delim { beg: Some('['), end: Some(']'), .. }]), "{e:#?}");
+        assert_eq!(parse_latex(&to_latex(&e)), e);
     }
 
     #[test]

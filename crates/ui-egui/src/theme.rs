@@ -248,6 +248,8 @@ pub struct Tokens {
     pub pressed: Color32,
     pub checked: Color32,
     pub accent: Color32,
+    /// The File page's side bar; white text and icons sit on it in both themes.
+    pub nav: Color32,
     pub accent_text: Color32,
     /// Text/icon colour drawn on top of `accent` (e.g. keytip badge letters).
     pub on_accent: Color32,
@@ -268,6 +270,9 @@ pub struct Tokens {
     /// Alignment guides while moving a picture or shape: drawn on the page, so legible on white
     /// paper in both themes.
     pub guide: Color32,
+    /// The frame around the equation the caret is in, its grip and its options strip: drawn on
+    /// the page, so the same light blue in both themes.
+    pub equation_box: Color32,
     /// Crop mode: the crop handles, and the dim over the cropped-away part of a picture.
     pub crop_handle: Color32,
     pub crop_dim: Color32,
@@ -314,6 +319,7 @@ impl Tokens {
             pressed: Color32::from_rgb(0xD6, 0xD6, 0xD6),
             checked: Color32::from_rgb(0xDD, 0xE3, 0xF8),
             accent: APP_COLOR,
+            nav: APP_COLOR,
             accent_text: APP_INK,
             on_accent: Color32::WHITE,
             input: Color32::WHITE,
@@ -329,6 +335,7 @@ impl Tokens {
             handle: Color32::WHITE,
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x28),
             guide: Color32::from_rgb(0xC0, 0x28, 0x8C),
+            equation_box: Color32::from_rgb(0x6E, 0x9B, 0xE6),
             crop_handle: Color32::BLACK,
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
             balloon: Color32::WHITE,
@@ -377,6 +384,7 @@ impl Tokens {
             pressed: Color32::from_rgb(0x4A, 0x4A, 0x4A),
             checked: Color32::from_rgb(0x2E, 0x3A, 0x66),
             accent: Color32::from_rgb(0x7A, 0x93, 0xF0),
+            nav: Color32::from_rgb(0x27, 0x31, 0x5C),
             accent_text: Color32::from_rgb(0x9C, 0xB0, 0xF5),
             // Dark text on the light dark-theme accent: white on #7a93f0 is only 2.9:1 (#655).
             on_accent: Color32::from_rgb(0x11, 0x16, 0x2E),
@@ -394,6 +402,7 @@ impl Tokens {
             handle: Color32::from_rgb(0xF2, 0xF2, 0xF2),
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x5A),
             guide: Color32::from_rgb(0xE0, 0x4C, 0xB0),
+            equation_box: Color32::from_rgb(0x6E, 0x9B, 0xE6),
             crop_handle: Color32::BLACK,
             crop_dim: Color32::from_rgba_unmultiplied(0x30, 0x30, 0x30, 0xE0),
             balloon: Color32::from_rgb(0x2B, 0x2B, 0x2B),
@@ -562,6 +571,10 @@ pub fn font_definitions_language(prefer_hans: bool, prefer_korean: bool, system_
         // The same static bytes the document fonts use: one copy in the binary.
         add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
     }
+    // Georgian has no glyphs in Inter, Source Sans or the CJK faces: the craft-fonts Geor face.
+    for f in wordcraft_fonts::georgian_fonts() {
+        add_cjk(&mut fonts, format!("{} {}", f.family, f.style), FontData::from_static(f.bytes));
+    }
     // The embedded faces leave interface characters without a glyph (a build without craft-fonts,
     // without its Chinese face, #241, or with faces lacking catalog characters, #486): an
     // installed CJK font after them, so the menus don't show boxes or `?`.
@@ -678,6 +691,35 @@ pub fn text_width(painter: &egui::Painter, text: &str, font: &FontId, tracking: 
         return painter.layout_no_wrap(text.to_string(), font.clone(), color).size().x;
     }
     painter.layout_job(tracked_job(text, font, tracking, color)).size().x
+}
+
+/// The text as it fits in `width`: shortened with an ellipsis when it is too long, and empty
+/// when not even the ellipsis fits (#2402). The beginning of the text is kept, so the reader
+/// still sees what the message is about.
+pub fn fit_text(painter: &egui::Painter, text: &str, font: &FontId, tracking: f32, color: Color32, width: f32) -> String {
+    if text.is_empty() || width <= 0.0 {
+        return String::new();
+    }
+    let full = text_width(painter, text, font, tracking, color);
+    if full <= width {
+        return text.to_string();
+    }
+    let count = text.chars().count();
+    // A rough cut first, so a long text doesn't need a layout for every character.
+    let per_char = (full / count as f32).max(0.5);
+    let mut shown: String = text.chars().take((width / per_char) as usize).collect();
+    while !shown.is_empty() && text_width(painter, &format!("{shown}…"), font, tracking, color) > width {
+        shown.pop();
+    }
+    if shown.is_empty() {
+        // Only the ellipsis is left: it stands for the whole text when it fits.
+        if text_width(painter, "…", font, tracking, color) <= width {
+            return "…".to_string();
+        }
+        return String::new();
+    }
+    shown.push('…');
+    shown
 }
 
 /// Paint one line of tracked text with the given anchor and return its rect.
@@ -815,6 +857,15 @@ mod tests {
         }
     }
 
+    /// White text and icons on the File page's side bar reach 4.5:1 in both themes.
+    #[test]
+    fn the_file_sidebar_reads_in_both_themes() {
+        for t in [super::Tokens::light(), super::Tokens::dark()] {
+            let r = contrast(egui::Color32::WHITE, t.nav);
+            assert!(r >= 4.5, "dark={}: white on the sidebar is {r:.2}:1", t.dark);
+        }
+    }
+
     /// #657: text field and combo outlines reach 3:1 against the field and everything it sits on.
     #[test]
     fn input_borders_reach_three_to_one() {
@@ -867,6 +918,20 @@ mod tests {
             let r = contrast(t.markup_edge, t.markup_area);
             assert!(r >= 1.1, "dark={}: the markup area edge is invisible ({r:.2}:1)", t.dark);
         }
+    }
+
+    /// The test root declares egui's `default_fonts` and `monochrome_emoji_fonts` features
+    /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
+    /// the front and SourceSans after egui's complete default fallback block, including the
+    /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
+    #[test]
+    fn interface_font_order_keeps_test_default_fonts_explicit() {
+        let defs = super::font_definitions(false, false);
+        let prop = &defs.families[&egui::FontFamily::Proportional];
+        assert_eq!(
+            prop.iter().take(6).map(String::as_str).collect::<Vec<_>>(),
+            ["Inter", "Ubuntu-Light", "egui-icons", "NotoEmoji-Regular", "emoji-icon-font", "SourceSans"]
+        );
     }
 
     /// #565: the composition of an input method (Bangla through ibus) drew as boxes because only the
@@ -929,6 +994,28 @@ mod tests {
                 assert!(!src.contains(b), "{name} hard-codes {b}; use theme::Tokens");
             }
         }
+    }
+
+    /// #2402: text that is too long for the room it has is shortened with an ellipsis, keeping
+    /// its beginning; text that fits is left alone.
+    #[test]
+    fn fit_text_shortens_text_that_does_not_fit() {
+        let long = "C:\\Test\\Documents\\Reports\\Final individual test folder\\Second level folder\\Project - Gadgets and sleep of teenagers.docx: The system cannot find the path specified. (os error 3)";
+        let font = super::TypeRung::Caption.regular();
+        let track = super::TypeRung::Caption.tracking();
+        let ctx = egui::Context::default();
+        let (mut whole, mut short, mut short_width, mut fitted) = (0.0, String::new(), 0.0, String::new());
+        ctx.run_ui(egui::RawInput::default(), |ui| {
+            whole = super::text_width(ui.painter(), long, &font, track, egui::Color32::BLACK);
+            short = super::fit_text(ui.painter(), long, &font, track, egui::Color32::BLACK, whole / 2.0);
+            short_width = super::text_width(ui.painter(), &short, &font, track, egui::Color32::BLACK);
+            fitted = super::fit_text(ui.painter(), long, &font, track, egui::Color32::BLACK, whole);
+        })
+        .drop_without_applying_deltas();
+        assert!(short.ends_with('…'), "{short}");
+        assert!(long.starts_with(short.trim_end_matches('…')), "{short}");
+        assert!(short_width <= whole / 2.0, "{short}");
+        assert_eq!(fitted, long, "text that fits is left as it is");
     }
 
     /// Symbols written as text in the interface code must exist in the interface fonts (Inter and

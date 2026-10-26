@@ -323,15 +323,6 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
             p.line_to((x1, y1));
             p
         }
-        ShapeKind::Arrow => poly(&[
-            (x0, cy - h * 0.2),
-            (x1 - h * 0.5, cy - h * 0.2),
-            (x1 - h * 0.5, y0),
-            (x1, cy),
-            (x1 - h * 0.5, y1),
-            (x1 - h * 0.5, cy + h * 0.2),
-            (x0, cy + h * 0.2),
-        ]),
         ShapeKind::DoubleArrow => {
             let ah = h * 0.4;
             poly(&[
@@ -415,33 +406,13 @@ pub fn shape_path(kind: ShapeKind, r: kurbo::Rect, corner: Option<u32>) -> BezPa
         }
 
         // Block Arrows
-        ShapeKind::LeftArrow => poly(&[
-            (x0, cy),
-            (x0 + h * 0.5, y0),
-            (x0 + h * 0.5, cy - h * 0.2),
-            (x1, cy - h * 0.2),
-            (x1, cy + h * 0.2),
-            (x0 + h * 0.5, cy + h * 0.2),
-            (x0 + h * 0.5, y1),
-        ]),
-        ShapeKind::UpArrow => poly(&[
-            (cx, y0),
-            (x1, y0 + w * 0.5),
-            (cx + w * 0.2, y0 + w * 0.5),
-            (cx + w * 0.2, y1),
-            (cx - w * 0.2, y1),
-            (cx - w * 0.2, y0 + w * 0.5),
-            (x0, y0 + w * 0.5),
-        ]),
-        ShapeKind::DownArrow => poly(&[
-            (cx - w * 0.2, y0),
-            (cx + w * 0.2, y0),
-            (cx + w * 0.2, y1 - w * 0.5),
-            (x1, y1 - w * 0.5),
-            (cx, y1),
-            (x0, y1 - w * 0.5),
-            (cx - w * 0.2, y1 - w * 0.5),
-        ]),
+        ShapeKind::Arrow | ShapeKind::ArrowLeft | ShapeKind::ArrowUp | ShapeKind::ArrowDown => {
+            let pts: Vec<(f64, f64)> = wordcraft_doc::wrap::arrow_outline(kind, w as f32, h as f32)
+                .iter()
+                .map(|&(u, v)| (x0 + f64::from(u) * w, y0 + f64::from(v) * h))
+                .collect();
+            poly(&pts)
+        }
         ShapeKind::LeftRightArrow => {
             let ah = h * 0.5;
             poly(&[

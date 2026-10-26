@@ -174,3 +174,17 @@ real_name = "Max Murphy"
 [people.SlavenDj]
 sync_github_name = true
 
+[people.asystemoffields]
+display_name = "asystemoffields"
+
+[people.dmim2502-commits]
+display_name = "Mulai"
+
+[people.Bortlesboat]
+real_name = "Andrew Barnes"
+
+[people.matstrange]
+sync_github_name = true
+
+[people.pakiat]
+display_name = "OtorO"

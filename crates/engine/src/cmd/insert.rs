@@ -2,7 +2,7 @@
 
 use serde_json::{Value, json};
 use wordcraft_doc::para::{Float, InlineObject, ShapeKind, Wrap};
-use wordcraft_doc::props::{Align, CharProps, Rgb, TabAlign, TabStop, TextColor};
+use wordcraft_doc::props::{Align, Border, Borders, CharProps, Rgb, TabAlign, TabStop, TextColor};
 use wordcraft_doc::{Block, Paragraph, PartKind, Path, Pos, StoryRef, Table, para_block};
 
 use super::{delete_selection, sel_result, split_para, type_text};
@@ -65,11 +65,13 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.createFooter", "Footer", "Insert › Header & Footer", |s, v| create_hf(s, v, false))
             .params(r#"{"page"?: number (0-based; default: the caret's section)} — the footer that page shows, created if it has none, with the caret in it"#),
         CommandSpec::new("insert.closeHeader", "Close Header and Footer", "Header & Footer", |s, _| {
+            // Back where the caret was in the body, as Word does, not on page 1.
+            let back = s.hf_return.take().filter(|_| s.in_header_footer());
             if !new_empty_headers(s).is_empty() {
                 // Its own undo step; a protected document keeps it, and the caret still leaves.
                 let _ = s.run("insert.removeEmptyHeaders", &json!({}));
             }
-            s.sel = Selection::caret(s.doc.start_of(StoryRef::Body));
+            s.sel = back.unwrap_or_else(|| Selection::caret(s.doc.start_of(StoryRef::Body)));
             sel_result(s)
         })
         .pure(),
@@ -219,14 +221,14 @@ pub(crate) fn picture(s: &mut Session, v: &Value) -> CmdResult {
     } else if let Some(path) = p::str(v, "path") {
         crate::io::read_file(path).map_err(CmdError::Failed)?
     } else {
-        s.ui_requests.push(json!({"open": "insertPicture"}));
+        s.push_ui_request(json!({"open": "insertPicture"}));
         return sel_result(s);
     };
     place_picture(s, bytes, p::f32(v, "width"), p::str(v, "alt").unwrap_or(""))
 }
 
-/// The media extension of an encoded image by its magic bytes, as `image_size` accepted it
-/// (TIFF included: the `image` crate decodes it).
+/// The media extension of an encoded image by its magic bytes, as the picture probe accepted it
+/// (TIFF included when its compression is one the `image` crate decodes within limits).
 pub(crate) fn image_ext(bytes: &[u8]) -> &'static str {
     match bytes.get(..4) {
         Some([0x89, b'P', b'N', b'G']) => "png",
@@ -247,14 +249,15 @@ fn place_picture(s: &mut Session, bytes: Vec<u8>, width: Option<f32>, alt: &str)
     if bytes.len() > 200 << 20 {
         return Err(CmdError::Failed("image is larger than 200 MB".into()));
     }
-    // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802).
-    let (natural_w, natural_h, ext) = if let Some((pw, ph)) = wordcraft_render::image_size(&bytes) {
-        let ext = image_ext(&bytes);
-        (pw as f32 * 0.75, ph as f32 * 0.75, ext)
-    } else if let Some(size) = wordcraft_render::metafile_size(&bytes) {
-        size
-    } else {
-        return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into()));
+    // Natural size: pixels at 96 ppi, or a metafile's own frame (WMF, EMF: #802). A picture that
+    // is never decoded (a TIFF with JPEG strips, #3645) isn't inserted.
+    let (natural_w, natural_h, ext) = match wordcraft_geom::picture::probe(&bytes) {
+        Ok(pic) => (pic.width as f32 * 0.75, pic.height as f32 * 0.75, image_ext(&bytes)),
+        Err(wordcraft_geom::picture::Refusal::Unsupported(why)) => return Err(CmdError::Failed(why.into())),
+        Err(_) => match wordcraft_render::metafile_size(&bytes) {
+            Some(size) => size,
+            None => return Err(CmdError::Failed("not a supported image (PNG, JPEG, GIF, WebP, BMP, WMF, EMF)".into())),
+        },
     };
     let key = s.doc.add_media(bytes, ext);
     // Fitted to the text width.
@@ -293,7 +296,7 @@ fn icon(s: &mut Session, v: &Value) -> CmdResult {
             .iter()
             .map(|i| json!({"id": i.id, "name": i.name, "category": i.category.name(), "keywords": i.keywords}))
             .collect();
-        s.ui_requests.push(json!({"open": "icons"}));
+        s.push_ui_request(json!({"open": "icons"}));
         return Ok(json!({"icons": icons}));
     };
     let icon = icon_lib::find(id).ok_or_else(|| CmdError::Params(format!("no icon {id:?} (insert.icon without an id lists them)")))?;
@@ -357,8 +360,19 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         }
     };
     let stroke = p::str(v, "stroke").and_then(Rgb::parse).or(Some(Rgb(0x0E, 0x40, 0x5A)));
-    let obj =
-        InlineObject::Shape { kind, w, h, fill, stroke, stroke_width: 1.0, float, story: None, freeform: None, effects: Default::default(), extra };
+    let obj = InlineObject::Shape {
+        kind,
+        w,
+        h,
+        fill: fill.map(wordcraft_doc::fill::Fill::solid),
+        stroke,
+        stroke_width: 1.0,
+        float,
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra,
+    };
     // A selected Drawing Canvas takes it in (and stays selected for the next one).
     if super::canvas::add_member(s, obj.clone())?.is_some() {
         return sel_result(s);
@@ -382,7 +396,7 @@ fn text_box(s: &mut Session, v: &Value) -> CmdResult {
         kind: ShapeKind::TextBox,
         w,
         h,
-        fill: Some(Rgb::WHITE),
+        fill: Some(wordcraft_doc::fill::Fill::solid(Rgb::WHITE)),
         stroke: Some(Rgb::BLACK),
         stroke_width: 0.75,
         float: Float::default(),
@@ -445,7 +459,7 @@ fn link(s: &mut Session, v: &Value) -> CmdResult {
         None => match place_target(s, v)? {
             Some(t) => t,
             None => {
-                s.ui_requests.push(json!({"open": "link"}));
+                s.push_ui_request(json!({"open": "link"}));
                 return sel_result(s);
             }
         },
@@ -473,9 +487,11 @@ fn link(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
-/// Whether `name` can name a bookmark: no spaces, at most 40 characters, not starting with a digit.
+/// Whether `name` can name a bookmark: starts with a letter or underscore, contains only alphanumeric characters
+/// or underscores, and is at most 40 characters (#3491). Word allows leading underscores for hidden bookmarks (_Toc, _Ref).
 pub fn bookmark_name_ok(name: &str) -> bool {
-    !name.is_empty() && !name.contains(' ') && name.len() <= 40 && !name.chars().next().is_some_and(|c| c.is_ascii_digit())
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_alphabetic() || c == '_') && chars.all(|c| c.is_alphanumeric() || c == '_') && name.chars().count() <= 40
 }
 
 /// Where bookmark `name` is: see [`bookmark_span`]. `None` when there is no such bookmark.
@@ -587,18 +603,42 @@ fn hf_part(s: &mut Session, header: bool) -> u32 {
     id
 }
 
+/// Three independently editable cells spanning the section's text width.
+fn three_column_hf(s: &Session, style: &str) -> wordcraft_doc::Blocks {
+    let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+    // The section `section_mut` would pick, read without making anything unique.
+    let sections = s.doc.sections();
+    let own = sections.iter().position(|(end, _)| block <= *end).filter(|i| i + 1 < sections.len()).and_then(|i| sections.get(i));
+    let width = own.map_or_else(|| s.doc.last_section.text_width(), |(_, sec)| sec.text_width());
+    let mut table = Table::new(1, 3, width);
+    table.props.style = Some("TableNormal".into());
+    table.props.width = Some(width);
+    table.props.fixed = true;
+    // Explicit nil borders also override borders inherited from the document's table style.
+    table.props.borders = Some(Borders::all(Border::default()));
+    for row in &mut table.rows {
+        for (cell, align) in row.cells.iter_mut().zip([Align::Left, Align::Center, Align::Right]) {
+            let mut para = Paragraph::new().styled(style);
+            para.props.align = Some(align);
+            cell.blocks = vec![para_block(para)];
+        }
+    }
+    // Keep a trailing paragraph so the story can also be edited after the table.
+    vec![std::sync::Arc::new(Block::Table(table)), para_block(Paragraph::new().styled(style))]
+}
+
 fn header_footer(s: &mut Session, v: &Value, header: bool) -> CmdResult {
     let id = hf_part(s, header);
     let style = if header { "Header" } else { "Footer" };
     if let Some(text) = p::str(v, "text") {
         let blocks = text.split('\n').map(|l| para_block(Paragraph::with_text(l, CharProps::default()).styled(style))).collect();
         s.doc.set_story(StoryRef::Part(id), blocks)?;
+    } else if p::str(v, "preset") == Some("blankThree") {
+        let blocks = three_column_hf(s, style);
+        s.doc.set_story(StoryRef::Part(id), blocks)?;
     } else if let Some(preset) = p::str(v, "preset") {
         let mut para = Paragraph::new().styled(style);
         match preset {
-            "blankThree" => {
-                para.insert_text(0, "[Type here]\t[Type here]\t[Type here]", &CharProps::default())?;
-            }
             "title" => {
                 para.insert_text(0, if s.doc.core.title.is_empty() { "[Document title]" } else { &s.doc.core.title }, &CharProps::default())?;
                 para.props.align = Some(Align::Center);
@@ -859,18 +899,19 @@ pub fn format_date_parts(fmt: &str, y: i64, m: usize, d: u32, (hh, mm, ss): (u32
             n += 1;
         }
         match (c, n) {
-            ('y', 4..) => out.push_str(&format!("{y:04}")),
-            ('y', _) => out.push_str(&format!("{:02}", y % 100)),
+            ('y' | 'Y', 4..) => out.push_str(&format!("{y:04}")),
+            ('y' | 'Y', _) => out.push_str(&format!("{:02}", y % 100)),
             ('M', 4..) => out.push_str(month),
             ('M', 3) => out.push_str(month.get(..3).unwrap_or(month)),
             ('M', 2) => out.push_str(&format!("{m:02}")),
             ('M', 1) => out.push_str(&m.to_string()),
-            ('d', 4..) => out.push_str(day),
-            ('d', 3) => out.push_str(day.get(..3).unwrap_or(day)),
-            ('d', 2) => out.push_str(&format!("{d:02}")),
-            ('d', 1) => out.push_str(&d.to_string()),
+            ('d' | 'D', 4..) => out.push_str(day),
+            ('d' | 'D', 3) => out.push_str(day.get(..3).unwrap_or(day)),
+            ('d' | 'D', 2) => out.push_str(&format!("{d:02}")),
+            ('d' | 'D', 1) => out.push_str(&d.to_string()),
             ('H', 2..) => out.push_str(&format!("{hh:02}")),
             ('H', _) => out.push_str(&hh.to_string()),
+            ('h', 2..) => out.push_str(&format!("{:02}", if hh.is_multiple_of(12) { 12 } else { hh % 12 })),
             ('h', _) => out.push_str(&(if hh.is_multiple_of(12) { 12 } else { hh % 12 }).to_string()),
             ('m', 2..) => out.push_str(&format!("{mm:02}")),
             ('m', _) => out.push_str(&mm.to_string()),
@@ -980,9 +1021,128 @@ fn cover_page(s: &mut Session, v: &Value) -> CmdResult {
     sel_result(s)
 }
 
+/// Why Insert › Drop Cap is off at the caret, as in Word: in a table cell, in an empty paragraph
+/// and in one that starts with a space.
+fn drop_cap_off(s: &Session) -> Option<&'static str> {
+    if s.sel.focus.path.cell().is_some() {
+        return Some("drop caps can't go in a table");
+    }
+    let first = s.doc.para_at(&s.sel.focus).and_then(|p| p.text.chars().next());
+    match first {
+        None => Some("the paragraph is empty"),
+        Some(c) if c.is_whitespace() => Some("the paragraph starts with a space"),
+        Some(_) => None,
+    }
+}
+
+/// Insert › Drop Cap and Drop Cap Options: none, or the letter dropped into the text or hung in
+/// the margin, `lines` tall, `distance` points from the text, in `font` (unset: the text's).
+/// None takes all of it away, the letter's font with it.
+fn drop_cap(s: &mut Session, v: &Value) -> CmdResult {
+    let lines = v.get("lines").and_then(Value::as_f64).filter(|l| l.is_finite());
+    let none = p::str(v, "position") == Some("none") || lines == Some(0.0);
+    let margin = p::str(v, "position") == Some("margin");
+    let lines = lines.map_or(3.0, |l| l.round().clamp(1.0, 10.0)) as u8;
+    let distance = p::f32(v, "distance").map_or(0.0, |d| d.clamp(0.0, wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE));
+    // A family name, not a paragraph of text.
+    let font = p::str(v, "font").map(str::trim).filter(|f| !f.is_empty()).map(|f| f.chars().take(64).collect::<String>());
+    super::para::fmt(s, &|p| {
+        p.drop_cap = (!none).then_some(lines);
+        p.drop_cap_margin = (!none && margin).then_some(true);
+        p.drop_cap_distance = (!none && distance > 0.0).then_some(distance);
+        p.drop_cap_font = font.clone().filter(|_| !none);
+    })
+}
+
+/// Insert › Drop Cap at the caret: the menu's highlight and the Drop Cap dialog's values.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DropCapState {
+    /// `none`, `dropped` or `margin`.
+    pub position: &'static str,
+    /// Lines to drop (3 when there is no drop cap).
+    pub lines: u8,
+    /// Distance from the text, points.
+    pub distance: f32,
+    /// The letter's own font, if it has one.
+    pub font: Option<String>,
+    /// The font of the paragraph's first character.
+    pub text_font: String,
+}
+
+pub fn drop_cap_state(s: &Session) -> DropCapState {
+    let para = s.doc.para_at(&s.sel.focus);
+    let props = para.map(|p| p.props.clone()).unwrap_or_default();
+    let rp = s.doc.styles.resolve_para(&props);
+    let first = para.map(|p| p.props_at(0).clone()).unwrap_or_default();
+    let text_font = s.doc.styles.resolve_char_in(props.style.as_deref(), None, &first).font;
+    DropCapState {
+        position: match (rp.drop_cap, rp.drop_cap_margin) {
+            (0, _) => "none",
+            (_, true) => "margin",
+            _ => "dropped",
+        },
+        lines: if rp.drop_cap == 0 { 3 } else { rp.drop_cap },
+        distance: if rp.drop_cap == 0 { 0.0 } else { rp.drop_cap_distance },
+        font: rp.drop_cap_font.filter(|_| rp.drop_cap > 0),
+        text_font,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A 4 × 4 RGB TIFF that says its strips are JPEG (they aren't): its header still reads.
+    fn jpeg_strip_tiff() -> Vec<u8> {
+        let mut t = Vec::new();
+        image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut t), image::ImageFormat::Tiff).unwrap();
+        assert_eq!(&t[..4], b"II*\0");
+        let ifd = u32::from_le_bytes(t[4..8].try_into().unwrap()) as usize;
+        let n = usize::from(u16::from_le_bytes([t[ifd], t[ifd + 1]]));
+        let e = (0..n).map(|i| ifd + 2 + 12 * i).find(|&e| t[e..e + 2] == 259u16.to_le_bytes()).unwrap();
+        t[e + 8..e + 10].copy_from_slice(&7u16.to_le_bytes());
+        t
+    }
+
+    /// #3645: a TIFF with JPEG strips is never decoded, so it is neither inserted nor swapped in;
+    /// before, its readable header was all insertion looked at.
+    #[test]
+    fn tiffs_with_jpeg_strips_are_refused() {
+        let tiff = jpeg_strip_tiff();
+        assert_eq!(wordcraft_render::image_size(&tiff), Some((4, 4)), "its header reads");
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        let e = s.run("insert.picture", &json!({"data": base64_encode(&tiff)})).unwrap_err().to_string();
+        assert!(e.contains("TIFF"), "{e}");
+        assert!(s.doc.media.is_empty());
+        let mut plain = Vec::new();
+        image::RgbImage::new(4, 4).write_to(&mut std::io::Cursor::new(&mut plain), image::ImageFormat::Tiff).unwrap();
+        s.run("insert.picture", &json!({"data": base64_encode(&plain)})).unwrap();
+        let e = s.run("picture.change", &json!({"data": base64_encode(&tiff)})).unwrap_err().to_string();
+        assert!(e.contains("TIFF"), "{e}");
+        assert_eq!(s.doc.media.len(), 1);
+    }
+
+    /// Closing the header or footer (Esc, the ribbon) puts the caret back where it was in the
+    /// body, not on page 1 (#3331).
+    #[test]
+    fn close_header_returns_to_the_body_selection() {
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.run("text.insert", &json!({"text": "One"})).unwrap();
+        s.run("insert.pageBreak", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Two words here"})).unwrap();
+        s.run("select.text", &json!({"text": "words"})).unwrap();
+        let before = s.sel.clone();
+        // A header written to stays.
+        s.run("insert.editHeader", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "Head"})).unwrap();
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        assert_eq!(s.sel, before);
+        // An empty one made by a double-click on page 2 is taken away again.
+        s.run("insert.editFooter", &json!({"page": 1})).unwrap();
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        assert_eq!(s.sel, before);
+        assert_eq!(s.doc.last_section.footers, Default::default());
+    }
 
     /// #960: editing the header of a page that has none creates the one that page shows (first
     /// page, even page or default); typing goes into it, and closing an unwritten one takes it
@@ -1190,6 +1350,47 @@ mod tests {
         assert_eq!(crate::cmd::references::bookmark_text(&s.doc, "Spot").as_deref(), Some("delta"));
     }
 
+    /// #3491: Bookmark names are validated by Unicode character count and character classes.
+    #[test]
+    fn bookmark_name_validation_rules() {
+        // Valid names:
+        assert!(bookmark_name_ok("Mark1"));
+        assert!(bookmark_name_ok("A"));
+        assert!(bookmark_name_ok("Alpha_Beta_123"));
+        // Valid leading underscore (Word hidden bookmarks, e.g. _Toc, _Ref, _Hidden):
+        assert!(bookmark_name_ok("_Hidden"));
+        assert!(bookmark_name_ok("_foo"));
+        // Valid 27-character Unicode Cyrillic name (51 UTF-8 bytes):
+        assert!(bookmark_name_ok("быстрый_доступ_к_документам"));
+        // Valid 40-character name:
+        let exactly_40 = "a".repeat(40);
+        assert!(bookmark_name_ok(&exactly_40));
+        let exactly_40_unicode = "я".repeat(40);
+        assert!(bookmark_name_ok(&exactly_40_unicode));
+
+        // Invalid: empty
+        assert!(!bookmark_name_ok(""));
+        // Invalid: leading digit
+        assert!(!bookmark_name_ok("1mark"));
+        // Invalid: symbols / punctuation
+        assert!(!bookmark_name_ok("a&b"));
+        assert!(!bookmark_name_ok("a!b"));
+        assert!(!bookmark_name_ok("a-b"));
+        assert!(!bookmark_name_ok("a.b"));
+        assert!(!bookmark_name_ok("foo bar"));
+        // Invalid: more than 40 characters
+        assert!(!bookmark_name_ok(&"a".repeat(41)));
+        assert!(!bookmark_name_ok(&"я".repeat(41)));
+
+        // Verification through `insert.bookmark` command
+        let mut s = Session::new(wordcraft_doc::Document::from_text("Test content"));
+        assert!(s.run("insert.bookmark", &json!({"name": "быстрый_доступ_к_документам"})).is_ok());
+        assert!(s.run("insert.bookmark", &json!({"name": "_Hidden"})).is_ok());
+        assert!(s.run("insert.bookmark", &json!({"name": "1mark"})).is_err());
+        assert!(s.run("insert.bookmark", &json!({"name": "a&b"})).is_err());
+        assert!(s.run("insert.bookmark", &json!({"name": "a!b"})).is_err());
+    }
+
     /// Insert › Symbol with a font: only the symbol takes it, the caret's font carries on after.
     #[test]
     fn a_mixed_symbol_string_keeps_symbols_and_text_apart() {
@@ -1227,6 +1428,13 @@ mod tests {
 
     #[test]
     fn date_pictures() {
+        // Word accepts either case for the day and year instructions.
+        assert_eq!(format_date_parts("MM/DD/YYYY", 2026, 10, 21, (17, 27, 3), 0), "10/21/2026");
+        assert_eq!(format_date_parts("D MMMM YYYY", 2026, 10, 21, (17, 27, 3), 0), "21 October 2026");
+        // Both 12-hour instructions pad a single-digit hour; only the 12-hour one wraps at noon.
+        assert_eq!(format_date_parts("hh:mm", 2026, 10, 21, (17, 27, 3), 0), "05:27");
+        assert_eq!(format_date_parts("h:mm", 2026, 10, 21, (17, 27, 3), 0), "5:27");
+        assert_eq!(format_date_parts("HH:mm", 2026, 10, 21, (5, 7, 3), 0), "05:07");
         let d = format_date("yyyy-MM-dd");
         assert_eq!(d.len(), 10);
         assert!(format_date("MMMM d, yyyy").contains(", "));
@@ -1237,72 +1445,5 @@ mod tests {
         assert_eq!(date_picture(r#"DATE \@ "MMMM d, yyyy" \* MERGEFORMAT"#).as_deref(), Some("MMMM d, yyyy"));
         assert_eq!(date_picture(r#"TIME \@ HH:mm"#).as_deref(), Some("HH:mm"));
         assert_eq!(date_picture("DATE"), None);
-    }
-}
-
-/// Why Insert › Drop Cap is off at the caret, as in Word: in a table cell, in an empty paragraph
-/// and in one that starts with a space.
-fn drop_cap_off(s: &Session) -> Option<&'static str> {
-    if s.sel.focus.path.cell().is_some() {
-        return Some("drop caps can't go in a table");
-    }
-    let first = s.doc.para_at(&s.sel.focus).and_then(|p| p.text.chars().next());
-    match first {
-        None => Some("the paragraph is empty"),
-        Some(c) if c.is_whitespace() => Some("the paragraph starts with a space"),
-        Some(_) => None,
-    }
-}
-
-/// Insert › Drop Cap and Drop Cap Options: none, or the letter dropped into the text or hung in
-/// the margin, `lines` tall, `distance` points from the text, in `font` (unset: the text's).
-/// None takes all of it away, the letter's font with it.
-fn drop_cap(s: &mut Session, v: &Value) -> CmdResult {
-    let lines = v.get("lines").and_then(Value::as_f64).filter(|l| l.is_finite());
-    let none = p::str(v, "position") == Some("none") || lines == Some(0.0);
-    let margin = p::str(v, "position") == Some("margin");
-    let lines = lines.map_or(3.0, |l| l.round().clamp(1.0, 10.0)) as u8;
-    let distance = p::f32(v, "distance").map_or(0.0, |d| d.clamp(0.0, wordcraft_doc::resolve::MAX_DROP_CAP_DISTANCE));
-    // A family name, not a paragraph of text.
-    let font = p::str(v, "font").map(str::trim).filter(|f| !f.is_empty()).map(|f| f.chars().take(64).collect::<String>());
-    super::para::fmt(s, &|p| {
-        p.drop_cap = (!none).then_some(lines);
-        p.drop_cap_margin = (!none && margin).then_some(true);
-        p.drop_cap_distance = (!none && distance > 0.0).then_some(distance);
-        p.drop_cap_font = font.clone().filter(|_| !none);
-    })
-}
-
-/// Insert › Drop Cap at the caret: the menu's highlight and the Drop Cap dialog's values.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DropCapState {
-    /// `none`, `dropped` or `margin`.
-    pub position: &'static str,
-    /// Lines to drop (3 when there is no drop cap).
-    pub lines: u8,
-    /// Distance from the text, points.
-    pub distance: f32,
-    /// The letter's own font, if it has one.
-    pub font: Option<String>,
-    /// The font of the paragraph's first character.
-    pub text_font: String,
-}
-
-pub fn drop_cap_state(s: &Session) -> DropCapState {
-    let para = s.doc.para_at(&s.sel.focus);
-    let props = para.map(|p| p.props.clone()).unwrap_or_default();
-    let rp = s.doc.styles.resolve_para(&props);
-    let first = para.map(|p| p.props_at(0).clone()).unwrap_or_default();
-    let text_font = s.doc.styles.resolve_char_in(props.style.as_deref(), None, &first).font;
-    DropCapState {
-        position: match (rp.drop_cap, rp.drop_cap_margin) {
-            (0, _) => "none",
-            (_, true) => "margin",
-            _ => "dropped",
-        },
-        lines: if rp.drop_cap == 0 { 3 } else { rp.drop_cap },
-        distance: if rp.drop_cap == 0 { 0.0 } else { rp.drop_cap_distance },
-        font: rp.drop_cap_font.filter(|_| rp.drop_cap > 0),
-        text_font,
     }
 }

@@ -77,8 +77,8 @@ pub fn reroute(s: &mut Session) -> bool {
     let mut moved = false;
     for pos in groups {
         if let Ok(para) = s.doc.para_mut(pos.story, &pos.path)
-            && let Some(InlineObject::Group { children, .. }) = para.object_at_mut(pos.off)
-            && wordcraft_doc::connector::reroute_group(children)
+            && let Some(group @ InlineObject::Group { .. }) = para.object_at_mut(pos.off)
+            && wordcraft_doc::connector::reroute_group(group)
         {
             para.touch();
             moved = true;
@@ -289,4 +289,104 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
     reroute(s);
     let o = s.doc.para_at(&pos).and_then(|p| p.object_at(pos.off)).cloned();
     Ok(json!({"object": serde_json::to_value(o).unwrap_or(Value::Null)}))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wordcraft_doc::connector::ShapeExtra;
+    use wordcraft_doc::para::{Float, GroupChild, ShapeKind};
+
+    fn shape(kind: ShapeKind, extra: ShapeExtra, float: Float) -> InlineObject {
+        InlineObject::Shape {
+            kind,
+            w: 40.0,
+            h: 20.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float,
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra,
+        }
+    }
+
+    fn visual_ends(group: &InlineObject) -> ((f32, f32), (f32, f32)) {
+        let InlineObject::Group { w, h, float, .. } = group else { panic!("group") };
+        let rects = group.group_rects(0.0, 0.0, *w, *h);
+        let ([x, y, w, h], obj) = rects[1];
+        let own = obj.frame().unwrap().2.spin();
+        let outer = float.spin();
+        let turn = |(x, y)| {
+            let (x, y) = own.apply(rects[1].0[0] + w / 2.0, rects[1].0[1] + h / 2.0, x, y);
+            let InlineObject::Group { w, h, .. } = group else { panic!("group") };
+            outer.apply(*w / 2.0, *h / 2.0, x, y)
+        };
+        (turn((x, y)), turn((x + w, y + h)))
+    }
+
+    #[test]
+    fn rerouting_scaled_group_preserves_visual_free_and_unresolved_ends() {
+        for (w, h) in [(200.0, 300.0), (400.0, 600.0), (400.0, 150.0)] {
+            for kind in [ShapeKind::StraightConnector, ShapeKind::ElbowConnector, ShapeKind::CurvedConnector] {
+                for rot in [30.0, 90.0] {
+                    for (flip_h, flip_v) in [(false, false), (true, false), (false, true), (true, true)] {
+                        for free in [None, Some(ConnEnd { id: 404, site: 0 }), Some(ConnEnd { id: 7, site: 99 })] {
+                            for free_start in [false, true] {
+                                let attached = Some(ConnEnd { id: 7, site: 3 });
+                                let (start, end) = if free_start { (free, attached) } else { (attached, free) };
+                                let group = InlineObject::Group {
+                                    w,
+                                    h,
+                                    ch_w: 200.0,
+                                    ch_h: 300.0,
+                                    float: Float { rot: 25.0, flip_h: true, ..Default::default() },
+                                    canvas: None,
+                                    children: vec![
+                                        GroupChild {
+                                            x: 100.0,
+                                            y: 200.0,
+                                            obj: shape(ShapeKind::Rectangle, ShapeExtra { id: 7, ..Default::default() }, Float::default()),
+                                        },
+                                        GroupChild {
+                                            x: 10.0,
+                                            y: 30.0,
+                                            obj: shape(
+                                                kind,
+                                                ShapeExtra { start, end, ..Default::default() },
+                                                Float { rot, flip_h, flip_v, ..Default::default() },
+                                            ),
+                                        },
+                                    ],
+                                };
+                                // Rendering scales each child rectangle before applying its own spin.
+                                let before = visual_ends(&group);
+                                let expected = if free_start { before.0 } else { before.1 };
+                                let mut s = Session::new(wordcraft_doc::Document::new());
+                                let pos = s.doc.start_of(StoryRef::Body);
+                                s.doc.para_mut(pos.story, &pos.path).unwrap().insert_object(pos.off, group, &Default::default()).unwrap();
+                                assert!(reroute(&mut s));
+                                let group = s.doc.para_at(&pos).unwrap().object_at(pos.off).unwrap();
+                                let after = visual_ends(group);
+                                let actual = if free_start { after.0 } else { after.1 };
+                                assert!(
+                                    (actual.0 - expected.0).abs() < 0.001 && (actual.1 - expected.1).abs() < 0.001,
+                                    "{w}x{h}, {kind:?}, {rot}, {flip_h}, {flip_v}, {free_start}: {actual:?} != {expected:?}"
+                                );
+                                let InlineObject::Group { children, .. } = group else { panic!("group") };
+                                let c = &children[1];
+                                let InlineObject::Shape { w, h, float, .. } = &c.obj else { panic!("connector") };
+                                let routed = ends(c.x, c.y, *w, *h, float.flip_h, float.flip_v);
+                                assert_eq!(if free_start { routed.1 } else { routed.0 }, (140.0, 210.0), "resolved sites stay in child coordinates");
+                                assert_eq!(float.rot, 0.0);
+                                assert!(!reroute(&mut s), "rerouting must settle");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }

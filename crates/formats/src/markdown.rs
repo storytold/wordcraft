@@ -5,11 +5,12 @@
 //! bottom-border paragraph), bullet and ordered lists (nested by indentation), GFM pipe tables,
 //! and inlines: emphasis/strong (the CommonMark delimiter algorithm), `~~strike~~`, code spans,
 //! inline links, autolinks, images (`data:` URIs become pictures, others their alt text),
-//! backslash escapes, entities, `<br>` and `<a id>` anchors.
+//! backslash escapes, entities, HTML comments (`<!-- ... -->`), `<br>` and `<a id>` anchors.
 //!
 //! Export writes the same constructs; pictures become `![alt](media-name)` placeholders.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use wordcraft_doc::{Align, Document};
 
@@ -24,19 +25,141 @@ const MAX_NEST: usize = 32;
 
 /// Parse Markdown text into a document.
 pub fn import(text: &str) -> Document {
+    model::begin_import();
     model::to_doc(&parse(text))
 }
 
 /// [`import`] onto `page`: Markdown gives no page size (#1381).
 pub fn import_on(text: &str, page: &wordcraft_doc::SectionProps) -> Document {
+    model::begin_import();
     model::to_doc_in(&parse(text), page.clone())
+}
+
+/// Link reference definitions: the normalised label to its destination.
+/// A destination is shared by every reference to it, not copied into each (#3713).
+pub type Refs = HashMap<String, Arc<str>>;
+
+/// A label as CommonMark compares them: case-folded, and any run of white space one space
+/// (§4.7, "matches"). `[FOO bar]` and `[foo   BAR]` are the same label.
+fn ref_label(raw: &str) -> String {
+    raw.split_whitespace().collect::<Vec<_>>().join(" ").to_lowercase()
+}
+
+/// A link reference definition on its own line: `[label]: destination "optional title"`. The
+/// destination may be wrapped in `<...>`. Returns the label and the destination.
+///
+/// CommonMark allows the title on the following line and the label to span lines; a definition
+/// written across lines is left as text here, which is what it was before these were read at all.
+fn link_definition(line: &str) -> Option<(String, String)> {
+    let t = line.trim_start();
+    // Up to three spaces of indentation; four makes it indented code.
+    if line.len() - t.len() > 3 || !t.starts_with('[') {
+        return None;
+    }
+    let bytes = t.as_bytes();
+    // The label ends at the first unescaped `]`, and cannot be empty or hold an unescaped `[`.
+    let mut i = 1;
+    let mut close = None;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'\\' => i += 1,
+            b'[' => return None,
+            b']' => {
+                close = Some(i);
+                break;
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let close = close?;
+    let label = ref_label(t.get(1..close)?);
+    // `[^label]: ...` is a footnote definition, which this importer leaves as text.
+    if label.starts_with('^') {
+        return None;
+    }
+    if label.is_empty() || t.as_bytes().get(close + 1) != Some(&b':') {
+        return None;
+    }
+    let rest = t.get(close + 2..)?.trim_start();
+    if rest.is_empty() {
+        return None;
+    }
+    // The destination: `<...>`, else up to the next space. What follows may only be a title.
+    let (dest, after) = match rest.strip_prefix('<') {
+        Some(inner) => {
+            let end = inner.find('>')?;
+            (inner.get(..end)?.to_string(), inner.get(end + 1..)?)
+        }
+        None => {
+            let end = rest.find(char::is_whitespace).unwrap_or(rest.len());
+            (rest.get(..end)?.to_string(), rest.get(end..)?)
+        }
+    };
+    if dest.is_empty() {
+        return None;
+    }
+    let title = after.trim();
+    let titled =
+        title.is_empty() || (title.len() >= 2 && matches!((title.chars().next()?, title.chars().last()?), ('"', '"') | ('\'', '\'') | ('(', ')')));
+    titled.then_some((label, dest))
+}
+
+/// Take the link reference definitions out of `lines`, leaving the rest. Lines inside a fenced
+/// code block are left alone: a definition there is code, not a definition. Fences open and
+/// close by the same rules [`parse_blocks`] applies, or a line it reads as code would be read
+/// here as a definition and deleted.
+///
+/// A definition has to start a block: CommonMark §4.7 forbids one from interrupting a paragraph,
+/// and a line like `[Warning]: unstable` in the middle of one is the author's text. This pass
+/// sees lines without the block structure around them, so it takes a definition only after a
+/// blank line, at the start of the document, after a heading or thematic break, or after another
+/// definition. A definition anywhere else stays in the document and reads as text, which is what
+/// it did before definitions were understood at all; deleting a line that was part of a
+/// paragraph would lose it silently.
+fn take_definitions(lines: &mut Vec<String>) -> Refs {
+    let mut refs = Refs::new();
+    let mut open: Option<(char, usize)> = None;
+    // The start of the document begins a block.
+    let mut starts_block = true;
+    lines.retain(|line| {
+        let t = line.trim_start_matches([' ', '\t']);
+        // Four spaces of indentation is code, not a fence (`parse_blocks`), on both sides.
+        let marker = (indent(line) < 4).then(|| fence(t)).flatten();
+        match open {
+            Some((c, n)) => {
+                // A closing fence holds nothing but its own run of fence characters.
+                if marker.is_some_and(|(fc, fl)| fc == c && fl >= n) && t.trim_start_matches(c).trim().is_empty() {
+                    open = None;
+                    starts_block = true;
+                }
+                return true;
+            }
+            None => {
+                if let Some(f) = marker {
+                    open = Some(f);
+                    return true;
+                }
+            }
+        }
+        if starts_block && let Some((label, dest)) = link_definition(line) {
+            // The first definition of a label wins, as CommonMark says, and definitions may
+            // follow one another.
+            refs.entry(label).or_insert(dest.into());
+            return false;
+        }
+        starts_block = is_blank(line) || atx_heading(t).is_some() || thematic_break(t);
+        true
+    });
+    refs
 }
 
 /// Parse Markdown text into the flow model.
 pub fn parse(text: &str) -> model::Flow {
     let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
-    let lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
-    let mut blocks = parse_blocks(&lines, 0, 0);
+    let mut lines: Vec<String> = text.split('\n').map(|l| expand_tabs(l.trim_end_matches('\r'))).collect();
+    let refs = take_definitions(&mut lines);
+    let mut blocks = parse_blocks(&lines, 0, 0, &refs);
     // A leading "Title" from front matter isn't supported; a first-level heading stays a heading.
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
@@ -149,7 +272,7 @@ fn list_marker(t: &str) -> Option<Marker> {
     let (m, len) = if matches!(first, '-' | '+' | '*') {
         (Marker { ordered: false, ch: first, len: 1, start: 1 }, 1)
     } else {
-        let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
+        let digits = t.chars().take_while(char::is_ascii_digit).count();
         if !(1..=9).contains(&digits) {
             return None;
         }
@@ -161,7 +284,7 @@ fn list_marker(t: &str) -> Option<Marker> {
         (Marker { ordered: true, ch: d, len: digits + 1, start }, digits + 1)
     };
     let rest = t.get(len..)?;
-    if rest.is_empty() || rest.starts_with(' ') { Some(m) } else { None }
+    if rest.is_empty() || rest.starts_with([' ', '\t']) { Some(m) } else { None }
 }
 
 fn split_row(l: &str) -> Vec<String> {
@@ -215,6 +338,7 @@ fn delimiter_row(l: &str) -> Option<Vec<Option<Align>>> {
         out.push(match (left, right) {
             (true, true) => Some(Align::Center),
             (false, true) => Some(Align::Right),
+            (true, false) => Some(Align::Left),
             _ => None,
         });
     }
@@ -231,16 +355,21 @@ fn interrupts(l: &str) -> bool {
         || thematic_break(t)
         || fence(t).is_some()
         || t.starts_with('>')
+        || t.starts_with("<!--")
         || list_marker(t).is_some_and(|m| (!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or("")))
 }
 
-fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize) {
+fn flush_para(lines: &mut Vec<String>, out: &mut Vec<FBlock>, depth: usize, refs: &Refs) {
     if lines.is_empty() {
         return;
     }
     let text = join_lines(lines);
     lines.clear();
-    let p = Para { inlines: parse_inlines(&text, &Fmt::default(), depth), ..Default::default() };
+    let inlines = parse_inlines(&text, &Fmt::default(), depth, refs);
+    if inlines.is_empty() {
+        return;
+    }
+    let p = Para { inlines, ..Default::default() };
     out.push(FBlock::Para(p));
 }
 
@@ -273,13 +402,13 @@ fn code_para(line: &str) -> FBlock {
 }
 
 /// Parse block structure. `level` is the list nesting level for lists found here.
-fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
+fn parse_blocks(lines: &[String], depth: usize, level: u8, refs: &Refs) -> Vec<FBlock> {
     let mut out = Vec::new();
     let mut para: Vec<String> = Vec::new();
     let mut i = 0;
     while let Some(line) = lines.get(i) {
         if is_blank(line) {
-            flush_para(&mut para, &mut out, depth);
+            flush_para(&mut para, &mut out, depth, refs);
             i += 1;
             continue;
         }
@@ -317,28 +446,28 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
                 let text = join_lines(&para);
                 para.clear();
                 let mut p = Para::new(Kind::Heading(lvl));
-                p.inlines = parse_inlines(&text, &Fmt::default(), depth);
+                p.inlines = parse_inlines(&text, &Fmt::default(), depth, refs);
                 out.push(FBlock::Para(p));
                 i += 1;
                 continue;
             }
         }
         if let Some((n, body)) = atx_heading(t) {
-            flush_para(&mut para, &mut out, depth);
+            flush_para(&mut para, &mut out, depth, refs);
             let mut p = Para::new(Kind::Heading(n));
-            p.inlines = parse_inlines(body, &Fmt::default(), depth);
+            p.inlines = parse_inlines(body, &Fmt::default(), depth, refs);
             out.push(FBlock::Para(p));
             i += 1;
             continue;
         }
         if thematic_break(t) {
-            flush_para(&mut para, &mut out, depth);
+            flush_para(&mut para, &mut out, depth, refs);
             out.push(FBlock::Para(Para::new(Kind::Rule)));
             i += 1;
             continue;
         }
         if let Some((fc, fl)) = fence(t) {
-            flush_para(&mut para, &mut out, depth);
+            flush_para(&mut para, &mut out, depth, refs);
             i += 1;
             while let Some(l) = lines.get(i) {
                 i += 1;
@@ -350,8 +479,18 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
             }
             continue;
         }
+        if t.starts_with("<!--") {
+            flush_para(&mut para, &mut out, depth, refs);
+            while let Some(l) = lines.get(i) {
+                i += 1;
+                if l.contains("-->") {
+                    break;
+                }
+            }
+            continue;
+        }
         if t.starts_with('>') {
-            flush_para(&mut para, &mut out, depth);
+            flush_para(&mut para, &mut out, depth, refs);
             let mut inner: Vec<String> = Vec::new();
             while let Some(l) = lines.get(i) {
                 let lt = l.trim_start_matches([' ', '\t']);
@@ -370,7 +509,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
                 p.push_text(&inner.join(" "), &Fmt::default());
                 out.push(FBlock::Para(p));
             } else {
-                for mut b in parse_blocks(&inner, depth + 1, level) {
+                for mut b in parse_blocks(&inner, depth + 1, level, refs) {
                     if let FBlock::Para(p) = &mut b
                         && p.kind == Kind::Normal
                     {
@@ -389,7 +528,7 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
             if head.len() == aligns.len() {
                 let mut table = FTable::default();
                 let cell = |s: &str, header: bool, a: Option<Align>| {
-                    let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth), ..Default::default() };
+                    let p = Para { align: a, inlines: parse_inlines(s, &Fmt::default(), depth, refs), ..Default::default() };
                     Cell { blocks: vec![FBlock::Para(p)], header, ..Default::default() }
                 };
                 table.rows.push(head.iter().zip(&aligns).map(|(s, a)| cell(s, true, *a)).collect());
@@ -410,19 +549,46 @@ fn parse_blocks(lines: &[String], depth: usize, level: u8) -> Vec<FBlock> {
         if let Some(m) = list_marker(t)
             && (para.is_empty() || ((!m.ordered || m.start == 1) && !is_blank(t.get(m.len..).unwrap_or(""))))
         {
-            flush_para(&mut para, &mut out, depth);
-            i = parse_list(lines, i, depth, level, &mut out);
+            flush_para(&mut para, &mut out, depth, refs);
+            i = parse_list(lines, i, depth, level, &mut out, refs);
             continue;
         }
         para.push(line.clone());
         i += 1;
     }
-    flush_para(&mut para, &mut out, depth);
+    flush_para(&mut para, &mut out, depth, refs);
     out
 }
 
+fn marker_space(ind: usize, marker_len: usize, after: &str) -> (usize, usize) {
+    let mut cols = 0;
+    let mut bytes = 0;
+    let mut rest = after;
+    while let Some(c) = rest.chars().next() {
+        match c {
+            ' ' => {
+                cols += 1;
+                bytes += 1;
+                rest = &rest[1..];
+                if cols >= 4 {
+                    break;
+                }
+            }
+            '\t' => {
+                let col = ind + marker_len + cols;
+                let n = 4 - col % 4;
+                cols += n;
+                bytes += 1;
+                break;
+            }
+            _ => break,
+        }
+    }
+    (cols, bytes)
+}
+
 /// Parse a list starting at `lines[i]`; returns the index after it.
-fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>) -> usize {
+fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut Vec<FBlock>, refs: &Refs) -> usize {
     let Some(first) = lines.get(i).and_then(|l| list_marker(l.trim_start_matches([' ', '\t']))) else { return i + 1 };
     while let Some(line) = lines.get(i) {
         let ind = indent(line);
@@ -435,13 +601,16 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             break;
         }
         let after = t.get(m.len..).unwrap_or("");
-        let spaces = indent(after);
-        let content_indent = if is_blank(after) || spaces > 4 { ind + m.len + 1 } else { ind + m.len + spaces };
-        let mut item: Vec<String> =
-            vec![if is_blank(after) { String::new() } else { after.get(spaces.min(4).min(after.len())..).unwrap_or("").to_string() }];
-        if spaces > 4 {
-            item[0] = after.get(1..).unwrap_or("").to_string();
-        }
+        let (spaces, skip) = if indent(after) > 4 {
+            (1, 1)
+        } else if after.starts_with([' ', '\t']) {
+            marker_space(ind, m.len, after)
+        } else {
+            (0, 0)
+        };
+        let content_indent = if is_blank(after) { ind + m.len + 1 } else { ind + m.len + spaces };
+        let item0 = if is_blank(after) { String::new() } else { after.get(skip.min(after.len())..).unwrap_or("").to_string() };
+        let mut item: Vec<String> = vec![item0];
         i += 1;
         while let Some(l) = lines.get(i) {
             if is_blank(l) {
@@ -457,16 +626,16 @@ fn parse_list(lines: &[String], mut i: usize, depth: usize, level: u8, out: &mut
             i += 1;
         }
         // Blank lines at the end of an item belong between items.
-        while item.len() > 1 && item.last().is_some_and(|x| x.is_empty()) {
+        while item.len() > 1 && item.last().is_some_and(String::is_empty) {
             item.pop();
         }
-        let li = ListInfo { ordered: first.ordered, level: level.min(8) };
+        let li = ListInfo { ordered: first.ordered, level: level.min(8), start: first.start };
         let inner = if depth >= MAX_NEST {
             let mut p = Para::default();
             p.push_text(&item.join(" "), &Fmt::default());
             vec![FBlock::Para(p)]
         } else {
-            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8))
+            parse_blocks(&item, depth + 1, level.saturating_add(1).min(8), refs)
         };
         let mut placed = false;
         if inner.is_empty() {
@@ -539,8 +708,8 @@ fn is_punct(c: char) -> bool {
 }
 
 /// Parse inline Markdown into formatted spans (on top of `base`).
-pub fn parse_inlines(s: &str, base: &Fmt, depth: usize) -> Vec<Inline> {
-    let nodes = tokenize(s, base, depth);
+pub fn parse_inlines(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Inline> {
+    let nodes = tokenize(s, base, depth, refs);
     emit(nodes)
 }
 
@@ -634,10 +803,18 @@ fn link_dest(s: &str, at: usize) -> Option<(String, usize)> {
     i += ws;
     let r = s.get(i..)?;
     let (dest, used) = if let Some(inner) = r.strip_prefix('<') {
-        let end = inner.find(['>', '\n'])?;
-        if inner.get(end..)?.starts_with('\n') {
-            return None;
-        }
+        // The first `>` not escaped by a backslash ends it; a line break first means no link.
+        let b = inner.as_bytes();
+        let mut k = 0;
+        let end = loop {
+            match b.get(k)? {
+                b'\\' => k += 1,
+                b'>' => break k,
+                b'\n' => return None,
+                _ => {}
+            }
+            k += 1;
+        };
         (inner.get(..end)?.to_string(), end + 2)
     } else {
         let mut depth = 0i32;
@@ -683,7 +860,7 @@ fn unescape(s: &str) -> String {
     let mut chars = s.chars().peekable();
     while let Some(c) = chars.next() {
         if c == '\\'
-            && let Some(n) = chars.peek().copied().filter(|n| n.is_ascii_punctuation())
+            && let Some(n) = chars.peek().copied().filter(char::is_ascii_punctuation)
         {
             out.push(n);
             chars.next();
@@ -702,7 +879,7 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
         let at = from + k;
         let before = lower.get(..at)?.chars().next_back();
         let after = lower.get(at + name.len()..)?.trim_start();
-        if before.is_some_and(|c| c.is_whitespace()) && after.starts_with('=') {
+        if before.is_some_and(char::is_whitespace) && after.starts_with('=') {
             let v = after.get(1..)?.trim_start();
             let q = v.chars().next()?;
             return Some(if q == '"' || q == '\'' {
@@ -721,7 +898,7 @@ fn tag_attr(tag: &str, name: &str) -> Option<String> {
     None
 }
 
-fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
+fn tokenize(s: &str, base: &Fmt, depth: usize, refs: &Refs) -> Vec<Node> {
     let mut nodes: Vec<Node> = Vec::new();
     // Bytes the link and image scans below may look ahead in total. Each unmatched `[` or `![(`
     // would otherwise rescan the rest of the text, which is quadratic on hostile input; once the
@@ -811,12 +988,29 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                         }
                         None => None,
                     };
-                    found.filter(|close| b.get(close + 1) == Some(&b'(') && scan_budget > 0).and_then(|close| {
-                        // A destination that does not parse may have been read to the end of the text.
-                        let dest = link_dest(s, close + 1);
-                        scan_budget = scan_budget.saturating_sub(dest.as_ref().map_or(s.len(), |d| d.1).saturating_sub(close));
-                        let (dest, end) = dest?;
-                        Some((s.get(open + 1..close)?.to_string(), dest, end))
+                    found.filter(|_| scan_budget > 0).and_then(|close| {
+                        let text = s.get(open + 1..close)?;
+                        if b.get(close + 1) == Some(&b'(') {
+                            // A destination that does not parse may have been read to the end of the text.
+                            let dest = link_dest(s, close + 1);
+                            scan_budget = scan_budget.saturating_sub(dest.as_ref().map_or(s.len(), |d| d.1).saturating_sub(close));
+                            let (dest, end) = dest?;
+                            return Some((text.to_string(), Arc::from(dest), end));
+                        }
+                        // A reference link: `[text][label]`, `[text][]` and `[text]` all take
+                        // their destination from a definition collected before parsing (#3238).
+                        // The shortcut form is only a link when the label is defined, so an
+                        // ordinary bracketed phrase is still text.
+                        let (label, end) = match s.get(close + 1..).and_then(|rest| rest.strip_prefix('[')) {
+                            Some(rest) => {
+                                let shut = rest.find(']')?;
+                                let inner = rest.get(..shut)?;
+                                let label = if inner.trim().is_empty() { text } else { inner };
+                                (label, close + 2 + shut + 1)
+                            }
+                            None => (text, close + 1),
+                        };
+                        Some((text.to_string(), refs.get(&ref_label(label))?.clone(), end))
                     })
                 } else {
                     None
@@ -824,7 +1018,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                 match parsed {
                     Some((inner, dest, end)) if img => {
                         flush!();
-                        let alt: String = parse_inlines(&inner, &Fmt::default(), depth + 1)
+                        let alt: String = parse_inlines(&inner, &Fmt::default(), depth + 1, refs)
                             .iter()
                             .filter_map(|x| if let Inline::Text(t, _) = x { Some(t.as_str()) } else { None })
                             .collect();
@@ -838,8 +1032,12 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                     Some((inner, dest, end)) if base.link.is_none() => {
                         flush!();
                         let mut f = base.clone();
-                        f.link = Some(dest);
-                        for x in parse_inlines(&inner, &f, depth + 1) {
+                        // A destination too long to keep leaves its text unlinked.
+                        f.link = (dest.len() <= model::MAX_LINK).then_some(dest);
+                        if f.link.is_none() {
+                            model::dropped(model::Dropped::Link);
+                        }
+                        for x in parse_inlines(&inner, &f, depth + 1, refs) {
                             nodes.push(Node::Inl(x));
                         }
                         i = end;
@@ -849,6 +1047,12 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                 }
             }
             b'<' => {
+                if let Some(pos) = s.get(i..).and_then(|r| r.strip_prefix("<!--")).and_then(|r| r.find("-->")) {
+                    flush!();
+                    i += 4 + pos + 3;
+                    text_start = i;
+                    continue;
+                }
                 let rest = s.get(i + 1..).unwrap_or("");
                 let end = within(rest, MAX_TAG).find('>');
                 let inner = end.and_then(|e| rest.get(..e)).unwrap_or("");
@@ -859,7 +1063,7 @@ fn tokenize(s: &str, base: &Fmt, depth: usize) -> Vec<Node> {
                 if is_auto {
                     flush!();
                     let mut f = base.clone();
-                    f.link = Some(if inner.contains('@') && !inner.contains(':') { format!("mailto:{inner}") } else { inner.to_string() });
+                    f.link = Some(if inner.contains('@') && !inner.contains(':') { format!("mailto:{inner}").into() } else { inner.into() });
                     push_text(&mut nodes, inner, &f);
                     i += inner.len() + 2;
                     text_start = i;
@@ -1014,18 +1218,16 @@ fn emit(mut nodes: Vec<Node>) -> Vec<Inline> {
         }
         out.push(Inline::Text(t.to_string(), f));
     };
-    let base_of = |nodes: &[Node], k: usize| -> Fmt {
-        // Delimiter literals take the formatting (link, …) of neighbouring text.
-        for j in (0..k).rev() {
-            if let Some(Node::Text(_, f)) = nodes.get(j) {
-                return Fmt { bold: false, italic: false, strike: false, ..f.clone() };
-            }
-        }
-        Fmt::default()
-    };
-    for (k, n) in nodes.iter().enumerate() {
+    // Delimiter literals take the formatting (link, …) of the text before them: the last text
+    // node, tracked here rather than searched for backwards from every delimiter (quadratic on
+    // a paragraph of delimiters).
+    let mut last_text: Option<&Fmt> = None;
+    for n in &nodes {
         match n {
-            Node::Text(t, f) => push(&mut out, t, f, em, strong, strike),
+            Node::Text(t, f) => {
+                push(&mut out, t, f, em, strong, strike);
+                last_text = Some(f);
+            }
             Node::Inl(Inline::Text(t, f)) => push(&mut out, t, f, em, strong, strike),
             Node::Inl(other) => out.push(other.clone()),
             Node::Delim { ch, left, opens, closes, .. } => {
@@ -1036,9 +1238,11 @@ fn emit(mut nodes: Vec<Node>) -> Vec<Inline> {
                         Emph::Strike => strike = strike.saturating_sub(1),
                     }
                 }
-                let lit: String = std::iter::repeat_n(*ch, *left).collect();
-                let f = base_of(&nodes, k);
-                push(&mut out, &lit, &f, em, strong, strike);
+                if *left > 0 {
+                    let lit: String = std::iter::repeat_n(*ch, *left).collect();
+                    let f = last_text.map_or_else(Fmt::default, |f| Fmt { bold: false, italic: false, strike: false, ..f.clone() });
+                    push(&mut out, &lit, &f, em, strong, strike);
+                }
                 for e in opens {
                     match e {
                         Emph::Em => em += 1,
@@ -1082,14 +1286,19 @@ fn escape_line_start(s: String) -> String {
         || t.starts_with('>')
         || t.starts_with("- ")
         || t.starts_with("+ ")
+        || t.starts_with("-\t")
+        || t.starts_with("+\t")
         || t == "-"
         || t == "+"
         || t.starts_with('=')
         || (t.starts_with('-') && t.trim_end_matches([' ', '\t']).chars().all(|c| c == '-'))
         || thematic_break(t)
         || {
-            let d = t.chars().take_while(|c| c.is_ascii_digit()).count();
-            d > 0 && t.get(d..).is_some_and(|r| r.starts_with(". ") || r.starts_with(") ") || r == "." || r == ")")
+            let d = t.chars().take_while(char::is_ascii_digit).count();
+            d > 0
+                && t.get(d..).is_some_and(|r| {
+                    r.starts_with(". ") || r.starts_with(") ") || r.starts_with(".\t") || r.starts_with(")\t") || r == "." || r == ")"
+                })
         };
     if !needs {
         return if cols > 3 || lead.contains('\t') { format!("{indent}{t}") } else { s };
@@ -1109,6 +1318,7 @@ fn escape_lines(body: String) -> String {
 }
 
 fn code_span(t: &str) -> String {
+    let t = t.replace("\r\n", " ").replace(['\r', '\n'], " ");
     let mut longest = 0;
     let mut cur = 0;
     for c in t.chars() {
@@ -1143,7 +1353,9 @@ fn inlines_md_table(inlines: &[Inline]) -> String {
 fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     // Split into (text, fmt) pieces with whitespace moved outside emphasis.
     let mut pieces: Vec<(String, Fmt, Option<String>)> = Vec::new();
-    let inlines = crate::model::equations_as_text(inlines);
+    let eq = crate::model::equations_as_text(inlines);
+    // Markdown keeps no ruby: its base text goes through the text path below.
+    let inlines = crate::model::ruby_as_text(&eq);
     for i in inlines.iter() {
         match i {
             Inline::Text(t, f) => {
@@ -1176,11 +1388,13 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
             }
             Inline::Figure(alt) => pieces.push((String::new(), Fmt::default(), Some(format!("![{}]()", escape(alt))))),
             Inline::Equation { .. } => {}
+            // Read as its base text by `ruby_as_text` above.
+            Inline::Ruby { .. } => {}
         }
     }
     let mut out = String::new();
     let mut stack: Vec<Mark> = Vec::new();
-    let mut link: Option<String> = None;
+    let mut link: Option<Arc<str>> = None;
     let close_all = |out: &mut String, stack: &mut Vec<Mark>| {
         while let Some(m) = stack.pop() {
             out.push_str(marker(m));
@@ -1238,8 +1452,35 @@ fn inlines_md_impl(inlines: &[Inline], in_table: bool) -> String {
     out
 }
 
+/// `l` as a Markdown link destination that reads back as exactly `l`, the target
+/// `is_safe_href` passed. What Markdown would decode (a backslash escape, an entity reference)
+/// or end the destination on (`<`, `>`) is backslash-escaped, never deleted: deleting `<` or `>`
+/// could turn an accepted relative target into `javascript:…` or `//host`. Control characters
+/// can't be written in a destination and are left out, as the safety check ignores them.
 fn link_target(l: &str) -> String {
-    if l.contains([' ', '(', ')', '<', '>']) { format!("<{}>", l.replace(['<', '>', '\n'], "")) } else { l.to_string() }
+    let l: String = l.chars().filter(|c| !c.is_ascii_control()).collect();
+    let mut out = String::with_capacity(l.len() + 2);
+    for (i, c) in l.char_indices() {
+        let rest = l.get(i + c.len_utf8()..).unwrap_or("");
+        match c {
+            '<' | '>' => out.push('\\'),
+            // A backslash is literal unless punctuation (or the closing `)`/`>`) follows it.
+            '\\' if rest.chars().next().is_none_or(|n| n.is_ascii_punctuation()) => out.push('\\'),
+            '&' if entity_like(rest) => out.push('\\'),
+            _ => {}
+        }
+        out.push(c);
+    }
+    if l.contains(|c: char| c.is_whitespace() || matches!(c, '(' | ')' | '<' | '>')) { format!("<{out}>") } else { out }
+}
+
+/// Whether `rest` (the text after a `&`) starts like an entity reference (`amp;`, `#106;`,
+/// `#x6A;`), which a Markdown reader would decode.
+fn entity_like(rest: &str) -> bool {
+    let Some(end) = within(rest, 34).find(';') else { return false };
+    let body = rest.get(..end).unwrap_or("");
+    let body = body.strip_prefix('#').map_or(body, |n| n.strip_prefix(['x', 'X']).unwrap_or(n));
+    !body.is_empty() && body.chars().all(|c| c.is_ascii_alphanumeric())
 }
 
 fn marker(m: Mark) -> &'static str {
@@ -1289,6 +1530,7 @@ fn table_md(t: &FTable, out: &mut Vec<String>) {
         .map(|a| match a {
             Some(Align::Center) => ":---:",
             Some(Align::Right) => "---:",
+            Some(Align::Left) => ":---",
             _ => "---",
         })
         .collect();
@@ -1335,7 +1577,9 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                     i += 1;
                 }
                 let longest = lines.iter().map(|l| l.chars().filter(|c| *c == '`').count()).max().unwrap_or(0);
-                let fence = "`".repeat(3.max(longest + 1).min(64));
+                // The fence must be longer than the longest run in the content, or a content
+                // line is read back as the closing fence (the `.min(64)` cap did exactly that).
+                let fence = "`".repeat(3.max(longest + 1));
                 out.push(fence.clone());
                 out.extend(lines);
                 out.push(fence);
@@ -1355,7 +1599,10 @@ fn write_blocks(blocks: &[FBlock], out: &mut Vec<String>) {
                             prev_top_ordered = li.ordered;
                         }
                         let n = counters.get_mut(lv).map(|c| {
-                            *c += 1;
+                            if *c == 0 {
+                                *c = li.start.saturating_sub(1);
+                            }
+                            *c = c.saturating_add(1);
                             *c
                         });
                         for d in counters.iter_mut().skip(lv + 1) {
@@ -1411,7 +1658,7 @@ mod tests {
     use super::*;
 
     fn inl(s: &str) -> Vec<Inline> {
-        parse_inlines(s, &Fmt::default(), 0)
+        parse_inlines(s, &Fmt::default(), 0, &Refs::new())
     }
 
     fn spans(s: &str) -> Vec<(String, bool, bool)> {
@@ -1436,7 +1683,7 @@ mod tests {
         let s = inl("see [the *site*](http://x.org \"T\") and `a*b*` \\*lit\\* &amp; <https://y.com>");
         let link: Vec<_> = s
             .iter()
-            .filter_map(|i| if let Inline::Text(t, f) = i { f.link.as_ref().map(|l| (t.clone(), l.clone(), f.italic)) } else { None })
+            .filter_map(|i| if let Inline::Text(t, f) = i { f.link.as_ref().map(|l| (t.clone(), l.to_string(), f.italic)) } else { None })
             .collect();
         assert_eq!(link[0], ("the ".into(), "http://x.org".into(), false));
         assert_eq!(link[1], ("site".into(), "http://x.org".into(), true));
@@ -1444,6 +1691,84 @@ mod tests {
         assert!(s.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "a*b*" && f.code)));
         let text: String = s.iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t.as_str()) } else { None }).collect();
         assert!(text.contains("*lit* & "), "{text}");
+    }
+
+    /// Reference links: `[text][label]`, `[text][]` and `[text]` take their destination from a
+    /// definition line, and the definition itself leaves the document. Before, none of the three
+    /// was a link and the definition stayed as a paragraph of its own (#3238).
+    #[test]
+    fn reference_links_resolve_and_their_definitions_leave_the_body() {
+        let links = |md: &str| -> Vec<(String, String)> {
+            match &*parse(md).blocks {
+                [FBlock::Para(p), ..] => p
+                    .inlines
+                    .iter()
+                    .filter_map(|x| match x {
+                        Inline::Text(t, f) => f.link.as_deref().map(|l| (t.clone(), l.to_string())),
+                        _ => None,
+                    })
+                    .collect(),
+                _ => vec![],
+            }
+        };
+        let def = "\n\n[ref1]: https://example.com/ref\n";
+        let to_ref = |text: &str| vec![(text.to_string(), "https://example.com/ref".to_string())];
+
+        assert_eq!(links(&format!("[click here][ref1]{def}")), to_ref("click here"), "full");
+        assert_eq!(links(&format!("[ref1][]{def}")), to_ref("ref1"), "collapsed");
+        assert_eq!(links(&format!("[ref1]{def}")), to_ref("ref1"), "shortcut");
+        // Labels match case-folded with runs of white space collapsed (CommonMark §4.7).
+        assert_eq!(links(&format!("[click here][  REF1  ]{def}")), to_ref("click here"), "folded label");
+        // An undefined label is not a link: an ordinary bracketed phrase stays text.
+        assert_eq!(links(&format!("[nope]{def}")), vec![], "undefined");
+        // Inline links are unaffected.
+        assert_eq!(links("[x](https://inline.example)"), vec![("x".into(), "https://inline.example".into())], "inline");
+
+        // The definition is not a paragraph, and its text is nowhere in the body.
+        let doc = import(&format!("Reference link: [click here][ref1]{def}"));
+        let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert_eq!(text, "Reference link: click here", "{text:?}");
+
+        // A definition inside a fence is code, not a definition.
+        let fenced = "```\n[ref1]: https://example.com/ref\n```\n\n[ref1]\n";
+        let body = import(fenced).plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(body.contains("[ref1]: https://example.com/ref"), "the fenced definition is still code: {body:?}");
+        assert_eq!(links(fenced), vec![], "a fenced definition defines nothing");
+    }
+
+    /// A definition has to start a block (CommonMark §4.7), and a fence opens and closes by the
+    /// same rules the block parser uses. Reading a line without that context deleted text: a
+    /// definition-shaped line inside a paragraph, and every such line inside a code block whose
+    /// fence this pass thought had closed.
+    #[test]
+    fn a_definition_shaped_line_that_is_not_a_definition_stays_in_the_document() {
+        let body = |md: &str| import(md).plain_text(wordcraft_doc::StoryRef::Body);
+
+        // A definition cannot interrupt a paragraph: this is the author's text, lines and all.
+        let para = "Status update\n[Warning]: unstable\nmore text\n";
+        assert_eq!(body(para), "Status update [Warning]: unstable more text", "{:?}", body(para));
+
+        // `` ```rust `` holds an info string, so it does not close a fence: the definition-shaped
+        // line after it is still code.
+        let code = "```\n```rust\n[foo]: /bar\n```\n\nSee [foo].\n";
+        assert!(body(code).contains("[foo]: /bar"), "{:?}", body(code));
+        assert!(body(code).ends_with("See [foo]."), "nothing defines foo: {:?}", body(code));
+
+        // Four spaces of indentation is code, not a fence, so the definition that follows is
+        // taken and the reference resolves.
+        let indented = "    ```\n\n[x]: /y\n\nSee [x].\n";
+        let doc = import(indented);
+        let text = doc.plain_text(wordcraft_doc::StoryRef::Body);
+        assert!(text.contains("```") && text.ends_with("See x."), "{text:?}");
+
+        // A definition still gives up its line after a blank line, at the start of the document,
+        // after a heading, and after another definition.
+        let starts = "[a]: /a\n[b]: /b\n\n# Head\n[c]: /c\n\nSee [a], [b], [c].\n";
+        assert_eq!(body(starts), "Head\nSee a, b, c.", "{:?}", body(starts));
+
+        // A footnote definition is not a link definition: it stays in the body.
+        let footnote = "x[^1]\n\n[^1]: Note\n";
+        assert!(body(footnote).contains("[^1]: Note"), "{:?}", body(footnote));
     }
 
     #[test]
@@ -1625,6 +1950,75 @@ mod tests {
     }
 
     #[test]
+    fn code_span_line_endings_stay_literal_on_export() {
+        let cases = [
+            ("a\n# b", "a # b"),
+            ("a\n<div>b</div>", "a <div>b</div>"),
+            ("a\n- b", "a - b"),
+            ("a\n```", "a ```"),
+            ("a\r# b", "a # b"),
+            ("a\r\n# b", "a # b"),
+            ("a\n\n> b", "a  > b"),
+            ("\na\n", " a "),
+            ("`a\n# b`", "`a # b`"),
+            ("cmd | grep", "cmd | grep"),
+        ];
+        let shapes = [
+            (Kind::Normal, None),
+            (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
+            (Kind::Code, Some(ListInfo { ordered: true, level: 0, start: 1 })),
+        ];
+        for (source, expected) in cases {
+            for (kind, list) in shapes {
+                let mut p = Para::new(kind);
+                p.list = list;
+                p.push_text(source, &Fmt { code: true, ..Default::default() });
+                let mut doc = model::to_doc(&model::Flow { blocks: vec![FBlock::Para(p)], ..Default::default() });
+                // The flow builder removes CR controls; keep the native document's raw input.
+                let p = doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path::top(0)).unwrap();
+                p.text = source.to_string();
+                p.runs[0].len = source.len();
+                let bytes = crate::export("md", &doc).unwrap().unwrap();
+                let md = String::from_utf8(bytes).unwrap();
+                assert_eq!(md.trim_end().lines().count(), 1, "{source:?} {kind:?} {list:?} -> {md:?}");
+                assert!(!md.contains('\r'), "{md:?}");
+                let back = crate::import("md", md.as_bytes()).unwrap().unwrap();
+                let flow = model::from_doc(&back);
+                let [FBlock::Para(q)] = flow.blocks.as_slice() else { panic!("{md:?}") };
+                assert_eq!(q.text(), expected, "{source:?} {kind:?} {list:?} -> {md:?}");
+                assert_eq!(q.list, list, "{md:?}");
+                assert!(q.inlines.iter().all(|i| matches!(i, Inline::Text(_, f) if f.code)), "{md:?}");
+            }
+        }
+        let fenced = "```\na\n# b\n```";
+        assert_eq!(export(&import(fenced)).trim_end(), fenced);
+    }
+
+    #[test]
+    fn code_span_line_endings_in_table_cells_stay_literal() {
+        for ending in ["\n", "\r", "\r\n"] {
+            let source = format!("a{ending}# b|c");
+            let mut p = Para::default();
+            p.push_text(&source, &Fmt { code: true, ..Default::default() });
+            let cell = Cell { blocks: vec![FBlock::Para(p)], ..Default::default() };
+            let table = FTable { rows: vec![vec![cell, Cell::default()], vec![Cell::default(), Cell::default()]], ..Default::default() };
+            let mut doc = model::to_doc(&model::Flow { blocks: vec![FBlock::Table(table)], ..Default::default() });
+            let p = doc.para_mut(wordcraft_doc::StoryRef::Body, &wordcraft_doc::Path(vec![0, 0, 0, 0])).unwrap();
+            p.text = source.clone();
+            p.runs[0].len = source.len();
+            let md = export(&doc);
+            let back = model::from_doc(&import(&md));
+            let [FBlock::Table(table), ..] = back.blocks.as_slice() else { panic!("{md:?}") };
+            assert!(back.blocks.iter().skip(1).all(|b| matches!(b, FBlock::Para(p) if p.text().is_empty())), "{md:?}");
+            assert_eq!(table.rows.len(), 2, "{md:?}");
+            assert_eq!(table.rows[0].len(), 2, "{md:?}");
+            let [FBlock::Para(p)] = table.rows[0][0].blocks.as_slice() else { panic!("{md:?}") };
+            assert_eq!(p.text(), "a # b|c", "{md:?}");
+            assert!(p.inlines.iter().all(|i| matches!(i, Inline::Text(_, f) if f.code)), "{md:?}");
+        }
+    }
+
+    #[test]
     fn table_code_pipe_export_import_round_trip() {
         let mut table = FTable::default();
         let mut cell_a = Cell::default();
@@ -1704,11 +2098,20 @@ mod tests {
     }
 
     #[test]
+    fn ordered_list_keeps_start_number() {
+        let txt = |md: &str| String::from_utf8_lossy(&crate::txt::export(&import(md))).into_owned();
+        assert_eq!(txt("5. a\n6. b"), "5.\ta\r\n6.\tb");
+        assert_eq!(txt("3. a\n- b\n4. c"), "3.\ta\r\n•\tb\r\n4.\tc");
+        assert_eq!(export(&import("5. a\n6. b")).trim_end(), "5. a\n6. b");
+    }
+
+    #[test]
     fn lines_after_line_break_stay_in_paragraph() {
         use wordcraft_doc::{CharProps, Document, Paragraph, StoryRef, para_block};
         let cases = ["Shopping\n- milk\n# not a heading", "a\n1. x", "a\n2) x", "a\n+ x", "a\n---", "a\n***", "a\n==", "a\n--", "a\n> q"];
         for s in cases {
-            let d = Document { body: vec![para_block(Paragraph::with_text(s, CharProps::default()))], ..Default::default() };
+            let mut d = Document::new();
+            d.body = vec![para_block(Paragraph::with_text(s, CharProps::default()))];
             let md = export(&d);
             let back = import(&md);
             assert_eq!(back.body.len(), 1, "{s:?} -> {md:?}");
@@ -1720,10 +2123,10 @@ mod tests {
     fn lines_after_line_break_stay_in_list_item_and_quote() {
         let cases = ["a\n- x", "a\n# h", "a\n1. x", "a\n--", "a\n---", "a\n==", "a\n> q"];
         let shapes: [(Kind, Option<ListInfo>); 5] = [
-            (Kind::Normal, Some(ListInfo { ordered: false, level: 0 })),
-            (Kind::Normal, Some(ListInfo { ordered: true, level: 0 })),
-            (Kind::Normal, Some(ListInfo { ordered: false, level: 1 })),
-            (Kind::Normal, Some(ListInfo { ordered: true, level: 1 })),
+            (Kind::Normal, Some(ListInfo { ordered: false, level: 0, start: 1 })),
+            (Kind::Normal, Some(ListInfo { ordered: true, level: 0, start: 1 })),
+            (Kind::Normal, Some(ListInfo { ordered: false, level: 1, start: 1 })),
+            (Kind::Normal, Some(ListInfo { ordered: true, level: 1, start: 1 })),
             (Kind::Quote, None),
         ];
         for s in cases {
@@ -1731,7 +2134,7 @@ mod tests {
                 let mut blocks = Vec::new();
                 if let Some(li) = list.filter(|l| l.level > 0) {
                     let mut parent = Para::new(Kind::Normal);
-                    parent.list = Some(ListInfo { ordered: li.ordered, level: 0 });
+                    parent.list = Some(ListInfo { ordered: li.ordered, level: 0, start: 1 });
                     parent.push_text("top", &Fmt::default());
                     blocks.push(FBlock::Para(parent));
                 }
@@ -1750,5 +2153,94 @@ mod tests {
                 assert_eq!(q.text(), s, "{md:?}");
             }
         }
+    }
+
+    #[test]
+    fn table_column_alignments_import_and_export() {
+        let md = "| Left | Center | Right | Default |\n| :--- | :---: | ---: | --- |\n| 1 | 2 | 3 | 4 |\n";
+        let flow = parse(md);
+        let FBlock::Table(t) = &flow.blocks[0] else { panic!("expected table") };
+        assert_eq!(t.rows.len(), 2);
+        let aligns: Vec<Option<Align>> =
+            t.rows[0].iter().map(|c| c.blocks.iter().find_map(|b| if let FBlock::Para(p) = b { Some(p.align) } else { None }).flatten()).collect();
+        assert_eq!(aligns, vec![Some(Align::Left), Some(Align::Center), Some(Align::Right), None]);
+
+        let mut out = Vec::new();
+        table_md(t, &mut out);
+        let exported = out.join("\n");
+        assert!(exported.contains("| :--- | :---: | ---: | --- |"), "Exported: {exported}");
+    }
+
+    #[test]
+    fn tab_separated_list_markers() {
+        let f = parse("-\tbullet item\n*\tstar item\n+\tplus item\n1.\tone item\n2)\ttwo item\n");
+        assert_eq!(f.blocks.len(), 5);
+        for (i, b) in f.blocks.iter().enumerate() {
+            let FBlock::Para(p) = b else { panic!("block {i} not a para") };
+            assert!(p.list.is_some(), "block {i} should be a list item: {:?}", p);
+        }
+        let FBlock::Para(p0) = &f.blocks[0] else { panic!() };
+        assert_eq!(p0.text(), "bullet item");
+        assert!(!p0.list.unwrap().ordered);
+
+        let FBlock::Para(p3) = &f.blocks[3] else { panic!() };
+        assert_eq!(p3.text(), "one item");
+        assert!(p3.list.unwrap().ordered);
+    }
+
+    #[test]
+    fn html_comments_are_ignored_in_blocks_and_inlines() {
+        let md = "<!-- block comment -->\n\nHello <!-- inline comment -->world!\n\n<!--\nmultiline\ncomment\n-->\n\nAfter comment.";
+        let flow = parse(md);
+        assert_eq!(flow.blocks.len(), 2);
+        let texts: Vec<String> = flow.blocks.iter().filter_map(|b| if let FBlock::Para(p) = b { Some(p.text()) } else { None }).collect();
+        assert_eq!(texts, ["Hello world!", "After comment."]);
+    }
+
+    #[test]
+    fn a_paragraph_of_delimiters_parses_in_linear_time() {
+        // #3714: each delimiter's literal looked back for the text before it, to the start of
+        // the paragraph when there was none (quadratic).
+        let src = "*_".repeat(200_000);
+        let t = std::time::Instant::now();
+        let out = inl(&src);
+        // Under a second on a loaded machine; the backwards search ran past 6 minutes.
+        assert!(t.elapsed() < std::time::Duration::from_secs(10), "{:?}", t.elapsed());
+        let text: String = out.iter().filter_map(|i| if let Inline::Text(t, _) = i { Some(t.as_str()) } else { None }).collect();
+        assert!(text.chars().all(|c| matches!(c, '*' | '_')), "only delimiters come out");
+        // Literal delimiters still take the link of the text before them.
+        let s = inl("[a](http://x.org) [b*](http://y.org)");
+        assert!(s.iter().any(|i| matches!(i, Inline::Text(t, f) if t == "b*" && f.link.as_deref() == Some("http://y.org"))), "{s:?}");
+    }
+
+    #[test]
+    fn exported_link_destinations_read_back_unchanged() {
+        // Removing `<` and `>` from a destination after the safety check could make a relative
+        // target a script or network-path one (`java<script:…` → `javascript:…`). They are
+        // escaped instead, as are backslash escapes and entity references a reader would decode.
+        let md = |l: &str| inlines_md(&[Inline::Text("x".into(), Fmt { link: Some(l.into()), ..Default::default() })]);
+        assert_eq!(md("java<script:alert(1)"), "[x](<java\\<script:alert(1)>)");
+        for l in [
+            "java<script:alert(1)",
+            "/</evil.example/(x)",
+            "a>b c",
+            "&#106;avascript:alert(1)",
+            "&#x6A;avascript:x",
+            "&amp;",
+            "javascript\\:x",
+            "dir\\",
+            "dir\\(1)\\",
+            "q?a=1&b=2",
+        ] {
+            let out = md(l);
+            let back = inl(&out);
+            let got: Vec<_> =
+                back.iter().filter_map(|i| if let Inline::Text(_, f) = i { f.link.as_deref().map(str::to_string) } else { None }).collect();
+            assert_eq!(got, [l.to_string()], "{l:?} → {out:?}");
+        }
+        // Ordinary destinations are written as before.
+        assert_eq!(md("https://example.com/a?b=1&c=2"), "[x](https://example.com/a?b=1&c=2)");
+        assert_eq!(md("https://example.com/a b"), "[x](<https://example.com/a b>)");
+        assert_eq!(md("https://e.com/x\ny"), "[x](https://e.com/xy)");
     }
 }

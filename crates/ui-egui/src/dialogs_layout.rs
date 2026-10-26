@@ -2,12 +2,13 @@
 //! Numbering Options…), Hyphenation (Hyphenation Options… and Manual…), Language (Review ›
 //! Language), Envelopes and Labels (Mailings › Create), Formula (Table Layout › Data, #1201)
 //! Sort (Table Layout › Data, #1200), Split Cells (Table Layout › Merge), Convert Text to Table
-//! (Insert › Table, #2592) and Size (Picture Format › Size, #2573). Each ends by running a
+//! (Insert › Table, #2592), Size (Picture Format › Size, #2573) and Format Page Numbers (Insert ›
+//! Header & Footer › Page Number ▸ Format Page Numbers…, #1113). Each ends by running a
 //! command (`layout.lineNumbers`, `layout.hyphenation`, `layout.manualHyphenation` with
 //! `caret.set` and `text.optionalHyphen`, `review.language`, `mailings.envelopes`,
 //! `mailings.labels`, `table.formula`, `table.sort`, `table.split`, `table.fromText`,
-//! `picture.size`), so scripts and agents get the same result without the dialog. Shown through
-//! [`crate::dialogs::Dialog::Layout`].
+//! `picture.size`, `layout.pageNumberFormat`), so scripts and agents get the same result without
+//! the dialog. Shown through [`crate::dialogs::Dialog::Layout`].
 
 use egui::{Ui, vec2};
 use serde::Serialize;
@@ -34,7 +35,9 @@ pub enum LayoutDialog {
     Sort(SortForm),
     SplitCells(SplitCellsForm),
     TextToTable(TextToTableForm),
+    TableToText(TableToTextForm),
     Size(SizeForm),
+    PageNumbers(PageNumbersForm),
 }
 
 impl LayoutDialog {
@@ -50,7 +53,9 @@ impl LayoutDialog {
             LayoutDialog::Sort(_) => "tableSort",
             LayoutDialog::SplitCells(_) => "splitCells",
             LayoutDialog::TextToTable(_) => "textToTable",
+            LayoutDialog::TableToText(_) => "tableToText",
             LayoutDialog::Size(_) => "pictureSize",
+            LayoutDialog::PageNumbers(_) => "pageNumbers",
         }
     }
 
@@ -67,7 +72,9 @@ impl LayoutDialog {
             LayoutDialog::Sort(_) => "Sort",
             LayoutDialog::SplitCells(_) => "Split Cells",
             LayoutDialog::TextToTable(_) => "Convert Text to Table",
+            LayoutDialog::TableToText(_) => "Convert to Text",
             LayoutDialog::Size(_) => "Size",
+            LayoutDialog::PageNumbers(_) => "Page Number Format",
         }
     }
 }
@@ -85,7 +92,9 @@ pub fn open(name: &str, app: &mut WordApp) -> Option<LayoutDialog> {
         "tableSort" => LayoutDialog::Sort(SortForm::read(app)?),
         "splitCells" => LayoutDialog::SplitCells(SplitCellsForm::read(app)?),
         "textToTable" => LayoutDialog::TextToTable(TextToTableForm::read(app)?),
+        "tableToText" => LayoutDialog::TableToText(TableToTextForm::read(app)?),
         "pictureSize" => LayoutDialog::Size(SizeForm::read(app)?),
+        "pageNumbers" => LayoutDialog::PageNumbers(PageNumbersForm::read(app)),
         _ => return None,
     })
 }
@@ -103,7 +112,9 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut LayoutDialog) -> bool {
         LayoutDialog::Sort(f) => sort_ui(app, ui, f),
         LayoutDialog::SplitCells(f) => split_cells_ui(app, ui, f),
         LayoutDialog::TextToTable(f) => text_to_table_ui(app, ui, f),
+        LayoutDialog::TableToText(f) => table_to_text_ui(app, ui, f),
         LayoutDialog::Size(f) => size_ui(app, ui, f),
+        LayoutDialog::PageNumbers(f) => page_numbers_ui(app, ui, f),
     }
 }
 
@@ -401,13 +412,21 @@ fn manual_ui(app: &mut WordApp, ui: &mut Ui, f: &mut ManualForm) -> bool {
 // Language
 
 /// Proofing languages offered, by BCP 47 tag, with their English names (translated for display).
-pub const LANGUAGES: [(&str, &str); 30] = [
+pub const LANGUAGES: [(&str, &str); 38] = [
     ("en-US", "English (United States)"),
     ("en-GB", "English (United Kingdom)"),
+    ("en-AU", "English (Australia)"),
+    ("en-CA", "English (Canada)"),
+    ("en-IN", "English (India)"),
+    ("en-IE", "English (Ireland)"),
+    ("en-NZ", "English (New Zealand)"),
+    ("en-ZA", "English (South Africa)"),
     ("de-DE", "German (Germany)"),
     ("fr-FR", "French (France)"),
     ("es-ES", "Spanish (Spain)"),
     ("es-MX", "Spanish (Mexico)"),
+    ("es-419", "Spanish (Latin America)"),
+    ("es-UY", "Spanish (Uruguay)"),
     ("it-IT", "Italian"),
     ("pt-BR", "Portuguese (Brazil)"),
     ("pt-PT", "Portuguese (Portugal)"),
@@ -1107,6 +1126,55 @@ fn text_to_table_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TextToTableForm) -> 
 }
 
 // ---------------------------------------------------------------------------------------------
+// Convert to Text
+
+/// The Convert to Text dialog (Table Layout › Data): what sets the cells of a row apart in the
+/// text (`paragraph`, `tab`, `comma` or `other` with `other_char`). It opens on Tabs.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TableToTextForm {
+    pub separator: String,
+    pub other_char: String,
+}
+
+impl TableToTextForm {
+    /// None when the caret isn't in a table.
+    pub fn read(app: &WordApp) -> Option<TableToTextForm> {
+        app.session.sel.focus.path.cell()?;
+        Some(TableToTextForm { separator: "tab".into(), other_char: "-".into() })
+    }
+
+    /// `table.toText` parameters for OK.
+    pub fn params(&self) -> Value {
+        let mut v = json!({"separator": self.separator});
+        if self.separator == "other" {
+            v["char"] = json!(self.other_char);
+        }
+        v
+    }
+}
+
+fn table_to_text_ui(app: &mut WordApp, ui: &mut Ui, f: &mut TableToTextForm) -> bool {
+    heading(ui, "Separate text with");
+    ui.radio_value(&mut f.separator, "paragraph".to_string(), tl!("Paragraph marks"));
+    ui.radio_value(&mut f.separator, "tab".to_string(), tl!("Tabs"));
+    ui.radio_value(&mut f.separator, "comma".to_string(), tl!("Commas"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut f.separator, "other".to_string(), tl!("Other:"));
+        let r = ui.add(egui::TextEdit::singleline(&mut f.other_char).char_limit(1).desired_width(24.0));
+        if r.changed() {
+            f.separator = "other".into();
+        }
+    });
+    let ready = f.separator != "other" || !f.other_char.is_empty();
+    let (ok, cancel) = buttons(ui, "OK", ready);
+    if ok {
+        return run(app, "table.toText", f.params());
+    }
+    cancel
+}
+
+// ---------------------------------------------------------------------------------------------
 // Size
 
 /// The Size dialog's fields (Picture Format › Size launcher, #2573) for the selected picture or
@@ -1316,6 +1384,75 @@ fn size_ui(app: &mut WordApp, ui: &mut Ui, f: &mut SizeForm) -> bool {
     cancel
 }
 
+// ---------------------------------------------------------------------------------------------
+// Format Page Numbers
+
+/// The Format Page Numbers dialog's fields (#1113): the number format, and where numbering
+/// starts — `cont` numbers on from the section before (no `w:start`), else the pages start at
+/// `start`.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageNumbersForm {
+    /// The section the fields were read from (see [`Self::follow`]).
+    pub section: usize,
+    /// OOXML number format (`decimal`, `upperRoman`, …).
+    pub format: String,
+    pub cont: bool,
+    pub start: u32,
+}
+
+impl PageNumbersForm {
+    /// The section's numbering as it is at the caret.
+    pub fn read(app: &WordApp) -> PageNumbersForm {
+        let sp = wordcraft_engine::cmd::page::sect(&app.session);
+        PageNumbersForm {
+            section: wordcraft_engine::cmd::page::section_index_of_focus(&app.session),
+            format: sp.page_num_format.ooxml().to_string(),
+            cont: sp.page_num_start.is_none(),
+            start: sp.page_num_start.unwrap_or(1).clamp(1, 100_000),
+        }
+    }
+
+    /// Follow the caret: dialogs aren't modal, so a click on the page may move it to another
+    /// section. The form then shows that section's numbering, so OK never writes numbers read
+    /// from another one (the Size dialog follows its object the same way).
+    pub fn follow(&mut self, app: &WordApp) {
+        if self.section != wordcraft_engine::cmd::page::section_index_of_focus(&app.session) {
+            *self = PageNumbersForm::read(app);
+        }
+    }
+
+    /// `layout.pageNumberFormat` parameters: no `start` (null) when the pages number on from the
+    /// section before.
+    pub fn params(&self) -> Value {
+        let start = if self.cont { Value::Null } else { json!(self.start) };
+        json!({"format": self.format, "start": start})
+    }
+}
+
+fn page_numbers_ui(app: &mut WordApp, ui: &mut Ui, f: &mut PageNumbersForm) -> bool {
+    f.follow(app);
+    ui.add_space(4.0);
+    ui.label(tl!("Number format"));
+    let label = crate::dialogs_notes::FORMATS.iter().find(|(v, _)| *v == f.format.as_str()).map(|(_, l)| *l).unwrap_or_default();
+    egui::ComboBox::from_id_salt("pnum_format").selected_text(label).width(150.0).show_ui(ui, |ui| {
+        for (v, l) in crate::dialogs_notes::FORMATS {
+            ui.selectable_value(&mut f.format, v.to_string(), l);
+        }
+    });
+    heading(ui, "Page numbering");
+    ui.radio_value(&mut f.cont, true, tl!("Continue from previous section"));
+    ui.horizontal(|ui| {
+        ui.radio_value(&mut f.cont, false, tl!("Start at:"));
+        ui.add_enabled(!f.cont, egui::DragValue::new(&mut f.start).range(1..=100_000));
+    });
+    let (ok, cancel) = buttons(ui, "OK", true);
+    if ok {
+        return run(app, "layout.pageNumberFormat", f.params());
+    }
+    cancel
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -1360,6 +1497,55 @@ mod tests {
         let s = &a.session.doc.settings;
         assert!(s.auto_hyphenation && !s.hyphenate_caps && s.consecutive_hyphen_limit == 2);
         assert!((s.hyphenation_zone - 18.0).abs() < 0.01, "zone untouched: {}", s.hyphenation_zone);
+    }
+
+    /// #1113: Format Page Numbers opens with the section's numbering, OK sets the format and
+    /// start, and "Continue from previous section" numbers on from the section before; a plain
+    /// command call without `start` keeps the section's start.
+    #[test]
+    fn page_numbers_dialog_sets_the_format_and_start() {
+        use wordcraft_doc::section::NumFormat;
+        let mut a = app();
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+        assert!(f.cont && f.format == "decimal", "{f:?}");
+        f.cont = false;
+        f.start = 5;
+        f.format = "upperRoman".into();
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        let s = a.session.doc.last_section.clone();
+        assert_eq!((s.page_num_format, s.page_num_start), (NumFormat::UpperRoman, Some(5)));
+        // The reopened dialog shows the section's numbering; continuing clears the start.
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+        assert!(!f.cont && f.start == 5 && f.format == "upperRoman", "{f:?}");
+        f.cont = true;
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        let s = a.session.doc.last_section.clone();
+        assert_eq!((s.page_num_format, s.page_num_start), (NumFormat::UpperRoman, None), "continue numbers on from the section before");
+        // A call with no `start` keeps it (the ribbon's old plain call cleared it).
+        a.run("layout.pageNumberFormat", json!({"start": 7})).unwrap();
+        a.run("layout.pageNumberFormat", json!({})).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(7));
+        // A valid start above 32,767 is not lowered by opening the dialog and accepting it.
+        a.run("layout.pageNumberFormat", json!({"start": 40_000})).unwrap();
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(f) = form(&mut a) else { panic!("page numbers") };
+        assert_eq!(f.start, 40_000);
+        a.run("layout.pageNumberFormat", f.params()).unwrap();
+        assert_eq!(a.session.doc.last_section.page_num_start, Some(40_000));
+        // The dialog follows the caret: moved to another section, it shows that section's
+        // numbering, so OK never writes the numbers read from the first one.
+        a.run("ui.dialog", json!({"name": "pageNumbers"})).unwrap();
+        let LayoutDialog::PageNumbers(mut f) = form(&mut a) else { panic!("page numbers") };
+        assert_eq!(f.section, 0);
+        a.run("caret.end", json!({})).unwrap();
+        a.run("layout.break", json!({"kind": "continuous"})).unwrap();
+        a.run("caret.end", json!({})).unwrap();
+        assert_eq!(wordcraft_engine::cmd::page::section_index_of_focus(&a.session), 1, "the caret is in the new section");
+        a.run("layout.pageNumberFormat", json!({"format": "lowerRoman", "start": 9})).unwrap();
+        f.follow(&a);
+        assert_eq!((f.section, f.format.as_str(), f.start), (1, "lowerRoman", 9));
     }
 
     /// #755: the Line Numbers "From text" distance and the Hyphenation zone follow the
@@ -1469,6 +1655,36 @@ mod tests {
         assert_eq!(state["noProof"], true);
         h.state_mut().run("edit.undo", json!({})).unwrap();
         assert_eq!(h.state().session.doc, before, "one undo restores the inherited formatting");
+    }
+
+    /// Set As Default and OK persist the chosen proofing language in a fresh app.
+    #[test]
+    fn language_dialog_default_survives_a_restart() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = app();
+        a.ui.language = "en".into();
+        a.dialog = Some(Dialog::Layout(Box::new(LayoutDialog::Language(LanguageForm { lang: "fr-FR".into(), no_proof: false, detect: false }))));
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                app.logic(&ui.ctx().clone());
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(3);
+        h.get_by_label("Set As Default").click();
+        h.run_steps(3);
+        h.get_by_label("OK").click();
+        h.run_steps(3);
+        let saved = serde_json::to_vec(&h.state().prefs()).unwrap();
+        let mut b = WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        b.apply_prefs(serde_json::from_slice(&saved).unwrap());
+        b.logic(&egui::Context::default());
+        assert_eq!(LanguageForm::read(&b).lang, "fr-FR");
+        assert!(!b.session.prefs.detect_language);
+        assert!(!b.session.dirty && !b.session.can_undo());
+        b.run("file.new", json!({})).unwrap();
+        assert_eq!(LanguageForm::read(&b).lang, "fr-FR");
     }
 
     /// #407: Envelopes starts from the selected address; Add to Document puts an envelope
@@ -1745,8 +1961,32 @@ mod tests {
         assert_eq!(t.rows.iter().map(|r| r.cells.len()).collect::<Vec<_>>(), [3, 3, 3, 3]);
     }
 
-    /// The envelope sizes are in the interface language with the region's decimal separator
-    /// (#1128; the untranslated-text audit found `#10   4.13 × 9.5 in` drawn in English).
+    /// Convert to Text opens its dialog on Tabs; OK converts with the separator chosen.
+    #[test]
+    fn table_to_text_opens_its_dialog() {
+        let mut a = table_app(2, &["a", "b", "c", "d"]);
+        assert_eq!(a.run("table.toText", json!({})).unwrap(), json!({"pending": "tableToText"}));
+        assert!(a.session.doc.body.iter().any(|b| b.as_table().is_some()), "nothing converted yet");
+        let LayoutDialog::TableToText(mut f) = form(&mut a) else { panic!("table to text") };
+        assert_eq!((f.separator.as_str(), f.other_char.as_str()), ("tab", "-"));
+        assert_eq!(f.params(), json!({"separator": "tab"}));
+        f.separator = "other".into();
+        f.other_char = "/".into();
+        assert_eq!(f.params(), json!({"separator": "other", "char": "/"}));
+        a.run("table.toText", f.params()).unwrap();
+        assert!(a.dialog.is_none());
+        let texts: Vec<&str> = a.session.doc.body.iter().filter_map(|b| b.as_para()).map(|p| p.text.as_str()).collect();
+        assert!(texts.contains(&"a/b") && texts.contains(&"c/d"), "{texts:?}");
+        assert!(a.session.doc.body.iter().all(|b| b.as_table().is_none()));
+
+        // Outside a table there is nothing to convert.
+        let mut a = app();
+        assert_eq!(a.run("ui.dialog", json!({"name": "tableToText"})).unwrap(), json!({"dialog": null}));
+    }
+
+    /// The envelope sizes go through the interface language's catalog and use the region's
+    /// decimal separator (#1128; the untranslated-text audit found `#10   4.13 × 9.5 in` drawn in
+    /// English).
     #[test]
     fn envelope_sizes_follow_the_interface_language_and_region() {
         let size = |name: &str| ENVELOPE_SIZES.iter().find(|s| s.0 == name).map(|(n, w, h)| envelope_label(n, *w, *h)).unwrap();
@@ -1755,10 +1995,11 @@ mod tests {
         let mut a = app();
         a.run("file.options", json!({"region": "it-IT"})).unwrap();
         crate::options::sync(&a);
-        crate::i18n::set_current(crate::i18n::Lang::from_code("it").unwrap());
-        assert_eq!(size("Envelope #10"), "#10   4,13 × 9,5 pollici");
-        assert_eq!(size("Envelope DL"), "DL   110 × 220 mm");
-        crate::i18n::set_current(crate::i18n::Lang::EN);
+        assert_eq!(size("Envelope #10"), "#10   4,13 × 9,5 in");
+        crate::i18n::pseudo::set(true);
+        assert_eq!(size("Envelope #10"), "⟦#10   4,13 × 9,5 in⟧");
+        assert_eq!(size("Envelope DL"), "⟦DL   110 × 220 mm⟧");
+        crate::i18n::pseudo::set(false);
         a.run("file.options", json!({"region": "en-US"})).unwrap();
         crate::options::sync(&a);
     }

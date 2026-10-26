@@ -29,7 +29,8 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
         app.read_aloud_error = Some(e.clone());
         app.status(e);
     }
-    let current = app.session.read_aloud.current().map(|u| u.start);
+    // The caret follows the reading only in the document being read.
+    let current = if reads_shown_document(app) { app.session.read_aloud.current().map(|u| u.start) } else { None };
     if current != app.read_aloud_at {
         if let Some(start) = &current {
             app.session.sel = wordcraft_engine::Selection::caret(app.session.doc.clamp(start));
@@ -42,16 +43,29 @@ pub fn poll(app: &mut WordApp, ctx: &egui::Context) {
 
 /// The page rectangles (in page units) of the sentence being read, to highlight.
 pub fn highlight(app: &mut WordApp) -> Option<(wordcraft_engine::doc::Pos, wordcraft_engine::doc::Pos)> {
-    if !app.session.read_aloud.open {
+    if !app.session.read_aloud.open || !reads_shown_document(app) {
         return None;
     }
     let u = app.session.read_aloud.current()?;
     Some((app.session.doc.clamp(&u.start), app.session.doc.clamp(&u.end)))
 }
 
+/// Whether the reading is of the document the window shows: its sentence positions are in it.
+fn reads_shown_document(app: &WordApp) -> bool {
+    app.session.read_aloud.document == Some(app.session.document_id())
+}
+
 /// The player window.
 pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     if !app.session.read_aloud.open {
+        return;
+    }
+    // With a window per document, the player is in the window of the document being read.
+    if app.windows.native()
+        && let Some(d) = app.session.read_aloud.document
+        && d != app.session.document_id()
+        && app.session.is_open(d)
+    {
         return;
     }
     let t = Tokens::get(ctx);
@@ -60,7 +74,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
     let mut run: Option<(&str, serde_json::Value)> = None;
     let right_top = app.canvas.canvas_rect.map_or(ctx.content_rect().right_top() + vec2(-24.0, 160.0), |r| r.right_top() + vec2(-24.0, 16.0));
     let window = egui::Window::new(tl!("Read Aloud"))
-        .id(egui::Id::new("read-aloud-player"))
+        .id(egui::Id::unique("read-aloud-player"))
         .collapsible(false)
         .resizable(false)
         .pivot(egui::Align2::RIGHT_TOP)
@@ -94,10 +108,10 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         ui.add_space(6.0);
         // Speed: applied when the slider is let go, so dragging doesn't restart the sentence
         // on every frame.
-        let id = egui::Id::new("read-aloud-rate");
+        let id = egui::Id::unique("read-aloud-rate");
         let mut rate = ui.data(|d| d.get_temp::<f32>(id)).unwrap_or_else(|| app.session.read_aloud.rate());
         ui.horizontal(|ui| {
-            ui.label(tl!("Speed"));
+            let label = ui.label(tl!("Speed"));
             ui.spacing_mut().slider_width = 110.0;
             let r = ui.add(
                 egui::Slider::new(&mut rate, MIN_RATE..=MAX_RATE)
@@ -106,6 +120,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
                     .custom_formatter(|v, _| format!("{v:.2}×"))
                     .custom_parser(|s| s.trim().trim_end_matches(['×', 'x']).trim().parse().ok()),
             );
+            let r = r.labelled_by(label.id);
             if r.dragged() {
                 ui.data_mut(|d| d.insert_temp(id, rate));
             } else {

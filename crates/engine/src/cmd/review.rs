@@ -12,17 +12,21 @@ use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("review.newComment", "New Comment", "Review › Comments", new_comment).key(super::mac_or("Mod+Alt+A / Mod+Alt+M", "Mod+Alt+M")).params(r#"{"text": string}"#),
-        CommandSpec::new("review.reply", "Reply", "Review › Comments", reply).params(r#"{"id": n, "text": string}"#).when(comments_change),
-        CommandSpec::new("review.editComment", "Edit Comment", "Review › Comments", edit_comment)
-            .params(r#"{"id": n, "text": string}"#)
+        CommandSpec::new("review.reply", "Reply", "Review › Comments", reply)
+            .params(r#"{"id": non-negative JSON integer, "text": string}"#)
             .when(comments_change),
-        CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: n, "all"?: bool}"#),
+        CommandSpec::new("review.editComment", "Edit Comment", "Review › Comments", edit_comment)
+            .params(r#"{"id": non-negative JSON integer, "text": string}"#)
+            .when(comments_change),
+        CommandSpec::new("review.deleteComment", "Delete", "Review › Comments", delete_comment).params(r#"{"id"?: non-negative JSON integer (omit to use the caret), "all"?: bool}"#),
         CommandSpec::new("review.resolveComment", "Resolve", "Review › Comments", |s, v| {
+            validate_comment_id(v)?;
             let id = p::u64(v, "id").map(|x| x as u32).or_else(|| comment_at_caret(s)).ok_or_else(|| CmdError::Params("`id` required".into()))?;
             let c = s.doc.comments.get_mut(&id).ok_or_else(|| CmdError::Params("no such comment".into()))?;
             c.resolved = p::bool(v, "value").unwrap_or(!c.resolved);
             sel_result(s)
-        }),
+        })
+        .params(r#"{"id"?: non-negative JSON integer (omit to use the caret), "value"?: bool (omit to toggle)}"#),
         CommandSpec::new("review.nextComment", "Next", "Review › Comments", |s, _| nav_comment(s, 1)).pure(),
         CommandSpec::new("review.previousComment", "Previous", "Review › Comments", |s, _| nav_comment(s, -1)).pure(),
         CommandSpec::new("review.comments", "Show Comments", "Review › Comments", list_comments).pure(),
@@ -32,10 +36,14 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .params(r#"{"value"?: bool (omit to toggle)}"#)
         .key("Mod+Shift+E"),
-        CommandSpec::new("review.acceptAll", "Accept All Changes", "Review › Changes", |s, _| resolve_all(s, true)),
-        CommandSpec::new("review.rejectAll", "Reject All Changes", "Review › Changes", |s, _| resolve_all(s, false)),
-        CommandSpec::new("review.accept", "Accept", "Review › Changes", |s, _| resolve_sel(s, true)),
-        CommandSpec::new("review.reject", "Reject", "Review › Changes", |s, _| resolve_sel(s, false)),
+        CommandSpec::new("review.acceptAll", "Accept All Changes", "Review › Changes", |s, v| resolve_all_then(s, v, true))
+            .params(r#"{"stopTracking"?: bool (also turn Track Changes off)}"#),
+        CommandSpec::new("review.rejectAll", "Reject All Changes", "Review › Changes", |s, v| resolve_all_then(s, v, false))
+            .params(r#"{"stopTracking"?: bool (also turn Track Changes off)}"#),
+        CommandSpec::new("review.accept", "Accept", "Review › Changes", |s, v| resolve_sel_then(s, v, true))
+            .params(r#"{"next"?: bool (then select the next change)}"#),
+        CommandSpec::new("review.reject", "Reject", "Review › Changes", |s, v| resolve_sel_then(s, v, false))
+            .params(r#"{"next"?: bool (then select the next change)}"#),
         CommandSpec::new("review.nextChange", "Next Change", "Review › Changes", |s, _| nav_change(s, 1)).pure(),
         CommandSpec::new("review.previousChange", "Previous Change", "Review › Changes", |s, _| nav_change(s, -1)).pure(),
         CommandSpec::new("review.markup", "Display for Review", "Review › Tracking", |s, v| {
@@ -110,6 +118,7 @@ pub fn specs() -> Vec<CommandSpec> {
         .params(r#"{"text": string}"#),
         CommandSpec::new("review.proofing", "Check Spelling as You Type", "File › Options › Proofing", |s, v| {
             s.view.proofing = p::bool(v, "value").unwrap_or(!s.view.proofing);
+            s.prefs.check_spelling = s.view.proofing;
             Ok(json!({"value": s.view.proofing}))
         })
         .pure(),
@@ -136,9 +145,20 @@ fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(&text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
-    s.doc
-        .comments
-        .insert(id, Comment { author: s.author.clone(), initials, date: now_iso(), parent: None, resolved: false, part, ..Default::default() });
+    let now = now_iso();
+    s.doc.comments.insert(
+        id,
+        Comment {
+            author: s.author.clone(),
+            initials,
+            date: now.clone(),
+            date_utc: Some(now),
+            parent: None,
+            resolved: false,
+            part,
+            ..Default::default()
+        },
+    );
     let props = Default::default();
     s.doc.insert_object(&b, InlineObject::CommentEnd { id }, &props)?;
     s.doc.insert_object(&a, InlineObject::CommentStart { id }, &props)?;
@@ -146,7 +166,17 @@ fn new_comment(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"id": id, "story": part}))
 }
 
+/// An omitted ID permits caret targeting; an explicit malformed value must not.
+/// Unlike the general numeric parameter helper, comment IDs never coerce floats.
+fn validate_comment_id(v: &Value) -> Result<(), CmdError> {
+    if v.get("id").is_some_and(|id| id.as_u64().is_none_or(|n| u32::try_from(n).is_err())) {
+        return Err(CmdError::Params("`id` must be a non-negative 32-bit JSON integer".into()));
+    }
+    Ok(())
+}
+
 fn reply(s: &mut Session, v: &Value) -> CmdResult {
+    validate_comment_id(v)?;
     let parent = p::u64(v, "id").map(|x| x as u32).ok_or_else(|| CmdError::Params("`id` required".into()))?;
     if !s.doc.comments.contains_key(&parent) {
         return Err(CmdError::Params("no such comment".into()));
@@ -155,9 +185,19 @@ fn reply(s: &mut Session, v: &Value) -> CmdResult {
     let part = s.doc.try_add_part(PartKind::Comment, vec![para_block(Paragraph::with_text(text, Default::default()))])?;
     let id = comment_id(s)?;
     let initials = s.user_initials();
+    let now = now_iso();
     s.doc.comments.insert(
         id,
-        Comment { author: s.author.clone(), initials, date: now_iso(), parent: Some(parent), resolved: false, part, ..Default::default() },
+        Comment {
+            author: s.author.clone(),
+            initials,
+            date: now.clone(),
+            date_utc: Some(now),
+            parent: Some(parent),
+            resolved: false,
+            part,
+            ..Default::default()
+        },
     );
     Ok(json!({"id": id}))
 }
@@ -179,6 +219,7 @@ fn comments_change(s: &Session) -> Option<&'static str> {
 
 /// Replace a comment's (or reply's) text; each line becomes a paragraph.
 fn edit_comment(s: &mut Session, v: &Value) -> CmdResult {
+    validate_comment_id(v)?;
     let id = p::u64(v, "id").and_then(|x| u32::try_from(x).ok()).ok_or_else(|| CmdError::Params("`id` required".into()))?;
     let text = p::req_str(v, "text")?;
     let part = s.doc.comments.get(&id).map(|c| c.part).ok_or_else(|| CmdError::Params("no such comment".into()))?;
@@ -269,6 +310,7 @@ fn thread_of(s: &Session, id: u32) -> Vec<u32> {
 }
 
 fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
+    validate_comment_id(v)?;
     let ids: Vec<u32> = if p::bool(v, "all").unwrap_or(false) {
         s.doc.comments.keys().copied().collect()
     } else {
@@ -285,14 +327,22 @@ fn delete_comment(s: &mut Session, v: &Value) -> CmdResult {
     Ok(json!({"deleted": ids}))
 }
 
-/// Comments in document order with their anchors.
+/// Comments in reading order with their anchors: every story the reader sees, in
+/// `Document::shown_stories` order (#2289). A comment anchored only in a story nothing shows
+/// (a removed header) has no anchor.
 pub fn comment_list(s: &Session) -> Vec<(u32, Option<Pos>)> {
     let mut found: Vec<(u32, Option<Pos>)> = Vec::new();
-    for path in s.doc.para_paths(StoryRef::Body) {
-        let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for o in p.object_offsets() {
-            if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
-                found.push((*id, Some(Pos { story: StoryRef::Body, path: path.clone(), off: o })));
+    // The balloons ask every frame; most documents have no comments.
+    if s.doc.comments.is_empty() {
+        return found;
+    }
+    for story in s.doc.shown_stories() {
+        for path in s.doc.para_paths(story) {
+            let Some(p) = s.doc.para(story, &path) else { continue };
+            for o in p.object_offsets() {
+                if let Some(InlineObject::CommentStart { id }) = p.object_at(o) {
+                    found.push((*id, Some(Pos { story, path: path.clone(), off: o })));
+                }
             }
         }
     }
@@ -322,28 +372,24 @@ fn list_comments(s: &mut Session, _: &Value) -> CmdResult {
 
 fn nav_comment(s: &mut Session, dir: i32) -> CmdResult {
     let list: Vec<Pos> = comment_list(s).into_iter().filter_map(|(_, p)| p).collect();
-    let caret = s.sel.focus.clone();
-    let t = if dir > 0 { list.iter().find(|p| **p > caret).or(list.first()) } else { list.iter().rev().find(|p| **p < caret).or(list.last()) };
+    // Reading order: the story's place in `shown_stories`, then the place in the story. Part ids
+    // follow creation, not reading, so `Pos` order won't do across stories.
+    let rank: BTreeMap<StoryRef, usize> = s.doc.shown_stories().into_iter().enumerate().map(|(i, st)| (st, i)).collect();
+    let key = |p: &Pos| rank.get(&p.story).map(|i| (*i, p.path.clone(), p.off));
+    let caret = key(&s.sel.focus);
+    let t = if dir > 0 {
+        list.iter().find(|p| caret.is_some() && key(p) > caret).or(list.first())
+    } else {
+        list.iter().rev().find(|p| caret.is_some() && key(p) < caret).or(list.last())
+    };
     if let Some(p) = t {
         s.sel = Selection::caret(p.clone());
     }
     sel_result(s)
 }
 
-/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
-/// the section break on it), `props` the paragraph's own formatting change.
-#[allow(clippy::too_many_arguments)]
-fn resolve_para(
-    s: &mut Session,
-    story: StoryRef,
-    path: &wordcraft_doc::Path,
-    from: usize,
-    to: usize,
-    mark: bool,
-    props: bool,
-    accept: bool,
-) -> Result<(), CmdError> {
-    let para = s.doc.para_mut(story, path)?;
+/// Accept or reject the tracked formatting and text of `from..to` in one paragraph (not its mark).
+fn resolve_runs(para: &mut wordcraft_doc::Paragraph, from: usize, to: usize, props: bool, accept: bool) -> Result<(), CmdError> {
     if props && (para.props.fmt_change.is_some() || para.props.num_change.is_some()) {
         fmt_revisions::resolve_para(&mut para.props, accept);
         para.touch();
@@ -364,6 +410,24 @@ fn resolve_para(
             })?;
         }
     }
+    Ok(())
+}
+
+/// Accept or reject a revision range in one paragraph; `mark` includes its paragraph mark (and
+/// the section break on it), `props` the paragraph's own formatting change.
+#[allow(clippy::too_many_arguments)]
+fn resolve_para(
+    s: &mut Session,
+    story: StoryRef,
+    path: &wordcraft_doc::Path,
+    from: usize,
+    to: usize,
+    mark: bool,
+    props: bool,
+    accept: bool,
+) -> Result<(), CmdError> {
+    let para = s.doc.para_mut(story, path)?;
+    resolve_runs(para, from, to, props, accept)?;
     if !mark {
         return Ok(());
     }
@@ -480,6 +544,28 @@ pub fn move_changes(s: &Session) -> Vec<(Pos, String, bool)> {
     out
 }
 
+/// Accept or reject the tracked text and paragraph marks of the top-level paragraphs in a block
+/// list that is not a story (a note separator).
+fn resolve_loose_blocks(blocks: &mut wordcraft_doc::Blocks, accept: bool) -> Result<(), CmdError> {
+    for b in blocks.iter_mut() {
+        let wordcraft_doc::Block::Para(p) = std::sync::Arc::make_mut(b) else { continue };
+        let len = p.len();
+        resolve_runs(p, 0, len, true, accept)?;
+        if p.mark.fmt_change.is_some() || p.section.as_ref().is_some_and(|x| x.fmt_change.is_some()) {
+            fmt_revisions::resolve_char(&mut p.mark, accept);
+            if let Some(sec) = p.section.as_deref_mut() {
+                fmt_revisions::resolve_section(sec, accept);
+            }
+        }
+        // A mark can't be removed here (no neighbour to join), so it just stops being a revision.
+        p.mark.ins = None;
+        p.mark.del = None;
+        p.touch();
+    }
+    fmt_revisions::resolve_containers(blocks, accept, 0);
+    Ok(())
+}
+
 fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
     let stories: Vec<StoryRef> = std::iter::once(StoryRef::Body).chain(s.doc.parts.keys().map(|k| StoryRef::Part(*k))).collect();
     for st in stories {
@@ -494,12 +580,33 @@ fn resolve_all(s: &mut Session, accept: bool) -> CmdResult {
         fmt_revisions::resolve_containers(&mut part.blocks, accept, 0);
     }
     fmt_revisions::resolve_section(&mut s.doc.last_section, accept);
+    // The note separators are block lists of their own, not stories; they must not keep ids of
+    // revisions that are about to be dropped.
+    for sep in [&mut s.doc.footnote_separators, &mut s.doc.endnote_separators] {
+        for blocks in [&mut sep.separator, &mut sep.continuation_separator, &mut sep.continuation_notice].into_iter().flatten() {
+            resolve_loose_blocks(blocks, accept)?;
+        }
+    }
     s.doc.revisions.clear();
     s.clamp_selection();
     sel_result(s)
 }
 
-fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
+/// Accept or Reject All; with `stopTracking`, Track Changes is turned off as well.
+fn resolve_all_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
+    let out = resolve_all(s, accept)?;
+    if p::bool(v, "stopTracking") == Some(true) {
+        s.doc.settings.track_changes = false;
+    }
+    Ok(out)
+}
+
+/// Accept or Reject at the selection; with `next`, the next change is selected afterwards.
+fn resolve_sel_then(s: &mut Session, v: &Value, accept: bool) -> CmdResult {
+    resolve_sel(s, accept, p::bool(v, "next") == Some(true))
+}
+
+fn resolve_sel(s: &mut Session, accept: bool, next: bool) -> CmdResult {
     let (a, b) = s.sel.ordered();
     // A caret right before a tracked paragraph mark (and no tracked text around it): that mark.
     let mut caret_mark = None;
@@ -561,7 +668,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
             }
             None => {
                 if resolve_cell(s, a.story, &a.path, accept)? {
-                    return sel_result(s);
+                    return if next { select_next_unresolved(s) } else { sel_result(s) };
                 }
                 return nav_change(s, 1);
             }
@@ -586,7 +693,7 @@ fn resolve_sel(s: &mut Session, accept: bool) -> CmdResult {
     super::moves::resolve(s, &moves, accept)?;
     s.sel = Selection::caret(a);
     s.clamp_selection();
-    sel_result(s)
+    if next { select_next_unresolved(s) } else { sel_result(s) }
 }
 
 fn changes(s: &Session) -> Vec<Change> {
@@ -770,6 +877,18 @@ fn nav_change(s: &mut Session, dir: i32) -> CmdResult {
         list.iter().rev().find(|c| c.b <= caret.0 && (c.b < caret.1 || c.a < caret.0)).or(list.last())
     };
     if let Some(c) = t {
+        s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
+    }
+    sel_result(s)
+}
+
+/// After a change at the caret is resolved: select the first change from the caret on, including
+/// one that starts and ends there (an empty paragraph's, a paragraph mark's or a table's
+/// formatting), else the first change in the document.
+fn select_next_unresolved(s: &mut Session) -> CmdResult {
+    let list = changes(s);
+    let caret = s.sel.ordered().0;
+    if let Some(c) = list.iter().find(|c| c.a >= caret).or(list.first()) {
         s.sel = Selection { anchor: c.a.clone(), focus: c.b.clone() };
     }
     sel_result(s)
@@ -1009,9 +1128,17 @@ fn tracking_options(s: &mut Session, v: &Value) -> CmdResult {
     m.move_to_color = color("moveToColor", "byAuthor", m.move_to_color)?;
     // Track moves is the document's (`w:doNotTrackMoves`), so changing it is an undo step; the
     // command is pure, so it records the step itself, once every parameter has been accepted.
+    // The other options are the user's own, so the command stays available under Restrict
+    // Editing; this one edits the document, so it passes the same check as an edit and isn't
+    // limited to an exception.
     if let Some(b) = p::bool(v, "trackMoves")
         && b != s.doc.settings.track_moves
     {
+        if super::protect::check_before(s, "review.trackingOptions", &json!({}))? {
+            return Err(CmdError::Disabled(
+                "review.trackingOptions: the document is protected; stop protection to change whether moves are tracked".into(),
+            ));
+        }
         s.checkpoint("Track Changes Options");
         s.doc.settings.track_moves = b;
         s.touch();
@@ -1578,6 +1705,119 @@ mod tests {
         }
     }
 
+    /// "one two three" with "new " typed at the start, "two " deleted and " end" typed at the end,
+    /// under Track Changes: three changes.
+    fn three_changes() -> Session {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.author = "Ana".into();
+        s.run("document.setText", &json!({"text": "one two three"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "new "})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 8}, "focus": {"block": 0, "off": 12}})).unwrap();
+        s.run("text.delete", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": " end"})).unwrap();
+        s
+    }
+
+    fn change_spans(s: &mut Session) -> Vec<(String, u64, u64)> {
+        let list = s.run("review.changes", &json!({})).unwrap();
+        list.as_array()
+            .unwrap()
+            .iter()
+            .map(|c| (c["kind"].as_str().unwrap().to_string(), c["start"]["off"].as_u64().unwrap(), c["end"]["off"].as_u64().unwrap()))
+            .collect()
+    }
+
+    fn selected(s: &Session) -> (usize, usize) {
+        let (a, b) = s.sel.ordered();
+        (a.off, b.off)
+    }
+
+    /// Accept and Move to Next, Reject and Move to Next: the change at the caret is resolved and
+    /// the next one is selected; without `next` the caret stays where the change was.
+    #[test]
+    fn accept_and_reject_can_move_to_the_next_change() {
+        for (cmd, accept) in [("review.accept", true), ("review.reject", false)] {
+            let mut s = three_changes();
+            let before = change_spans(&mut s);
+            assert_eq!(before.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["insert", "delete", "insert"], "{cmd}");
+            s.run("caret.docStart", &json!({})).unwrap();
+            s.run(cmd, &json!({"next": true})).unwrap();
+            let after = change_spans(&mut s);
+            assert_eq!(after.len(), 2, "{cmd}: the first insertion is resolved");
+            assert_eq!(after[0].0, "delete", "{cmd}");
+            let deletion = (after[0].1 as usize, after[0].2 as usize);
+            assert_eq!(selected(&s), deletion, "{cmd}: the deletion is selected next");
+            assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body).starts_with("new "), accept, "{cmd}");
+
+            // Without `next`, the caret stays at the resolved change.
+            let mut s = three_changes();
+            s.run("caret.docStart", &json!({})).unwrap();
+            s.run(cmd, &json!({})).unwrap();
+            assert_eq!(selected(&s), (0, 0), "{cmd}");
+        }
+    }
+
+    /// With the caret on no change, Accept and Move to Next selects the next change without
+    /// resolving it, as Accept and Next Change do.
+    #[test]
+    fn accept_and_move_to_next_off_a_change_selects_it_unresolved() {
+        let mut s = three_changes();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 5}, "focus": {"block": 0, "off": 5}})).unwrap();
+        s.run("review.accept", &json!({"next": true})).unwrap();
+        let after = change_spans(&mut s);
+        assert_eq!(after.len(), 3, "nothing is resolved");
+        assert_eq!(selected(&s), (after[1].1 as usize, after[1].2 as usize), "the deletion after the caret is selected");
+    }
+
+    /// Reject and Move to Next on the only text of a centered paragraph: the paragraph's formatting
+    /// change, now empty at the caret, is selected next, not the insertion after it.
+    #[test]
+    fn move_to_next_selects_a_change_left_at_the_caret() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.author = "Ana".into();
+        s.run("document.setText", &json!({"text": "one\n\nthree"})).unwrap();
+        s.run("review.trackChanges", &json!({"value": true})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 0}, "focus": {"block": 1, "off": 0}})).unwrap();
+        s.run("para.align", &json!({"value": "center"})).unwrap();
+        s.run("text.insert", &json!({"text": "x"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.insert", &json!({"text": "!"})).unwrap();
+        let before = change_spans(&mut s);
+        assert_eq!(before.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["format", "insert", "insert"], "{before:?}");
+        s.run("select.range", &json!({"anchor": {"block": 1, "off": 1}, "focus": {"block": 1, "off": 1}})).unwrap();
+        s.run("review.reject", &json!({"next": true})).unwrap();
+        let after = change_spans(&mut s);
+        assert_eq!(after.iter().map(|c| c.0.as_str()).collect::<Vec<_>>(), ["format", "insert"], "{after:?}");
+        let (a, b) = s.sel.ordered();
+        let at = (wordcraft_doc::Path::top(1), 0);
+        assert_eq!(((a.path.clone(), a.off), (b.path.clone(), b.off)), (at.clone(), at), "the centering is selected");
+    }
+
+    /// Accept All Changes and Stop Tracking, Reject All Changes and Stop Tracking: every change is
+    /// resolved and Track Changes is off; plain Accept All and Reject All leave it on.
+    #[test]
+    fn accept_and_reject_all_can_stop_tracking() {
+        for cmd in ["review.acceptAll", "review.rejectAll"] {
+            let mut s = three_changes();
+            s.run(cmd, &json!({"stopTracking": true})).unwrap();
+            assert!(change_spans(&mut s).is_empty(), "{cmd}");
+            assert!(!s.doc.settings.track_changes, "{cmd}: Track Changes is off");
+            s.run("edit.undo", &json!({})).unwrap();
+            assert!(s.doc.settings.track_changes, "{cmd}: one undo step brings tracking and the changes back");
+            assert_eq!(change_spans(&mut s).len(), 3, "{cmd}");
+
+            let mut s = three_changes();
+            s.run(cmd, &json!({})).unwrap();
+            assert!(change_spans(&mut s).is_empty(), "{cmd}");
+            assert!(s.doc.settings.track_changes, "{cmd}: Track Changes stays on");
+        }
+    }
+
     /// "plain words here" with "words" made bold, then 14 pt, and the paragraph centred, under
     /// Track Changes by Ana.
     fn formatted_while_tracking() -> Session {
@@ -1648,6 +1888,21 @@ mod tests {
         let p = body_para(&s);
         assert_eq!((p.props.align, p.props.fmt_change.is_none()), (Some(wordcraft_doc::props::Align::Center), true));
         assert!(s.run("review.changes", &json!({})).unwrap().as_array().unwrap().is_empty());
+    }
+
+    /// Clearing formatting in the Style Inspector keeps pending formatting revisions.
+    #[test]
+    fn inspector_clear_keeps_formatting_changes() {
+        let mut s = formatted_while_tracking();
+        s.run("review.trackChanges", &json!({"value": false})).unwrap();
+        s.run("styles.inspectorClear", &json!({"level": "paragraphFormatting"})).unwrap();
+        assert!(body_para(&s).props.fmt_change.is_some(), "paragraph formatting change survives");
+
+        let mut s = formatted_while_tracking();
+        s.run("review.trackChanges", &json!({"value": false})).unwrap();
+        s.run("select.range", &json!({"anchor": {"block": 0, "off": 6}, "focus": {"block": 0, "off": 11}})).unwrap();
+        s.run("styles.inspectorClear", &json!({"level": "characterFormatting"})).unwrap();
+        assert!(body_para(&s).props_of_char(6).fmt_change.is_some(), "character formatting change survives");
     }
 
     /// Comment anchors left in any story (the body, headers, footers, notes and text boxes), with
@@ -1745,6 +2000,231 @@ mod tests {
         s.run("review.deleteComment", &json!({"id": root})).unwrap();
         assert!(s.doc.comments.is_empty());
         assert!(started.elapsed() < std::time::Duration::from_secs(5), "took {:?}", started.elapsed());
+    }
+
+    /// A comment on the whole of the story the caret is in; its id and that story.
+    fn comment_here(s: &mut Session, text: &str) -> (u64, wordcraft_doc::StoryRef) {
+        let story = s.sel.focus.story;
+        s.run("select.all", &json!({})).unwrap();
+        (s.run("review.newComment", &json!({"text": text})).unwrap()["id"].as_u64().unwrap(), story)
+    }
+
+    /// Comments in a header, a footer, a text box and a footnote, made in that order, then one
+    /// on a word of the body. Returns each comment's id and story in reading order, which isn't
+    /// the order they were made: the body, the text box and footnote it shows, then the header
+    /// and the footer.
+    fn comments_in_every_story(s: &mut Session) -> Vec<(u64, wordcraft_doc::StoryRef)> {
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body text with a comment on it."})).unwrap();
+        s.run("insert.header", &json!({"text": "header"})).unwrap();
+        let header = comment_here(s, "header");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("insert.footer", &json!({"text": "footer"})).unwrap();
+        let footer = comment_here(s, "footer");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.textBox", &json!({"text": "boxed"})).unwrap();
+        let text_box = comment_here(s, "text box");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("references.footnote", &json!({"text": "noted"})).unwrap();
+        let note = comment_here(s, "footnote");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("select.text", &json!({"text": "comment"})).unwrap();
+        let body = (s.run("review.newComment", &json!({"text": "body"})).unwrap()["id"].as_u64().unwrap(), wordcraft_doc::StoryRef::Body);
+        s.run("caret.docStart", &json!({})).unwrap();
+        vec![body, text_box, note, header, footer]
+    }
+
+    /// `review.comments` as (id, the anchor's story).
+    fn listed(s: &mut Session) -> Vec<(u64, Option<wordcraft_doc::StoryRef>)> {
+        let list = s.run("review.comments", &json!({})).unwrap();
+        list.as_array().unwrap().iter().map(|c| (c["id"].as_u64().unwrap(), serde_json::from_value(c["anchor"]["story"].clone()).ok())).collect()
+    }
+
+    /// The stories Next Comment visits, `n` presses from the caret.
+    fn next_stories(s: &mut Session, n: usize) -> Vec<wordcraft_doc::StoryRef> {
+        (0..n)
+            .map(|_| {
+                s.run("review.nextComment", &json!({})).unwrap();
+                s.sel.focus.story
+            })
+            .collect()
+    }
+
+    /// #2289: comments in headers, footers, text boxes and footnotes are listed with their
+    /// anchors, in reading order rather than the order their stories were made.
+    #[test]
+    fn comments_outside_the_body_are_listed_with_their_anchors() {
+        let mut s = Session::new(Document::new());
+        let want: Vec<_> = comments_in_every_story(&mut s).into_iter().map(|(id, st)| (id, Some(st))).collect();
+        assert_eq!(listed(&mut s), want);
+    }
+
+    /// #2289: Next and Previous Comment go through every story's comments in reading order and
+    /// wrap around.
+    #[test]
+    fn next_and_previous_comment_reach_comments_outside_the_body() {
+        let mut s = Session::new(Document::new());
+        let want: Vec<_> = comments_in_every_story(&mut s).into_iter().map(|(_, st)| st).collect();
+        let mut wrapped = want.clone();
+        wrapped.push(want[0]);
+        assert_eq!(next_stories(&mut s, want.len() + 1), wrapped, "Next visits each comment, then wraps to the first");
+        let back: Vec<_> = (0..want.len())
+            .map(|_| {
+                s.run("review.previousComment", &json!({})).unwrap();
+                s.sel.focus.story
+            })
+            .collect();
+        let mut rev = want.clone();
+        rev.reverse();
+        assert_eq!(back, rev, "Previous from the first comment wraps to the last");
+    }
+
+    /// #2289: a header comes before the footer whichever was made first.
+    #[test]
+    fn next_comment_reaches_the_header_before_the_footer() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body"})).unwrap();
+        s.run("insert.footer", &json!({"text": "footer"})).unwrap();
+        let footer = comment_here(&mut s, "footer").1;
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("insert.header", &json!({"text": "header"})).unwrap();
+        let header = comment_here(&mut s, "header").1;
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        assert_eq!(next_stories(&mut s, 2), vec![header, footer]);
+    }
+
+    /// #2289: a comment left in a story nothing shows any more (a removed header, a deleted
+    /// footnote's text) has no anchor, and Next never takes the caret into that hidden story.
+    #[test]
+    fn comments_in_hidden_stories_are_not_navigated_to() {
+        let mut s = Session::new(Document::new());
+        let all = comments_in_every_story(&mut s);
+        let (note, header) = (all[2], all[3]);
+        s.run("insert.removeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("text.backspace", &json!({})).unwrap();
+        assert!(!s.doc.shown_stories().contains(&note.1), "the footnote's reference is gone");
+        let list = listed(&mut s);
+        for hidden in [note, header] {
+            assert!(list.contains(&(hidden.0, None)), "comment {} sits in a hidden story: {list:?}", hidden.0);
+        }
+        let shown = [all[0].1, all[1].1, all[4].1];
+        for st in next_stories(&mut s, all.len()) {
+            assert!(shown.contains(&st), "Next went to hidden {st:?}");
+        }
+    }
+
+    /// A body comment, then, with `option` on, a comment in the header of page `page`; `option`
+    /// is turned off again. Returns the header comment's id and story.
+    fn comment_in_header_version(s: &mut Session, option: &str, page: usize) -> (u64, wordcraft_doc::StoryRef) {
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body text with a comment on it."})).unwrap();
+        s.run("select.text", &json!({"text": "comment"})).unwrap();
+        s.run("review.newComment", &json!({"text": "body"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.pageBreak", &json!({})).unwrap();
+        s.run(option, &json!({"value": true})).unwrap();
+        s.run("insert.editHeader", &json!({"page": page})).unwrap();
+        s.run("text.insert", &json!({"text": "header"})).unwrap();
+        let header = comment_here(s, "header");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run(option, &json!({"value": false})).unwrap();
+        s.run("caret.docStart", &json!({})).unwrap();
+        header
+    }
+
+    /// A first-page or even-page header is hidden while its option is off: its comments have no
+    /// anchor and Next skips them.
+    #[test]
+    fn comments_in_header_versions_whose_option_is_off_are_not_navigated_to() {
+        for (option, page, slot) in [("layout.differentFirstPage", 0, "first"), ("layout.differentOddEven", 1, "even")] {
+            let mut s = Session::new(Document::new());
+            let (id, story) = comment_in_header_version(&mut s, option, page);
+            let headers = s.doc.sections().first().map(|(_, sec)| sec.headers).unwrap();
+            let want = if slot == "first" { headers.first } else { headers.even };
+            assert_eq!(want.map(wordcraft_doc::StoryRef::Part), Some(story), "{option}: the comment is in the {slot} header");
+            assert!(listed(&mut s).contains(&(id, None)), "{option} off: no anchor");
+            for st in next_stories(&mut s, 3) {
+                assert_eq!(st, wordcraft_doc::StoryRef::Body, "{option} off: Next went to the hidden {slot} header");
+            }
+            s.run(option, &json!({"value": true})).unwrap();
+            assert!(listed(&mut s).contains(&(id, Some(story))), "{option} on: anchored again");
+        }
+    }
+
+    /// With Different First Page on, the first page's header comes before the later pages'
+    /// header, in the list and for Next.
+    #[test]
+    fn first_page_header_comes_before_the_default_header() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Page one"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.pageBreak", &json!({})).unwrap();
+        s.run("layout.differentFirstPage", &json!({"value": true})).unwrap();
+        let mut header = |page: usize| {
+            s.run("insert.editHeader", &json!({"page": page})).unwrap();
+            s.run("text.insert", &json!({"text": "header"})).unwrap();
+            let c = comment_here(&mut s, "header");
+            s.run("insert.closeHeader", &json!({})).unwrap();
+            c
+        };
+        let (first, default) = (header(0), header(1));
+        assert_ne!(first.1, default.1);
+        s.run("caret.docStart", &json!({})).unwrap();
+        assert_eq!(listed(&mut s), vec![(first.0, Some(first.1)), (default.0, Some(default.1))]);
+        assert_eq!(next_stories(&mut s, 2), vec![first.1, default.1]);
+    }
+
+    /// A linked text box shows the first box's text: comments in its own text have no anchor and
+    /// Next skips them.
+    #[test]
+    fn comments_in_a_linked_text_box_own_text_are_not_navigated_to() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "Body text with a comment on it."})).unwrap();
+        s.run("select.text", &json!({"text": "comment"})).unwrap();
+        s.run("review.newComment", &json!({"text": "body"})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        s.run("insert.textBox", &json!({"text": "first box"})).unwrap();
+        let first = s.sel.focus.story;
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.docEnd", &json!({})).unwrap();
+        // Only a blank box can be linked to.
+        s.run("insert.textBox", &json!({"text": " "})).unwrap();
+        let (id, follower) = comment_here(&mut s, "follower");
+        s.run("insert.closeHeader", &json!({})).unwrap();
+        s.run("caret.set", &json!({"pos": {"story": first, "path": [0], "off": 0}})).unwrap();
+        s.run("shape.link", &json!({"target": 1})).unwrap();
+        assert_eq!(s.doc.text_box_chains().first().and_then(|c| c.get(1)).copied().map(wordcraft_doc::StoryRef::Part), Some(follower));
+        s.run("caret.docStart", &json!({})).unwrap();
+        assert!(listed(&mut s).contains(&(id, None)), "linked: no anchor");
+        for st in next_stories(&mut s, 3) {
+            assert_ne!(st, follower, "Next went into the linked box's own text");
+        }
+        s.run("caret.set", &json!({"pos": {"story": first, "path": [0], "off": 0}})).unwrap();
+        s.run("shape.breakLink", &json!({})).unwrap();
+        assert!(listed(&mut s).contains(&(id, Some(follower))), "unlinked: anchored again");
+    }
+
+    /// Text inside a comment isn't an anchor: a comment marker in a comment's own story is not
+    /// listed as that comment's place in the document.
+    #[test]
+    fn comment_list_skips_comment_text() {
+        let mut s = Session::new(Document::new());
+        s.view.proofing = false;
+        s.run("document.setText", &json!({"text": "hello"})).unwrap();
+        s.run("select.all", &json!({})).unwrap();
+        let id = s.run("review.newComment", &json!({"text": "note"})).unwrap()["id"].as_u64().unwrap() as u32;
+        let part = s.doc.comments.get(&id).unwrap().part;
+        let at = wordcraft_doc::Pos { story: wordcraft_doc::StoryRef::Part(part), path: wordcraft_doc::Path::top(0), off: 0 };
+        s.doc.insert_object(&at, wordcraft_doc::InlineObject::CommentStart { id }, &Default::default()).unwrap();
+        let list = super::comment_list(&s);
+        assert_eq!(list.iter().filter(|(x, _)| *x == id).count(), 1);
+        assert_eq!(list.first().and_then(|(_, p)| p.as_ref()).map(|p| p.story), Some(wordcraft_doc::StoryRef::Body));
     }
 
     #[test]

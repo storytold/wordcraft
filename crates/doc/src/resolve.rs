@@ -78,7 +78,7 @@ impl ResolvedChar {
         ResolvedChar {
             // A symbol character is shown in its own font (`w:sym`), whatever the run's font.
             font: c.shown_font().map(str::to_string).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
-            size: c.size.unwrap_or(11.0).clamp(1.0, 1638.0),
+            size: c.size.unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold: c.bold.unwrap_or(false),
             italic: c.italic.unwrap_or(false),
             underline: c.underline.unwrap_or_default(),
@@ -113,7 +113,7 @@ impl ResolvedChar {
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
-            size_cs: c.size_cs.or(c.size).unwrap_or(11.0).clamp(1.0, 1638.0),
+            size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
         }

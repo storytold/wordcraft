@@ -1,0 +1,305 @@
+# English spelling variants: American and British forms of the same word, for the English
+# dialects (#1281, #1045). Written by WordCraft contributors from general knowledge of English
+# spelling (MIT OR Apache-2.0); no other word list copied. See ATTRIBUTION.md.
+#
+# Each line: POLICY AMERICAN BRITISH
+# POLICY is three letters, for American English (en-US), Canadian English (en-CA) and the
+# British-spelling Englishes (en-GB, en-AU, en-NZ, en-IE, en-ZA, en-IN…), in that order:
+#   u  only the American form is right there (the British one is flagged, American suggested)
+#   b  only the British form is right there
+#   *  both are right
+# Inflections (colours, centred, organising, organisation…) come from the rules in
+# crates/proof/src/en_variants.rs for -or/-our, -er/-re and -ize/-ise style pairs; other pairs
+# get only a plural, so list their other forms on lines of their own. When in doubt a form is
+# accepted: a false alarm is worse than a missed variant.
+
+# -or / -our
+ubb arbor arbour
+ubb ardor ardour
+ubb armor armour
+ubb armory armoury
+ubb behavior behaviour
+ubb behavioral behavioural
+ubb candor candour
+ubb clamor clamour
+ubb color colour
+ubb demeanor demeanour
+ubb discolor discolour
+ubb dishonor dishonour
+ubb endeavor endeavour
+ubb favor favour
+ubb favorite favourite
+ubb favoritism favouritism
+ubb fervor fervour
+ubb flavor flavour
+ubb harbor harbour
+ubb honor honour
+ubb humor humour
+ubb labor labour
+ubb misbehavior misbehaviour
+ubb neighbor neighbour
+ubb neighborhood neighbourhood
+ubb neighborly neighbourly
+ubb odor odour
+ubb parlor parlour
+ubb rancor rancour
+ubb rigor rigour
+ubb rumor rumour
+ubb savior saviour
+ubb savor savour
+ubb savory savoury
+ubb splendor splendour
+ubb succor succour
+ubb tumor tumour
+ubb unfavorable unfavourable
+ubb valor valour
+ubb vapor vapour
+ubb vigor vigour
+
+# -er / -re
+ubb caliber calibre
+ubb center centre
+ubb centimeter centimetre
+ubb epicenter epicentre
+ubb fiber fibre
+ubb kilometer kilometre
+ubb liter litre
+ubb luster lustre
+ubb maneuver manoeuvre
+ubb meager meagre
+ubb millimeter millimetre
+ubb miter mitre
+ubb ocher ochre
+ubb saber sabre
+ubb sepulcher sepulchre
+ubb somber sombre
+ubb specter spectre
+*bb theater theatre
+# A meter is also a measuring device in British English.
+u** meter metre
+
+# -ize / -ise (British English accepts both: Oxford spelling uses -ize)
+uu* agonize agonise
+uu* apologize apologise
+uu* authorize authorise
+uu* capitalize capitalise
+uu* categorize categorise
+uu* centralize centralise
+uu* characterize characterise
+uu* civilize civilise
+uu* colonize colonise
+uu* commercialize commercialise
+uu* computerize computerise
+uu* criticize criticise
+uu* crystallize crystallise
+uu* customize customise
+uu* decentralize decentralise
+uu* demonize demonise
+uu* deodorize deodorise
+uu* destabilize destabilise
+uu* digitize digitise
+uu* dramatize dramatise
+uu* economize economise
+uu* emphasize emphasise
+uu* energize energise
+uu* equalize equalise
+uu* familiarize familiarise
+uu* fantasize fantasise
+uu* fertilize fertilise
+uu* finalize finalise
+uu* formalize formalise
+uu* fossilize fossilise
+uu* galvanize galvanise
+uu* generalize generalise
+uu* globalize globalise
+uu* harmonize harmonise
+uu* hospitalize hospitalise
+uu* humanize humanise
+uu* hypnotize hypnotise
+uu* hypothesize hypothesise
+uu* idealize idealise
+uu* idolize idolise
+uu* immobilize immobilise
+uu* immortalize immortalise
+uu* immunize immunise
+uu* industrialize industrialise
+uu* initialize initialise
+uu* italicize italicise
+uu* itemize itemise
+uu* jeopardize jeopardise
+uu* legalize legalise
+uu* legitimize legitimise
+uu* liberalize liberalise
+uu* localize localise
+uu* magnetize magnetise
+uu* marginalize marginalise
+uu* maximize maximise
+uu* mechanize mechanise
+uu* memorize memorise
+uu* mesmerize mesmerise
+uu* minimize minimise
+uu* mobilize mobilise
+uu* modernize modernise
+uu* monopolize monopolise
+uu* moralize moralise
+uu* nationalize nationalise
+uu* naturalize naturalise
+uu* neutralize neutralise
+uu* normalize normalise
+uu* optimize optimise
+uu* organize organise
+uu* ostracize ostracise
+uu* oxidize oxidise
+uu* pasteurize pasteurise
+uu* patronize patronise
+uu* penalize penalise
+uu* personalize personalise
+uu* plagiarize plagiarise
+uu* polarize polarise
+uu* popularize popularise
+uu* pressurize pressurise
+uu* prioritize prioritise
+uu* privatize privatise
+uu* publicize publicise
+uu* pulverize pulverise
+uu* randomize randomise
+uu* rationalize rationalise
+uu* realize realise
+uu* recognize recognise
+uu* reorganize reorganise
+uu* revolutionize revolutionise
+uu* satirize satirise
+uu* scrutinize scrutinise
+uu* sensitize sensitise
+uu* socialize socialise
+uu* specialize specialise
+uu* stabilize stabilise
+uu* standardize standardise
+uu* sterilize sterilise
+uu* stigmatize stigmatise
+uu* subsidize subsidise
+uu* summarize summarise
+uu* symbolize symbolise
+uu* sympathize sympathise
+uu* synchronize synchronise
+uu* synthesize synthesise
+uu* systematize systematise
+uu* tantalize tantalise
+uu* terrorize terrorise
+uu* theorize theorise
+uu* trivialize trivialise
+uu* urbanize urbanise
+uu* utilize utilise
+uu* vandalize vandalise
+uu* verbalize verbalise
+uu* victimize victimise
+uu* visualize visualise
+uu* vocalize vocalise
+uu* westernize westernise
+
+# -yze / -yse
+u*b analyze analyse
+u*b catalyze catalyse
+u*b dialyze dialyse
+u*b electrolyze electrolyse
+u*b hydrolyze hydrolyse
+u*b paralyze paralyse
+u*b psychoanalyze psychoanalyse
+
+# -ense / -ence
+ubb defense defence
+ubb offense offence
+ubb pretense pretence
+ubb defenseless defenceless
+# In British English "license" and "practise" are the verbs, so only American English flags.
+u** license licence
+u** practice practise
+
+# Doubled l (American English accepts both)
+*bb canceled cancelled
+*bb canceling cancelling
+*bb channeled channelled
+*bb channeling channelling
+*bb counseled counselled
+*bb counseling counselling
+*bb counselor counsellor
+*bb counselors counsellors
+*bb dueling duelling
+*bb equaled equalled
+*bb equaling equalling
+*bb fueled fuelled
+*bb fueling fuelling
+*bb jeweler jeweller
+*bb jewelers jewellers
+*bb jewelry jewellery
+*bb labeled labelled
+*bb labeling labelling
+*bb leveled levelled
+*bb leveling levelling
+*bb marveled marvelled
+*bb marveling marvelling
+*bb marvelous marvellous
+*bb modeled modelled
+*bb modeling modelling
+*bb quarreled quarrelled
+*bb quarreling quarrelling
+*bb signaled signalled
+*bb signaling signalling
+*bb totaled totalled
+*bb totaling totalling
+*bb traveled travelled
+*bb traveler traveller
+*bb travelers travellers
+*bb traveling travelling
+*bb tunneled tunnelled
+*bb tunneling tunnelling
+*bb woolen woollen
+
+# -og / -ogue
+*bb catalog catalogue
+*bb cataloged catalogued
+*bb cataloging cataloguing
+
+# ae / oe
+u*b anemia anaemia
+u*b anemic anaemic
+u*b anesthesia anaesthesia
+u*b anesthetic anaesthetic
+**b archeology archaeology
+**b archeologist archaeologist
+u*b diarrhea diarrhoea
+u*b edema oedema
+u*b esophagus oesophagus
+u*b estrogen oestrogen
+u*b gynecologist gynaecologist
+u*b gynecology gynaecology
+u*b hematology haematology
+u*b hemoglobin haemoglobin
+u*b hemorrhage haemorrhage
+u*b leukemia leukaemia
+u*b orthopedic orthopaedic
+u*b pediatric paediatric
+u*b pediatrician paediatrician
+u*b pediatrics paediatrics
+
+# Other words
+u*b aluminum aluminium
+u*b cozy cosy
+ubb mold mould
+ubb molded moulded
+ubb molding moulding
+ubb moldy mouldy
+ubb molt moult
+ubb pajamas pyjamas
+ubb plow plough
+ubb plowed ploughed
+ubb plowing ploughing
+u** program programme
+u*b skeptic sceptic
+u*b skeptical sceptical
+u*b skepticism scepticism
+ubb smolder smoulder
+ubb smoldering smouldering
+# "Tire" and "curb" are also verbs everywhere, so only American English flags.
+uu* tire tyre
+uu* curb kerb

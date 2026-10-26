@@ -12,6 +12,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use serde_json::{Value, json};
+use wordcraft_doc::props::VMerge;
 use wordcraft_doc::props::{CellProps, CharProps, ParaProps, PropChange, RowProps, TableProps};
 use wordcraft_doc::section::SectionProps;
 use wordcraft_doc::table::{Cell, Row, Table};
@@ -146,15 +147,30 @@ impl Recorder<'_> {
                 (Block::Para(pb), Block::Para(pa)) if pb.text == pa.text => {
                     if let Block::Para(pa) = Arc::make_mut(a) {
                         self.para(pb, pa);
+                        // The section's properties on the paragraph (`w:sectPrChange`).
+                        let (Some(b), Some(x)) = (pb.section.as_deref(), pa.section.as_deref_mut()) else { continue };
+                        if let Some(w) = self.change(b, x, strip_section, |s| &s.fmt_change) {
+                            x.fmt_change = w;
+                        }
                     }
                 }
-                (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() => {
+                (Block::Table(tb), Block::Table(ta)) if tb.rows.len() == ta.rows.len() && tb.grid == ta.grid => {
                     let Block::Table(ta) = Arc::make_mut(a) else { continue };
+                    if let Some(w) = self.change(&tb.props, &ta.props, strip_table, |t| &t.fmt_change) {
+                        ta.props.fmt_change = w;
+                    }
                     for (rb, ra) in tb.rows.iter().zip(ta.rows.iter_mut()) {
+                        if let Some(w) = self.change(&rb.props, &ra.props, strip_row, |r| &r.fmt_change) {
+                            ra.props.fmt_change = w;
+                        }
                         if rb.cells.len() != ra.cells.len() {
                             continue;
                         }
                         for (cb, ca) in rb.cells.iter().zip(ra.cells.iter_mut()) {
+                            // Merges are structure, not formatting: span and vertical merge stay out.
+                            if let Some(w) = self.change(&cb.props, &ca.props, strip_cell, |c| &c.fmt_change) {
+                                ca.props.fmt_change = w;
+                            }
                             self.blocks(&cb.blocks, &mut ca.blocks, depth + 1);
                         }
                     }
@@ -163,6 +179,21 @@ impl Recorder<'_> {
             }
         }
     }
+}
+
+/// The formatting-comparison strips: what isn't formatting in these properties. A cell's merge
+/// is structure, a section's headers and footers are content.
+fn strip_table(t: &TableProps) -> TableProps {
+    TableProps { fmt_change: None, ..t.clone() }
+}
+fn strip_row(r: &RowProps) -> RowProps {
+    RowProps { fmt_change: None, ..r.clone() }
+}
+fn strip_cell(c: &CellProps) -> CellProps {
+    CellProps { fmt_change: None, span: 0, vmerge: VMerge::None, ..c.clone() }
+}
+fn strip_section(s: &SectionProps) -> SectionProps {
+    SectionProps { fmt_change: None, headers: Default::default(), footers: Default::default(), ..s.clone() }
 }
 
 /// Keep the formatting changes the command `id` made to `s.doc` (compared with `before`) as

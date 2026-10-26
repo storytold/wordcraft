@@ -16,6 +16,7 @@ mod wordart;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
+use wordcraft_doc::control::{ControlEvent, ControlKind, control_events, pair_events};
 use wordcraft_doc::graphic::{Graphic, GraphicKind};
 use wordcraft_doc::numbering::{AbstractNum, Level, LevelSuffix, Num};
 use wordcraft_doc::para::NoteKind;
@@ -96,6 +97,10 @@ pub(crate) struct Reader<'p> {
     /// Linked text boxes as read: (`wps:txbx/@id` or `wps:linkedTxbx/@id`, `seq` (0 for the box
     /// holding the text), text box part). See [`link_text_boxes`].
     pub txbx_links: Vec<(u32, u32, u32)>,
+    /// The theme's fill styles, which shapes' style references point to.
+    pub theme_fills: shape_style::ThemeFills,
+    /// The fill of the group being read (what its members' `a:grpFill` stands for).
+    pub group_fill: Option<wordcraft_doc::fill::Fill>,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -124,7 +129,7 @@ pub(crate) fn read_package(bytes: &[u8]) -> Result<Document, DocxError> {
 pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     let root_rels = pkg.rels("");
     let main = root_rels.by_type(rt::OFFICE_DOC).filter(|r| !r.external).map(|r| r.target.clone()).unwrap_or_else(|| "word/document.xml".to_string());
-    let Some(root) = pkg.xml(&main)? else {
+    let Some(root) = pkg.xml_strict(&main)? else {
         return Err(DocxError::MissingPart(main));
     };
     if root.name != "w:document" {
@@ -159,6 +164,8 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         content_types: None,
         embedded: EmbeddedManifest::default(),
         txbx_links: Vec::new(),
+        theme_fills: Default::default(),
+        group_fill: None,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -178,7 +185,8 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
             log::warn!("docx: ignoring unreadable {what}: {e}");
         }
     };
-    // Styles come before settings, but their theme colours already follow its colour mapping.
+    // Styles come before settings, but their theme colours already follow its colour mapping, and
+    // their `…Bidi` theme fonts its theme font language.
     if let Some(p) = part(rt::SETTINGS) {
         r.read_color_mapping(&p);
     }
@@ -252,9 +260,21 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         r.flush_pending(&mut sc, &mut blocks);
         r.doc.body = blocks;
         unstyle_toc_links(&mut r.doc);
+        toc_control_to_toc(&mut r.doc.body);
         toc_field_to_heading(&mut r.doc.body);
         if let Some(s) = body.child("w:sectPr") {
             r.doc.last_section = r.read_section(s, &rels);
+        }
+    }
+    // A watermark in the box Word's Design › Watermark gives it for the page keeps no box of its
+    // own: it follows the page, as when it was made.
+    let (pw, ph) = (r.doc.last_section.page_w, r.doc.last_section.page_h);
+    if let Some(wm) = r.doc.settings.watermark.as_mut()
+        && let Some([w, h]) = wm.size
+    {
+        let [dw, dh] = wordcraft_doc::Watermark { size: None, ..wm.clone() }.frame(pw, ph);
+        if (w - dw).abs() < 0.06 && (h - dh).abs() < 0.06 {
+            wm.size = None;
         }
     }
 
@@ -279,7 +299,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
     }
     r.read_glossary(&rels);
     r.keep_custom_xml(&root_rels, &rels);
-    r.keep_unmodelled(&root_rels, &rels);
+    r.keep_unmodelled(&root, &root_rels, &rels);
     if !r.embedded.parts.is_empty() {
         let manifest = r.embedded.to_bytes();
         r.doc.passthrough.insert(EMBEDDED_PARTS.into(), Arc::new(manifest));
@@ -416,12 +436,21 @@ fn keep_glued_ids(doc: &mut Document, glued: &HashSet<u32>) {
 /// no underline) though the entries carry it (measured in Word for Windows: a Hyperlink-styled run
 /// in a hyperlink inside a TOC field's result is plain; one outside a hyperlink, another style,
 /// direct formatting, or a hyperlink in another field keep their look). The style is dropped from
-/// those runs so they look the same here; the links stay.
+/// those runs so they look the same here; the links stay. The style is found by its built-in
+/// name: localized Word and older files give it another id (`Hipervnculo`, `Hyperlnk`).
 fn unstyle_toc_links(doc: &mut Document) {
+    let ids: HashSet<String> = doc
+        .styles
+        .styles
+        .iter()
+        .filter(|s| s.kind == StyleKind::Character && s.name.eq_ignore_ascii_case("Hyperlink"))
+        .map(|s| s.id.clone())
+        .chain(["Hyperlink".to_string()])
+        .collect();
     for f in doc.field_ranges(wordcraft_doc::StoryRef::Body) {
         if is_toc(&f.instr) {
             let _ = doc.format_range(&f.start, &f.end, &|c| {
-                if c.link.is_some() && c.style.as_deref() == Some("Hyperlink") {
+                if c.link.is_some() && c.style.as_deref().is_some_and(|s| ids.contains(s)) {
                     c.style = None;
                 }
             });
@@ -429,47 +458,115 @@ fn unstyle_toc_links(doc: &mut Document) {
     }
 }
 
+/// Word's Table of Contents content control belongs to the TOC: the writer puts it back around
+/// the TOC heading and its entries (`toc_span`), which References › Update Table rebuilds. It is
+/// handed to the TOC only when the writer would put it back around the same paragraphs; any other
+/// is kept as read, or saving would drop it (#2427).
+fn toc_control_to_toc(body: &mut Blocks) {
+    let span = {
+        let events = control_events(body);
+        let (pairs, _) = pair_events(&events);
+        pairs.iter().find_map(|&(o, c, depth)| {
+            let (ControlEvent::Open { block: s, off: Some(0), control }, ControlEvent::Close { block: e, off: Some(off) }) =
+                (events.get(o)?, events.get(c)?)
+            else {
+                return None;
+            };
+            let toc = matches!(&control.kind, ControlKind::Gallery { list: false, gallery, .. } if gallery == "Table of Contents");
+            let at_end = body.get(*e)?.as_para()?.len() == off.checked_add(OBJ.len_utf8())?;
+            (depth == 0 && toc && at_end).then_some((*s, *e, *off))
+        })
+    };
+    let Some((s, e, off)) = span else { return };
+    let mut toc = body.clone();
+    // The end first: both markers may be in the same paragraph.
+    if let Some(Block::Para(p)) = toc.get_mut(e).map(Arc::make_mut) {
+        let _ = p.delete(off, p.len());
+    }
+    if let Some(Block::Para(p)) = toc.get_mut(s).map(Arc::make_mut) {
+        let _ = p.delete(0, OBJ.len_utf8());
+    }
+    toc_field_to_heading(&mut toc);
+    if crate::write::written_toc_span(&toc) == Some((s, e)) {
+        *body = toc;
+        return;
+    }
+    // TOCs the writer rebuilds in the same paragraphs once Update Table has turned them into the
+    // engine's TOC (`range_toc_to_field`) are handed over as the range read, as without the control:
+    // - Word's layout, the field's end alone in a paragraph after the entries (it goes with them);
+    // - ours with a heading that isn't a `TOCHeading`, written empty and the field opening in the
+    //   first entry. Kept in the control, that paragraph wouldn't be empty and each save and update
+    //   would add a blank line above the entries (#2182).
+    let mut engine = toc.clone();
+    let mut last = e;
+    // The entry before Word's paragraph holding nothing but the field's end, and that end's format.
+    let end_only = e.checked_sub(1).filter(|&l| l > s).and_then(|l| {
+        let p = engine.get(e)?.as_para()?;
+        let only = p.section.is_none() && p.len() == OBJ.len_utf8() && matches!(p.object_at(0), Some(InlineObject::FieldEnd));
+        only.then(|| (l, p.props_of_char(0).clone()))
+    });
+    if let Some((l, props)) = end_only {
+        engine.remove(e);
+        last = l;
+        if let Some(Block::Para(p)) = engine.get_mut(l).map(Arc::make_mut) {
+            let len = p.len();
+            let _ = p.insert_object(len, InlineObject::FieldEnd, &props);
+        }
+    }
+    // An empty paragraph opening the control takes the field. It may end a section, as above
+    // entries in columns (#3889).
+    if engine.get(s).and_then(|b| b.as_para()).is_some_and(|p| p.is_empty()) {
+        field_to_heading(&mut engine, s + 1);
+    } else {
+        toc_field_to_heading(&mut engine);
+    }
+    if crate::write::written_toc_span(&engine) == Some((s, last)) {
+        *body = toc;
+    }
+}
+
 /// Normalize only a complete TOC range that the engine's heading/entry representation can
 /// reproduce exactly. Other imported TOCs keep their explicit boundaries, independent of styles.
 fn toc_field_to_heading(body: &mut Blocks) {
     for i in 1..body.len() {
-        let heading = body[i - 1].as_para().filter(|p| p.props.style.as_deref() == Some("TOCHeading"));
-        let has_toc = |o: &InlineObject| matches!(o, InlineObject::Field { instr, .. } if is_toc(instr));
-        if heading.is_none_or(|h| h.objects.iter().any(has_toc)) {
-            continue;
+        if body[i - 1].as_para().is_some_and(|p| p.props.style.as_deref() == Some("TOCHeading")) {
+            field_to_heading(body, i);
         }
-        let Some((field, props, end)) = body[i].as_para().and_then(|p| {
-            let (field, end) = match p.object_at(0) {
-                Some(InlineObject::FieldStart { instr, locked, dirty }) if is_toc(instr) => (
-                    InlineObject::Field {
-                        instr: instr.clone(),
-                        result: String::new(),
-                        locked: *locked,
-                        dirty: *dirty,
-                        code: false,
-                        form: String::new(),
-                    },
-                    Some(toc_range_end(body, i)?),
-                ),
-                Some(f @ InlineObject::Field { result, .. }) if result.is_empty() && has_toc(f) => (f.clone(), None),
-                _ => return None,
-            };
-            Some((field, p.props_of_char(0).clone(), end))
-        }) else {
-            continue;
+    }
+}
+
+/// Moves the TOC field that opens paragraph `i` (a complete range over the entries, or an empty
+/// field) to the end of paragraph `i - 1`, the engine's TOC heading, unless that one has a TOC
+/// field already.
+fn field_to_heading(body: &mut Blocks, i: usize) {
+    let has_toc = |o: &InlineObject| matches!(o, InlineObject::Field { instr, .. } if is_toc(instr));
+    if i == 0 || body.get(i - 1).and_then(|b| b.as_para()).is_none_or(|h| h.objects.iter().any(has_toc)) {
+        return;
+    }
+    let Some((field, props, end)) = body.get(i).and_then(|b| b.as_para()).and_then(|p| {
+        let (field, end) = match p.object_at(0) {
+            Some(InlineObject::FieldStart { instr, locked, dirty }) if is_toc(instr) => (
+                InlineObject::Field { instr: instr.clone(), result: String::new(), locked: *locked, dirty: *dirty, code: false, form: String::new() },
+                Some(toc_range_end(body, i)?),
+            ),
+            Some(f @ InlineObject::Field { result, .. }) if result.is_empty() && has_toc(f) => (f.clone(), None),
+            _ => return None,
         };
-        // Delete the end first: the two markers may occupy the same paragraph.
-        if let Some(Block::Para(p)) = end.and_then(|end| body.get_mut(end)).map(Arc::make_mut) {
-            let off = p.len().saturating_sub(OBJ.len_utf8());
-            let _ = p.delete(off, p.len());
-        }
-        if let Some(Block::Para(p)) = body.get_mut(i).map(Arc::make_mut) {
-            let _ = p.delete(0, OBJ.len_utf8());
-        }
-        if let Some(Block::Para(h)) = body.get_mut(i - 1).map(Arc::make_mut) {
-            let end = h.len();
-            let _ = h.insert_object(end, field, &props);
-        }
+        Some((field, p.props_of_char(0).clone(), end))
+    }) else {
+        return;
+    };
+    // Delete the end first: the two markers may occupy the same paragraph.
+    if let Some(Block::Para(p)) = end.and_then(|end| body.get_mut(end)).map(Arc::make_mut) {
+        let off = p.len().saturating_sub(OBJ.len_utf8());
+        let _ = p.delete(off, p.len());
+    }
+    if let Some(Block::Para(p)) = body.get_mut(i).map(Arc::make_mut) {
+        let _ = p.delete(0, OBJ.len_utf8());
+    }
+    if let Some(Block::Para(h)) = body.get_mut(i - 1).map(Arc::make_mut) {
+        let end = h.len();
+        let _ = h.insert_object(end, field, &props);
     }
 }
 
@@ -717,6 +814,7 @@ impl Reader<'_> {
             self.pc.theme_colors = colors.clone();
             self.doc.settings.theme_colors = colors;
         }
+        self.theme_fills = shape_style::ThemeFills::read(el.child("a:fmtScheme"));
         if let Some(fs) = el.child("a:fontScheme") {
             let face =
                 |n: &str| fs.child(n).and_then(|f| f.child("a:latin")).and_then(|l| l.attr("typeface")).filter(|t| !t.is_empty()).map(str::to_string);
@@ -729,15 +827,30 @@ impl Reader<'_> {
             let cs = |n: &str| fs.child(n).and_then(|f| f.child("a:cs")).and_then(|c| c.attr("typeface")).unwrap_or_default().to_string();
             self.pc.major_cs = cs("a:majorFont");
             self.pc.minor_cs = cs("a:minorFont");
+            // Per-script fonts (`a:font script="Arab"`); Office's themes list about 30.
+            let scripts = |n: &str| -> Vec<(String, String)> {
+                let Some(f) = fs.child(n) else { return Vec::new() };
+                f.els()
+                    .filter(|e| e.name == "a:font")
+                    .filter_map(|e| Some((e.attr("script")?, e.attr("typeface")?)))
+                    .filter(|(s, t)| s.len() <= 8 && !t.is_empty() && t.len() < 256)
+                    .take(256)
+                    .map(|(s, t)| (s.to_string(), t.to_string()))
+                    .collect()
+            };
+            self.pc.major_scripts = scripts("a:majorFont");
+            self.pc.minor_scripts = scripts("a:minorFont");
         }
         self.pc.major_font = self.doc.settings.major_font.clone();
         self.pc.minor_font = self.doc.settings.minor_font.clone();
         self.pc.theme = self.doc.settings.theme_colors.clone();
     }
 
-    /// `w:settings/w:clrSchemeMapping`: which scheme colour text1, background1… stand for.
+    /// `w:settings/w:clrSchemeMapping`: which scheme colour text1, background1… stand for. Also
+    /// `w:themeFontLang/@w:bidi`, the language whose script picks the `…Bidi` theme fonts.
     fn read_color_mapping(&mut self, path: &str) {
         let Ok(Some(root)) = self.xml(path) else { return };
+        self.pc.bidi_script = root.child("w:themeFontLang").and_then(|l| l.attr("w:bidi")).filter(|v| !v.trim().is_empty()).map(props::lang_script);
         let Some(m) = root.child("w:clrSchemeMapping") else { return };
         let names = [
             "dark1",
@@ -790,6 +903,24 @@ impl Reader<'_> {
         {
             self.pc.alias.insert(id.to_string(), "Normal".into());
         }
+        // Word in other languages names the TOC styles' ids in that language (`toc 1` is `Sumrio1`
+        // in Portuguese): they take the engine's ids, which Update Table and the writer's TOC
+        // recognise the entries by (#3889). Not when the file or an earlier style has that id.
+        let mut taken: Vec<String> = root.children("w:style").take(10_000).filter_map(|s| s.attr("w:styleId")).map(str::to_string).collect();
+        for s in root.children("w:style").take(10_000).filter(|s| s.attr("w:type").is_none_or(|t| t == "paragraph")) {
+            let (Some(id), Some(name)) = (s.attr("w:styleId"), s.child_val("w:name")) else { continue };
+            let canonical = match name.trim().to_ascii_lowercase().as_str() {
+                "toc heading" => "TOCHeading".to_string(),
+                n => match n.strip_prefix("toc ").and_then(|d| d.parse::<u8>().ok()).filter(|d| (1..=9).contains(d)) {
+                    Some(d) => format!("TOC{d}"),
+                    None => continue,
+                },
+            };
+            if !taken.contains(&canonical) && !self.pc.alias.contains_key(id) {
+                taken.push(canonical.clone());
+                self.pc.alias.insert(id.to_string(), canonical);
+            }
+        }
         let mut sheet = StyleSheet::empty();
         sheet.default_para_present = root.child("w:docDefaults").and_then(|dd| dd.child("w:pPrDefault")).is_some();
         if let Some(dd) = root.child("w:docDefaults") {
@@ -798,6 +929,10 @@ impl Reader<'_> {
             }
             if let Some(p) = dd.child("w:pPrDefault").and_then(|d| d.child("w:pPr")) {
                 sheet.default_para = self.pc.ppr(p).0;
+                // Word makes no paragraph a text frame from the document defaults: the sizeless
+                // top-left `w:framePr` Apple Pages writes there would put every paragraph, the
+                // headers' and footers' included, at the page's corner (#2360).
+                sheet.default_para.frame = None;
             }
         }
         if sheet.default_chr.size.is_none() {
@@ -894,7 +1029,8 @@ impl Reader<'_> {
             }
             t.fill = tp.child("w:shd").and_then(|e| self.pc.shd_fill(e));
             t.cell_margins = tp.child("w:tblCellMar").map(props::margins);
-            t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).filter(|n| *n > 0).map(|n| n.min(1000));
+            t.band_size = tp.child_val("w:tblStyleRowBandSize").and_then(u32_of).map(|n| n.min(1000));
+            t.col_band_size = tp.child_val("w:tblStyleColBandSize").and_then(u32_of).map(|n| n.min(1000));
         }
         for c in s.children("w:tblStylePr").take(64) {
             let Some(part) = c.attr("w:type").and_then(TablePart::from_ooxml) else { continue };
@@ -1076,6 +1212,7 @@ impl Reader<'_> {
                         s.compat_mode = m.clamp(11, 99);
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
+                    s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:doNotTrackMoves" => s.track_moves = !on_off(k),
@@ -1226,6 +1363,10 @@ impl Reader<'_> {
         let mut by_para: HashMap<String, u32> = HashMap::new();
         let mut next_id = 0u32;
         let mut entries: BTreeMap<u32, Comment> = BTreeMap::new();
+        // Ids given before this part, looked up rather than scanned for every generated id: a
+        // scan per comment made many non-numeric ids quadratic (#3692). Ids given here are in
+        // `entries`.
+        let given: HashSet<u32> = self.comment_map.values().copied().collect();
         for c in root.children("w:comment") {
             if self.doc.parts.len() >= MAX_PARTS {
                 break;
@@ -1237,7 +1378,7 @@ impl Reader<'_> {
             let id = match file_id.parse::<u32>() {
                 Ok(v) if !entries.contains_key(&v) => v,
                 _ => {
-                    while entries.contains_key(&next_id) || self.comment_map.values().any(|v| *v == next_id) {
+                    while entries.contains_key(&next_id) || given.contains(&next_id) {
                         next_id += 1;
                     }
                     next_id

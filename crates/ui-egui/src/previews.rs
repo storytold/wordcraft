@@ -217,7 +217,7 @@ impl Previews {
         self.east_asian = None;
         ctx.data_mut(|d| {
             for f in families {
-                d.remove::<TextureHandle>(egui::Id::new(format!("font:{f}")));
+                d.remove::<TextureHandle>(egui::Id::unique(format!("font:{f}")));
             }
         });
     }
@@ -226,9 +226,9 @@ impl Previews {
     pub fn font_preview_fn(&mut self) -> Box<dyn Fn(&mut Ui, &str) -> Response> {
         Box::new(|ui: &mut Ui, name: &str| {
             let key = format!("font:{name}");
-            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::new(&key)));
+            let tex: Option<TextureHandle> = ui.ctx().data(|d| d.get_temp::<TextureHandle>(egui::Id::unique(&key)));
             let (r, resp) = ui.allocate_exact_size(vec2(260.0, crate::widgets::COMBO_PREVIEW_ROW_H), Sense::click());
-            resp.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, ui.is_enabled(), name));
+            resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), name));
             let t = Tokens::get(ui.ctx());
             if resp.hovered() {
                 ui.painter().rect_filled(r, 3.0, t.hover);
@@ -237,7 +237,7 @@ impl Previews {
                 // Context accessors share a lock: read input before taking the data write lock.
                 let now = ui.input(|i| i.time);
                 let n = ui.ctx().data_mut(|d| {
-                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::new("font_preview_budget"));
+                    let c = d.get_temp_mut_or_default::<(f64, u32)>(egui::Id::unique("font_preview_budget"));
                     if c.0 != now {
                         *c = (now, 0);
                     }
@@ -252,7 +252,7 @@ impl Previews {
                 let mut img = font_entry_image(name, ppp);
                 ink_mask(&mut img);
                 let h = ui.ctx().load_texture(&key, img, egui::TextureOptions::LINEAR);
-                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::new(&key), h.clone()));
+                ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(&key), h.clone()));
                 Some(h)
             });
             match tex {
@@ -294,6 +294,11 @@ impl Previews {
         }
         self.tex.insert(key.to_string(), h.clone());
         Some(h)
+    }
+
+    /// Another document is shown: its revisions count apart from the last one's.
+    pub(crate) fn document_changed(&mut self) {
+        self.styles_hash = (u64::MAX, 0);
     }
 
     /// Hash of the style sheet (recomputed only when the document revision changes).
@@ -517,7 +522,8 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let rev = app.session.rev();
     let skey = app.previews.styles_key(&app.session.doc, rev);
     let ppp = ui.ctx().pixels_per_point();
-    let start = ui.data(|d| d.get_temp::<usize>(egui::Id::new("gallery_start"))).unwrap_or(0).min(styles.len().saturating_sub(1));
+    let start_id = app.window_id("gallery_start");
+    let start = ui.data(|d| d.get_temp::<usize>(start_id)).unwrap_or(0).min(styles.len().saturating_sub(1));
     // A compact ribbon group (#662, #1285) trims the gallery to fewer tiles before it folds.
     let visible = if crate::ribbon_fit::compact(ui.ctx()) { STYLE_TILES_COMPACT } else { STYLE_TILES };
     crate::ribbon_fit::add_saving(ui.ctx(), (STYLE_TILES - STYLE_TILES_COMPACT) as f32 * 76.0);
@@ -525,9 +531,9 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     ui.painter().rect(area.shrink(1.0), 4.0, t.input, Stroke::new(1.0, t.border), egui::StrokeKind::Inside);
     for (k, (id, name)) in styles.iter().skip(start).take(visible).enumerate() {
         let r = Rect::from_min_size(pos2(area.min.x + 3.0 + k as f32 * 76.0, area.min.y + 3.0), vec2(74.0, area.height() - 6.0));
-        let resp = ui.interact(r, ui.id().with(("style_tile", id)), Sense::click());
+        let resp = ui.interact(r, ui.scope_id().with(("style_tile", id)), Sense::click());
         let active = *id == current;
-        resp.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, active, name));
+        resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, name));
         if active {
             ui.painter().rect(r, 3.0, t.checked, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
         } else if resp.hovered() {
@@ -580,7 +586,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
     let thirds = ar.height() / 3.0;
     for (i, (icon, delta)) in [("chevronUp", -1i32), ("chevronDown", 1), ("more", 0)].iter().enumerate() {
         let br = Rect::from_min_size(pos2(ar.min.x, ar.min.y + thirds * i as f32), vec2(ar.width(), thirds));
-        let resp = ui.interact(br, ui.id().with(("gal_arrow", i)), Sense::click());
+        let resp = ui.interact(br, ui.scope_id().with(("gal_arrow", i)), Sense::click());
         if resp.hovered() {
             ui.painter().rect_filled(br, 2.0, t.hover);
         }
@@ -590,7 +596,7 @@ pub fn style_gallery(app: &mut WordApp, ui: &mut Ui, state: &Value) {
                 let _ = app.run("view.stylesPane", json!({"value": true}));
             } else {
                 let n = if *delta < 0 { start.saturating_sub(visible) } else { (start + visible).min(styles.len().saturating_sub(1)) };
-                ui.data_mut(|d| d.insert_temp(egui::Id::new("gallery_start"), n));
+                ui.data_mut(|d| d.insert_temp(start_id, n));
             }
         }
     }
@@ -695,6 +701,83 @@ mod tests {
         assert!(loaded.len() <= 2, "previewing loaded {loaded:?}");
     }
 
+    /// A window whose Styles gallery lists `style` first: runs the gallery for a few frames and
+    /// returns the painted shapes of the last one and every texture picture uploaded on the way.
+    fn run_gallery(mut doc: Document, style: wordcraft_doc::styles::Style) -> (Vec<egui::epaint::ClippedShape>, Vec<egui::ColorImage>) {
+        // Only the style under test is in the gallery.
+        for other in &mut doc.styles.styles {
+            other.quick = false;
+        }
+        doc.styles.upsert(style);
+        let mut app = WordApp::new(wordcraft_engine::Session::new(doc), Default::default());
+        app.ui.language = "en".into();
+        let ctx = egui::Context::default();
+        let mut shapes = Vec::new();
+        let mut images = Vec::new();
+        for frame in 0..6 {
+            let input = egui::RawInput {
+                time: Some(f64::from(frame) * 0.1),
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 200.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                ui.add_space(20.0);
+                style_gallery(&mut app, ui, &json!({}));
+            });
+            for (_, deltas) in out.textures_delta.set.drain() {
+                for delta in deltas {
+                    if let (None, egui::ImageData::Color(img)) = (delta.pos, &delta.image) {
+                        images.push(egui::ColorImage::clone(img));
+                    }
+                }
+            }
+            out.textures_delta.clear();
+            shapes = out.shapes;
+        }
+        (shapes, images)
+    }
+
+    fn gallery_style(name: &str) -> wordcraft_doc::styles::Style {
+        wordcraft_doc::styles::Style { id: "Backfill".into(), name: name.into(), quick: true, priority: Some(0), ..Default::default() }
+    }
+
+    /// Regression test for #2: a style gallery label longer than its tile was painted at full width
+    /// and ran into the neighbouring tiles; it is now cut with an ellipsis to fit the tile.
+    #[test]
+    fn a_long_style_name_is_truncated_to_its_tile() {
+        let name = "An extraordinarily long custom style name that cannot fit a tile";
+        let (shapes, _) = run_gallery(Document::new(), gallery_style(name));
+        let label = shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == name => Some(t),
+                _ => None,
+            })
+            .expect("the long style's label is painted");
+        // A tile is 74 points wide.
+        assert!(label.galley.size().x <= 74.0, "the label is {} points wide, wider than its 74-point tile", label.galley.size().x);
+        assert!(label.galley.elided, "the label is cut short with an ellipsis");
+    }
+
+    /// Regression test for #2: a style whose hanging indent is larger than its left indent previewed
+    /// with its first line starting off the tile's left edge; the first line now starts at the edge.
+    #[test]
+    fn a_hanging_indent_style_previews_from_the_tile_edge() {
+        let mut style = gallery_style("Hanging");
+        style.para.indent_left = Some(0.0);
+        style.para.indent_first = Some(-36.0);
+        let (_, images) = run_gallery(Document::new(), style);
+        // The style is the only one in the gallery: its preview is the picture of a tile's size (the other upload is egui's font texture).
+        let preview = images.iter().find(|i| (200..300).contains(&i.size[0]) && (20..60).contains(&i.size[1])).expect("the preview is rendered");
+        let [w, h] = preview.size;
+        let inked: Vec<bool> = (0..w).map(|x| (0..h).any(|y| preview.pixels.get(y * w + x).is_some_and(|p| p.a() > 0 && p.r() < 160))).collect();
+        let first = inked.iter().position(|&i| i).expect("the preview has text");
+        let last = inked.iter().rposition(|&i| i).unwrap_or(first);
+        // "AaBbCcDd" begins at the left margin (1 point) and is whole: it is about 60 points wide.
+        assert!(first < 6, "the first line starts off the tile's left edge (ink from column {first})");
+        assert!(last - first > 40, "the first line is cut off by the tile's left edge (ink {first}..{last})");
+    }
+
     /// #663: gallery previews are dimmed in the dark theme, unless they show Switch Modes' dark
     /// page; the light theme keeps a white page.
     #[test]
@@ -706,6 +789,8 @@ mod tests {
         assert!(dim.r() < 0xE0 && dim.r() > 0xA0, "{dim:?}");
     }
 
+    /// Font-menu previews defer over budget, render on a later frame, and reuse cached entries
+    /// without consuming budget or deadlocking.
     #[test]
     fn font_menu_previews_render_defer_and_reuse_without_deadlocking() {
         // A nested Context lock used to hang the first uncached menu entry. Bound the wait so
@@ -714,9 +799,9 @@ mod tests {
         let worker = std::thread::spawn(move || {
             let ctx = egui::Context::default();
             let preview = Previews::default().font_preview_fn();
-            let budget_id = egui::Id::new("font_preview_budget");
-            let sans_id = egui::Id::new("font:Source Sans 3");
-            let inter_id = egui::Id::new("font:Inter");
+            let budget_id = egui::Id::unique("font_preview_budget");
+            let sans_id = egui::Id::unique("font:Source Sans 3");
+            let inter_id = egui::Id::unique("font:Inter");
             ctx.data_mut(|d| d.insert_temp(budget_id, (1.0_f64, 11_u32)));
 
             for time in [1.0, 2.0, 3.0] {

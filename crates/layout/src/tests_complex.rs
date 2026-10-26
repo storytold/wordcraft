@@ -266,3 +266,21 @@ fn a_missing_roman_thai_font_is_not_drawn_in_cambria() {
     assert_ne!(face(true).id(), cambria.id());
     assert_eq!(face(true).id(), face(false).id());
 }
+
+/// `w14:ligatures` (Word writes `historicalDiscretional` on whole Khmer documents) turns `liga`
+/// and `clig` off, which breaks Khmer OS syllables: Khmer text is shaped the same either way.
+#[test]
+fn khmer_ignores_the_ligature_setting() {
+    use wordcraft_doc::props::{CharProps, Ligatures};
+    let text = "\u{179F}\u{17CA}\u{17BE}\u{1794}\u{17A2}\u{1784}\u{17D2}\u{1780}\u{17C1}\u{178F} \u{1795}\u{17D2}\u{178F}\u{1793}\u{17D2}\u{1791}\u{17B6}\u{1791}\u{17C4}\u{179F}";
+    let gids = |ligatures: Option<Ligatures>| {
+        let chr = CharProps { font: Some("Khmer OS Siemreap".into()), size: Some(12.0), ligatures, ..Default::default() };
+        let mut d = Document::new();
+        d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
+        let l = lay(&d);
+        para_layout(&l, 0).glyphs.iter().map(|g| g.gid).collect::<Vec<_>>()
+    };
+    let hd = Ligatures { historical: true, discretional: true, ..Default::default() };
+    assert_eq!(gids(Some(hd)), gids(None));
+    assert_eq!(gids(Ligatures::from_ooxml("none")), gids(None));
+}

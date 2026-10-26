@@ -9,6 +9,7 @@ mod math;
 mod props;
 mod sdt;
 mod story;
+pub(crate) use story::written_toc_span;
 mod watermark;
 mod wordart;
 
@@ -115,6 +116,9 @@ pub(crate) struct Writer<'d> {
     used_media: std::collections::BTreeSet<String>,
     /// Bounds writing text boxes inside text boxes (as layout shows them).
     boxes: wordcraft_doc::BoxBudget,
+    /// Text box stories already written: a story shown by many shapes is written once, the other
+    /// shapes get an empty box, so the file doesn't grow as shapes × story size.
+    written_boxes: std::collections::HashSet<u32>,
     /// Charts, diagrams and OLE objects kept from a file: the parts they need.
     embeds: embed::EmbedWriter<'d>,
     /// Linked text boxes: part id → (`wps:txbx`/`wps:linkedTxbx` id, seq; 0 for the box holding
@@ -174,6 +178,7 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
         inline_controls: Vec::new(),
         used_media: Default::default(),
         boxes: wordcraft_doc::BoxBudget::default(),
+        written_boxes: std::collections::HashSet::new(),
         embeds: embed::EmbedWriter::new(doc),
         txbx_links: doc
             .text_box_chains()
@@ -267,7 +272,13 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
 
     // The glossary: kept verbatim while its entries are as read and its parts were kept, else
     // written from the model (before the notes: references its entries hold are collected too).
-    if glossary::edited(doc) || (!doc.glossary.is_empty() && !wr.embeds.kept_glossary()) {
+    // When the privacy settings ask for changes, its kept parts are written without the names and
+    // dates of its tracked changes and comments (#3692), or from the model if they can't be.
+    let (names, dates) = (doc.settings.remove_personal_info, doc.settings.remove_date_time);
+    if glossary::edited(doc)
+        || (!doc.glossary.is_empty() && !wr.embeds.kept_glossary())
+        || ((names || dates) && !wr.embeds.scrub_glossary(names, dates))
+    {
         wr.embeds.drop_glossary = true;
         wr.glossary(&mut entries, &mut overrides, &mut rels);
     }
@@ -715,7 +726,15 @@ fn styles_xml(doc: &Document) -> Vec<u8> {
     w.open("w:docDefaults", &[]);
     w.open("w:rPrDefault", &[]);
     w.open("w:rPr", &[]);
-    props::rpr_inner(&mut w, &s.default_chr);
+    if s.default_chr.size.is_none() {
+        // The reader reads an omitted `w:sz` as 10 pt, but the resolver falls back to
+        // DEFAULT_FONT_SIZE, so writing nothing would change the size on reopening.
+        let mut chr = s.default_chr.clone();
+        chr.size = Some(wordcraft_doc::props::DEFAULT_FONT_SIZE);
+        props::rpr_inner(&mut w, &chr);
+    } else {
+        props::rpr_inner(&mut w, &s.default_chr);
+    }
     w.close("w:rPr");
     w.close("w:rPrDefault");
     if s.default_para_present || s.default_para != wordcraft_doc::props::ParaProps::default() {
@@ -795,10 +814,13 @@ fn style_xml(w: &mut W, st: &Style, flagged: &[StyleKind]) {
         w.close("w:rPr");
     }
     if let Some(t) = &st.table {
-        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() {
+        if t.borders.is_some() || t.cell_margins.is_some() || t.band_size.is_some() || t.col_band_size.is_some() {
             w.open("w:tblPr", &[]);
             if let Some(n) = t.band_size {
-                w.val("w:tblStyleRowBandSize", &n.clamp(1, 1000).to_string());
+                w.val("w:tblStyleRowBandSize", &n.min(1000).to_string());
+            }
+            if let Some(n) = t.col_band_size {
+                w.val("w:tblStyleColBandSize", &n.min(1000).to_string());
             }
             if let Some(b) = &t.borders {
                 props::borders(w, "w:tblBorders", b, Some("w:insideH"), &[]);
@@ -1067,6 +1089,9 @@ fn settings_xml(doc: &Document, footnotes: bool, endnotes: bool, template_rel: O
     }
     w.open("w:compat", &[]);
     // CT_Compat: the older switches come before the `w:compatSetting`s.
+    if doc.settings.do_not_expand_shift_return {
+        w.empty("w:doNotExpandShiftReturn", &[]);
+    }
     if doc.settings.sum_paragraph_spacing {
         w.empty("w:doNotUseHTMLParagraphAutoSpacing", &[]);
     }
@@ -1119,9 +1144,9 @@ fn write_comment_ids(
             },
         };
         used.insert(durable.clone());
-        // A local `w:date` with a zone designator is UTC already; otherwise only the file's own.
+        // Only a known UTC time: `w:date` is local time, often with a `Z` it doesn't mean.
         // Remove date and time on save (#1062): no comment date here either.
-        let utc = if doc.settings.remove_date_time { None } else { c.date_utc.clone().or_else(|| c.date.ends_with('Z').then(|| c.date.clone())) };
+        let utc = if doc.settings.remove_date_time { None } else { c.date_utc.clone() };
         rows.push((pid.clone(), durable, utc));
     }
     let mc = "http://schemas.openxmlformats.org/markup-compatibility/2006";
@@ -1212,7 +1237,7 @@ fn theme_xml(doc: &Document) -> Vec<u8> {
 /// The author the saved file gives a comment or tracked change when the document removes personal
 /// information on save (`w:removePersonalInformation`), as Word does.
 pub(crate) const ANONYMOUS_AUTHOR: &str = "Author";
-const ANONYMOUS_INITIALS: &str = "A";
+pub(crate) const ANONYMOUS_INITIALS: &str = "A";
 
 /// The `w:author` written for an annotation by `author`: "Author" when the document removes
 /// personal information on save, "Unknown" when it has none.

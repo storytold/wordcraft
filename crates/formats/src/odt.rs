@@ -19,9 +19,11 @@
 
 use std::collections::HashMap;
 use std::io::{Cursor, Read, Write};
+use std::sync::Arc;
 
 use quick_xml::XmlVersion;
 use quick_xml::events::{BytesStart, Event};
+use wordcraft_doc::props::VAlign;
 use wordcraft_doc::section::{Columns, SectionStart};
 use wordcraft_doc::{Align, Document, RevisionKind, Rgb, SectionProps};
 
@@ -40,6 +42,8 @@ const MAX_OPEN_INSERTIONS: usize = 64;
 /// Longest change author or date kept, in characters.
 const MAX_INFO_CHARS: usize = 256;
 
+mod page_parts;
+
 // ---------------------------------------------------------------------------------------------
 // Export
 
@@ -52,6 +56,7 @@ fn x(s: &str) -> String {
             '>' => o.push_str("&gt;"),
             '"' => o.push_str("&quot;"),
             '\'' => o.push_str("&apos;"),
+            '\u{FFFE}' | '\u{FFFF}' => {}
             c if c.is_control() && !matches!(c, '\t' | '\n') => {}
             _ => o.push(c),
         }
@@ -103,8 +108,8 @@ struct Writer {
     last_list: Option<String>,
     /// The page the block being written starts.
     master: Option<SecStart>,
-    /// Cell styles by shading.
-    cell_styles: Vec<Option<Rgb>>,
+    /// Cell styles by (shading, vertical-alignment).
+    cell_styles: Vec<(Option<Rgb>, Option<VAlign>)>,
     pictures: Vec<(String, std::sync::Arc<Vec<u8>>, String)>,
     /// `text:changed-region` elements written so far.
     regions: Vec<String>,
@@ -347,7 +352,9 @@ impl Writer {
 
     fn plain_inlines(&mut self, inl: &[Inline], out: &mut String) {
         let mut prev_space = true;
-        let inl = model::equations_as_text(inl);
+        let eq = model::equations_as_text(inl);
+        // ODF has no ruby: its base text goes through the text path below.
+        let inl = model::ruby_as_text(&eq);
         let last = inl.len().saturating_sub(1);
         for (idx, i) in inl.iter().enumerate() {
             match i {
@@ -424,6 +431,8 @@ impl Writer {
                     prev_space = false;
                 }
                 Inline::Anchor(a) => out.push_str(&format!("<text:bookmark text:name=\"{}\"/>", x(a))),
+                // Read as its base text by `ruby_as_text` above.
+                Inline::Ruby { .. } => {}
                 Inline::Figure(_) | Inline::Equation { .. } => {}
             }
         }
@@ -432,7 +441,7 @@ impl Writer {
     /// Paragraph `p`, or with `chain` the paragraphs joined at deleted paragraph marks (`p`
     /// is the first).
     fn para_in(&mut self, p: &Para, chain: Option<&Vec<Para>>, out: &mut String) {
-        let paras: &[Para] = chain.map(|c| c.as_slice()).unwrap_or(std::slice::from_ref(p));
+        let paras: &[Para] = chain.map(Vec::as_slice).unwrap_or(std::slice::from_ref(p));
         let start = self.master.take();
         self.chain = chain.map(|c| c.iter().map(|q| self.para_style(q)).collect()).unwrap_or_default();
         self.part = 0;
@@ -448,7 +457,8 @@ impl Writer {
                 "</text:p>"
             }
         };
-        let tracked = paras.len() > 1 || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) if f.ins.is_some() || f.del.is_some()));
+        let tracked = paras.len() > 1
+            || p.inlines.iter().any(|i| matches!(i, Inline::Text(_, f) | Inline::Ruby { fmt: f, .. } if f.ins.is_some() || f.del.is_some()));
         if tracked {
             let mut items = Vec::new();
             for (k, q) in paras.iter().enumerate() {
@@ -576,11 +586,12 @@ impl Writer {
         }
     }
 
-    fn cell_style(&mut self, shading: Option<Rgb>) -> String {
-        let k = match self.cell_styles.iter().position(|s| *s == shading) {
+    fn cell_style(&mut self, shading: Option<Rgb>, valign: Option<VAlign>) -> String {
+        let key = (shading, valign);
+        let k = match self.cell_styles.iter().position(|s| *s == key) {
             Some(k) => k,
             None => {
-                self.cell_styles.push(shading);
+                self.cell_styles.push(key);
                 self.cell_styles.len() - 1
             }
         };
@@ -618,7 +629,7 @@ impl Writer {
                     }
                     continue;
                 }
-                let st = self.cell_style(c.shading);
+                let st = self.cell_style(c.shading, c.valign);
                 let mut attrs = format!(" table:style-name=\"{st}\" office:value-type=\"string\"");
                 if span > 1 {
                     attrs.push_str(&format!(" table:number-columns-spanned=\"{span}\""));
@@ -701,10 +712,16 @@ impl Writer {
                 ));
             }
         }
-        for (i, sh) in self.cell_styles.iter().enumerate() {
+        for (i, (sh, va)) in self.cell_styles.iter().enumerate() {
             let bg = sh.map(|c| format!(" fo:background-color=\"#{}\"", c.hex().to_ascii_lowercase())).unwrap_or_default();
+            let va_str = match va {
+                Some(VAlign::Top) => " style:vertical-align=\"top\"",
+                Some(VAlign::Center) => " style:vertical-align=\"middle\"",
+                Some(VAlign::Bottom) => " style:vertical-align=\"bottom\"",
+                None => "",
+            };
             s.push_str(&format!(
-                "<style:style style:name=\"Cell{}\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"4pt\" fo:border=\"0.5pt solid #000000\"{bg}/></style:style>",
+                "<style:style style:name=\"Cell{}\" style:family=\"table-cell\"><style:table-cell-properties fo:padding=\"4pt\" fo:border=\"0.5pt solid #000000\"{bg}{va_str}/></style:style>",
                 i + 1
             ));
         }
@@ -727,7 +744,7 @@ impl Item<'_> {
     /// Its tracked insertion and deletion.
     fn marks(&self) -> (Option<&RevMark>, Option<&RevMark>) {
         match self {
-            Item::Inl(Inline::Text(_, f)) => (f.ins.as_ref(), f.del.as_ref()),
+            Item::Inl(Inline::Text(_, f) | Inline::Ruby { fmt: f, .. }) => (f.ins.as_ref(), f.del.as_ref()),
             Item::Inl(_) => (None, None),
             Item::Mark(p) => (p.mark_ins.as_deref(), p.mark_del.as_deref()),
         }
@@ -794,28 +811,22 @@ fn join_deleted_marks(blocks: &[FBlock]) -> Option<(Vec<FBlock>, HashMap<usize, 
 fn now_iso() -> String {
     let t = now_unix();
     let (days, secs) = (t.div_euclid(86_400), t.rem_euclid(86_400));
-    // Days since 1970-01-01 → civil date (Howard Hinnant's algorithm).
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = yoe + era * 400 + i64::from(m <= 2);
+    // Reuse the crate's 400-year-cycle converter (chrono within a cycle, cycles carried in the
+    // year) so a clock past chrono's range keeps the proleptic Gregorian date the old hand-rolled
+    // code gave, never the epoch. `{y:04}` rather than `%Y`, which writes a `+` before year 10000.
+    let (y, m, d) = crate::sheet::civil(days);
     format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}:{:02}Z", secs / 3600, secs / 60 % 60, secs % 60)
 }
 
 /// Seconds since the Unix epoch: the system clock, or the browser's on the web.
 fn now_unix() -> i64 {
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     {
         use std::time::{SystemTime, UNIX_EPOCH};
         SystemTime::now().duration_since(UNIX_EPOCH).ok().and_then(|d| i64::try_from(d.as_secs()).ok()).unwrap_or(0)
     }
     // `SystemTime::now()` panics on wasm32-unknown-unknown, so ask the browser's clock.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
     {
         let ms = js_sys::Date::now();
         if ms.is_finite() && ms > 0.0 { (ms / 1000.0) as i64 } else { 0 }
@@ -1024,7 +1035,7 @@ struct FmtDelta {
     color: Option<Rgb>,
     background: Option<Rgb>,
     size: Option<f32>,
-    font: Option<String>,
+    font: Option<Arc<str>>,
     code: Option<bool>,
 }
 
@@ -1063,6 +1074,10 @@ struct StyleInfo {
     border_bottom: bool,
     /// `fo:background-color` of a table-cell style's `style:table-cell-properties`.
     cell_background: Option<Rgb>,
+    /// `style:vertical-align` of a table-cell style's `style:table-cell-properties`.
+    cell_valign: Option<VAlign>,
+    /// `style:column-width` of a table-column style's `style:table-column-properties`, in points.
+    column_width: Option<f32>,
     /// `style:master-page-name` of a paragraph or table style: its paragraphs (tables) start a
     /// page of that master page. Empty: explicitly none, which stops the lookup up the chain.
     master_page: Option<String>,
@@ -1093,7 +1108,7 @@ fn column_sep(a: &Attrs) -> bool {
 
 /// Length → points.
 fn length(v: &str) -> Option<f32> {
-    let v = v.trim();
+    let v = v.trim().to_ascii_lowercase();
     let num = |s: &str| s.trim().parse::<f32>().ok().filter(|x| x.is_finite());
     if let Some(n) = v.strip_suffix("pt") {
         num(n)
@@ -1108,7 +1123,7 @@ fn length(v: &str) -> Option<f32> {
     } else if let Some(n) = v.strip_suffix("px") {
         num(n).map(|x| x * 0.75)
     } else {
-        num(v)
+        num(&v)
     }
 }
 
@@ -1177,6 +1192,62 @@ fn events(xml: &[u8], mut f: impl FnMut(Ev)) {
     }
 }
 
+/// An embedded ODF formula sub-document's `content.xml`, read for its `math:math` element
+/// (ODF 1.3 §10.4.3.2 wraps it in `office:document-content`/`office:body`/`office:math`, but
+/// some writers emit it bare): the first element named `math` in document order, with its
+/// subtree, passed to [`crate::mathml::read`]. `None` when there's no such element, it holds
+/// nothing, or the XML is malformed. Nesting and element count are bounded like other XML here.
+fn read_formula(xml: &[u8]) -> Option<(String, bool)> {
+    use crate::mathml::{El, Item, MAX_NODES, local};
+    let mut stack: Vec<El> = Vec::new();
+    let mut math: Option<El> = None;
+    let mut over = 0usize;
+    let mut count = 0usize;
+    events(xml, |ev| {
+        if math.is_some() {
+            return;
+        }
+        count += 1;
+        if count > MAX_NODES * 4 {
+            math = stack.drain(..).next();
+            return;
+        }
+        match ev {
+            Ev::Start(q, a) => {
+                if stack.is_empty() && local(&q) != "math" {
+                    return;
+                }
+                if stack.len() < wordcraft_doc::math::MAX_DEPTH {
+                    stack.push(El { name: q, attrs: a, children: Vec::new() });
+                } else {
+                    over += 1;
+                }
+            }
+            Ev::End(_) => {
+                if over > 0 {
+                    over -= 1;
+                } else if stack.len() > 1 {
+                    if let Some(done) = stack.pop()
+                        && let Some(parent) = stack.last_mut()
+                    {
+                        parent.children.push(Item::El(done));
+                    }
+                } else if stack.len() == 1 {
+                    math = stack.pop();
+                }
+            }
+            Ev::Text(t) => {
+                if over == 0
+                    && let Some(top) = stack.last_mut()
+                {
+                    top.children.push(Item::Text(t));
+                }
+            }
+        }
+    });
+    crate::mathml::read(&math?)
+}
+
 #[derive(Default)]
 struct Styles {
     map: HashMap<String, StyleInfo>,
@@ -1219,24 +1290,42 @@ impl Styles {
                 "text-properties" => {
                     if let Some((_, s)) = &mut cur {
                         let d = &mut s.fmt;
-                        if let Some(w) = get(&a, "fo:font-weight") {
-                            d.bold = Some(w == "bold" || w.parse::<u32>().is_ok_and(|n| n >= 600));
+                        let is_bold = |w: &str| {
+                            let w = w.trim();
+                            w.eq_ignore_ascii_case("bold") || w.parse::<u32>().is_ok_and(|n| n >= 600)
+                        };
+                        // The fo: value governs Latin text; the Asian and complex-script values
+                        // stand in only when a style sets nothing else.
+                        let weight =
+                            get(&a, "fo:font-weight").or_else(|| get(&a, "style:font-weight-asian")).or_else(|| get(&a, "style:font-weight-complex"));
+                        if let Some(w) = weight {
+                            d.bold = Some(is_bold(w));
                         }
-                        if let Some(v) = get(&a, "fo:font-style") {
-                            d.italic = Some(v == "italic" || v == "oblique");
+                        let is_italic = |v: &str| {
+                            let v = v.trim();
+                            v.eq_ignore_ascii_case("italic") || v.eq_ignore_ascii_case("oblique")
+                        };
+                        let style =
+                            get(&a, "fo:font-style").or_else(|| get(&a, "style:font-style-asian")).or_else(|| get(&a, "style:font-style-complex"));
+                        if let Some(v) = style {
+                            d.italic = Some(is_italic(v));
                         }
-                        if let Some(v) = get(&a, "style:text-underline-style") {
-                            d.underline = Some(v != "none");
+                        let is_not_none = |v: &str| !v.trim().eq_ignore_ascii_case("none");
+                        // The line style decides; the line type counts only when no style is given.
+                        let ul = get(&a, "style:text-underline-style").or_else(|| get(&a, "style:text-underline-type"));
+                        if let Some(v) = ul {
+                            d.underline = Some(is_not_none(v));
                         }
-                        if let Some(v) = get(&a, "style:text-line-through-style") {
-                            d.strike = Some(v != "none");
+                        let strike = get(&a, "style:text-line-through-style").or_else(|| get(&a, "style:text-line-through-type"));
+                        if let Some(v) = strike {
+                            d.strike = Some(is_not_none(v));
                         }
                         if let Some(v) = get(&a, "style:text-position") {
                             let v = v.trim();
                             let first = v.split_whitespace().next().unwrap_or("");
                             let pct = first.trim_end_matches('%').parse::<f32>().unwrap_or(0.0);
-                            d.sup = Some(first == "super" || pct > 0.0);
-                            d.sub = Some(first == "sub" || pct < 0.0);
+                            d.sup = Some(first.eq_ignore_ascii_case("super") || pct > 0.0);
+                            d.sub = Some(first.eq_ignore_ascii_case("sub") || pct < 0.0);
                         }
                         if let Some(c) = get(&a, "fo:color").and_then(model::parse_color) {
                             d.color = Some(c);
@@ -1249,10 +1338,10 @@ impl Styles {
                         }
                         if let Some(fam) = get(&a, "fo:font-family").or_else(|| get(&a, "style:font-name")) {
                             let fam = fam.split(',').next().unwrap_or("").trim().trim_matches(['\'', '"']).to_string();
-                            if model::is_mono(&fam) || get(&a, "style:font-pitch") == Some("fixed") {
+                            if model::is_mono(&fam) || get(&a, "style:font-pitch").is_some_and(|p| p.trim().eq_ignore_ascii_case("fixed")) {
                                 d.code = Some(true);
                             } else if !fam.is_empty() {
-                                d.font = Some(fam);
+                                d.font = model::kept_font(&fam);
                             }
                         }
                     }
@@ -1264,23 +1353,38 @@ impl Styles {
                         s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
                     }
                 }
-                "table-cell-properties" => {
+                "table-column-properties" => {
                     if let Some((_, s)) = &mut cur
-                        && let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color)
+                        && let Some(w) = get(&a, "style:column-width").and_then(length)
                     {
-                        s.cell_background = Some(c);
+                        s.column_width = Some(w);
+                    }
+                }
+                "table-cell-properties" => {
+                    if let Some((_, s)) = &mut cur {
+                        if let Some(c) = get(&a, "fo:background-color").and_then(model::parse_color) {
+                            s.cell_background = Some(c);
+                        }
+                        if let Some(va) = get(&a, "style:vertical-align") {
+                            s.cell_valign = match va.trim() {
+                                "top" => Some(VAlign::Top),
+                                "middle" | "center" => Some(VAlign::Center),
+                                "bottom" => Some(VAlign::Bottom),
+                                _ => None,
+                            };
+                        }
                     }
                 }
                 "paragraph-properties" => {
                     if let Some((_, s)) = &mut cur {
-                        s.align = match get(&a, "fo:text-align") {
+                        s.align = match get(&a, "fo:text-align").map(|v| v.trim().to_ascii_lowercase()).as_deref() {
                             Some("center") => Some(Align::Center),
                             Some("end") | Some("right") => Some(Align::Right),
                             Some("justify") => Some(Align::Justify),
                             Some("start") | Some("left") => Some(Align::Left),
                             _ => s.align,
                         };
-                        if get(&a, "fo:break-before") == Some("page") {
+                        if get(&a, "fo:break-before").is_some_and(|b| b.trim().eq_ignore_ascii_case("page")) {
                             s.page_break = true;
                         }
                         match get(&a, "fo:keep-with-next") {
@@ -1291,7 +1395,7 @@ impl Styles {
                         if let Some(v) = get(&a, "style:page-number") {
                             s.page_number = Some(v.trim().parse::<u32>().ok().map(|n| n.min(32_767)));
                         }
-                        if get(&a, "fo:border-bottom").is_some_and(|b| b != "none") {
+                        if get(&a, "fo:border-bottom").is_some_and(|b| !b.trim().eq_ignore_ascii_case("none")) {
                             s.border_bottom = true;
                         }
                     }
@@ -1343,7 +1447,7 @@ impl Styles {
 
     /// The document's default font: the Standard paragraph style's, else the default style's.
     fn doc_font(&self) -> Option<String> {
-        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.clone()).or_else(|| self.default_font.clone())
+        self.map.get("Standard").filter(|s| !s.auto).and_then(|s| s.fmt.font.as_deref().map(str::to_string)).or_else(|| self.default_font.clone())
     }
 
     fn chain<'a>(&'a self, name: &'a str) -> Vec<(&'a str, &'a StyleInfo)> {
@@ -1385,9 +1489,19 @@ impl Styles {
         self.chain(name).iter().find_map(|(_, s)| s.columns.clone())
     }
 
+    /// Width in points of a table-column style (whole chain).
+    fn column_width(&self, name: &str) -> Option<f32> {
+        self.chain(name).iter().find_map(|(_, s)| s.column_width)
+    }
+
     /// Background colour of a table-cell style (whole chain).
     fn cell_background(&self, name: &str) -> Option<Rgb> {
         self.chain(name).iter().find_map(|(_, s)| s.cell_background)
+    }
+
+    /// Vertical alignment of a table-cell style (whole chain).
+    fn cell_valign(&self, name: &str) -> Option<VAlign> {
+        self.chain(name).iter().find_map(|(_, s)| s.cell_valign)
     }
 
     /// Paragraph kind, alignment, page break, rule, keep-with-next and base formatting. The text formatting of
@@ -1441,6 +1555,16 @@ struct TableB {
     row: Vec<Cell>,
     /// Covered cells still owed to the previous cell's column span.
     hcover: usize,
+    /// Widths in points of the `table:table-column`s so far, 0 where the style gives none.
+    widths: Vec<f32>,
+}
+
+impl TableB {
+    fn finish(self) -> FTable {
+        // A column without a width leaves the whole grid to the equal split.
+        let widths = if self.widths.iter().all(|w| *w > 0.0) { self.widths } else { Vec::new() };
+        FTable { rows: self.rows, widths, borderless: false }
+    }
 }
 
 /// A `text:changed-region` read from `text:tracked-changes`.
@@ -1493,7 +1617,8 @@ struct Body<'a> {
     in_text: bool,
     skip: usize,
     depth: usize,
-    frame: Option<(Option<f32>, Option<f32>, Option<Vec<u8>>, String)>,
+    /// `(width, height, picture bytes, alt text, equation read from an embedded `draw:object`)`.
+    frame: Option<(Option<f32>, Option<f32>, Option<Vec<u8>>, String, Option<(String, bool)>)>,
     in_desc: bool,
     /// The master pages' page setups.
     pages: &'a Pages,
@@ -1522,6 +1647,82 @@ struct Body<'a> {
     del: Option<DelState>,
     /// Insertions open in the body: (region id, revision).
     active_ins: Vec<(String, RevMark)>,
+}
+
+impl<'a> Body<'a> {
+    fn new(styles: &'a Styles, pages: &'a Pages, zip: &'a mut dyn FnMut(&str) -> Option<Vec<u8>>) -> Self {
+        let page = pages.first.clone().unwrap_or_default();
+        Body {
+            styles,
+            zip,
+            containers: vec![Vec::new()],
+            fmt: Vec::new(),
+            para: None,
+            xml_space_end: false,
+            para_cont: false,
+            lists: Vec::new(),
+            lists_saved: Vec::new(),
+            item_used: Vec::new(),
+            tables: Vec::new(),
+            cells: Vec::new(),
+            in_text: false,
+            skip: 0,
+            depth: 0,
+            frame: None,
+            in_desc: false,
+            pages,
+            sec: page.clone(),
+            page,
+            sec_from: 0,
+            sections: 0,
+            cols_at: None,
+            in_tc: false,
+            track: None,
+            regions: HashMap::new(),
+            region_count: 0,
+            region: None,
+            info_at: None,
+            info_field: None,
+            del: None,
+            active_ins: Vec::new(),
+        }
+    }
+
+    fn feed(&mut self, ev: Ev) {
+        match ev {
+            Ev::Start(q, a) => {
+                if self.depth < MAX_XML_DEPTH {
+                    self.start(&q, &a);
+                } else {
+                    self.depth += 1;
+                }
+            }
+            Ev::End(q) => {
+                if self.depth <= MAX_XML_DEPTH {
+                    self.end(&q);
+                } else {
+                    self.depth -= 1;
+                }
+            }
+            Ev::Text(t) => self.text(&t),
+        }
+    }
+
+    /// The blocks read, with anything still open closed.
+    fn take_blocks(&mut self) -> Vec<FBlock> {
+        self.end_para();
+        while self.containers.len() > 1 {
+            let c = self.containers.pop().unwrap_or_default();
+            self.container().extend(c);
+        }
+        let mut blocks = self.containers.pop().unwrap_or_default();
+        for t in self.tables.drain(..) {
+            if !t.rows.is_empty() {
+                blocks.push(FBlock::Table(t.finish()));
+            }
+        }
+        blocks
+    }
 }
 
 impl Body<'_> {
@@ -1611,7 +1812,7 @@ impl Body<'_> {
         {
             let style = self.lists.iter().rev().find_map(|l| l.0.clone());
             let ordered = style.and_then(|s| self.styles.lists.get(&s)).and_then(|v| v.get(lv.min(9)).copied()).unwrap_or(false);
-            p.list = Some(ListInfo { ordered, level: lv.min(8) as u8 });
+            p.list = Some(ListInfo { ordered, level: lv.min(8) as u8, start: 1 });
             self.para_cont = self.item_used.last().copied().unwrap_or(false);
             if let Some(u) = self.item_used.last_mut() {
                 *u = true;
@@ -1853,7 +2054,7 @@ impl Body<'_> {
             "a" => {
                 let mut f = self.cur_fmt();
                 if let Some(h) = get(a, "xlink:href").filter(|h| !h.is_empty()) {
-                    f.link = Some(h.to_string());
+                    f.link = model::kept_link(h);
                 }
                 if let Some(s) = get(a, "text:style-name") {
                     f = self.styles.text_fmt(s, &f);
@@ -1903,7 +2104,15 @@ impl Body<'_> {
                     self.skip = 1;
                     return;
                 }
-                self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0 });
+                self.tables.push(TableB { rows: Vec::new(), row: Vec::new(), hcover: 0, widths: Vec::new() });
+            }
+            "table-column" => {
+                let w = get(a, "table:style-name").and_then(|n| self.styles.column_width(n)).unwrap_or(0.0);
+                let n = get(a, "table:number-columns-repeated").and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(1).max(1);
+                if let Some(t) = self.tables.last_mut() {
+                    let room = wordcraft_doc::table::MAX_COLS.saturating_sub(t.widths.len());
+                    t.widths.extend(std::iter::repeat_n(w, n.min(room)));
+                }
             }
             "table-row" => {
                 if let Some(t) = self.tables.last_mut() {
@@ -1916,10 +2125,11 @@ impl Body<'_> {
                 let span = get(a, "table:number-columns-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 63);
                 let rows = get(a, "table:number-rows-spanned").and_then(|v| v.trim().parse::<u32>().ok()).unwrap_or(1).clamp(1, 1000);
                 let shading = get(a, "table:style-name").and_then(|s| self.styles.cell_background(s));
+                let valign = get(a, "table:style-name").and_then(|s| self.styles.cell_valign(s));
                 if let Some(t) = self.tables.last_mut() {
                     t.hcover = span as usize - 1;
                 }
-                self.cells.push(Cell { colspan: span, rowspan: rows, shading, ..Default::default() });
+                self.cells.push(Cell { colspan: span, rowspan: rows, shading, valign, ..Default::default() });
                 self.containers.push(Vec::new());
                 self.lists_saved.push((std::mem::take(&mut self.lists), std::mem::take(&mut self.item_used)));
             }
@@ -1935,15 +2145,30 @@ impl Body<'_> {
             "frame" => {
                 let w = get(a, "svg:width").and_then(length);
                 let h = get(a, "svg:height").and_then(length);
-                self.frame = Some((w, h, None, String::new()));
+                self.frame = Some((w, h, None, String::new(), None));
             }
             "image" => {
                 if let Some(href) = get(a, "xlink:href")
                     && let Some(fr) = &mut self.frame
                     && fr.2.is_none()
+                    && fr.4.is_none()
                 {
                     let path = href.trim_start_matches("./");
                     fr.2 = (self.zip)(path);
+                }
+            }
+            // An embedded object (ODF 1.3 §10.4.3): a formula sub-document's `content.xml` holds
+            // a `math:math` tree (#3099). Other object kinds have none, so the frame still falls
+            // back to its `draw:image` replacement preview, read at `end` below.
+            "object" => {
+                if let Some(href) = get(a, "xlink:href")
+                    && let Some(fr) = &mut self.frame
+                    && fr.4.is_none()
+                {
+                    let path = format!("{}/content.xml", href.trim_start_matches("./").trim_end_matches('/'));
+                    if let Some(xml) = (self.zip)(&path) {
+                        fr.4 = read_formula(&xml);
+                    }
                 }
             }
             "desc" | "title" if self.frame.is_some() => self.in_desc = true,
@@ -2197,7 +2422,7 @@ impl Body<'_> {
                 if let Some(t) = self.tables.pop()
                     && !t.rows.is_empty()
                 {
-                    self.container().push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
+                    self.container().push(FBlock::Table(t.finish()));
                 }
             }
             "desc" | "title" => self.in_desc = false,
@@ -2208,14 +2433,18 @@ impl Body<'_> {
                 self.break_section(next);
             }
             "frame" => {
-                if let Some((w, h, Some(data), alt)) = self.frame.take()
-                    && let Some(img) = make_img(data, w, h, alt.trim())
-                {
-                    if self.para.is_none() {
-                        self.start_para(None, None);
-                    }
-                    if let Some(p) = &mut self.para {
-                        p.inlines.push(Inline::Image(img));
+                if let Some((w, h, img, alt, eq)) = self.frame.take() {
+                    let inline = match eq {
+                        Some((linear, display)) => Some(Inline::Equation { linear, display }),
+                        None => img.and_then(|data| make_img(data, w, h, alt.trim())).map(Inline::Image),
+                    };
+                    if let Some(inline) = inline {
+                        if self.para.is_none() {
+                            self.start_para(None, None);
+                        }
+                        if let Some(p) = &mut self.para {
+                            p.inlines.push(inline);
+                        }
                     }
                 }
                 self.frame = None;
@@ -2302,6 +2531,8 @@ fn read_meta(xml: &[u8]) -> Meta {
     let mut m = Meta::default();
     let mut cur: Option<String> = None;
     let mut keywords: Vec<String> = Vec::new();
+    let mut creator = String::new();
+    let mut mod_date = String::new();
     events(xml, |ev| match ev {
         Ev::Start(q, _) => cur = Some(q),
         Ev::End(_) => cur = None,
@@ -2310,16 +2541,32 @@ fn read_meta(xml: &[u8]) -> Meta {
             Some("dc:subject") => m.subject.push_str(&t),
             Some("dc:description") => m.description.push_str(&t),
             Some("meta:initial-creator") => m.author.push_str(&t),
-            Some("dc:creator") if m.author.is_empty() => m.author.push_str(&t),
+            Some("dc:creator") => creator.push_str(&t),
             Some("meta:keyword") => keywords.push(t),
             Some("meta:creation-date") => m.created.push_str(&t),
+            Some("dc:date") => mod_date.push_str(&t),
             _ => {}
         },
     });
+    if m.author.is_empty() {
+        m.author = creator;
+    }
+    if m.created.is_empty() {
+        m.created = mod_date;
+    }
     m.keywords = keywords.join(", ");
-    if !m.created.is_empty() && !m.created.ends_with('Z') && !m.created.contains('+') {
-        let base = m.created.split('.').next().unwrap_or("").to_string();
-        m.created = format!("{base}Z");
+    let created = m.created.trim();
+    if !created.is_empty() {
+        let has_tz =
+            created.ends_with(['Z', 'z']) || created.contains('+') || created.split_once('T').map(|(_, time)| time.contains('-')).unwrap_or(false);
+        if !has_tz {
+            let base = created.split('.').next().unwrap_or("");
+            m.created = format!("{base}Z");
+        } else {
+            m.created = created.to_string();
+        }
+    } else {
+        m.created.clear();
     }
     m
 }
@@ -2331,11 +2578,11 @@ pub fn parse(bytes: &[u8]) -> Result<Flow, String> {
 
 /// [`parse`], with the last section's properties (the others are on the paragraphs that end them).
 fn parse_full(bytes: &[u8]) -> Result<(Flow, SectionProps), String> {
-    parse_tracked(bytes).map(|(f, last, _, _)| (f, last))
+    parse_tracked(bytes).map(|(f, last, ..)| (f, last))
 }
 
 /// [`parse_full`], plus whether change tracking is on (`None`: the document has no tracked changes).
-fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>), String> {
+fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Option<String>, page_parts::Parts), String> {
     let mut z = zip::ZipArchive::new(Cursor::new(bytes)).map_err(|e| format!("ODT: not a valid package ({e})"))?;
     if let Some(mt) = read_entry(&mut z, "mimetype") {
         let mt = String::from_utf8_lossy(&mt);
@@ -2346,11 +2593,11 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
     let content = read_entry(&mut z, "content.xml").ok_or("ODT: content.xml is missing")?;
     let mut styles = Styles::default();
     let mut pages = Pages::default();
-    if let Some(s) = read_entry(&mut z, "styles.xml") {
-        styles.read(&s, false);
-        pages = read_pages(&s);
+    let styles_xml = read_entry(&mut z, "styles.xml");
+    if let Some(s) = &styles_xml {
+        styles.read(s, false);
+        pages = read_pages(s);
     }
-    let page = pages.first.clone().unwrap_or_default();
     styles.read(&content, true);
     let meta = read_entry(&mut z, "meta.xml").map(|m| read_meta(&m)).unwrap_or_default();
     let mut pictures = Pictures::new(MAX_ENTRY);
@@ -2358,68 +2605,10 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         // A frame may point at any entry, as often as it likes: `Pictures` keeps that bounded.
         pictures.get(&mut z, path)
     };
-    let mut body = Body {
-        styles: &styles,
-        zip: &mut fetch,
-        containers: vec![Vec::new()],
-        fmt: Vec::new(),
-        para: None,
-        xml_space_end: false,
-        para_cont: false,
-        lists: Vec::new(),
-        lists_saved: Vec::new(),
-        item_used: Vec::new(),
-        tables: Vec::new(),
-        cells: Vec::new(),
-        in_text: false,
-        skip: 0,
-        depth: 0,
-        frame: None,
-        in_desc: false,
-        pages: &pages,
-        sec: page.clone(),
-        page,
-        sec_from: 0,
-        sections: 0,
-        cols_at: None,
-        in_tc: false,
-        track: None,
-        regions: HashMap::new(),
-        region_count: 0,
-        region: None,
-        info_at: None,
-        info_field: None,
-        del: None,
-        active_ins: Vec::new(),
-    };
-    events(&content, |ev| match ev {
-        Ev::Start(q, a) => {
-            if body.depth < MAX_XML_DEPTH {
-                body.start(&q, &a);
-            } else {
-                body.depth += 1;
-            }
-        }
-        Ev::End(q) => {
-            if body.depth <= MAX_XML_DEPTH {
-                body.end(&q);
-            } else {
-                body.depth -= 1;
-            }
-        }
-        Ev::Text(t) => body.text(&t),
-    });
-    body.end_para();
-    while body.containers.len() > 1 {
-        let c = body.containers.pop().unwrap_or_default();
-        body.container().extend(c);
-    }
-    let mut blocks = body.containers.pop().unwrap_or_default();
-    for t in body.tables.drain(..) {
-        if !t.rows.is_empty() {
-            blocks.push(FBlock::Table(FTable { rows: t.rows, widths: Vec::new(), borderless: false }));
-        }
-    }
+    let parts = styles_xml.as_deref().map(|x| page_parts::read(x, &styles, &mut pages, &mut fetch)).unwrap_or_default();
+    let mut body = Body::new(&styles, &pages, &mut fetch);
+    events(&content, |ev| body.feed(ev));
+    let mut blocks = body.take_blocks();
     // An open section with nothing in it (after a column section at the end) isn't one: the
     // section before it ends the document.
     let mut last = body.sec;
@@ -2433,17 +2622,19 @@ fn parse_tracked(bytes: &[u8]) -> Result<(Flow, SectionProps, Option<bool>, Opti
         blocks.push(FBlock::Para(Para::default()));
     }
     let track = body.track;
-    Ok((Flow { blocks, meta }, last, track, styles.doc_font()))
+    Ok((Flow { blocks, meta }, last, track, styles.doc_font(), parts))
 }
 
 /// Parse an `.odt` package into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
-    let (flow, last, track, font) = parse_tracked(bytes)?;
+    model::begin_import();
+    let (flow, last, track, font, parts) = parse_tracked(bytes)?;
     let mut doc = model::to_doc(&flow);
     if font.is_some() {
         doc.styles.default_chr.font = font;
     }
     doc.last_section = last;
+    page_parts::add(&mut doc, parts);
     if let Some(t) = track {
         doc.settings.track_changes = t;
     }
@@ -2456,6 +2647,7 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
 struct Pages {
     masters: HashMap<String, SectionProps>,
     first: Option<SectionProps>,
+    first_name: Option<String>,
 }
 
 fn read_pages(xml: &[u8]) -> Pages {
@@ -2507,6 +2699,7 @@ fn read_pages(xml: &[u8]) -> Pages {
         }
         if pages.first.is_none() {
             pages.first = Some(sec.clone());
+            pages.first_name = Some(name.clone());
         }
         pages.masters.entry(name).or_insert(sec);
     }
@@ -2554,10 +2747,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn escaper_drops_noncharacters() {
+        assert_eq!(x("a\u{FFFF}b\u{FFFE}c\u{1}d\te"), "abcd\te");
+    }
+
+    #[test]
     fn lengths() {
         assert_eq!(length("1in"), Some(72.0));
         assert_eq!(length("12pt"), Some(12.0));
         assert!((length("2.54cm").unwrap() - 72.0).abs() < 0.01);
+        assert_eq!(length("1IN"), Some(72.0));
+        assert_eq!(length("12PT"), Some(12.0));
+        assert!((length("2.54CM").unwrap() - 72.0).abs() < 0.01);
+        assert!((length("25.4MM").unwrap() - 72.0).abs() < 0.01);
+        assert_eq!(length("1pc"), Some(12.0));
+        assert_eq!(length("10PX"), Some(7.5));
         assert_eq!(length("x"), None);
     }
 
@@ -2661,6 +2865,68 @@ mod tests {
         assert_eq!(imgs.len(), 3);
         assert!(imgs.iter().all(|i| i.data.as_slice() == png.as_slice()));
         assert_eq!(import(&pkg).unwrap().media.len(), 1);
+    }
+
+    #[test]
+    fn embedded_formula_object_reads_its_mathml() {
+        // #3099: LibreOffice saves an equation as a `draw:object` (a formula sub-document whose
+        // own `content.xml` is MathML) plus a `draw:image` replacement preview in LibreOffice's
+        // own metafile format, which WordCraft can't decode as a picture. The object's MathML
+        // must be read instead of silently dropping the frame (blank equation).
+        let math = r#"<math xmlns="http://www.w3.org/1998/Math/MathML" display="block"><semantics><mrow><mi>E</mi><mo stretchy="false">=</mo><msup><mi mathvariant="italic">mc</mi><mn>2</mn></msup></mrow><annotation encoding="StarMath 5.0">E=mc^2</annotation></semantics></math>"#;
+        let frame = r#"<draw:frame svg:width="0.5in" svg:height="0.2in"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="./ObjectReplacements/Object 1"/></draw:frame>"#;
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = zip_of(&[
+            ("content.xml", content.as_bytes()),
+            ("Object 1/content.xml", math.as_bytes()),
+            // Not a format `sniff_image` recognizes: proves the equation wins over this fallback.
+            ("ObjectReplacements/Object 1", &[0u8; 50]),
+        ]);
+        let flow = parse(&pkg).unwrap();
+        let eqs: Vec<(String, bool)> = paras(&flow)
+            .into_iter()
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Equation { linear, display } = i { Some((linear.clone(), *display)) } else { None })
+            .collect();
+        assert_eq!(eqs, vec![("E=mc^2".to_string(), true)]);
+    }
+
+    #[test]
+    fn a_trailing_slash_on_the_object_href_still_resolves() {
+        // Some ODF producers write the object folder with a trailing slash
+        // (`xlink:href="./Object 1/"`); that must not double the slash before `content.xml`.
+        let math = r#"<math><mi>x</mi></math>"#;
+        let frame = r#"<draw:frame svg:width="1in" svg:height="1in"><draw:object xlink:href="./Object 1/"/></draw:frame>"#;
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", math.as_bytes())]);
+        let flow = parse(&pkg).unwrap();
+        let eqs: Vec<(String, bool)> = paras(&flow)
+            .into_iter()
+            .flat_map(|p| &p.inlines)
+            .filter_map(|i| if let Inline::Equation { linear, display } = i { Some((linear.clone(), *display)) } else { None })
+            .collect();
+        assert_eq!(eqs, vec![("x".to_string(), false)]);
+    }
+
+    #[test]
+    fn object_without_mathml_falls_back_to_its_replacement_image() {
+        // A non-formula embedded object (or one whose content.xml has no `math:math`) has no
+        // equation to read: the frame still shows its `draw:image` replacement, as before.
+        let png = [b"\x89PNG\r\n\x1a\n".as_slice(), &[7u8; 300]].concat();
+        let frame = r#"<draw:frame svg:width="1in" svg:height="1in"><draw:object xlink:href="./Object 1"/><draw:image xlink:href="Pictures/a.png"/></draw:frame>"#;
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>{frame}</text:p></office:text></office:body></office:document-content>"#
+        );
+        let pkg = zip_of(&[("content.xml", content.as_bytes()), ("Object 1/content.xml", b"<office:spreadsheet/>"), ("Pictures/a.png", &png)]);
+        let flow = parse(&pkg).unwrap();
+        let imgs: Vec<&model::Img> =
+            paras(&flow).into_iter().flat_map(|p| &p.inlines).filter_map(|i| if let Inline::Image(img) = i { Some(img) } else { None }).collect();
+        assert_eq!(imgs.len(), 1);
+        assert!(imgs[0].data.as_slice() == png.as_slice());
     }
 
     const NS_T: &str = r#"xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0""#;
@@ -2784,6 +3050,54 @@ mod tests {
     }
 
     #[test]
+    fn table_column_styles_are_the_grid_widths() {
+        // A column's `style:column-width` (and `table:number-columns-repeated`) sets its width.
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Table1.A" style:family="table-column"><style:table-column-properties style:column-width="1in"/></style:style><style:style style:name="Table1.B" style:family="table-column"><style:table-column-properties style:column-width="2in"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:style-name="Table1.A"/><table:table-column table:style-name="Table1.B" table:number-columns-repeated="2"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell><table:table-cell><text:p>C</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+        assert_eq!(t.widths, vec![72.0, 144.0, 144.0]);
+    }
+
+    #[test]
+    fn table_column_widths_survive_a_round_trip() {
+        // A width changed in the document is written and read back; the file's own widths are
+        // what the first import shows.
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="Table1.A" style:family="table-column"><style:table-column-properties style:column-width="1in"/></style:style><style:style style:name="Table1.B" style:family="table-column"><style:table-column-properties style:column-width="3in"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:style-name="Table1.A"/><table:table-column table:style-name="Table1.B"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+        );
+        let grid = |doc: &Document| match doc
+            .body
+            .iter()
+            .find_map(|b| if let wordcraft_doc::Block::Table(t) = &**b { Some(t.grid.clone()) } else { None })
+        {
+            Some(g) => g,
+            None => panic!("no table"),
+        };
+        let mut doc = import(&package(&content, None)).unwrap();
+        assert_eq!(grid(&doc), vec![72.0, 216.0]);
+        let widths = vec![150.0, 100.0];
+        for b in doc.body.iter_mut() {
+            if let wordcraft_doc::Block::Table(t) = std::sync::Arc::make_mut(b) {
+                t.grid = widths.clone();
+            }
+        }
+        let back = import(&export(&doc).unwrap()).unwrap();
+        assert_eq!(grid(&back), widths);
+    }
+
+    #[test]
+    fn table_without_column_widths_keeps_the_equal_split() {
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell><text:p>A</text:p></table:table-cell><table:table-cell><text:p>B</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+        assert!(t.widths.is_empty());
+    }
+
+    #[test]
     fn table_cell_style_background_is_shading() {
         // #437: `fo:background-color` on `style:table-cell-properties` is the cell's shading.
         let content = format!(
@@ -2793,6 +3107,23 @@ mod tests {
         let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
         let row: Vec<_> = t.rows[0].iter().map(|c| (c.text(), c.shading)).collect();
         assert_eq!(row, vec![("Red".to_string(), Some(Rgb(255, 0, 0))), ("Plain".to_string(), None)]);
+    }
+
+    #[test]
+    fn table_cell_style_vertical_alignment() {
+        let content = format!(
+            r##"<office:document-content {NS_T}><office:automatic-styles><style:style style:name="MidCell" style:family="table-cell"><style:table-cell-properties style:vertical-align="middle"/></style:style><style:style style:name="BotCell" style:family="table-cell"><style:table-cell-properties style:vertical-align="bottom"/></style:style></office:automatic-styles><office:body><office:text><table:table><table:table-column table:number-columns-repeated="2"/><table:table-row><table:table-cell table:style-name="MidCell"><text:p>Mid</text:p></table:table-cell><table:table-cell table:style-name="BotCell"><text:p>Bot</text:p></table:table-cell></table:table-row></table:table></office:text></office:body></office:document-content>"##
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let Some(FBlock::Table(t)) = f.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table") };
+        assert_eq!(t.rows[0][0].valign, Some(VAlign::Center));
+        assert_eq!(t.rows[0][1].valign, Some(VAlign::Bottom));
+        let doc = crate::model::to_doc(&f);
+        let bytes = export(&doc).unwrap();
+        let f2 = parse(&bytes).unwrap();
+        let Some(FBlock::Table(t2)) = f2.blocks.iter().find(|b| matches!(b, FBlock::Table(_))) else { panic!("no table in export") };
+        assert_eq!(t2.rows[0][0].valign, Some(VAlign::Center));
+        assert_eq!(t2.rows[0][1].valign, Some(VAlign::Bottom));
     }
 
     /// #1379: three master pages (A4 upright; A4 wide with page numbering restarting at 1; A4
@@ -2823,6 +3154,87 @@ mod tests {
             </office:text></office:body></office:document-content>"#
         );
         package(&content, Some(&styles))
+    }
+
+    fn part_text(d: &Document, id: Option<u32>) -> String {
+        d.plain_text(wordcraft_doc::StoryRef::Part(id.expect("part")))
+    }
+
+    #[test]
+    fn headers_and_footers_follow_their_master_page() {
+        // #863: headers and footers live on the master pages in styles.xml.
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:automatic-styles>
+            <style:page-layout style:name="pU"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout>
+            <style:page-layout style:name="pW"><style:page-layout-properties fo:page-width="29.7cm" fo:page-height="21cm"/></style:page-layout>
+            <style:style style:name="MP1" style:family="paragraph"><style:text-properties fo:font-weight="bold"/></style:style>
+            </office:automatic-styles><office:master-styles>
+            <style:master-page style:name="Upright" style:page-layout-name="pU">
+            <style:header><text:p text:style-name="MP1">ACME <text:span>Letterhead</text:span></text:p></style:header>
+            <style:header-left><text:p>Left page</text:p></style:header-left>
+            <loext:header-first><text:p>First page</text:p></loext:header-first>
+            <style:footer><text:p>Page <text:page-number text:select-page="current">1</text:page-number></text:p></style:footer>
+            <style:footer-left style:display="false"><text:p>Hidden</text:p></style:footer-left>
+            </style:master-page>
+            <style:master-page style:name="Wide" style:page-layout-name="pW"><style:header><text:p>Wide header</text:p></style:header></style:master-page>
+            </office:master-styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>
+            <style:style style:name="PWide" style:family="paragraph" style:master-page-name="Wide"/>
+            </office:automatic-styles><office:body><office:text>
+            <text:p>Upright body</text:p><text:p text:style-name="PWide">Wide body</text:p>
+            </office:text></office:body></office:document-content>"#
+        );
+        let d = import(&package(&content, Some(&styles))).unwrap();
+        let secs = d.sections();
+        assert_eq!(secs.len(), 2);
+        let (up, wide) = (&secs[0].1, &secs[1].1);
+        assert_eq!(part_text(&d, up.headers.default), "ACME Letterhead");
+        assert_eq!(part_text(&d, up.headers.even), "Left page");
+        assert_eq!(part_text(&d, up.headers.first), "First page");
+        assert_eq!(part_text(&d, up.footers.default), "Page 1");
+        assert!(up.title_page && d.settings.even_odd_headers);
+        // The hidden left footer: left pages show the right pages' footer.
+        assert_eq!((up.footers.even, up.footers.first), (up.footers.default, None));
+        assert_eq!(part_text(&d, wide.headers.default), "Wide header");
+        assert_eq!((wide.headers.even, wide.title_page), (wide.headers.default, false));
+        // Its master page has no footer: an empty one, not the previous section's.
+        assert_eq!(part_text(&d, wide.footers.default), "");
+        assert_eq!(d.parts.len(), 6);
+        let id = up.headers.default.unwrap();
+        let Some(wordcraft_doc::Block::Para(p)) = d.parts[&id].blocks.first().map(|b| &**b) else { panic!("no header paragraph") };
+        assert!(p.runs.iter().all(|r| r.props.bold == Some(true)), "{:?}", p.runs);
+    }
+
+    #[test]
+    fn documents_without_headers_get_none() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>Body</text:p></office:text></office:body></office:document-content>"#
+        );
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"/></office:master-styles></office:document-styles>"#
+        );
+        for d in [import(&package(&content, Some(&styles))).unwrap(), import(&package(&content, None)).unwrap()] {
+            assert!(d.parts.is_empty());
+            assert_eq!(d.last_section.headers, Default::default());
+            assert!(!d.last_section.title_page && !d.settings.even_odd_headers);
+        }
+    }
+
+    #[test]
+    fn deeply_nested_header_content_does_not_panic() {
+        let n = 4 * MAX_XML_DEPTH;
+        let (open, close) = ("<text:span>".repeat(n), "</text:span>".repeat(n));
+        let styles = format!(
+            r#"<office:document-styles {NS_T}><office:automatic-styles><style:page-layout style:name="pm1"><style:page-layout-properties fo:page-width="21cm" fo:page-height="29.7cm"/></style:page-layout></office:automatic-styles><office:master-styles><style:master-page style:name="Standard" style:page-layout-name="pm1"><style:header><text:p>{open}Deep{close}</text:p></style:header><style:footer><text:p>After</text:p></style:footer></style:master-page></office:master-styles></office:document-styles>"#
+        );
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:body><office:text><text:p>Body</text:p></office:text></office:body></office:document-content>"#
+        );
+        let d = import(&package(&content, Some(&styles))).unwrap();
+        assert!(d.last_section.headers.default.is_some());
+        assert_eq!(part_text(&d, d.last_section.footers.default), "After");
     }
 
     #[test]
@@ -3180,6 +3592,25 @@ mod tests {
     }
 
     #[test]
+    fn an_inserted_ruby_keeps_its_tracked_insertion() {
+        // ODF has no ruby: its base text is written as text, and the insertion on the ruby must
+        // still be a change range around that text, not plain untracked text.
+        use wordcraft_doc::RevisionKind::Insert;
+        let props = wordcraft_doc::props::CharProps::default();
+        let mut p = wordcraft_doc::Paragraph::with_text("before ", props.clone());
+        let n = p.len();
+        let mut ins = props.clone();
+        ins.ins = Some(0);
+        p.insert_object(n, crate::model::ruby_object("漢字".into(), "かんじ".into(), 20.0), &ins).unwrap();
+        let mut d = Document::new();
+        d.settings.track_changes = true;
+        d.revisions.push(wordcraft_doc::Revision::new(Insert, "Alice", "2024-03-01T10:00:00"));
+        d.body = vec![wordcraft_doc::para_block(p)];
+        let back = import(&export(&d).unwrap()).unwrap();
+        assert_eq!(rev_runs(&back), vec![(vec![("before ".to_string(), None), ("漢字".to_string(), Some(Insert))], None)]);
+    }
+
+    #[test]
     fn hostile_tracked_changes_are_bounded() {
         // Unknown and duplicate ids, a change-end without a start, nested regions, a deletion
         // inside a deletion, a change mark inside the deleted text and tracked changes inside a paragraph.
@@ -3366,5 +3797,92 @@ mod tests {
             let back = import(&export(&d).unwrap()).unwrap();
             assert_eq!(back.plain_text(wordcraft_doc::StoryRef::Body).trim_end_matches('\n'), t);
         }
+    }
+
+    #[test]
+    fn test_asian_complex_and_extended_text_properties() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>
+                <style:style style:name="AsianBold" style:family="paragraph"><style:text-properties style:font-weight-asian="bold"/></style:style>
+                <style:style style:name="ComplexItalic" style:family="paragraph"><style:text-properties style:font-style-complex="italic"/></style:style>
+                <style:style style:name="UlType" style:family="paragraph"><style:text-properties style:text-underline-type="single"/></style:style>
+                <style:style style:name="StrikeType" style:family="paragraph"><style:text-properties style:text-line-through-type="double"/></style:style>
+                <style:style style:name="CaseAlign" style:family="paragraph"><style:paragraph-properties fo:text-align="CENTER" fo:break-before="PAGE"/><style:text-properties fo:font-weight="BOLD"/></style:style>
+            </office:automatic-styles><office:body><office:text>
+                <text:p text:style-name="AsianBold">Asian</text:p>
+                <text:p text:style-name="ComplexItalic">Complex</text:p>
+                <text:p text:style-name="UlType">Underlined</text:p>
+                <text:p text:style-name="StrikeType">Struck</text:p>
+                <text:p text:style-name="CaseAlign">Centered</text:p>
+            </office:text></office:body></office:document-content>"#
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let ps = paras(&f);
+        assert_eq!(ps.len(), 5);
+
+        let fmt = |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap();
+
+        assert!(fmt(ps[0]).bold);
+        assert!(fmt(ps[1]).italic);
+        assert!(fmt(ps[2]).underline);
+        assert!(fmt(ps[3]).strike);
+        assert!(fmt(ps[4]).bold);
+        assert_eq!(ps[4].align, Some(Align::Center));
+        assert!(ps[4].page_break);
+    }
+
+    #[test]
+    fn latin_attributes_win_over_asian_and_line_types() {
+        let content = format!(
+            r#"<office:document-content {NS_T}><office:automatic-styles>
+                <style:style style:name="AsianOnly" style:family="paragraph"><style:text-properties fo:font-weight="normal" style:font-weight-asian="bold" fo:font-style="normal" style:font-style-complex="italic"/></style:style>
+                <style:style style:name="NoLines" style:family="paragraph"><style:text-properties style:text-underline-style="none" style:text-underline-type="single" style:text-line-through-style="none" style:text-line-through-type="double"/></style:style>
+            </office:automatic-styles><office:body><office:text>
+                <text:p text:style-name="AsianOnly">Latin</text:p>
+                <text:p text:style-name="NoLines">Plain</text:p>
+            </office:text></office:body></office:document-content>"#
+        );
+        let f = parse(&package(&content, None)).unwrap();
+        let ps = paras(&f);
+        let fmt = |p: &Para| p.inlines.iter().find_map(|i| if let Inline::Text(_, f) = i { Some(f.clone()) } else { None }).unwrap();
+        assert!(!fmt(ps[0]).bold, "Asian bold does not make Latin text bold");
+        assert!(!fmt(ps[0]).italic, "complex-script italic does not make Latin text italic");
+        assert!(!fmt(ps[1]).underline, "a line type does not override a line style of none");
+        assert!(!fmt(ps[1]).strike);
+    }
+
+    #[test]
+    fn meta_creation_date_timezones_and_fallbacks() {
+        let xml_neg = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00-05:00</meta:creation-date>
+            <dc:creator>Modifier</dc:creator>
+            <meta:initial-creator>Original Author</meta:initial-creator>
+        </office:meta></office:document-meta>"#;
+        let m = read_meta(xml_neg);
+        assert_eq!(m.created, "2024-03-05T13:45:00-05:00");
+        assert_eq!(m.author, "Original Author");
+
+        let xml_neg_frac = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00.500-05:00</meta:creation-date>
+        </office:meta></office:document-meta>"#;
+        assert_eq!(read_meta(xml_neg_frac).created, "2024-03-05T13:45:00.500-05:00");
+
+        let xml_local_frac = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00.123</meta:creation-date>
+        </office:meta></office:document-meta>"#;
+        assert_eq!(read_meta(xml_local_frac).created, "2024-03-05T13:45:00Z");
+
+        let xml_z_lower = br#"<office:document-meta><office:meta>
+            <meta:creation-date>2024-03-05T13:45:00z</meta:creation-date>
+        </office:meta></office:document-meta>"#;
+        assert_eq!(read_meta(xml_z_lower).created, "2024-03-05T13:45:00z");
+
+        let xml_dc_date_fallback = br#"<office:document-meta><office:meta>
+            <dc:date>2024-03-05T13:45:00Z</dc:date>
+            <dc:creator>Solo Creator</dc:creator>
+        </office:meta></office:document-meta>"#;
+        let m2 = read_meta(xml_dc_date_fallback);
+        assert_eq!(m2.created, "2024-03-05T13:45:00Z");
+        assert_eq!(m2.author, "Solo Creator");
     }
 }
