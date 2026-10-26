@@ -115,7 +115,7 @@ fn context(ui: &mut Ui, app: &mut WordApp, form: &mut SpellingForm, spelling: bo
                 ui.add(egui::Label::new(job).wrap());
             });
             let (rect, response) = ui.allocate_exact_size(vec2(28.0, 28.0), Sense::click());
-            response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, tl!("Read Aloud")));
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, tl!("Read Aloud")));
             crate::icons::paint(ui.painter(), rect.shrink(4.0), "readAloud", t.icon, t.accent);
             if response.on_hover_text(tl!("Read Aloud")).clicked() {
                 if form.current(app) {
@@ -165,7 +165,7 @@ fn body(app: &mut WordApp, ui: &mut Ui, form: &mut SpellingForm) {
                     ui.horizontal(|ui| {
                         let width = (ui.available_width() - 34.0).max(20.0);
                         let (rect, response) = ui.allocate_exact_size(vec2(width, 64.0), Sense::click());
-                        response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, suggestion));
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, suggestion));
                         if response.hovered() {
                             ui.painter().rect_filled(rect, 0.0, t.hover);
                         }
