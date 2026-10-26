@@ -433,6 +433,7 @@ pub(crate) fn shape_path(kind: ShapeKind, r: &Rect, corner: Option<u32>) -> Opti
         ShapeKind::MathMultiply => {
             let th = w.min(h) * 0.2;
             poly(&mut pb, &[(x0, y0 + th), (x0 + th, y0), (x1, y1 - th), (x1 - th, y1)]);
+            poly(&mut pb, &[(x1 - th, y0), (x1, y0 + th), (x0 + th, y1), (x0, y1 - th)]);
         }
         ShapeKind::MathDivide => {
             let bar_h = h * 0.18;

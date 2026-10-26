@@ -649,7 +649,6 @@ impl ShapeKind {
         matches!(
             self,
             ShapeKind::Line
-                | ShapeKind::DoubleArrow
                 | ShapeKind::StraightConnector
                 | ShapeKind::ElbowConnector
                 | ShapeKind::ElbowArrow
@@ -1063,7 +1062,7 @@ impl ShapeKind {
             "leftBrace" => ShapeKind::LeftBrace,
             "rightBrace" => ShapeKind::RightBrace,
 
-            "line" => ShapeKind::Line,
+            "line" | "lineInv" => ShapeKind::Line,
             "rightArrow" => ShapeKind::Arrow,
             "straightConnector1" => ShapeKind::StraightConnector,
             "bentConnector2" | "bentConnector3" | "bentConnector4" | "bentConnector5" => ShapeKind::ElbowConnector,

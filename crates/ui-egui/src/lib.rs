@@ -1900,6 +1900,21 @@ impl WordApp {
                 }
                 json!({"focusRibbon": self.focus_ribbon})
             }
+            "ui.shapeTool" => {
+                let kind: Option<wordcraft_doc::para::ShapeKind> = match s("kind") {
+                    None | Some("none") => None,
+                    Some(name) => serde_json::from_value(Value::String(name.to_string()))
+                        .ok()
+                        .or_else(|| Some(wordcraft_doc::para::ShapeKind::from_ooxml_prst(name))),
+                };
+                self.canvas.shape_tool = kind;
+                self.canvas.shape_drawing = None;
+                if let Some(k) = kind {
+                    self.status(crate::shape_tool::tool_hint(k));
+                }
+                json!({"shapeTool": kind.and_then(|k| serde_json::to_value(k).ok())})
+            }
+            }
             "ui.quickAccessToolbar" => {
                 // Hide Quick Access Toolbar (its menu) and Show Quick Access Toolbar (the ribbon's
                 // right-click menu, Customize Ribbon), #1945: `value` true shows the toolbar in

@@ -1742,14 +1742,10 @@ fn shape_section(ui: &mut Ui, app: &mut WordApp, title: &str, shapes: &[ShapeKin
                 ui.painter().rect_filled(r, 2.0, t.hover);
             }
             let stroke_c = if resp.hovered() { t.accent_text } else { t.text };
-            let fill_c = if !k.is_line_like() { t.accent.linear_multiply(0.12) } else { egui::Color32::TRANSPARENT };
             let inner = r.shrink(4.0);
             for (closed, pts) in wordcraft_render::shape_preview_contours(k, inner.width(), inner.height()) {
                 let screen_pts: Vec<Pos2> = pts.into_iter().map(|(x, y)| pos2(inner.min.x + x, inner.min.y + y)).collect();
                 if closed {
-                    if !k.is_line_like() {
-                        ui.painter().add(egui::Shape::convex_polygon(screen_pts.clone(), fill_c, Stroke::NONE));
-                    }
                     ui.painter().add(egui::Shape::closed_line(screen_pts, Stroke::new(1.0, stroke_c)));
                 } else {
                     ui.painter().add(egui::Shape::line(screen_pts, Stroke::new(1.2, stroke_c)));
@@ -1757,8 +1753,8 @@ fn shape_section(ui: &mut Ui, app: &mut WordApp, title: &str, shapes: &[ShapeKin
             }
             if resp.on_hover_text(tl!(k.label())).clicked() {
                 // Arms the shape tool: the next canvas drag draws it.
-                app.canvas.shape_tool = Some(k);
-                app.status(crate::shape_tool::tool_hint(k));
+                let kind_val = serde_json::to_value(k).unwrap_or_else(|_| json!("rectangle"));
+                let _ = app.run("ui.shapeTool", json!({ "kind": kind_val }));
                 ui.close();
             }
             if i % 10 == 9 {

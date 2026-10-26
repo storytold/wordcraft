@@ -28,7 +28,7 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("insert.icon", "Icons", "Insert › Illustrations", icon)
             .params(r#"{"id"?: string (omit to list the library), "color"?: "RRGGBB", "size"?: pt, "query"?: string, "category"?: string}"#),
         CommandSpec::new("insert.shape", "Shapes", "Insert › Illustrations", shape)
-            .params(r#"{"kind": string, "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB", "arrow"?: "none"|"start"|"end"|"both", "x"?: pt, "y"?: pt, "anchor"?: "margin|page|paragraph", "wrap"?: "square|inline"}"#),
+            .params(r#"{"kind": string, "width"?: pt, "height"?: pt, "fill"?: "RRGGBB", "stroke"?: "RRGGBB", "arrow"?: "none"|"start"|"end"|"both", "x"?: pt, "y"?: pt, "anchor"?: "margin|page|paragraph", "wrap"?: "square|inline|inFrontOfText|behindText"}"#),
         CommandSpec::new("insert.textBox", "Text Box", "Insert › Text", text_box)
             .params(r#"{"text"?: string, "width"?: pt, "height"?: pt}"#)
             .when(|s| {
@@ -317,8 +317,11 @@ fn icon(s: &mut Session, v: &Value) -> CmdResult {
 }
 
 fn shape(s: &mut Session, v: &Value) -> CmdResult {
-    let kind: ShapeKind =
-        serde_json::from_value(v.get("kind").cloned().unwrap_or(json!("rectangle"))).map_err(|e| CmdError::Params(e.to_string()))?;
+    let kind: ShapeKind = match v.get("kind") {
+        Some(Value::String(k_str)) => serde_json::from_value(Value::String(k_str.clone())).unwrap_or_else(|_| ShapeKind::from_ooxml_prst(k_str)),
+        Some(val) => serde_json::from_value(val.clone()).map_err(|e| CmdError::Params(e.to_string()))?,
+        None => ShapeKind::Rectangle,
+    };
     let w = p::f32(v, "width").unwrap_or(108.0).clamp(4.0, 2000.0);
     let h = p::f32(v, "height").unwrap_or(if kind.is_line_like() { 1.0 } else { 72.0 }).clamp(if kind.is_connector() { 0.0 } else { 1.0 }, 2000.0);
     let fill = match p::str(v, "fill") {
@@ -342,17 +345,16 @@ fn shape(s: &mut Session, v: &Value) -> CmdResult {
         _ => wordcraft_doc::para::Anchor::Margin,
     };
     let float = match (x, y) {
-        (Some(x), Some(y)) => Float {
-            wrap: if p::str(v, "wrap").is_some_and(|w| w == "inline") { Wrap::Inline } else { Wrap::Square },
-            h_rel: anchor,
-            v_rel: anchor,
-            x: x.clamp(-5000.0, 5000.0),
-            y: y.clamp(-5000.0, 5000.0),
-            dist: 0.0,
-            ..Default::default()
-        },
+        (Some(x), Some(y)) => {
+            let wrap = match p::str(v, "wrap") {
+                Some(w) => serde_json::from_value::<Wrap>(json!(w)).unwrap_or(Wrap::Square),
+                None if kind.is_line_like() || kind.is_connector() => Wrap::InFrontOfText,
+                None => Wrap::Square,
+            };
+            Float { wrap, h_rel: anchor, v_rel: anchor, x: x.clamp(-5000.0, 5000.0), y: y.clamp(-5000.0, 5000.0), dist: 0.0, ..Default::default() }
+        }
         _ => {
-            if kind.is_connector() {
+            if kind.is_connector() || kind.is_line_like() {
                 Float { wrap: Wrap::InFrontOfText, ..Default::default() }
             } else {
                 Float { wrap: Wrap::Inline, ..Default::default() }

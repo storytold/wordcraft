@@ -77,6 +77,12 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
         return true;
     }
     // Primary released: finish drawing and insert shape
+    finish_drag(app, kind, st);
+    true
+}
+
+/// Complete drawing a shape and insert it into the document.
+pub fn finish_drag(app: &mut WordApp, kind: ShapeKind, st: ShapeDrawing) {
     app.canvas.shape_drawing = None;
     app.canvas.shape_tool = None;
 
@@ -91,19 +97,29 @@ pub fn pointer(app: &mut WordApp, ui: &Ui, resp: &egui::Response, rects: &[Rect]
         let oy = st.from.1.min(st.to.1).max(0.0);
         (w, h, ox, oy)
     };
-    let _ = app.run(
-        "insert.shape",
-        json!({
-            "kind": kind.ooxml_prst(),
-            "width": w,
-            "height": h,
-            "x": ox,
-            "y": oy,
-            "anchor": "page",
-            "wrap": "square",
-        }),
-    );
-    true
+    let res = match kind {
+        ShapeKind::DrawingCanvas => app.run("insert.canvas", json!({ "width": w, "height": h })),
+        ShapeKind::TextBox => app.run("insert.textBox", json!({ "width": w, "height": h })),
+        _ => {
+            let kind_val = serde_json::to_value(kind).unwrap_or_else(|_| json!("rectangle"));
+            let wrap_val = if kind.is_line_like() { "inFrontOfText" } else { "square" };
+            app.run(
+                "insert.shape",
+                json!({
+                    "kind": kind_val,
+                    "width": w,
+                    "height": h,
+                    "x": ox,
+                    "y": oy,
+                    "anchor": "page",
+                    "wrap": wrap_val,
+                }),
+            )
+        }
+    };
+    if let Err(e) = res {
+        app.status(e);
+    }
 }
 
 /// Draw the ghost preview of the shape being drawn and its dimension badge.
@@ -204,5 +220,65 @@ mod tests {
             }
             _ => panic!("expected shape"),
         }
+    }
+
+    #[test]
+    fn finish_drag_click_uses_default_dimensions() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        let st = ShapeDrawing { page: 0, from: (100.0, 100.0), to: (101.0, 101.0) };
+        finish_drag(&mut app, ShapeKind::Rectangle, st);
+        let (_, obj) = wordcraft_engine::cmd::objects::selected(&app.session).unwrap();
+        match obj {
+            wordcraft_doc::para::InlineObject::Shape { kind, w, h, .. } => {
+                assert_eq!(kind, ShapeKind::Rectangle);
+                assert_eq!(w, 108.0);
+                assert_eq!(h, 72.0);
+            }
+            _ => panic!("expected shape"),
+        }
+    }
+
+    #[test]
+    fn finish_drag_line_uses_in_front_of_text_wrap() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        let st = ShapeDrawing { page: 0, from: (50.0, 50.0), to: (200.0, 80.0) };
+        finish_drag(&mut app, ShapeKind::Line, st);
+        let (_, obj) = wordcraft_engine::cmd::objects::selected(&app.session).unwrap();
+        match obj {
+            wordcraft_doc::para::InlineObject::Shape { kind, float, .. } => {
+                assert_eq!(kind, ShapeKind::Line);
+                assert_eq!(float.wrap, wordcraft_doc::para::Wrap::InFrontOfText);
+            }
+            _ => panic!("expected shape"),
+        }
+    }
+
+    #[test]
+    fn finish_drag_routes_textbox() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        let st = ShapeDrawing { page: 0, from: (20.0, 20.0), to: (120.0, 80.0) };
+        finish_drag(&mut app, ShapeKind::TextBox, st);
+        let (_, obj) = wordcraft_engine::cmd::objects::selected(&app.session).unwrap();
+        match obj {
+            wordcraft_doc::para::InlineObject::Shape { kind, w, h, .. } => {
+                assert_eq!(kind, ShapeKind::TextBox);
+                assert_eq!((w, h), (100.0, 60.0));
+            }
+            _ => panic!("expected text box"),
+        }
+    }
+
+    #[test]
+    fn ui_shape_tool_arms_and_disarms() {
+        let mut app = WordApp::new(wordcraft_engine::Session::new(Document::new()), crate::Services::default());
+        assert_eq!(app.canvas.shape_tool, None);
+
+        let res = app.run("ui.shapeTool", json!({ "kind": "diamond" }));
+        assert!(res.is_ok());
+        assert_eq!(app.canvas.shape_tool, Some(ShapeKind::Diamond));
+
+        let res = app.run("ui.shapeTool", json!({ "kind": "none" }));
+        assert!(res.is_ok());
+        assert_eq!(app.canvas.shape_tool, None);
     }
 }

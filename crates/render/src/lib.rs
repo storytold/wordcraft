@@ -1247,7 +1247,7 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
                 }
                 return;
             }
-            if let Some(f) = fill {
+            if can_fill && let Some(f) = fill {
                 set_paint(ctx, f, opts);
                 ctx.fill_path(&path);
             }
