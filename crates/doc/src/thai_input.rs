@@ -108,6 +108,25 @@ pub enum ThaiInputAction {
         /// Character to insert instead of the typed character, or `None` to insert as typed.
         replacement: Option<char>,
     },
+    /// Delete `slot_bytes` bytes at `slot_offset`, then insert the (possibly replaced) character
+    /// at the **original caret position adjusted for the deletion** rather than at `slot_offset`.
+    ///
+    /// Used when the deletion point and the insertion point differ — specifically for
+    /// `[cons, vowel, tone] + ำ → [cons, tone, ำ]`: the vowel is deleted but ำ is appended
+    /// after the tone mark that stays in place.
+    ///
+    /// Execution order in the engine:
+    /// 1. If `cons_swap` is `Some`, replace the consonant in-place.
+    /// 2. Delete `slot_bytes` bytes at `slot_offset`.
+    /// 3. Move caret to `original_caret_offset − slot_bytes`.
+    /// 4. Insert `replacement` (or the typed character if `None`) at the caret.
+    DeleteThenAppend {
+        slot_offset: usize,
+        slot_bytes: usize,
+        cons_swap: Option<ConsSwap>,
+        /// Character to insert instead of the typed character, or `None` to insert as typed.
+        replacement: Option<char>,
+    },
     /// The character is structurally invalid here; reject it (no insertion, optional beep).
     Reject,
 }
@@ -411,10 +430,13 @@ pub fn thai_input_action(
                         ThaiCharClass::Consonant // only one element means consonant
                     };
                     match prev_prev_cls {
-                        // [cons, vowel, tone] + type ำ → replace the vowel with ำ (tone stays).
+                        // [cons, vowel, tone] + type ำ → delete vowel, append ำ after tone.
+                        // Result: [cons, tone, ำ] — the canonical tone-am order.
+                        // We use DeleteThenAppend because deletion (vowel) and insertion (ำ)
+                        // happen at different positions.
                         ThaiCharClass::UpperVowel | ThaiCharClass::LowerVowel => {
                             let (vowel_off, vowel_ch) = tcb[tcb.len() - 2];
-                            ThaiInputAction::Replace {
+                            ThaiInputAction::DeleteThenAppend {
                                 slot_offset: vowel_off,
                                 slot_bytes: vowel_ch.len_utf8(),
                                 cons_swap: None,
@@ -1175,6 +1197,28 @@ mod tests {
         match action("ก้ำ", maitho) {
             ThaiInputAction::Replace { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
             other => panic!("expected Replace ้ at 3, got {other:?}"),
+        }
+
+        // [cons, vowel, tone] + type ำ → DeleteThenAppend: delete vowel, append ำ after tone.
+        // Result order: [cons, tone, ำ]  (not [cons, ำ, tone]).
+        // กิ้ = ก(0,3) + ิ(3,3) + ้(6,3); caret at 9 → delete ิ at 3, insert ำ at 6.
+        match action("กิ้", sara_am) {
+            ThaiInputAction::DeleteThenAppend { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected DeleteThenAppend(vowel=3,3) for [cons,vowel,tone]+ำ, got {other:?}"),
+        }
+
+        // Same for a lower vowel + tone.
+        // กุ้ = ก(0,3) + ุ(3,3) + ้(6,3); caret at 9.
+        match action("กุ้", sara_am) {
+            ThaiInputAction::DeleteThenAppend { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected DeleteThenAppend for [cons,lower_vowel,tone]+ำ, got {other:?}"),
+        }
+
+        // The full upgraded sequence: cons+Sara_I+MAIEK+MAIEK+MAIEK → cons+Sara_UEE+MAIEK, then +ำ.
+        // กืื้ shorthand: กื = ก+Sara_UEE, กื้ = ก+Sara_UEE+้ (offset: ก=0, ื=3, ้=6).
+        match action("กื้", sara_am) {
+            ThaiInputAction::DeleteThenAppend { slot_offset: 3, slot_bytes: 3, cons_swap: None, replacement: None } => {}
+            other => panic!("expected DeleteThenAppend for [cons,Sara_UEE,tone]+ำ, got {other:?}"),
         }
 
         let _ = sara_am;
