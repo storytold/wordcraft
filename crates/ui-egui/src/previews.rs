@@ -423,6 +423,29 @@ pub fn style_snippet(base: &Document, para: Paragraph, w: f32, h: f32, ppp: f32,
     snippet_blocks(base, vec![Block::Para(para)], w, h, ppp, margin, None, dark)
 }
 
+/// A sample of `style` as the defaults would make it: the style drawn on a temporary document
+/// with `sheet`'s styles (never the open document), for the Defaults pane's preview.
+pub fn style_sample(
+    sheet: &wordcraft_doc::styles::StyleSheet,
+    style: &wordcraft_doc::styles::Style,
+    text: &str,
+    w: f32,
+    h: f32,
+    ppp: f32,
+) -> Option<egui::ColorImage> {
+    let mut base = Document::new();
+    base.styles = sheet.clone();
+    match base.styles.styles.iter_mut().find(|s| s.id == style.id) {
+        Some(slot) => *slot = style.clone(),
+        None => base.styles.styles.push(style.clone()),
+    }
+    let mut p = Paragraph::with_text(text, CharProps::default()).styled(&style.id);
+    p.props.space_before = Some(0.0);
+    p.props.space_after = Some(0.0);
+    p.props.align = Some(wordcraft_doc::Align::Left);
+    style_snippet(&base, p, w, h, ppp, 2.0, false)
+}
+
 /// How a gallery draws a page preview: as rendered on a light interface or on Switch Modes' dark
 /// page, and dimmed in the dark theme so a white page isn't the brightest thing on screen (#663).
 pub fn preview_tint(t: &Tokens, dark_page: bool) -> egui::Color32 {

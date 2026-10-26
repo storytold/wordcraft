@@ -19,6 +19,7 @@ pub mod cluster;
 pub mod collate;
 pub mod connector;
 pub mod control;
+pub mod defaults;
 pub mod edit;
 pub mod effects;
 pub mod encoding;

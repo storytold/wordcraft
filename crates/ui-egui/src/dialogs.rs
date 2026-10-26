@@ -1774,7 +1774,7 @@ fn run_as_one_step(app: &mut WordApp, commands: Vec<(&str, Value)>) -> Result<()
 /// Page Setup's Paper group (#1433): a Paper size list (the named sizes and Custom size) and
 /// the width and height. The fields follow the orientation (the wide side is the width in
 /// landscape), and a typed size that is wider than tall turns the orientation to landscape.
-fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, custom: &mut bool) {
+pub(crate) fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, custom: &mut bool) {
     if (*landscape && paper.0 < paper.1) || (!*landscape && paper.0 > paper.1) {
         *paper = (paper.1, paper.0);
     }
@@ -1814,6 +1814,64 @@ fn page_paper_group(ui: &mut Ui, paper: &mut (f32, f32), landscape: &mut bool, c
             *landscape = paper.0 > paper.1;
         }
         ui.end_row();
+    });
+}
+
+/// The property fields the Modify Style dialog and the Defaults pane's style editor share: what
+/// a style says for itself, resolved for display (as the dialog has always shown it).
+pub(crate) struct StyleFields<'a> {
+    pub name: &'a mut String,
+    pub font: &'a mut String,
+    pub size: &'a mut f32,
+    pub bold: &'a mut bool,
+    pub italic: &'a mut bool,
+    pub color: &'a mut String,
+    pub before: &'a mut f32,
+    pub after: &'a mut f32,
+}
+
+/// The style's properties: name, font, size, colour, spacing and emphasis. Shared by Modify Style
+/// and File › Options › Defaults, so both edit a style in exactly the same terms. `name_editable`
+/// is false where renaming would break the `basedOn` links of the default styles.
+pub(crate) fn style_fields(app: &mut WordApp, ui: &mut Ui, f: StyleFields<'_>, name_editable: bool, display_name: Option<&str>) {
+    egui::Grid::new("style_fields").num_columns(2).show(ui, |ui| {
+        let name_label = ui.label(tl!("Name:"));
+        if name_editable {
+            ui.text_edit_singleline(f.name).labelled_by(name_label.id);
+        } else {
+            // A default style keeps its name: other styles are based on that id.
+            ui.label(egui::RichText::new(display_name.unwrap_or(f.name.as_str())).weak());
+        }
+        ui.end_row();
+        let font_label = ui.label(tl!("Font:"));
+        let shown = app.previews.font_shown(f.font);
+        let fams = app.previews.families();
+        let prev = app.previews.font_preview_fn();
+        if let Some(face) = crate::widgets::font_combo(ui, "ms_font", 220.0, &shown, &fams, Some(&*prev)) {
+            if face == crate::widgets::ADD_FONT {
+                let _ = app.run("font.add", json!({}));
+            } else {
+                *f.font = app.previews.font_stored(&face);
+            }
+        }
+        let _ = font_label;
+        ui.end_row();
+        let size_label = ui.label(tl!("Size:"));
+        ui.add(egui::DragValue::new(f.size).range(1.0..=1638.0).speed(0.5)).labelled_by(size_label.id);
+        ui.end_row();
+        let color_label = ui.label(tl!("Color:"));
+        ui.text_edit_singleline(f.color).labelled_by(color_label.id);
+        ui.end_row();
+        ui.label(tl!("Space before/after:"));
+        ui.horizontal(|ui| {
+            ui.add(egui::DragValue::new(f.before).range(0.0..=1584.0)).accessible_name(tl!("Space before"));
+            ui.add(egui::DragValue::new(f.after).range(0.0..=1584.0)).accessible_name(tl!("Space after"));
+        });
+        ui.end_row();
+    });
+    ui.horizontal(|ui| {
+        ui.checkbox(f.bold, tl!("Bold"));
+        ui.checkbox(f.italic, tl!("Italic"));
     });
 }
 

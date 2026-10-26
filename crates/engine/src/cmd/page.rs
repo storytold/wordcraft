@@ -408,7 +408,7 @@ pub fn columns_preset_at(s: &Session) -> Option<&'static str> {
 /// Checks a whole section handed to `layout.pageSetup` by the rules of Size, Margins, Columns,
 /// Line Numbers, Footnotes and Page Borders: a non-finite number or margins that leave no room
 /// for text is an error; the rest is clamped to the ranges those commands use.
-fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
+pub(crate) fn validate_section(x: &mut SectionProps) -> Result<(), CmdError> {
     let bad = |what: &str| CmdError::Params(format!("section: {what} must be a finite number"));
     let finite = [x.page_w, x.page_h, x.margin_top, x.margin_bottom, x.margin_left, x.margin_right, x.header, x.footer, x.gutter, x.columns.space];
     if finite.iter().any(|n| !n.is_finite()) {

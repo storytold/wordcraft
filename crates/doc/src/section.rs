@@ -717,6 +717,15 @@ impl DocGrid {
     }
 }
 
+/// The smallest page side WordCraft accepts, points (0.1", as Word allows).
+pub const MIN_PAGE_SIDE: f32 = 7.2;
+
+/// The largest page side WordCraft accepts, points: 600 cm, LibreOffice's limit for a custom page
+/// size (Word itself stops at 22 in / 1584 pt). The page stays this size through layout, saving
+/// and export; only the PDF writer, capped by the PDF format at 200 in, and Word itself are
+/// narrower.
+pub const MAX_PAGE_SIDE: f32 = 17_008.0;
+
 /// Page setup and section-level settings.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
