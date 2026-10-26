@@ -384,6 +384,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// Two read and two write roots (#3582): each grants its own access; paths outside all of
+    /// them, through `..` or into a same-prefix sibling are refused, and the error names them all.
     #[test]
     fn several_roots_each_grant_their_access() {
         let (base, _) = folders("several");
@@ -422,6 +424,8 @@ mod tests {
         let _ = std::fs::remove_dir_all(base);
     }
 
+    /// With several roots, a link in any of them that leads out of all of them is outside; a link
+    /// from one root into another is inside.
     #[cfg(unix)]
     #[test]
     fn a_link_in_any_root_that_leads_out_is_outside() {

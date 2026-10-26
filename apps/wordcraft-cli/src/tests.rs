@@ -142,6 +142,7 @@ fn author_flag_cannot_claim_a_named_exception_after_protection() {
     assert!(s.run("text.insert", &json!({"text": "Changed"})).is_err());
 }
 
+/// `mcp` takes the root flags out of its arguments, once or repeated, and opens the roots.
 #[test]
 fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
     let base = std::env::temp_dir().join(format!("wc-cli-roots-{}", std::process::id()));
@@ -177,6 +178,7 @@ fn automation_root_flags_are_taken_out_of_the_mcp_arguments() {
     let _ = std::fs::remove_dir_all(base);
 }
 
+/// A malformed root flag or a missing folder stops `mcp` rather than leaving it unconfined.
 #[test]
 fn automation_root_flags_reject_bad_operands_and_missing_folders() {
     for bad in [args(&["--automation-read-root"]), args(&["--automation-read-root", "--author"]), args(&["--automation-write-root="])] {

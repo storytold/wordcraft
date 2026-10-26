@@ -4,12 +4,14 @@
 
 use std::path::PathBuf;
 
+/// The root folders found on the command line so far, in the order given.
 pub struct AutomationArgs {
     pub read_roots: Vec<PathBuf>,
     pub write_roots: Vec<PathBuf>,
 }
 
 impl AutomationArgs {
+    /// Starts from `read_roots` and `write_roots` (empty when parsing a command line).
     pub fn new(read_roots: Vec<PathBuf>, write_roots: Vec<PathBuf>) -> Self {
         Self { read_roots, write_roots }
     }
@@ -45,6 +47,7 @@ impl AutomationArgs {
 mod tests {
     use super::*;
 
+    /// Both spellings of both flags are taken; other arguments are left for the caller.
     #[test]
     fn roots_are_taken_and_other_arguments_are_left() {
         let mut roots = AutomationArgs::new(vec![], vec![]);
@@ -57,6 +60,7 @@ mod tests {
         assert_eq!(args.next().as_deref(), Some("report.docx"));
     }
 
+    /// A flag given again adds a folder instead of being an error (#3582).
     #[test]
     fn a_root_flag_given_again_adds_a_folder() {
         let mut roots = AutomationArgs::new(vec![], vec![]);
@@ -69,6 +73,7 @@ mod tests {
         assert_eq!(roots.write_roots, [PathBuf::from("out"), PathBuf::from("out 2")]);
     }
 
+    /// A missing, empty or flag-like operand is an error and leaves the roots found so far as they were.
     #[test]
     fn invalid_operands_leave_roots_unchanged() {
         for flag in ["--automation-read-root", "--automation-write-root"] {
@@ -84,6 +89,7 @@ mod tests {
         }
     }
 
+    /// A folder named with a leading `-` is taken when given as `--flag=-dir` or `./-dir`.
     #[test]
     fn explicit_dash_folder_and_relative_dash_folder_are_valid() {
         let mut roots = AutomationArgs::new(vec![], vec![]);

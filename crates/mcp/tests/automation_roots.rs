@@ -235,6 +235,9 @@ fn a_link_outside_the_write_root_into_it_is_not_written() {
     assert_ne!(std::fs::read(base.join("out/doc.docx")).unwrap(), b"inside");
 }
 
+/// Through the protocol with two read and two write roots (#3582): files open from each read root
+/// and save into each write root, names with spaces, accents, `·` and `–` included; nothing opens or
+/// saves outside them.
 #[test]
 fn several_roots_each_open_and_save_and_nothing_else() {
     let (_, base) = confined("several", true, true);
