@@ -17,6 +17,7 @@ use wordcraft_layout::display::{DisplayOptions, Draw, Stroke, page_layers};
 use wordcraft_metafile::{Item, Picture, PlacedItem, Seg};
 
 mod color_glyph;
+mod emoji;
 pub mod icon_lib;
 
 /// Worker threads for rasterising (0 on the web, where there are no threads).
@@ -574,6 +575,8 @@ pub struct RenderOptions {
     /// picture. `None` shows the document's page background. Screen only.
     pub read_paper: Option<Rgb>,
 }
+
+pub use emoji::{EmojiImage, emoji_image};
 
 /// Default grey for a dark page's paper.
 pub const DARK_PAPER: u8 = 0x33;

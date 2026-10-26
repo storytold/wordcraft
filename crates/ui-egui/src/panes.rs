@@ -603,6 +603,57 @@ fn nav_headings(doc: &Document) -> Vec<(Path, u8, String)> {
     items
 }
 
+/// The heading's label as atoms: a colour emoji cluster is drawn from the system emoji font as an
+/// image (the interface fonts are monochrome, so the outline used to show a box or a black-and-
+/// white glyph where the page showed colour), the rest stays text. The texture is rasterised once
+/// per (cluster, size) and cached on the context.
+fn nav_label_atoms<'a>(ui: &mut Ui, text: &str, level: u8) -> egui::Atoms<'a> {
+    let font = if level == 0 { semibold(12.5) } else { regular(12.5) };
+    let px = 14;
+    let mut atoms: Vec<egui::Atom<'a>> = Vec::new();
+    let mut run = String::new();
+    let flush = |run: &mut String, atoms: &mut Vec<egui::Atom<'a>>| {
+        if !run.is_empty() {
+            atoms.push(egui::Atom::from(egui::RichText::new(std::mem::take(run)).font(font.clone())));
+        }
+    };
+    let starts = wordcraft_doc::cluster::cluster_starts(text);
+    for (i, start) in starts.iter().copied().enumerate() {
+        let end = starts.get(i + 1).copied().unwrap_or(text.len());
+        let cluster = text.get(start..end).unwrap_or("");
+        match nav_emoji_atom(ui, cluster, px) {
+            Some(atom) => {
+                flush(&mut run, &mut atoms);
+                atoms.push(atom);
+            }
+            None => run.push_str(cluster),
+        }
+    }
+    flush(&mut run, &mut atoms);
+    atoms.push(egui::Atom::grow());
+    egui::Atoms::from(atoms)
+}
+
+/// A colour emoji image atom for a grapheme cluster, when the cluster is an emoji presentation
+/// sequence and a colour emoji font draws it; `None` for text and for sequences without colour.
+fn nav_emoji_atom<'a>(ui: &mut Ui, cluster: &str, px: u32) -> Option<egui::Atom<'a>> {
+    let chars: Vec<char> = cluster.chars().collect();
+    if !wordcraft_fonts::emoji_sequence(&chars) {
+        return None;
+    }
+    let key = egui::Id::unique(("nav_emoji", cluster, px));
+    if let Some((tex, size)) = ui.data(|d| d.get_temp::<(egui::TextureHandle, egui::Vec2)>(key)) {
+        return Some(egui::Image::new((tex.id(), size)).into());
+    }
+    let image = wordcraft_render::emoji_image(cluster, px)?;
+    let size = egui::vec2(image.width as f32, image.height as f32);
+    let pixels = egui::ColorImage::from_rgba_unmultiplied([image.width as usize, image.height as usize], &image.rgba);
+    let tex = ui.ctx().load_texture(format!("nav_emoji/{cluster}/{px}"), pixels, egui::TextureOptions::LINEAR);
+    let atom = egui::Image::new((tex.id(), size)).into();
+    ui.data_mut(|d| d.insert_temp(key, (tex, size)));
+    Some(atom)
+}
+
 /// Constrain each heading to the available pane width so long document text cannot
 /// enlarge the panel. A heading too long for the width wraps onto further lines — a word
 /// wider than the pane is broken too — and the row grows with it, so the label reads whole
@@ -624,13 +675,13 @@ fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, collapsed: Op
             ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
             toggled = tri.clicked();
         }
-        let label = egui::RichText::new(text).font(if level == 0 { semibold(12.5) } else { regular(12.5) });
+        let atoms = nav_label_atoms(ui, text, level);
         let width = ui.available_width();
         let r = ui.add(
             // The trailing grow atom takes the spare width, so the text starts flush left
             // under its parent instead of centred, as in Word (#1199). A minimum height
             // keeps short headings on one row; a wrapped one becomes as tall as it needs.
-            egui::Button::selectable(selected, (label, egui::Atom::grow())).wrap().min_size(vec2(width, ui.spacing().interact_size.y)),
+            egui::Button::selectable(selected, atoms).wrap().min_size(vec2(width, ui.spacing().interact_size.y)),
         );
         (toggled, r)
     })
@@ -1328,6 +1379,24 @@ mod tests {
                 assert!(!h.state().canvas.focused && h.state().dialog.is_some(), "panes open: {panes}, shift: {shift}");
             }
         }
+    }
+
+    /// A heading with a colour emoji shows it as an image atom, because the interface fonts are
+    /// monochrome; a plain heading stays text (plus the trailing grow atom). Skips the image
+    /// half when the platform has no colour emoji font.
+    #[test]
+    fn nav_labels_draw_colour_emoji_as_images() {
+        let has_colour = wordcraft_fonts::FontDb::global()
+            .fallback_for('\u{2696}', u32::MAX)
+            .is_some_and(|f| wordcraft_fonts::COLOR_EMOJI.contains(&f.family.as_str()));
+        egui::__run_test_ui(|ui| {
+            let plain = super::nav_label_atoms(ui, "Base legal", 0);
+            assert_eq!(plain.len(), 2, "text + grow: {plain:?}");
+            if has_colour {
+                let marked = super::nav_label_atoms(ui, "\u{2696}\u{FE0F} Base legal", 0);
+                assert_eq!(marked.len(), 3, "image + text + grow: {marked:?}");
+            }
+        });
     }
 
     /// Ctrl and F-key shortcuts run while F6 has put the keyboard on a pane's title bar; a pane's

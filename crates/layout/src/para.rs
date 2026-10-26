@@ -626,11 +626,17 @@ struct SegKey {
     complex: bool,
     /// Odd bidi level: shaped right to left.
     rtl: bool,
+    /// A cluster drawn as one emoji in a colour emoji face (see [`emoji_sequence`]).
+    emoji: bool,
 }
 
 impl SegKey {
     fn same(&self, o: &SegKey) -> bool {
-        self.face.map(|f| f.id()) == o.face.map(|f| f.id()) && self.small == o.small && self.complex == o.complex && self.rtl == o.rtl
+        self.face.map(|f| f.id()) == o.face.map(|f| f.id())
+            && self.small == o.small
+            && self.complex == o.complex
+            && self.rtl == o.rtl
+            && self.emoji == o.emoji
     }
 }
 
@@ -981,40 +987,72 @@ impl<'a> Builder<'a> {
             }
         };
         // Split by font coverage (fallback faces), small caps case, script formatting and direction.
+        // Emoji presentation sequences ("1️⃣", "⚖️", "👩‍💻") are drawn as the one emoji they are:
+        // the whole cluster takes a colour emoji face covering it, where the text face would draw
+        // its base and leave the keycap (U+20E3) or the joined emoji without a glyph.
+        let clusters = wordcraft_doc::cluster::cluster_starts(text);
+        let mut cluster = 0usize;
+        let mut cluster_end = 0usize;
+        let mut cluster_face: Option<FaceRef> = None;
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
         let mut segs: Vec<(usize, usize, SegKey)> = Vec::new();
         for (i, c) in text.char_indices() {
             let rtl = use_levels && levels.get(lbase + i).is_some_and(|l| l % 2 == 1);
+            if i >= cluster_end {
+                while clusters.get(cluster + 1).is_some_and(|s| *s <= i) {
+                    cluster += 1;
+                }
+                let start = clusters.get(cluster).copied().unwrap_or(i);
+                cluster_end = clusters.get(cluster + 1).copied().unwrap_or(text.len());
+                // A cluster of plain ASCII cannot be an emoji sequence: no allocation, no scan.
+                let cluster_text = text.get(start..cluster_end).unwrap_or("");
+                cluster_face = (!cluster_text.is_ascii())
+                    .then(|| {
+                        let chars: Vec<char> = cluster_text.chars().collect();
+                        wordcraft_fonts::emoji_sequence(&chars)
+                            .then(|| wordcraft_fonts::FontDb::global().color_emoji_face(&chars, primary.id(), rc.bold, rc.italic))
+                            .flatten()
+                    })
+                    .flatten()
+                    .map(|f| FaceRef::of(&f));
+            }
+            // An emoji cluster keeps its own face and its digits as typed: a numeral mode that
+            // rewrote them would break the keycap the shaper draws.
+            let emoji = cluster_face.filter(|_| i < cluster_end);
+            let prev_emoji = cur.is_some_and(|k| k.emoji);
             // A symbol-font character becomes its Unicode symbol (#776).
             let c = show(c);
             // Displayed form (Word › Numeral): one char in, one char out. Coverage and the
             // fallback face are picked for the displayed char, so Hindi digits land in an
             // Arabic-capable face and Western digits in a Latin one.
-            let dc = self.numeral_char(&context, i, c, rtl);
+            let dc = if emoji.is_some() { c } else { self.numeral_char(&context, i, c, rtl) };
             let mark = is_mark(c);
             let complex = match cur {
                 Some(k) if mark => k.complex,
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
             let prim = if complex { primary_cs.unwrap_or(primary) } else { primary };
-            let face = match cur {
-                Some(k) if mark => k.face,
-                _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
-                // The run's one substitute face for a missing Thai font (#1549).
-                _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
-                // Stay in the fallback face the word started in while it covers the letters.
-                Some(SegKey { face: Some(f), .. }) if f.covers(dc) => Some(f),
-                // The run's unified East Asian face, when one face covers the whole run.
-                _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
-                _ => {
-                    let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
-                    wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
-                }
+            let face = match emoji {
+                Some(f) => Some(f),
+                None => match cur {
+                    Some(k) if mark => k.face,
+                    _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
+                    // The run's one substitute face for a missing Thai font (#1549).
+                    _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
+                    _ if prim.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                    // Stay in the fallback face the word started in while it covers the letters.
+                    Some(SegKey { face: Some(f), .. }) if !prev_emoji && f.covers(dc) => Some(f),
+                    // The run's unified East Asian face, when one face covers the whole run.
+                    _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
+                    _ => {
+                        let (bold, italic) = if complex { (rc.bold_cs, rc.italic_cs) } else { (rc.bold, rc.italic) };
+                        wordcraft_fonts::FontDb::global().fallback_styled(dc, prim.id(), bold, italic).map(|f| FaceRef::of(&f))
+                    }
+                },
             };
             let small = rc.small_caps && !rc.caps && c.is_lowercase();
-            let k = SegKey { face, small, complex, rtl };
+            let k = SegKey { face, small, complex, rtl, emoji: emoji.is_some() };
             match cur {
                 Some(p) if p.same(&k) => {}
                 Some(p) => {
@@ -1047,7 +1085,7 @@ impl<'a> Builder<'a> {
             // Displayed text: numeral substitution is 1 char → 1 char and a capital may be
             // several; `map_starts` holds where each document char's displayed form starts and
             // `orig_of` maps it back to the char's original byte offset (+ a `sub.len()` sentinel).
-            let substituted = expands || sub.char_indices().any(|(i, c)| self.numeral_char(&context, a + i, c, key.rtl) != c);
+            let substituted = !key.emoji && (expands || sub.char_indices().any(|(i, c)| self.numeral_char(&context, a + i, c, key.rtl) != c));
             let mut mapped = String::new();
             let mut map_starts: Vec<usize> = Vec::new();
             let mut orig_of: Vec<usize> = Vec::new();

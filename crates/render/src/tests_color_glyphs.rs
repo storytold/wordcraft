@@ -98,3 +98,53 @@ fn emoji_page_with(opts: &RenderOptions, cp: wordcraft_doc::CharProps) -> Option
     assert_eq!(boxes.len(), 2, "both emoji use the colour emoji font");
     Some((img, boxes))
 }
+
+/// A keycap sequence (`1️⃣`) is drawn as the one colour emoji it is: the emoji font's ligature
+/// draws digit and enclosing keycap together, where the text font leaves a missing-glyph box
+/// after the digit. Skips when no colour emoji font is installed.
+#[cfg(not(target_arch = "wasm32"))]
+#[test]
+fn a_keycap_is_drawn_as_a_colour_emoji() {
+    let keycap = "1\u{FE0F}\u{20E3}";
+    let chars: Vec<char> = keycap.chars().collect();
+    let colour = FontDb::global().color_emoji_face(&chars, u32::MAX, false, false);
+    if !colour.is_some_and(|f| COLOR_EMOJI.contains(&f.family.as_str())) {
+        eprintln!("skipped: no colour emoji font installed");
+        return;
+    }
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("{keycap} Tema"), wordcraft_doc::CharProps::default()))];
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let page = &l.pages[0];
+    let scale = 2.0;
+    let img = render_page(&d, page, scale, &RenderOptions::default());
+    let mut box_of = None;
+    for it in page_display(&d, page, &DisplayOptions::default()) {
+        if let Draw::Glyphs { face, size, glyphs, text, .. } = it
+            && COLOR_EMOJI.contains(&face.family.as_str())
+        {
+            // One glyph draws the whole keycap: its ligature, not the digit alone.
+            assert_eq!(glyphs.len(), 1, "keycap drawn with {} glyphs in {}", glyphs.len(), face.family);
+            assert_eq!(text, keycap, "the colour emoji draws the keycap text");
+            let (_, x, y) = glyphs[0];
+            let pad = 6.0;
+            box_of = Some((
+                ((x * scale - pad).max(0.0) as u32),
+                (((y - size) * scale - pad).max(0.0) as u32),
+                ((x + size) * scale + pad) as u32,
+                (y * scale + pad) as u32,
+            ));
+        }
+    }
+    let (x0, y0, x1, y1) = box_of.expect("the keycap is drawn from the colour emoji font");
+    // The keycap's badge is blue: its blue channel runs well above its red one, where the paper
+    // and the black text are grey.
+    let blue = (x0..x1)
+        .flat_map(|x| (y0..y1).map(move |y| (x, y)))
+        .filter(|(x, y)| {
+            let p = img.pixel(*x, *y);
+            i32::from(p[2]) - i32::from(p[0]) > 20
+        })
+        .count();
+    assert!(blue > 30, "only {blue} blue pixels in the keycap box {x0},{y0}..{x1},{y1}");
+}
