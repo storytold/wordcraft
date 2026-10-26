@@ -3,8 +3,8 @@ name: Spelling review preview
 on:
   pull_request:
     paths:
-      - 'crates/ui-egui/src/dialogs_spelling.rs'
-      - 'crates/ui-egui/src/dialogs_review.rs'
+      - 'crates/ui-egui/src/proofing_pane.rs'
+      - 'crates/ui-egui/src/panes.rs'
       - 'crates/engine/src/cmd/review.rs'
       - '.github/workflows/spelling-review.yml'
   workflow_dispatch:

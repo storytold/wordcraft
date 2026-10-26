@@ -172,6 +172,10 @@ impl<'a> Exempt<'a> {
         if let Some(sugg) = app.canvas.context_issue.as_ref().and_then(|i| i.get("suggestions")).and_then(Value::as_array) {
             names.extend(sugg.iter().filter_map(Value::as_str).map(str::to_string));
         }
+        // The proofing pane displays document context and dictionary suggestions, not UI wording.
+        if let Some(form) = &app.spelling_review {
+            names.extend(form.content_text());
+        }
         Exempt { body: app.session.doc.plain_text(wordcraft_doc::StoryRef::Body), names, math: math_placeholders }
     }
 

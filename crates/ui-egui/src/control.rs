@@ -56,6 +56,7 @@ pub fn inspect(app: &mut WordApp, ctx: &egui::Context) -> Value {
     json!({
         "ui": app.prefs(),
         "view": app.session.view,
+        "proofing": app.spelling_review,
         "dialog": app.dialog.as_ref().map(|d| serde_json::to_value(d).unwrap_or_default()),
         "window": [r.width(), r.height()],
         "canvasRect": app.canvas.canvas_rect.map(|c| [c.left(), c.top(), c.width(), c.height()]),

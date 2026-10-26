@@ -1,24 +1,33 @@
-# Spelling and grammar correction form
+# Spelling and grammar task pane
 
-> **Last updated:** 2026-10-26 · **Status:** implementation proposed; hosted checks and visual acceptance must be verified before integration.
+> **Last updated:** 2026-10-26 · **Status:** implementation proposed; hosted checks and rendered comparison remain required before integration.
 
-Review › Spelling & Grammar, Home › Editor and F7 open a persistent correction form. The issue's text, explanation and proofing language appear above the suggestions. Choose a suggestion or type replacement text in Change to, then choose Change. Each replacement uses the existing review command and is one undoable document edit. Ignore Once advances without changing the document or dictionaries. Ignore All lasts for the session; Add to Dictionary uses the existing personal dictionary. Those two actions are offered only for spelling issues.
+## Word reference
 
-The pass begins at the next issue from the current selection and continues to the end of the current story (body, header, note or other active text). It does not traverse all document stories or restrict itself to a selected range. Check Again starts another search with wrapping; ignored-once occurrences can be revisited. Completion stays visible until Close or Escape. The compact right-click/Shift+F10 menu is retained.
+Observed the actual Word for Windows interface on the preparation PC on 2026-10-26, using a newly created document with the synthetic sentence "Le chat mange une souri. Ce documant contient une faute." F7 selected "documant" and opened a right-side pane titled Vérification. Existing documents were left unchanged. The exact Word build was not recorded.
 
-The form consumes language-aware engine results. It works with the existing proofing languages and is independent of French contribution #3185; adding an interface does not install a dictionary or add grammar rules. Interface labels use the shared translation lookup and fall back to English when a catalog lacks a key. No release date or completeness increase is implied.
+At a 1920 × 1152 window, the pane occupied approximately 400 logical pixels on the right. Its body had a category heading and dictionary explanation, a framed sentence context approximately 48 px high, a Suggestions heading, and three bordered suggestion rows approximately 68 px high. Ignore Once, Ignore All and Add to Dictionary were text actions below the list. A suggestion's chevron opened Read Aloud, Spell Out, Change All and AutoCorrect actions. These are observations, not a copied screenshot or asset.
 
-If another command changes the document body or selection while the form is open, an old suggestion is refused. Check Again obtains a fresh target. Read-only/protected document commands retain the engine's existing checks and display refusals in the form.
+WordCraft uses this arrangement and its shared pane host, icons, typography and theme palette. Clicking a suggestion applies the correction directly and advances; the central modal proposal is superseded. The pane supports sentence context, Read Aloud through the existing command, manual replacement and AutoCorrect actions. Word's dictionary definitions/synonyms, Spell Out and Change All are not implemented here. Visual similarity must be assessed from the generated light/dark previews; implementation alone is not evidence of pixel identity.
+
+## Scope and behavior
+
+Review › Spelling & Grammar, Home › Editor and F7 open the task pane. The pass begins at the next issue from the current selection and continues to the end of the current story (body, header, note or other active text), not all document stories or only a selection. Each correction uses the existing review command and remains undoable. Ignore Once advances without changing the document or dictionaries. Ignore All lasts for the session; Add to Dictionary uses the personal dictionary. Those two actions are offered only for spelling issues. Completion remains visible; Check Again starts a wrapping search. The pane host supplies Close and docking.
+
+If another command changes the document body or selection, a cached suggestion is refused; Check Again obtains a fresh target. Read-only/protected document commands retain their checks. The pane is local to each window, clears on a document switch and does not alter the compact right-click menu. Programmatic review commands return structured results without opening UI.
+
+This work is independent of French contribution #3185. It consumes language-aware engine results and adds neither dictionaries nor grammar rules. Labels use the external shared translation lookup with English fallback for missing keys. No release date or readiness increase is implied.
 
 ## Verification
 
-- Engine regression: one- and two-paragraph navigation, forward-only completion and explicit wrapping.
-- UI regressions: suggestion application and undo, Ignore Once progress/completion, Ignore All, personal dictionary addition, stale selection/body refusal, no-issue completion and Escape.
-- Offscreen preview: the ignored spelling_review_dialog_preview test writes light/dark PNGs; inspect them before integration.
-- Required repository gate: cargo xtask ci. Cargo is unavailable on the preparation PC, so hosted checks are required; test definitions alone are not evidence of success.
+- Engine: one-/two-paragraph navigation, forward-only completion and explicit wrapping.
+- UI: direct suggestion correction and undo, Ignore Once progress/completion, Ignore All, personal dictionary addition, stale selection/body refusal, completion and Close, per-window isolation and document switching.
+- Offscreen: the ignored spelling_review_dialog_preview test writes light/dark PNGs for comparison with the recorded Word arrangement.
+- Required gate: cargo xtask ci. Cargo is unavailable on the preparation PC; hosted validation is required, and test definitions alone do not establish success.
 
 ## Revision history
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-26 | minor | Actual Word for Windows observation replaces the modal proposal with a right-side Proofing pane, sentence context and directly clickable suggestion cards |
 | 2026-10-26 | minor | Separate language-independent correction-form proposal and verification scope |

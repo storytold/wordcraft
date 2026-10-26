@@ -45,7 +45,6 @@ pub mod dialogs_notes;
 pub mod dialogs_para;
 pub mod dialogs_refs;
 pub mod dialogs_review;
-pub mod dialogs_spelling;
 pub mod dialogs_ribbon;
 pub mod dialogs_smart_art;
 pub mod dialogs_table_style;
@@ -74,6 +73,7 @@ pub mod paste_picture;
 pub mod previews;
 pub mod print_page;
 pub mod printing;
+pub mod proofing_pane;
 pub mod read_aloud;
 pub mod ribbon;
 pub mod ribbon_fit;
@@ -590,6 +590,8 @@ pub struct WordApp {
     pub colors: Option<colors::ColorsDialog>,
     /// The Restrict Editing pane (#412).
     pub restrict: dialogs_review::RestrictPane,
+    /// The language-aware spelling and grammar task pane.
+    pub spelling_review: Option<proofing_pane::SpellingForm>,
     pub status_msg: Option<(String, f64)>,
     pub previews: previews::Previews,
     /// Media key of the picture a pending Change Picture replaces (#147).
@@ -778,6 +780,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -887,6 +890,7 @@ impl WordApp {
             dialog,
             colors,
             restrict,
+            spelling_review,
             status_msg,
             previews,
             change_picture_target,
@@ -1115,12 +1119,10 @@ impl WordApp {
         if matches!(id, "insert.picture" | "insert.icon") {
             self.select_inserted_picture(&r);
         }
-        // User proofing opens a persistent correction form; scripts keep the engine's
-        // structured result. Right-click and Shift+F10 retain their compact suggestions.
+        // User proofing opens the persistent task pane; scripts keep structured results.
+        // Right-click and Shift+F10 retain their compact suggestions menu.
         if matches!(id, "review.spelling" | "review.editor") && let Ok(v) = &r {
-            self.dialog = Some(dialogs::Dialog::Review(Box::new(dialogs_review::ReviewDialog::Spelling(Box::new(
-                dialogs_spelling::SpellingForm::new(self, v.clone()),
-            )))));
+            self.spelling_review = Some(proofing_pane::SpellingForm::new(self, v.clone()));
         }
         let r = system_clipboard::explain(self, id, r);
         // Check Accessibility shows its findings in the Accessibility pane, kept up to date there.
