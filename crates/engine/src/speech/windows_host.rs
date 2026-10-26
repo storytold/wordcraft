@@ -306,20 +306,31 @@ impl Drop for Host {
     fn drop(&mut self) {
         let _ = writeln!(self.stdin, "{{\"cmd\":\"quit\"}}");
         let _ = self.stdin.flush();
-        let deadline = Instant::now() + Duration::from_millis(500);
-        loop {
-            match self.child.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-                _ => {
-                    let _ = self.child.kill();
-                    let _ = self.child.wait();
-                    break;
-                }
-            }
+        let mut exited = wait_for_exit(&mut self.child, Duration::from_millis(500));
+        if !exited {
+            let _ = self.child.kill();
+            exited = wait_for_exit(&mut self.child, Duration::from_secs(1));
         }
-        if let Some(reader) = self.reader.take() {
-            let _ = reader.join();
+        if exited {
+            if let Some(reader) = self.reader.take() {
+                let _ = reader.join();
+            }
+        } else {
+            // The child outlived `kill`; joining its reader could block forever on its stdout.
+            let _ = self.reader.take();
+        }
+    }
+}
+
+/// Wait up to `timeout` for `child` to exit; `false` if it is still running or reaping failed.
+#[cfg(target_os = "windows")]
+fn wait_for_exit(child: &mut Child, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return true,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => return false,
         }
     }
 }
