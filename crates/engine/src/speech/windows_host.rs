@@ -1,6 +1,7 @@
 //! The persistent Windows speech host: one PowerShell process per reading, so System.Speech and
 //! the synthesizer load once instead of once per sentence. The current `speak` path remains the
-//! fallback when the host cannot start or stops answering.
+//! fallback when the host cannot start or fails before a sentence starts; once a sentence has
+//! started, a dead host is reported as an error so the sentence is not repeated.
 
 #[cfg(target_os = "windows")]
 use std::io::{BufRead, BufReader, Write};
@@ -236,6 +237,8 @@ impl Host {
             self.broken = true;
             return Err(HostError::Unavailable);
         }
+        // A failure before `started` falls back to the per-sentence path; after it, the sentence
+        // is reported as failed so the caller does not repeat the part already spoken.
         let mut started = false;
         let deadline = Instant::now() + SPEAK_TIMEOUT;
         loop {

@@ -869,7 +869,8 @@ enum Spoken {
 }
 
 /// The system voice for one reading. On Windows it keeps one PowerShell host alive from the
-/// first system sentence; if the host cannot start, it falls back to a process per sentence.
+/// first system sentence; if the host cannot start, or fails before a sentence starts, it falls
+/// back to a process per sentence.
 #[cfg(not(target_arch = "wasm32"))]
 struct SystemSpeaker {
     #[cfg(target_os = "windows")]
