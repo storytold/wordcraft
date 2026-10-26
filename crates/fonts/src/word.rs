@@ -334,6 +334,7 @@ pub fn is_thai_family(family: &str) -> bool {
 /// should emit those PUA codepoints instead of the standard Unicode ones.
 pub fn is_wtt2_thai_font(family: &str) -> bool {
     const NAMES: &[&str] = &[
+        // Dedicated Microsoft WTT 2.0 Thai families
         "cordia new",
         "cordiaupc",
         "angsana new",
@@ -347,6 +348,10 @@ pub fn is_wtt2_thai_font(family: &str) -> bool {
         "jasmineupc",
         "kodchiangupc",
         "lilyupc",
+        // Microsoft general-purpose fonts that shipped with WTT 2.0 Thai PUA glyphs
+        "tahoma",
+        "microsoft sans serif",
+        "arial unicode ms",
     ];
     NAMES.contains(&family.to_ascii_lowercase().as_str())
 }
