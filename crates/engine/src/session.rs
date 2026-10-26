@@ -23,7 +23,13 @@ use wordcraft_doc::props::CharProps;
 use wordcraft_doc::{Document, PartKind, Path, Pos, StoryRef, Table};
 use wordcraft_layout::{DocLayout, LayoutCache, LayoutOptions, NumeralMode, ViewMode};
 
-use crate::{CmdError, Registry};
+use crate::{CmdError, ImeEditOutcome, Registry};
+
+mod documents;
+mod views;
+pub use documents::{DocInfo, DocState};
+use documents::{document_id_mark, next_document_id, untitled_name};
+pub use views::WindowView;
 
 /// A selection: anchor (where it started) and focus (where the caret is).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -135,6 +141,10 @@ pub struct ViewState {
     pub table_gridlines: bool,
     pub nav_pane: bool,
     pub styles_pane: bool,
+    /// Where the Styles pane sits: docked right (the default) or left, or floating (#1756).
+    /// Kept in the user's preferences, not the document.
+    #[serde(default)]
+    pub styles_pane_dock: StylesPaneDock,
     /// Style Inspector pane (Home › Styles).
     #[serde(default)]
     pub style_inspector: bool,
@@ -215,6 +225,38 @@ pub struct ViewState {
     pub full_screen: bool,
 }
 
+/// Where the Styles pane sits (`view.stylesPaneDock`, #1756).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum StylesPaneDock {
+    #[default]
+    Right,
+    Left,
+    /// A window of its own over the document, which can be moved and resized.
+    #[serde(rename = "float")]
+    Floating,
+}
+
+impl StylesPaneDock {
+    /// `left`, `right` or `float`; anything else is `None`.
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "right" => Some(Self::Right),
+            "left" => Some(Self::Left),
+            "float" => Some(Self::Floating),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Right => "right",
+            Self::Left => "left",
+            Self::Floating => "float",
+        }
+    }
+}
+
 fn on() -> bool {
     true
 }
@@ -252,6 +294,7 @@ impl Default for ViewState {
             table_gridlines: true,
             nav_pane: false,
             styles_pane: false,
+            styles_pane_dock: StylesPaneDock::Right,
             style_inspector: false,
             comments_pane: false,
             clipboard_pane: false,
@@ -327,8 +370,10 @@ struct Undo {
 
 /// What [`Session::restore`] needs to take commands back exactly: the document, the selection,
 /// the undo and redo stacks (also the oldest undo steps the undo limit pushes out meanwhile), the
-/// open typing group, a pending [`Session::join_next_undo`] (and whether its group has a step)
-/// and the dirty flag. See [`Session::edit_snapshot`].
+/// open typing group, the pending
+/// [`Session::join_next_undo`]/[`Session::join_next_equation_edit`]/body IME replacement promises,
+/// whether the group has a step of its own, and the dirty flag. See
+/// [`Session::edit_snapshot`].
 pub struct EditSnapshot {
     doc: Document,
     sel: Selection,
@@ -341,8 +386,14 @@ pub struct EditSnapshot {
     redo: Vec<Arc<Undo>>,
     typing_open: bool,
     join_next: bool,
+    equation_join_next: bool,
+    /// The body `DeleteSurrounding` replacement promise then, with the exact caret it expects.
+    ime_text_join: Option<Selection>,
     join_anchor: bool,
     dirty: bool,
+    /// The body's replacement epoch then: a previewed replacement that is rolled back is not a
+    /// replacement after all.
+    ime_body_epoch: u64,
 }
 
 /// Undo steps that the commands run between [`Session::edit_snapshot`] and [`Session::restore`]
@@ -364,7 +415,38 @@ impl EditSnapshot {
     }
 }
 
-/// An editing session.
+/// What `run` keeps to take a failed mutating command back: the document, the selection, the
+/// undo and redo stacks, the open typing group, the undo steps dropped so far and the column
+/// block.
+type RunSnapshot = (Document, Selection, Vec<Arc<Undo>>, Vec<Arc<Undo>>, bool, u64, Option<ColumnBlock>);
+
+/// A layout made and what it was made for: (revision, width, read height, view, read line
+/// spacing, layout, proofing, outline, (deletions left out, deletions marked Hidden, body
+/// deletions in balloons), numeral display, the word being typed, (hidden text shown, field
+/// codes shown)).
+type LayoutEntry = (
+    u64,
+    f32,
+    f32,
+    ViewMode,
+    Option<u32>,
+    Arc<DocLayout>,
+    bool,
+    Option<wordcraft_layout::outline::OutlineView>,
+    (bool, wordcraft_layout::HideDeleted, bool),
+    NumeralMode,
+    Option<wordcraft_layout::TypingWord>,
+    (bool, bool),
+);
+
+/// The layouts last made, newest first. Two, so two windows on one document with different
+/// views ([`WindowView`]) each find theirs as they draw in turn.
+type LayoutSlots = [Option<LayoutEntry>; 2];
+
+/// An editing session: the app-wide state (clipboard, preferences, macros, the command registry…)
+/// and the open documents. The active document's state is in the session's own fields, which
+/// every command works on; the other open documents wait in [`DocState`] values and are swapped
+/// in when they become active (see [`Session::documents`]).
 pub struct Session {
     pub doc: Document,
     pub sel: Selection,
@@ -423,6 +505,14 @@ pub struct Session {
     typing_open: bool,
     /// The next mutating command joins the previous undo step (later frames of a drag).
     join_next: bool,
+    /// The next equation typing command joins a successful equation `deleteSurrounding`'s undo
+    /// step. Unlike [`Self::join_next`], any other command consumes and discards it, so an
+    /// unrelated Bold or document replacement can never be merged into the deletion.
+    equation_join_next: bool,
+    /// The next `text.insert` at this exact selection joins a successful body
+    /// `DeleteSurrounding`'s undo step. Any other command consumes and discards it, so an
+    /// intervening edit owns its own checkpoint instead of being merged into the deletion.
+    ime_text_join: Option<Selection>,
     /// Whether the undo group has a step of its own for the next joined command to merge
     /// into. A command that changed nothing leaves the group without one, so the next
     /// command in the group starts the step the group needs.
@@ -430,30 +520,45 @@ pub struct Session {
     /// The newest automatic capitalisation, for Word's "Automatically add words to list" (#1857).
     pub(crate) autocap: Option<crate::cmd::tools::AutoCap>,
     rev: u64,
+    /// Which document this is, unique in the process: changes when [`Session::set_document`]
+    /// replaces it (an open into an untouched blank document, recover), never on an edit or when
+    /// another document becomes active and this one comes back.
+    document_id: u64,
+    /// The number in an untitled document's name (`Document2`); 0 for one opened from a file.
+    untitled: u32,
+    /// `rev` when the document was made, for [`Session::is_untouched_blank`].
+    made_rev: u64,
     /// What Restrict Editing's outright refusals depend on, for greying out commands
     /// ([`Session::why_disabled`]): computed once per document, revision and author instead of
     /// for every button on every frame.
     protect_facts: std::sync::Mutex<Option<((u64, u64, String), crate::cmd::protect::Facts)>>,
-    /// Which document this is: changes when [`Session::set_document`] replaces it (open, new,
-    /// mail merge, recover), never on an edit.
-    document_id: u64,
+    /// How many times the document's body was replaced under the same [`Self::document_id`]
+    /// (`document.setText`, version restore, compare, Undo/Redo). It is the body's IME
+    /// replacement epoch: a composition must not survive the swap, even when the new body has
+    /// the same text or the same bounded surrounding window.
+    ime_body_epoch: u64,
+    /// Engine-owned, checked, process-monotonic revision for IME receipts whose target cannot
+    /// provide surrounding text. `None` means the allocator is exhausted (fail closed).
+    ime_state_revision: Option<u64>,
+    /// The caret/equation-session token the revision was last allocated for. It covers selection
+    /// and caret changes without walking the document.
+    ime_state_seen: Option<ImeCaretState>,
+    /// The current command's explicit IME effect classification.
+    ime_edit_outcome: ImeEditOutcome,
+    /// Simulation of a globally exhausted IME revision allocator for front-end producer tests.
+    /// Only [`Self::exhaust_ime_state_revision`] sets it; production builds do not compile it,
+    /// and it only makes receipt classification fail closed.
+    #[cfg(any(test, feature = "test-support"))]
+    ime_state_exhausted: bool,
+    /// A successful non-IME command changed document state since the last IME observation. It is
+    /// drained before publishing a receipt and at observation time; it is never cleared by a later
+    /// command. It covers mixed formatting/IME frames when available stamps ignore the revision.
+    pending_ime_application_change: bool,
+    /// Whether the current command was entered through [`Session::run_ime`]. Nested commands
+    /// inherit the origin.
+    ime_origin: bool,
     cache: LayoutCache,
-    /// (revision, width, read height, view, read line spacing, layout, proofing, outline,
-    /// (deletions left out, deletions marked Hidden, body deletions in balloons), numeral display, the word being typed).
-    #[allow(clippy::type_complexity)]
-    layout: Option<(
-        u64,
-        f32,
-        f32,
-        ViewMode,
-        Option<u32>,
-        Arc<DocLayout>,
-        bool,
-        Option<wordcraft_layout::outline::OutlineView>,
-        (bool, wordcraft_layout::HideDeleted, bool),
-        NumeralMode,
-        Option<wordcraft_layout::TypingWord>,
-    )>,
+    layout: LayoutSlots,
     /// The word being typed, left without a spelling squiggle ([`TypedWord`]).
     typing: Option<TypedWord>,
     /// Picture edits: edited media key → original media key (Reset Picture).
@@ -504,8 +609,12 @@ pub struct Session {
     /// Password, `file.encrypt`); `None` saves them unencrypted. Kept from a password-protected
     /// file that was opened, cleared when the document is replaced.
     pub password: Option<crate::io::Password>,
+    /// The recovery worker every open document's copy is kept through (desktop hosts only).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) recovery: Option<crate::recovery::Recovery>,
+    /// The active document's recovery copy.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) recovery_slot: crate::recovery::Slot,
     /// More pictures and shapes selected along with the one the selection holds (Shift+click),
     /// for Group. Cleared by any edit or selection change other than adding to it.
     pub also_selected: Vec<Pos>,
@@ -521,18 +630,56 @@ pub struct Session {
     edit_marks: Vec<Pos>,
     /// How many Go Back presses since the last edit (which place comes next).
     go_back_step: usize,
+    /// The open documents other than the active one, in no particular order.
+    others: Vec<DocState>,
+    /// Every open document's id, the active one's too, in the order they were opened.
+    order: Vec<u64>,
+    /// Untitled documents made so far, for the next one's name (`Document3`).
+    untitled_count: u32,
 }
 
 /// The number of edit locations Go Back cycles through (Word: four).
 const EDIT_MARKS: usize = 4;
 
+/// The caret identity used for the process-monotonic IME state revision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum ImeCaretState {
+    Body(Selection),
+    Equation { session: u64, pos: wordcraft_doc::math_edit::MathPos },
+}
+
+/// One checked allocation from a process-monotonic IME revision counter.
+fn allocate_ime_state_revision(counter: &std::sync::atomic::AtomicU64) -> Option<u64> {
+    counter.try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |n| n.checked_add(1)).ok()
+}
+
+static IME_STATE_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// Allocates the next process-monotonic IME state revision, returning `None` when the counter is
+/// exhausted.
+fn next_ime_state_revision() -> Option<u64> {
+    allocate_ime_state_revision(&IME_STATE_REVISION)
+}
+
 /// The equation being edited.
 #[derive(Clone, Debug, PartialEq)]
 pub struct MathEdit {
-    /// The equation object (its U+FFFC).
+    /// The equation object (its U+FFFC). This moves as the document is edited, so it is not an
+    /// IME owner; [`Self::session`] is.
     pub at: Pos,
     /// The caret inside it.
     pub pos: wordcraft_doc::math_edit::MathPos,
+    /// A stable token for this editing session, unique across documents and re-entry.
+    pub session: u64,
+}
+
+/// Next stable token for an equation editing session, or `None` when the counter is exhausted.
+///
+/// Exhaustion fails closed: a repeated token could let a cached IME context outlive the
+/// equation it described, so the caller refuses to start editing instead.
+pub fn next_math_session() -> Option<u64> {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.try_update(std::sync::atomic::Ordering::Relaxed, std::sync::atomic::Ordering::Relaxed, |n| n.checked_add(1)).ok()
 }
 
 /// Editing preferences that persist between runs (the front end saves and restores them).
@@ -648,6 +795,7 @@ fn typed_range(text: &str, off: usize) -> Option<(usize, usize)> {
     text.get(start..off)?.chars().any(char::is_alphanumeric).then_some((start, end))
 }
 
+/// The name of `doc`'s bibliography style, APA when it names none we know.
 fn doc_bib_style(doc: &Document) -> String {
     doc.settings.bib_style.as_deref().and_then(crate::cmd::citations::find_style).map_or("APA", |st| st.name).to_string()
 }
@@ -674,10 +822,14 @@ impl Session {
 
     /// Save the custom dictionary through [`Session::user_dict_path`], if the host wired one up,
     /// with `removed` (words just taken out) left out of the merge with the file. A failed save
-    /// keeps the words in memory and never fails the command (#40).
+    /// keeps the words in memory and never fails the command (#40), as does a file outside the
+    /// automation roots in force: it is read, then replaced beside itself (#3737).
     pub(crate) fn persist_user_dictionary(&self, removed: &[String]) {
-        if let Some(path) = self.user_dict_path.as_deref()
-            && let Err(e) = wordcraft_proof::save_user_dictionary(path, removed)
+        let Some(path) = self.user_dict_path.as_deref() else { return };
+        let name = path.to_string_lossy();
+        if let Err(e) = crate::file_access::check_read(&name)
+            .and_then(|()| crate::file_access::check_write(&name))
+            .and_then(|()| wordcraft_proof::save_user_dictionary(path, removed).map_err(|e| e.to_string()))
         {
             log::warn!("custom dictionary: save failed: {e}");
         }
@@ -691,75 +843,138 @@ impl Session {
 
     /// Initialise session defaults while sharing the immutable command registry with previews.
     fn with_registry(doc: Document, registry: Arc<Registry>) -> Self {
-        let start = doc.start_of(StoryRef::Body);
-        let bib_style = doc_bib_style(&doc);
+        let DocState {
+            doc,
+            sel,
+            view,
+            pending,
+            path,
+            file_name,
+            dirty,
+            pending_move,
+            find,
+            goal_x,
+            page_hint,
+            new_header_parts,
+            hf_return,
+            history,
+            undo_evicted,
+            redo,
+            typing_open,
+            join_next,
+            equation_join_next,
+            ime_text_join,
+            join_anchor,
+            autocap,
+            rev,
+            document_id,
+            untitled,
+            made_rev,
+            ime_body_epoch,
+            cache,
+            layout,
+            typing,
+            originals,
+            picture_looks,
+            versions,
+            autosave,
+            bib_style,
+            merge,
+            math,
+            password,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery_slot,
+            also_selected,
+            column,
+            column_mode,
+            widened,
+            edit_marks,
+            go_back_step,
+        } = DocState::new(doc, 1, ViewState::default());
         Session {
             doc,
-            sel: Selection::caret(start),
-            view: ViewState::default(),
-            pending: None,
+            sel,
+            view,
+            pending,
             last_highlight: wordcraft_doc::props::Highlight::Yellow,
-            path: None,
-            file_name: None,
+            path,
+            file_name,
             user_dict_path: None,
-            dirty: false,
+            dirty,
             clipboard: None,
-            pending_move: None,
+            pending_move,
             clipboard_text: String::new(),
             clipboard_html: String::new(),
             clip_history: Default::default(),
-            find: FindState::default(),
-            goal_x: None,
-            page_hint: 0,
+            find,
+            goal_x,
+            page_hint,
             registry,
             author: "WordCraft User".into(),
             initials: String::new(),
             painter: None,
             status: String::new(),
-            new_header_parts: Vec::new(),
-            hf_return: None,
-            history: Vec::new(),
-            undo_evicted: 0,
-            redo: Vec::new(),
-            typing_open: false,
-            join_next: false,
-            join_anchor: false,
-            autocap: None,
-            rev: 1,
+            new_header_parts,
+            hf_return,
+            history,
+            undo_evicted,
+            redo,
+            typing_open,
+            join_next,
+            equation_join_next,
+            ime_text_join,
+            join_anchor,
+            autocap,
+            rev,
+            document_id,
+            untitled,
+            made_rev,
             protect_facts: std::sync::Mutex::new(None),
-            document_id: 1,
-            cache: LayoutCache::new(),
-            layout: None,
-            typing: None,
-            originals: Default::default(),
-            picture_looks: Default::default(),
+            ime_body_epoch,
+            ime_state_revision: None,
+            ime_state_seen: None,
+            ime_edit_outcome: ImeEditOutcome::default(),
+            #[cfg(any(test, feature = "test-support"))]
+            ime_state_exhausted: false,
+            pending_ime_application_change: false,
+            ime_origin: false,
+            cache,
+            layout,
+            typing,
+            originals,
+            picture_looks,
             last_command: None,
             recording: None,
             macros: Default::default(),
-            versions: Vec::new(),
+            versions,
             building_blocks: Default::default(),
-            autosave: true,
+            autosave,
             bib_style,
-            merge: Default::default(),
+            merge,
             ui_requests: Vec::new(),
-            math: None,
+            math,
             math_latex: false,
             math_normal_text: false,
-            also_selected: Vec::new(),
+            also_selected,
             prefs: Prefs::default(),
             system_region: Default::default(),
             keymap: crate::KeyMap::default(),
             ribbon: crate::RibbonLayout::default(),
             editing_lang: None,
             read_aloud: Default::default(),
-            password: None,
+            password,
             #[cfg(not(target_arch = "wasm32"))]
             recovery: None,
-            column: None,
-            column_mode: false,
-            widened: None,
-            edit_marks: Vec::new(),
-            go_back_step: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            recovery_slot,
+            column,
+            column_mode,
+            widened,
+            edit_marks,
+            go_back_step,
+            others: Vec::new(),
+            order: vec![document_id],
+            untitled_count: 1,
         }
     }
 
@@ -834,6 +1049,29 @@ impl Session {
     pub fn document_id(&self) -> u64 {
         self.document_id
     }
+
+    /// How many times the body was replaced under this [`Self::document_id`].
+    ///
+    /// Front ends use it as the body's IME replacement epoch and to tell a body swap from an
+    /// ordinary edit; it advances for `document.setText`, a version restore, a compare and
+    /// Undo/Redo, never for typing.
+    pub fn ime_body_epoch(&self) -> u64 {
+        self.ime_body_epoch
+    }
+
+    /// Note that a command replaced the document or its whole body under this document id.
+    ///
+    /// The counter fails closed: if it were ever exhausted (unreachable in practice), the
+    /// document owner id advances too, so a cached IME context still cannot be reused.
+    pub fn note_body_replaced(&mut self) {
+        self.ime_body_epoch = match self.ime_body_epoch.checked_add(1) {
+            Some(epoch) => epoch,
+            None => {
+                self.document_id = self.document_id.saturating_add(1);
+                u64::MAX
+            }
+        };
+    }
     pub fn touch(&mut self) {
         self.rev = self.rev.wrapping_add(1);
         self.dirty = true;
@@ -880,7 +1118,7 @@ impl Session {
 
     /// The document's file name and full path for fields (`FILENAME`) and layout context.
     /// Returns `(filename, filepath)`. Unsaved documents with no explicit file name default
-    /// consistently to `("Document1", "Document1")`. Document metadata title is never used
+    /// consistently to their name, `("Document1", "Document1")` for the first. Document metadata title is never used
     /// as a filename fallback (#3449).
     pub fn resolved_filenames(&self) -> (String, String) {
         if let Some(path) = &self.path {
@@ -890,7 +1128,8 @@ impl Session {
         } else if let Some(name) = &self.file_name {
             (name.clone(), name.clone())
         } else {
-            ("Document1".to_string(), "Document1".to_string())
+            let name = untitled_name(self.untitled);
+            (name.clone(), name)
         }
     }
 
@@ -915,19 +1154,30 @@ impl Session {
         let hide_deleted = !self.view.show_markup;
         let deleted = (hide_deleted, self.prefs.markup.hidden_deletions(), self.revisions_in_balloons());
         let outline = (mode == ViewMode::Outline).then(|| self.view.outline.view());
-        if let Some((r, w, h, m, sp, l, pf, o, hd, n, t)) = &self.layout
-            && *r == self.rev
-            && (*w == width || mode == ViewMode::Print)
-            && *h == height
-            && *m == mode
-            && *sp == spacing
-            && *pf == self.view.proofing
-            && *n == self.view.numeral
-            && *hd == deleted
-            && *o == outline
-            && *t == typing
+        let shown = (self.view.marks || self.prefs.marks.hidden, self.view.field_codes);
+        let (rev, proofing, numeral) = (self.rev, self.view.proofing, self.view.numeral);
+        let fits = |e: &Option<LayoutEntry>| {
+            e.as_ref().is_some_and(|(r, w, h, m, sp, _, pf, o, hd, n, t, sh)| {
+                *r == rev
+                    && (*w == width || mode == ViewMode::Print)
+                    && *h == height
+                    && *m == mode
+                    && *sp == spacing
+                    && *pf == proofing
+                    && *n == numeral
+                    && *hd == deleted
+                    && *o == outline
+                    && *t == typing
+                    && *sh == shown
+            })
+        };
+        if !fits(&self.layout[0]) && fits(&self.layout[1]) {
+            self.layout.swap(0, 1);
+        }
+        if fits(&self.layout[0])
+            && let Some(e) = &self.layout[0]
         {
-            return l.clone();
+            return e.5.clone();
         }
         let (fn_name, fn_path) = self.resolved_filenames();
         let (filename, filepath): (Option<Arc<str>>, Option<Arc<str>>) = (Some(Arc::from(fn_name.as_str())), Some(Arc::from(fn_path.as_str())));
@@ -936,14 +1186,14 @@ impl Session {
             web_width: width,
             read_height: height,
             read_line_spacing: spacing.map(f32::from_bits),
-            show_hidden: self.view.marks || self.prefs.marks.hidden,
+            show_hidden: shown.0,
             hide_deleted,
             hide_marked: deleted.1,
             deletions_in_balloons: deleted.2,
             proofing: self.view.proofing,
             numeral: self.view.numeral.resolve(SYSTEM_LOCALE.get().map(String::as_str)),
             comment_balloons: false,
-            field_codes: self.view.field_codes,
+            field_codes: shown.1,
             outline: outline.clone(),
             proof: wordcraft_layout::ProofOptions { grammar: self.prefs.mark_grammar, spelling: self.prefs.spelling() },
             typing_word: typing,
@@ -951,7 +1201,11 @@ impl Session {
             filepath: filepath.clone(),
         };
         let l = Arc::new(wordcraft_layout::layout(&self.doc, &mut self.cache, &opts));
-        self.layout = Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing));
+        let [newest, _] = std::mem::take(&mut self.layout);
+        self.layout = [
+            Some((self.rev, width, height, mode, spacing, l.clone(), self.view.proofing, outline, deleted, self.view.numeral, typing, shown)),
+            newest,
+        ];
         l
     }
 
@@ -1049,7 +1303,7 @@ impl Session {
 
     /// Invalidate the cached layout (fonts changed etc.).
     pub fn relayout(&mut self) {
-        self.layout = None;
+        self.layout = Default::default();
         self.cache.clear();
     }
 
@@ -1073,6 +1327,10 @@ impl Session {
         if untouched && self.doc.plain_text(StoryRef::Body).trim().is_empty() && self.doc.paragraph_count() <= 1 {
             self.doc.styles.default_chr.lang = Some(self.editing_lang.clone().unwrap_or_else(|| "en-US".into()));
             self.rev = self.rev.wrapping_add(1);
+            // Not an edit: the document is as untouched as it was.
+            if self.made_rev == self.rev.wrapping_sub(1) {
+                self.made_rev = self.rev;
+            }
             self.relayout();
         }
     }
@@ -1116,6 +1374,36 @@ impl Session {
     /// except the first; it is consumed by the next `run`.
     pub fn join_next_undo(&mut self) {
         self.join_next = true;
+    }
+    /// Make the next equation typing command (`equation.type` or `equation.backspace`) join the
+    /// previous equation deletion's undo step. Unlike [`Self::join_next_undo`], the promise is
+    /// not generic: any other command consumes and discards it, so unrelated edits get their own
+    /// checkpoint. A deletion-only IME request therefore cannot leak a join into the next edit.
+    pub fn join_next_equation_edit(&mut self) {
+        self.equation_join_next = true;
+    }
+    /// Discard an equation replacement join that received no replacement (for example an empty
+    /// commit), so it cannot join a later composition's typing.
+    pub fn clear_equation_join(&mut self) {
+        self.equation_join_next = false;
+    }
+    /// Make the next `text.insert` at the current selection join a successful body
+    /// `DeleteSurrounding`'s undo step. Unlike [`Self::join_next_undo`], the promise is scoped to
+    /// that exact replacement: any other command consumes and discards it, so an intervening
+    /// ordinary edit gets its own checkpoint.
+    pub fn join_next_ime_text_replacement(&mut self) {
+        self.ime_text_join = Some(self.sel.clone());
+    }
+    /// Discard a body replacement join that received no replacement (an empty or refused
+    /// commit, a new request or a refusal), so it cannot join a later composition.
+    pub fn clear_ime_text_join(&mut self) {
+        self.ime_text_join = None;
+    }
+    /// Discard every pending IME replacement join. A refused surrounding request supersedes the
+    /// composition it interrupts, including any promise from an earlier accepted request.
+    pub fn clear_ime_joins(&mut self) {
+        self.equation_join_next = false;
+        self.ime_text_join = None;
     }
     /// Stamp the document's save metadata (modified time, last modified by, revision; created
     /// when it has none) the way Word does on every save. `file.save` calls it, and so does any
@@ -1194,6 +1482,9 @@ impl Session {
         }
         done
     }
+    /// Undoes the newest step: closes typing, records an AutoCorrect exception when the undone step
+    /// was its automatic capital, swaps the document, selection, pending formatting and column with
+    /// the redo snapshot, replaces the body identity, refreshes equation editing and touches layout.
     pub fn undo(&mut self) -> bool {
         self.typing_open = false;
         // Undoing the automatic capitalisation's own step makes its word an exception; any
@@ -1211,6 +1502,9 @@ impl Session {
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.redo.push(Arc::new(cur));
+        // Undo swaps the whole body back: a composition belongs to the text it showed.
+        self.note_body_replaced();
+        self.refresh_math_session();
         self.touch();
         true
     }
@@ -1219,6 +1513,8 @@ impl Session {
         let next = if redo { self.redo.last() } else { self.history.last() };
         next.is_some_and(|u| crate::cmd::protect::protection_lifted(&self.doc, &u.doc))
     }
+    /// Redoes the newest undone step by swapping the snapshots back, replacing the body identity,
+    /// refreshing equation editing and touching layout.
     pub fn redo(&mut self) -> bool {
         self.typing_open = false;
         let Some(u) = self.redo.pop().map(Arc::unwrap_or_clone) else { return false };
@@ -1230,9 +1526,28 @@ impl Session {
             column: std::mem::replace(&mut self.column, u.column),
         };
         self.history.push(Arc::new(cur));
+        self.note_body_replaced();
+        self.refresh_math_session();
         self.touch();
         true
     }
+    /// An equation's editing session cannot ride across Undo/Redo: the equation tree, or the
+    /// object at that offset, may be a different one now. A new session token starts a new IME
+    /// context; if tokens are exhausted, the equation is left (fail closed).
+    fn refresh_math_session(&mut self) {
+        if self.math.is_none() {
+            return;
+        }
+        match next_math_session() {
+            Some(session) => {
+                if let Some(m) = self.math.as_mut() {
+                    m.session = session;
+                }
+            }
+            None => self.math = None,
+        }
+    }
+
     /// Drop history (after open / new).
     pub fn reset_history(&mut self) {
         self.autocap = None;
@@ -1299,12 +1614,19 @@ impl Session {
     /// Replace the document (open/new).
     pub fn set_document(&mut self, doc: Document) {
         self.autocap = None;
-        self.document_id = self.document_id.wrapping_add(1);
+        let replaced = self.document_id;
+        self.document_id = next_document_id();
+        if let Some(at) = self.order.iter_mut().find(|d| **d == replaced) {
+            *at = self.document_id;
+        }
+        self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
         self.doc = doc;
         self.doc.ensure_nonempty();
         self.password = None;
         self.file_name = None;
+        // The old document's equation is gone: its editing session cannot carry over.
+        self.math = None;
         self.sel = Selection::caret(self.doc.start_of(StoryRef::Body));
         self.pending = None;
         self.typing = None;
@@ -1317,10 +1639,16 @@ impl Session {
         self.hf_return = None;
         self.go_back_step = 0;
         self.view.outline.collapsed.clear();
+        // A copy the replaced document kept stays in the recovery list.
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.recovery_slot = Default::default();
+        }
         self.reset_history();
         self.clear_versions();
         self.touch();
         self.dirty = false;
+        self.made_rev = self.rev;
         self.relayout();
     }
 
@@ -1328,16 +1656,17 @@ impl Session {
     /// may want to take it back without a trace (cheap: the document's blocks are shared).
     ///
     /// Covered: `doc`, `sel`, the undo stack (its length, and its oldest steps when it is near
-    /// the limit), `redo`, the open typing group, a pending `join_next_undo` (and whether its
-    /// group has a step to merge into) and `dirty`. `rev`,
+    /// the limit), `redo`, the open typing group, the pending `join_next_undo`,
+    /// `join_next_equation_edit` and body replacement promises, whether the typing group has a
+    /// step of its own, and `dirty`. `rev`,
     /// `cache` and `layout` are derived (`restore` bumps `rev`). The other fields are not
     /// covered: a caller that lets the command change them (the view, the find state, the
     /// clipboard, macros, the file path…) saves and puts them back itself.
     ///
     /// `restore` is exact when the commands in between only add undo steps (every mutating
     /// command adds at most one; up to [`SNAPSHOT_HEAD`] may push old steps out of a full
-    /// stack). Taking steps off the stack (`edit.undo`) or clearing it (`file.new`,
-    /// `file.open`) in between is not covered.
+    /// stack). Taking steps off the stack (`edit.undo`), clearing it (`file.open` into
+    /// a blank document) or switching documents in between is not covered.
     ///
     /// The destructuring lists every field, so a new field does not build until someone decides
     /// whether a snapshot must cover it.
@@ -1375,6 +1704,8 @@ impl Session {
             redo,
             typing_open,
             join_next,
+            equation_join_next,
+            ime_text_join,
             join_anchor,
             autocap: _,
             rev: _,
@@ -1395,6 +1726,23 @@ impl Session {
             merge: _,
             ui_requests: _,
             document_id: _,
+            // The untitled name and when the document was made: not edits.
+            untitled: _,
+            made_rev: _,
+            // The other open documents: a snapshot covers the active one.
+            others: _,
+            order: _,
+            untitled_count: _,
+            ime_body_epoch,
+            // The IME revision and its caret token are process-global evidence, not document
+            // state: a rollback must not reuse a revision.
+            ime_state_revision: _,
+            ime_state_seen: _,
+            ime_edit_outcome: _,
+            #[cfg(any(test, feature = "test-support"))]
+                ime_state_exhausted: _,
+            pending_ime_application_change: _,
+            ime_origin: _,
             read_aloud: _,
             prefs: _,
             system_region: _,
@@ -1410,6 +1758,8 @@ impl Session {
             password: _,
             #[cfg(not(target_arch = "wasm32"))]
                 recovery: _,
+            #[cfg(not(target_arch = "wasm32"))]
+                recovery_slot: _,
             also_selected: _,
             // Column selection and a widened selection's ends, like `sel`'s shape: valid only while
             // `sel` matches them.
@@ -1430,8 +1780,11 @@ impl Session {
             redo: redo.clone(),
             typing_open: *typing_open,
             join_next: *join_next,
+            equation_join_next: *equation_join_next,
+            ime_text_join: ime_text_join.clone(),
             join_anchor: *join_anchor,
             dirty: *dirty,
+            ime_body_epoch: *ime_body_epoch,
         }
     }
 
@@ -1439,7 +1792,21 @@ impl Session {
     /// selection or undo/redo (undo steps the limit pushed out meanwhile come back). The layout
     /// is recomputed.
     pub fn restore(&mut self, snap: EditSnapshot) {
-        let EditSnapshot { doc, sel, history_len, evicted, head, redo, typing_open, join_next, join_anchor, dirty } = snap;
+        let EditSnapshot {
+            doc,
+            sel,
+            history_len,
+            evicted,
+            head,
+            redo,
+            typing_open,
+            join_next,
+            equation_join_next,
+            ime_text_join,
+            join_anchor,
+            dirty,
+            ime_body_epoch,
+        } = snap;
         let gone = usize::try_from(self.undo_evicted.saturating_sub(evicted)).unwrap_or(usize::MAX);
         if gone > 0 {
             let back = gone.min(head.len());
@@ -1454,6 +1821,9 @@ impl Session {
         self.redo = redo;
         self.typing_open = typing_open;
         self.join_next = join_next;
+        self.equation_join_next = equation_join_next;
+        self.ime_text_join = ime_text_join;
+        self.ime_body_epoch = ime_body_epoch;
         self.join_anchor = join_anchor;
         self.touch();
         self.dirty = dirty;
@@ -1495,8 +1865,10 @@ impl Session {
             return;
         }
         self.rev = rev;
-        if self.layout.as_ref().is_some_and(|l| l.0 != rev) {
-            self.layout = None;
+        for slot in &mut self.layout {
+            if slot.as_ref().is_some_and(|l| l.0 != rev) {
+                *slot = None;
+            }
         }
         if self.find.highlights.as_ref().is_some_and(|(r, _)| *r != rev) {
             self.find.highlights = None;
@@ -1521,6 +1893,87 @@ impl Session {
         f
     }
 
+    /// The current command's explicit IME effect classification.
+    pub fn ime_edit_outcome(&self) -> ImeEditOutcome {
+        self.ime_edit_outcome
+    }
+
+    /// Set the effect classification from a command handler. [`Session::run`] fills
+    /// `selection_changed` and enforces the content/state invariant after the command.
+    pub(crate) fn set_ime_edit_outcome(&mut self, outcome: ImeEditOutcome) {
+        self.ime_edit_outcome = outcome;
+    }
+
+    /// Take the pending application-origin change signal. The UI owns one session, so a simple
+    /// bool is enough; it deliberately survives later commands until drained.
+    pub fn take_pending_ime_application_change(&mut self) -> bool {
+        std::mem::take(&mut self.pending_ime_application_change)
+    }
+
+    /// Simulate a globally exhausted IME revision allocator in this session (test support).
+    ///
+    /// This only ever makes receipt classification fail closed. It exists so front-end producer
+    /// tests can exercise the real `ime_stamp` path instead of hand-building an `Unavailable`
+    /// stamp; production builds do not compile it.
+    #[cfg(any(test, feature = "test-support"))]
+    #[doc(hidden)]
+    pub fn exhaust_ime_state_revision(&mut self) {
+        self.ime_state_exhausted = true;
+        self.ime_state_revision = None;
+    }
+
+    /// The checked, process-monotonic revision for IME receipts with unavailable surrounding
+    /// text. Selection/caret motion allocates on the next call; `None` means exhausted.
+    pub fn ime_state_revision(&mut self) -> Option<u64> {
+        self.sync_ime_caret_state();
+        self.ime_state_revision
+    }
+
+    /// Returns the caret identity used for IME state revisions: the equation session and position
+    /// while editing, otherwise the body selection.
+    fn current_ime_caret_state(&self) -> ImeCaretState {
+        match &self.math {
+            Some(m) => ImeCaretState::Equation { session: m.session, pos: m.pos.clone() },
+            None => ImeCaretState::Body(self.sel.clone()),
+        }
+    }
+
+    /// Allocate the next IME state revision, or store `None` when the allocator is exhausted.
+    /// Test support can pin exhaustion for this session so a front-end producer test sees the
+    /// real `ime_stamp`/receipt path fail closed.
+    fn reset_ime_state_revision(&mut self) {
+        #[cfg(any(test, feature = "test-support"))]
+        if self.ime_state_exhausted {
+            self.ime_state_revision = None;
+            return;
+        }
+        // v5: allocation failure must store `None`, never retain a stale revision.
+        self.ime_state_revision = next_ime_state_revision();
+    }
+
+    /// Allocates a new revision only when the body selection or the equation session and position
+    /// differs from the last observed state.
+    fn sync_ime_caret_state(&mut self) {
+        let state = self.current_ime_caret_state();
+        if self.ime_state_seen.as_ref() != Some(&state) {
+            self.ime_state_seen = Some(state);
+            self.reset_ime_state_revision();
+        }
+    }
+
+    /// Run one command as the input method's own transaction.
+    ///
+    /// Commands run inside this scope are IME-origin: a successful command run *outside* this
+    /// scope sets the pending application-change signal, but nothing inside it does. Nested commands inherit
+    /// the origin. The previous origin is restored on every return, including unknown, disabled or
+    /// refused commands.
+    pub fn run_ime(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        let previous = std::mem::replace(&mut self.ime_origin, true);
+        let result = self.run(id, params);
+        self.ime_origin = previous;
+        result
+    }
+
     /// Whether the command changed nothing: the document, the selection, the formatting
     /// waiting at the caret and the column selection are as they were before it ran.
     ///
@@ -1534,9 +1987,27 @@ impl Session {
     /// control channel). Mutating commands are undoable; a failed command leaves the document as
     /// it was; a panic inside a command becomes an error.
     pub fn run(&mut self, id: &str, params: &Value) -> Result<Value, CmdError> {
+        // The document the command starts in, and the first id a document it opens can have.
+        let home = self.document_id;
+        let mark = document_id_mark();
+        // Every dispatch starts from an unclassified outcome. Early returns (unknown, disabled,
+        // protected) leave it at the default.
+        self.ime_edit_outcome = ImeEditOutcome::default();
+        // A rolled-back transaction must not leave a successful application-change signal from a
+        // nested command that ran before the failure.
+        let pending_application_change_before = self.pending_ime_application_change;
         let join = std::mem::take(&mut self.join_next);
+        // The equation replacement promise is not a generic undo join: only the command that
+        // actually types into the equation may consume it. Any other command discards it.
+        let equation_join = std::mem::take(&mut self.equation_join_next);
+        // The body replacement promise is likewise scoped: only the `text.insert` at the
+        // selection the deletion left may consume it.
+        let ime_text_join = self.ime_text_join.take();
         let reg = self.registry.clone();
         let Some(spec) = reg.get(id) else { return Err(CmdError::Unknown(id.to_string())) };
+        let join = join
+            || (equation_join && matches!(id, "equation.type" | "equation.backspace"))
+            || (id == "text.insert" && ime_text_join.as_ref().is_some_and(|sel| sel == &self.sel));
         if let Some(why) = (spec.enabled)(self) {
             return Err(CmdError::Disabled(format!("{id}: {why}")));
         }
@@ -1574,7 +2045,11 @@ impl Session {
         }
         // The undo stacks are snapshotted whole, not as a length: commands run nested commands,
         // whose checkpoints, undos and redos (and evictions at the limit) must be put back too.
-        let before_doc = if spec.mutates {
+        let ime_epoch_before = spec.mutates.then_some(self.ime_body_epoch);
+        // Commands may leave an equation (a whole-body replacement) even after they fail; put
+        // the editing session back with the document.
+        let math_before = spec.mutates.then(|| self.math.clone());
+        let before_doc: Option<RunSnapshot> = if spec.mutates {
             Some((
                 self.doc.clone(),
                 self.sel.clone(),
@@ -1648,6 +2123,7 @@ impl Session {
         let default_language_before = self.prefs.default_language.clone();
         let run = spec.run;
         let mutates = spec.mutates;
+        let ime_caret_before = self.current_ime_caret_state();
         let rev_before = self.rev;
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
         let mut result = match result {
@@ -1657,6 +2133,9 @@ impl Session {
                 Err(CmdError::Failed(format!("{id} panicked: {msg}")))
             }
         };
+        if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
+            return self.finish_elsewhere(home, mark, result, before_doc, blocks_before, default_language_before, pending_application_change_before);
+        }
         // Restrict Editing: outside the exceptions nothing may change.
         if result.is_ok()
             && guard
@@ -1727,6 +2206,28 @@ impl Session {
                     }
                 }
                 self.clamp_selection();
+                let mut ime_outcome = self.ime_edit_outcome;
+                if ime_outcome.content_changed {
+                    ime_outcome.state_changed = true;
+                }
+                // An unclassified mutating command is conservatively a state change. It can make
+                // a frame Other, but it can never mint a receipt because `classified` is false.
+                // A command that changed nothing is not an edit (#23), so it is not an IME
+                // state change either: otherwise Backspace at the document start would still
+                // signal an application change and move the settled IME revision.
+                if !ime_outcome.classified && mutates && !no_op {
+                    ime_outcome.state_changed = true;
+                }
+                ime_outcome.selection_changed = self.current_ime_caret_state() != ime_caret_before;
+                self.ime_edit_outcome = ime_outcome;
+                if ime_outcome.state_changed {
+                    let caret = self.current_ime_caret_state();
+                    self.ime_state_seen = Some(caret);
+                    self.reset_ime_state_revision();
+                }
+                if !self.ime_origin && !no_op && (ime_outcome.content_changed || ime_outcome.state_changed || (!ime_outcome.classified && mutates)) {
+                    self.pending_ime_application_change = true;
+                }
                 if sel_before.focus.story == StoryRef::Body && self.in_header_footer() {
                     self.hf_return = Some(sel_before.clone());
                 }
@@ -1749,8 +2250,16 @@ impl Session {
                 self.note_typing(id, before_doc.as_ref().map(|b| &b.0), &sel_before);
             }
             Err(e) => {
+                self.ime_edit_outcome = ImeEditOutcome::default();
+                self.pending_ime_application_change = pending_application_change_before;
                 self.autocap = None;
                 self.prefs.default_language = default_language_before;
+                if let Some(epoch) = ime_epoch_before {
+                    self.ime_body_epoch = epoch;
+                }
+                if let Some(math) = math_before {
+                    self.math = math;
+                }
                 if let Some(versions) = versions_before {
                     self.versions = versions;
                 }
@@ -1782,6 +2291,63 @@ impl Session {
                 }
                 if let Some(rev) = rev_restore {
                     self.restore_rev(rev);
+                }
+                if let Some(b) = blocks_before {
+                    self.building_blocks = b;
+                }
+                self.status = e.to_string();
+            }
+        }
+        result
+    }
+
+    /// The end of [`Session::run`] for a command that ended up in another document than it
+    /// started in (it opened, made, switched to or closed one) or that failed after opening one.
+    /// The checks that compare the document before and after the command don't apply.
+    /// Succeeded: the first document loses the undo step made for the command when its text is
+    /// as it was (opening a document is no edit to undo there). Failed: the documents the command opened close again and the first document is
+    /// active and as it was.
+    fn finish_elsewhere(
+        &mut self,
+        home: u64,
+        mark: u64,
+        result: Result<Value, CmdError>,
+        before_doc: Option<RunSnapshot>,
+        blocks_before: Option<std::collections::BTreeMap<String, Fragment>>,
+        default_language_before: Option<String>,
+        pending_application_change_before: bool,
+    ) -> Result<Value, CmdError> {
+        // Another document is a state change the input method has to see, never an IME edit.
+        self.ime_edit_outcome = ImeEditOutcome::default();
+        match &result {
+            Ok(_) => {
+                self.put_back_parked(home, before_doc);
+                self.clamp_selection();
+                self.ime_state_seen = Some(self.current_ime_caret_state());
+                self.reset_ime_state_revision();
+                if !self.ime_origin {
+                    self.pending_ime_application_change = true;
+                }
+            }
+            Err(e) => {
+                self.pending_ime_application_change = pending_application_change_before;
+                self.autocap = None;
+                self.prefs.default_language = default_language_before;
+                if self.is_open(home) {
+                    let _ = self.switch_to(home);
+                    let opened: Vec<u64> = self.order.iter().copied().filter(|d| *d >= mark && *d != home).collect();
+                    for d in opened {
+                        let _ = self.close_document(d);
+                    }
+                    if let Some((d, s, h, r, t, ev, c)) = before_doc {
+                        self.doc = d;
+                        self.sel = s;
+                        self.history = h;
+                        self.redo = r;
+                        self.typing_open = t;
+                        self.undo_evicted = ev;
+                        self.column = c;
+                    }
                 }
                 if let Some(b) = blocks_before {
                     self.building_blocks = b;
@@ -1871,4 +2437,96 @@ pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
     d.last_section.page_w = w;
     d.last_section.page_h = h;
     d
+}
+
+#[cfg(test)]
+mod ime_revision_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Checked allocations stop at `u64::MAX` and report exhaustion instead of wrapping.
+    #[test]
+    fn checked_revision_allocation_refuses_to_wrap() {
+        let counter = std::sync::atomic::AtomicU64::new(u64::MAX - 1);
+        assert_eq!(allocate_ime_state_revision(&counter), Some(u64::MAX - 1));
+        assert_eq!(allocate_ime_state_revision(&counter), None, "exhaustion fails closed");
+        assert_eq!(counter.load(std::sync::atomic::Ordering::Relaxed), u64::MAX);
+    }
+
+    /// An unchanged caret reuses its revision, while a direct selection assignment is observed and
+    /// advances the revision.
+    #[test]
+    fn selection_and_caret_motion_advance_the_unavailable_revision() {
+        let mut s = Session::new(Document::from_text("hello"));
+        let first = s.ime_state_revision().expect("a revision");
+        assert_eq!(s.ime_state_revision(), Some(first), "an unchanged caret reuses its revision");
+        s.sel = Selection::caret(Pos::body(0, 2));
+        let moved = s.ime_state_revision().expect("a revision");
+        assert!(moved > first, "a direct selection assignment is caught");
+    }
+
+    /// A selection-only command advances the revision on the next read, while a committed state
+    /// change advances it immediately.
+    #[test]
+    fn successful_state_changes_allocate_but_selection_only_commands_do_not() {
+        let mut s = Session::new(Document::from_text("hello"));
+        let first = s.ime_state_revision().expect("a revision");
+        s.run("select.all", &json!({})).unwrap();
+        // `run` does not allocate for selection-only work; the next stamp sees the new caret.
+        assert!(s.ime_state_revision() > Some(first));
+        let selected = s.ime_state_revision().expect("a revision");
+        s.run("para.alignCenter", &json!({})).unwrap();
+        assert!(s.ime_state_revision() > Some(selected), "a committed state change advances");
+    }
+
+    /// After the revision allocator is exhausted, a real equation edit still reports its classified
+    /// change but cannot mint a revision.
+    #[test]
+    fn exhausted_allocator_keeps_a_real_equation_commit_uncertifiable() {
+        let mut s = Session::new(Document::new());
+        s.run("insert.equation", &json!({})).unwrap();
+        s.exhaust_ime_state_revision();
+        assert_eq!(s.ime_state_revision(), None, "exhaustion fails closed");
+        s.run_ime("equation.type", &json!({"text": "x"})).unwrap();
+        let outcome = s.ime_edit_outcome();
+        assert!(outcome.classified && outcome.content_changed && outcome.state_changed, "{outcome:?}");
+        assert_eq!(s.ime_state_revision(), None, "a real producer command cannot mint a revision");
+    }
+
+    /// The application-change signal is consumed once; commands run through `run_ime` do not set it,
+    /// while a normal command does.
+    #[test]
+    fn application_origin_signal_is_taken_once_and_ime_commands_do_not_set_it() {
+        let mut s = Session::new(Document::from_text("hello"));
+        s.run("para.alignCenter", &json!({})).unwrap();
+        assert!(s.take_pending_ime_application_change(), "a normal command signals");
+        assert!(!s.take_pending_ime_application_change(), "taking clears it");
+        s.run_ime("text.insert", &json!({"text": "x"})).unwrap();
+        assert!(!s.take_pending_ime_application_change(), "an IME transaction is not an application change");
+        s.run("text.insert", &json!({"text": "y"})).unwrap();
+        assert!(s.take_pending_ime_application_change());
+    }
+
+    /// Unknown and refused IME commands restore the normal origin without signalling an application
+    /// change, and a nested command inside a macro inherits the IME origin.
+    #[test]
+    fn ime_origin_is_restored_and_nested_commands_inherit_it() {
+        let mut s = Session::new(Document::from_text("hello"));
+        s.run("tools.macros", &json!({"define": {"name": "centre", "steps": [{"command": "para.alignCenter", "params": {}}]}})).unwrap();
+        s.take_pending_ime_application_change();
+
+        // Unknown and refused commands restore the normal application origin; the failed run
+        // itself leaves no application-change signal.
+        assert!(s.run_ime("no.such.command", &json!({})).is_err());
+        assert!(!s.take_pending_ime_application_change(), "an unknown IME command is not an application change");
+        assert!(s.run_ime("equation.backspace", &json!({})).is_err());
+        assert!(!s.take_pending_ime_application_change(), "a refused IME command is not an application change");
+
+        // A nested `run` inherits the IME origin from `run_ime`; the same macro run normally is
+        // an application change.
+        s.run_ime("tools.macros", &json!({"run": "centre"})).unwrap();
+        assert!(!s.take_pending_ime_application_change(), "the nested command inherits the IME origin");
+        s.run("tools.macros", &json!({"run": "centre"})).unwrap();
+        assert!(s.take_pending_ime_application_change(), "a normal macro run is application-origin");
+    }
 }

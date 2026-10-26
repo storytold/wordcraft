@@ -18,6 +18,18 @@ pub const FUNCTION_NAMES: &[&str] = &[
     "tanh",
 ];
 
+/// Length of the longest of [`FUNCTION_NAMES`].
+const MAX_NAME: usize = {
+    let (mut max, mut i) = (0, 0);
+    while i < FUNCTION_NAMES.len() {
+        if FUNCTION_NAMES[i].len() > max {
+            max = FUNCTION_NAMES[i].len();
+        }
+        i += 1;
+    }
+    max
+};
+
 /// Function names whose subscripts go underneath (`lim_(n→∞)`).
 const LIMIT_NAMES: &[&str] = &["lim", "liminf", "limsup", "max", "min", "sup", "inf", "det", "gcd", "Pr"];
 
@@ -410,10 +422,12 @@ impl P {
     fn word(&mut self, stops: &[char]) -> Arg {
         let start = self.i;
         let mut end = start;
-        while self.c.get(end).is_some_and(char::is_ascii_alphabetic) {
+        // Look no further than the longest name (and one past it, to see the run is longer): a
+        // scan to the end of every run made a long run of letters quadratic (CWE-407).
+        while end - start <= MAX_NAME && self.c.get(end).is_some_and(char::is_ascii_alphabetic) {
             end += 1;
         }
-        let word: String = self.c.get(start..end).unwrap_or(&[]).iter().collect();
+        let word: String = if end - start > MAX_NAME { String::new() } else { self.c.get(start..end).unwrap_or(&[]).iter().collect() };
         if !FUNCTION_NAMES.contains(&word.as_str()) {
             self.i = start + 1;
             return vec![text(self.c.get(start).copied().unwrap_or(' '))];

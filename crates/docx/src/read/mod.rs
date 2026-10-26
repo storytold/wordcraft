@@ -1212,6 +1212,7 @@ impl Reader<'_> {
                         s.compat_mode = m.clamp(11, 99);
                     }
                     s.sum_paragraph_spacing = k.children("w:doNotUseHTMLParagraphAutoSpacing").any(on_off);
+                    s.do_not_expand_shift_return = k.children("w:doNotExpandShiftReturn").any(on_off);
                 }
                 "w:trackRevisions" => s.track_changes = on_off(k),
                 "w:doNotTrackMoves" => s.track_moves = !on_off(k),
@@ -1362,6 +1363,10 @@ impl Reader<'_> {
         let mut by_para: HashMap<String, u32> = HashMap::new();
         let mut next_id = 0u32;
         let mut entries: BTreeMap<u32, Comment> = BTreeMap::new();
+        // Ids given before this part, looked up rather than scanned for every generated id: a
+        // scan per comment made many non-numeric ids quadratic (#3692). Ids given here are in
+        // `entries`.
+        let given: HashSet<u32> = self.comment_map.values().copied().collect();
         for c in root.children("w:comment") {
             if self.doc.parts.len() >= MAX_PARTS {
                 break;
@@ -1373,7 +1378,7 @@ impl Reader<'_> {
             let id = match file_id.parse::<u32>() {
                 Ok(v) if !entries.contains_key(&v) => v,
                 _ => {
-                    while entries.contains_key(&next_id) || self.comment_map.values().any(|v| *v == next_id) {
+                    while entries.contains_key(&next_id) || given.contains(&next_id) {
                         next_id += 1;
                     }
                     next_id

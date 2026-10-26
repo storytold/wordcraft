@@ -19,6 +19,7 @@
 //! tables. Group nesting and picture sizes are capped.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use wordcraft_doc::props::VAlign;
 use wordcraft_doc::{Align, Document, Rgb};
@@ -306,11 +307,13 @@ impl Writer {
                 "\\nosupersub"
             });
         }
-        let font = |f: &Fmt| if f.code { Some(model::MONO_FONT.to_string()) } else { f.font.clone() };
+        fn font(f: &Fmt) -> Option<&str> {
+            if f.code { Some(model::MONO_FONT) } else { f.font.as_deref() }
+        }
         let old_font = font(old);
         if old_font != font(cur) {
             // No font is the document's default font, font 0 (Normal's).
-            let i = old_font.map_or(0, |n| self.t.font(&n));
+            let i = old_font.map_or(0, |n| self.t.font(n));
             ctl.push_str(&format!("\\f{i}"));
         }
         let half_points = |s: Option<f32>| s.map(|s| (s * 2.0).round().clamp(2.0, 3276.0) as i32);
@@ -1106,7 +1109,7 @@ struct Reader {
     st: St,
     stack: Vec<St>,
     overflow: usize,
-    fonts: HashMap<i32, String>,
+    fonts: HashMap<i32, Arc<str>>,
     font_cur: i32,
     font_name: String,
     /// Code pages of the fonts whose charset names one (`\fcharset204` → 1251).
@@ -1398,7 +1401,9 @@ impl Reader {
 
     fn commit_font(&mut self) {
         let name = std::mem::take(&mut self.font_name).trim().trim_end_matches(';').trim().to_string();
-        if !name.is_empty() && self.fonts.len() < 4096 {
+        if let Some(name) = model::kept_font(&name).filter(|n| !n.is_empty())
+            && self.fonts.len() < 4096
+        {
             self.fonts.insert(self.font_cur, name);
             if let Some(cp) = self.font_cp_cur.take() {
                 self.font_cps.insert(self.font_cur, cp);
@@ -1626,7 +1631,8 @@ impl Reader {
                 for c in s.chars() {
                     if c == ';' {
                         self.commit_font();
-                    } else {
+                    } else if self.font_name.len() <= model::MAX_FONT_NAME {
+                        // One past the limit is enough for `commit_font` to drop the name.
                         self.font_name.push(c);
                     }
                 }
@@ -1646,8 +1652,10 @@ impl Reader {
                 for c in s.chars() {
                     if c == ';' {
                         self.commit_style();
-                    } else {
+                    } else if self.style_name.len() < model::MAX_FONT_NAME {
                         self.style_name.push(c);
+                    } else {
+                        model::dropped(model::Dropped::StyleName);
                     }
                 }
             }
@@ -2128,9 +2136,9 @@ impl Reader {
             "cell" => self.end_cell(),
             "nestcell" => self.end_para(true),
             "row" => self.end_row(),
-            "line" => self.ch('\n'),
+            "line" | "softline" => self.ch('\n'),
             "tab" => self.ch('\t'),
-            "page" => self.ch('\u{000C}'),
+            "page" | "softpage" => self.ch('\u{000C}'),
             "column" => self.ch('\u{000E}'),
             "emdash" => self.ch('—'),
             "endash" => self.ch('–'),
@@ -2144,6 +2152,8 @@ impl Reader {
             "qmspace" => self.ch('\u{2005}'),
             "zwj" => self.ch('\u{200D}'),
             "zwnj" => self.ch('\u{200C}'),
+            "zwbo" => self.ch('\u{200B}'),
+            "zwnbo" => self.ch('\u{2060}'),
             "u" => {
                 let u = (pv as i64).rem_euclid(65_536) as u16;
                 if (0xD800..0xDC00).contains(&u) {
@@ -2327,7 +2337,7 @@ impl Reader {
             "fldrslt" => {
                 let link = self.st.field.and_then(|i| self.fields.get(i)).and_then(|s| hyperlink(s));
                 if link.is_some() {
-                    self.st.fmt.link = link;
+                    self.st.fmt.link = link.as_deref().and_then(model::kept_link);
                 }
             }
             _ => {}
@@ -2727,7 +2737,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
                         i += 2;
                         continue;
                     }
-                    b'~' => {
+                    b'~' | b' ' => {
                         r.ch('\u{00A0}');
                         i += 2;
                     }
@@ -2805,7 +2815,7 @@ fn parse_full(bytes: &[u8]) -> Result<Parsed, String> {
     if blocks.is_empty() {
         blocks.push(FBlock::Para(Para::default()));
     }
-    let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).cloned();
+    let default_font = r.fonts.get(&r.deff).filter(|n| !model::is_mono(n)).map(|n| n.to_string());
     Ok(Parsed { flow: Flow { blocks, meta: r.meta }, page: r.page, last_section, default_font, headers_footers })
 }
 
@@ -2848,6 +2858,7 @@ fn column_grid(rows: &mut [Vec<Cell>], rights: &[Vec<i32>]) -> Vec<f32> {
 
 /// Parse RTF bytes into a document.
 pub fn import(bytes: &[u8]) -> Result<Document, String> {
+    model::begin_import();
     let Parsed { flow, last_section, default_font, headers_footers, .. } = parse_full(bytes)?;
     let mut doc = model::to_doc_in(&flow, last_section);
     // Each section's own headers and footers; those it leaves out stay linked to the previous.
@@ -4396,5 +4407,13 @@ mod tests {
         assert!(exported.contains("\\clvertalt"));
         assert!(exported.contains("\\clvertalc"));
         assert!(exported.contains("\\clvertalb"));
+    }
+
+    #[test]
+    fn rtf_backslash_space_and_special_breaks() {
+        let rtf = br"{\rtf1\ansi A\ B\~C\zwbo D\softline E\softpage F\par}";
+        let doc = import(rtf).unwrap();
+        let p = doc.body.first().unwrap().as_para().unwrap();
+        assert_eq!(p.text, "A\u{00A0}B\u{00A0}C\u{200B}D\nE\u{000C}F");
     }
 }

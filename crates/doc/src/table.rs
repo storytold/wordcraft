@@ -48,6 +48,12 @@ impl Row {
     pub fn first_grid(&self) -> usize {
         (self.props.grid_before as usize).min(MAX_COLS)
     }
+
+    /// Grid columns `w:gridAfter` leaves empty after the row's last cell, bounded as the DOCX
+    /// reader bounds them (a native document can say anything).
+    pub fn grid_after(&self) -> usize {
+        (self.props.grid_after as usize).min(MAX_COLS)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Default)]
@@ -97,7 +103,8 @@ impl Table {
     }
 
     pub fn cols(&self) -> usize {
-        let row_cols = |r: &Row| r.first_grid() + r.cells.iter().map(Cell::span).sum::<usize>() + r.props.grid_after as usize;
+        let row_cols =
+            |r: &Row| r.first_grid().saturating_add(r.cells.iter().map(Cell::span).fold(0, usize::saturating_add)).saturating_add(r.grid_after());
         self.grid.len().max(self.rows.iter().map(row_cols).max().unwrap_or(0))
     }
 

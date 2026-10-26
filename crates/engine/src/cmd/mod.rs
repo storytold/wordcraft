@@ -150,16 +150,43 @@ pub fn selected_paths(s: &Session) -> Vec<wordcraft_doc::Path> {
     s.doc.para_paths_in(&a, &b)
 }
 
-/// Delete the selection (respecting track changes); returns the collapsed position.
-pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
+/// What one selection deletion actually did, for IME outcome classification.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct SelectionDelete {
+    pub at: Pos,
+    pub content_changed: bool,
+    pub state_changed: bool,
+}
+
+/// Delete the selection (respecting track changes), reporting whether committed content changed.
+///
+/// Under Track Changes an all-already-deleted range is a real no-op: no revision record is
+/// created and the effect says so.
+pub(crate) fn delete_selection_effect(s: &mut Session) -> Result<SelectionDelete, CmdError> {
     let (a, b) = s.sel.ordered();
     if a == b {
-        return Ok(a);
+        return Ok(SelectionDelete { at: a, content_changed: false, state_changed: false });
     }
     controls::check_delete(s, &a, &b)?;
-    let at = if s.doc.settings.track_changes { track_delete(s, &a, &b)? } else { s.doc.delete_range(&a, &b)? };
-    s.sel = crate::Selection::caret(at.clone());
-    Ok(at)
+    let effect = if s.doc.settings.track_changes {
+        if !track_delete_would_change(s, &a, &b) {
+            SelectionDelete { at: a.clone(), content_changed: false, state_changed: false }
+        } else {
+            let rid = new_revision(s, RevisionKind::Delete);
+            let deleted = track_delete_as(s, &a, &b, rid)?;
+            SelectionDelete { at: deleted.at, content_changed: deleted.changed, state_changed: deleted.changed }
+        }
+    } else {
+        let at = s.doc.delete_range(&a, &b)?;
+        SelectionDelete { at, content_changed: true, state_changed: true }
+    };
+    s.sel = crate::Selection::caret(effect.at.clone());
+    Ok(effect)
+}
+
+/// Delete the selection (respecting track changes); returns the collapsed position.
+pub fn delete_selection(s: &mut Session) -> Result<Pos, CmdError> {
+    delete_selection_effect(s).map(|e| e.at)
 }
 
 /// A revision record for the current author.
@@ -217,15 +244,47 @@ pub fn remove_empty_para(s: &mut Session, story: StoryRef, path: &wordcraft_doc:
     Ok(true)
 }
 
+/// Whether a tracked deletion of `a..b` would change anything: any non-deleted run intersects
+/// the range, or a removable/markable paragraph mark lies inside it.
+pub(crate) fn track_delete_would_change(s: &Session, a: &Pos, b: &Pos) -> bool {
+    let paths = s.doc.paths_between(a, b);
+    for path in &paths {
+        let Some(p) = s.doc.para(a.story, path) else { continue };
+        let from = if *path == a.path { a.off } else { 0 };
+        let to = if *path == b.path { b.off } else { p.len() };
+        if p.run_ranges().any(|(r, c)| r.end > from && r.start < to && c.del.is_none()) {
+            return true;
+        }
+        if *path != b.path && has_next_para(s, a.story, path) && p.mark.del.is_none() {
+            return true;
+        }
+    }
+    false
+}
+
+/// What one tracked deletion did.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub(crate) struct TrackDeleteEffect {
+    pub at: Pos,
+    /// At least one run was removed/marked deleted, or a paragraph mark was removed/marked.
+    pub changed: bool,
+}
+
 /// Tracked deletion: own insertions are removed, other text is marked deleted.
+///
+/// Preflights first: an all-already-deleted range does nothing and creates no revision record.
 pub(crate) fn track_delete(s: &mut Session, a: &Pos, b: &Pos) -> Result<Pos, CmdError> {
+    if !track_delete_would_change(s, a, b) {
+        return Ok(a.clone());
+    }
     let rid = new_revision(s, RevisionKind::Delete);
-    track_delete_as(s, a, b, rid)
+    track_delete_as(s, a, b, rid).map(|e| e.at)
 }
 
 /// [`track_delete`] marking the deleted text with revision `rid`.
-pub(crate) fn track_delete_as(s: &mut Session, a: &Pos, b: &Pos, rid: u32) -> Result<Pos, CmdError> {
+pub(crate) fn track_delete_as(s: &mut Session, a: &Pos, b: &Pos, rid: u32) -> Result<TrackDeleteEffect, CmdError> {
     let author = s.author.clone();
+    let mut changed = false;
     // Remove text this author inserted (it never existed for the reader); mark the rest.
     let paths = s.doc.paths_between(a, b);
     for path in paths.iter().rev() {
@@ -248,6 +307,7 @@ pub(crate) fn track_delete_as(s: &mut Session, a: &Pos, b: &Pos, rid: u32) -> Re
             } else {
                 para.format(x, y, &|c| c.del = Some(rid))?;
             }
+            changed = true;
         }
         // The paragraph mark is inside the range unless this is its last paragraph. Like text,
         // a mark this author inserted is removed (the paragraphs join again), any other is
@@ -264,14 +324,27 @@ pub(crate) fn track_delete_as(s: &mut Session, a: &Pos, b: &Pos, rid: u32) -> Re
                     p.mark.del = Some(rid);
                     p.touch();
                 }
+                changed = true;
             }
         }
     }
-    Ok(a.clone())
+    Ok(TrackDeleteEffect { at: a.clone(), changed })
+}
+
+/// What one text insertion/deletion commit changed, for IME outcome classification.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct InsertEffect {
+    pub content_changed: bool,
+    pub state_changed: bool,
 }
 
 /// Insert typed text at the caret (replacing the selection), with pending formatting and track changes.
 pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
+    insert_text(s, text, true).map(|_| ())
+}
+
+/// [`type_text`] with the effect the insertion had.
+pub(crate) fn type_text_effect(s: &mut Session, text: &str) -> Result<InsertEffect, CmdError> {
     insert_text(s, text, true)
 }
 
@@ -279,30 +352,38 @@ pub fn type_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
 /// being transferred, not Enter key presses: an empty list item between them stays (Enter on
 /// one would end the list).
 pub fn paste_text(s: &mut Session, text: &str) -> Result<(), CmdError> {
-    insert_text(s, text, false)
+    insert_text(s, text, false).map(|_| ())
 }
 
-fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError> {
+/// Inserts typed or pasted text at the caret: resolves field ends and content-control placeholders,
+/// deletes the selection, applies tracked-change insertions, and splits paragraphs at every typed
+/// line break or pasted paragraph separator. A pasted separator keeps the list semantics of pasted
+/// text; a one-line control suppresses typed breaks only. It gives an otherwise undirected paragraph
+/// right-to-left direction when its first strong letter is RTL, and returns whether content or state
+/// changed.
+fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<InsertEffect, CmdError> {
     let mut props = s.typing_props();
     if s.sel.is_collapsed() {
         s.sel = crate::Selection::caret(s.doc.past_field_ends(&s.sel.focus));
     }
     // Content controls: a placeholder is replaced, locked ones refuse.
-    if let Some(p) = controls::prepare_edit(s)? {
+    let prepared = controls::prepare_edit(s)?;
+    let placeholder_changed = prepared.is_some();
+    if let Some(p) = prepared {
         props = p;
     }
     // Pasted text is text: pending properties left by AutoCorrect don't give it a symbol's font (#2036).
     if !enter {
         props = props.without_symbol();
     }
-    delete_selection(s)?;
+    let deletion = delete_selection_effect(s)?;
     // Typed text is new: never deleted, and not a formatting change of the text around it.
     props.fmt_change = None;
     // Its direction comes from its own letters, as on screen, not from the run it's typed into:
     // Latin typed into reopened Hebrew must not be saved as right-to-left (#1543). The DOCX
     // writer marks the right-to-left pieces itself.
     props.rtl = None;
-    if s.doc.settings.track_changes {
+    if s.doc.settings.track_changes && !text.is_empty() {
         props.ins = Some(new_revision(s, RevisionKind::Insert));
         props.del = None;
     } else {
@@ -311,6 +392,7 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError>
     }
     let mut at = s.sel.focus.clone();
     let mut first = true;
+    let mut inserted = false;
     // Typed line breaks are the Enter key between the lines: in a one-line control it does
     // nothing, so the lines run together and the control stays one paragraph (pasted text keeps
     // its breaks, as before).
@@ -318,10 +400,12 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError>
     for part in text.split(['\r', '\u{2029}']) {
         if !first && !no_breaks {
             at = split_para_as(s, &at, enter)?;
+            inserted = true;
         }
         first = false;
         let part = part.replace('\u{000B}', "\n");
         if !part.is_empty() {
+            inserted = true;
             let starts_para = direction_unset(s, &at);
             at = s.doc.insert_text(&at, &part, &props)?;
             // Typing Arabic, Hebrew… as the first letters of a paragraph whose direction nothing
@@ -338,7 +422,8 @@ fn insert_text(s: &mut Session, text: &str, enter: bool) -> Result<(), CmdError>
     }
     s.sel = crate::Selection::caret(at);
     s.goal_x = None;
-    Ok(())
+    let content_changed = deletion.content_changed || inserted;
+    Ok(InsertEffect { content_changed, state_changed: deletion.state_changed || content_changed || placeholder_changed })
 }
 
 /// Is the paragraph at `at` still without letters (empty, or only spaces, digits and

@@ -92,20 +92,25 @@ struct Measured {
     order: HashMap<String, Vec<String>>,
 }
 
+/// Stable storage id for the ribbon fit plan of the current frame.
 fn frame_id() -> Id {
-    Id::new("ribbon_fit_frame")
+    Id::unique("ribbon_fit_frame")
 }
+/// Stable storage id for widths measured from earlier ribbon frames.
 fn measured_id() -> Id {
-    Id::new("ribbon_fit_measured")
+    Id::unique("ribbon_fit_measured")
 }
+/// Stable storage id for the ribbon's compact-layout choices.
 fn compact_id() -> Id {
-    Id::new("ribbon_fit_compact")
+    Id::unique("ribbon_fit_compact")
 }
+/// Stable storage id for the points a group would save by drawing compact.
 fn saving_id() -> Id {
-    Id::new("ribbon_fit_saving")
+    Id::unique("ribbon_fit_saving")
 }
+/// Stable storage id for whether this frame's ribbon fit plan is active.
 fn active_id() -> Id {
-    Id::new("ribbon_fit_active")
+    Id::unique("ribbon_fit_active")
 }
 
 /// What the measured widths depend on besides the groups themselves.

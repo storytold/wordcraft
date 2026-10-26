@@ -217,11 +217,6 @@ impl Patterns {
         self.exceptions.len()
     }
 
-    #[allow(dead_code)]
-    pub(crate) fn from_parts(alpha: Alphabet, map: FxMap<u128, Box<[u8]>>, max_len: usize) -> Patterns {
-        Patterns { alpha, map, max_len, exceptions: HashMap::new() }
-    }
-
     /// Make `letters` part of the alphabet even if no pattern mentions them.
     pub fn add_letters(&mut self, letters: impl IntoIterator<Item = char>) {
         for c in letters {

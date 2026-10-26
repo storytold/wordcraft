@@ -356,6 +356,7 @@ impl AutoCorrectForm {
             "borderLines": o.border_lines,
             "tabIndent": o.tab_indent,
             "headingStyles": o.heading_styles,
+            "doubleSpacePeriod": o.double_space_period,
             "autoAddFirstLetter": o.auto_add_first_letter,
             "autoAddInitialCaps": o.auto_add_initial_caps,
         })
@@ -401,6 +402,7 @@ fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bo
             ui.checkbox(&mut o.bold_italic, tl!("*Bold* and _italic_ as real formatting"));
             ui.checkbox(&mut o.dashes, tl!("Hyphens (--) as dashes (—)"));
             ui.checkbox(&mut o.links, tl!("Internet addresses as links"));
+            ui.checkbox(&mut o.double_space_period, tl!("Add a period with double-space"));
             heading(ui, "Apply as you type");
             ui.checkbox(&mut o.bullets, tl!("Automatic bulleted lists"));
             ui.checkbox(&mut o.numbering, tl!("Automatic numbered lists"));
@@ -423,6 +425,8 @@ fn autocorrect_ui(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) -> bo
     cancel
 }
 
+/// Draws AutoCorrect's capitalization and replacement checkboxes, the replace list with its
+/// filter and add, replace and delete actions, and the exceptions editor.
 fn autocorrect_tab(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
     let o = &mut f.options;
     ui.checkbox(&mut o.two_initial_caps, tl!("Correct TWo INitial CApitals"));
@@ -442,11 +446,11 @@ fn autocorrect_tab(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
     ui.checkbox(&mut o.caps_lock, tl!("Correct accidental usage of cAPS LOCK key"));
     ui.checkbox(&mut o.replace_text, tl!("Replace text as you type"));
     egui::Grid::new("ac_boxes").num_columns(2).spacing(vec2(8.0, 2.0)).show(ui, |ui| {
-        ui.label(tl!("Replace:"));
-        ui.label(tl!("With:"));
+        let replace_label = ui.label(tl!("Replace:"));
+        let with_label = ui.label(tl!("With:"));
         ui.end_row();
-        ui.add(egui::TextEdit::singleline(&mut f.from).desired_width(110.0));
-        ui.add(egui::TextEdit::singleline(&mut f.to).desired_width(260.0));
+        ui.add(egui::TextEdit::singleline(&mut f.from).desired_width(110.0)).labelled_by(replace_label.id);
+        ui.add(egui::TextEdit::singleline(&mut f.to).desired_width(260.0)).labelled_by(with_label.id);
         ui.end_row();
     });
     // The list, filtered to what's typed in Replace (as Word scrolls to it).
@@ -530,11 +534,12 @@ fn exceptions(app: &mut WordApp, ui: &mut Ui, f: &mut AutoCorrectForm) {
     });
 }
 
+/// Filters the math-symbol table by the typed prefix and lists each `\name` with its character.
 fn math_tab(ui: &mut Ui, f: &mut AutoCorrectForm) {
     ui.label(egui::RichText::new(tl!("In equations, typing a name after a backslash replaces it with its symbol.")).small().weak());
     ui.horizontal(|ui| {
-        ui.label(tl!("Replace:"));
-        ui.add(egui::TextEdit::singleline(&mut f.math_filter).desired_width(140.0));
+        let label = ui.label(tl!("Replace:"));
+        ui.add(egui::TextEdit::singleline(&mut f.math_filter).desired_width(140.0)).labelled_by(label.id);
     });
     let filter = f.math_filter.trim().trim_start_matches('\\').to_string();
     egui::ScrollArea::vertical().id_salt("ac_math").max_height(240.0).auto_shrink([false, true]).show(ui, |ui| {
@@ -616,7 +621,7 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     if st.formatting && st.show_styles {
         let allowed = st.allowed.get_or_insert_with(Vec::new);
         ui.label(egui::RichText::new(tl!("Checked styles are allowed:")).small());
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             if ui.small_button(tl!("All")).clicked() {
                 *allowed = styles.iter().map(|(id, _)| id.clone()).collect();
             }
@@ -638,14 +643,16 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
         });
     }
     heading(ui, "2. Editing restrictions");
-    ui.checkbox(&mut st.editing, tl!("Only allow this kind of editing:"));
+    let editing = ui.checkbox(&mut st.editing, tl!("Only allow this kind of editing:"));
     ui.add_enabled_ui(st.editing, |ui| {
         let current = EDIT_MODES.get(st.mode).map(|m| m.1).unwrap_or("");
-        egui::ComboBox::from_id_salt("restrict_mode").selected_text(tl!(current)).width(220.0).show_ui(ui, |ui| {
-            for (i, (_, label)) in EDIT_MODES.iter().enumerate() {
-                ui.selectable_value(&mut st.mode, i, tl!(label));
-            }
-        });
+        let combo =
+            egui::ComboBox::from_id_salt("restrict_mode").selected_text(tl!(current)).width(ui.available_width().min(220.0)).show_ui(ui, |ui| {
+                for (i, (_, label)) in EDIT_MODES.iter().enumerate() {
+                    ui.selectable_value(&mut st.mode, i, tl!(label));
+                }
+            });
+        combo.response.labelled_by(editing.id);
     });
     let mode = EDIT_MODES.get(st.mode).map(|m| m.0).unwrap_or("readOnly");
     if st.editing && matches!(mode, "readOnly" | "comments") {
@@ -672,7 +679,7 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     } else {
         ui.label(egui::RichText::new(tl!("The password is optional; without it anyone can stop the protection.")).small());
         passwords(ui, st, true);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // macOS puts Cancel before OK.
             let mac = cfg!(target_os = "macos");
             let mut cancel = mac && ui.button(tl!("Cancel")).clicked();
@@ -710,17 +717,15 @@ fn setup_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane) {
     error(ui, &st.message);
 }
 
+/// Each label above its field, so both fit the narrowest pane.
 fn passwords(ui: &mut Ui, st: &mut RestrictPane, confirm: bool) {
-    egui::Grid::new("restrict_pw").num_columns(2).spacing(vec2(8.0, 4.0)).show(ui, |ui| {
-        ui.label(tl!("Password:"));
-        ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(140.0));
-        ui.end_row();
-        if confirm {
-            ui.label(tl!("Confirm password:"));
-            ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(140.0));
-            ui.end_row();
-        }
-    });
+    let width = ui.available_width().min(220.0);
+    let label = ui.label(tl!("Password:"));
+    ui.add(egui::TextEdit::singleline(st.password.as_mut_string()).password(true).desired_width(width)).labelled_by(label.id);
+    if confirm {
+        let label = ui.label(tl!("Confirm password:"));
+        ui.add(egui::TextEdit::singleline(st.confirm.as_mut_string()).password(true).desired_width(width)).labelled_by(label.id);
+    }
 }
 
 fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str) {
@@ -760,7 +765,7 @@ fn enforced_ui(app: &mut WordApp, ui: &mut Ui, st: &mut RestrictPane, mode: &str
     } else {
         ui.label(egui::RichText::new(tl!("Type the password to stop the protection.")).small());
         passwords(ui, st, false);
-        ui.horizontal(|ui| {
+        ui.horizontal_wrapped(|ui| {
             // macOS puts Cancel before OK.
             let mac = cfg!(target_os = "macos");
             let cancel_first = mac && ui.button(tl!("Cancel")).clicked();
@@ -896,5 +901,45 @@ mod tests {
             h.step();
         }
         assert!(texts(&h).iter().any(|t| t.contains("(none)")), "no matches: the hint shows");
+    }
+
+    /// #2848 through the real dialog: tick "Add a period with double-space" on the AutoFormat As
+    /// You Type tab, press OK, and a double Space typed in the page makes a period.
+    #[test]
+    fn the_double_space_option_is_set_in_the_dialog_and_works_when_typing() {
+        use egui_kittest::kittest::Queryable;
+        let mut app = app("");
+        app.run("tools.autocorrect", json!({})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        h.get_by_label("AutoFormat As You Type").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("Add a period with double-space").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label("OK").click();
+        for _ in 0..4 {
+            h.step();
+        }
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert!(h.state().session.prefs.autocorrect.double_space_period, "the option is on");
+        h.state_mut().canvas.focused = true;
+        for t in ["Hello", " ", " ", "world"] {
+            h.event(egui::Event::Text(t.to_string()));
+            h.step();
+        }
+        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hello. world");
     }
 }
