@@ -393,6 +393,13 @@ while ($null -ne ($line = $reader.ReadLine())) {
 
     #[cfg(target_os = "windows")]
     #[test]
+    fn fake_host_start_fails_if_it_exits_before_ready() {
+        let err = Host::start_with(super::super::windows_command(None, "exit 1").command(), &|| false);
+        assert!(err.is_err());
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
     fn fake_host_reports_done_including_before_started() {
         let mut host = fake_host();
         assert!(matches!(host.speak("ok", None, 1.0, &|| false), Ok(Spoken::Done)));
