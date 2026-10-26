@@ -567,7 +567,7 @@ fn system_offset_secs(unix: u64) -> i64 {
 }
 
 /// On the web the browser's `Date` gives the offset directly (chrono isn't used there).
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 fn system_offset_secs(unix: u64) -> i64 {
     let ms = (unix as f64) * 1000.0;
     if !ms.is_finite() {
@@ -576,6 +576,12 @@ fn system_offset_secs(unix: u64) -> i64 {
     // `getTimezoneOffset` is minutes *west* of UTC (UTC+13 gives -780); NaN for an invalid date.
     let west_min = js_sys::Date::new(&js_sys::wasm_bindgen::JsValue::from_f64(ms)).get_timezone_offset();
     if west_min.is_finite() && west_min.abs() <= 26.0 * 60.0 { -(west_min as i64) * 60 } else { 0 }
+}
+
+/// Other wasm targets (WASI) have neither chrono's clock nor a browser: UTC.
+#[cfg(all(target_arch = "wasm32", not(target_os = "unknown")))]
+fn system_offset_secs(_unix: u64) -> i64 {
+    0
 }
 
 /// The local civil date and time now: see [`local_civil`].
