@@ -1,7 +1,9 @@
 //! The persistent Windows speech host: one PowerShell process per reading, so System.Speech and
 //! the synthesizer load once instead of once per sentence. The current `speak` path remains the
 //! fallback when the host cannot start or fails before a sentence starts; once a sentence has
-//! started, a dead host is reported as an error so the sentence is not repeated.
+//! started, a dead host is reported as an error so the sentence is not repeated. The Windows
+//! default voice is captured when the host starts and restored before every sentence, so
+//! changing it mid-reading takes effect on the next reading.
 
 #[cfg(target_os = "windows")]
 use std::io::{BufRead, BufReader, Write};
@@ -29,6 +31,7 @@ const SPEAK_TIMEOUT: Duration = Duration::from_secs(300);
 const HOST_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Speech
 $synth = New-Object System.Speech.Synthesis.SpeechSynthesizer
+# Captured once per reading: a default-voice change mid-reading takes effect next time.
 $defaultVoice = $synth.Voice.Name
 $defaultLanguage = $synth.Voice.Culture.TwoLetterISOLanguageName
 $utf8 = New-Object System.Text.UTF8Encoding($false)
