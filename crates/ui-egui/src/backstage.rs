@@ -329,7 +329,7 @@ fn home_page(app: &mut WordApp, ui: &mut Ui) {
 fn new_page(app: &mut WordApp, ui: &mut Ui) {
     let t = Tokens::get(ui.ctx());
     heading(ui, "New");
-    let id = egui::Id::unique("backstage_template_search");
+    let id = app.window_id("backstage_template_search");
     let mut query = ui.ctx().data(|d| d.get_temp::<String>(id)).unwrap_or_default();
     let search = ui.add(egui::TextEdit::singleline(&mut query).hint_text(tl!("Search for templates")).desired_width(360.0));
     if search.changed() {
@@ -571,8 +571,8 @@ pub(crate) fn forget_save_as_error(ctx: &egui::Context) {
 
 /// Open a file from the Recent list. A file that can't be opened (deleted, moved, unreadable)
 /// leaves File open so the list can say why, rather than closing it on a greyed-out window.
-fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
-    app.run("file.open", json!({"path": path}))?;
+pub(crate) fn open_recent(app: &mut WordApp, path: &str) -> Result<(), String> {
+    app.open_file(path, None)?;
     app.ui.backstage = false;
     app.canvas.want_focus = true;
     Ok(())
@@ -1038,29 +1038,27 @@ mod tests {
 
     #[test]
     #[cfg(not(target_arch = "wasm32"))]
-    fn recovery_restore_uses_save_changes_and_resets_autosave_permission() {
+    fn recovery_restore_opens_beside_unsaved_work_without_autosave_permission() {
         let (app, root) = recovery_app();
         let mut h = recovery_harness(app);
         settle_recovery(&mut h);
         h.state_mut().execute("text.insert", json!({"text": "Current unsaved work"})).unwrap();
+        let work = h.state().session.document_id();
         h.state_mut().autosave_path = Some(root.join("must-not-write.docx"));
         h.state_mut().run("file.recover", json!({})).unwrap();
         h.run_steps(4);
         assert_eq!(h.state().session.recovery_documents().len(), 1);
         h.get_by_label("Restore").click();
-        h.run_steps(4);
-        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })));
-        h.get_by_label("Cancel").click();
-        h.run_steps(4);
-        assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Current unsaved work");
-        h.get_by_label("Restore").click();
-        h.run_steps(4);
-        h.get_by_label("Don't Save").click();
         settle_recovery(&mut h);
+        assert!(h.state().dialog.is_none(), "nothing is replaced, so nothing to ask");
+        assert_ne!(h.state().session.document_id(), work);
         assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body), "Recovered synthetic work");
         assert!(h.state().session.dirty && h.state().session.path.is_none());
         assert!(h.state().autosave_path.is_none());
         assert!(!h.state().ui.backstage);
+        let kept = h.state_mut().session.with_document(work, |s| s.doc.plain_text(wordcraft_doc::StoryRef::Body)).unwrap();
+        assert_eq!(kept, "Current unsaved work");
+        assert!(h.state().session.recovery_documents().is_empty(), "the restored document keeps the copy");
         assert!(!root.join("must-not-write.docx").exists());
         drop(h);
         let _ = std::fs::remove_dir_all(root);
@@ -1122,14 +1120,15 @@ mod tests {
         assert!(h.query_by_label("Report").is_some(), "the built-in templates stay");
 
         // The search covers both.
-        h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("backstage_template_search"), "memo".to_string()));
+        let search = h.state().window_id("backstage_template_search");
+        h.ctx.data_mut(|d| d.insert_temp(search, "memo".to_string()));
         h.run_steps(3);
         assert!(h.query_by_label("Team memo").is_some(), "search finds a personal template");
         assert!(h.query_by_label("Contract").is_none() && h.query_by_label("Report").is_none());
-        h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("backstage_template_search"), "zzz".to_string()));
+        h.ctx.data_mut(|d| d.insert_temp(search, "zzz".to_string()));
         h.run_steps(3);
         assert!(h.query_by_label("No templates match your search.").is_some());
-        h.ctx.data_mut(|d| d.insert_temp(egui::Id::unique("backstage_template_search"), String::new()));
+        h.ctx.data_mut(|d| d.insert_temp(search, String::new()));
         h.run_steps(3);
 
         h.get_by_label("Team memo").click();
@@ -1174,33 +1173,25 @@ mod tests {
         let _ = std::fs::remove_dir_all(&chosen);
     }
 
-    /// A personal template replaces the document like New does: unsaved changes are asked about
-    /// first, and nothing is replaced until that is answered.
+    /// A personal template opens a new document like New does: nothing is asked, and the
+    /// document with unsaved changes stays open beside it.
     #[test]
-    fn a_personal_template_asks_about_unsaved_changes_first() {
+    fn a_personal_template_opens_beside_unsaved_work() {
         let dir = personal_dir("dirty");
         let memo = dir.join("Memo.dotx");
         write_template(&memo, "From the template");
         let mut h = new_page_harness(Some(dir.clone()));
         h.state_mut().run("document.setText", json!({"text": "Unsaved work"})).unwrap();
-        assert!(h.state().session.dirty);
+        let first = h.state().session.document_id();
         h.get_by_label("Memo").click();
         h.run_steps(3);
         let body = |h: &egui_kittest::Harness<'static, WordApp>| h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body);
-        assert!(matches!(h.state().dialog, Some(crate::dialogs::Dialog::SaveChanges { .. })), "Save changes is asked");
-        assert_eq!(body(&h), "Unsaved work", "the document stays until the question is answered");
-        h.state_mut().run("ui.saveChanges", json!({"answer": "cancel"})).unwrap();
-        h.run_steps(2);
-        assert_eq!(body(&h), "Unsaved work", "Cancel keeps it");
-        assert_eq!(h.state().session.doc.settings.attached_template, None);
-        h.state_mut().run("ui.backstage", json!({"value": true, "page": "new"})).unwrap();
-        h.run_steps(3);
-        h.get_by_label("Memo").click();
-        h.run_steps(3);
-        h.state_mut().run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
-        h.run_steps(2);
-        assert!(body(&h).contains("From the template"), "Don't Save makes the document from the template");
+        assert!(h.state().dialog.is_none(), "nothing is asked");
+        assert!(body(&h).contains("From the template"));
         assert_eq!(h.state().session.doc.settings.attached_template.as_deref(), Some(memo.to_string_lossy().as_ref()));
+        h.state_mut().run("view.switchWindows", json!({"id": first})).unwrap();
+        assert_eq!(body(&h), "Unsaved work", "the unsaved document is still open");
+        assert!(h.state().session.dirty);
         drop(h);
         let _ = std::fs::remove_dir_all(&dir);
     }

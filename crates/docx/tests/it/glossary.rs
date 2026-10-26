@@ -234,6 +234,131 @@ fn edited_glossary_is_written_from_the_model() {
     assert_eq!(twice.get(&target), files.get(&target));
 }
 
+#[test]
+fn an_unchanged_glossary_follows_the_privacy_settings() {
+    // An untouched glossary was written back byte for byte, so the names and dates of its
+    // tracked changes survived a save that removes personal information (#3692).
+    let tracked = r#"<w:docPart><w:docPartPr><w:name w:val="Clause"/><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added clause</w:t></w:r></w:ins></w:p></w:docPartBody></w:docPart>"#;
+    let bytes = package(
+        &[("rId7", GLOSSARY_REL, "glossary/document.xml")],
+        &[
+            ("[Content_Types].xml", content_types(&[("/word/glossary/document.xml", GLOSSARY_CT)])),
+            ("word/glossary/document.xml", glossary_xml(tracked)),
+        ],
+    );
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    let as_read = save(&doc);
+    let kept = text(&as_read, &glossary_target(&as_read).expect("a glossary"));
+    assert!(kept.contains("Quill Ramsey"), "the fixture's glossary is kept verbatim: {kept}");
+    for (personal, dates) in [(true, false), (false, true), (true, true)] {
+        let mut private = doc.clone();
+        private.settings.remove_personal_info = personal;
+        private.settings.remove_date_time = dates;
+        let files = save(&private);
+        let g = text(&files, &glossary_target(&files).expect("a glossary"));
+        assert!(g.contains("Added clause"), "{g}");
+        assert_eq!(g.contains("Quill Ramsey"), !personal, "{g}");
+        assert_eq!(g.contains("2026-03-04T05:06:07Z"), !dates, "{g}");
+    }
+}
+
+#[test]
+fn a_private_save_keeps_the_glossary_entries_the_model_passed_over() {
+    // The privacy settings had the glossary written from the model, which holds only the
+    // entries the reader took: one without a name was lost, and with no other entry the whole
+    // glossary went. The kept parts are now written without the names and dates instead.
+    let nameless = r#"<w:docPart><w:docPartPr><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Nameless entry</w:t></w:r></w:ins><w:commentRangeStart w:id="0"/><w:r><w:t>noted</w:t></w:r><w:commentRangeEnd w:id="0"/><w:r><w:commentReference w:id="0"/></w:r></w:p></w:docPartBody></w:docPart>"#;
+    // The comments part binds WordprocessingML to another prefix: names are matched by namespace.
+    let comments = format!(
+        r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?><x:comments xmlns:x="{W}"><x:comment x:id="0" x:author="Quill Ramsey" x:date="2026-03-04T05:06:07Z" x:initials="QR"><x:p><x:r><x:t>A note</x:t></x:r></x:p></x:comment></x:comments>"#
+    );
+    let bytes = package(
+        &[("rId7", GLOSSARY_REL, "glossary/document.xml")],
+        &[
+            (
+                "[Content_Types].xml",
+                content_types(&[
+                    ("/word/glossary/document.xml", GLOSSARY_CT),
+                    ("/word/glossary/comments.xml", "application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"),
+                ]),
+            ),
+            ("word/glossary/document.xml", glossary_xml(nameless)),
+            ("word/glossary/_rels/document.xml.rels", rels(&[("rId1", &format!("{REL}/comments"), "comments.xml")])),
+            ("word/glossary/comments.xml", comments),
+        ],
+    );
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    assert!(doc.glossary.is_empty(), "the reader passes over an entry without a name");
+    for (personal, dates) in [(true, false), (false, true), (true, true)] {
+        let mut private = doc.clone();
+        private.settings.remove_personal_info = personal;
+        private.settings.remove_date_time = dates;
+        let files = save(&private);
+        let target = glossary_target(&files).expect("the glossary survives");
+        let g = text(&files, &target);
+        assert!(g.contains("Nameless entry"), "{g}");
+        assert_eq!(g.contains("Quill Ramsey"), !personal, "{g}");
+        assert_eq!(g.contains("2026-03-04T05:06:07Z"), !dates, "{g}");
+        let c = files.iter().find(|(n, _)| n.starts_with("word/glossary/comments")).map(|(_, b)| String::from_utf8_lossy(b).into_owned());
+        let c = c.expect("the glossary's comments survive");
+        assert!(c.contains("A note"), "{c}");
+        assert_eq!(c.contains("Quill Ramsey"), !personal, "{c}");
+        assert_eq!(c.contains("x:initials=\"QR\""), !personal, "{c}");
+        assert_eq!(c.contains("2026-03-04T05:06:07Z"), !dates, "{c}");
+    }
+}
+
+#[test]
+fn a_kept_glossary_that_cant_be_rewritten_privately_is_written_from_the_model() {
+    // UTF-16 markup isn't rewritten in place: the model, which applies the settings, is written.
+    let tracked = r#"<w:docPart><w:docPartPr><w:name w:val="Clause"/><w:category><w:name w:val="General"/><w:gallery w:val="docParts"/></w:category></w:docPartPr><w:docPartBody><w:p><w:ins w:id="1" w:author="Quill Ramsey" w:date="2026-03-04T05:06:07Z"><w:r><w:t>Added clause</w:t></w:r></w:ins></w:p></w:docPartBody></w:docPart>"#;
+    let utf16: Vec<u8> = [0xFF, 0xFE].into_iter().chain(glossary_xml(tracked).encode_utf16().flat_map(u16::to_le_bytes)).collect();
+    let bytes = zip(&[
+        ("_rels/.rels", rels(&[("rIdMain", &format!("{REL}/officeDocument"), "word/document.xml")]).into_bytes()),
+        (
+            "word/document.xml",
+            format!(r#"<w:document xmlns:w="{W}"><w:body><w:p><w:r><w:t>Body</w:t></w:r></w:p></w:body></w:document>"#).into_bytes(),
+        ),
+        ("word/_rels/document.xml.rels", rels(&[("rId7", GLOSSARY_REL, "glossary/document.xml")]).into_bytes()),
+        ("[Content_Types].xml", content_types(&[("/word/glossary/document.xml", GLOSSARY_CT)]).into_bytes()),
+        ("word/glossary/document.xml", utf16),
+    ]);
+    let mut doc = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(doc.glossary.len(), 1);
+    doc.settings.remove_personal_info = true;
+    let (files, warned) = warnings(|| save(&doc));
+    let g = text(&files, &glossary_target(&files).expect("a glossary"));
+    assert!(g.contains("Added clause") && !g.contains("Quill Ramsey"), "{g}");
+    // What the model doesn't hold is lost: the save says so (review of #3872).
+    assert_eq!(warned.iter().filter(|w| w.contains("written from its entries")).count(), 1, "{warned:?}");
+}
+
+/// `f`'s result and the warnings logged on this thread while it ran.
+fn warnings<T>(f: impl FnOnce() -> T) -> (T, Vec<String>) {
+    use std::cell::RefCell;
+    struct Capture;
+    thread_local! {
+        static LINES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    }
+    impl log::Log for Capture {
+        fn enabled(&self, m: &log::Metadata) -> bool {
+            m.level() <= log::Level::Warn
+        }
+        fn log(&self, r: &log::Record) {
+            if self.enabled(r.metadata()) {
+                LINES.with(|l| l.borrow_mut().push(r.args().to_string()));
+            }
+        }
+        fn flush(&self) {}
+    }
+    static CAPTURE: Capture = Capture;
+    let _ = log::set_logger(&CAPTURE);
+    log::set_max_level(log::LevelFilter::Warn);
+    LINES.with(|l| l.borrow_mut().clear());
+    let out = f();
+    (out, LINES.with(|l| std::mem::take(&mut *l.borrow_mut())))
+}
+
 /// The relationships part of a part in `word/`.
 fn glossary_rels(part: &str) -> String {
     let (dir, file) = part.rsplit_once('/').unwrap();

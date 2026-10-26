@@ -1089,6 +1089,12 @@ impl Paragraph {
     pub fn object_offsets(&self) -> Vec<usize> {
         self.text.char_indices().filter(|(_, c)| *c == OBJ).map(|(i, _)| i).collect()
     }
+    /// (byte offset, object) for every object, in text order, in one pass. Prefer it to
+    /// [`Paragraph::object_offsets`] + [`Paragraph::object_at`], which counts the objects before
+    /// each offset again, so a loop over a paragraph's objects is quadratic (#3614).
+    pub fn objects_with_offsets(&self) -> impl Iterator<Item = (usize, &InlineObject)> + '_ {
+        self.text.char_indices().filter(|(_, c)| *c == OBJ).map(|(i, _)| i).zip(self.objects.iter())
+    }
 
     /// Insert plain text (U+FFFC is dropped) at `off` with `props`. Returns the inserted length.
     pub fn insert_text(&mut self, off: usize, s: &str, props: &CharProps) -> Result<usize> {
@@ -1559,6 +1565,11 @@ mod tests {
         assert!(matches!(p.object_at(0), Some(InlineObject::BookmarkStart { .. })));
         let off = p.object_offsets()[1];
         assert!(matches!(p.object_at(off), Some(InlineObject::Field { .. })));
+        // The one-pass walk agrees with offsets + object_at.
+        let one_pass: Vec<(usize, &InlineObject)> = p.objects_with_offsets().collect();
+        let each: Vec<(usize, &InlineObject)> = p.object_offsets().into_iter().filter_map(|o| Some((o, p.object_at(o)?))).collect();
+        assert_eq!(one_pass, each);
+        assert_eq!(one_pass.len(), 2);
         assert_eq!(p.plain_text(), "a1b");
         p.delete(0, 3).unwrap();
         assert_eq!(p.objects.len(), 1);
