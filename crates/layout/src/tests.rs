@@ -4998,11 +4998,8 @@ fn a_picture_line_in_multiple_spacing_takes_the_leading_of_its_text_or_the_parag
     ]
     .into();
     let l = lay(&d);
-    let lines: Vec<crate::para::Line> = l.pages[0]
-        .items
-        .iter()
-        .filter_map(|i| if let Placed::Lines { para, l0, .. } = i { Some(para.lines[*l0].clone()) } else { None })
-        .collect();
+    let lines: Vec<crate::para::Line> =
+        l.pages[0].items.iter().filter_map(|i| if let Placed::Lines { para, l0, .. } = i { Some(para.lines[*l0].clone()) } else { None }).collect();
     let (small, big) = (&lines[0], &lines[1]);
     let alone = lines[2].height;
     assert!((alone - (pic + small.height)).abs() < 0.01, "alone: {alone}, want {pic} + the 8pt mark's {}", small.height);
