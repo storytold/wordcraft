@@ -1082,8 +1082,14 @@ impl<'a> Builder<'a> {
                     // Other scripts: name-based heuristic (not in the preferred list).
                     // A missing Thai font keeps its one substitute face for the run (#1549).
                     if matches!(u32::from(dc), 0x0E00..=0x0E7F) {
+                        // Never fall back for known WTT 2.0 fonts: skrifa may fail to find
+                        // U+F700 in their cmap (old TrueType PUA subtable), causing a false
+                        // negative from has_thai_short_tail_support.  Keeping the WTT 2.0 face
+                        // lets the render path apply the PUA substitution and HarfBuzz shape it.
+                        let cs_font = rc_cs.as_ref().map_or(rc.font.as_str(), |r| r.font.as_str());
                         !(resolved.substituted && wordcraft_fonts::word::is_thai_family(&rc.font))
                             && !wordcraft_fonts::has_thai_short_tail_support(prim.get())
+                            && !wordcraft_fonts::word::is_wtt2_thai_font(cs_font)
                     } else {
                         wordcraft_fonts::fallback_rank(dc, &prim.get().family) > wordcraft_fonts::script_fallbacks(dc).len()
                     }
