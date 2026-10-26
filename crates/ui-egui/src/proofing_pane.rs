@@ -326,6 +326,22 @@ mod tests {
     }
 
     #[test]
+    fn spelling_review_dialog_selected_spelling_stays_actionable_when_grammar_overlaps() {
+        let mut a = app("A sentense sentense.");
+        a.session.sel = Selection::caret(Pos::body(0, 11));
+        a.run("review.spelling", json!({"wrap": false})).unwrap();
+        let mut f = a.spelling_review.take().unwrap();
+        assert_eq!(f.issue["kind"], "spelling");
+        assert!(f.current(&mut a), "the selected typo is current despite overlapping grammar");
+        f.replacement = "sentence".into();
+        f.act(&mut a, Some("review.applySuggestion"));
+        assert!(f.message.is_empty());
+        assert_eq!(a.session.doc.plain_text(StoryRef::Body), "A sentense sentence.");
+        a.run("edit.undo", json!({})).unwrap();
+        assert_eq!(a.session.doc.plain_text(StoryRef::Body), "A sentense sentense.");
+    }
+
+    #[test]
     fn spelling_review_dialog_refuses_a_stale_selection_or_replaced_body() {
         for replace in [false, true] {
             let mut a = app("The brwn fox and brwn dog.");

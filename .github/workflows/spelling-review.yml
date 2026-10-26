@@ -5,6 +5,11 @@ on:
     paths:
       - 'crates/ui-egui/src/proofing_pane.rs'
       - 'crates/ui-egui/src/panes.rs'
+      - 'crates/ui-egui/src/lib.rs'
+      - 'crates/ui-egui/src/window_ui.rs'
+      - 'crates/ui-egui/src/control.rs'
+      - 'crates/ui-egui/src/documents.rs'
+      - 'crates/ui-egui/src/canvas.rs'
       - 'crates/engine/src/cmd/review.rs'
       - '.github/workflows/spelling-review.yml'
   workflow_dispatch:

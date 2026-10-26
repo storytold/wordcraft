@@ -976,7 +976,16 @@ fn para_issues(s: &Session, story: StoryRef, path: &wordcraft_doc::Path) -> Vec<
 
 /// The issue under a position.
 fn issue_at(s: &Session, at: &Pos) -> Option<(Pos, Pos, wordcraft_proof::Issue)> {
-    para_issues(s, at.story, &at.path).into_iter().find(|(a, b, _)| a.off <= at.off && at.off <= b.off)
+    let issues = para_issues(s, at.story, &at.path);
+    let selected = s.sel.ordered();
+    // F7 can select a spelling issue inside a larger grammar issue. Keep that
+    // exact target for either selection direction before falling back to a point.
+    if at == &s.sel.focus
+        && let Some(issue) = issues.iter().find(|(a, b, _)| a == &selected.0 && b == &selected.1)
+    {
+        return Some(issue.clone());
+    }
+    issues.into_iter().find(|(a, b, _)| a.off <= at.off && at.off <= b.off)
 }
 
 fn issue_json(s: &Session, a: &Pos, b: &Pos, i: &wordcraft_proof::Issue) -> Value {
@@ -2275,4 +2284,29 @@ mod spelling_navigation_tests {
             assert_eq!(s.run("review.spelling", &json!({})).unwrap()["start"], first["start"]);
         }
     }
+    #[test]
+    fn spelling_review_dialog_navigation_resolves_selected_spelling_before_overlapping_grammar() {
+        for reverse in [false, true] {
+            let mut s = Session::new(Document::from_text("A sentense sentense."));
+            s.sel = Selection::caret(Pos::body(0, 11));
+            let selected = s.run("review.spelling", &json!({"wrap": false})).unwrap();
+            assert_eq!(selected["kind"], "spelling");
+            assert_eq!(selected["start"]["off"], 11);
+            assert_eq!(selected["text"], "sentense");
+            let issues = s.run("review.issues", &json!({})).unwrap();
+            assert!(issues.as_array().unwrap().iter().any(|i| i["kind"] == "grammar" && i["text"] == "sentense sentense"));
+            if reverse {
+                std::mem::swap(&mut s.sel.anchor, &mut s.sel.focus);
+            }
+            assert_eq!(s.run("review.suggestions", &json!({})).unwrap(), selected);
+            let elsewhere = s.run("review.suggestions", &json!({"pos": {"block": 0, "off": 5}})).unwrap();
+            assert_eq!(elsewhere["kind"], "spelling");
+            assert_eq!(elsewhere["start"]["off"], 2, "an explicit other position keeps point lookup");
+            s.run("review.applySuggestion", &json!({"text": "sentence"})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentence.");
+            s.run("edit.undo", &json!({})).unwrap();
+            assert_eq!(s.doc.plain_text(StoryRef::Body), "A sentense sentense.");
+        }
+    }
+
 }
