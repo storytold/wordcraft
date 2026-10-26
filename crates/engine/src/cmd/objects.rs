@@ -678,8 +678,9 @@ fn bounds(s: &mut Session, v: &Value) -> CmdResult {
     }
     let (w0, h0) = obj_size(&obj);
     let min = min_size(&obj);
-    let w = p::f32(v, "width").unwrap_or(w0).clamp(min, MAX_OFFSET);
-    let h = p::f32(v, "height").unwrap_or(h0).clamp(min, MAX_OFFSET);
+    // A size not given stays as it is: a move must not give a level line (0 high) a height.
+    let w = p::f32(v, "width").map_or(w0, |w| w.clamp(min, MAX_OFFSET));
+    let h = p::f32(v, "height").map_or(h0, |h| h.clamp(min, MAX_OFFSET));
     if (w, h) != (w0, h0) {
         with_obj(s, |o| o.set_size(w, h))?;
     }
@@ -1858,6 +1859,33 @@ mod tests {
         assert_eq!(s.doc.plain_text(StoryRef::Body).replace(wordcraft_doc::para::OBJ, ""), "Some text  more text");
         s.run("edit.undo", &json!({})).unwrap();
         assert_eq!((object_area(&mut s).rect.x, object_area(&mut s).rect.y), (250.0, 300.0), "{insert}");
+    }
+
+    /// Moving keeps a size it isn't given: a level line (0 high, as Word files store a rule)
+    /// moved by its body stays level, though a height given to it is still at least the minimum.
+    #[test]
+    fn moving_a_level_line_keeps_it_level() {
+        let line = InlineObject::Shape {
+            kind: wordcraft_doc::para::ShapeKind::Line,
+            w: 200.0,
+            h: 0.0,
+            fill: None,
+            stroke: None,
+            stroke_width: 1.0,
+            float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 50.0, y: 100.0, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        };
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        s.doc.insert_object(&Pos::body(0, 0), line, &Default::default()).unwrap();
+        s.run("select.range", &json!({"anchor": Pos::body(0, 0), "focus": Pos::body(0, wordcraft_doc::para::OBJ.len_utf8())})).unwrap();
+        s.run("arrange.bounds", &json!({"page": 0, "x": 150, "y": 300})).unwrap();
+        let o = s.layout().object(&Pos::body(0, 0), 0).unwrap();
+        assert_eq!((o.rect.x, o.rect.y, o.rect.w, o.rect.h), (150.0, 300.0, 200.0, 0.0));
+        s.run("arrange.bounds", &json!({"height": 0})).unwrap();
+        assert_eq!(s.layout().object(&Pos::body(0, 0), 0).unwrap().rect.h, min_size(&selected(&s).unwrap().1));
     }
 
     /// Ctrl+drag: a copy lands where dropped and is selected; the original stays, the clipboard

@@ -22,7 +22,7 @@ const MAX_OFFSET: f32 = 4000.0;
 
 fn has_connector(s: &Session) -> Option<&'static str> {
     match super::objects::selected(s) {
-        Some((_, InlineObject::Shape { kind, .. })) if kind.is_connector() => None,
+        Some((_, InlineObject::Shape { kind, .. })) if kind.is_open() => None,
         _ => Some("select a connector first"),
     }
 }
@@ -31,7 +31,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("shape.connect", "Connect Shapes", "Shape Format › Insert Shapes", connect)
             .params(
-                r#"{"start"?: end, "end"?: end}  end: {"path": [..], "off": n, "site"?: n} (glue to that body shape's connection site; nearest one when omitted) | {"x": pt, "y": pt, "page"?: n} (drag the end there: it glues to a shape's site within 12 pt, else stays free there) | null (unglue)"#,
+                r#"{"start"?: end, "end"?: end}  end: {"path": [..], "off": n, "site"?: n} (glue to that body shape's connection site; nearest one when omitted) | {"x": pt, "y": pt, "page"?: n} (drag the end there: it glues to a shape's site within 12 pt, else stays free there) | null (unglue). A plain line's ends only move to points: lines don't glue"#,
             )
             .when(has_connector),
     ]
@@ -185,13 +185,23 @@ fn ensure_id(s: &mut Session, pos: &Pos) -> Result<u32, CmdError> {
     Ok(id)
 }
 
-/// `shape.connect`: glue, move or unglue the selected connector's ends.
+/// A floating line or connector's start and end on its page: its frame's ends (flips
+/// included), turned with the frame by `deg` about its centre.
+pub fn page_ends(r: wordcraft_geom::Rect, flip_h: bool, flip_v: bool, deg: f32) -> ((f32, f32), (f32, f32)) {
+    let (a, b) = ends(r.x, r.y, r.w, r.h, flip_h, flip_v);
+    let turn = wordcraft_geom::Spin::new(deg, false, false);
+    let (cx, cy) = (r.x + r.w / 2.0, r.y + r.h / 2.0);
+    (turn.apply(cx, cy, a.0, a.1), turn.apply(cx, cy, b.0, b.1))
+}
+
+/// `shape.connect`: glue, move or unglue the selected connector's ends, or move a line's.
 fn connect(s: &mut Session, v: &Value) -> CmdResult {
     let (pos, obj) = super::objects::selected(s).ok_or_else(|| CmdError::Disabled("select a connector first".into()))?;
     let InlineObject::Shape { kind, float, .. } = &obj else { return Err(CmdError::Disabled("select a connector first".into())) };
-    if !kind.is_connector() {
+    if !kind.is_open() {
         return Err(CmdError::Disabled("select a connector first".into()));
     }
+    let line = !kind.is_connector();
     if pos.story != StoryRef::Body || float.wrap == Wrap::Inline {
         return Err(CmdError::Disabled("only floating connectors in the body text can be glued".into()));
     }
@@ -199,7 +209,7 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
     let layout = s.layout();
     let hit = layout.object(&pos, s.page_hint).ok_or_else(|| CmdError::Failed("the connector isn't laid out".into()))?;
     let r = hit.rect;
-    let (mut p0, mut p1) = ends(r.x, r.y, r.w, r.h, fh, fv);
+    let (mut p0, mut p1) = page_ends(r, fh, fv, hit.spin.deg);
     let mut glue: [Option<Option<ConnEnd>>; 2] = [None, None];
     for (i, key) in ["start", "end"].into_iter().enumerate() {
         let Some(e) = v.get(key) else { continue };
@@ -208,6 +218,9 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
             continue;
         }
         let here = if i == 0 { p0 } else { p1 };
+        if line && e.get("path").is_some() {
+            return Err(CmdError::Params(format!("`{key}`: a line's ends move to points; lines don't glue to shapes")));
+        }
         let (target, site) = if e.get("path").is_some() {
             let at = body_pos(e).ok_or_else(|| CmdError::Params(format!("`{key}`: no shape there")))?;
             let th = layout
@@ -233,9 +246,9 @@ fn connect(s: &mut Session, v: &Value) -> CmdResult {
             if page != hit.page {
                 return Err(CmdError::Params("a connector's ends stay on its page".into()));
             }
-            // The nearest site of a shape (not a connector) within reach.
+            // The nearest site of a shape (not a connector) within reach; a line's end stays free.
             let mut best: Option<(Pos, u32, f32)> = None;
-            if let Some(pg) = layout.pages.get(page) {
+            if !line && let Some(pg) = layout.pages.get(page) {
                 for it in &pg.items {
                     let wordcraft_layout::Placed::Object { rect, spin, story: StoryRef::Body, path, off, .. } = it else { continue };
                     let at = Pos { story: StoryRef::Body, path: path.clone(), off: *off };

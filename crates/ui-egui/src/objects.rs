@@ -66,15 +66,18 @@ pub struct ObjectDrag {
 /// How near (screen points) a press must be to a connector's end to grab it.
 const END_GRAB: f32 = 7.0;
 
-/// The selected connector's start and end on its page (points), and its layout.
+/// The selected connector's start and end on its page (points), and its layout; or a floating
+/// line's in the body, whose ends move the same way (they just don't glue). Such a line shows
+/// and takes handles at its ends only, as Word's do: the frame's handles would sit on a level
+/// line, so pressing it there would resize it into a slant rather than move it.
 fn connector_ends(app: &WordApp, layout: &DocLayout) -> Option<(ObjectHit, (f32, f32), (f32, f32))> {
     let (pos, InlineObject::Shape { kind, float, .. }) = selected(app)? else { return None };
-    if !kind.is_connector() {
+    if !kind.is_open() || (!kind.is_connector() && (pos.story != StoryRef::Body || float.wrap == Wrap::Inline)) {
         return None;
     }
     let (flip_h, flip_v) = (float.flip_h, float.flip_v);
     let o = layout.object(&pos, app.session.page_hint)?;
-    let (a, b) = wordcraft_doc::connector::ends(o.rect.x, o.rect.y, o.rect.w, o.rect.h, flip_h, flip_v);
+    let (a, b) = wordcraft_engine::cmd::connectors::page_ends(o.rect, flip_h, flip_v, o.spin.deg);
     Some((o, a, b))
 }
 
@@ -441,7 +444,9 @@ pub fn select_at(app: &mut WordApp, layout: &DocLayout, pages: &[Rect], scale: f
 /// being edited (body, or the header/footer).
 fn grab_at(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at: Pos2) -> Option<(ObjectHit, Grab)> {
     let story = active_story(app, layout);
-    let handle = active(app, layout).filter(|(o, _)| o.story == story && !fixed(app, o)).and_then(|(o, _)| {
+    // A connector or line is resized by its ends (`connector_end_at`), not by a frame.
+    let framed = connector_ends(app, layout).is_none();
+    let handle = active(app, layout).filter(|(o, _)| framed && o.story == story && !fixed(app, o)).and_then(|(o, _)| {
         let f = screen(pages, scale, o.page, o.rect)?;
         if !size_only(app, &o) && frame::rotate_handle_at(f, o.spin.deg, at) {
             return Some((o, Grab::Rotate));
@@ -579,8 +584,10 @@ pub fn paint(app: &WordApp, painter: &Painter, t: &Tokens, layout: &DocLayout, p
         paint_end_drag(app, d, painter, t, layout, pages, scale);
         return;
     }
-    if let Some((o, a, b)) = connector_ends(app, layout) {
-        // A connector: a handle at each end (filled when glued).
+    // A connector or line: a handle at each end (filled when glued). While it is dragged by its
+    // body, the drag preview below shows instead (the page leaves it out meanwhile).
+    let body_drag = app.canvas.obj_drag.as_ref().is_some_and(|d| d.drag.moved);
+    if !body_drag && let Some((o, a, b)) = connector_ends(app, layout) {
         let glued = match selected(app) {
             Some((_, InlineObject::Shape { extra, .. })) => (extra.start.is_some(), extra.end.is_some()),
             _ => (false, false),
@@ -653,14 +660,16 @@ fn paint_drop_caret(d: &ObjectDrag, painter: &Painter, layout: &DocLayout, pages
 }
 
 /// A connector's end being dragged: a line from its other end to the pointer, and the connection
-/// sites of the shapes near the pointer (the one it would glue to, filled).
+/// sites of the shapes near the pointer (the one it would glue to, filled). A line's end doesn't
+/// glue, so it shows no sites.
 fn paint_end_drag(app: &WordApp, d: &ObjectDrag, painter: &Painter, t: &Tokens, layout: &DocLayout, pages: &[Rect], scale: f32) {
     let Some((which, at)) = d.end.filter(|_| d.drag.moved) else { return };
     let Some((_, a, b)) = connector_ends(app, layout) else { return };
     let fixed = if which { a } else { b };
     let snap = wordcraft_engine::cmd::connectors::SNAP;
+    let glues = matches!(selected(app), Some((_, InlineObject::Shape { kind, .. })) if kind.is_connector());
     let mut best: Option<((f32, f32), f32)> = None;
-    if let Some(pg) = layout.pages.get(d.object.page) {
+    if glues && let Some(pg) = layout.pages.get(d.object.page) {
         for it in &pg.items {
             let wordcraft_layout::Placed::Object { rect, spin, story: StoryRef::Body, path, off, .. } = it else { continue };
             let pos = Pos { story: StoryRef::Body, path: path.clone(), off: *off };
@@ -933,6 +942,90 @@ mod tests {
             freeform: None,
             effects: Default::default(),
             extra: Default::default(),
+        }
+    }
+
+    /// A floating line `w` wide and `h` tall (0: level, as Word files often store a rule).
+    fn floating_line(w: f32, h: f32, flip_v: bool) -> InlineObject {
+        InlineObject::Shape {
+            kind: ShapeKind::Line,
+            w,
+            h,
+            fill: None,
+            stroke: Some(wordcraft_doc::Rgb(0, 0, 0)),
+            stroke_width: 0.75,
+            float: wordcraft_doc::para::Float { wrap: Wrap::InFrontOfText, x: 60.0, y: 120.0, flip_v, ..Default::default() },
+            story: None,
+            freeform: None,
+            effects: Default::default(),
+            extra: Default::default(),
+        }
+    }
+
+    /// A selected level line, pressed in its middle and dragged, moves and stays level: its
+    /// middle is its body, not a resize handle (a level line's top and bottom edge handles sit on
+    /// it there, and grabbing one gave it a height, so it came out slanted).
+    #[test]
+    fn a_level_line_dragged_by_its_middle_moves_and_stays_level() {
+        use crate::table_resize::tests::{H, button, steps};
+        for flip_v in [false, true] {
+            let (mut app, hit) = app_with(floating_line(300.0, 0.0, flip_v));
+            app.run("view.commentsPane", json!({"value": false})).unwrap();
+            app.run("select.range", json!({"anchor": hit.pos(), "focus": Pos { off: hit.off + OBJ.len_utf8(), ..hit.pos() }})).unwrap();
+            let mut h: H = rotation_window(app);
+            let r = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+            let at = |h: &mut H, x: f32, y: f32| crate::canvas::page_to_screen(h.state_mut(), 0, x, y).unwrap();
+            let start = at(&mut h, r.x + r.w / 2.0, r.y);
+            // Along the page and a little down, as a hand drags.
+            let end = start + egui::vec2(60.0, 3.0);
+            h.event(egui::Event::PointerMoved(start));
+            button(&h, start, true);
+            h.step();
+            for k in 1..=4 {
+                h.event(egui::Event::PointerMoved(start + (end - start) * (k as f32 / 4.0)));
+                h.step();
+            }
+            assert_eq!(h.state().canvas.obj_drag.as_ref().map(|d| d.drag.grab), Some(Grab::Move), "flip_v {flip_v}: the middle moves it");
+            // While it moves, it shows where the pointer has it (the page leaves it out
+            // meanwhile), not only as its end handles back where it was: something is drawn along
+            // the line's new place, between its ends.
+            h.step();
+            let img = h.render().unwrap();
+            let ppp = h.ctx.pixels_per_point();
+            let (x0, x1) = (((end.x - 100.0) * ppp) as u32, ((end.x + 100.0) * ppp) as u32);
+            let (y0, y1) = (((end.y - 3.0) * ppp) as u32, ((end.y + 3.0) * ppp) as u32);
+            let pointer = Rect::from_min_size(end - egui::vec2(2.0, 2.0), egui::vec2(20.0, 26.0));
+            let drawn = (y0..y1)
+                .flat_map(|y| (x0..x1).map(move |x| (x, y)))
+                .filter(|&(x, y)| !pointer.contains(egui::pos2(x as f32 / ppp, y as f32 / ppp)))
+                .filter(|&(x, y)| img.get_pixel(x, y).0[..3].iter().any(|c| *c < 200))
+                .count();
+            assert!(drawn > 50, "flip_v {flip_v}: the dragged line shows at its new place ({drawn} pixels)");
+            button(&h, end, false);
+            steps(&mut h, 3);
+            let n = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+            assert!(n.h.abs() < 0.01 && (n.w - r.w).abs() < 0.01, "flip_v {flip_v}: still a level line as long: {r:?} -> {n:?}");
+            assert!(n.x > r.x + 10.0, "flip_v {flip_v}: moved along: {r:?} -> {n:?}");
+            // Its end is a handle: dragged down, that end goes there and the other stays.
+            let right = at(&mut h, n.right(), n.y);
+            let down = right + egui::vec2(0.0, 40.0);
+            h.event(egui::Event::PointerMoved(right));
+            button(&h, right, true);
+            h.step();
+            for k in 1..=4 {
+                h.event(egui::Event::PointerMoved(right + (down - right) * (k as f32 / 4.0)));
+                h.step();
+            }
+            button(&h, down, false);
+            steps(&mut h, 3);
+            let e = h.state_mut().session.layout().object(&Pos::body(0, 0), 0).unwrap().rect;
+            // Screen points per page point.
+            let scale = (at(&mut h, n.x + 100.0, n.y).x - at(&mut h, n.x, n.y).x) / 100.0;
+            assert!((e.x - n.x).abs() < 0.5 && (e.y - n.y).abs() < 0.5, "flip_v {flip_v}: the left end stays: {n:?} -> {e:?}");
+            assert!(
+                (e.right() - n.right()).abs() < 0.5 && (e.bottom() - (n.y + 40.0 / scale)).abs() < 0.5,
+                "flip_v {flip_v}: the right end follows: {e:?}"
+            );
         }
     }
 
