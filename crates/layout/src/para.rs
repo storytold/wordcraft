@@ -2135,12 +2135,14 @@ fn break_lines(pl: &mut ParaLayout, env: &ParaEnv, mark_style: u32, level: Optio
     let mut i = 0usize;
     let mut top = 0.0f32;
     let mut first = true;
-    let est_h = pl
-        .styles
-        .get(mark_style as usize)
-        .map(|st| (st.ascent + st.descent) * if let LineSpacing::Multiple(m) = rp.line_spacing { m } else { 1.0 })
-        .unwrap_or(14.0)
-        .max(1.0);
+    let natural = pl.styles.get(mark_style as usize).map(|st| st.ascent + st.descent);
+    let snap = |h: f32| grid.map_or(h, |g| g.snap_height(h));
+    let est_h = match rp.line_spacing {
+        LineSpacing::Multiple(m) => natural.map_or(14.0, |h| snap(h) * m),
+        LineSpacing::AtLeast(v) => snap(natural.unwrap_or(14.0)).max(v),
+        LineSpacing::Exactly(v) => natural.unwrap_or(14.0).max(v),
+    }
+    .max(1.0);
     // Exact spacing fixes the table-contact boundary even when the mark has other metrics.
     // Keep the existing estimate for shapes and for non-exact spacing.
     let table_h = if let LineSpacing::Exactly(h) = rp.line_spacing { h } else { est_h };
