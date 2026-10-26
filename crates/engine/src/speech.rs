@@ -467,8 +467,8 @@ const OTHER_SCRIPT_LANGUAGES: &[&str] = &[
 /// Is `text` written in Latin letters (with their accented forms and ligatures)? Letters of other
 /// scripts may be there, but less than a fifth of them, as in [`detect_language`]: a Greek letter
 /// in a formula doesn't make a Hungarian sentence Greek. Modifier letters (`ʼ`) and the micro sign
-/// count for no script. Text without letters (`2026`, `3.14`) is no Latin text: it keeps the voice
-/// of its tag.
+/// count for no script. Text without letters (`2026`, `3.14`) is no Latin text: [`voice_for`]
+/// decides it by its tag.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn is_latin_text(text: &str) -> bool {
     let (mut latin, mut other) = (0usize, 0usize);
@@ -506,9 +506,17 @@ fn voice_for<'a>(voice: Option<&'a Voice>, lang: Option<&str>, text: &str) -> Op
     if let Some(own_script) = own.as_deref().and_then(script_language) {
         return (script == Some(own_script)).then_some(voice);
     }
+    if own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) {
+        return None;
+    }
+    // Text without letters (a `2026` cell) keeps the chosen voice, unless its tag is a language of
+    // another script, whose voice reads the number in that language.
+    if !text.chars().any(char::is_alphabetic) {
+        return (script.is_none() && !OTHER_SCRIPT_LANGUAGES.contains(&sentence.as_str())).then_some(voice);
+    }
     // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
     // document (every run `ru-RU`) goes to the chosen English voice.
-    (!own.is_some_and(|o| OTHER_SCRIPT_LANGUAGES.contains(&o.as_str())) && is_latin_text(text)).then_some(voice)
+    is_latin_text(text).then_some(voice)
 }
 
 /// The voices in `espeak-ng --voices`' `listing`: a header, then `Pty Language Age/Gender

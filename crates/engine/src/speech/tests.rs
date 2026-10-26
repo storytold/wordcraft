@@ -486,9 +486,14 @@ fn a_chosen_voice_reads_its_own_language() {
     assert!(is_latin_text("Hawaiʻi és Oʼahu szigete"));
     assert!(is_latin_text("Az α-részecskék pályáját mérték a kísérletben."));
     assert!(!is_latin_text("123 – !"), "no letters: not Latin text");
-    // A number in a Japanese or Russian document keeps the voice of its tag.
+    // A number in a Japanese, Russian or Hindi document keeps the voice of its tag; in a
+    // document tagged with a Latin-script language it keeps the chosen voice.
     assert_eq!(voice_for(Some(&gb), Some("ja"), "2026"), None);
     assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "3.14"), None);
+    assert_eq!(voice_for(Some(&hu), Some("ja"), "2026"), None);
+    assert_eq!(voice_for(Some(&hu), Some("hi-IN"), "2026"), None);
+    assert_eq!(voice_for(Some(&hu), Some("en-US"), "2026"), Some(&hu), "a Hungarian document tagged en-US");
+    assert_eq!(voice_for(Some(&hu), Some("de"), "3.14 – 42"), Some(&hu));
     assert_eq!(voice_for(Some(&hu), Some("en-US"), "5 µm vastag réteg"), Some(&hu));
     assert_eq!(voice_for(Some(&hu), Some("en-US"), "A ﬁnom ﬁlm ﬂottul fut."), Some(&hu));
     // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
