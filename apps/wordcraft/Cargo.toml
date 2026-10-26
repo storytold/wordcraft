@@ -77,7 +77,7 @@ craft-print = { git = "https://github.com/storytold/craft-libs", rev = "17744430
 rfd = { workspace = true }
 # Waits for an `rfd::AsyncFileDialog` on a background thread (the dialogs don't block the UI, #94);
 # rfd itself already depends on it.
-pollster = "0.4"
+pollster = "1"
 # Pictures and copied files on the system clipboard (#45); egui's paste only carries text. Already
 # in the build through egui-winit, with the same features.
 arboard = { workspace = true, features = ["image-data"] }

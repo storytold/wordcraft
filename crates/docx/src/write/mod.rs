@@ -272,7 +272,13 @@ pub(crate) fn write_parts(doc: &Document, flavor: Flavor) -> Result<Vec<(String,
 
     // The glossary: kept verbatim while its entries are as read and its parts were kept, else
     // written from the model (before the notes: references its entries hold are collected too).
-    if glossary::edited(doc) || (!doc.glossary.is_empty() && !wr.embeds.kept_glossary()) {
+    // When the privacy settings ask for changes, its kept parts are written without the names and
+    // dates of its tracked changes and comments (#3692), or from the model if they can't be.
+    let (names, dates) = (doc.settings.remove_personal_info, doc.settings.remove_date_time);
+    if glossary::edited(doc)
+        || (!doc.glossary.is_empty() && !wr.embeds.kept_glossary())
+        || ((names || dates) && !wr.embeds.scrub_glossary(names, dates))
+    {
         wr.embeds.drop_glossary = true;
         wr.glossary(&mut entries, &mut overrides, &mut rels);
     }
@@ -1231,7 +1237,7 @@ fn theme_xml(doc: &Document) -> Vec<u8> {
 /// The author the saved file gives a comment or tracked change when the document removes personal
 /// information on save (`w:removePersonalInformation`), as Word does.
 pub(crate) const ANONYMOUS_AUTHOR: &str = "Author";
-const ANONYMOUS_INITIALS: &str = "A";
+pub(crate) const ANONYMOUS_INITIALS: &str = "A";
 
 /// The `w:author` written for an annotation by `author`: "Author" when the document removes
 /// personal information on save, "Unknown" when it has none.

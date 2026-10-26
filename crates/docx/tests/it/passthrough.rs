@@ -357,3 +357,49 @@ fn extended_properties_are_kept_without_words_counts_and_personal_ones_follow_th
     assert!(!private.contains("Company") && !private.contains("Manager"), "{private}");
     assert!(private.contains("<Template>Normal.dotm</Template>"));
 }
+
+/// `name` with its letters' case flipped by the bits of `i`.
+fn spelling(name: &str, i: u32) -> String {
+    let mut bit = 0;
+    name.chars()
+        .map(|c| {
+            if !c.is_ascii_alphabetic() {
+                return c;
+            }
+            bit += 1;
+            if i >> (bit - 1) & 1 == 1 { c.to_ascii_uppercase() } else { c.to_ascii_lowercase() }
+        })
+        .collect()
+}
+
+#[test]
+fn a_part_reached_under_many_spellings_is_kept_and_written_once() {
+    // Part names are case-insensitive (ECMA-376 Part 2 §6.2.2.3): 64 relationships naming one picture
+    // and one unmodelled part in 64 casings are two parts, not 128 copies on save (#3704).
+    let ns = r#"xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture""#;
+    let n = 64;
+    let mut body = String::new();
+    let mut doc_rels = Vec::new();
+    for i in 0..n {
+        body.push_str(&format!(
+            r#"<w:p><w:r><w:drawing><wp:inline {ns}><wp:extent cx="9525" cy="9525"/><wp:docPr id="{}" name="p"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture"><pic:pic><pic:blipFill><a:blip r:embed="rIdP{i}"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#,
+            i + 1
+        ));
+        doc_rels.push((format!("rIdP{i}"), format!("{REL}/image"), spelling("media/image1.png", i)));
+        doc_rels.push((format!("rIdU{i}"), "urn:example:future-relationship".to_string(), spelling("unknownPart.xml", i)));
+    }
+    let doc_rels: Vec<(&str, &str, &str)> = doc_rels.iter().map(|(a, b, c)| (a.as_str(), b.as_str(), c.as_str())).collect();
+    let picture = format!("\u{89}PNG\r\n\u{1a}\n{}", "0".repeat(64 * 1024));
+    let unknown = format!(r#"<x:thing xmlns:x="urn:example:future">{}</x:thing>"#, "x".repeat(64 * 1024));
+    let ct = CT.replace("<Default Extension=\"jpeg\"", "<Default Extension=\"png\" ContentType=\"image/png\"/><Default Extension=\"jpeg\"");
+    let bytes =
+        package(&body, &doc_rels, &[], &[("[Content_Types].xml", &ct), ("word/media/image1.png", &picture), ("word/unknownPart.xml", &unknown)]);
+    let doc = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(doc.media.len(), 1, "{:?}", doc.media.keys());
+    let files = save(&doc);
+    let named = |s: &str| files.keys().filter(|k| k.to_ascii_lowercase().contains(s)).count();
+    assert_eq!(named("unknownpart"), 1, "{:?}", files.keys());
+    assert_eq!(files.keys().filter(|k| k.starts_with("word/media/")).count(), 1, "{:?}", files.keys());
+    let written: usize = files.values().map(Vec::len).sum();
+    assert!(written < 4 * 64 * 1024, "{written} bytes written");
+}
