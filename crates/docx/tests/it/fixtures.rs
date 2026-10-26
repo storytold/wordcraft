@@ -4323,4 +4323,12 @@ fn vml_horizontal_rules_are_read_and_kept() {
     );
     let again = wordcraft_docx::read(&wordcraft_docx::write(&d).unwrap()).unwrap();
     assert_eq!(rules(&again)[..3], got[..3]);
+    // A positioned or hidden rule stays a plain shape, keeping its placement and visibility.
+    let body = [
+        hr(r#"o:hralign="center" o:hr="t""#, "position:absolute;margin-left:10pt;margin-top:20pt;width:100pt;height:2pt"),
+        hr(r#"o:hralign="center" o:hr="t""#, "visibility:hidden;width:0;height:2pt"),
+    ]
+    .concat();
+    let d = read_body(&body);
+    assert_eq!(rules(&d).iter().map(|r| r.0).collect::<Vec<_>>(), [None, None]);
 }

@@ -115,7 +115,9 @@ impl Writer<'_> {
             // ink keep their original source and related parts.
             InlineObject::Graphic { .. } => self.write_graphic(w, o, props, rels, depth),
             InlineObject::Image { .. } => self.write_image(w, o, props, rels, depth),
-            InlineObject::Shape { extra, .. } if extra.hr.is_some() => self.write_hr(w, o, props),
+            InlineObject::Shape { extra, float, .. } if extra.hr.is_some() && float.wrap == Wrap::Inline && !float.hidden => {
+                self.write_hr(w, o, props)
+            }
             InlineObject::Shape { .. } => self.write_shape(w, o, props, rels, depth),
             InlineObject::Group { .. } => self.write_group(w, o, props, rels, depth),
             InlineObject::Ruby { base, ruby, align, size, raise, base_size, lang, props: ruby_props } => {

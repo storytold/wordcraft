@@ -298,7 +298,9 @@ impl Reader<'_> {
         // A horizontal rule (`o:hr`, a pasted `<hr>`): across `o:hrpct` tenths of a percent of its
         // line, or its own width (`o:hrpct="0"`); a width of 0 with no percentage is the whole
         // line. `o:hralign` places a shorter one (Word, measured: 50 % centred, left, right).
-        if attr("o:hr").is_some_and(|v| matches!(v.trim(), "t" | "true" | "1")) {
+        // Only a rule in the text, shown: a positioned or hidden one stays a plain shape, which
+        // keeps its placement and visibility when saved.
+        if attr("o:hr").is_some_and(|v| matches!(v.trim(), "t" | "true" | "1")) && float.wrap == Wrap::Inline && !float.hidden {
             let tenths = attr("o:hrpct").and_then(|v| v.trim().parse::<f32>().ok()).filter(|p| p.is_finite() && *p > 0.0);
             let pct = tenths.map_or(if w > 0.0 { 0.0 } else { 100.0 }, |t| (t / 10.0).min(100.0));
             let align = match attr("o:hralign").map(|a| a.trim().to_ascii_lowercase()).as_deref() {
