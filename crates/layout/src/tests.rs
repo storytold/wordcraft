@@ -499,15 +499,20 @@ fn paragraph_layouts_keep_no_spare_capacity() {
     assert!(seen >= 3, "{seen}");
 }
 
-/// A finished page's items hold no spare room: a long document keeps every page.
+/// A finished page's items hold no spare room, the last one's too: a long document keeps every
+/// page.
 #[test]
 fn finished_pages_keep_no_spare_capacity() {
     let d = Document::from_text(&"Line of text\n".repeat(400));
     let l = lay(&d);
     assert!(l.pages.len() >= 3, "{}", l.pages.len());
-    for p in &l.pages[..l.pages.len() - 1] {
+    for p in &l.pages {
         assert_eq!(p.items.capacity(), p.items.len());
     }
+    // Web view lays the document out on one page, the last.
+    let web = layout(&d, &mut LayoutCache::new(), &LayoutOptions { view: ViewMode::Web, ..Default::default() });
+    assert_eq!(web.pages.len(), 1);
+    assert_eq!(web.pages[0].items.capacity(), web.pages[0].items.len());
 }
 
 #[test]
