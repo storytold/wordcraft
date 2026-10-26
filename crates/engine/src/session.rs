@@ -451,6 +451,9 @@ pub struct Session {
     pub doc: Document,
     pub sel: Selection,
     pub view: ViewState,
+    /// Defaults for new documents (File › Options › Defaults): the styles and page setup the
+    /// person adopted. Persisted by the host in `ui.json`; applied only to blank documents.
+    pub defaults: wordcraft_doc::defaults::DocumentDefaults,
     /// Formatting picked with a collapsed caret, applied to the next typed text.
     pub pending: Option<CharProps>,
     /// Last highlighter choice for the shortcut; palette state, outside document undo.
@@ -895,6 +898,7 @@ impl Session {
             doc,
             sel,
             view,
+            defaults: wordcraft_doc::defaults::DocumentDefaults::default(),
             pending,
             last_highlight: wordcraft_doc::props::Highlight::Yellow,
             path,
@@ -1607,8 +1611,12 @@ impl Session {
 
     /// A new blank document (the Normal template) on the region's paper: Letter in the US and
     /// other Letter regions, A4 elsewhere (#838). Margins stay 2.54 cm (1") all round.
+    /// A blank document for File › New (and the window's first document): the app's paper for the
+    /// region, then the person's defaults for new documents (styles, page setup, page colour).
     pub fn blank_document(&self) -> Document {
-        blank_document(&self.region())
+        let mut d = blank_document(&self.region());
+        d.apply_defaults(&self.defaults);
+        d
     }
 
     /// Replace the document (open/new).
@@ -1675,6 +1683,8 @@ impl Session {
             doc,
             sel,
             view: _,
+            // App preferences for future documents, not part of this one's edit state.
+            defaults: _,
             pending: _,
             last_highlight: _,
             path: _,
