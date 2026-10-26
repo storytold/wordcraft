@@ -546,6 +546,37 @@ pub fn now_iso() -> String {
     iso_from_unix_secs(now_unix())
 }
 
+/// The computer's offset from UTC now, seconds (east positive: +25200 in Thailand); 0 when the
+/// time zone can't be read.
+pub fn local_utc_offset() -> i64 {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        i64::from(chrono::Local::now().offset().local_minus_utc())
+    }
+    // The browser gives minutes west of UTC.
+    #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+    {
+        let m = js_sys::Date::new_0().get_timezone_offset();
+        if m.is_finite() { -(m as i64) * 60 } else { 0 }
+    }
+    #[cfg(all(target_arch = "wasm32", not(target_os = "unknown")))]
+    {
+        0
+    }
+}
+
+/// Seconds since the Unix epoch on the computer's own clock: [`now_unix`] moved by
+/// [`local_utc_offset`]. Dates people type and read (Insert › Date & Time, the time of day) go
+/// by it; timestamps kept in files stay UTC.
+pub fn now_local_unix() -> u64 {
+    now_unix().saturating_add_signed(local_utc_offset())
+}
+
+/// The local date and time now, ISO-8601 without a zone (`2026-10-25T19:05:00`).
+pub fn now_local_iso() -> String {
+    iso_from_unix_secs(now_local_unix()).trim_end_matches('Z').to_string()
+}
+
 /// Days since 1970-01-01 → (year, month, day).
 ///
 /// `NaiveDate` only covers about ±262143 years, but this is reached by the system clock (and by
@@ -627,5 +658,27 @@ mod iso_tests {
         assert_eq!(civil_from_days(-99_000_000), (-269_083, 3, 17));
         // The extremes must not overflow or panic (i128 intermediates).
         let _ = (civil_from_days(i64::MAX), civil_from_days(i64::MIN));
+    }
+}
+
+#[cfg(test)]
+mod local_time_tests {
+    /// Dates people read go by the computer's clock: the UTC clock moved by the local offset,
+    /// with no zone letter, and a real offset (within ±14 hours).
+    #[test]
+    fn local_time_is_utc_moved_by_the_offset() {
+        let off = super::local_utc_offset();
+        assert!(off.abs() <= 14 * 3600, "{off}");
+        // UTC read just before and just after the local clock, so an hour turning between the
+        // reads can't fail the test: the local hour is the one either UTC read gives.
+        let before = super::now_iso();
+        let local = super::now_local_iso();
+        let after = super::now_iso();
+        assert!(!local.ends_with('Z') && local.len() == 19, "{local}");
+        let part = |s: &str, at: std::ops::Range<usize>| s.get(at).and_then(|n| n.parse::<i64>().ok()).unwrap_or(-1);
+        // The hour of a UTC time moved by the offset, minutes included (an offset can be +5:30).
+        let moved = |utc: &str| (part(utc, 11..13) * 3600 + part(utc, 14..16) * 60 + part(utc, 17..19) + off).rem_euclid(86_400) / 3600;
+        let hour = part(&local, 11..13);
+        assert!([moved(&before), moved(&after)].contains(&hour), "utc {before}..{after}, offset {off}, local {local}");
     }
 }
