@@ -467,7 +467,8 @@ const OTHER_SCRIPT_LANGUAGES: &[&str] = &[
 /// Is `text` written in Latin letters (with their accented forms and ligatures)? Letters of other
 /// scripts may be there, but less than a fifth of them, as in [`detect_language`]: a Greek letter
 /// in a formula doesn't make a Hungarian sentence Greek. Modifier letters (`ʼ`) and the micro sign
-/// count for no script.
+/// count for no script. Text without letters (`2026`, `3.14`) is no Latin text: it keeps the voice
+/// of its tag.
 #[cfg(any(not(target_arch = "wasm32"), test))]
 fn is_latin_text(text: &str) -> bool {
     let (mut latin, mut other) = (0usize, 0usize);
@@ -480,7 +481,7 @@ fn is_latin_text(text: &str) -> bool {
             other += 1;
         }
     }
-    other.saturating_mul(5) < latin.saturating_add(other).max(1)
+    latin > 0 && other.saturating_mul(5) < latin.saturating_add(other)
 }
 
 /// The chosen voice, when it suits the sentence `text` in `lang`: the sentence has no language,
@@ -707,7 +708,9 @@ struct VoiceList {
     voices: Option<Arc<[Voice]>>,
     asked: Option<std::time::Instant>,
     asking: bool,
-    /// The next asking may start Speech Dispatcher (the voice picker opened, a voice was chosen).
+    /// A request to start Speech Dispatcher for the list (the voice picker opened, a voice was
+    /// chosen), kept until a query that may start it takes it: a query without it that is
+    /// already running leaves it for the next one.
     start_server: bool,
 }
 
@@ -723,11 +726,15 @@ fn ask_voices_now(empty: bool, asking: bool, since: Option<std::time::Duration>,
     !asking && (since.is_none_or(|t| t >= again) || (empty && start_server))
 }
 
-/// May the voice list asked for now start Speech Dispatcher? Only when the list is empty and
-/// nothing is being asked already.
+/// After a query for the voices that ran with (`with_server`) or without leave to start Speech
+/// Dispatcher and found `found_empty`, with a request for that leave `pending`: whether the request
+/// is settled (cleared), and whether to ask again at once, starting the server. A list that came
+/// back settles it (no later refresh starts a server); an empty answer from a query without leave
+/// is followed at once by one with it.
 #[cfg(not(target_arch = "wasm32"))]
-fn server_for_voices(empty: bool, asking: bool) -> bool {
-    empty && !asking
+fn after_voice_query(found_empty: bool, with_server: bool, pending: bool) -> (bool, bool) {
+    let again = pending && found_empty && !with_server;
+    (!found_empty || again, again)
 }
 
 /// The list to keep after asking: a good list is never replaced by an empty answer (a server
@@ -753,10 +760,24 @@ fn installed_voices() -> Option<Arc<[Voice]>> {
             l.asked = Some(std::time::Instant::now());
             let start_server = std::mem::take(&mut l.start_server);
             let asked = std::thread::Builder::new().name("read-aloud-voices".into()).spawn(move || {
-                let found = list_voices(start_server);
-                let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
-                l.voices = Some(keep_voices(l.voices.take(), found));
-                l.asking = false;
+                let mut with_server = start_server;
+                loop {
+                    let found = list_voices(with_server);
+                    let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
+                    let found_empty = found.is_empty();
+                    l.voices = Some(keep_voices(l.voices.take(), found));
+                    let (settled, again) = after_voice_query(found_empty, with_server, l.start_server);
+                    if settled {
+                        l.start_server = false;
+                    }
+                    if again {
+                        l.asked = Some(std::time::Instant::now());
+                        with_server = true;
+                        continue;
+                    }
+                    l.asking = false;
+                    break;
+                }
             });
             if asked.is_err() {
                 l.asking = false;
@@ -1175,15 +1196,16 @@ impl ReadAloud {
     /// choice from another machine) is simply not used.
     pub fn set_voice(&mut self, voice: Option<&str>) {
         let v = voice.and_then(voice_id).map(str::to_string);
-        // The list is asked for now, so the first sentence doesn't wait for it.
-        if v.is_some() && self.backend == Backend::System {
+        let changed = self.voice() != v;
+        // The list is asked for now, so the first sentence doesn't wait for it; a newly chosen
+        // (or restored) voice may start Speech Dispatcher for it, once.
+        if v.is_some() && changed {
+            self.ask_voices_starting_server();
+        } else if v.is_some() && self.backend == Backend::System {
             let _ = installed_voices();
         }
-        if self.voice() == v {
+        if !changed {
             return;
-        }
-        if v.is_some() {
-            self.ask_voices_starting_server();
         }
         if self.state() == State::Playing {
             self.change(|s| s.voice = v);
@@ -1207,11 +1229,13 @@ impl ReadAloud {
         #[cfg(not(target_arch = "wasm32"))]
         if self.backend == Backend::System {
             {
-                // Only for an ask that happens now: a list already there, or one being asked
-                // for, leaves no request behind for a later background refresh to act on.
+                // Only while there is no list: a list already there leaves no request behind for
+                // a later background refresh to act on. A query running meanwhile leaves it to
+                // the next one.
                 let mut l = VOICES.lock().unwrap_or_else(PoisonError::into_inner);
-                let empty = l.voices.as_ref().is_none_or(|v| v.is_empty());
-                l.start_server = server_for_voices(empty, l.asking);
+                if l.voices.as_ref().is_none_or(|v| v.is_empty()) {
+                    l.start_server = true;
+                }
             }
             let _ = installed_voices();
         }

@@ -394,10 +394,16 @@ fn the_voice_picker_may_start_the_server_once() {
     assert!(ask_voices_now(true, false, Some(VOICES_RETRY), false));
     assert!(ask_voices_now(false, false, Some(VOICES_REFRESH), false));
     assert!(ask_voices_now(true, false, None, false), "never asked");
-    // The request is only for an ask that happens now: never left for a later refresh.
-    assert!(server_for_voices(true, false));
-    assert!(!server_for_voices(false, false), "a list is there: no server started later");
-    assert!(!server_for_voices(true, true), "being asked: no request left behind");
+    // A request that arrives while a query without it runs (the saved voice restored at
+    // start-up, the picker opened during the first frame's query) isn't lost: an empty
+    // answer is followed at once by a query that may start the server.
+    assert_eq!(after_voice_query(true, false, true), (true, true));
+    // A query that ran with it settles it, whatever it found; so does a list that came back,
+    // so no later refresh starts a server.
+    assert_eq!(after_voice_query(true, true, false), (false, false));
+    assert_eq!(after_voice_query(false, false, true), (true, false));
+    // No request: nothing more.
+    assert_eq!(after_voice_query(true, false, false), (false, false));
     // A silent backend never asks the system, picker or not.
     let r = ReadAloud::default();
     r.ask_voices_starting_server();
@@ -479,7 +485,10 @@ fn a_chosen_voice_reads_its_own_language() {
     assert!(is_latin_text("A ﬁnom ﬁlm ﬂottul fut."));
     assert!(is_latin_text("Hawaiʻi és Oʼahu szigete"));
     assert!(is_latin_text("Az α-részecskék pályáját mérték a kísérletben."));
-    assert!(is_latin_text("123 – !"), "no letters at all");
+    assert!(!is_latin_text("123 – !"), "no letters: not Latin text");
+    // A number in a Japanese or Russian document keeps the voice of its tag.
+    assert_eq!(voice_for(Some(&gb), Some("ja"), "2026"), None);
+    assert_eq!(voice_for(Some(&gb), Some("ru-RU"), "3.14"), None);
     assert_eq!(voice_for(Some(&hu), Some("en-US"), "5 µm vastag réteg"), Some(&hu));
     assert_eq!(voice_for(Some(&hu), Some("en-US"), "A ﬁnom ﬁlm ﬂottul fut."), Some(&hu));
     // A Latin-script voice reads Latin text whatever the tag: an English sentence in a Russian
