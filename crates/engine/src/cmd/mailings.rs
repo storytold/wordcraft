@@ -522,7 +522,8 @@ fn insert_field(s: &mut Session, instr: &str, placeholder: &str) -> CmdResult {
 }
 
 /// Parse CSV (RFC 4180-ish: quotes, doubled quotes, commas/semicolons/tabs).
-pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
+/// The field separator: whichever of `,` `;` and tab the first line (outside quotes) uses most.
+fn csv_separator(text: &str) -> char {
     let first = text.lines().next().unwrap_or("");
     let mut quoted = false;
     let mut unquoted = String::new();
@@ -533,7 +534,20 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
             unquoted.push(c);
         }
     }
-    let sep = [',', ';', '\t'].into_iter().max_by_key(|c| unquoted.matches(*c).count()).unwrap_or(',');
+    [',', ';', '\t'].into_iter().max_by_key(|c| unquoted.matches(*c).count()).unwrap_or(',')
+}
+
+/// Ends the current row: kept when it has any non-empty field, otherwise dropped.
+fn push_csv_row(rows: &mut Vec<Vec<String>>, row: &mut Vec<String>) {
+    if row.iter().any(|x| !x.is_empty()) {
+        rows.push(std::mem::take(row));
+    } else {
+        row.clear();
+    }
+}
+
+pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
+    let sep = csv_separator(text);
     let mut rows = Vec::new();
     let mut row = Vec::new();
     let mut cell = String::new();
@@ -560,11 +574,7 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
                 chars.next();
             }
             row.push(std::mem::take(&mut cell));
-            if row.iter().any(|x| !x.is_empty()) {
-                rows.push(std::mem::take(&mut row));
-            } else {
-                row.clear();
-            }
+            push_csv_row(&mut rows, &mut row);
         } else {
             cell.push(c);
         }
@@ -573,9 +583,7 @@ pub fn parse_csv(text: &str) -> Vec<Vec<String>> {
         }
     }
     row.push(cell);
-    if row.iter().any(|x| !x.is_empty()) {
-        rows.push(row);
-    }
+    push_csv_row(&mut rows, &mut row);
     rows
 }
 
@@ -1096,10 +1104,8 @@ fn finish(s: &mut Session, v: &Value) -> CmdResult {
         crate::io::save_path(std::path::Path::new(path), &out).map_err(CmdError::Failed)?;
         return Ok(json!({"records": count, "path": path}));
     }
-    s.set_document(out);
-    s.path = None;
+    s.add_document(out);
     s.dirty = true;
-    s.merge.preview = false;
     Ok(json!({"records": count}))
 }
 
@@ -1261,8 +1267,7 @@ fn envelopes(s: &mut Session, v: &Value) -> CmdResult {
     let mut d = Document::new();
     d.last_section = sect;
     d.body = blocks;
-    s.set_document(d);
-    s.path = None;
+    s.add_document(d);
     Ok(json!({"width": w, "height": h}))
 }
 
@@ -1494,8 +1499,7 @@ fn labels(s: &mut Session, v: &Value) -> CmdResult {
         }
     }
     d.body = vec![std::sync::Arc::new(Block::Table(t)), para_block(Paragraph::new())];
-    s.set_document(d);
-    s.path = None;
+    s.add_document(d);
     let _ = Pos::body(0, 0);
     Ok(json!({"labels": if single.is_some() { 1 } else { rows * cols }, "filled": made, "product": prod.id}))
 }

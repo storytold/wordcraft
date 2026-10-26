@@ -140,16 +140,31 @@ pub fn find_in(dir: &Path, names: &[&str]) -> Option<(PathBuf, PathBuf)> {
     })
 }
 
+/// Read a dictionary file: a regular file of at most [`MAX_FILE`] bytes. The read itself is
+/// bounded, so a file that grows after its size is checked (or a filesystem that reports a wrong
+/// size) can't make it read more (#3661).
+pub(crate) fn read_capped(p: &Path) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+    let err = |e: std::io::Error| format!("{}: {e}", p.display());
+    let f = std::fs::File::open(p).map_err(err)?;
+    let meta = f.metadata().map_err(err)?;
+    if !meta.is_file() {
+        return Err(format!("{}: not a regular file", p.display()));
+    }
+    if meta.len() > MAX_FILE {
+        return Err(format!("{}: too large ({} bytes)", p.display(), meta.len()));
+    }
+    let mut buf = Vec::new();
+    f.take(MAX_FILE + 1).read_to_end(&mut buf).map_err(err)?;
+    if buf.len() as u64 > MAX_FILE {
+        return Err(format!("{}: too large", p.display()));
+    }
+    Ok(buf)
+}
+
 /// Read a Hunspell pair from disk (size-capped), decoded per the `.aff`'s `SET` line.
 pub fn load(aff: &Path, dic: &Path) -> Result<AffixDict, String> {
-    let read = |p: &Path| -> Result<Vec<u8>, String> {
-        let len = std::fs::metadata(p).map_err(|e| format!("{}: {e}", p.display()))?.len();
-        if len > MAX_FILE {
-            return Err(format!("{}: too large ({len} bytes)", p.display()));
-        }
-        std::fs::read(p).map_err(|e| format!("{}: {e}", p.display()))
-    };
-    let (aff_text, dic_text) = decode(&read(aff)?, &read(dic)?)?;
+    let (aff_text, dic_text) = decode(&read_capped(aff)?, &read_capped(dic)?)?;
     let source = format!("Hunspell dictionary {}", dic.display());
     AffixDict::from_hunspell(&aff_text, &dic_text, &[source.as_str()])
 }
@@ -157,6 +172,23 @@ pub fn load(aff: &Path, dic: &Path) -> Result<AffixDict, String> {
 /// ISO 8859-1: every byte is the code point of the same value (the original VERO pt_BR uses it).
 fn decode_latin1(bytes: &[u8]) -> String {
     bytes.iter().map(|&b| char::from(b)).collect()
+}
+
+/// ISO 8859-9 (Latin-5, Turkish): ISO 8859-1 with Ğ İ Ş ğ ı ş in place of Ð Ý Þ ð ý þ. The
+/// encoding of older Turkish dictionaries (`SET ISO8859-9`).
+fn decode_latin5(bytes: &[u8]) -> String {
+    bytes
+        .iter()
+        .map(|&b| match b {
+            0xd0 => 'Ğ',
+            0xdd => 'İ',
+            0xde => 'Ş',
+            0xf0 => 'ğ',
+            0xfd => 'ı',
+            0xfe => 'ş',
+            _ => char::from(b),
+        })
+        .collect()
 }
 
 /// ISO 8859-2 code points 0xA0..=0xFF (0x00..=0x9F map to themselves).
@@ -184,7 +216,8 @@ fn decode_high(bytes: &[u8], high: &str) -> String {
 
 /// Decode an `.aff`/`.dic` pair to UTF-8 from the encoding the `.aff`'s `SET` line names
 /// (UTF-8 when there is none; ISO 8859-2 is the other one Polish dictionaries use, ISO 8859-1 the
-/// one the original Portuguese VERO uses, KOI8-R and Windows-1251 the ones older Russian dictionaries use).
+/// one the original Portuguese VERO uses, ISO 8859-9 the one older Turkish dictionaries use, KOI8-R
+/// and Windows-1251 the ones older Russian dictionaries use).
 pub fn decode(aff: &[u8], dic: &[u8]) -> Result<(String, String), String> {
     let head = String::from_utf8_lossy(aff.get(..aff.len().min(8192)).unwrap_or_default()).to_string();
     let set = head.lines().find_map(|l| l.trim_start_matches('\u{feff}').strip_prefix("SET ")).map(str::trim).unwrap_or("UTF-8").to_ascii_uppercase();
@@ -195,6 +228,7 @@ pub fn decode(aff: &[u8], dic: &[u8]) -> Result<(String, String), String> {
         }
         "ISO8859-1" | "ISO-8859-1" => Ok((decode_latin1(aff), decode_latin1(dic))),
         "ISO8859-2" | "ISO-8859-2" => Ok((decode_latin2(aff), decode_latin2(dic))),
+        "ISO8859-9" | "ISO-8859-9" => Ok((decode_latin5(aff), decode_latin5(dic))),
         "KOI8-R" | "KOI8R" => Ok((decode_high(aff, KOI8_R_HIGH), decode_high(dic, KOI8_R_HIGH))),
         "CP1251" | "WINDOWS-1251" | "MICROSOFT-CP1251" => Ok((decode_high(aff, CP1251_HIGH), decode_high(dic, CP1251_HIGH))),
         other => Err(format!("unsupported encoding {other}")),
@@ -213,6 +247,8 @@ mod tests {
         assert_eq!(d, "2\nżółw\n");
         let (_, d) = decode("SET UTF-8\n".as_bytes(), "żółw".as_bytes()).unwrap();
         assert_eq!(d, "żółw");
+        let (_, d) = decode(b"SET ISO8859-9\n", b"\xd0\xdd\xde\xf0\xfd\xfe\xd6\xe7").unwrap();
+        assert_eq!(d, "ĞİŞğışÖç");
         assert!(decode(b"SET SHIFT_JIS\n", b"").is_err());
         assert!(decode(b"SET UTF-8\n", b"\xff\xfe").is_err());
     }
@@ -281,6 +317,54 @@ mod tests {
         let d = load(&aff, &dic).unwrap();
         assert!(d.check("kot") && d.check("koty") && !d.check("kotx"));
         assert!(load(&dir.join("missing.aff"), &dic).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn reads_are_bounded_and_regular_files_only() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-hunspell-cap-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let aff = dir.join("xx.aff");
+        std::fs::write(&aff, "SET UTF-8\n").unwrap();
+        // One byte over the cap (sparse: nothing is written) is refused without reading it.
+        let big = dir.join("big.dic");
+        std::fs::File::create(&big).unwrap().set_len(MAX_FILE + 1).unwrap();
+        assert!(load(&aff, &big).unwrap_err().contains("too large"));
+        // A directory, and on Unix an endless device, are not dictionary files. (No clock: a
+        // reader that read `/dev/zero` would never return, so the error itself is the proof.)
+        assert!(load(&aff, &dir).unwrap_err().contains("not a regular file"));
+        #[cfg(unix)]
+        assert!(load(&aff, Path::new("/dev/zero")).unwrap_err().contains("not a regular file"));
+        // Turkish reads through the same reader.
+        let (tr_aff, tr_dic) = (dir.join("tr_TR.aff"), dir.join("tr_TR.dic"));
+        std::fs::write(&tr_aff, "SET UTF-8\nSFX 1 Y 1\nSFX 1 0 lar .\n").unwrap();
+        std::fs::write(&tr_dic, "1\nkitap/1\n").unwrap();
+        assert!(crate::tr::load(&tr_aff, &tr_dic).unwrap().contains("kitaplar"));
+        assert!(crate::tr::load(&tr_aff, &big).unwrap_err().contains("too large"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A Turkish dictionary in ISO 8859-9, the encoding older tr_TR dictionaries use, read from
+    /// disk through the capped reader and decoded per its `SET` line: its words with Turkish
+    /// letters (ğ ı ş İ, and ç ö ü from Latin-1) are found, as stems and with a suffix. Before the
+    /// Turkish dictionary went through this reader it was read as UTF-8, which these bytes are not.
+    #[test]
+    fn a_turkish_dictionary_in_iso_8859_9_loads_from_disk() {
+        let dir = std::env::temp_dir().join(format!("wordcraft-hunspell-latin5-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (aff, dic) = (dir.join("tr_TR.aff"), dir.join("tr_TR.dic"));
+        std::fs::write(&aff, b"SET ISO8859-9\nSFX 1 Y 2\nSFX 1 0 lar .\nSFX 1 0 \xfd .\nSFX 2 Y 1\nSFX 2 0 ler .\n").unwrap();
+        // ağaç/1 (-lar, -ı), ışık, şişe/2 (-ler), İzmir, öğrenci/2, güneş.
+        let words: &[u8] = b"6\na\xf0a\xe7/1\n\xfd\xfe\xfdk\n\xfei\xfee/2\n\xddzmir\n\xf6\xf0renci/2\ng\xfcne\xfe\n";
+        std::fs::write(&dic, words).unwrap();
+        assert!(String::from_utf8(words.to_vec()).is_err(), "the .dic is not UTF-8");
+        let d = crate::tr::load(&aff, &dic).unwrap();
+        for w in ["ağaç", "ağaçlar", "ağaçı", "ışık", "şişe", "şişeler", "İzmir", "öğrenci", "öğrenciler", "güneş"] {
+            assert!(d.contains(w), "{w}");
+        }
+        // The six letters ISO 8859-9 puts in place of ISO 8859-1's aren't read as those.
+        assert!(!d.contains("aðaç") && !d.contains("ýþýk") && !d.contains("Ýzmir"));
+        assert!(!d.contains("ağaçs") && !d.contains("ışıklar") && !d.contains("şişelar"), "only the rules' suffixes, on the stems that take them");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

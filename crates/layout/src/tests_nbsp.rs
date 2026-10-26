@@ -1,7 +1,7 @@
 //! A no-break space is laid out as wide as an ordinary space, whatever the font's own U+00A0
 //! glyph measures (Lucida Bright draws it twice as wide).
 
-use super::*;
+use super::{Document, LayoutCache, LayoutOptions, Placed, layout};
 
 /// Inter with its U+00A0 glyph twice as wide as its space, under the family name "Wnbsp".
 /// Built from the bundled font so the test needs no installed font.
@@ -37,7 +37,8 @@ fn wide_nbsp_family() -> &'static str {
 /// The width of the first line of `text` set in the wide-nbsp font.
 fn line_width(text: &str) -> f32 {
     let chr = wordcraft_doc::CharProps { font: Some(wide_nbsp_family().into()), size: Some(12.0), ..Default::default() };
-    let d = Document { body: vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))], ..Document::new() };
+    let mut d = Document::new();
+    d.body = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(text, chr))];
     let mut c = LayoutCache::new();
     let l = layout(&d, &mut c, &LayoutOptions::default());
     for p in &l.pages {
