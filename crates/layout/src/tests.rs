@@ -4968,6 +4968,50 @@ fn line_spacing_does_not_scale_pictures() {
 }
 
 #[test]
+fn a_picture_in_one_and_a_half_spacing_takes_the_texts_leading_and_fits_at_the_page_bottom() {
+    // Word for Windows (a 472pt picture in 1.5-spaced 12pt text): the line is the picture plus
+    // half the text's natural height, and at the foot of a page the picture only has to fit above
+    // the bottom margin: it stayed with 1.7pt to spare, less than the descent.
+    use wordcraft_doc::props::LineSpacing;
+    let pic = 400.0;
+    let doc = |spare: f32| {
+        let mut d = Document::from_text("Text");
+        let s = d.last_section.clone();
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        p.props.line_spacing = Some(LineSpacing::Exactly(20.0));
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(s.page_h - s.margin_bottom - s.margin_top - 20.0 - pic - spare);
+        let mut q = wordcraft_doc::Paragraph::with_text("", Default::default());
+        q.props.line_spacing = Some(LineSpacing::Multiple(1.5));
+        q.props.space_before = Some(0.0);
+        q.insert_object(0, picture(100.0, pic, Default::default()), &Default::default()).unwrap();
+        d.body.push(wordcraft_doc::para_block(q));
+        d
+    };
+    let l = lay(&doc(1.0));
+    let lines = |l: &DocLayout, page: usize| {
+        l.pages[page]
+            .items
+            .iter()
+            .filter_map(|i| if let Placed::Lines { para, l0, .. } = i { Some((para.clone(), *l0)) } else { None })
+            .collect::<Vec<_>>()
+    };
+    let on_first = lines(&l, 0);
+    let Some((para, l0)) = on_first.iter().find(|(p, _)| !p.lines.is_empty() && p.lines[0].text_asc >= pic) else {
+        panic!("the picture should stay on page 1 ({} pages)", l.pages.len())
+    };
+    let line = &para.lines[*l0];
+    let st = &para.styles[para.clusters[0].style as usize];
+    assert!(st.descent > 1.0, "the spare room is under the descent");
+    let want = pic + 0.5 * (st.ascent + st.descent);
+    assert!((line.height - want).abs() < 0.01, "line {} for a {pic}pt picture, want {want}", line.height);
+    assert!((line.baseline - line.top - pic).abs() < 0.01, "the picture stands at the line top");
+    // A picture that ends past the margin still goes to the next page.
+    let l = lay(&doc(-0.5));
+    assert!(!lines(&l, 0).iter().any(|(p, _)| p.lines.first().is_some_and(|x| x.text_asc >= pic)), "the picture should move on");
+}
+
+#[test]
 fn multiple_line_spacing_adds_its_leading_below_the_text() {
     use wordcraft_doc::props::LineSpacing;
     // (spacing, expected baseline below the line top as a share of the ascent)
@@ -5015,8 +5059,10 @@ fn list_label_does_not_inflate_an_inline_picture_floor() {
         let l = lay(&d);
         let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { .. })) else { panic!() };
         let line = &para.lines[0];
-        let desc = para.styles[para.clusters[0].style as usize].descent;
-        assert!((line.height - (144.0 + desc)).abs() < 0.01, "{spacing:?}: {}", line.height);
+        let st = &para.styles[para.clusters[0].style as usize];
+        // Under the picture: the descent, or the text's own multiple leading when larger.
+        let below = if let LineSpacing::Multiple(m) = spacing { st.descent.max((m - 1.0) * (st.ascent + st.descent)) } else { st.descent };
+        assert!((line.height - (144.0 + below)).abs() < 0.01, "{spacing:?}: {}", line.height);
         assert!((line.baseline - line.top - 144.0).abs() < 0.01);
     }
 }

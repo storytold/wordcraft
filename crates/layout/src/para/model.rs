@@ -158,6 +158,9 @@ pub struct Line {
     /// The text's own ascent and descent on this line, without line-spacing leading (the caret's extent).
     pub text_asc: f32,
     pub text_desc: f32,
+    /// Room at the bottom of the line below its text or picture: multiple spacing's extra
+    /// leading, which Word lets a page's last line run into the bottom margin.
+    pub leading: f32,
     /// Cluster index range.
     pub c0: usize,
     pub c1: usize,

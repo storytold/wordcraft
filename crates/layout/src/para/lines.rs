@@ -352,6 +352,7 @@ impl<'e> Breaker<'e> {
             baseline: v.baseline,
             text_asc: v.text_asc,
             text_desc: v.text_desc,
+            leading: v.leading,
             c0: sc.c0,
             c1,
             xs: sc.xs,
@@ -475,12 +476,23 @@ impl<'e> Breaker<'e> {
         // no rule tried so far (none, only the text's descent) matched both; it needs Word probes.
         let natural = asc + desc;
         let pictures = if obj_asc > asc { obj_asc + desc } else { 0.0 };
+        // Word puts the multiple's leading of the text, (m - 1) x its natural height, below a taller
+        // picture instead of the descent: a 472pt picture in 1.5-spaced 12pt text (natural 12.59pt,
+        // descent 2.63pt) takes 478.3pt in Word for Windows, its next line 6.3pt below it. Never
+        // less than the picture and the descent (single spacing). (height, leading)
+        let multiple_pictures = match rp.line_spacing {
+            LineSpacing::Multiple(m) if text_pictures > 0.0 && m > 1.0 => {
+                let leading = (m - 1.0) * text_natural;
+                Some((obj_asc + desc.max(leading), leading))
+            }
+            _ => None,
+        };
         // Document grid: the line takes whole line pitches, its text centred in them.
         let grid = self.grid.as_ref();
         let (height, centred) = match (rp.line_spacing, grid) {
             (LineSpacing::Multiple(m), Some(g)) => ((g.snap_height(natural) * m).max(g.snap_height(pictures)), true),
             (LineSpacing::AtLeast(v), Some(g)) => (g.snap_height(natural.max(pictures)).max(v), true),
-            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(text_pictures), false),
+            (LineSpacing::Multiple(m), None) => ((text_natural * m + label_extra).max(multiple_pictures.map_or(text_pictures, |p| p.0)), false),
             (LineSpacing::AtLeast(v), None) => (natural.max(text_pictures).max(v), false),
             (LineSpacing::Exactly(v), _) => (v, false),
         };
@@ -490,7 +502,15 @@ impl<'e> Breaker<'e> {
         } else {
             self.top + baseline_offset(rp.line_spacing, asc, height, desc).max(obj_asc.min(height - desc))
         };
-        Measure { height, baseline, text_asc, text_desc }
+        // Below a picture that sets the line's height the leading is the multiple's, as below text:
+        // Word keeps such a line on the page when the picture fits above the bottom margin (with
+        // 1.7pt to spare, under the descent, in the same document).
+        let leading = if let Some((h, lead)) = multiple_pictures.filter(|p| !centred && height <= p.0) {
+            lead.min(self.top + h - baseline).max(0.0)
+        } else {
+            (self.top + height - baseline - text_desc).max(0.0)
+        };
+        Measure { height, baseline, text_asc, text_desc, leading }
     }
 
     /// Alignment / justification of the line (trailing spaces hang).
@@ -567,12 +587,14 @@ impl<'e> Breaker<'e> {
         };
         let (width, x0) = (self.width, rp.indent_left);
         let (x0, left, right) = if self.rtl_para { (width - x0, width - self.base_right, width - x0) } else { (x0, x0, self.base_right) };
+        let below = if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) };
         self.lines.push(Line {
             top: self.top,
             height: h,
-            baseline: self.top + if grid.is_some() { h - desc } else { baseline_offset(rp.line_spacing, asc, h, desc) },
+            baseline: self.top + below,
             text_asc: asc,
             text_desc: desc,
+            leading: (h - below - desc).max(0.0),
             c0: self.n,
             c1: self.n,
             xs: vec![x0],
@@ -642,6 +664,8 @@ struct Measure {
     baseline: f32,
     text_asc: f32,
     text_desc: f32,
+    /// Room at the bottom of the line below its text or picture (see `Line::leading`).
+    leading: f32,
 }
 
 /// Where the line's content ends: trailing spaces and markers hang.
