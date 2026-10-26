@@ -105,12 +105,19 @@ fn is_below_or_phinthu(c: char) -> bool {
 /// 2. **RU/LU + Sara_AA → LAKKHANGYAO** — ฤ (U+0E24) and ฦ (U+0E26) followed by sara aa
 ///    (า U+0E32) render sara aa as lakkhangyao (ๅ U+0E45).  Applied for all Thai fonts.
 fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> Option<String> {
-    // Both the requested font and the actual rendering face must be known WTT 2.0 families.
-    // This avoids the skrifa cmap path (face.covers) which may miss PUA entries in old fonts,
-    // while still correctly skipping OpenType substitutes whose family name is not WTT 2.0.
-    let is_wtt2 = wordcraft_fonts::word::is_wtt2_thai_font(font)
-               && wordcraft_fonts::word::is_wtt2_thai_font(&face.family);
-    let needs_short_tail = is_wtt2 && (text.contains('\u{0E10}') || text.contains('\u{0E0D}'));
+    // Both the requested font and the actual rendering face must be known WTT 2.0 families,
+    // AND the face must actually carry the PUA short-tail glyphs.  The three-way check is:
+    // 1. Requested font is WTT 2.0 by name (rc.font).
+    // 2. Rendering face is WTT 2.0 by family name (not an OpenType substitute like Thonburi).
+    // 3. Face actually contains U+F700 — if the glyph is absent, substituting produces .notdef.
+    // The segmentation fix (bdd592d3) keeps WTT 2.0 faces in place so check 2 now reliably
+    // points at the real face rather than a fallback.
+    let wtt2_base = wordcraft_fonts::word::is_wtt2_thai_font(font)
+                 && wordcraft_fonts::word::is_wtt2_thai_font(&face.family);
+    let has_f700 = wtt2_base && face.covers('\u{F700}');
+    let has_f70f = wtt2_base && face.covers('\u{F70F}');
+    let needs_short_tail = (has_f700 && text.contains('\u{0E10}'))
+                        || (has_f70f && text.contains('\u{0E0D}'));
     let needs_ru_lu = text.contains('\u{0E24}') || text.contains('\u{0E26}');
     if !needs_short_tail && !needs_ru_lu {
         return None;
@@ -120,10 +127,10 @@ fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> O
     while let Some(c) = chars.next() {
         match c {
             // Rule 1: short-tail substitution — only before below-vowels and phinthu.
-            '\u{0E10}' if is_wtt2 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
+            '\u{0E10}' if has_f700 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
                 out.push('\u{F700}');
             }
-            '\u{0E0D}' if is_wtt2 && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
+            '\u{0E0D}' if has_f70f && chars.peek().copied().is_some_and(is_below_or_phinthu) => {
                 out.push('\u{F70F}');
             }
             // Rule 2: ฤ/ฦ + sara aa → push consonant then lakkhangyao, consuming sara aa.
