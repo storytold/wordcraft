@@ -1244,8 +1244,14 @@ fn layout_box(
                 let mut pl = ctx.para_labelled(p, width, table, &[], label.clone());
                 // A text frame (a footer's page number in a frame, say) is placed apart, like a
                 // floating object, and the text after it wraps around it; it takes no room in
-                // the flow.
-                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames) {
+                // the flow. Word treats the page/page frames in the reported header as ordinary
+                // paragraphs (#2361), while footer, note and cell frames keep their floating
+                // behavior. Text boxes retain the upstream no-frame rule (#2357).
+                let header_page_frame = matches!(story, StoryRef::Part(id)
+                    if ctx.doc.parts.get(&id).is_some_and(|part| part.kind == wordcraft_doc::PartKind::Header)
+                        && !in_cell
+                        && pl.rp.frame.as_ref().is_some_and(|fr| fr.h_anchor == "page" && fr.v_anchor == "page"));
+                if let Some(fr) = pl.rp.frame.clone().filter(|_| frames && !header_page_frame) {
                     let fw = fr.w.unwrap_or_else(|| natural_width(&pl)).clamp(1.0, 1584.0);
                     let pf = if (fw - width).abs() > 0.01 { ctx.para_labelled(p, fw, table, &[], label) } else { pl };
                     let h = match fr.h {
@@ -3033,12 +3039,31 @@ fn body_top_for(ctx: &mut Ctx, sect: &SectionProps, header: Option<u32>) -> f32 
     // Placed as `headers_footers` draws it, so page-relative floats wrap the same way.
     let frame = PageFrame { sect, origin: (sect.margin_left + sect.gutter, sect.header), number: 1, mirror: ctx.mirror };
     let track = std::mem::replace(&mut ctx.track_totals, false);
-    let (h, ..) = with_pin(ctx, id, sect, 1, |ctx| {
-        layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)).height
-    });
+    let (bl, ..) =
+        with_pin(ctx, id, sect, 1, |ctx| layout_box(ctx, StoryRef::Part(id), &blocks, &[], sect.text_width(), BoxContext::Other, 0, Some(frame)));
     ctx.track_totals = track;
+    // A wrapping float anchored to the header's text reaches with it: the body clears the
+    // logo, not just the header's lines (#2361). Page-fixed and non-wrapping floats (a
+    // watermark box, #149) don't count. Items sit in the box's frame, whose top is the
+    // header offset.
+    let mut bottom = bl.height;
+    for it in &bl.items {
+        let Placed::Object { rect, spin, story, path, off, wrap, .. } = it else { continue };
+        if !matches!(wrap, Wrap::Square | Wrap::Tight | Wrap::Through | Wrap::TopAndBottom) {
+            continue;
+        }
+        let anchored = ctx
+            .doc
+            .para(*story, path)
+            .and_then(|p| p.object_at(*off))
+            .and_then(InlineObject::frame)
+            .is_some_and(|(_, _, f)| matches!(f.v_rel, Anchor::Paragraph | Anchor::Line | Anchor::Margin));
+        if anchored {
+            bottom = bottom.max(spin.bounds(*rect).bottom());
+        }
+    }
     // Word starts the body right below a header that reaches past the top margin, no gap.
-    sect.margin_top.max(sect.header + h)
+    sect.margin_top.max(sect.header + bottom)
 }
 
 /// Where the footer starts (as `headers_footers` places it), `f32::MAX` without one.
