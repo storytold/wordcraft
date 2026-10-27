@@ -5,6 +5,7 @@ use super::floats::{FloatAnchor, ObjFrame, ObjectPlacement, anchor_floats, body_
 use super::notes::{DECOR_STORY, NoteBox, para_notes};
 use super::page::{PageBuilder, PageFrame, item_bottom};
 use super::placed::Placed;
+use super::table_flow::table_start_need;
 use super::{
     Arc, Block, Counters, Document, HashMap, InlineObject, Level, LineEnd, Page, ParaLayout, Paragraph, Path, Rect, StoryRef, TextDirection,
     ViewMode, outline, para,
@@ -933,6 +934,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
                     }
             }
         }
+        Some(Block::Table(t)) if t.props.float.is_none() => table_start_need(ctx, t, block + 1, width),
         Some(Block::Table(_)) => 24.0,
         None => 0.0,
     }
