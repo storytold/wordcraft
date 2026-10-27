@@ -3,7 +3,7 @@
 //! moves whole rows or splits them between lines (`split_row`).
 
 use wordcraft_doc::numbering::Counters;
-use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
+use wordcraft_doc::props::{Align, Border, BorderStyle, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
 use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
@@ -581,8 +581,7 @@ pub fn layout_table(ctx: &mut Ctx, story: StoryRef, t: &Table, path: &[u32], ava
                 std::mem::swap(&mut borders.left, &mut borders.right);
             }
             // Word keeps the cell's text clear of its top border (and the last row's of its bottom
-            // border): the border's width sits on top of the cell margin.
-            let band = |b: Option<Border>| b.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            // border): the border's band sits on top of the cell margin.
             let (band_t, band_b) = (band(borders.top), if ri + 1 == nrows { band(borders.bottom) } else { 0.0 });
             // A shared edge painted by the row above still clears this cell's text and minimum.
             let band_t = if band_t > 0.0 || cell.props.vmerge == VMerge::Continue {
@@ -868,7 +867,7 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
                 // clips them, as Word does, rather than letting them run past its edges.
                 clip: (exact && c.h > span_h + 0.01) || (t.props.fixed && c.w - c.margins[1] - c.margins[3] < 4.0),
             });
-            let top = c.margins[0] + c.borders.top.filter(Border::is_visible).map_or(0.0, |b| b.width.clamp(0.0, 12.0));
+            let top = c.margins[0] + band(c.borders.top);
             parts.push(CellPart { top, items: first..items.len(), end, align });
         }
         out.push(RowLayout {
@@ -880,6 +879,16 @@ fn finish_table_rows(ctx: &mut Ctx, input: TableRows<'_>) -> TableLayout {
         });
     }
     TableLayout { x, width: total, rows: out }
+}
+
+/// The room a horizontal cell border takes across the row: its line width, or for a double
+/// border its two lines and the gap between them, each as wide as the line (Word: a 0.5pt double
+/// border between 15pt at-least rows steps the row below 1pt further than a 0.5pt single one).
+fn band(b: Option<Border>) -> f32 {
+    b.filter(Border::is_visible).map_or(0.0, |b| {
+        let w = b.width.clamp(0.0, 12.0);
+        if b.style == BorderStyle::Double { w * 3.0 } else { w }
+    })
 }
 
 /// Split a row at `cut` (points below the row's top) so the part above fits on this page.
