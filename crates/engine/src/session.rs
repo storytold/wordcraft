@@ -67,6 +67,9 @@ pub struct Session {
     /// preferences leave `None`: new documents use the built-in formatting and Set As Default for
     /// all new documents is refused, so an agent never changes the person's defaults (#4237).
     pub normal_store: Option<Arc<dyn crate::normal_template::NormalStore>>,
+    /// Set As Default changes waiting for the Normal template: written by [`Session::run`] only
+    /// once the command has succeeded (see `cmd::defaults::TemplateEdit`).
+    pub(crate) pending_template: Vec<crate::cmd::defaults::TemplateEdit>,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,

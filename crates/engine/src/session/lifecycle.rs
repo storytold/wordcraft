@@ -94,6 +94,7 @@ impl Session {
             file_name,
             user_dict_path: None,
             normal_store: None,
+            pending_template: Vec::new(),
             dirty,
             clipboard: None,
             pending_move,

@@ -275,3 +275,22 @@ fn headless_sessions_never_write_a_template() {
     assert!(s.run("format.setDefault", &json!({"props": {"size": 1e30}, "scope": "document"})).is_ok());
     assert!(s.doc.styles.default_chr.size.is_some_and(|x| x <= 1638.0), "sizes are clamped");
 }
+
+/// Review P2: a Set As Default refused after its handler ran (here by Restrict Editing's
+/// post-check: document defaults are outside the editable region) saves nothing in the template.
+#[test]
+fn a_refused_set_as_default_saves_nothing() {
+    let store = MemoryStore::new();
+    let mut s = Session::new(Document::from_text("Locked intro.\nFill in here.\n"));
+    s.normal_store = Some(store.clone());
+    run(&mut s, "select.text", json!({"text": "Fill in here."}));
+    run(&mut s, "review.restrict", json!({"exception": "add"}));
+    run(&mut s, "review.restrict", json!({"mode": "readOnly"}));
+    run(&mut s, "select.text", json!({"text": "here"}));
+    let before = s.doc.styles.clone();
+    assert!(s.run("format.setDefault", &json!({"props": {"font": "Georgia"}})).is_err());
+    assert!(s.run("para.setDefault", &json!({"props": {"spaceAfter": 30.0}})).is_err());
+    assert_eq!(s.doc.styles, before, "the document is rolled back");
+    assert!(store.get().is_none(), "and the template was never written");
+    assert_ne!(body_font(&session(&store).normal_document()).0, "Georgia");
+}
