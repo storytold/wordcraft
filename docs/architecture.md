@@ -29,7 +29,7 @@ winit or rfd.
 | L4 | `control-key` | 0.1k | Per-window control-port key files shared by the app and the MCP bridge |
 | L5 | `mcp` | 1.0k | MCP server: every command as a tool; headless or bridged to the running app |
 | L6 | `ui-egui` | 13.1k | Word-style front end: ribbon, keytips, mini-toolbar, Backstage, canvas, rulers, panes, dialogs, Equation tab, i18n catalogs, themes, control channel, headless `ui_shot` example |
-| apps | `wordcraft` | 1.6k | Desktop app (eframe + wgpu; logging, window geometry, file associations) |
+| apps | `wordcraft` | 1.6k | Desktop app (library + binary; eframe + wgpu; logging, window geometry, file associations) |
 | apps | `wordcraft-cli` | 0.4k | `convert`, `text`, `inspect`, `run`, `commands`, `parity`, `mcp`, `zotero` |
 | apps | `wordcraft-web` | 0.3k | Browser build (eframe web runner, WebGPU with WebGL2 fallback) |
 
