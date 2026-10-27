@@ -56,7 +56,7 @@ Table sorting and formulas use decimal points for Cuban and Peruvian Spanish (`e
 matching their existing region settings. Parsing and result-formatting regression tests cover
 both locales and preserve Spain's decimal comma; see [localization parity](localization-parity.md).
 
-Set As Default for new documents (#4237): Design › Set as Default and the Font, Paragraph and Page Setup dialogs' Set As Default, and Modify Style › New documents based on this template, save into a Normal template (`Normal.docx` in the settings folder, `localStorage` on the web) that every new blank document starts from; File › Options › Advanced › Reset… deletes it. Not yet: File › Open Normal template, paper source (not modelled).
+Set As Default for new documents (#4237): Design › Set as Default and the Font, Paragraph and Page Setup dialogs' Set As Default, and Modify Style › New documents based on this template, save into a Normal template (`Normal.dotx` in the settings folder, `localStorage` on the web) that every new blank document starts from; File › Options › Advanced › Reset… deletes it. Not yet: File › Open Normal template, paper source (not modelled).
 
 Set Proofing Language › Set As Default now persists in user preferences and applies to future blank documents and opened plain text (#2882). Existing document and template languages stay intact; rejected commands retain the previous saved default. This does not add proofing dictionaries.
 
