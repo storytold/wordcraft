@@ -1241,7 +1241,10 @@ fn finish_canvas_frame(finish: CanvasFinish<'_>, out: egui::scroll_area::ScrollA
                 || latest.and_then(|p| page_at(&rects, layout, geo.scale, p)).is_some_and(|(pg, x, y)| layout.selection_bar_at(pg, x, y).is_some()));
         // An armed Format Painter shows over the text, as Word's brush does; egui has no brush,
         // so the copy pointer stands in (#3453). The selection bar keeps its arrow.
-        let fallback = if in_bar {
+        // The workspace around and between the pages keeps the arrow, as Word's does (#4114); a
+        // drag that started on a page keeps the I-beam wherever it goes.
+        let off_page = !resp.dragged() && !latest.is_some_and(|p| on_visible_page(&rects, &geo.bands, p));
+        let fallback = if in_bar || off_page {
             egui::CursorIcon::Default
         } else if app.session.painter.is_some() {
             egui::CursorIcon::Copy
