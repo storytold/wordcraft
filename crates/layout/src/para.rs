@@ -118,7 +118,8 @@ fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> O
     let has_f70f = wtt2_base && face.covers('\u{F70F}');
     let needs_short_tail = (has_f700 && text.contains('\u{0E10}'))
                         || (has_f70f && text.contains('\u{0E0D}'));
-    let needs_ru_lu = text.contains('\u{0E24}') || text.contains('\u{0E26}');
+    let has_lakkhangyao = face.covers('\u{0E45}');
+    let needs_ru_lu = has_lakkhangyao && (text.contains('\u{0E24}') || text.contains('\u{0E26}'));
     if !needs_short_tail && !needs_ru_lu {
         return None;
     }
@@ -134,7 +135,9 @@ fn thai_short_tail(text: &str, font: &str, face: &wordcraft_fonts::FaceRef) -> O
                 out.push('\u{F70F}');
             }
             // Rule 2: ฤ/ฦ + sara aa → push consonant then lakkhangyao, consuming sara aa.
-            '\u{0E24}' | '\u{0E26}' => {
+            // Only when the face actually carries U+0E45 — substituting to a missing glyph
+            // would produce .notdef.
+            '\u{0E24}' | '\u{0E26}' if has_lakkhangyao => {
                 out.push(c);
                 if chars.peek().copied() == Some('\u{0E32}') {
                     chars.next(); // consume sara aa
