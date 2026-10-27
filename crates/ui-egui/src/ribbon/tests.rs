@@ -697,3 +697,60 @@ fn shape_and_chart_formats_leave_out_of_range_sizes_alone() {
     assert_eq!(before.0, Some((20.0, 2500.0)));
     assert_eq!(shown(a), before, "Chart Design shown, the chart untouched");
 }
+
+/// Switching ribbon tabs smoothly animates the indicator underline in both directions.
+#[test]
+fn ribbon_tab_switching_animates_indicator() {
+    let a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+    let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1920.0, 900.0)).build_ui_state(
+        |ui, app: &mut crate::WordApp| {
+            let ctx = ui.ctx().clone();
+            app.logic(&ctx);
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(10);
+    assert_eq!(h.state().ui.tab, "Home");
+    let home_cx: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+
+    // Move right: Home -> Insert
+    h.state_mut().run("ui.tab", json!({"tab": "Insert"})).unwrap();
+    h.run_steps(1);
+    assert!(h.ctx.has_requested_repaint(), "ribbon tab transition should trigger repaint/animation");
+    let s1: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+    assert_eq!(s1, home_cx, "on the first frame after tab change, indicator begins transition from previous tab");
+    h.run_steps(10);
+    assert_eq!(h.state().ui.tab, "Insert");
+    let insert_cx: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+    assert!(insert_cx > home_cx, "indicator should reach target Insert position to the right: {insert_cx} > {home_cx}");
+
+    // Move left: Insert -> Home
+    h.state_mut().run("ui.tab", json!({"tab": "Home"})).unwrap();
+    h.run_steps(1);
+    assert!(h.ctx.has_requested_repaint(), "ribbon tab transition back to Home should trigger repaint/animation");
+    let s1_back: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+    assert_eq!(s1_back, insert_cx, "on the first frame, indicator begins transition leftwards from previous tab");
+    h.run_steps(10);
+    assert_eq!(h.state().ui.tab, "Home");
+    let final_home_cx: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+    assert_eq!(final_home_cx, home_cx);
+
+    // Move right: Home -> Layout
+    h.state_mut().run("ui.tab", json!({"tab": "Layout"})).unwrap();
+    h.run_steps(1);
+    assert!(h.ctx.has_requested_repaint(), "ribbon tab transition to Layout should trigger repaint/animation");
+    h.run_steps(10);
+    assert_eq!(h.state().ui.tab, "Layout");
+    let layout_cx: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+    assert!(layout_cx > insert_cx);
+
+    // Move left: Layout -> Draw
+    h.state_mut().run("ui.tab", json!({"tab": "Draw"})).unwrap();
+    h.run_steps(1);
+    assert!(h.ctx.has_requested_repaint(), "ribbon tab transition to Draw should trigger repaint/animation");
+    h.run_steps(10);
+    assert_eq!(h.state().ui.tab, "Draw");
+    let draw_cx: f32 = h.ctx.data(|d| d.get_temp(egui::Id::unique("ribbon_indicator_cur_cx"))).unwrap();
+    assert!(draw_cx < layout_cx && draw_cx > home_cx);
+}
