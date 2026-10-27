@@ -20,8 +20,12 @@ impl Chart {
         let mut types = vec![ty];
         if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
             for other in combined_types(plot, ty) {
+                // Past the series limit a chart type is only noted (its bar spacing may still
+                // count), not parsed: each would cost a full cell budget for series dropped.
                 let room = MAX_SERIES.saturating_sub(series.len());
-                series.extend(read_series(other, false, theme).into_iter().take(room));
+                if room > 0 {
+                    series.extend(read_series(other, false, theme).into_iter().take(room));
+                }
                 types.push(other);
             }
         }
@@ -78,7 +82,7 @@ impl Chart {
             }
         }
         if grouping == Grouping::Percent {
-            to_percent(&mut series, n);
+            to_percent(&mut series, n, kind);
         }
         let (cat, val) = chart_axes(plot, scatter, theme);
         let text_colour = chart_text_colour(space, theme);
@@ -248,10 +252,12 @@ pub(super) fn combined_types<'a>(plot: &'a El, ty: &El) -> Vec<&'a El> {
 }
 
 /// Values as their share of each category's total (100% stacked charts).
-fn to_percent(series: &mut [Series], n: usize) {
+fn to_percent(series: &mut [Series], n: usize, kind: Kind) {
+    // Only the first chart type stacks: the other types of a combination keep their values and
+    // don't count in the totals.
     for i in 0..n {
-        let total: f64 = series.iter().map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();
-        for s in series.iter_mut() {
+        let total: f64 = series.iter().filter(|s| s.kind == kind).map(|s| s.values.get(i).copied().flatten().map_or(0.0, f64::abs)).sum();
+        for s in series.iter_mut().filter(|s| s.kind == kind) {
             if let Some(Some(v)) = s.values.get_mut(i) {
                 *v = if total > 0.0 { *v / total } else { 0.0 };
             }

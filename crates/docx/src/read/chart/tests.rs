@@ -794,3 +794,36 @@ fn the_title_takes_its_stated_size() {
     assert_eq!(title(r#"sz="1600""#), Some(16.0));
     assert_eq!(title(""), Some(TITLE_SIZE));
 }
+
+/// A 100% stacked column chart combined with a line: only the columns become shares of their
+/// category's total; the line keeps its values and doesn't count in the totals.
+#[test]
+fn only_the_stacked_chart_type_becomes_percentages() {
+    let cats = ["A", "B"];
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Left", None, &cats, &["1", "3"]),
+        ser(1, "Right", None, &cats, &["3", "1"]),
+        ser(2, "Trend", None, &cats, &["10", "20"]),
+    );
+    let chart = Chart::parse(&whole_chart(&plot), &theme()).expect("a chart");
+    let values = |j: usize| chart.series[j].values.clone();
+    assert_eq!(values(0), vec![Some(0.25), Some(0.75)], "column shares of the columns' totals");
+    assert_eq!(values(1), vec![Some(0.75), Some(0.25)]);
+    assert_eq!(values(2), vec![Some(10.0), Some(20.0)], "the line keeps its values");
+}
+
+/// A data table's name column stays inside the margin reserved for it: a series name wider
+/// than that is cut short instead of running off the chart.
+#[test]
+fn a_long_data_table_name_stays_inside_the_chart() {
+    let long = "A very long series name that is much wider than the chart allows for its table";
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:dTable><c:showKeys val="1"/></c:dTable></c:plotArea>"#,
+        ser(0, long, None, &["Q1", "Q2"], &["41", "27"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let (name, rect, _) = chart_texts(&items).into_iter().find(|(t, _, _)| t.starts_with("A very")).expect("the series name");
+    assert!(rect[0] >= 0.0, "the name starts inside the chart: {rect:?}");
+    assert!(name.ends_with('…'), "the name is cut short: {name}");
+}

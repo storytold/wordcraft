@@ -255,7 +255,7 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         }
     }
     if let Some(t) = &c.data_table {
-        draw_data_table(out, c, t, &g);
+        draw_data_table(out, c, t, &g, m.left);
     } else if !c.cat.deleted {
         draw_category_labels(out, c, &g, &ax.xticks, &m, area);
     }
@@ -275,11 +275,12 @@ fn table_names_w(c: &Chart, t: &DataTable, fs: f32) -> f32 {
 
 /// A data table under the plot: the categories over the plot's bands, then a row per series with
 /// its key and name left of the plot and its values under the categories.
-fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Frame) {
+fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Frame, margin: f32) {
     let (fs, lh) = (c.text_size, c.text_size * LINE);
     let plot = g.plot;
     let band = g.band();
-    let names_w = table_names_w(c, t, fs).min(plot.x.max(0.0));
+    // The name column keeps to the left margin `axis_margins` reserved for it.
+    let names_w = table_names_w(c, t, fs).min(margin).min(plot.x.max(0.0));
     let (x0, top) = (plot.x - names_w, plot.bottom());
     let rows = table_rows(c, t);
     let bottom = top + rows as f32 * lh;
@@ -295,7 +296,10 @@ fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Fra
             draw_key(out, x, y + lh / 2.0, k, c.series_colour(j));
             x += key_w(k) + GAP;
         }
-        text(out, Rect { x, y, w: (plot.x - x - GAP).max(1.0), h: lh }, &series_name(s, j), fs, TextAlign::Left, t.bold, t.text);
+        // Cut short only past the plot's edge: the column was sized to the widest name, which
+        // fills it exactly.
+        let name = clip_text(&series_name(s, j), (plot.x - x).max(1.0), fs);
+        text(out, Rect { x, y, w: (plot.x - x - GAP).max(1.0), h: lh }, &name, fs, TextAlign::Left, t.bold, t.text);
         for i in 0..g.n {
             let Some(v) = s.raw.get(i).copied().flatten() else { continue };
             let x = g.band_start(i);
