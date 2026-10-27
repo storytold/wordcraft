@@ -641,7 +641,7 @@ Footer page-table height and body wrapping are corrected. Other pagination gaps 
 ## Revision history
 
 > 2026-10-27 · Technical synchronization: existing Proofing pane hooks and regression tests follow the extracted engine/UI modules on main `436d444`; compact context menus remain upstream. New-SHA validation is pending; readiness unchanged.
-
+>
 > 2026-10-23 · cu20we review follow-up: Only paragraph-relative box floats use the pre-spacing origin. Line-relative floats and page/margin fallbacks in cells and text boxes keep the text-top origin. Synthetic controls compare zero and 24 pt space-before across all four box contexts. New cap conversion helpers and regression tests document their contracts; readiness estimates unchanged.
 
 | Date | Change | Summary |
