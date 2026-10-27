@@ -20,8 +20,7 @@ mod styles;
 
 use cross_refs::cross_ref;
 pub use cross_refs::{caption_labels, ref_targets};
-#[cfg(test)]
-use generated::ENTRY_STYLE;
+pub use generated::{ENTRY_STYLE, ta_field};
 pub(crate) use generated::generated_list;
 use generated::table_of_figures;
 pub use generated::{figures_instr, update_generated};

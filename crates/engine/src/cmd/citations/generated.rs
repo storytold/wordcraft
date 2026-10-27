@@ -46,7 +46,7 @@ pub fn ta_field(entry: &str, category: Option<u8>) -> InlineObject {
 }
 
 /// The value of a field switch (`\c "4"` or `\c 4` → `4`), if the instruction has it.
-fn switch_value(instr: &str, switch: char) -> Option<String> {
+pub(super) fn switch_value(instr: &str, switch: char) -> Option<String> {
     let mut tokens = Vec::new();
     let mut cur = String::new();
     let mut quoted = false;
@@ -75,7 +75,7 @@ fn switch_value(instr: &str, switch: char) -> Option<String> {
 }
 
 /// Whether the field instruction has a switch (`\p`).
-fn has_switch(instr: &str, switch: char) -> bool {
+pub(super) fn has_switch(instr: &str, switch: char) -> bool {
     let want = format!("\\{switch}");
     instr.split_whitespace().any(|t| t.eq_ignore_ascii_case(&want))
 }
@@ -195,7 +195,7 @@ fn caption_body(p: &Paragraph, label: &str) -> String {
     rest.trim_start_matches(|c: char| c.is_whitespace() || matches!(c, ':' | '.' | '-' | '\u{2013}' | '\u{2014}')).trim_end().to_string()
 }
 
-pub(super) const ENTRY_STYLE: &str = "ListEntry";
+pub const ENTRY_STYLE: &str = "ListEntry";
 
 /// Rebuild every generated list.
 pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {

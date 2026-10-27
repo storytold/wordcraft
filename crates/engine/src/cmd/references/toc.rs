@@ -512,7 +512,7 @@ fn regenerate_toc(s: &mut Session, leader: Option<TabLeader>, tabs: &[(String, V
                     if let Some((_, sp)) = s.doc.sections().get(pg.section) {
                         sp.format_page_number(pg.number)
                     } else {
-                        super::page::sect(s).format_page_number(pg.number)
+                        crate::cmd::page::sect(s).format_page_number(pg.number)
                     }
                 })
                 .unwrap_or_else(|| "1".to_string());
