@@ -215,6 +215,8 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                     ui.add_space(8.0);
                     ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                         // The tabs that don't fit go into a » menu at the end of the strip (#897, #2026).
+                        let mut entries = Vec::new();
+                        let mut clicked_tab = None;
                         for (i, ((tab, custom), _)) in tabs.iter().zip(&plan.fits).enumerate().filter(|(_, (_, fits))| **fits) {
                             let (tab, custom) = (tab.as_str(), *custom);
                             let contextual = !custom && wordcraft_engine::ribbon::CONTEXTUAL_TABS.contains(&tab);
@@ -229,6 +231,23 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 // Every tab: they only place the legacy keys' hint (#1697).
                                 crate::keytips::record_tab(r, tab, "", &mut app.keytip_rects);
                             }
+                            if resp.clicked() {
+                                clicked_tab = Some(tab);
+                            }
+                            if resp.double_clicked() && tab != "File" {
+                                let _ = app.run("ui.collapseRibbon", json!({}));
+                            }
+                            resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
+                            entries.push((tab, contextual, shown, w, cut, r, resp));
+                        }
+
+                        // Handle tab click before drawing so active styling is 100% symmetric in both directions.
+                        if let Some(new_tab) = clicked_tab {
+                            let _ = app.run("ui.tab", json!({"tab": new_tab}));
+                        }
+
+                        let mut target_indicator: Option<Rect> = None;
+                        for (tab, contextual, shown, w, cut, r, resp) in entries {
                             let active = app.ui.tab == tab && !app.ui.backstage;
                             resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, shown));
                             if resp.hovered() && !active {
@@ -257,18 +276,12 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                     color,
                                 );
                             }
-                            let resp = if cut { resp.on_hover_text(shown) } else { resp };
+                            if cut {
+                                resp.on_hover_text(shown);
+                            }
                             if active {
-                                let u = Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2(w - 16.0, 3.0));
-                                ui.painter().rect_filled(u, 2.0, t.accent);
+                                target_indicator = Some(Rect::from_center_size(pos2(r.center().x, r.max.y - 2.0), vec2((w - 16.0).max(8.0), 3.0)));
                             }
-                            if resp.clicked() {
-                                let _ = app.run("ui.tab", json!({"tab": tab}));
-                            }
-                            if resp.double_clicked() && tab != "File" {
-                                let _ = app.run("ui.collapseRibbon", json!({}));
-                            }
-                            resp.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
                         }
                         let left_out: Vec<(&str, &str)> = tabs
                             .iter()
@@ -304,6 +317,61 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
                                 }
                             });
                         }
+
+                        let anim_time = if app.animations_on() { 0.14 } else { 0.0 };
+                        let id_center_x = ui.scope_id().with("tab_indicator_center_x");
+                        let id_width = ui.scope_id().with("tab_indicator_width");
+                        let id_vis = ui.scope_id().with("tab_indicator_vis");
+                        let id_last_cx = ui.scope_id().with("tab_indicator_last_cx");
+                        let id_last_w = ui.scope_id().with("tab_indicator_last_w");
+                        let id_last_y = ui.scope_id().with("tab_indicator_last_y");
+                        let vis = ui.ctx().animate_bool_responsive(id_vis, target_indicator.is_some());
+
+                        if let Some(target) = target_indicator {
+                            let (target_cx, target_w, target_y) = (target.center().x, target.width(), target.center().y);
+                            let is_init = ui.ctx().data(|d| d.get_temp::<bool>(ui.scope_id().with("tab_indicator_init"))).unwrap_or(false);
+                            if !is_init {
+                                ui.ctx().data_mut(|d| d.insert_temp(ui.scope_id().with("tab_indicator_init"), true));
+                                ui.ctx().animate_value_with_time(id_center_x, target_cx, 0.0);
+                                ui.ctx().animate_value_with_time(id_width, target_w, 0.0);
+                            }
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(id_last_cx, target_cx);
+                                d.insert_temp(id_last_w, target_w);
+                                d.insert_temp(id_last_y, target_y);
+                            });
+
+                            let cur_cx = ui.ctx().animate_value_with_time(id_center_x, target_cx, anim_time);
+                            let cur_w = ui.ctx().animate_value_with_time(id_width, target_w, anim_time);
+
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(egui::Id::unique("ribbon_indicator_cur_cx"), cur_cx);
+                                d.insert_temp(egui::Id::unique("ribbon_indicator_cur_w"), cur_w);
+                            });
+
+                            if vis > 0.01 && cur_w > 0.0 {
+                                let u = Rect::from_center_size(pos2(cur_cx, target_y), vec2(cur_w, 3.0));
+                                ui.painter().rect_filled(u, 2.0, t.accent.gamma_multiply(vis));
+                            }
+                        } else {
+                            // When not visible in strip (e.g. backstage opened or overflowed), fade out in place
+                            let last_cx: f32 = ui.ctx().data(|d| d.get_temp(id_last_cx)).unwrap_or(100.0);
+                            let last_w: f32 = ui.ctx().data(|d| d.get_temp(id_last_w)).unwrap_or(40.0);
+                            let last_y: f32 = ui.ctx().data(|d| d.get_temp(id_last_y)).unwrap_or(28.0);
+
+                            let cur_cx = ui.ctx().animate_value_with_time(id_center_x, last_cx, anim_time);
+                            let cur_w = ui.ctx().animate_value_with_time(id_width, last_w, anim_time);
+
+                            ui.ctx().data_mut(|d| {
+                                d.insert_temp(egui::Id::unique("ribbon_indicator_cur_cx"), cur_cx);
+                                d.insert_temp(egui::Id::unique("ribbon_indicator_cur_w"), cur_w);
+                            });
+
+                            if vis > 0.01 && cur_w > 0.0 {
+                                let u = Rect::from_center_size(pos2(cur_cx, last_y), vec2(cur_w, 3.0));
+                                ui.painter().rect_filled(u, 2.0, t.accent.gamma_multiply(vis));
+                            }
+                        }
                     });
                 });
             });
@@ -327,6 +395,22 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             bg.context_menu(|ui| crate::widgets::customize_menu_items(ui, app));
             let entry = user_tabs.iter().find(|e| e.name == app.ui.tab);
             crate::ribbon_fit::begin(ui.ctx(), &app.ui.tab, ui.available_width() - 4.0);
+            let tab_id = ui.scope_id().with("ribbon_active_tab_name");
+            let last_tab: Option<String> = ui.ctx().data(|d| d.get_temp(tab_id));
+            let tab_changed = last_tab.as_deref() != Some(app.ui.tab.as_str());
+            let anim_id = ui.scope_id().with("ribbon_content_anim");
+            if tab_changed {
+                ui.ctx().data_mut(|d| d.insert_temp(tab_id, app.ui.tab.clone()));
+                if last_tab.is_some() && app.animations_on() {
+                    ui.ctx().animate_value_with_time(anim_id, 0.0, 0.0);
+                }
+            }
+            let anim_time = if app.animations_on() { 0.12 } else { 0.0 };
+            let progress = ui.ctx().animate_value_with_time(anim_id, 1.0, anim_time);
+            if progress < 1.0 {
+                let opacity = (progress * (2.0 - progress)).clamp(0.0, 1.0);
+                ui.set_opacity(opacity);
+            }
             // 0.37 keeps the scroll offset private: an edge-chevron click leaves a one-frame
             // request here and the next scroll area is built at that offset.
             let pending_id = ui.scope_id().with("ribbon_scroll_pending");

@@ -33,39 +33,55 @@ impl WordApp {
         let moved = |app: &WordApp| app.windows.shown() != window;
         if self.ui.backstage {
             backstage::show(self, ui);
-        } else if !self.has_document() {
-            // No document open (#1129): the ribbon greyed out but for Help, and no page.
-            chrome::title_bar(self, ui);
-            ribbon::show(self, ui);
-            chrome::status_bar(self, ui);
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
         } else {
-            let screen = chrome::Screen::of(&self.session.view);
-            // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
-            self.focus_ribbon &= screen == chrome::Screen::Focus;
-            if screen != chrome::Screen::Normal {
-                chrome::screen_bar(self, ui, screen);
-            } else {
+            let was_bs: Option<bool> = ctx.data(|d| d.get_temp(ui.scope_id().with("was_backstage_open")));
+            let editor_anim_id = ui.scope_id().with("editor_enter_anim");
+            if was_bs == Some(true) {
+                ctx.data_mut(|d| d.insert_temp(ui.scope_id().with("was_backstage_open"), false));
+                if self.animations_on() {
+                    ctx.animate_value_with_time(editor_anim_id, 0.0, 0.0);
+                }
+            }
+            let editor_time = if self.animations_on() { 0.12 } else { 0.0 };
+            let editor_progress = ctx.animate_value_with_time(editor_anim_id, 1.0, editor_time);
+            if editor_progress < 1.0 {
+                let opacity = (editor_progress * (2.0 - editor_progress)).clamp(0.0, 1.0);
+                ui.set_opacity(opacity);
+            }
+            if !self.has_document() {
+                // No document open (#1129): the ribbon greyed out but for Help, and no page.
                 chrome::title_bar(self, ui);
-                if moved(self) {
-                    return;
-                }
                 ribbon::show(self, ui);
+                chrome::status_bar(self, ui);
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.canvas)).show(ui, |_| {});
+            } else {
+                let screen = chrome::Screen::of(&self.session.view);
+                // Focus and Full Screen (#1678) take the whole screen, with only their slim bar.
+                self.focus_ribbon &= screen == chrome::Screen::Focus;
+                if screen != chrome::Screen::Normal {
+                    chrome::screen_bar(self, ui, screen);
+                } else {
+                    chrome::title_bar(self, ui);
+                    if moved(self) {
+                        return;
+                    }
+                    ribbon::show(self, ui);
+                    if moved(self) {
+                        return;
+                    }
+                    chrome::status_bar(self, ui);
+                    panes::show(self, ui);
+                }
                 if moved(self) {
                     return;
                 }
-                chrome::status_bar(self, ui);
-                panes::show(self, ui);
-            }
-            if moved(self) {
-                return;
-            }
-            let fill = if screen == chrome::Screen::Focus { chrome::FOCUS_CANVAS } else { t.canvas };
-            egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
-                canvas::show(self, ui);
-            });
-            if self.focus_ribbon && !moved(self) {
-                chrome::focus_ribbon(self, ctx);
+                let fill = if screen == chrome::Screen::Focus { chrome::FOCUS_CANVAS } else { t.canvas };
+                egui::CentralPanel::default().frame(egui::Frame::NONE.fill(fill)).show(ui, |ui| {
+                    canvas::show(self, ui);
+                });
+                if self.focus_ribbon && !moved(self) {
+                    chrome::focus_ribbon(self, ctx);
+                }
             }
         }
     }
