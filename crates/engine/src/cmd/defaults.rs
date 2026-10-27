@@ -226,13 +226,15 @@ fn font_default(s: &mut Session, v: &Value) -> CmdResult {
     done(s, v)
 }
 
-/// The paragraph formatting a default may carry: no style, list, frame or revision.
+/// The paragraph formatting a default may carry: no style, list, frame or revision (formatting
+/// or numbering change).
 fn para_patch(v: &Value) -> Result<ParaProps, CmdError> {
     let mut pp: ParaProps = serde_json::from_value(v.get("props").cloned().unwrap_or(Value::Null)).map_err(|e| CmdError::Params(e.to_string()))?;
     pp.style = None;
     pp.numbering = None;
     pp.frame = None;
     pp.fmt_change = None;
+    pp.num_change = None;
     pp.drop_cap = None;
     Ok(pp)
 }
