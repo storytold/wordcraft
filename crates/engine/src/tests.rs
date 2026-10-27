@@ -6377,6 +6377,27 @@ fn password_protected_documents_round_trip() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// Shape Outline on a shape with no outline width (an unstroked VML shape reads none) gives it
+/// Word's 0.75 pt line; a width given wins, and a shape's own width is kept.
+#[test]
+fn an_outline_added_without_a_width_gets_words_default() {
+    let mut s = s();
+    run(&mut s, "insert.shape", json!({"kind": "rectangle"}));
+    let outline = |s: &Session| match cmd::objects::selected(s) {
+        Some((_, wordcraft_doc::InlineObject::Shape { stroke, stroke_width, .. })) => (stroke.is_some(), stroke_width),
+        o => panic!("{o:?}"),
+    };
+    run(&mut s, "shape.outline", json!({"color": null, "width": 0}));
+    assert_eq!(outline(&s), (false, 0.0));
+    run(&mut s, "shape.outline", json!({"color": "FF0000"}));
+    assert_eq!(outline(&s), (true, 0.75));
+    run(&mut s, "shape.outline", json!({"color": "00FF00", "width": 2}));
+    assert_eq!(outline(&s), (true, 2.0));
+    run(&mut s, "shape.outline", json!({"color": null}));
+    run(&mut s, "shape.outline", json!({"color": "0000FF"}));
+    assert_eq!(outline(&s), (true, 2.0));
+}
+
 /// Shape Format › Shape Effects (#275): presets and custom values apply to the selected shape,
 /// an omitted key is kept, hostile numbers are clamped and each change is one undo step.
 #[test]

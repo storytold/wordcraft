@@ -1123,9 +1123,15 @@ impl Writer<'_> {
                 w.close("a:ln");
             }
             None => {
-                let cap = extra.cap.ooxml();
-                let ln: &[(&str, &str)] = if extra.cap.is_flat() { &[] } else { &[("cap", cap)] };
-                w.open("a:ln", ln);
+                let width = emu(stroke_width.clamp(0.0, 100.0));
+                let mut ln: Vec<(&str, &str)> = Vec::new();
+                if *stroke_width > 0.0 {
+                    ln.push(("w", width.as_str()));
+                }
+                if !extra.cap.is_flat() {
+                    ln.push(("cap", extra.cap.ooxml()));
+                }
+                w.open("a:ln", &ln);
                 w.empty("a:noFill", &[]);
                 line_dash(w, &extra.dash);
                 w.close("a:ln");

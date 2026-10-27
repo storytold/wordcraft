@@ -20,6 +20,9 @@ use crate::xml::{El, Node};
 use wordcraft_doc::wordart::TextWarp;
 
 const INK_URI: &str = "http://schemas.microsoft.com/office/word/2010/wordprocessingInk";
+/// The left and right cell margins Word gives a table in a document without a default table
+/// style (10 twips; measured, as with that `w:tblCellMar`).
+const NO_STYLE_CELL_MARGIN: f32 = 0.5;
 const INK_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/customXml";
 /// The `a:graphicData` URI of an Office 2016 chart (`cx:chart`).
 const CHARTEX_URI: &str = "http://schemas.microsoft.com/office/drawing/2014/chartex";
@@ -1748,7 +1751,7 @@ impl Reader<'_> {
             })
         };
         let stroke = on("stroked").then(|| attr("strokecolor").map_or(Some(Rgb::BLACK), vml_color)).flatten();
-        let stroke_width = attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0);
+        let stroke_width = if on("stroked") { attr("strokeweight").and_then(|v| measure(v, 1.0)).unwrap_or(0.75).clamp(0.0, 100.0) } else { 0.0 };
         let fill = vml_fill(shape, shapetype);
         let endcap = shape
             .child("v:stroke")
@@ -1980,6 +1983,11 @@ impl Reader<'_> {
                 let old = ch.child("w:tblPr").map(|o| self.pc.tblpr(o)).unwrap_or_default();
                 table.props.fmt_change = PropChange::boxed(self.revision(RevisionKind::Format, ch), old);
             }
+        }
+        // Without a default table style Word gives a table without a style or cell margins of
+        // its own 10 twips each side, not Normal Table's 108; ours are written with one.
+        if !self.default_table_style && table.props.style.is_none() && table.props.cell_margins.is_none() {
+            table.props.cell_margins = Some([0.0, NO_STYLE_CELL_MARGIN, 0.0, NO_STYLE_CELL_MARGIN]);
         }
         if let Some(g) = t.child("w:tblGrid") {
             table.grid = g

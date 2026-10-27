@@ -235,6 +235,56 @@ fn picture_in_box_keeps_its_frame() {
     assert!(matches!(&p.objects[0], InlineObject::Shape { w, h, .. } if *w == 144.0 && *h == 72.0));
 }
 
+/// A text box resizing to fit its text counts its outline's width, drawn or not (Word: a 0.5 pt
+/// `a:ln` with `a:noFill` makes it 0.5 pt taller); a VML box that isn't stroked (`stroked="f"`)
+/// has none (Word: no taller than its text and margins).
+#[test]
+fn text_boxes_keep_the_width_of_their_outline_drawn_or_not() {
+    let content = r#"<w:txbxContent><w:p><w:r><w:t>Boxed</w:t></w:r></w:p></w:txbxContent>"#;
+    let vml = |attrs: &str| {
+        format!(
+            r#"<w:p><w:r><w:pict><v:rect style="width:100pt;height:40pt" {attrs}><v:textbox style="mso-fit-shape-to-text:t">{content}</v:textbox></v:rect></w:pict></w:r></w:p>"#
+        )
+    };
+    let dml = |ln: &str| {
+        format!(
+            r#"<w:p><w:r><w:drawing><wp:inline><wp:extent cx="1270000" cy="508000"/><wp:docPr id="1" name="Box"/><a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape"><wps:wsp><wps:cNvSpPr txBox="1"/><wps:spPr><a:prstGeom prst="rect"/>{ln}</wps:spPr><wps:txbx>{content}</wps:txbx><wps:bodyPr><a:spAutoFit/></wps:bodyPr></wps:wsp></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>"#
+        )
+    };
+    let body = [
+        dml(r#"<a:ln w="6350"><a:noFill/></a:ln>"#),
+        dml(r#"<a:ln w="25400"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln>"#),
+        dml(""),
+        vml(r#"stroked="f" strokeweight="2pt""#),
+        vml(r#"stroked="f""#),
+        vml(""),
+        vml(r#"strokeweight="2pt""#),
+    ]
+    .concat();
+    let doc = format!(
+        r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape" xmlns:v="urn:schemas-microsoft-com:vml"><w:body>{body}</w:body></w:document>"#
+    );
+    let rels = br#"<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>"#;
+    let d = wordcraft_docx::read(&zip(&[("_rels/.rels", rels), ("word/document.xml", doc.as_bytes())])).unwrap();
+    let outlines = |d: &Document| {
+        let mut out = Vec::new();
+        d.objects_in_reading_order(&mut |o| {
+            if let InlineObject::Shape { stroke, stroke_width, story: Some(id), .. } = o
+                && d.parts.get(id).is_some_and(|p| p.body.auto_fit)
+            {
+                out.push((stroke.is_some(), *stroke_width));
+            }
+        });
+        out
+    };
+    let read = outlines(&d);
+    assert_eq!(read, [(false, 0.5), (true, 2.0), (false, 0.0), (false, 0.0), (false, 0.0), (true, 0.75), (true, 2.0)]);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    assert!(xml.contains(r#"<a:ln w="6350"><a:noFill/></a:ln>"#), "an outline not drawn keeps its width: {xml}");
+    assert_eq!(outlines(&wordcraft_docx::read(&bytes).unwrap()), read, "saved and read again");
+}
+
 #[test]
 fn story_shared_by_many_shapes_is_written_once() {
     let mut d = Document::from_text("x");

@@ -109,19 +109,43 @@ fn only_tables_include_exact_line_bottom_contact_in_all_compatibility_modes() {
     }
 }
 
+/// The lines of body block `block`: left edge, top and right edge on the page.
+fn block_lines(d: &Document, block: usize) -> Vec<(f32, f32, f32)> {
+    let l = layout(d, &mut LayoutCache::new(), &LayoutOptions::default());
+    assert_eq!(l.pages.len(), 1);
+    l.pages[0]
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Placed::Lines { path, x, y, para, l0, l1, story: StoryRef::Body, .. } if path.0 == vec![block as u32] => {
+                let shown = para.lines.get(*l0..*l1)?;
+                let first = shown.first()?.top;
+                Some(shown.iter().map(|line| (x + line.left, y + line.top - first, x + line.right)).collect::<Vec<_>>())
+            }
+            _ => None,
+        })
+        .flatten()
+        .collect()
+}
+
+/// Word for Mac (two floats leaving a 32 pt strip between them, the table touching the line's
+/// bottom): a word too wide for the strip, the row's only span, is split across it from the row
+/// the table touches on, rather than moving below the table.
 #[test]
-fn a_word_skipping_a_narrow_strip_at_table_contact_resumes_when_the_table_ends() {
+fn a_word_too_wide_for_the_strip_at_table_contact_is_split_across_it() {
     for mode in [11, 12, 14, 15] {
         let mut d = document(mode);
-        // Before contact the shape leaves 200 pt on the left. At contact the table takes
-        // 168 pt of that, leaving a 32 pt strip, too narrow for P4. The table ends before
-        // the shape: P4 must use the newly available left strip, not jump below the shape.
         add_table(&mut d, CONTACT, 168.0);
         add_shape(&mut d, 72.0, 272.0, 268.0, 500.0);
-        let lines = line_positions(&d);
-        assert!((lines[3].1 - (CONTACT + 50.0)).abs() < 0.001, "mode={mode}: {lines:?}");
-        assert_eq!(lines[3].0, 72.0);
-        assert!(lines[..3].iter().enumerate().all(|(n, l)| l.1 == 72.0 + n as f32 * LINE));
+        let p4 = block_lines(&d, 4);
+        assert!(p4.len() > 1, "mode={mode}: {p4:?}");
+        assert!((p4[0].1 - (CONTACT - LINE)).abs() < 0.001, "mode={mode}: {p4:?}");
+        assert!(p4[0].0 >= 240.0 && p4[0].2 <= 272.0 + 0.01, "mode={mode}: {p4:?}");
+        for (n, block) in (1..=3).enumerate() {
+            let lines = block_lines(&d, block);
+            assert_eq!(lines.len(), 1, "mode={mode}: {lines:?}");
+            assert_eq!((lines[0].0, lines[0].1), (72.0, 72.0 + n as f32 * LINE), "mode={mode}");
+        }
     }
 }
 
@@ -201,11 +225,13 @@ fn exact_table_contact_uses_the_spacing_with_larger_and_smaller_marks() {
     }
 }
 
+/// As above with exact 12 pt lines and a 4 pt paragraph mark: the line's 12 pt reach the table,
+/// so the word is split across the strip from its first row (with the mark's height the row would
+/// not reach the table and the word would fit beside the shape).
 #[test]
-fn exact_table_contact_uses_the_spacing_when_a_word_skips_a_strip() {
+fn exact_table_contact_uses_the_spacing_when_a_word_is_split_across_a_strip() {
     for mode in [11, 12, 14, 15] {
         let mut d = exact_document(mode, 4.0);
-        // Anchor the shape in an earlier paragraph so the tested word has no inline anchor.
         let Block::Para(p) = &*d.body[0] else { panic!("expected paragraph") };
         let mut anchor = Paragraph::with_text("P0", p.mark.clone());
         anchor.mark = p.mark.clone();
@@ -213,8 +239,9 @@ fn exact_table_contact_uses_the_spacing_when_a_word_skips_a_strip() {
         d.body.insert(0, wordcraft_doc::para_block(anchor));
         add_table(&mut d, 96.0, 168.0);
         add_shape(&mut d, 72.0, 272.0, 268.0, 500.0);
-        // The 32 pt strip cannot hold the word. The table ends before the shape,
-        // leaving 200 pt on the left, so skipping must stop at the table's bottom.
-        assert_eq!(exact_line(&d), (72.0, 146.0), "mode={mode}");
+        let lines = block_lines(&d, 2);
+        assert!(lines.len() > 1, "mode={mode}: {lines:?}");
+        assert!((lines[0].1 - 84.0).abs() < 0.001, "mode={mode}: {lines:?}");
+        assert!(lines.iter().take_while(|l| l.1 < 146.0).all(|l| l.0 >= 240.0 && l.2 <= 272.0 + 0.01), "mode={mode}: {lines:?}");
     }
 }

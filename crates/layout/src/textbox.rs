@@ -11,7 +11,7 @@ use std::collections::{BTreeSet, HashMap};
 use std::sync::Arc;
 
 use wordcraft_doc::props::{TextDirection, TextVert, VAlign};
-use wordcraft_doc::{Block, Blocks, Path, StoryRef, TextBody};
+use wordcraft_doc::{Block, Blocks, PartKind, Path, StoryRef, TextBody};
 use wordcraft_geom::Rect;
 
 use crate::{BoxContext, Ctx, Placed, fit_box, layout_box};
@@ -95,6 +95,55 @@ fn lay(ctx: &mut Ctx, id: u32, blocks: &Blocks, len: f32, vert: TextVert, depth:
     layout_box(ctx, story, blocks, &[], len, BoxContext::Other, depth + 1, None).items
 }
 
+/// The most sizes [`fitted_size`] keeps for one layout.
+const MAX_FITS: usize = 4096;
+
+/// The size a shape stored `w` × `h`, showing text box story `id` inside an outline `stroke`
+/// wide, is laid out at. A box that resizes to fit its text ([`TextBody::auto_fit`]) is as deep
+/// across its lines as its text (the space before its first paragraph and after its last, and
+/// an empty last paragraph, count), plus its margins and its whole outline (drawn or not), as
+/// in Word: shrunk or grown, from its top edge (left for turned text). A box stored smaller than
+/// its margins and outline adds only its stored size to the text. Stacked text, linked boxes and
+/// a box inside itself keep the stored size. Measuring leaves no trace: list counters, equation
+/// numbers and the linked chains laid out on the way are as they were.
+pub(crate) fn fitted_size(ctx: &mut Ctx, id: u32, (w, h): (f32, f32), stroke: f32, depth: usize) -> (f32, f32) {
+    let doc = ctx.doc;
+    let Some(part) = doc.parts.get(&id).filter(|p| p.kind == PartKind::TextBox && p.body.auto_fit && p.body.vert != TextVert::Stacked) else {
+        return (w, h);
+    };
+    ctx.chains.build(doc);
+    if ctx.chains.member.contains_key(&id) {
+        return (w, h);
+    }
+    let key = (id, [w.to_bits(), h.to_bits(), stroke.to_bits()], ctx.fields.page);
+    if let Some(size) = ctx.fits.get(&key) {
+        return *size;
+    }
+    if !ctx.boxes.enter(id) {
+        return (w, h);
+    }
+    let body = part.body;
+    let (len, _) = frame(&body, w, h);
+    let counted = (ctx.counters.clone(), ctx.eq_count);
+    let flows: Vec<usize> = ctx.chains.flows.keys().copied().collect();
+    let text = layout_box(ctx, StoryRef::Part(id), &part.blocks, &[], len, BoxContext::Other, depth + 1, None).height;
+    (ctx.counters, ctx.eq_count) = counted;
+    ctx.chains.flows.retain(|ci, _| flows.contains(ci));
+    ctx.boxes.leave();
+    let [l, t, r, b] = body.insets_pt();
+    let outline = wordcraft_geom::finite(stroke).max(0.0);
+    let fit = |stored: f32, margins: f32| (wordcraft_geom::finite(text) + wordcraft_geom::finite(stored).min(margins + outline)).clamp(1.0, 4000.0);
+    let size = match body.vert.turn() {
+        TextDirection::Horizontal => (w, fit(h, t + b)),
+        _ => (fit(w, l + r), h),
+    };
+    if ctx.fits.len() >= MAX_FITS {
+        ctx.fits.clear();
+    }
+    ctx.fits.insert(key, size);
+    size
+}
+
 /// The items showing text box `id` in its frame `rect` (page coordinates): its text, or its
 /// share of a linked chain's, cut to what fits, aligned and turned as the box says.
 pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec<Placed> {
@@ -115,30 +164,6 @@ pub(crate) fn box_items(ctx: &mut Ctx, id: u32, rect: Rect, depth: usize) -> Vec
         }
     };
     place(items, &body, rect, across)
-}
-
-/// The height of a `w` wide text box `id` that resizes to fit its text (`a:spAutoFit`): its text's
-/// depth plus its top and bottom margins, as Word fits it when laying the document out. `None`
-/// for a box that keeps its own height: one that doesn't resize, with turned text, or linked.
-pub(crate) fn fitted_height(ctx: &mut Ctx, id: u32, w: f32) -> Option<f32> {
-    let body = ctx.doc.parts.get(&id).map(|p| p.body)?;
-    if !body.auto_fit || body.vert.turn() != TextDirection::Horizontal || body.next.is_some() {
-        return None;
-    }
-    ctx.chains.build(ctx.doc);
-    if ctx.chains.member.contains_key(&id) || !ctx.boxes.enter(id) {
-        return None;
-    }
-    let blocks = ctx.doc.parts.get(&id).map(|p| p.blocks.clone()).unwrap_or_default();
-    let (len, _) = frame(&body, w, 0.0);
-    // Measuring doesn't count the box's list numbers and equations: `box_items` lays it out again.
-    let snap = (ctx.counters.clone(), ctx.eq_count);
-    let items = lay(ctx, id, &blocks, len, body.vert, 0);
-    (ctx.counters, ctx.eq_count) = snap;
-    ctx.boxes.leave();
-    let [_, t, _, b] = body.insets_pt();
-    let h = extent(&items) + t + b;
-    h.is_finite().then_some(h)
 }
 
 /// Move items laid out in a box's frame onto the page: aligned in the `across` room (top,

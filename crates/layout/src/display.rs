@@ -1353,7 +1353,7 @@ fn lines(
             }
             let cx = x + line.cl_left(k).unwrap_or(0.0);
             let obj = para.and_then(|p| p.objects.get(oi));
-            let rect = inline_rect(obj, cx, base, c.adv, c.obj_h);
+            let rect = inline_rect(obj.and_then(|o| pl.object_frame(oi, o)), cx, base, c.adv, c.obj_h);
             let spin = obj.and_then(InlineObject::frame).map(|(_, _, f)| f.spin()).unwrap_or_default();
             match obj {
                 Some(o @ (InlineObject::Image { .. } | InlineObject::Shape { .. } | InlineObject::Group { .. })) => {
@@ -2071,11 +2071,11 @@ pub(crate) fn effects_in(effects: wordcraft_doc::effects::ShapeEffects, spin: Sp
     e
 }
 
-/// Where inline object `obj` is drawn, given its cluster's box (`adv` × `obj_h` standing on the
-/// baseline at `cx`): inside the room kept for its effects.
-/// A rotated one's unrotated frame, centred in that room.
-pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
-    let frame = obj.and_then(InlineObject::frame);
+/// Where an inline object is drawn, given its size as laid out and placement (`frame`, see
+/// [`crate::para::ParaLayout::object_frame`]) and its cluster's box (`adv` × `obj_h` standing on
+/// the baseline at `cx`): inside the room kept for its effects. A rotated one's unrotated frame,
+/// centred in that room.
+pub(crate) fn inline_rect(frame: Option<(f32, f32, &wordcraft_doc::para::Float)>, cx: f32, base: f32, adv: f32, obj_h: f32) -> Rect {
     let [l, t, r, b] = frame.map_or([0.0; 4], |(_, _, float)| float.effect_extent());
     let room = Rect::new(cx + l, base - obj_h + t, (adv - l - r).max(0.0), (obj_h - t - b).max(0.0));
     let Some((w, h, float)) = frame.filter(|(_, _, f)| f.rot != 0.0) else { return room };

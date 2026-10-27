@@ -369,8 +369,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     *stroke = c;
                     // A colour chosen here replaces an outline gradient from a file.
                     extra.outline_fill = None;
-                    if let Some(w) = w {
-                        *stroke_width = w;
+                    match w {
+                        Some(w) => *stroke_width = w,
+                        None if c.is_some() && (*stroke_width <= 0.0 || stroke_width.is_nan()) => *stroke_width = DEFAULT_OUTLINE,
+                        None => {}
                     }
                 } else if let Some(style) = super::canvas::style_mut(o) {
                     style.stroke = c;
@@ -380,7 +382,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
             })
         })
-        .params(r#"{"color": "RRGGBB" | null, "width"?: pt}  (a selected drawing canvas: its border)"#)
+        .params(r#"{"color": "RRGGBB" | null, "width"?: pt}  (a shape with no outline width gets Word's 0.75 pt; a selected drawing canvas: its border)"#)
         .when(has_shape_or_canvas),
         CommandSpec::new("shape.effects", "Shape Effects", "Shape Format › Shape Styles", shape_effects)
             .params(
@@ -661,6 +663,9 @@ pub fn min_size(o: &InlineObject) -> f32 {
     if matches!(o, InlineObject::Shape { story: Some(_), .. }) { 18.0 } else { 4.0 }
 }
 
+/// The outline width Word gives a shape that gets an outline without one, points.
+const DEFAULT_OUTLINE: f32 = 0.75;
+
 /// Largest object offset or move, points.
 const MAX_OFFSET: f32 = 4000.0;
 
@@ -865,11 +870,22 @@ fn move_object_once(s: &mut Session, pos: &Pos, page: usize, x: f32, y: f32, (w,
         f.x = (x - origin.x).clamp(-MAX_OFFSET, MAX_OFFSET);
         f.y = (y - origin.y).clamp(-MAX_OFFSET, MAX_OFFSET);
     })?;
+    // Placed from its paragraph it may not stay there (from Word 2013 layout one reaching below
+    // the bottom margin is lifted above it): then it keeps its place on the page, as dropped.
+    s.touch();
+    let landed = s.layout().object(&at, page).map(|o| (o.page, o.rect.y));
+    if landed.is_none_or(|(p, top)| p != page || (top - y).abs() > 0.5) {
+        edit_float(s, &at, |f| {
+            f.v_rel = Anchor::Page;
+            f.y = y.clamp(-MAX_OFFSET, MAX_OFFSET);
+        })?;
+    }
     Ok(at)
 }
 
 /// Turn the selected floating object's alignment (left, centred, …) into an offset from its
-/// column / paragraph that keeps it where it is, so it can be moved by an offset.
+/// column / paragraph (from the page's top for one fixed on the page) that keeps it where it is,
+/// so it can be moved by an offset.
 fn unalign(s: &mut Session) -> Result<(), CmdError> {
     use wordcraft_doc::para::Anchor;
     let (pos, obj) = selected(s).ok_or_else(|| CmdError::Disabled("no picture or shape selected".into()))?;
@@ -885,7 +901,11 @@ fn unalign(s: &mut Session) -> Result<(), CmdError> {
             f.h_rel = Anchor::Column;
             f.x = ox.clamp(-MAX_OFFSET, MAX_OFFSET);
         }
-        if f.v_align.is_some() {
+        if f.v_align.is_some() && !moves_with_text(f) {
+            f.v_align = None;
+            f.v_rel = Anchor::Page;
+            f.y = hit.rect.y.clamp(-MAX_OFFSET, MAX_OFFSET);
+        } else if f.v_align.is_some() {
             f.v_align = None;
             f.v_rel = Anchor::Paragraph;
             f.y = oy.clamp(-MAX_OFFSET, MAX_OFFSET);
