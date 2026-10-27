@@ -50,8 +50,9 @@ impl Part {
 }
 
 /// Where the template is kept. The front end provides it ([`crate::Session::normal_store`]);
-/// headless sessions (MCP, `wordcraft-cli`, tests) have none, so an agent never changes the
-/// person's defaults.
+/// headless sessions (`wordcraft-cli mcp`, `wordcraft-cli run`, tests) have none, so they never
+/// change the person's defaults. An agent driving the running app (`--control`, `mcp --connect`)
+/// uses the app's store, like the saved proofing language.
 pub trait NormalStore: Send + Sync {
     /// The template's bytes; `Ok(None)` when there is none. Bytes over [`MAX_TEMPLATE_BYTES`]
     /// may be returned as an error instead.

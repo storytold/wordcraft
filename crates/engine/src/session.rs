@@ -65,7 +65,9 @@ pub struct Session {
     /// Where the Normal template is kept, if the host wired one up (the desktop app: the
     /// settings folder; the web app: `localStorage`). Headless sessions, tests and runs without
     /// preferences leave `None`: new documents use the built-in formatting and Set As Default for
-    /// all new documents is refused, so an agent never changes the person's defaults (#4237).
+    /// all new documents is refused there (#4237). An agent driving the desktop app (`--control`,
+    /// `mcp --connect`) runs in the app's session and so can change them, as it can the saved
+    /// proofing language.
     pub normal_store: Option<Arc<dyn crate::normal_template::NormalStore>>,
     /// Set As Default changes waiting for the Normal template: written by [`Session::run`] only
     /// once the command has succeeded (see `cmd::defaults::TemplateEdit`).
