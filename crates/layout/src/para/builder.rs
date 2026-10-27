@@ -11,8 +11,9 @@ use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_H
 const ZERO_WIDTH_SPACE: char = '\u{200B}';
 
 /// Whether `c` is set in a run's high-ANSI font: non-ASCII, neither complex script nor East Asian.
+/// A zero-width space has nothing to draw and stays in the ASCII font.
 fn high_ansi(rc: &ResolvedChar, c: char) -> bool {
-    !c.is_ascii() && !rc.uses_complex(c) && !east_asian(c)
+    !c.is_ascii() && c != ZERO_WIDTH_SPACE && !rc.uses_complex(c) && !east_asian(c)
 }
 
 pub(super) struct Builder<'a> {
@@ -88,6 +89,8 @@ impl<'a> Builder<'a> {
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
             let ha = match cur {
+                // U+200B is a mark to the bidi classes, but takes no font from the text before it.
+                _ if c == ZERO_WIDTH_SPACE => false,
                 Some(k) if mark => k.high_ansi,
                 _ => !complex && rc_ha.is_some() && high_ansi(rc, dc),
             };

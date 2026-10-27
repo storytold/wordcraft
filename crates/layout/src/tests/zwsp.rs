@@ -137,3 +137,25 @@ fn a_row_of_zero_width_spaces_is_as_tall_as_a_row_of_text() {
     let steps: Vec<f32> = rows.windows(2).map(|w| w[1] - w[0]).collect();
     assert!((steps[1] - steps[0]).abs() < 0.01 && (steps[2] - steps[0]).abs() < 0.01, "row steps {steps:?}");
 }
+
+/// A run with a distinct high-ANSI font (`w:hAnsi`, here one with taller lines): a zero-width
+/// space is not high-ANSI text, so it stays in the run's ASCII font, at its line height. It
+/// counted as non-ASCII Latin text, and as a mark it also took the high-ANSI choice of the
+/// character before it.
+#[test]
+fn a_zero_width_space_stays_out_of_a_distinct_high_ansi_font() {
+    let with_hansi = |t: &str| {
+        let hansi = wordcraft_doc::CharProps { font_hansi: Some("Source Sans 3".into()), ..chr() };
+        let mut p = wordcraft_doc::Paragraph::with_text(t, hansi.clone());
+        p.mark = hansi;
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+        p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        p
+    };
+    let mut d = Document::new();
+    d.body = ["x", "\u{200b}", "\u{200b}\u{200b}"].into_iter().map(|t| wordcraft_doc::para_block(with_hansi(t))).collect();
+    let h = line_heights(&d);
+    assert_eq!(h.len(), 3, "{h:?}");
+    assert!(h.iter().all(|v| (v - h[0]).abs() < 0.01), "lines of zero-width spaces as tall as text in the run's font: {h:?}");
+}
