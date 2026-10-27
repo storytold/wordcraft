@@ -301,12 +301,14 @@ impl<'a> Flow<'a> {
 
     /// Keep lines together: if it doesn't fit but would on an empty column, move it. Keep with
     /// next alone moves a paragraph only when it would fit here by itself (Word for Windows): one
-    /// that doesn't breaks as usual, its last lines going over with the next paragraph. Returns
-    /// the space before applied (`before`, or what is left of it at the top of the next column).
+    /// that doesn't breaks as usual, its last lines going over with the next paragraph. A closing
+    /// section mark needs no room, so neither moves it: in a heading style (keep lines together,
+    /// keep with next) it went to a page of its own and left that page blank. Returns the space
+    /// before applied (`before`, or what is left of it at the top of the next column).
     fn keep_together(&self, ctx: &mut Ctx, pb: &mut PageBuilder, rooms: Rooms, before: f32) -> f32 {
         let rp = &self.pl.rp;
         let height = self.pl.height + rooms.top + rooms.bottom;
-        if !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
+        if self.closes_section_on_full_page(pb) || !(rp.keep_lines || (rp.keep_next && pb.y + height <= pb.bottom + 0.01)) {
             return before;
         }
         let need = height + if rp.keep_next { next_first_line(ctx, self.block, self.width, 0, &mut ctx.counters.clone()) } else { 0.0 };
@@ -421,7 +423,12 @@ impl<'a> Flow<'a> {
             && p.text
                 .get(l.start..l.stop)
                 .is_some_and(|t| t.chars().all(|c| matches!(c, wordcraft_doc::para::PAGE_BREAK | wordcraft_doc::para::COLUMN_BREAK)));
-        only_break || (pb.next_starts_page && p.section.is_some() && p.text.is_empty())
+        only_break || self.closes_section_on_full_page(pb)
+    }
+
+    /// Whether this is an empty paragraph closing a section before a new page (#1614).
+    fn closes_section_on_full_page(&self, pb: &PageBuilder) -> bool {
+        pb.next_starts_page && self.p.section.is_some() && self.p.text.is_empty()
     }
 
     /// Whether the line (just taken, `fit.l1` is after it) forces a break, noted in `fit`.
