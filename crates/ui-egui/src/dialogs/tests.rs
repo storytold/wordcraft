@@ -1871,6 +1871,24 @@ fn closing_set_as_default_returns_to_the_dialog() {
     assert!(store.get().is_none());
 }
 
+/// Re-review P3: the Design ribbon's Set as Default button opens the question; nothing is saved
+/// until its OK.
+#[test]
+fn design_ribbon_set_as_default_asks_first() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().ui.tab = "Design".into();
+    h.run_steps(3);
+    h.get_by_label("Set as Default").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::DesignDefault)), "the question opens");
+    assert!(store.get().is_none(), "and nothing is saved yet");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(store.get().is_some(), "OK saves");
+}
+
 /// Review P3: Design › Set as Default asks before saving; Cancel saves nothing.
 #[test]
 fn design_set_as_default_asks_first() {
