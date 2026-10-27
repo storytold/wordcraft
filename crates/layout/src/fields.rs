@@ -373,6 +373,13 @@ pub fn field_text_on(instr: &str, result: &str, ctx: &FieldCtx, page: u32) -> (S
                     from_name
                         .or_else(|| literal_after_eq(instr).and_then(parse))
                         .or_else(|| parse(result.trim()))
+                } else if fmt == NumFormat::Hex {
+                    // For \* Hex the stored result is already hex-formatted (e.g. "A", "1F").
+                    // Re-parsing it as decimal would give a wrong second conversion.
+                    // Use the field name or the literal instead; if neither is available,
+                    // preserve the stored result unchanged by returning None here.
+                    name.parse::<f64>().ok()
+                        .or_else(|| literal_after_eq(instr)?.parse().ok())
                 } else {
                     result.trim().parse::<f64>().ok()
                         .or_else(|| name.parse::<f64>().ok())
