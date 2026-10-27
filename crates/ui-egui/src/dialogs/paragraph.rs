@@ -140,9 +140,17 @@ pub(super) fn default_para_props(app: &WordApp, d: &Dialog) -> serde_json::Map<S
             "right" => "indentRight",
             "bidi" if unchanged && !*rtl => continue,
             "lineSpacing" if unchanged => {
-                let at = &app.session.sel.focus;
-                let actual = app.session.doc.para_at(at).map(|p| app.session.doc.styles.resolve_para(&p.props).line_spacing);
-                if let Some(ls) = actual.and_then(|ls| serde_json::to_value(ls).ok()) {
+                // The dialog shows Exactly 12 and Exactly 18 alike: send the spacing only when
+                // every selected paragraph has the same one.
+                let s = &app.session;
+                let story = s.sel.focus.story;
+                let mut each = wordcraft_engine::cmd::selected_paths(s)
+                    .into_iter()
+                    .filter_map(|path| s.doc.para(story, &path))
+                    .chain(s.doc.para_at(&s.sel.focus))
+                    .map(|p| s.doc.styles.resolve_para(&p.props).line_spacing);
+                let first = each.next();
+                if let Some(ls) = first.filter(|f| each.all(|o| o == *f)).and_then(|ls| serde_json::to_value(ls).ok()) {
                     props.insert("lineSpacing".into(), ls);
                 }
                 continue;
