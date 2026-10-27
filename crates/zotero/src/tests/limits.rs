@@ -40,6 +40,28 @@ fn a_note_referenced_many_times_is_listed_once() {
     assert!(list.iter().all(|f| f.start.story == StoryRef::Part(note) && f.note_index == 1));
 }
 
+// Each note's fields are listed at its reference, so the reference's offset must be its own
+// marker's, past text and other objects before it (#3906).
+#[test]
+fn note_fields_are_listed_at_their_reference() {
+    let mut doc = Document::from_text("");
+    let a = doc.add_part(PartKind::Footnote, vec![para_block(objects_para(citations(1)))]);
+    let b = doc.add_part(PartKind::Footnote, vec![para_block(objects_para(citations(1)))]);
+    let note = |id| InlineObject::NoteRef { kind: NoteKind::Footnote, id, custom: String::new() };
+    let mut objects = citations(1);
+    objects.push(note(b));
+    objects.extend(citations(1));
+    objects.push(note(a));
+    let mut p = objects_para(objects);
+    // Multibyte text between the markers: offsets are bytes, not characters or object indexes.
+    p.text = format!("é{OBJ}{OBJ}ü{OBJ}ß{OBJ}{OBJ}ø{OBJ}");
+    p.runs = vec![Run { len: p.text.len(), props: CharProps::default() }];
+    doc.body = vec![para_block(p)];
+    let got: Vec<(StoryRef, usize, u32)> = fields::list(&doc).into_iter().map(|f| (f.start.story, f.start.off, f.note_index)).collect();
+    let body = |off| (StoryRef::Body, off, 0);
+    assert_eq!(got, [body(2), (StoryRef::Part(b), 0, 1), body(15), (StoryRef::Part(a), 0, 2)]);
+}
+
 #[test]
 fn listing_stops_at_the_field_budget() {
     let mut doc = Document::from_text("");
