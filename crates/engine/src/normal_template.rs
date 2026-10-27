@@ -118,29 +118,15 @@ impl FileStore {
 #[cfg(not(target_arch = "wasm32"))]
 impl NormalStore for FileStore {
     fn load(&self) -> Result<Option<Vec<u8>>, String> {
-        match std::fs::symlink_metadata(&self.path) {
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
-            Err(e) => return Err(format!("{}: {e}", self.path.display())),
-            Ok(_) => {}
-        }
-        let limit = u64::try_from(MAX_TEMPLATE_BYTES).unwrap_or(u64::MAX);
-        crate::io::read_regular_file_within(&self.path, limit)
-            .map(Some)
-            .ok_or_else(|| format!("{}: not a readable file of at most {} MB", self.path.display(), MAX_TEMPLATE_BYTES >> 20))
+        crate::io::read_app_file(&self.path, u64::try_from(MAX_TEMPLATE_BYTES).unwrap_or(u64::MAX))
     }
 
     fn save(&self, bytes: &[u8]) -> Result<(), String> {
-        if let Some(dir) = self.path.parent() {
-            std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        crate::io::write_atomic(&self.path, bytes)
+        crate::io::write_app_file(&self.path, bytes)
     }
 
     fn reset(&self) -> Result<(), String> {
-        match std::fs::remove_file(&self.path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", self.path.display())),
-            _ => Ok(()),
-        }
+        crate::io::remove_app_file(&self.path)
     }
 }
 
