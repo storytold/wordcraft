@@ -827,3 +827,38 @@ fn a_long_data_table_name_stays_inside_the_chart() {
     assert!(rect[0] >= 0.0, "the name starts inside the chart: {rect:?}");
     assert!(name.ends_with('…'), "the name is cut short: {name}");
 }
+
+/// A 100% stacked column chart combined with a line on the same axes: the line keeps its values,
+/// so the value axis takes them in rather than stopping at 100%, and the line is drawn at them,
+/// not pinned to the top of the plot.
+#[test]
+fn a_percent_stacked_combination_scales_its_axis_to_the_line() {
+    let cats = ["A", "B"];
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="percentStacked"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Left", Some("FF0000"), &cats, &["1", "3"]),
+        ser(1, "Right", Some("00FF00"), &cats, &["3", "1"]),
+        ser(2, "Trend", Some("0000FF"), &cats, &["10", "20"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let line_ys: Vec<f32> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, fill: None, stroke: Some(c), .. } if *c == Rgb(0, 0, 0xFF) => Some(segs),
+            _ => None,
+        })
+        .flat_map(|segs| {
+            segs.iter().filter_map(|s| match s {
+                PathSeg::Move(_, y) | PathSeg::Line(_, y) => Some(*y),
+                _ => None,
+            })
+        })
+        .collect();
+    assert_eq!(line_ys.len(), 2, "two line points: {line_ys:?}");
+    assert!((line_ys[0] - line_ys[1]).abs() > 10.0, "10 and 20 at different heights, not both at the top: {line_ys:?}");
+    let ticks: Vec<String> = chart_texts(&items).into_iter().map(|(t, _, _)| t).filter(|t| t.ends_with('%')).collect();
+    assert!(
+        ticks.iter().any(|t| t.trim_end_matches('%').parse::<f64>().is_ok_and(|v| v >= 2000.0)),
+        "the axis reaches the line's 20 (2000%): {ticks:?}"
+    );
+}

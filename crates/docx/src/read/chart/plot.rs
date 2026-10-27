@@ -130,7 +130,10 @@ pub(super) struct Axes {
 impl Axes {
     pub(super) fn of(c: &Chart) -> Axes {
         let (dlo, dhi) = extent(c);
-        let (vmin, vmax) = if c.grouping == Grouping::Percent { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
+        // A 100% stacked chart's axis runs 0..100%, unless other chart types share it: they keep
+        // their own values, so the axis takes them in too (the stacked shares stay within 0..1).
+        let combined = c.series.iter().any(|s| s.kind != c.kind);
+        let (vmin, vmax) = if c.grouping == Grouping::Percent && !combined { (Some(0.0), Some(1.0)) } else { (c.val.min, c.val.max) };
         // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale).
         let zero = !matches!(c.kind, Kind::Line | Kind::Scatter) || !narrow(dlo, dhi);
         let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
