@@ -205,7 +205,7 @@ pub fn toc_instr(v: &Value) -> String {
     } else if !on("rightAlign", true) {
         s.push_str(" \\p \" \"");
     }
-    let clean = |n: &str| n.chars().filter(|c| !matches!(c, '"' | ',' | '\\')).take(64).collect::<String>().trim().to_string();
+    let clean = |n: &str| n.chars().filter(|c| !matches!(c, '"' | ',' | ';' | '\\')).take(64).collect::<String>().trim().to_string();
     let pairs: Vec<String> = match v.get("styleLevels") {
         Some(Value::Object(m)) => m
             .iter()
