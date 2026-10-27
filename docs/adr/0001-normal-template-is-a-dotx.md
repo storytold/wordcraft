@@ -15,3 +15,5 @@ The Normal template is a WordCraft-written `Normal.dotx` in the settings folder 
 - Matches Word's Normal.dotm model, so "this document only / all new documents" behaves as users expect.
 - A docx parse at each blank-document creation; it is small, and capped.
 - `ui.json` defaults from unmerged PRs are never read; nothing to migrate.
+- A template freezes the built-in style sheet as it was at its first save: later changes to WordCraft's built-in styles don't reach documents made from it until Reset, as with Word's Normal.dotm.
+- Agents in headless sessions never change it; an agent driving the running app (`--control`, `mcp --connect`) can, as it can the saved proofing language.
