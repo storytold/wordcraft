@@ -4187,9 +4187,11 @@ fn thai_drop_cap_takes_whole_tcb() {
     assert!(cap_size > 30.0, "drop cap font size {cap_size} should be >> 12pt for 3 lines");
 }
 
-/// Thai drop cap with a leading vowel: เก (เ U+0E40 + ก U+0E01) — both codepoints enlarged.
+/// Thai drop cap starting with a leading vowel (เ แ โ ใ ไ): only the vowel is dropped.
+/// "เกาะ…" → drop cap = "เ" (3 bytes); body starts at byte 3 with "กาะ…".
 #[test]
-fn thai_drop_cap_leading_vowel_included() {
+fn thai_drop_cap_leading_vowel_alone() {
+    // เ (U+0E40, 3 bytes) + ก (U+0E01, 3 bytes) + าะ…
     let body = "เกาะติดกับเรื่องราวที่น่าสนใจและสำคัญยิ่ง ".repeat(8);
     let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
     p.props.drop_cap = Some(3);
@@ -4200,10 +4202,12 @@ fn thai_drop_cap_leading_vowel_included() {
         if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
     }).expect("no lines");
 
-    let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set for leading-vowel TCB");
+    let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set for leading-vowel paragraph");
     assert_eq!(lines, 3);
-    // เก = 2 codepoints → 2 clusters (leading vowel + consonant).
-    assert!(nc >= 2, "leading vowel + consonant must both be in the drop cap ({nc} clusters)");
+    // The drop cap is just "เ" (3 bytes); body cluster must start at byte 3, not 6.
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(3),
+        "leading vowel dropped alone: body must start at byte 3 (ก), not byte 6; got {body_start:?}");
 }
 
 /// Sara aa (า U+0E32) is a pure trailing following vowel — no above/below component —
