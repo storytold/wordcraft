@@ -5018,6 +5018,55 @@ fn a_double_border_band_scales_with_its_width_and_closes_the_table() {
     assert!((steps[3] - (15.0 + 2.25)).abs() < 0.01, "after a double bottom border: {steps:?}");
 }
 
+/// Row heights (cell rectangles) and the first cell's line height of a three-row table with
+/// `margin` top and bottom cell margins and `width` single borders below every row. The first row
+/// has its own top border; the cells below have none (`nil`), so the border between them is the
+/// one the row above draws.
+fn shared_edge_rows(margin: f32, width: f32) -> (Vec<f32>, f32) {
+    let mut d = Document::from_text("");
+    let line = Some(Border { style: BorderStyle::Single, width, color: None, space: 0.0 });
+    let nil = Some(Border { style: BorderStyle::None, width: 0.0, color: None, space: 0.0 });
+    let mut t = Table::new(3, 1, 200.0);
+    t.props.style = None;
+    t.props.borders = Some(Borders::default());
+    t.props.cell_margins = Some([margin, 5.4, margin, 5.4]);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        let cell = &mut row.cells[0];
+        cell.props.borders = Some(Borders { top: if r == 0 { line } else { nil }, bottom: line, ..Default::default() });
+        let mut p = wordcraft_doc::Paragraph::with_text(&format!("row {r}"), Default::default());
+        p.props = ParaProps { space_before: Some(0.0), space_after: Some(0.0), ..Default::default() };
+        cell.blocks = vec![wordcraft_doc::para_block(p)];
+    }
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t))];
+    let l = lay(&d);
+    let heights = (0..3).map(|r| row_height(&l, r)).collect();
+    let line =
+        l.pages[0].items.iter().find_map(|i| if let Placed::Lines { para, .. } = i { para.lines.first().map(|l| l.height) } else { None }).unwrap();
+    (heights, line)
+}
+
+/// A cell without a top border of its own, below a row that draws one along their shared edge,
+/// keeps its top margin from the row's top: the border lies inside the margin (Word: 3.6pt cell
+/// margins, 0.5pt borders and a 17.09pt line make 24.29pt rows below the first, which is 0.5pt
+/// taller with its own top border; measured on a table-heavy report).
+#[test]
+fn a_border_from_the_row_above_lies_inside_the_top_margin() {
+    let (h, line) = shared_edge_rows(3.6, 0.5);
+    assert!((h[0] - (0.5 + 3.6 + line + 3.6)).abs() < 0.01, "own top border: {h:?}, line {line}");
+    assert!((h[1] - (3.6 + line + 3.6)).abs() < 0.01, "border from the row above: {h:?}, line {line}");
+    // The last row adds its bottom border below its bottom margin.
+    assert!((h[2] - (h[1] + 0.5)).abs() < 0.01, "last row: {h:?}");
+}
+
+/// The border from the row above still clears the text when it is wider than the top margin:
+/// the text starts below the border, not the border plus the margin.
+#[test]
+fn a_border_from_the_row_above_wider_than_the_margin_clears_the_text() {
+    let (h, line) = shared_edge_rows(1.0, 3.0);
+    assert!((h[0] - (3.0 + 1.0 + line + 1.0)).abs() < 0.01, "own top border: {h:?}, line {line}");
+    assert!((h[1] - (3.0 + line + 1.0)).abs() < 0.01, "border from the row above: {h:?}, line {line}");
+}
+
 /// Word gives every cell in a row the row's largest top and bottom margins: a cell without its
 /// own lines up with a neighbour that has them, and the row is as tall as if all had them.
 #[test]
