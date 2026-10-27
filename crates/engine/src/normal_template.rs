@@ -1,5 +1,5 @@
 //! The Normal template (#4237, ADR 0001): the saved defaults every new blank document starts
-//! from. It is a WordCraft-written `Normal.docx` (in the settings folder on the desktop, under
+//! from. It is a WordCraft-written `Normal.dotx` (in the settings folder on the desktop, under
 //! its own `localStorage` key on the web), read with the same docx reader as any document.
 //!
 //! Set As Default re-reads the template, changes only what was set and writes it back whole
@@ -21,7 +21,7 @@ use wordcraft_doc::{Document, StyleSheet};
 pub const MAX_TEMPLATE_BYTES: usize = 8 << 20;
 
 /// The template's file name in the settings folder.
-pub const FILE_NAME: &str = "Normal.docx";
+pub const FILE_NAME: &str = "Normal.dotx";
 
 /// Custom document property naming the parts the template carries, space-separated
 /// (`styles`, `theme`, `page`).
@@ -100,7 +100,7 @@ impl NormalStore for MemoryStore {
     }
 }
 
-/// `Normal.docx` in a folder (the desktop app's settings folder). Written through a sibling
+/// `Normal.dotx` in a folder (the desktop app's settings folder). Written through a sibling
 /// temporary file and a rename, like a document save.
 #[cfg(not(target_arch = "wasm32"))]
 pub struct FileStore {
@@ -281,6 +281,18 @@ mod tests {
         assert_eq!(back.styles.default_chr.size, Some(13.0));
         assert_eq!(back.styles.default_chr.lang, None, "language is not stored");
         assert_eq!(back.last_section.margin_left, 100.0);
+    }
+
+    #[test]
+    fn the_template_is_saved_as_a_word_template_not_a_document() {
+        use std::io::Read;
+        assert_eq!(FILE_NAME, "Normal.dotx");
+        let bytes = to_bytes(&empty()).unwrap();
+        let mut zip = zip::ZipArchive::new(std::io::Cursor::new(bytes)).unwrap();
+        let mut types = String::new();
+        zip.by_name("[Content_Types].xml").unwrap().read_to_string(&mut types).unwrap();
+        assert!(types.contains("wordprocessingml.template.main+xml"), "a .dotx package, which Word opens as a template");
+        assert!(!types.contains("wordprocessingml.document.main+xml"));
     }
 
     #[test]

@@ -143,7 +143,7 @@ fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
 }
 
-/// The `localStorage` key of the Normal template (#4237): the `Normal.docx` bytes, base64.
+/// The `localStorage` key of the Normal template (#4237): the `Normal.dotx` bytes, base64.
 const NORMAL_KEY: &str = "wordcraft.normal";
 
 /// The Normal template in `localStorage` under [`NORMAL_KEY`], apart from the preferences so a

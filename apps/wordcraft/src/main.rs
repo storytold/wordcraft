@@ -166,7 +166,7 @@ fn prefs_path() -> Option<std::path::PathBuf> {
     wordcraft_control_key::settings_dir().map(|b| b.join("ui.json"))
 }
 
-/// `Normal.docx` in the settings folder: the Normal template new documents start from (#4237).
+/// `Normal.dotx` in the settings folder: the Normal template new documents start from (#4237).
 /// Runs without preferences have none, so they use the built-in formatting and never change it.
 fn normal_store() -> Option<std::sync::Arc<dyn wordcraft_engine::normal_template::NormalStore>> {
     if !prefs_enabled() {
