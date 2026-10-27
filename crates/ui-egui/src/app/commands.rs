@@ -141,8 +141,37 @@ impl WordApp {
             }
             return r;
         }
+        // Native host Save is an intent, not a download or a storage acknowledgement. Commit
+        // the same pending comment text as snapshot export before binding the ticket's token.
+        if id == "file.save" && self.services.host_save_request.is_some() {
+            self.prepare_native_snapshot()?;
+            let saves = self.services.async_saves.clone().ok_or("native host saves require asynchronous completion")?;
+            let _ = saves.take_started();
+            let Some(request) = &self.services.host_save_request else { return Err("native host save is unavailable".into()) };
+            let result = request(&self.session, self.native_draft_revision());
+            let started = saves.take_started();
+            let ticket = match result {
+                Ok(ticket) if started == Some(ticket) => ticket,
+                result => {
+                    let error = result.err().unwrap_or_else(|| "the host did not start its save ticket".into());
+                    if let Some(ticket) = started {
+                        saves.finish(ticket, async_saves::SaveOutcome::Failed(error.clone()));
+                    }
+                    return Err(error);
+                }
+            };
+            self.saves_in_flight.push(SaveInFlight {
+                ticket,
+                name: self.web_save_name(id),
+                document: self.session.document_id(),
+                marked_saved: false,
+                host_managed: true,
+            });
+            return Ok(json!({"pendingSave": ticket}));
+        }
         // Web: saving and exporting become downloads.
         if self.services.download.is_some() && matches!(id, "file.save" | "file.saveAs" | "file.exportPdf" | "file.exportPng") {
+            let host_managed = self.services.host_save_request.is_some();
             let name = params.get("path").and_then(Value::as_str).map(str::to_string).unwrap_or_else(|| self.web_save_name(id));
             let name = if id == "file.exportPdf" && !name.ends_with(".pdf") { format!("{name}.pdf") } else { name };
             // A save with a password encrypts this and later saves (`file.save`'s `password`).
@@ -152,15 +181,23 @@ impl WordApp {
                 if !wordcraft_engine::io::can_encrypt(&name) || pw.as_str().is_none_or(str::is_empty) {
                     return Err("only Word documents (.docx, .docm, .dotx, .dotm) can be saved with a password, and it can't be empty".into());
                 }
-                self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
+                if !host_managed {
+                    self.session.run("file.encrypt", &json!({"password": pw})).map_err(|e| e.to_string())?;
+                }
             }
             // A save is a save, download or not: advance the revision and modified stamp (#262).
-            if matches!(id, "file.save" | "file.saveAs") {
+            if !host_managed && matches!(id, "file.save" | "file.saveAs") {
                 self.session.stamp_save();
             }
             // Word documents are encrypted with the document's password, if it has one.
-            let password =
-                if matches!(id, "file.save" | "file.saveAs") { self.session.password.as_ref().map(wordcraft_engine::Password::as_str) } else { None };
+            let password = if matches!(id, "file.save" | "file.saveAs") {
+                host_managed
+                    .then(|| params.get("password").and_then(Value::as_str))
+                    .flatten()
+                    .or_else(|| self.session.password.as_ref().map(wordcraft_engine::Password::as_str))
+            } else {
+                None
+            };
             let opts = wordcraft_engine::cmd::file::export_options(&self.session, &params);
             let bytes = wordcraft_engine::io::save_bytes_with(&name, &self.session.doc, password, &opts)?;
             // A ticket left over from an earlier call isn't this save's.
@@ -170,7 +207,7 @@ impl WordApp {
             }
             // An export is a copy, and so is a save in a format that doesn't keep everything (a
             // page image, plain text): the document itself still has unsaved changes.
-            let marked_saved = matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
+            let marked_saved = !host_managed && matches!(id, "file.save" | "file.saveAs") && keeps_everything(&name);
             // Save As tells the host page the document is now this file, which it only is when the
             // save marks it saved. A Save under a name the page never sent (an untitled document,
             // an imported .doc saved as .docx) is a new file too, never an overwrite.
@@ -198,7 +235,7 @@ impl WordApp {
             // the document's save isn't confirmed.
             if let Some(ticket) = saves.as_ref().and_then(async_saves::AsyncSaves::take_started) {
                 let document = self.session.document_id();
-                self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved });
+                self.saves_in_flight.push(SaveInFlight { ticket, name: name.clone(), document, marked_saved, host_managed: false });
                 return Ok(json!({"downloaded": name, "bytes": bytes.len(), "pendingSave": ticket}));
             }
             return Ok(json!({"downloaded": name, "bytes": bytes.len()}));

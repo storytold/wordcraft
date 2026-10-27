@@ -101,7 +101,7 @@ mod state;
 use app::control_click_as_secondary;
 pub(crate) use app::{discards_document, works_without_document};
 pub use clock::now_ms;
-pub use services::{HostSaveFn, Inbox, Services};
+pub use services::{HostSaveFn, HostSaveRequestFn, Inbox, Services};
 pub use state::{AutoSaveBlock, DefaultApp, SaveChoice, keeps_everything};
 
 /// Web: a save the browser's picker hasn't finished ([`async_saves`]).
@@ -113,6 +113,8 @@ struct SaveInFlight {
     document: u64,
     /// Whether it marked the document saved (a Save in a format that keeps everything).
     marked_saved: bool,
+    /// Native host Save keeps dirty state intact, but still guards replacement until its ACK.
+    host_managed: bool,
 }
 
 /// Web: the command a Save Changes prompt holds back until its picker save ends.
