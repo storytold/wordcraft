@@ -5,7 +5,7 @@
 use wordcraft_doc::numbering::Counters;
 use wordcraft_doc::props::{Align, Border, Borders, HeightRule, Rgb, TextDirection, VAlign, VMerge};
 use wordcraft_doc::styles::{PartSet, TablePart, TableStyleProps};
-use wordcraft_doc::{Block, Blocks, Paragraph, Row, StoryRef, Table};
+use wordcraft_doc::{Block, Blocks, Cell, Paragraph, Row, StoryRef, Table};
 use wordcraft_geom::Rect;
 
 use crate::para::{CellText, ClKind, ParaLayout};
@@ -212,6 +212,8 @@ pub fn measure_table_columns(doc: &wordcraft_doc::Document, t: &Table) -> Vec<(f
                 // Measurement uses a fixed environment (like show_hidden/proofing above).
                 numeral: crate::NumeralMode::default(),
                 exclusions: &[],
+                wrap_after: 0.0,
+                wrap_before: 0.0,
                 eq_number: 0,
                 read_line_spacing: None,
                 grid: crate::para::Grid::default(),
@@ -295,13 +297,50 @@ pub fn autofit_widths(cols: &[(f32, f32)], avail: f32) -> Vec<f32> {
     cols.iter().map(|c| c.0 + (c.1 - c.0) * k).collect()
 }
 
-/// The first cell's left margin: how far its text sits inside the table's edge.
-pub(crate) fn first_cell_left_margin(ctx: &Ctx, t: &Table) -> f32 {
-    first_cell_left_margin_in(t, default_margins(t, table_style(ctx, t).as_ref()))
-}
-
 fn first_cell_left_margin_in(t: &Table, def: [f32; 4]) -> f32 {
     t.rows.first().and_then(|r| r.cells.first()).map_or(def, |cell| cell.props.resolved_margins(def))[1]
+}
+
+/// How a floating table's cell edges stand against the edges its offset or alignment places,
+/// and how far past them text keeps away (points, before the distances from text).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub(crate) struct FloatEdges {
+    /// How far the outer cell edges stand outside the placed edges, left and right (negative:
+    /// inside).
+    pub out: (f32, f32),
+    /// How far past the outer cell edges the text keeps away, left and right.
+    pub wrap: (f32, f32),
+}
+
+/// How far past a cell edge without a visible border Word keeps text beside a floating table
+/// (with one, half the border): measured 0.5–0.75 pt from where the text starts (Word puts it on
+/// a quarter-point grid) and more than 0.7 from the narrowest strip it uses, so 15 twips.
+const UNBORDERED_WRAP: f32 = 0.75;
+
+/// Where floating table `t`'s outer cell edges stand (see [`FloatEdges`]). Measured in Word:
+/// before Word 2013 layout (compatibility mode 15) an offset or alignment places the text of the
+/// outer cells, so the edges sit their cell margins further out; from it on it places the outer
+/// edges of the borders, so the cell edges sit half a border in. Text keeps clear of the outer
+/// edge of a visible border, else of [`UNBORDERED_WRAP`] past the cell edge.
+pub(crate) fn float_edges(ctx: &Ctx, t: &Table) -> FloatEdges {
+    let style = table_style(ctx, t);
+    let margins = default_margins(t, style.as_ref());
+    let mut tborders = style.as_ref().and_then(|s| s.parts.borders).unwrap_or_default();
+    if let Some(own) = t.props.borders {
+        tborders.overlay(&own);
+    }
+    let row = t.rows.first();
+    let (first, last) = (row.and_then(|r| r.cells.first()), row.and_then(|r| r.cells.last()));
+    let half = |b: Option<Border>| b.filter(Border::is_visible).map(|b| b.width.clamp(0.0, 12.0) / 2.0);
+    let left = half(first.and_then(|c| c.props.borders.and_then(|b| b.left)).or(tborders.left));
+    let right = half(last.and_then(|c| c.props.borders.and_then(|b| b.right)).or(tborders.right));
+    let out = if ctx.doc.settings.compat_mode >= 15 {
+        (-left.unwrap_or(0.0), -right.unwrap_or(0.0))
+    } else {
+        let resolved = |c: Option<&Cell>| c.map_or(margins, |c| c.props.resolved_margins(margins));
+        (resolved(first)[1], resolved(last)[3])
+    };
+    FloatEdges { out, wrap: (left.unwrap_or(UNBORDERED_WRAP), right.unwrap_or(UNBORDERED_WRAP)) }
 }
 
 /// What a table style gives the cells in one set of parts: shading, vertical alignment and each

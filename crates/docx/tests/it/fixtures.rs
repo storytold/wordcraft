@@ -4098,3 +4098,36 @@ fn vml_textbox_style_anchor_and_fit() {
     assert_eq!(tb.body.anchor, wordcraft_doc::props::VAlign::Center);
     assert!(tb.body.auto_fit);
 }
+
+/// Measured in Word: without a default table style (no styles part, or one without a
+/// `w:default` table style) a table with no style or cell margins of its own has cell margins of
+/// 10 twips each side, the same as with that `w:tblCellMar`; with one (Normal Table) 108.
+#[test]
+fn a_table_gets_words_cell_margins_without_a_default_table_style() {
+    let tables = r#"<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/></w:tblPr><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>
+<w:tbl><w:tblPr><w:tblW w:w="3000" w:type="dxa"/><w:tblCellMar><w:left w:w="300" w:type="dxa"/><w:right w:w="100" w:type="dxa"/></w:tblCellMar></w:tblPr><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>
+<w:tbl><w:tblPr><w:tblStyle w:val="Grid"/><w:tblW w:w="3000" w:type="dxa"/></w:tblPr><w:tr><w:tc><w:p/></w:tc></w:tr></w:tbl><w:p/>"#;
+    let margins = |d: &Document| -> Vec<Option<[f32; 4]>> {
+        d.body.iter().filter_map(|b| if let Block::Table(t) = &**b { Some(t.props.cell_margins) } else { None }).collect()
+    };
+    let own = Some([0.0, 15.0, 0.0, 5.0]);
+    let word = Some([0.0, 0.5, 0.0, 0.5]);
+    assert_eq!(margins(&read_body(tables)), vec![word, own, None], "no styles part");
+    let normal = |default: &str| {
+        format!(
+            r#"<w:styles {W_NS}><w:style w:type="table"{default} w:styleId="TableNormal"><w:name w:val="Normal Table"/><w:tblPr><w:tblCellMar><w:left w:w="108" w:type="dxa"/><w:right w:w="108" w:type="dxa"/></w:tblCellMar></w:tblPr></w:style>
+<w:style w:type="table" w:styleId="Grid"><w:name w:val="Grid"/><w:basedOn w:val="TableNormal"/></w:style></w:styles>"#
+        )
+    };
+    let with = |styles: &str| wordcraft_docx::read(&docx(tables, &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)])).unwrap();
+    for on in ["1", "true", "on"] {
+        assert_eq!(margins(&with(&normal(&format!(r#" w:default="{on}""#)))), vec![None, own, None], "Normal Table the default ({on})");
+    }
+    for off in ["0", "false", "off"] {
+        assert_eq!(margins(&with(&normal(&format!(r#" w:default="{off}""#)))), vec![word, own, None], "Normal Table not the default ({off})");
+    }
+    assert_eq!(margins(&with(&normal(""))), vec![word, own, None], "Normal Table not the default");
+    // Saved with our default table style, the margins stay the table's own.
+    let saved = wordcraft_docx::write(&read_body(tables)).unwrap();
+    assert_eq!(margins(&wordcraft_docx::read(&saved).unwrap()), vec![word, own, None]);
+}

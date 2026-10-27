@@ -788,8 +788,9 @@ pub(crate) fn layout_time_ratio(doc: impl Fn(usize) -> Document, n: usize, opts:
 }
 
 /// A document that is one word with no break opportunity in it, laid out beside a floating
-/// object: the word is wider than the span the object leaves, so the measurement that asks
-/// whether it would fit the full line runs for every line the word takes.
+/// object: the word is wider than the strip the object leaves, the row's only span, so it is
+/// split across the strip a line per few characters, and nothing done for one of those lines may
+/// walk the rest of the word.
 fn long_word_beside_a_float(n: usize) -> Document {
     use wordcraft_doc::para::{Anchor, Float, Wrap};
     let mut d = Document::from_text(&"a".repeat(n));
@@ -816,26 +817,13 @@ fn a_megabyte_long_word_lays_out_quickly() {
     assert!(t.elapsed().as_secs() < 15, "a megabyte-long word took {:?}", t.elapsed());
 }
 
-/// A cluster with the given advance and kind, for the tests that measure a word by hand.
-fn word_cluster(kind: para::ClKind, adv: f32, break_after: bool) -> para::Cluster {
-    para::Cluster { start: 0, end: 1, adv, kind, style: 0, g0: 0, g1: 1, break_after, obj_h: 0.0, obj_d: 0.0, dot: false }
-}
-
-/// A word that a negative advance makes narrower still fits beside a float: the width of a word
-/// is the sum of its advances, and a font that pulls a glyph back takes the width off again.
+/// A word that a negative advance makes narrower still fits the strip beside a float: a font that
+/// pulls a glyph back gives that glyph a negative advance, which takes the width off the rest of
+/// the word too, so the word's advances add up to less and its line fits the strip the object
+/// leaves, the row's only span. Without the glyph pulled back the word is wider than the strip and
+/// is split across it, as Word splits a word too wide for the only strip beside a floating object.
 #[test]
 fn a_word_a_negative_advance_narrows_still_fits() {
-    // A hundred points, then a font that pulls the last glyph back by sixty: the word is forty
-    // wide, and fits in sixty.
-    let clusters = vec![word_cluster(para::ClKind::Text, 100.0, false), word_cluster(para::ClKind::Text, -60.0, true)];
-    let widths = para::word_widths(&clusters, &[]);
-    assert_eq!(widths[0], 40.0, "the word is the sum of its advances");
-    assert!(widths[0] <= 60.0, "a word of forty points fits in sixty");
-    assert!(widths[0] > 30.0, "a word of forty points does not fit in thirty");
-
-    // The same word in a document: a font that pulls one glyph back takes the width off the
-    // rest of the word too, and the strip a floating object leaves is the row's only span, so
-    // the word is measured against it.
     use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
     // Twelve characters, the sixth of them pulled back by thirty points.
     let word = |pull: f32| {
@@ -862,6 +850,21 @@ fn a_word_a_negative_advance_narrows_still_fits() {
     let plain = width(&word(0.0));
     let pulled = width(&word(-30.0));
     assert!(pulled < plain, "a font that pulls a glyph back makes the word narrower: {pulled} against {plain}");
+    let advances = |d: &Document| {
+        let l = lay(d);
+        body(&l).clusters.iter().map(|c| (c.start, c.adv)).collect::<Vec<_>>()
+    };
+    let (plain_advs, pulled_advs) = (advances(&word(0.0)), advances(&word(-30.0)));
+    let sixth = |advs: &[(usize, f32)]| advs.iter().find(|(start, _)| *start == 5).map(|(_, adv)| *adv);
+    let (Some(plain_sixth), Some(pulled_sixth)) = (sixth(&plain_advs), sixth(&pulled_advs)) else {
+        panic!("no cluster for the sixth character: {plain_advs:?} {pulled_advs:?}")
+    };
+    assert!(pulled_sixth < 0.0, "the glyph pulled back by thirty points has a negative advance: {pulled_sixth}");
+    assert!((plain_sixth - pulled_sixth - 30.0).abs() <= 0.01, "the glyph is pulled back by thirty points: {plain_sixth} → {pulled_sixth}");
+    let total = |advs: &[(usize, f32)]| advs.iter().map(|(_, adv)| adv).sum::<f32>();
+    let (plain_total, pulled_total) = (total(&plain_advs), total(&pulled_advs));
+    assert!((plain_total - pulled_total - 30.0).abs() <= 0.01, "the word's advances add up to thirty points less: {plain_total} → {pulled_total}");
+    assert!((plain - pulled - 30.0).abs() <= 0.01, "the word's last glyph ends thirty points sooner: {plain} → {pulled}");
     // The strip the object leaves is half way between the two widths: the word fits it with the
     // glyph pulled back, and does not fit it without.
     let strip = (plain + pulled) / 2.0;
@@ -900,101 +903,13 @@ fn a_word_a_negative_advance_narrows_still_fits() {
     assert!(fits[0].1 >= 468.0 - strip - 0.01, "the word is in the strip beside the object: {fits:?}");
     assert!(fits[0].3 <= 468.0 + 0.01, "the word ends inside the strip: {fits:?}");
     assert!(!fits[0].4, "the word is not split across the strip: {fits:?}");
-    // The wider one does not: it moves on whole, below the object, rather than being split
-    // across the strip.
-    let moves_on = beside(word(0.0));
-    assert!(moves_on.iter().any(|l| l.0 >= 150.0 - 0.01 && l.1 < 1.0), "the wider word is laid out below the object: {moves_on:?}");
-    assert!(moves_on.iter().all(|l| !l.4), "the word is not split across the strip: {moves_on:?}");
-}
-
-/// The words after a break are words of their own: their advances are not counted in the word
-/// before them, or a long word followed by a word that pulls the width back would be measured
-/// as if the two were one.
-#[test]
-fn the_words_after_a_break_are_not_counted_in_the_word_before_it() {
-    // A word of two ordinary clusters, then a break, then a word that pulls a hundred points
-    // back.
-    let clusters = vec![
-        word_cluster(para::ClKind::Text, 10.0, false),
-        word_cluster(para::ClKind::Text, 10.0, true),
-        word_cluster(para::ClKind::Text, -100.0, true),
-    ];
-    let widths = para::word_widths(&clusters, &[]);
-    assert_eq!(widths[0], 20.0, "the word after the break must not hold up the word before it");
-    assert_eq!(widths[1], 10.0, "the word that ends at the break is a word of its own");
-    assert_eq!(widths[2], -100.0);
-}
-
-/// A word whose advances alternate in sign is measured by their sum: a font that pulls some
-/// glyphs back must not make the measurement walk the word to find out how wide it is.
-#[test]
-fn a_word_whose_advances_alternate_is_measured_by_its_sum() {
-    // A thousand points forward, nine hundred and ninety-nine back: the word is one point wider
-    // per pair, so it is far wider than the room even though it is never wider than a thousand
-    // points at a time.
-    let mut clusters = Vec::new();
-    for i in 0..1_000 {
-        clusters.push(word_cluster(para::ClKind::Text, if i % 2 == 0 { 1000.0 } else { -999.0 }, false));
-    }
-    clusters.push(word_cluster(para::ClKind::Text, 0.0, true));
-    let widths = para::word_widths(&clusters, &[]);
-    assert_eq!(widths[0], 500.0, "the word is the sum of its advances");
-}
-
-/// The width of a word is the sum of its advances: the same sum the scan this replaces took, over
-/// every shape of word — negative advances, spaces, break opportunities and hyphenation points
-/// included.
-#[test]
-fn a_word_is_measured_by_the_sum_of_its_advances() {
-    // The measurement as the scan this replaces took it: the clusters up to the first break
-    // opportunity that isn't a hyphenation point, their advance, spaces aside.
-    let scan = |clusters: &[para::Cluster], hyph: &[u32], c0: usize| -> f32 {
-        let mut done = false;
-        let mut word = 0.0f32;
-        for (k, c) in (c0..clusters.len()).map(|k| (k, &clusters[k])) {
-            let end = c.break_after && hyph.binary_search(&(k as u32)).is_err();
-            if done {
-                break;
-            }
-            done = end;
-            if c.kind != para::ClKind::Space {
-                word += c.adv;
-            }
-        }
-        word
-    };
-    // A deterministic spread of advances, spaces, breaks and hyphenation points.
-    let mut seed = 0x2545_f491_4f6c_dd1du64;
-    let mut next = move || {
-        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
-        (seed >> 33) as i32
-    };
-    for _ in 0..2_000 {
-        let n = 1 + next().unsigned_abs() as usize % 40;
-        let clusters: Vec<para::Cluster> = (0..n)
-            .map(|_| {
-                let kind = if next() % 7 == 0 { para::ClKind::Space } else { para::ClKind::Text };
-                word_cluster(kind, (next() % 4000) as f32 / 100.0 - 20.0, next() % 3 == 0)
-            })
-            .collect();
-        let mut hyph = Vec::new();
-        if next() % 2 == 0 {
-            for _ in 0..next().unsigned_abs() as usize % 4 {
-                hyph.push(next().unsigned_abs() % n as u32);
-            }
-            hyph.sort_unstable();
-            hyph.dedup();
-        }
-        let widths = para::word_widths(&clusters, &hyph);
-        for (c0, &width) in widths.iter().enumerate().take(n) {
-            // The two sums are the same number, added in a different order: one adds the word's
-            // advances from its start and the other from its end, and a float sum depends on
-            // the order it is added in. The difference is far below the tenth of a point the
-            // comparison that uses the width allows.
-            let scan = scan(&clusters, &hyph, c0);
-            assert!((width - scan).abs() < 0.001, "the word at cluster {c0} of {clusters:?} is {width}, the scan says {scan}");
-        }
-    }
+    let split = beside(word(0.0));
+    assert!(split.len() > 1, "the wider word does not fit the strip: {split:?}");
+    assert!(split[0].4, "the wider word is split across the strip: {split:?}");
+    assert!(
+        split.iter().all(|l| l.0 < 150.0 && l.1 >= 468.0 - strip - 0.01 && l.3 <= 468.0 + 0.01),
+        "the wider word stays in the strip beside the object rather than moving below it: {split:?}"
+    );
 }
 
 /// A word with no break opportunity in it whose advances alternate in sign: a run with wide
@@ -1018,13 +933,53 @@ fn long_word_with_alternating_advances_beside_a_float(n: usize) -> Document {
     d
 }
 
-/// A word whose advances alternate in sign lays out in linear time: the measurement that asks
-/// whether it would fit the full line must not walk the word again for every line it takes.
+/// A word whose advances alternate in sign lays out in linear time: nothing done for a line it
+/// takes may walk the rest of the word.
 #[test]
 fn a_word_with_alternating_advances_lays_out_in_linear_time() {
     let (t1, tk, ratio) = layout_time_ratio(long_word_with_alternating_advances_beside_a_float, 50_000, &LayoutOptions::default());
     eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
     assert!(ratio < 24.0, "8x the word took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
+/// A word with no break opportunity in it, laid out beside a 400 pt tall floating object in the
+/// middle of the column: every row beside the object is split in two, so the word is tried in
+/// both spans of every row there before it moves on below the object and is broken across the
+/// lines.
+fn long_word_beside_a_float_in_the_middle(n: usize) -> Document {
+    use wordcraft_doc::para::{Anchor, Float, Wrap};
+    let mut d = Document::from_text(&"a".repeat(n));
+    let f = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x: 160.0, dist: 9.0, ..Default::default() };
+    d.insert_object(&Pos::body(0, 0), rect_shape(144.0, 400.0, f), &Default::default()).unwrap();
+    d
+}
+
+/// A timing smoke test for a long word moving down the rows a floating object splits: the word
+/// moves on below the object, and eight times the word costs well under 24 times the time. The
+/// word is 5,000 characters (and 40,000), a few pages, so that what the layout does once per page
+/// for the paragraph stays out of the ratio. The object is as tall at both lengths, so the word is
+/// tried in as many spans at both: the ratio does not show what one of those tries costs.
+#[test]
+fn a_long_unbreakable_word_moving_down_a_split_row_lays_out_in_linear_time() {
+    let l = lay(&long_word_beside_a_float_in_the_middle(2_000));
+    let Some(Placed::Lines { para, .. }) = l.pages[0].items.iter().find(|i| matches!(i, Placed::Lines { story: StoryRef::Body, .. })) else {
+        panic!("no body text on the page")
+    };
+    let first = para.lines.iter().find(|ln| ln.c1 > ln.c0).map(|ln| (ln.top, ln.left));
+    assert!(first.is_some_and(|(top, left)| top >= 400.0 - 0.01 && left < 1.0), "the word moves on below the object: {first:?}");
+    let (t1, tk, ratio) = layout_time_ratio(long_word_beside_a_float_in_the_middle, 5_000, &LayoutOptions::default());
+    eprintln!("t(n) {t1:.4} s, t(8n) {tk:.4} s, ratio {ratio:.1}");
+    assert!(ratio < 24.0, "8x the word took {ratio:.1}x the time ({t1:.4} s → {tk:.4} s): not linear");
+}
+
+/// A timing smoke test: a megabyte-long word moving down the rows a floating object splits lays
+/// out within the budget a megabyte-long word beside a single strip has.
+#[test]
+fn a_megabyte_long_word_moving_down_a_split_row_lays_out_quickly() {
+    let d = long_word_beside_a_float_in_the_middle(1_000_000);
+    let t = std::time::Instant::now();
+    lay(&d);
+    assert!(t.elapsed().as_secs() < 15, "a megabyte-long word took {:?}", t.elapsed());
 }
 
 #[test]
@@ -4516,16 +4471,20 @@ fn square_wrap_flows_text_on_both_sides() {
     assert!(para.lines.iter().all(|ln| !ln.beside && ink_end(para, ln) <= (r2.x - x).max(ln.right) + 0.01));
 }
 
-/// #1376: a word too long for the strip beside a square-wrapped object moves on whole (to the
-/// row's next strip, or the next row) instead of being split across the strip; words that fit
-/// still use it, and a word wider than the whole line still breaks where it is.
+/// #1376: in a row split by a square-wrapped object (text on both sides), a word too long for a
+/// strip moves on whole (to the row's next strip, or the next row) instead of being split across
+/// it, however long it is; words that fit still use it. A strip that is the row's only span takes
+/// the word split across it, as a line with no object does (Word for Mac). In
+/// [`WRAP_TEST_FONT`], whose words fit the wider strips and need splitting in the 32 pt one,
+/// whatever fonts are installed.
 #[test]
-fn a_word_too_wide_for_the_strip_beside_a_float_moves_on_whole() {
+fn a_word_too_wide_for_a_strip_beside_a_float_moves_on_whole_only_in_a_split_row() {
     use wordcraft_doc::para::{Anchor, Float, ShapeKind, Wrap};
     // A `w` x 150pt square at `x` in the 468pt column, leaving a 32pt strip on its right. Each
     // line: (top, left, beside the object's far side, ends inside a word, where its text ends).
     let lines = |text: &str, x: f32, w: f32| {
         let mut d = Document::from_text(&text.repeat(6));
+        d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
         let float = Float { wrap: Wrap::Square, h_rel: Anchor::Column, v_rel: Anchor::Paragraph, x, ..Default::default() };
         let shape = InlineObject::Shape {
             kind: ShapeKind::Rectangle,
@@ -4554,13 +4513,14 @@ fn a_word_too_wide_for_the_strip_beside_a_float_moves_on_whole() {
     assert!(right.iter().all(|l| !l.3 && l.4 <= 468.01), "{right:?}");
     let short = lines("It is so, as it is to be, if we go on. ", 468.0 - 150.0 - 32.0, 150.0);
     assert!(short.iter().any(|l| l.2) && short.iter().all(|l| !l.3), "{short:?}");
-    // The strip is the row's only span: long words go below the object.
+    // The strip is the row's only span: Word splits a word too wide for it across the strip.
     let only = lines(long, 0.0, 468.0 - 32.0);
-    assert!(only.iter().all(|l| !l.3 && (l.0 >= 150.0 - 0.01 || l.1 >= 468.0 - 32.0 - 0.01)), "{only:?}");
-    assert!(only.iter().any(|l| l.0 >= 150.0 - 0.01 && l.1 < 1.0), "{only:?}");
-    // A word wider than the whole line breaks where it is, beside the object.
+    let beside: Vec<_> = only.iter().filter(|l| l.0 < 150.0 - 0.01).collect();
+    assert!(beside.iter().all(|l| l.1 >= 468.0 - 32.0 - 0.01 && l.4 <= 468.01) && beside.iter().any(|l| l.3), "{only:?}");
+    // In a split row even a word wider than the whole line moves on, row by row below the
+    // object, and breaks there (Word).
     let huge = lines(&format!("{} ", "x".repeat(120)), 468.0 - 150.0 - 32.0, 150.0);
-    assert!(huge[0].0 < 1.0 && huge.iter().any(|l| l.3), "{huge:?}");
+    assert!(huge[0].0 >= 150.0 - 0.01 && huge.iter().any(|l| l.3), "{huge:?}");
     // The strip left of the object: a skipped strip leaves the row's other span its first line.
     let left = lines(long, 32.0, 150.0);
     assert!(left.iter().all(|l| !l.3) && left.iter().any(|l| l.0 < 150.0 && l.1 >= 182.0 - 0.01 && !l.2), "{left:?}");
@@ -7300,6 +7260,9 @@ fn tight_wrap_follows_an_ellipse() {
     let spans = |wrap| {
         let mut d = wrapped_shape_doc(ShapeKind::Ellipse, 160.0, 160.0, Float { wrap, ..Default::default() });
         d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+        if let Some(Block::Para(p)) = d.body.first_mut().map(Arc::make_mut) {
+            p.props.line_spacing = Some(wordcraft_doc::props::LineSpacing::Multiple(1.0));
+        }
         line_spans(&lay(&d))
     };
     let (square, tight, through) = (spans(Wrap::Square), spans(Wrap::Tight), spans(Wrap::Through));

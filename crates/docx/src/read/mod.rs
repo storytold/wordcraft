@@ -32,7 +32,7 @@ use wordcraft_doc::{
 use crate::DocxError;
 use crate::bibliography::{MAX_SOURCES, Seen};
 use crate::package::{ContentTypes, EMBEDDED_PARTS, EmbeddedManifest, MAX_VBA_RELATED, Package, Rels, VBA_PROJECT_PART, VBA_RELATED, rel_is, rt};
-use crate::units::{flag, int, on_off, tw, u32_of};
+use crate::units::{flag, int, on_off, on_off_value, tw, u32_of};
 use crate::xml::El;
 pub(crate) use props::PropCtx;
 use story::StoryCtx;
@@ -101,6 +101,8 @@ pub(crate) struct Reader<'p> {
     pub theme_fills: shape_style::ThemeFills,
     /// The fill of the group being read (what its members' `a:grpFill` stands for).
     pub group_fill: Option<wordcraft_doc::fill::Fill>,
+    /// Whether the styles part has a default table style (see `read_table`).
+    pub default_table_style: bool,
 }
 
 /// The package path that internal relationship `id` points at, if it has type `kind` (an `rt`
@@ -166,6 +168,7 @@ pub(crate) fn read_opened(pkg: &Package) -> Result<Document, DocxError> {
         txbx_links: Vec::new(),
         theme_fills: Default::default(),
         group_fill: None,
+        default_table_style: false,
     };
     r.pc.major_font = r.doc.settings.major_font.clone();
     r.pc.minor_font = r.doc.settings.minor_font.clone();
@@ -940,6 +943,8 @@ impl Reader<'_> {
         }
         // Built-in styles' behaviour (gallery, priority, visibility), written back as is.
         sheet.latent_styles = root.child("w:latentStyles").map(|l| l.to_xml()).filter(|x| x.len() <= MAX_LATENT_STYLES_XML);
+        self.default_table_style =
+            root.children("w:style").take(10_000).any(|s| s.attr("w:type") == Some("table") && s.attr("w:default").is_some_and(on_off_value));
         for s in root.children("w:style").take(10_000) {
             let Some(raw_id) = s.attr("w:styleId").filter(|i| !i.is_empty()) else { continue };
             let id = self.pc.style_id(raw_id);

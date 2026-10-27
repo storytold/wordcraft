@@ -95,10 +95,12 @@ pub fn tw(e: &El, attr: &str) -> Option<f32> {
 
 /// ST_OnOff: absent `w:val` = on; `0`, `false`, `off` = off.
 pub fn on_off(e: &El) -> bool {
-    match e.attr("w:val") {
-        None => true,
-        Some(v) => !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE"),
-    }
+    e.attr("w:val").is_none_or(on_off_value)
+}
+
+/// An ST_OnOff value: `0`, `false`, `off` = off, anything else (`1`, `true`, `on`) on.
+pub fn on_off_value(v: &str) -> bool {
+    !matches!(v.trim(), "0" | "false" | "off" | "False" | "FALSE")
 }
 
 /// An on/off child of `parent`, if present.
