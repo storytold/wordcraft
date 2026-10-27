@@ -1023,7 +1023,7 @@ pub fn update_fields_in(s: &mut Session, all: bool) -> Result<(), CmdError> {
             // A table formula reads the cells around its own cell again.
             if instr.trim_start().starts_with('=') {
                 if let Some((tp, r, c)) = path.cell()
-                    && let Some(t) = s.doc.table(StoryRef::Body, &tp)
+                    && let Some(t) = s.doc.table(story, &tp)
                 {
                     let default_lang = super::default_lang(s);
                     let text = match super::table_formula::evaluate_field_with(t, Some(&s.doc), default_lang.as_deref(), r, c, instr) {
