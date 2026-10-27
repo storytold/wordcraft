@@ -85,7 +85,11 @@ impl Session {
             self.doc.settings.track_changes = true;
         }
         // Macro recording and Repeat.
+        // Set As Default and Reset change the Normal template, not the document: Repeat or a macro
+        // replaying one would rewrite the person's defaults unasked (#4237 review).
+        let template_command = id.ends_with(".setDefault") || id == "defaults.reset";
         let record = !matches!(id, "tools.recordMacro" | "tools.macros" | "edit.undo" | "edit.redo" | "edit.repeat")
+            && !template_command
             && (spec.mutates || id.starts_with("caret.") || id.starts_with("select."));
         // A password never lands in a recorded macro or Repeat.
         let kept = || {
@@ -98,7 +102,7 @@ impl Session {
         if record && let Some((_, steps)) = self.recording.as_mut() {
             steps.push((id.to_string(), kept()));
         }
-        if spec.mutates && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
+        if spec.mutates && !template_command && !matches!(id, "edit.undo" | "edit.redo" | "edit.repeat") {
             self.last_command = Some((id.to_string(), kept()));
         }
         // Typing, caret movement and selection outside the equation commands leave the equation.
