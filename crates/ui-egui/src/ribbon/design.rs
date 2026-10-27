@@ -79,13 +79,14 @@ pub(super) fn design(app: &mut WordApp, ui: &mut Ui) {
                 },
             );
             small(ui, app, "effectsDesign", Some("Effects"), "Effects", crate::widgets::ButtonAction::new("design.effects", json!({}), false));
+            // Asks first, as Word does; `design.setDefault` itself never asks (#4237).
             small(
                 ui,
                 app,
                 "setDefault",
                 Some("Set as Default"),
                 "Set as Default",
-                crate::widgets::ButtonAction::new("design.setDefault", json!({}), false),
+                crate::widgets::ButtonAction::new("ui.dialog", json!({"name": "designSetDefault"}), false),
             );
         });
     });

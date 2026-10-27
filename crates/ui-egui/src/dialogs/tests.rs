@@ -1779,10 +1779,118 @@ fn page_setup_set_as_default() {
     h.run_steps(3);
     h.get_by_label("Set As Default").click();
     h.run_steps(3);
-    assert!(h.state().session.doc.last_section.landscape, "applied here");
+    assert!(!h.state().session.doc.last_section.landscape, "asked first: nothing applied yet");
+    // Cancel: back to Page Setup with the edit, nothing applied.
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::PageSetup { landscape: true, .. })), "back with the edit");
+    assert!(!h.state().session.doc.last_section.landscape && store.get().is_none());
+    // This document only: applied, not saved.
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("This document only?").click();
+    h.run_steps(2);
     h.get_by_label("OK").click();
     h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    assert!(h.state().session.doc.last_section.landscape, "applied");
+    assert!(store.get().is_none(), "not saved");
+    h.state_mut().run("edit.undo", json!({})).unwrap();
+    assert!(!h.state().session.doc.last_section.landscape, "one undo step");
+    // All: applied and saved, in one undo step.
+    let d = Dialog::open("pageSetup", h.state_mut()).map(|mut d| {
+        if let Dialog::PageSetup { landscape, .. } = &mut d {
+            *landscape = true;
+        }
+        d
+    });
+    h.state_mut().dialog = d;
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().session.doc.last_section.landscape);
     assert!(restarted(&store).last_section.landscape);
+}
+
+/// Review P3: Cancel on Set As Default's question goes back to the Font or Paragraph dialog with
+/// its edits.
+#[test]
+fn cancelling_set_as_default_returns_to_the_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |d| {
+        if let Dialog::Font { size, .. } = d {
+            *size = "17".into();
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Font { size, .. }) if size == "17"), "back in Font with the edit");
+    assert!(store.get().is_none());
+    let (mut h, _) = normal_template_harness("paragraph", |d| {
+        if let Dialog::Paragraph { after, .. } = d {
+            *after = 33.0;
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Paragraph { after, .. }) if *after == 33.0));
+}
+
+/// Review P3: Design › Set as Default asks before saving; Cancel saves nothing.
+#[test]
+fn design_set_as_default_asks_first() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |_| {});
+    h.state_mut().dialog = None;
+    h.state_mut().run("design.theme", json!({"name": "Studio"})).unwrap();
+    h.state_mut().run("ui.dialog", json!({"name": "designSetDefault"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(store.get().is_none(), "Cancel saves nothing");
+    h.state_mut().run("ui.dialog", json!({"name": "designSetDefault"})).unwrap();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(restarted(&store).settings.theme_name, "Studio");
+}
+
+/// Review P3: Paragraph › Set As Default keeps Exactly line spacing the dialog can't show, and
+/// sends no direction for a left-to-right paragraph.
+#[test]
+fn paragraph_set_as_default_keeps_what_the_dialog_cant_show() {
+    use egui_kittest::kittest::Queryable;
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.session.normal_store = Some(store.clone());
+    a.run("para.lineSpacing", json!({"exactly": 20.0})).unwrap();
+    let d = Dialog::open("paragraph", &mut a).unwrap();
+    let props = super::paragraph::default_para_props(&a, &d);
+    assert_eq!(props.get("lineSpacing"), Some(&json!({"rule": "exactly", "value": 20.0})), "{props:?}");
+    assert!(!props.contains_key("bidi"), "{props:?}");
+    a.dialog = Some(d);
+    let mut h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.styles.default_para.line_spacing, Some(wordcraft_doc::props::LineSpacing::Exactly(20.0)));
+    assert_eq!(h.state().session.doc.styles.default_para.bidi, None);
 }
 
 /// #4237: Modify Style › New documents based on this template; Options › Reset asks first.

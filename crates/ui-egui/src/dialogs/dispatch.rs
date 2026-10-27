@@ -4,7 +4,7 @@ use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigati
 use super::font::{apply_font, default_font_props, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
-use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
+use super::page_setup::{apply_page_setup, page_paper_group, page_valign_combo};
 use super::paragraph::{ParaNumber, apply_paragraph, default_para_props, para_check, para_number};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
@@ -32,7 +32,8 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::NewStyle { .. } => new_style_dialog(app, ui, d),
         Dialog::ModifyStyle { .. } => modify_style_dialog(app, ui, d),
         Dialog::ManageStyles { alphabetical, selected } => manage_styles(app, ui, alphabetical, selected),
-        Dialog::SetDefault { command, params, all } => set_default(app, ui, command, params, all),
+        Dialog::SetDefault { command, params, all, back } => set_default(app, ui, command, params, all, back),
+        Dialog::DesignDefault => design_default(app, ui),
         Dialog::ResetDefaults => reset_defaults(app, ui),
         Dialog::TableStyle { .. } => table_style_dialog(app, ui, d),
         Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
@@ -226,7 +227,8 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     // Set As Default asks this document or all new ones, then sets every field (#4237).
     if ui.button(tl!("Set As Default")).clicked() {
         let props = default_font_props(app, d);
-        app.dialog = Some(Dialog::SetDefault { command: "format.setDefault".into(), params: json!({"props": props}), all: false });
+        let back = Some(Box::new(d.clone()));
+        app.dialog = Some(Dialog::SetDefault { command: "format.setDefault".into(), params: json!({"props": props}), all: false, back });
         return true;
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
@@ -347,8 +349,9 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.add_space(6.0);
     let (tabs, set_default) = ui.horizontal(|ui| (ui.button(tl!("Tabs…")).clicked(), ui.button(tl!("Set As Default")).clicked())).inner;
     if set_default {
-        let props = default_para_props(d);
-        app.dialog = Some(Dialog::SetDefault { command: "para.setDefault".into(), params: json!({"props": props}), all: false });
+        let props = default_para_props(app, d);
+        let back = Some(Box::new(d.clone()));
+        app.dialog = Some(Dialog::SetDefault { command: "para.setDefault".into(), params: json!({"props": props}), all: false, back });
         return true;
     }
     let (ok, cancel) = buttons(ui, tl!("OK"));
@@ -574,9 +577,9 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         mirror,
         rtl,
         grid,
-        grid_was,
+        grid_was: _,
         paper,
-        paper_was,
+        paper_was: _,
         paper_custom,
         message,
         valign,
@@ -639,52 +642,20 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
     ui.checkbox(first_page, tl!("Different First Page"));
     ui.add_space(4.0);
-    // Set As Default applies the page setup here, as OK does, then asks (#4237).
-    let mut set_default = ui.button(tl!("Set As Default")).clicked();
+    // Set As Default asks first; its OK applies the page setup (and saves it for new
+    // documents), its Cancel comes back here with these edits (#4237).
+    let set_default = ui.button(tl!("Set As Default")).clicked();
     let (mut ok, cancel) = buttons(ui, tl!("OK"));
-    if ok || set_default {
-        // Everything OK changes is one undo step; a refused command applies nothing.
-        let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right))
-            .map_err(|e| tl!(e).to_string())
-            .and_then(|mut commands| {
-                // Mirror margins go with the margins (#1181).
-                if let Some((_, v)) = commands.iter_mut().rev().find(|(id, _)| *id == "layout.margins") {
-                    v["mirror"] = json!(*mirror);
-                }
-                if grid != grid_was {
-                    let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.0 as usize).copied().unwrap_or("none");
-                    let mut v = json!({"type": kind});
-                    if grid.1 != grid_was.1 {
-                        v["linesPerPage"] = json!(grid.1);
-                    }
-                    if grid.2 != grid_was.2 {
-                        v["charsPerLine"] = json!(grid.2);
-                    }
-                    commands.push(("layout.documentGrid", v));
-                }
-                if *rtl != wordcraft_engine::cmd::page::sect(&app.session).rtl {
-                    commands.push(("layout.sectionRtl", json!({"value": *rtl})));
-                }
-                if *valign != wordcraft_engine::cmd::page::sect(&app.session).valign {
-                    commands.push(("layout.verticalAlign", json!({"value": page_valign_value(*valign)})));
-                }
-                if *odd_even != app.session.doc.settings.even_odd_headers {
-                    commands.push(("layout.differentOddEven", json!({"value": *odd_even})));
-                }
-                if *first_page != wordcraft_engine::cmd::page::sect(&app.session).title_page {
-                    commands.push(("layout.differentFirstPage", json!({"value": *first_page})));
-                }
-                run_as_one_step(app, commands)
-            });
-        if let Err(e) = result {
-            *message = e;
-            ok = false;
-            set_default = false;
-        }
-    }
     if set_default {
-        app.dialog = Some(Dialog::SetDefault { command: "layout.setDefault".into(), params: json!({}), all: true });
+        let back = Some(Box::new(d.clone()));
+        app.dialog = Some(Dialog::SetDefault { command: "layout.setDefault".into(), params: json!({}), all: true, back });
         return true;
+    }
+    if ok && let Err(e) = apply_page_setup(app, d, false) {
+        if let Dialog::PageSetup { message, .. } = d {
+            *message = e;
+        }
+        ok = false;
     }
     ok || cancel
 }
@@ -1547,14 +1518,30 @@ fn check_errors_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 /// Set As Default's question (#4237): the open document only, or it and every new document
-/// based on the Normal template. OK runs the command with that `scope`.
-fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, all: &mut bool) -> bool {
+/// based on the Normal template. OK runs the command with that `scope` (from Page Setup, applies
+/// the page setup first, in the same step); Cancel goes back to the dialog that asked, with its
+/// edits, as Word does.
+fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, all: &mut bool, back: &mut Option<Box<Dialog>>) -> bool {
     ui.label(tl!("Use this formatting as the default for:"));
     ui.add_space(4.0);
     ui.radio_value(all, false, tl!("This document only?"));
     ui.radio_value(all, true, tl!("All documents based on the Normal template?"));
     let (ok, cancel) = buttons(ui, tl!("OK"));
+    if cancel {
+        app.dialog = back.take().map(|b| *b);
+        return true;
+    }
     if ok {
+        if let Some(mut source) = back.take().filter(|b| matches!(**b, Dialog::PageSetup { .. })) {
+            if let Err(e) = apply_page_setup(app, &source, *all) {
+                // Not applied: back to Page Setup, saying why.
+                if let Dialog::PageSetup { message, .. } = &mut *source {
+                    *message = e;
+                }
+                app.dialog = Some(*source);
+            }
+            return true;
+        }
         let mut params = params.clone();
         if let Some(o) = params.as_object_mut() {
             o.insert("scope".into(), json!(if *all { "new" } else { "document" }));
@@ -1562,6 +1549,17 @@ fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, al
         if let Err(e) = app.run(command, params) {
             app.status(e.to_string());
         }
+    }
+    ok
+}
+
+/// Design › Set as Default: asks before saving the document's style set, theme and paragraph
+/// spacing for new documents (#4237).
+fn design_default(app: &mut WordApp, ui: &mut Ui) -> bool {
+    ui.label(tl!("Use the current style set and theme for all new documents?"));
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    if ok && let Err(e) = app.run("design.setDefault", json!({"scope": "new"})) {
+        app.status(e.to_string());
     }
     ok || cancel
 }
