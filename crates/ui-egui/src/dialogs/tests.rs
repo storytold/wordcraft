@@ -1938,6 +1938,21 @@ fn paragraph_set_as_default_keeps_what_the_dialog_cant_show() {
     assert_eq!(h.state().session.doc.styles.default_para.bidi, None);
 }
 
+/// Re-review P3: paragraphs with different spacing rules (Exactly 12 and Exactly 18) show alike
+/// in the dialog; Set As Default leaves their spacing out rather than saving the caret's.
+#[test]
+fn paragraph_set_as_default_skips_mixed_line_spacing() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("One\nTwo")), crate::Services::default());
+    a.run("select.text", json!({"text": "One"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 12.0})).unwrap();
+    a.run("select.text", json!({"text": "Two"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 18.0})).unwrap();
+    a.run("select.all", json!({})).unwrap();
+    let d = Dialog::open("paragraph", &mut a).unwrap();
+    let props = super::paragraph::default_para_props(&a, &d);
+    assert!(!props.contains_key("lineSpacing"), "{props:?}");
+}
+
 /// #4237: Modify Style › New documents based on this template; Options › Reset asks first.
 #[test]
 fn modify_style_for_new_documents_and_reset() {
