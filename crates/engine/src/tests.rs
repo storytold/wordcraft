@@ -9,6 +9,14 @@ use wordcraft_doc::{Pos, StoryRef};
 
 use crate::{Session, cmd};
 
+mod bidi;
+mod documents;
+mod fonts;
+mod ime_noop;
+mod revision_checks;
+mod typing;
+mod wordart;
+
 fn s() -> Session {
     Session::new(wordcraft_doc::Document::new())
 }
