@@ -4961,6 +4961,62 @@ fn at_least_rows_add_cell_margins_and_border_bands() {
     assert!((tops[0] - (72.0 + 0.5 + 5.0)).abs() < 0.01, "first cell text at {}", tops[0]);
 }
 
+/// Line tops of a table of 15pt at-least rows without cell margins, its rows split by 0.5pt
+/// single borders except one edge, between the second and third rows, drawn `double` at `width`.
+fn double_border_row_tops(width: f32, last_bottom: bool) -> Vec<f32> {
+    use wordcraft_doc::props::{Border, BorderStyle, Borders, HeightRule};
+    let mut d = Document::from_text("");
+    let single = Some(Border { style: BorderStyle::Single, width: 0.5, color: None, space: 0.0 });
+    let double = Some(Border { style: BorderStyle::Double, width, color: None, space: 0.0 });
+    let mut t = Table::new(4, 1, 200.0);
+    t.props.borders = Some(Borders { top: single, left: single, bottom: single, right: single, between: single, inside_v: single });
+    t.props.cell_margins = Some([0.0, 5.4, 0.0, 5.4]);
+    for (r, row) in t.rows.iter_mut().enumerate() {
+        row.props.height = Some(15.0);
+        row.props.height_rule = HeightRule::AtLeast;
+        let cell = &mut row.cells[0];
+        cell.blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&format!("row {r}"), Default::default()))];
+        // Both cells along the edge carry it, as Word writes a border set on a row's bottom.
+        let own = match r {
+            1 => Borders { bottom: double, ..Default::default() },
+            2 => Borders { top: double, ..Default::default() },
+            3 if last_bottom => Borders { bottom: double, ..Default::default() },
+            _ => continue,
+        };
+        cell.props.borders = Some(own);
+    }
+    let after = wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("after", Default::default()));
+    d.body = vec![std::sync::Arc::new(wordcraft_doc::Block::Table(t)), after];
+    line_tops(&lay(&d))
+}
+
+/// A double border takes its two lines and the gap between them, three times its line width, of
+/// the row's height (Word: in a table of 15pt at-least rows with 0.5pt borders the text steps
+/// 15.5pt from row to row, and 16.5pt into the row below a 0.5pt double border; measured on a
+/// table-heavy report).
+#[test]
+fn a_double_border_band_is_three_line_widths() {
+    let tops = double_border_row_tops(0.5, false);
+    let steps: Vec<f32> = tops.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(steps.len(), 4, "{tops:?}");
+    assert!((steps[0] - 15.5).abs() < 0.01, "below a single border: {steps:?}");
+    assert!((steps[1] - 16.5).abs() < 0.01, "below the double border: {steps:?}");
+    assert!((steps[2] - 15.5).abs() < 0.01, "back to single borders: {steps:?}");
+    // The paragraph after the table starts below the last row's 0.5pt bottom border.
+    assert!((steps[3] - 15.5).abs() < 0.01, "after the table: {steps:?}");
+}
+
+/// The band scales with the line width (a 0.75pt double is 2.25pt), and a double bottom border on
+/// the last row takes its band below the table the same way.
+#[test]
+fn a_double_border_band_scales_with_its_width_and_closes_the_table() {
+    let tops = double_border_row_tops(0.75, true);
+    let steps: Vec<f32> = tops.windows(2).map(|w| w[1] - w[0]).collect();
+    assert_eq!(steps.len(), 4, "{tops:?}");
+    assert!((steps[1] - (15.0 + 2.25)).abs() < 0.01, "below the double border: {steps:?}");
+    assert!((steps[3] - (15.0 + 2.25)).abs() < 0.01, "after a double bottom border: {steps:?}");
+}
+
 /// Word gives every cell in a row the row's largest top and bottom margins: a cell without its
 /// own lines up with a neighbour that has them, and the row is as tall as if all had them.
 #[test]
