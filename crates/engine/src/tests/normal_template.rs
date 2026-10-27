@@ -294,3 +294,21 @@ fn a_refused_set_as_default_saves_nothing() {
     assert!(store.get().is_none(), "and the template was never written");
     assert_ne!(body_font(&session(&store).normal_document()).0, "Georgia");
 }
+
+/// Review P3: Repeat and a recorded macro never replay a Set As Default or Reset, which would
+/// rewrite the person's defaults unasked.
+#[test]
+fn repeat_and_macros_skip_template_commands() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "tools.recordMacro", json!({"name": "m"}));
+    run(&mut s, "text.insert", json!({"text": "Hi "}));
+    run(&mut s, "format.setDefault", json!({"props": {"font": "Georgia"}}));
+    run(&mut s, "tools.recordMacro", json!({}));
+    store.put(None);
+    let _ = s.run("edit.repeat", &json!({}));
+    assert!(store.get().is_none(), "Repeat didn't save the default again");
+    run(&mut s, "tools.macros", json!({"run": "m"}));
+    assert!(store.get().is_none(), "nor did the macro");
+    assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hi Hi Hi ", "Repeat and the macro typed again");
+}
