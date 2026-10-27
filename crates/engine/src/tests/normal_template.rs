@@ -166,6 +166,34 @@ fn a_style_saved_for_new_documents() {
     assert!(s.run("styles.setDefault", &json!({"style": "No Such Style"})).is_err());
 }
 
+/// Saving the same styles again doesn't grow the template's lists: each save copies a style's
+/// list afresh, and the old copy, numbered by nothing, goes.
+#[test]
+fn saving_again_does_not_grow_the_lists() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "styles.create", json!({"name": "Steps", "basedOn": "Normal"}));
+    let num = s.doc.numbering.add_list(wordcraft_doc::ListKind::Numbered);
+    let id = s.doc.styles.styles.iter().find(|st| st.name == "Steps").map(|st| st.id.clone()).unwrap();
+    s.doc.styles.get_mut(&id).unwrap().para.numbering = Some(wordcraft_doc::props::NumRef { num, level: 0 });
+    let lists = |store: &MemoryStore| {
+        let t = crate::normal_template::parse(&store.get().unwrap()).unwrap();
+        (t.numbering.nums.len(), t.numbering.abstracts.len())
+    };
+    run(&mut s, "design.setDefault", json!({}));
+    let first = lists(&store);
+    assert_eq!(first, (1, 1), "the style's list is saved");
+    for _ in 0..3 {
+        run(&mut s, "design.setDefault", json!({}));
+        run(&mut s, "styles.setDefault", json!({"style": "Steps"}));
+    }
+    assert_eq!(lists(&store), first);
+    let d = session(&store).normal_document();
+    let steps = d.styles.styles.iter().find(|st| st.name == "Steps").unwrap();
+    let n = steps.para.numbering.expect("still numbered");
+    assert!(d.numbering.num(n.num).is_some(), "its list is there");
+}
+
 /// The language is never stored: Proofing Language › Set As Default owns it.
 #[test]
 fn language_is_not_stored() {
