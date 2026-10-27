@@ -373,3 +373,27 @@ fn template_commands_survive_hostile_params() {
         }
     }
 }
+
+/// Re-review P2: writing the template reads the stored file, which a person can replace. A panic
+/// while reading or merging it is an error that rolls the command back, never an abort.
+#[test]
+fn a_panic_while_writing_the_template_is_an_error() {
+    struct Panics;
+    impl NormalStore for Panics {
+        fn load(&self) -> Result<Option<Vec<u8>>, String> {
+            panic!("damaged template")
+        }
+        fn save(&self, _: &[u8]) -> Result<(), String> {
+            Ok(())
+        }
+        fn reset(&self) -> Result<(), String> {
+            Ok(())
+        }
+    }
+    let mut s = Session::new(Document::from_text("Text.\n"));
+    s.normal_store = Some(Arc::new(Panics));
+    let before = s.doc.styles.clone();
+    assert!(s.run("format.setDefault", &json!({"props": {"font": "Georgia"}})).is_err());
+    assert!(s.run("para.setDefault", &json!({"props": {"spaceAfter": 30.0}})).is_err());
+    assert_eq!(s.doc.styles, before, "the document is rolled back");
+}
