@@ -312,3 +312,21 @@ fn repeat_and_macros_skip_template_commands() {
     assert!(store.get().is_none(), "nor did the macro");
     assert_eq!(s.doc.plain_text(wordcraft_doc::StoryRef::Body), "Hi Hi Hi ", "Repeat and the macro typed again");
 }
+
+/// Review P3: Page Setup › Set As Default saves the page setup of the caret's section, also when
+/// the caret is in a footnote (whose story paths don't index the body).
+#[test]
+fn page_default_reads_the_carets_section_from_any_story() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    run(&mut s, "text.insert", json!({"text": "One"}));
+    run(&mut s, "layout.margins", json!({"left": 100.0, "right": 100.0}));
+    run(&mut s, "layout.break", json!({"kind": "nextPage"}));
+    run(&mut s, "text.insert", json!({"text": "Two"}));
+    run(&mut s, "layout.margins", json!({"left": 50.0, "right": 50.0}));
+    assert_eq!(s.doc.sections().len(), 2);
+    run(&mut s, "references.footnote", json!({}));
+    assert_ne!(s.sel.focus.story, wordcraft_doc::StoryRef::Body, "the caret is in the footnote");
+    run(&mut s, "layout.setDefault", json!({}));
+    assert_eq!(session(&store).normal_document().last_section.margin_left, 50.0, "the second section's, where the note is");
+}
