@@ -1,11 +1,11 @@
 use super::bookmarks::{bookmark, enclose_preview, icons_body, macros};
 use super::chrome::{buttons, color_field};
 use super::find::{FindTab, SEARCH_SUGGESTIONS, command_matches, find_in_navigation_pane, goto_body, special_menu, swallow_shortcut_text};
-use super::font::{apply_font, preview_size};
+use super::font::{apply_font, default_font_props, preview_size};
 use super::forms::{cell_margins_dialog, custom_properties, table_properties};
 use super::mailings::{ADDRESS_PARTS, recipient_list, rule_params};
 use super::page_setup::{page_layout_commands, page_paper_group, page_valign_combo, page_valign_value, run_as_one_step};
-use super::paragraph::{ParaNumber, apply_paragraph, para_check, para_number};
+use super::paragraph::{ParaNumber, apply_paragraph, default_para_props, para_check, para_number};
 use super::styles::manage_styles;
 use super::{Dialog, MeasureExt, Tokens, Ui, Value, WordApp, json, semibold, vec2};
 
@@ -32,6 +32,8 @@ pub(super) fn body(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         Dialog::NewStyle { .. } => new_style_dialog(app, ui, d),
         Dialog::ModifyStyle { .. } => modify_style_dialog(app, ui, d),
         Dialog::ManageStyles { alphabetical, selected } => manage_styles(app, ui, alphabetical, selected),
+        Dialog::SetDefault { command, params, all } => set_default(app, ui, command, params, all),
+        Dialog::ResetDefaults => reset_defaults(app, ui),
         Dialog::TableStyle { .. } => table_style_dialog(app, ui, d),
         Dialog::Insert(f) => crate::dialogs_insert::body(app, ui, f),
         Dialog::Refs(f) => crate::dialogs_refs::body(app, ui, f),
@@ -220,6 +222,13 @@ fn font_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     let mut job = egui::text::LayoutJob::single_section(sample, fmt);
     job.wrap.max_width = ui.available_width().min(400.0);
     ui.label(job);
+    ui.add_space(4.0);
+    // Set As Default asks this document or all new ones, then sets every field (#4237).
+    if ui.button(tl!("Set As Default")).clicked() {
+        let props = default_font_props(app, d);
+        app.dialog = Some(Dialog::SetDefault { command: "format.setDefault".into(), params: json!({"props": props}), all: false });
+        return true;
+    }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         apply_font(app, d);
@@ -336,7 +345,12 @@ fn paragraph_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         }
     }
     ui.add_space(6.0);
-    let tabs = ui.button(tl!("Tabs…")).clicked();
+    let (tabs, set_default) = ui.horizontal(|ui| (ui.button(tl!("Tabs…")).clicked(), ui.button(tl!("Set As Default")).clicked())).inner;
+    if set_default {
+        let props = default_para_props(d);
+        app.dialog = Some(Dialog::SetDefault { command: "para.setDefault".into(), params: json!({"props": props}), all: false });
+        return true;
+    }
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok || tabs {
         apply_paragraph(app, d);
@@ -624,8 +638,11 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.label(egui::RichText::new(tl!("Headers and footers")).font(semibold(12.5)));
     ui.checkbox(odd_even, tl!("Different Odd & Even Pages"));
     ui.checkbox(first_page, tl!("Different First Page"));
+    ui.add_space(4.0);
+    // Set As Default applies the page setup here, as OK does, then asks (#4237).
+    let mut set_default = ui.button(tl!("Set As Default")).clicked();
     let (mut ok, cancel) = buttons(ui, tl!("OK"));
-    if ok {
+    if ok || set_default {
         // Everything OK changes is one undo step; a refused command applies nothing.
         let result = page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right))
             .map_err(|e| tl!(e).to_string())
@@ -662,7 +679,12 @@ fn page_setup_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         if let Err(e) = result {
             *message = e;
             ok = false;
+            set_default = false;
         }
+    }
+    if set_default {
+        app.dialog = Some(Dialog::SetDefault { command: "layout.setDefault".into(), params: json!({}), all: true });
+        return true;
     }
     ok || cancel
 }
@@ -921,7 +943,7 @@ fn new_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
 }
 
 fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
-    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after } = d else {
+    let Dialog::ModifyStyle { back, resume, id, name, font, size, bold, italic, color, before, after, new_documents } = d else {
         return false;
     };
     egui::Grid::new("ms").num_columns(2).show(ui, |ui| {
@@ -957,13 +979,24 @@ fn modify_style_dialog(app: &mut WordApp, ui: &mut Ui, d: &mut Dialog) -> bool {
         ui.checkbox(bold, tl!("Bold"));
         ui.checkbox(italic, tl!("Italic"));
     });
+    ui.horizontal(|ui| {
+        ui.radio_value(new_documents, false, tl!("Only in this document"));
+        ui.radio_value(new_documents, true, tl!("New documents based on this template"));
+    });
     let (ok, cancel) = buttons(ui, tl!("OK"));
     if ok {
         let mut chr = json!({"font": font, "size": *size, "bold": *bold, "italic": *italic});
         if let Some(c) = wordcraft_doc::Rgb::parse(color) {
             chr["color"] = json!({"Rgb": [c.0, c.1, c.2]});
         }
-        let _ = app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+        let modified =
+            app.run("styles.modify", json!({"style": id, "name": name, "chr": chr, "para": {"spaceBefore": *before, "spaceAfter": *after}}));
+        if modified.is_ok()
+            && *new_documents
+            && let Err(e) = app.run("styles.setDefault", json!({"style": id, "scope": "new"}))
+        {
+            app.status(e.to_string());
+        }
     }
     if (ok || cancel) && *back {
         app.dialog = Some(Dialog::ManageStyles { alphabetical: false, selected: id.clone() });
@@ -1510,5 +1543,36 @@ fn check_errors_dialog(ui: &mut Ui, d: &mut Dialog) -> bool {
     ui.add_space(4.0);
     ui.label(egui::RichText::new(crate::i18n::fmt(tl!("Recipients: {count}"), &[("count", &records.to_string())])).weak());
     let (ok, cancel) = buttons(ui, tl!("Close"));
+    ok || cancel
+}
+
+/// Set As Default's question (#4237): the open document only, or it and every new document
+/// based on the Normal template. OK runs the command with that `scope`.
+fn set_default(app: &mut WordApp, ui: &mut Ui, command: &str, params: &Value, all: &mut bool) -> bool {
+    ui.label(tl!("Use this formatting as the default for:"));
+    ui.add_space(4.0);
+    ui.radio_value(all, false, tl!("This document only?"));
+    ui.radio_value(all, true, tl!("All documents based on the Normal template?"));
+    let (ok, cancel) = buttons(ui, tl!("OK"));
+    if ok {
+        let mut params = params.clone();
+        if let Some(o) = params.as_object_mut() {
+            o.insert("scope".into(), json!(if *all { "new" } else { "document" }));
+        }
+        if let Err(e) = app.run(command, params) {
+            app.status(e.to_string());
+        }
+    }
+    ok || cancel
+}
+
+/// File › Options › Advanced › Reset default formatting: deletes the Normal template once the
+/// user confirms (#4237).
+fn reset_defaults(app: &mut WordApp, ui: &mut Ui) -> bool {
+    ui.label(tl!("New documents will use WordCraft's built-in formatting. Your saved defaults can't be recovered. Reset?"));
+    let (ok, cancel) = buttons(ui, tl!("Reset"));
+    if ok && let Err(e) = app.run("defaults.reset", json!({})) {
+        app.status(e.to_string());
+    }
     ok || cancel
 }

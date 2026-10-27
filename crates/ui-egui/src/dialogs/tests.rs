@@ -1693,3 +1693,123 @@ fn the_custom_properties_dialog_leaves_imported_non_text_properties_alone() {
     let kinds: Vec<(&str, &str)> = h.state().session.doc.custom_props.iter().map(|p| (p.name.as_str(), p.kind.as_str())).collect();
     assert_eq!(kinds, [("Status", "lpwstr"), ("Count", "i4")], "Cancel leaves the imported property as it was");
 }
+
+/// A harness drawing `app` whole, with the Normal template in memory.
+fn normal_template_harness(
+    dialog: &str,
+    edit: impl FnOnce(&mut Dialog),
+) -> (egui_kittest::Harness<'static, WordApp>, std::sync::Arc<wordcraft_engine::normal_template::MemoryStore>) {
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("Lanterns")), crate::Services::default());
+    a.session.normal_store = Some(store.clone());
+    let mut d = if dialog == "modifyStyle" { Dialog::modify_style(&a, "Normal") } else { Dialog::open(dialog, &mut a) }.unwrap();
+    edit(&mut d);
+    a.dialog = Some(d);
+    let h = egui_kittest::Harness::builder().with_size(vec2(1440.0, 900.0)).build_ui_state(
+        |ui, app: &mut WordApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        a,
+    );
+    (h, store)
+}
+
+/// A new session on `store`, as after a restart: its first blank document.
+fn restarted(store: &std::sync::Arc<wordcraft_engine::normal_template::MemoryStore>) -> wordcraft_doc::Document {
+    let mut s = Session::new(wordcraft_doc::Document::new());
+    s.normal_store = Some(store.clone());
+    s.normal_document()
+}
+
+/// #4237: Font › Set As Default asks "this document only" or "all documents"; all saves every
+/// field into the Normal template for new documents, and the open document changes too.
+#[test]
+fn font_set_as_default_asks_then_saves_for_new_documents() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |d| {
+        if let Dialog::Font { font, size, .. } = d {
+            *font = "Georgia".into();
+            *size = "15".into();
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    assert!(matches!(h.state().dialog, Some(Dialog::SetDefault { .. })), "it asks");
+    h.get_by_label("All documents based on the Normal template?").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(h.state().dialog.is_none());
+    let r = h.state().session.doc.styles.resolve_char(Some("Normal"), &Default::default());
+    assert_eq!((r.font.as_str(), r.size), ("Georgia", 15.0), "the open document changes too");
+    let d = restarted(&store);
+    let r = d.styles.resolve_char(Some("Normal"), &Default::default());
+    assert_eq!((r.font.as_str(), r.size), ("Georgia", 15.0));
+}
+
+/// #4237: "This document only" leaves the template alone.
+#[test]
+fn paragraph_set_as_default_this_document_only() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("paragraph", |d| {
+        if let Dialog::Paragraph { after, .. } = d {
+            *after = 24.0;
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(h.state().session.doc.styles.default_para.space_after, Some(24.0));
+    assert!(store.get().is_none(), "nothing saved for new documents");
+}
+
+/// #4237: Page Setup › Set As Default applies the page setup, then saves it for new documents.
+#[test]
+fn page_setup_set_as_default() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("pageSetup", |d| {
+        if let Dialog::PageSetup { landscape, .. } = d {
+            *landscape = true;
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    assert!(h.state().session.doc.last_section.landscape, "applied here");
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert!(restarted(&store).last_section.landscape);
+}
+
+/// #4237: Modify Style › New documents based on this template; Options › Reset asks first.
+#[test]
+fn modify_style_for_new_documents_and_reset() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("modifyStyle", |_| {});
+    let Some(Dialog::ModifyStyle { id, .. }) = &h.state().dialog else { panic!("modify style") };
+    let id = id.clone();
+    if let Some(Dialog::ModifyStyle { italic, .. }) = &mut h.state_mut().dialog {
+        *italic = true;
+    }
+    h.run_steps(3);
+    h.get_by_label("New documents based on this template").click();
+    h.run_steps(2);
+    h.get_by_label("OK").click();
+    h.run_steps(3);
+    assert_eq!(restarted(&store).styles.get(&id).and_then(|s| s.chr.italic), Some(true));
+
+    h.state_mut().dialog = Some(Dialog::ResetDefaults);
+    h.run_steps(3);
+    h.get_by_label("Cancel").click();
+    h.run_steps(3);
+    assert!(store.get().is_some(), "Cancel keeps it");
+    h.state_mut().dialog = Some(Dialog::ResetDefaults);
+    h.run_steps(3);
+    h.get_by_label("Reset").click();
+    h.run_steps(3);
+    assert!(store.get().is_none(), "Reset deletes it");
+}

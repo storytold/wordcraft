@@ -105,6 +105,8 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::About { .. } => "About WordCraft",
         Dialog::SaveChanges { .. } => "WordCraft",
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
+        Dialog::SetDefault { .. } => "Set As Default",
+        Dialog::ResetDefaults => "Reset Default Formatting",
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::SelectTable { .. } => "Select Table",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",
