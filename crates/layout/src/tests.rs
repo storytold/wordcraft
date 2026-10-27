@@ -4206,8 +4206,8 @@ fn thai_drop_cap_leading_vowel_included() {
     assert!(nc >= 2, "leading vowel + consonant must both be in the drop cap ({nc} clusters)");
 }
 
-/// Sara aa (า U+0E32) is a trailing following vowel — it appears AFTER the consonant
-/// horizontally and must NOT be part of the drop cap TCB.
+/// Sara aa (า U+0E32) is a pure trailing following vowel — no above/below component —
+/// and must NOT be part of the drop cap TCB.
 /// "ข่าว..." → TCB = "ข่" (ข U+0E02 + ่ U+0E48, 6 bytes), body starts at byte 6.
 #[test]
 fn thai_drop_cap_sara_aa_stays_in_body() {
@@ -4229,6 +4229,49 @@ fn thai_drop_cap_sara_aa_stays_in_body() {
     let body_start = pl.clusters.get(nc).map(|c| c.start);
     assert_eq!(body_start, Some(6),
         "sara aa (byte 6-9) must stay in body text, not be consumed by the drop cap; got {body_start:?}");
+}
+
+/// Sara am (ำ U+0E33) encodes nikhahit (above) + sara aa in one codepoint — it has an
+/// above component and IS part of the drop cap TCB.
+/// "สำคัญ…" → TCB = "สำ" (ส U+0E2A + ำ U+0E33, 6 bytes), body starts at byte 6.
+/// "ข่ำ…"   → TCB = "ข่ำ" (ข + ่ + ำ, 9 bytes), body starts at byte 9.
+#[test]
+fn thai_drop_cap_sara_am_in_tcb() {
+    // Simple case: cons + sara am (no tone mark).
+    // ส (U+0E2A, 3 bytes) + ำ (U+0E33, 3 bytes)
+    let body = "สำคัญยิ่งต่อการพัฒนาประเทศ ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| {
+        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
+    }).expect("no lines");
+
+    pl.drop_cap.expect("drop cap must be set");
+    let (nc, _, _) = pl.drop_cap.unwrap();
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(6),
+        "TCB for สำ should be 6 bytes (ส + ำ); body_start={body_start:?}");
+
+    // With tone mark: cons + tone + sara am → TCB is all three (9 bytes).
+    // ข (U+0E02, 3) + ่ (U+0E48, 3) + ำ (U+0E33, 3)
+    let body2 = "ข่ำขลังมาแต่โบราณกาลนานนม ".repeat(8);
+    let mut p2 = wordcraft_doc::Paragraph::with_text(&body2, Default::default());
+    p2.props.drop_cap = Some(3);
+    let mut d2 = Document::from_text("x");
+    d2.body = vec![wordcraft_doc::para_block(p2)];
+    let l2 = lay(&d2);
+    let pl2 = l2.pages[0].items.iter().find_map(|i| {
+        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
+    }).expect("no lines (tone+sara am)");
+
+    pl2.drop_cap.expect("drop cap must be set (tone+sara am)");
+    let (nc2, _, _) = pl2.drop_cap.unwrap();
+    let body_start2 = pl2.clusters.get(nc2).map(|c| c.start);
+    assert_eq!(body_start2, Some(9),
+        "TCB for ข่ำ should be 9 bytes (ข + ่ + ำ); body_start={body_start2:?}");
 }
 
 #[test]
