@@ -767,6 +767,8 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("review.language", "Language", "Review › Language", language).params(
             r#"{"lang"?: "en-US|en-GB|pl-PL|fr-FR|…" (BCP 47; default en-US), "noProof"?: bool, "detect"?: bool (detect language automatically, a preference), "default"?: bool (also the document's default and the saved language for future blank documents)}"#,
         ),
+        CommandSpec::new("review.defaultLanguage", "Review Language", "File › Options › Language", default_language)
+            .params(r#"{"value"?: "auto"|"off"|<tag> (a proofing language such as pt-BR), "apply"?: bool (also the open document's default language, true by default)}"#),
         CommandSpec::new("review.showMarkup", "Show Markup", "Review › Tracking", |s, v| {
             s.view.show_markup = p::bool(v, "value").unwrap_or(!s.view.show_markup);
             s.relayout();
@@ -863,6 +865,53 @@ fn language(s: &mut Session, v: &Value) -> CmdResult {
         s.prefs.default_language = lang;
     }
     Ok(result)
+}
+
+/// The proofing default shown by File › Options › Language (and used for text that names no
+/// language): the saved default, else the interface's editing language, else US English.
+fn proofing_default(s: &Session) -> String {
+    s.prefs.default_language.clone().or_else(|| s.editing_lang.clone()).unwrap_or_else(|| "en-US".to_string())
+}
+
+/// File › Options › Language › Review language: set the app's proofing default. `auto` follows
+/// the interface language, `off` turns the live check off, a tag is used as it is; `apply` (the
+/// default) also changes the open document's default language, which clears the live squiggles
+/// at once. Persisted with the other preferences in `ui.json`.
+fn default_language(s: &mut Session, v: &Value) -> CmdResult {
+    let Some(value) = p::str(v, "value").map(str::trim).filter(|v| !v.is_empty()) else {
+        let checking = s.view.proofing;
+        let value = if !checking { "off".to_string() } else { s.prefs.default_language.clone().unwrap_or_else(|| "auto".to_string()) };
+        return Ok(json!({"value": value, "resolved": proofing_default(s), "checking": checking}));
+    };
+    if value.eq_ignore_ascii_case("off") {
+        s.view.proofing = false;
+        s.prefs.check_spelling = false;
+        return Ok(json!({"value": "off", "resolved": proofing_default(s), "checking": false}));
+    }
+    let (value, resolved) = if value.eq_ignore_ascii_case("auto") {
+        // Automatic follows the interface language (a pt-br interface writes pt-BR).
+        s.prefs.default_language = None;
+        ("auto".to_string(), proofing_default(s))
+    } else {
+        let tag = wordcraft_proof::lang::normalize_tag(value)
+            .ok_or_else(|| CmdError::Params(format!("`value` must be auto, off or a language tag, not {value:?}")))?;
+        s.prefs.default_language = Some(tag.clone());
+        s.view.proofing = true;
+        s.prefs.check_spelling = true;
+        (tag.clone(), tag)
+    };
+    if p::bool(v, "apply").unwrap_or(true) {
+        // The open document's own default language: text that names no language now resolves in
+        // the chosen one, and the live check follows without reopening the file.
+        s.doc.styles.default_chr.lang = Some(resolved.clone());
+        if let Some(normal) = s.doc.styles.styles.iter_mut().find(|x| x.id == "Normal")
+            && normal.chr.lang.is_some()
+        {
+            normal.chr.lang = Some(resolved.clone());
+        }
+        s.relayout();
+    }
+    Ok(json!({"value": value, "resolved": resolved, "checking": s.view.proofing}))
 }
 
 fn macros(s: &mut Session, v: &Value) -> CmdResult {
@@ -2393,6 +2442,51 @@ mod tests {
         s.run("review.language", &json!({"lang": "de-DE", "default": true})).unwrap();
         assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("de-DE"));
         assert!(s.run("review.language", &json!({"lang": "<script>"})).is_err());
+    }
+
+    /// File › Options › Language: the review language is a persisted app default; Automatic
+    /// follows the interface language, Off turns the live check off, and applying it changes the
+    /// open document's default so the squiggles follow at once.
+    #[test]
+    fn review_language_default_is_applied_and_persisted() {
+        let mut s = Session::new(Document::from_text("Texto"));
+        s.set_editing_language(Some("pt-BR"));
+        let r = s.run("review.defaultLanguage", &json!({"value": "auto"})).unwrap();
+        assert_eq!((r["value"].as_str(), r["resolved"].as_str()), (Some("auto"), Some("pt-BR")));
+        assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pt-BR"));
+        assert!(s.view.proofing && s.prefs.default_language.is_none());
+
+        let r = s.run("review.defaultLanguage", &json!({"value": "pt-br"})).unwrap();
+        assert_eq!(r["resolved"], "pt-BR");
+        assert_eq!(s.prefs.default_language.as_deref(), Some("pt-BR"));
+
+        let r = s.run("review.defaultLanguage", &json!({"value": "off"})).unwrap();
+        assert_eq!(r["value"], "off");
+        assert!(!s.view.proofing && !s.prefs.check_spelling);
+        assert_eq!(s.prefs.default_language.as_deref(), Some("pt-BR"), "Off keeps the language saved");
+        assert_eq!(s.run("review.defaultLanguage", &json!({})).unwrap()["value"], "off");
+
+        assert!(s.run("review.defaultLanguage", &json!({"value": "<script>"})).is_err());
+        let r = s.run("review.defaultLanguage", &json!({"value": "en-US"})).unwrap();
+        assert_eq!(r["resolved"], "en-US");
+        assert!(s.view.proofing && s.prefs.check_spelling, "choosing a language checks it again");
+        assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("en-US"));
+    }
+
+    /// A document that names no language adopts the app's proofing default when opened; a
+    /// document that names its own keeps it.
+    #[test]
+    fn documents_without_a_language_adopt_the_proofing_default() {
+        let mut s = Session::new(Document::from_text(""));
+        s.set_editing_language(Some("pt-BR"));
+        let mut plain = Document::from_text("Sem idioma");
+        plain.styles.default_chr.lang = None;
+        s.set_document(plain);
+        assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("pt-BR"));
+        let mut english = Document::from_text("With language");
+        english.styles.default_chr.lang = Some("en-US".into());
+        s.set_document(english);
+        assert_eq!(s.doc.styles.default_chr.lang.as_deref(), Some("en-US"), "its own language wins");
     }
 
     /// The inspector's removals delete straight from the document, so they aren't tracked: on a

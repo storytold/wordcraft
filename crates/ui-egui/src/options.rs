@@ -472,11 +472,14 @@ fn save(app: &mut WordApp, ui: &mut Ui) {
 fn language(app: &mut WordApp, ui: &mut Ui) {
     section(ui, "Interface language");
     language_picker(app, ui);
-    // #414 (detect the document's language) goes here.
     ui.add_space(8.0);
     section(ui, "Proofing language");
+    review_language_picker(app, ui);
+    note(ui, "Automatic follows the interface language. It sets the spelling and grammar dictionary for your documents.");
     let lang = crate::ribbon::caret_language(app);
-    let text = if crate::ribbon::caret_no_proof(app) {
+    let text = if !app.session.view.proofing {
+        tl!("Spelling and grammar are not checked: Review language is Off.").to_string()
+    } else if crate::ribbon::caret_no_proof(app) {
         tl!("The text at the insertion point is marked Do not check spelling or grammar.").to_string()
     } else if !crate::ribbon::caret_language_proofed(app) {
         crate::i18n::fmt(tl!("{language}: WordCraft doesn't check spelling or grammar in this language yet."), &[("language", &lang)])
@@ -720,6 +723,51 @@ fn animations_picker(app: &mut WordApp, ui: &mut Ui) {
     }
 }
 
+/// Review language: the app's proofing default for text that names no language. The same shapes
+/// as the interface picker above (Dropdown + helper line); Automatic follows the interface, Off
+/// turns the live check off, and a language is used as it is. The choice is persisted in
+/// `ui.json` and applies to the open document's default language at once.
+fn review_language_picker(app: &mut WordApp, ui: &mut Ui) {
+    use crate::ribbon::{PROOFING_LANGUAGES, language_name};
+    let checking = app.session.view.proofing;
+    let saved = app.session.prefs.default_language.clone();
+    let resolved = saved.clone().or_else(|| app.session.editing_lang.clone()).unwrap_or_else(|| "en-US".to_string());
+    let resolved_name = tl!(&language_name(Some(&resolved))).to_string();
+    let automatic = crate::i18n::fmt(tl!("Automatic ({language})"), &[("language", &resolved_name)]);
+    let shown = if !checking {
+        tl!("Do not check spelling or grammar").to_string()
+    } else if saved.is_none() {
+        automatic.clone()
+    } else {
+        tl!(&language_name(Some(&resolved))).to_string()
+    };
+    let mut chosen: Option<&str> = None;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Review language:"));
+        let combo = egui::ComboBox::from_id_salt("review_language").selected_text(shown).width(260.0).show_ui(ui, |ui| {
+            if ui.selectable_label(checking && saved.is_none(), automatic.as_str()).clicked() {
+                chosen = Some("auto");
+            }
+            for (tag, _) in PROOFING_LANGUAGES.iter().filter(|(t, _)| ["pt-BR", "pt-PT", "en-US", "es-ES"].contains(t)) {
+                let name = tl!(&language_name(Some(tag))).to_string();
+                let on = checking && saved.as_deref().is_some_and(|s| s.eq_ignore_ascii_case(tag));
+                if ui.selectable_label(on, name).clicked() {
+                    chosen = Some(tag);
+                }
+            }
+            if ui.selectable_label(!checking, tl!("Do not check spelling or grammar")).clicked() {
+                chosen = Some("off");
+            }
+        });
+        combo.response.labelled_by(label.id);
+    });
+    if let Some(value) = chosen
+        && let Err(e) = app.run("review.defaultLanguage", json!({"value": value}))
+    {
+        app.status(e);
+    }
+}
+
 /// Interface language: follow the system (the default) or pick one (#8).
 fn language_picker(app: &mut WordApp, ui: &mut Ui) {
     use crate::i18n::{AUTO, Lang};
@@ -895,6 +943,43 @@ mod tests {
         );
         h.run_steps(4);
         h
+    }
+
+    /// File › Options › Language: "Review language" is a dropdown (not static text). The choice
+    /// is persisted, applied to the open document at once, and the status bar reads it back.
+    #[test]
+    fn review_language_picker_persists_and_applies() {
+        use egui_kittest::kittest::Queryable;
+        let mut a = app();
+        a.run("ui.language", json!({"value": "en"})).unwrap();
+        a.run("file.options", json!({"pane": "language"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        h.run_steps(4);
+        let combo_text =
+            |h: &egui_kittest::Harness<'static, crate::WordApp>| h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Review language:").value();
+        assert!(combo_text(&h).as_deref().is_some_and(|v| v.contains("Automatic")), "{:?}", combo_text(&h));
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Review language:").click();
+        h.run_steps(3);
+        h.get_by_label("Portuguese (Brazil)").click();
+        h.run_steps(4);
+        assert_eq!(h.state().session.prefs.default_language.as_deref(), Some("pt-BR"));
+        assert_eq!(h.state().session.doc.styles.default_chr.lang.as_deref(), Some("pt-BR"), "applied to the document");
+        assert!(h.state().session.view.proofing && h.state().session.prefs.check_spelling);
+        assert_eq!(crate::ribbon::caret_language(h.state()), "Portuguese (Brazil)", "the status bar follows");
+        // Off turns the live check off and the dropdown (and the bar) say so.
+        h.get_by_role_and_label(egui::accesskit::Role::ComboBox, "Review language:").click();
+        h.run_steps(3);
+        h.get_by_label("Do not check spelling or grammar").click();
+        h.run_steps(4);
+        assert!(!h.state().session.view.proofing && !h.state().session.prefs.check_spelling);
+        assert_eq!(combo_text(&h).as_deref(), Some("Do not check spelling or grammar"));
     }
 
     /// File › Options must not offer a way around the protected document's author check.

@@ -1622,6 +1622,9 @@ impl Session {
         self.note_body_replaced();
         self.bib_style = doc_bib_style(&doc);
         self.doc = doc;
+        // A file that names no language uses the app's proofing default, not English.
+        let tag = self.prefs.default_language.clone().or_else(|| self.editing_lang.clone());
+        adopt_default_language(&mut self.doc, tag.as_deref());
         self.doc.ensure_nonempty();
         self.password = None;
         self.file_name = None;
@@ -2431,6 +2434,17 @@ impl Session {
 }
 
 /// A new blank document on `region`'s paper (see [`Session::blank_document`]).
+/// A document that names no default text language of its own adopts `tag`, so text without a
+/// language is checked (and shown in the status bar) in the app's language instead of English.
+/// A document that carries a language — from its own styles — is left as it is.
+pub(crate) fn adopt_default_language(doc: &mut Document, tag: Option<&str>) {
+    let Some(tag) = tag else { return };
+    let named = doc.styles.resolve_char(None, &wordcraft_doc::props::CharProps::default()).lang.is_some();
+    if !named {
+        doc.styles.default_chr.lang = Some(tag.to_string());
+    }
+}
+
 pub fn blank_document(region: &wordcraft_geom::Region) -> Document {
     let mut d = Document::new();
     let (_, w, h) = region.paper();

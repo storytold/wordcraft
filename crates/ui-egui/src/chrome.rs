@@ -604,14 +604,20 @@ pub fn status_bar(app: &mut WordApp, ui: &mut Ui) {
                 let lang = crate::ribbon::caret_language(app);
                 let missing = crate::ribbon::caret_missing_dictionary(app);
                 let unreadable = crate::ribbon::caret_unreadable_dictionary(app);
-                let shown = if unreadable.is_some() {
+                let shown = if !app.session.view.proofing {
+                    tl!("Do not check spelling or grammar").to_string()
+                } else if unreadable.is_some() {
                     crate::i18n::fmt(tl!("{language} (dictionary unreadable)"), &[("language", &lang)])
                 } else if missing.is_some() {
                     crate::i18n::fmt(tl!("{language} (no dictionary)"), &[("language", &lang)])
                 } else {
                     lang.clone()
                 };
-                let tip = dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string());
+                let tip = if app.session.view.proofing {
+                    dictionary_problem(&lang, &unreadable, missing).unwrap_or_else(|| tl!("Language").to_string())
+                } else {
+                    tl!("Spelling and grammar are not checked.").to_string()
+                };
                 let resp = st(ui, &shown).on_hover_text(tip);
                 egui::Popup::menu(&resp).show(|ui| {
                     ui.set_min_width(200.0);

@@ -264,6 +264,9 @@ pub struct Tokens {
     /// Find › Reading Highlight.
     pub find_highlight: Color32,
     pub page_shadow: Color32,
+    /// The Navigation pane's tree connectors (the guides joining a heading to its parent): thin
+    /// lines that must read on the pane without competing with the headings themselves.
+    pub tree_line: Color32,
     /// Selection-frame handles (pictures, shapes, text boxes) and their shadow.
     pub handle: Color32,
     pub handle_shadow: Color32,
@@ -332,6 +335,7 @@ impl Tokens {
             selection: Color32::from_rgba_unmultiplied(0x3B, 0x5B, 0xDB, 0x48),
             find_highlight: Color32::from_rgba_unmultiplied(0xFF, 0xE0, 0x3D, 0x90),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x22),
+            tree_line: Color32::from_rgb(0xBD, 0xBD, 0xC2),
             handle: Color32::WHITE,
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x28),
             guide: Color32::from_rgb(0xC0, 0x28, 0x8C),
@@ -399,6 +403,9 @@ impl Tokens {
             selection: Color32::from_rgba_unmultiplied(0x7A, 0x93, 0xF0, 0x55),
             find_highlight: Color32::from_rgba_unmultiplied(0xC8, 0xA8, 0x00, 0x70),
             page_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x60),
+            // Clearer than `border` on the pane (#262626): the tree's thin connectors were almost
+            // invisible in the dark theme.
+            tree_line: Color32::from_rgb(0x55, 0x55, 0x5E),
             handle: Color32::from_rgb(0xF2, 0xF2, 0xF2),
             handle_shadow: Color32::from_rgba_unmultiplied(0, 0, 0, 0x5A),
             guide: Color32::from_rgb(0xE0, 0x4C, 0xB0),
@@ -1053,6 +1060,9 @@ mod tests {
         let exempt = |c: char, file: &str| match file {
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
             "ribbon.rs" => c == '➢',
+            // The Navigation pane paints the emoji in heading labels from the colour emoji font;
+            // its variation selectors and keycap marks are painted by that image too.
+            "panes.rs" => wordcraft_fonts::is_emoji(c) || wordcraft_fonts::is_default_ignorable(c),
             _ => false,
         };
         symbols.retain(|(c, file)| !exempt(*c, file));

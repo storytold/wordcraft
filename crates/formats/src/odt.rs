@@ -2638,6 +2638,11 @@ pub fn import(bytes: &[u8]) -> Result<Document, String> {
     if let Some(t) = track {
         doc.settings.track_changes = t;
     }
+    // ODT's text language is not read yet (a known limit of this importer): don't let the built-in
+    // sheet's `en-US` look like the file's own language, or a Portuguese document would be
+    // proofed as English. With no language the app's proofing default applies (see
+    // `Session`/`adopt_default_language`).
+    doc.styles.default_chr.lang = None;
     Ok(doc)
 }
 
@@ -2745,6 +2750,16 @@ fn apply_layout(a: &Attrs, sec: &mut SectionProps) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An ODT that names no language does not inherit the built-in sheet's en-US, so the app's
+    /// proofing default (pt-BR on a Portuguese interface) applies instead of English.
+    #[test]
+    fn imported_odt_has_no_default_language_of_its_own() {
+        let mut d = Document::new();
+        d.ensure_nonempty();
+        let back = super::import(&super::export(&d).unwrap()).unwrap();
+        assert_eq!(back.styles.default_chr.lang, None, "the file names no language");
+    }
 
     #[test]
     fn escaper_drops_noncharacters() {

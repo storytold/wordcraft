@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 
 use craft_ui::panes::{Edge, PaneContent, PaneHost, PaneLabels, PaneRequest, PaneState, Place, SidePolicy};
-use egui::{Stroke, Ui, vec2};
+use egui::{Stroke, Ui, pos2, vec2};
 use serde_json::{Value, json};
 use wordcraft_doc::numbering::{Counters, LevelSuffix};
 use wordcraft_doc::section::NumFormat;
@@ -520,6 +520,9 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
             }
         }
         _ => {
+            // Modelo 2: the rows touch, so the vertical trunks have no gaps between them.
+            ui.scope(|ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
             let caret = app.session.sel.focus.clone();
             let items = nav_headings(&app.session.doc);
             let current = items.iter().rposition(|(path, ..)| *path <= caret.path);
@@ -531,25 +534,57 @@ fn nav(app: &mut WordApp, ui: &mut Ui) {
             let collapsed_flags: Vec<bool> = items.iter().enumerate().map(|(i, (p, _, _))| has_children[i] && app.ui.nav_collapsed.contains(p)).collect();
             let levels: Vec<u8> = items.iter().map(|(_, lv, _)| *lv).collect();
             let visible = visible_headings(&levels, &collapsed_flags);
-            for (i, (path, lv, txt)) in items.into_iter().enumerate() {
+            let chain = active_chain(&levels, &visible, current);
+            let current_index = current;
+            // The levels this heading nests under, for the tree's connector lines.
+            let mut ancestors: Vec<u8> = Vec::new();
+            for (i, (path, lv, txt)) in items.iter().enumerate() {
                 if !visible[i] {
                     continue;
                 }
+                while ancestors.last().is_some_and(|a| *a >= *lv) {
+                    ancestors.pop();
+                }
+                // The last child of its parent closes the guide line under it at the row's middle.
+                let last = items
+                    .iter()
+                    .enumerate()
+                    .skip(i + 1)
+                    .find(|(j, _)| visible[*j])
+                    .is_none_or(|(_, (_, next, _))| *next <= *lv);
                 let collapsed = collapsed_flags[i];
-                let (toggle, r) = nav_heading(ui, lv, &txt, current == Some(i), has_children[i].then_some(collapsed));
+                let row_id = ui.make_persistent_id(("nav_row", path));
+                // The trunks of the active branch: each ancestor level whose parent row is on the
+                // chain and which lies above (or at) the selected row.
+                let active_guides = branch_guide_levels(&ancestors, &chain, &levels, i, current_index);
+                let on_chain = chain.contains(&i);
+                let (toggle, r) = nav_heading(
+                    ui,
+                    row_id,
+                    *lv,
+                    txt,
+                    current == Some(i),
+                    has_children[i].then_some(collapsed),
+                    &ancestors,
+                    last,
+                    on_chain,
+                    &active_guides,
+                );
                 if toggle {
-                    if !app.ui.nav_collapsed.remove(&path) {
-                        app.ui.nav_collapsed.insert(path);
+                    if !app.ui.nav_collapsed.remove(path) {
+                        app.ui.nav_collapsed.insert(path.clone());
                     }
-                } else if r.clicked() {
-                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path, off: 0 }}));
+                } else if r.clicked() || (r.has_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Space))) {
+                    let _ = app.run("caret.set", json!({"pos": Pos { story: StoryRef::Body, path: path.clone(), off: 0 }}));
                     // Align the chosen heading's page immediately against this pane, rather
                     // than the indeterminate minimum movement from scroll_to_rect.
                     app.canvas.nav_to_caret = true;
                     app.canvas.scroll_to_caret = false;
                     app.canvas.want_focus = true;
                 }
+                ancestors.push(*lv);
             }
+            });
         }
     });
 }
@@ -603,38 +638,301 @@ fn nav_headings(doc: &Document) -> Vec<(Path, u8, String)> {
     items
 }
 
-/// Constrain each heading to the available pane width so long document text cannot
-/// enlarge the panel. A heading too long for the width wraps onto further lines — a word
-/// wider than the pane is broken too — and the row grows with it, so the label reads whole
-/// instead of ending in an ellipsis (#3015).
-fn nav_heading(ui: &mut Ui, level: u8, text: &str, selected: bool, collapsed: Option<bool>) -> (bool, egui::Response) {
-    ui.horizontal(|ui| {
-        ui.add_space(level as f32 * 14.0);
-        // The triangle is drawn in code; headings without children keep an empty slot so text aligns.
-        let mut toggled = false;
-        let (rect, tri) = ui.allocate_exact_size(vec2(14.0, ui.spacing().interact_size.y), egui::Sense::click());
-        if let Some(c) = collapsed {
-            let ctr = rect.center();
-            let col = ui.visuals().text_color();
-            let pts = if c {
-                vec![ctr + vec2(-2.5, -4.0), ctr + vec2(-2.5, 4.0), ctr + vec2(3.0, 0.0)]
-            } else {
-                vec![ctr + vec2(-4.0, -2.5), ctr + vec2(4.0, -2.5), ctr + vec2(0.0, 3.0)]
-            };
-            ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
-            toggled = tri.clicked();
+/// Distance one heading level is indented under its parent, points.
+const NAV_INDENT: f32 = 14.0;
+
+/// Modelo 2 — Curva Orgânica Fluida: the tree's connector lines are 25% thicker than the old
+/// single pixel, the active branch is drawn heavier (with a glow) and the elbow into a row is a
+/// quarter circle of this radius; a parent whose children branch off gets a small node there.
+const NAV_GUIDE_WIDTH: f32 = 1.25;
+const NAV_ACTIVE_WIDTH: f32 = 1.5;
+const NAV_ELBOW_RADIUS: f32 = 6.0;
+const NAV_NODE_RADIUS: f32 = 2.25;
+/// The fork slot before the triangle: the articulation node sits in its middle, and the trunk to
+/// the children leaves from there (so the node is visible, as ● ▾ in the Modelo 2 diagram).
+const NAV_FORK_SLOT: f32 = 8.0;
+
+/// The row indices on the caret's branch, from the root down to the selected heading.
+fn active_chain(levels: &[u8], visible: &[bool], current: Option<usize>) -> Vec<usize> {
+    let mut chain = Vec::new();
+    let Some(mut i) = current else { return chain };
+    if !visible.get(i).copied().unwrap_or(false) {
+        return chain;
+    }
+    chain.push(i);
+    let mut level = levels[i];
+    loop {
+        let parent = (0..i).rev().find(|&j| visible.get(j).copied().unwrap_or(false) && levels[j] < level);
+        let Some(j) = parent else { break };
+        chain.push(j);
+        i = j;
+        level = levels[j];
+    }
+    chain.reverse();
+    chain
+}
+
+/// The guide levels of row `i` whose trunk belongs to the active branch: an ancestor level is lit
+/// when its parent row is on the chain and the row lies between that parent and the selected row,
+/// which carries the light through the siblings passed on the way down.
+fn branch_guide_levels(ancestors: &[u8], chain: &[usize], levels: &[u8], i: usize, current: Option<usize>) -> Vec<u8> {
+    let Some(current) = current else { return Vec::new() };
+    ancestors.iter().copied().filter(|a| chain.iter().any(|&k| levels.get(k) == Some(a) && k <= i) && i <= current).collect()
+}
+
+/// The colour of the keycap emoji the page draws (Noto Color Emoji's light steel blue): the pane
+/// reproduces the badge it makes, so the heading looks the same in both places.
+const KEYCAP_BADGE: egui::Color32 = egui::Color32::from_rgb(140, 175, 191);
+
+/// A heading that starts with a keycap (`1️⃣`, `#️⃣`): the digit and the text after the space
+/// that follows it. The interface fonts have no keycap ligature (they would draw the digit and
+/// drop the enclosing mark), so the pane draws the keycap as the badge the page shows.
+fn keycap_prefix(text: &str) -> Option<(char, &str)> {
+    let mut it = text.char_indices();
+    let (_, digit) = it.next()?;
+    if !(digit.is_ascii_digit() || digit == '#' || digit == '*') {
+        return None;
+    }
+    for (i, c) in it {
+        match c {
+            // The variation selector is optional (a keycap may be digit + enclosing keycap).
+            '\u{FE0E}' | '\u{FE0F}' => {}
+            '\u{20E3}' => {
+                let end = i + c.len_utf8();
+                let rest = text.get(end..).unwrap_or("");
+                return Some((digit, rest.strip_prefix(' ').unwrap_or(rest)));
+            }
+            _ => return None,
         }
-        let label = egui::RichText::new(text).font(if level == 0 { semibold(12.5) } else { regular(12.5) });
-        let width = ui.available_width();
-        let r = ui.add(
-            // The trailing grow atom takes the spare width, so the text starts flush left
-            // under its parent instead of centred, as in Word (#1199). A minimum height
-            // keeps short headings on one row; a wrapped one becomes as tall as it needs.
-            egui::Button::selectable(selected, (label, egui::Atom::grow())).wrap().min_size(vec2(width, ui.spacing().interact_size.y)),
-        );
-        (toggled, r)
-    })
-    .inner
+    }
+    None
+}
+
+/// Byte ranges of the emoji sequences in a heading's text, in order.
+fn emoji_clusters(text: &str) -> Vec<(usize, usize)> {
+    let starts = wordcraft_doc::cluster::cluster_starts(text);
+    let mut out = Vec::new();
+    for (i, &s) in starts.iter().enumerate() {
+        let e = starts.get(i + 1).copied().unwrap_or(text.len());
+        if let Some(c) = text.get(s..e) {
+            // Presentation sequences (`⚖️`, keycaps, ZWJ) and characters that are emoji by
+            // themselves (`📘`): the pane paints both from the colour emoji font.
+            let chars: Vec<char> = c.chars().collect();
+            if wordcraft_fonts::emoji_sequence(&chars) || chars.first().is_some_and(|&f| wordcraft_fonts::is_emoji(f)) {
+                out.push((s, e));
+            }
+        }
+    }
+    out
+}
+
+/// The interface's colour image for an emoji, kept between frames (rasterising it again every
+/// frame would burn the CPU for nothing: the pane redraws while typing).
+fn emoji_texture(ui: &Ui, text: &str, px: u32) -> Option<egui::TextureHandle> {
+    let id = egui::Id::unique(("nav_emoji", text, px));
+    if let Some(t) = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(id)) {
+        return Some(t);
+    }
+    let img = wordcraft_render::emoji_image(text, px)?;
+    let color = egui::ColorImage::from_rgba_unmultiplied([img.width as usize, img.height as usize], &img.rgba);
+    let tex = ui.ctx().load_texture(format!("nav-emoji-{text}"), color, egui::TextureOptions::LINEAR);
+    ui.ctx().data_mut(|d| d.insert_temp(id, tex.clone()));
+    Some(tex)
+}
+
+/// Paint the colour images of the emoji in `text` over the glyphs the pane's (transparent) text
+/// found for them. The interface fonts have emoji only in monochrome; the page draws them from the
+/// colour font, and the Navigator follows the page rather than showing grey shapes.
+fn paint_emoji(ui: &Ui, pos: egui::Pos2, galley: &egui::Galley, text: &str, em: f32) {
+    let ppp = ui.ctx().pixels_per_point();
+    let mut glyphs = galley.rows.iter().flat_map(|r| r.glyphs.iter());
+    for (s, e) in emoji_clusters(text) {
+        let Some(first) = text.get(s..e).and_then(|c| c.chars().next()) else { continue };
+        // One glyph per drawn character, in order: the cluster's first character finds its box.
+        let Some(g) = glyphs.find(|g| g.chr == first) else { continue };
+        let baseline = pos.y + g.pos.y;
+        // An emoji fills its em square, not the (taller) line box: size it like the label's text so
+        // it sits with the words instead of swelling past them.
+        let target_h = (em * 1.05).max(1.0);
+        let top = baseline - target_h * 0.86;
+        let Some(tex) = emoji_texture(ui, &text[s..e], (target_h * ppp).round().max(1.0) as u32) else { continue };
+        let size = tex.size_vec2();
+        let aspect = (size.x / size.y.max(1.0)).clamp(0.2, 5.0);
+        let rect = egui::Rect::from_min_size(egui::pos2(pos.x + g.pos.x, top), vec2(target_h * aspect, target_h));
+        ui.painter().image(tex.id(), rect, egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)), egui::Color32::WHITE);
+    }
+}
+
+/// One heading in the pane: its level's indent, the expand/collapse triangle, the keycap badge
+/// when the heading starts with one, and the label — one line, ended with an ellipsis when it
+/// doesn't fit, as Writer's Navigator does (the whole heading shows on hover). `guides` are the
+/// levels of the headings this one nests under: connector lines run down their slots and across
+/// to this row, and `last` closes the line under its parent at the row's middle.
+///
+/// The row paints itself rather than using a Button: the label mixes text with colour emoji
+/// images, which a single widget's text cannot. `id` keeps its hover/selection and click stable.
+#[allow(clippy::too_many_arguments)]
+fn nav_heading(
+    ui: &mut Ui,
+    id: egui::Id,
+    level: u8,
+    text: &str,
+    selected: bool,
+    collapsed: Option<bool>,
+    guides: &[u8],
+    last: bool,
+    active: bool,
+    active_guides: &[u8],
+) -> (bool, egui::Response) {
+    let t = Tokens::get(ui.ctx());
+    let row_h = ui.spacing().interact_size.y;
+    let keycap = keycap_prefix(text);
+    let label_text = keycap.map_or(text, |(_, rest)| rest);
+    // How wide the label may be: the row less the indent, the triangle slot, the keycap badge
+    // and the gaps between them. Budgeted here rather than from the cursor part-way through the
+    // row, so the label can never make the row wider than the pane (which used to widen it).
+    let gap = ui.spacing().item_spacing.x;
+    let badge_w = keycap.map_or(0.0, |_| (row_h * 0.78).max(9.0) * 1.08 + 5.0);
+    let row_w = ui.available_width().max(0.0);
+    let label_w = (row_w - level as f32 * NAV_INDENT - NAV_FORK_SLOT - NAV_INDENT - badge_w - 3.0 * gap).max(24.0);
+
+    // The row goes in first so its hover/selection fill is painted behind the text.
+    let (row, _) = ui.allocate_exact_size(vec2(row_w, row_h), egui::Sense::hover());
+    let hovered = ui.ctx().read_response(id).is_some_and(|r| r.hovered());
+    if selected {
+        ui.painter().rect_filled(row, 4.0, ui.visuals().selection.bg_fill);
+    } else if hovered {
+        ui.painter().rect_filled(row, 4.0, ui.visuals().widgets.hovered.weak_bg_fill);
+    }
+
+    // The label: text, with the emoji laid out transparent so their colour images can sit on top.
+    let ink = egui::TextFormat { font_id: regular(12.5), color: ui.visuals().text_color(), ..Default::default() };
+    let clear = egui::TextFormat { font_id: regular(12.5), color: egui::Color32::TRANSPARENT, ..Default::default() };
+    let mut job = egui::text::LayoutJob::default();
+    let mut prev = 0;
+    for (s, e) in emoji_clusters(label_text) {
+        if prev < s {
+            job.append(&label_text[prev..s], 0.0, ink.clone());
+        }
+        job.append(&label_text[s..e], 0.0, clear.clone());
+        prev = e;
+    }
+    if prev < label_text.len() {
+        job.append(&label_text[prev..], 0.0, ink.clone());
+    }
+    job.wrap = egui::text::TextWrapping { max_width: label_w, max_rows: 1, break_anywhere: true, overflow_character: Some('\u{2026}') };
+    let galley = ui.painter().layout_job(job);
+
+    let mut toggled = false;
+    let label = ui
+        .scope_builder(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)), |ui| {
+            ui.add_space(level as f32 * NAV_INDENT);
+            // The articulation node's slot: the Modelo 2 diagram puts ●/○ before the triangle, and
+            // the trunk to the children leaves from its middle; rows without children keep it empty
+            // so every label aligns.
+            let (fork, _) = ui.allocate_exact_size(vec2(NAV_FORK_SLOT, row_h), egui::Sense::hover());
+            let _ = fork;
+            // The triangle is drawn in code; headings without children keep an empty slot so text aligns.
+            let (rect, tri) = ui.allocate_exact_size(vec2(NAV_INDENT, row_h), egui::Sense::click());
+            if let Some(c) = collapsed {
+                let ctr = rect.center();
+                let col = ui.visuals().text_color();
+                let pts = if c {
+                    vec![ctr + vec2(-2.5, -4.0), ctr + vec2(-2.5, 4.0), ctr + vec2(3.0, 0.0)]
+                } else {
+                    vec![ctr + vec2(-4.0, -2.5), ctr + vec2(4.0, -2.5), ctr + vec2(0.0, 3.0)]
+                };
+                ui.painter().add(egui::Shape::convex_polygon(pts, col, Stroke::NONE));
+                toggled = tri.clicked();
+            }
+            if let Some((digit, _)) = keycap {
+                // The keycap the page draws: a rounded square in the accent colour with the digit on
+                // it, at the row's text height.
+                let h = (row_h * 0.78).max(9.0);
+                let (slot, _) = ui.allocate_exact_size(vec2(h * 1.08, row_h), egui::Sense::hover());
+                let badge = egui::Rect::from_center_size(slot.center(), vec2(h * 1.08, h));
+                ui.painter().rect_filled(badge, 2.5, KEYCAP_BADGE);
+                ui.painter().text(badge.center(), egui::Align2::CENTER_CENTER, digit, semibold(h * 0.62), egui::Color32::WHITE);
+                ui.add_space(5.0);
+            }
+            let width = ui.available_width().max(0.0);
+            let (label_rect, resp) = ui.allocate_exact_size(vec2(width, row_h), egui::Sense::click());
+            let pos = label_rect.left_top() + vec2(0.0, ((row_h - galley.size().y) * 0.5).max(0.0));
+            ui.painter().galley(pos, galley.clone(), ui.visuals().text_color());
+            paint_emoji(ui, pos, &galley, label_text, 12.5);
+            // The whole heading stays the row's accessible name, and a click anywhere on the label
+            // jumps to it (the caller handles it).
+            resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, selected, text));
+            ui.interact(label_rect, id, egui::Sense::click())
+        })
+        .inner;
+
+    if ui.ctx().memory(|m| m.has_focus(id)) {
+        ui.painter().rect_stroke(row.shrink(1.0), 4.0, Stroke::new(1.0, t.accent), egui::StrokeKind::Inside);
+    }
+    // The tree's connector lines, painted under the indent and the triangle only so they never
+    // run over the label. Modelo 2 — Curva Orgânica Fluida: one continuous trunk per ancestor
+    // level (the rows are laid out with no vertical spacing, so there are no cuts between them),
+    // a quarter-circle elbow into this row, and a small node where a parent's children branch.
+    let mid = row.center().y;
+    let left = row.left();
+    // The trunk of a level runs through the middle of that level's fork slot; a row's own connector
+    // ends there (at the node when it has children).
+    let fork_x = |a: u8| left + a as f32 * NAV_INDENT + NAV_FORK_SLOT * 0.5;
+    let end = fork_x(level);
+    let normal = Stroke::new(NAV_GUIDE_WIDTH, t.tree_line);
+    if let Some(innermost) = guides.last().copied() {
+        let painter = ui.painter();
+        let radius = NAV_ELBOW_RADIUS.min((row.height() * 0.5 - 1.0).max(2.0));
+        // Each trunk of the active branch is lit from the root down to the selected heading: a
+        // segment belongs to the branch when the selected row is inside that ancestor's subtree
+        // and the segment lies above it, which includes the siblings passed on the way.
+        let lit = |a: u8| active_guides.contains(&a);
+        let glow = Stroke::new(NAV_ACTIVE_WIDTH + 2.0, t.accent.gamma_multiply(0.35));
+        for &a in guides {
+            let bottom = if last && a == innermost { mid - radius } else { row.bottom() };
+            if lit(a) {
+                painter.vline(fork_x(a), row.top()..=bottom, glow);
+            }
+            painter.vline(fork_x(a), row.top()..=bottom, if lit(a) { Stroke::new(NAV_ACTIVE_WIDTH, t.accent) } else { normal });
+        }
+        // The organic elbow: the trunk turns into the row through a quarter circle, never a hard
+        // right angle.
+        let x = fork_x(innermost);
+        let elbow = if active { Stroke::new(NAV_ACTIVE_WIDTH, t.accent) } else { normal };
+        // A row without children has no node or triangle; the connector runs on to where its label
+        // (or keycap badge) starts, so the branch reads as joined instead of stopping short.
+        let target = if collapsed.is_some() { end } else { left + level as f32 * NAV_INDENT + NAV_FORK_SLOT + NAV_INDENT };
+        if active {
+            painter.hline(x + radius..=target, mid, glow);
+        }
+        if target > x {
+            let c = radius * 0.552_284_8;
+            painter.add(egui::epaint::CubicBezierShape::from_points_stroke(
+                [pos2(x, mid - radius), pos2(x, mid - radius + c), pos2(x + radius - c, mid), pos2(x + radius, mid)],
+                false,
+                egui::Color32::TRANSPARENT,
+                elbow,
+            ));
+            painter.hline(x + radius..=target, mid, elbow);
+        }
+    }
+    // The articulation node: filled while the group is open, hollow while it is collapsed. A stub
+    // reaches from it to the first child's row, so the branch has no cut at the parent's bottom half.
+    if let Some(collapsed) = collapsed {
+        let centre = pos2(end, mid);
+        let colour = if active { t.accent } else { t.tree_line };
+        if !collapsed {
+            ui.painter().vline(end, mid + NAV_NODE_RADIUS..=row.bottom(), Stroke::new(NAV_GUIDE_WIDTH, if active { t.accent } else { t.tree_line }));
+        }
+        if collapsed {
+            ui.painter().circle_filled(centre, NAV_NODE_RADIUS, t.panel);
+            ui.painter().circle_stroke(centre, NAV_NODE_RADIUS, Stroke::new(1.35, colour));
+        } else {
+            ui.painter().circle_filled(centre, NAV_NODE_RADIUS, colour);
+        }
+    }
+    (toggled, label.on_hover_text(text))
 }
 
 /// Items collected by Copy and Cut, newest first; clicking one pastes it at the caret.
@@ -1330,6 +1628,33 @@ mod tests {
         }
     }
 
+    /// Modelo 2: every ancestor level's trunk is lit from its parent down to the selected row,
+    /// including the siblings passed on the way (the CSS `.is-active-branch` path).
+    #[test]
+    fn branch_guides_light_the_way_from_the_root_to_the_selection() {
+        let levels = [0u8, 1, 1, 2, 2, 1];
+        let chain = super::active_chain(&levels, &[true; 6], Some(4));
+        assert_eq!(chain, vec![0, 2, 4]);
+        let g = |ancestors: &[u8], i: usize| super::branch_guide_levels(ancestors, &chain, &levels, i, Some(4));
+        assert_eq!(g(&[0], 1), vec![0], "a sibling above the branch lights the root trunk");
+        assert_eq!(g(&[0], 2), vec![0]);
+        assert_eq!(g(&[0, 1], 3), vec![0, 1]);
+        assert_eq!(g(&[0, 1], 4), vec![0, 1], "the selected row closes the path");
+    }
+
+    /// Modelo 2: the caret's branch is the chain from the root down to the selected heading, so
+    /// the trunks of every ancestor level are lit through the siblings passed on the way.
+    #[test]
+    fn active_chain_runs_from_the_root_to_the_selected_heading() {
+        let levels = [1u8, 2, 2, 3, 1];
+        let visible = [true; 5];
+        assert_eq!(super::active_chain(&levels, &visible, Some(3)), vec![0, 2, 3]);
+        assert_eq!(super::active_chain(&levels, &visible, Some(0)), vec![0]);
+        assert!(super::active_chain(&levels, &visible, None).is_empty());
+        let hidden = [true, false, false, false, true];
+        assert!(super::active_chain(&levels, &hidden, Some(1)).is_empty(), "a hidden heading lights nothing");
+    }
+
     /// Ctrl and F-key shortcuts run while F6 has put the keyboard on a pane's title bar; a pane's
     /// text field keeps Ctrl+H for itself.
     #[test]
@@ -1684,7 +2009,7 @@ mod navigation_tests {
     }
 
     #[test]
-    fn long_headings_wrap_without_stretching_navigation() {
+    fn long_headings_elide_without_stretching_navigation() {
         // A heading that runs well past the width, and a single word wider than the pane.
         let headings = ["An extremely long heading with words that must stay inside the navigation pane ".repeat(20), "x".repeat(400)];
         // Draw one heading in a pane of `width`: the pane rect, the heading row's rect, the label's
@@ -1696,10 +2021,11 @@ mod navigation_tests {
             let mut panel_rect = egui::Rect::NOTHING;
             let mut heading_rect = egui::Rect::NOTHING;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test")
-                    .default_size(width)
-                    .resizable(true)
-                    .show(ui, |ui| egui::ScrollArea::vertical().show(ui, |ui| nav_heading(ui, level, text, true, None).1).inner);
+                let result = egui::Panel::left("navigation_test").default_size(width).resizable(true).show(ui, |ui| {
+                    egui::ScrollArea::vertical()
+                        .show(ui, |ui| nav_heading(ui, egui::Id::unique(("t", level)), level, text, true, None, &[], true, false, &[]).1)
+                        .inner
+                });
                 panel_rect = result.response.rect;
                 heading_rect = result.inner.rect;
             });
@@ -1720,11 +2046,14 @@ mod navigation_tests {
                 let (panel_rect, heading_rect, rows, elided) = render(width, level, text);
                 assert!(panel_rect.width() < width + 20.0, "long heading expanded the {width}px pane to {panel_rect:?}");
                 assert!(heading_rect.max.x <= panel_rect.max.x, "heading escaped pane: {heading_rect:?} / {panel_rect:?}");
-                // The heading wraps onto further lines instead of ending in an ellipsis (#3015).
-                assert!(rows > 1, "long heading must wrap onto further lines at {width}px, got {rows}");
-                assert!(!elided, "long heading must not end in an ellipsis at {width}px");
-                // ... and its row grows with the text, where a short heading keeps one row.
-                assert!(heading_rect.height() > one_line.height(), "a wrapped heading row is taller at {width}px: {heading_rect:?} vs {one_line:?}");
+                // Writer's Navigator keeps the row on one line and ends it in an ellipsis (the
+                // 0.10 look); the whole heading shows on hover.
+                assert_eq!(rows, 1, "long heading must stay on one line at {width}px, got {rows}");
+                assert!(elided, "long heading must end in an ellipsis at {width}px");
+                assert!(
+                    (heading_rect.height() - one_line.height()).abs() < 0.5,
+                    "an elided heading keeps one row's height at {width}px: {heading_rect:?} vs {one_line:?}"
+                );
             }
         }
     }
@@ -1738,7 +2067,9 @@ mod navigation_tests {
             let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(900.0, 600.0));
             let mut panel_left = 0.0;
             let output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
-                let result = egui::Panel::left("navigation_test").default_size(260.0).show(ui, |ui| nav_heading(ui, level, "Kilns", false, None));
+                let result = egui::Panel::left("navigation_test")
+                    .default_size(260.0)
+                    .show(ui, |ui| nav_heading(ui, egui::Id::unique("t2"), level, "Kilns", false, None, &[], true, false, &[]));
                 panel_left = result.response.rect.min.x;
             });
             let x = output
@@ -1753,7 +2084,9 @@ mod navigation_tests {
             x - panel_left
         };
         let (top, second) = (text_left(0), text_left(1));
-        assert!(top < 40.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
+        // The Modelo 2 fork slot (the articulation node) sits before the triangle, so the label
+        // starts a little further in than the old 22 px; the indent per level is unchanged.
+        assert!(top < 56.0, "a top-level heading starts at the pane's left edge, not centred: {top}px in");
         assert!((second - top - 14.0).abs() < 0.5, "a level-2 heading is indented 14px under its parent: {top} / {second}");
     }
 

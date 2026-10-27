@@ -1757,13 +1757,17 @@ impl FontDb {
     /// loaded face covers a character. `None` when no single face covers them all, and the caller
     /// keeps the per-character fallback.
     ///
+    /// Default-ignorables (variation selectors, joiners) take no glyph of their own: they neither
+    /// choose a face nor disqualify one, so an emoji sequence can be given a colour emoji face
+    /// even though that face maps no variation selector.
+    ///
     /// Cached per (character set, excluded face, bold, italic) and dropped when the loaded faces
     /// change, like [`Self::fallback_for`], so relayout doesn't repeat the search.
     pub fn fallback_for_run(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
-        if chars.is_empty() {
+        let mut set: Vec<char> = chars.iter().copied().filter(|c| !crate::is_default_ignorable(*c)).collect();
+        if set.is_empty() {
             return None;
         }
-        let mut set: Vec<char> = chars.to_vec();
         set.sort_unstable();
         set.dedup();
         let key = (set, exclude, bold, italic);
@@ -1789,6 +1793,33 @@ impl FontDb {
         cache.chars = cache.chars.saturating_add(key.0.len());
         cache.map.insert(key, found.clone());
         found
+    }
+
+    /// A face drawing an emoji presentation sequence (`1️⃣`, `⚖️`, `👩‍💻`) as the one emoji it is:
+    /// the first colour emoji family that maps every character of the sequence the shaper draws
+    /// (the variation selectors and joiners are the shaper's own), else the run's fallback face.
+    /// `None` when no loaded face covers the characters.
+    ///
+    /// Not cached: the colour families are tried first, a handful of lookups, and the run cache
+    /// under them already keeps the search cheap.
+    pub fn color_emoji_face(&self, chars: &[char], exclude: u32, bold: bool, italic: bool) -> Option<Arc<FontFace>> {
+        let need: Vec<char> = chars.iter().copied().filter(|c| !c.is_control() && !c.is_whitespace() && !crate::is_default_ignorable(*c)).collect();
+        if need.is_empty() {
+            return None;
+        }
+        let style = match (bold, italic) {
+            (true, true) => "Bold Italic",
+            (true, false) => "Bold",
+            (false, true) => "Italic",
+            (false, false) => "Regular",
+        };
+        for family in crate::COLOR_EMOJI {
+            let face = self.face(family, style);
+            if face.family.eq_ignore_ascii_case(family) && need.iter().all(|c| face.covers(*c)) {
+                return Some(face);
+            }
+        }
+        self.fallback_for_run(&need, exclude, bold, italic)
     }
 
     /// The face for a run, and the number of loaded faces the search last chose from.
@@ -2154,6 +2185,31 @@ mod tests {
         drop(cache);
         db.set_system_fallback(false);
         assert!(db.run_fallbacks.read().unwrap().map.is_empty());
+    }
+
+    #[test]
+    #[cfg(not(target_arch = "wasm32"))]
+    fn an_emoji_sequence_prefers_a_colour_emoji_face() {
+        let db = FontDb::global();
+        let colour = crate::COLOR_EMOJI.iter().find(|f| db.face(f, "Regular").family.eq_ignore_ascii_case(f)).copied();
+        let Some(colour) = colour else {
+            eprintln!("skipped: no colour emoji font installed");
+            return;
+        };
+        let primary = db.face(FALLBACK_FAMILY, "Regular");
+        // "1️⃣": the keycap is the digit and the enclosing mark; the variation selector takes no
+        // glyph of its own, so a face that maps the two characters draws it as one emoji.
+        let keycap: Vec<char> = "1\u{FE0F}\u{20E3}".chars().collect();
+        let face = db.color_emoji_face(&keycap, primary.id(), false, false).expect("a colour emoji face");
+        assert!(face.family.eq_ignore_ascii_case(colour), "{} is not {colour}", face.family);
+        assert!(face.covers('1') && face.covers('\u{20E3}'));
+        // The variation selector neither chooses a face nor disqualifies one.
+        assert_eq!(
+            db.fallback_for_run(&['1', '\u{FE0F}'], primary.id(), false, false).map(|f| f.id()),
+            db.fallback_for_run(&['1'], primary.id(), false, false).map(|f| f.id())
+        );
+        // A text-presentation cluster is not an emoji sequence and keeps the ordinary fallback.
+        assert!(!crate::emoji_sequence(&"\u{2764}\u{FE0E}".chars().collect::<Vec<_>>()));
     }
 
     /// The issue's run (#1549): Thai letters and digits, Latin letters, digits and the baht sign.
