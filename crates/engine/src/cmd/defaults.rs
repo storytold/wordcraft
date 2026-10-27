@@ -260,12 +260,10 @@ fn para_default(s: &mut Session, v: &Value) -> CmdResult {
 /// Page Setup › Set As Default: the caret's section's page setup.
 fn page_default(s: &mut Session, v: &Value) -> CmdResult {
     if scope_is_new(v)? {
-        let block = s.sel.focus.path.0.first().copied().unwrap_or(0) as usize;
+        // The caret's section from any story: a header, footnote or text box finds the section
+        // it belongs to, as the Page Setup dialog does.
         let mut from = Document::new();
-        let at = s.doc.section_index_of(block);
-        if let Some((_, sp)) = s.doc.sections().get(at) {
-            nt::page_setup_onto(&mut from.last_section, sp);
-        }
+        nt::page_setup_onto(&mut from.last_section, &crate::cmd::page::sect(s));
         from.settings.even_odd_headers = s.doc.settings.even_odd_headers;
         from.settings.mirror_margins = s.doc.settings.mirror_margins;
         queue(s, TemplateEdit::Page(Box::new(from)))?;
