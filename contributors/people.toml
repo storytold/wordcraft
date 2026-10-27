@@ -181,3 +181,7 @@ sync_github_name = true
 
 [people.pakiat]
 display_name = "OtorO"
+
+[people.dpkruse]
+real_name = "Darren Kruse"
+sync_github_name = true
