@@ -5,7 +5,10 @@
 //! - `wordcraft:ready` (to the parent): `{ version }`, sent once the app is running and
 //!   listening; send a file now.
 //! - `wordcraft:open` (from the parent): `{ name, bytes }`, bytes an `ArrayBuffer` or
-//!   `Uint8Array`. It opens like a document picked with File › Open or dropped on the window.
+//!   `Uint8Array`. Without a request ID it opens like a picked or dropped document. An optional
+//!   bounded `requestId` requests a correlated import: unsaved/unconfirmed work is refused, and
+//!   `wordcraft:opened {requestId, document, revision}` is sent only after the actual import, or
+//!   `{requestId, error}` on failure. One correlated import can be pending.
 //! - `wordcraft:save` (to the parent): `{ name, saveAs, bytes }` (a transferred `ArrayBuffer`) for
 //!   every file WordCraft would otherwise download. The parent stores it and reports failures
 //!   itself. `saveAs` says whether the file becomes the document's file:
@@ -18,12 +21,24 @@
 //!   - Save As or Export to a format that doesn't (PDF, Markdown, plain text), Export as PDF and
 //!     Export Page as PNG: `false`. They are copies; the document's file stays the same.
 //! - `wordcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
+//! - `wordcraft:changed` (to the parent): `{ document, revision }` after every native document revision,
+//!   including further edits while `dirty` stays true. Revision is an opaque string that also
+//!   distinguishes replacing the document. Document is a separate opaque identity string; hosts
+//!   must refuse to store snapshots under a different document's identity.
+//! - `wordcraft:snapshot` (from the parent): `{ requestId }`, a nonempty string of at most 128
+//!   UTF-8 bytes. Requests the complete native JSON. Pending comment/reply text is committed as
+//!   for File Save; dirty state is never cleared and storage is not acknowledged.
+//! - `wordcraft:snapshot-result` (to the parent): `{ requestId, document, revision, bytes }` (a transferred
+//!   `ArrayBuffer` of native JSON), or `{ requestId, error }`. At most one request is pending;
+//!   another receives an error. The native Document parser checks the serialized snapshot.
+//!   Neither snapshot nor changed grants durable Saved. Reopen native bytes with `wordcraft:open`
+//!   and a `.json` name. The host guards unsaved work before replacing a document.
 //! - `wordcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the parent
 //! guards leaving the page, and `?author=` names the user for comments and tracked changes.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
@@ -34,11 +49,20 @@ use wordcraft_ui_egui::{Inbox, Services, WordApp};
 /// The longest user name taken from `?author=`.
 const MAX_AUTHOR_CHARS: usize = 200;
 
+struct PendingOpen {
+    request_id: String,
+    name: String,
+    bytes: Vec<u8>,
+}
+
 #[derive(Clone)]
 pub struct Bridge {
     window: web_sys::Window,
     parent: web_sys::Window,
     origin: String,
+    snapshot: Rc<RefCell<Option<String>>>,
+    open: Rc<RefCell<Option<PendingOpen>>>,
+    observed: Rc<RefCell<crate::snapshot::RevisionObserver>>,
 }
 
 impl Bridge {
@@ -60,7 +84,7 @@ impl Bridge {
         if parent.location().origin().ok()? != origin {
             return None;
         }
-        Some(Self { window, parent, origin })
+        Some(Self { window, parent, origin, snapshot: Rc::default(), open: Rc::default(), observed: Rc::default() })
     }
 
     /// Hand saved and exported files to the parent instead of downloading them, report unsaved
@@ -119,23 +143,114 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let snapshot = self.snapshot.clone();
+        let open = self.open.clone();
+        let bridge = self.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
+            if string(&data, "type").as_deref() == Some("wordcraft:snapshot") {
+                let Some(id) = string(&data, "requestId").filter(|id| !id.is_empty() && id.len() <= 128) else { return };
+                if snapshot.borrow().is_some() {
+                    bridge.send(&[
+                        ("type", "wordcraft:snapshot-result".into()),
+                        ("requestId", id.into()),
+                        ("error", "snapshot already pending".into()),
+                    ]);
+                    return;
+                }
+                *snapshot.borrow_mut() = Some(id);
+                ctx.request_repaint();
+                return;
+            }
             if string(&data, "type").as_deref() != Some("wordcraft:open") {
                 return;
             }
+            let request_id = if js_sys::Reflect::has(&data, &JsValue::from_str("requestId")).unwrap_or(false) {
+                let Some(id) = string(&data, "requestId").filter(|id| !id.is_empty() && id.len() <= 128) else { return };
+                Some(id)
+            } else {
+                None
+            };
+            if let Some(id) = &request_id
+                && open.borrow().is_some()
+            {
+                bridge.post_open_error(id, "open already pending");
+                return;
+            }
             let name = string(&data, "name").filter(|n| !n.trim().is_empty()).unwrap_or_else(|| "Document.docx".to_string());
-            let Some(bytes) = bytes(&data) else { return };
-            inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+            let Some(bytes) = bytes(&data) else {
+                if let Some(id) = request_id {
+                    bridge.post_open_error(&id, "open requires document bytes");
+                }
+                return;
+            };
+            if let Some(request_id) = request_id {
+                *open.borrow_mut() = Some(PendingOpen { request_id, name, bytes });
+            } else {
+                inbox.lock().unwrap_or_else(|e| e.into_inner()).push((name, bytes));
+            }
             ctx.request_repaint();
         });
         if self.window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
             // The listener lives as long as the page.
             on_message.forget();
         }
+    }
+
+    /// Report native revisions independently of dirty state, then answer a pending native
+    /// snapshot request after the app has processed its inbox and commands. Pending comment/reply
+    /// drafts are committed through the same commands as Save. Neither is a save
+    /// acknowledgement; the host must confirm its own durable storage separately.
+    pub fn observe(&self, app: &mut WordApp) {
+        if let Some(pending) = self.open.borrow_mut().take() {
+            match app.open_host_document(&pending.name, &pending.bytes) {
+                Ok(()) => {
+                    let document = crate::snapshot::document(&app.session);
+                    let revision = crate::snapshot::revision(&app.session, app.native_draft_revision());
+                    self.send(&[
+                        ("type", "wordcraft:opened".into()),
+                        ("requestId", pending.request_id.as_str().into()),
+                        ("document", document.as_str().into()),
+                        ("revision", revision.as_str().into()),
+                    ]);
+                }
+                Err(error) => self.post_open_error(&pending.request_id, &error),
+            }
+        }
+        let pending = self.snapshot.borrow_mut().take();
+        let prepared = if pending.is_some() { app.prepare_native_snapshot() } else { Ok(()) };
+        let session = &app.session;
+        let draft_revision = app.native_draft_revision();
+        let document = crate::snapshot::document(session);
+        let revision = crate::snapshot::revision(session, draft_revision);
+        if self.observed.borrow_mut().changed(session, draft_revision) {
+            self.send(&[("type", "wordcraft:changed".into()), ("document", document.as_str().into()), ("revision", revision.as_str().into())]);
+        }
+        let Some(id) = pending else { return };
+        let result = prepared.and_then(|()| crate::snapshot::native_snapshot(session)).and_then(|bytes| {
+            let buffer = js_sys::Uint8Array::from(bytes.as_slice()).buffer();
+            let value = message(&[
+                ("type", "wordcraft:snapshot-result".into()),
+                ("requestId", id.as_str().into()),
+                ("document", document.as_str().into()),
+                ("revision", revision.as_str().into()),
+                ("bytes", buffer.clone().into()),
+            ])
+            .ok_or_else(|| "couldn't build the snapshot message".to_string())?;
+            self.parent
+                .post_message_with_transfer(&value, &self.origin, &js_sys::Array::of1(&buffer))
+                .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+        });
+        if let Err(error) = result {
+            self.send(&[("type", "wordcraft:snapshot-result".into()), ("requestId", id.as_str().into()), ("error", error.as_str().into())]);
+        }
+    }
+
+    fn post_open_error(&self, request_id: &str, error: &str) {
+        self.send(&[("type", "wordcraft:opened".into()), ("requestId", request_id.into()), ("error", error.into())]);
     }
 
     /// Post a message to the parent; false if it couldn't be sent.

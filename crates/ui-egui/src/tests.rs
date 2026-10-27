@@ -6972,3 +6972,70 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+#[test]
+fn correlated_host_open_finishes_the_actual_import_and_reimports_same_named_bytes() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    let original = a.session.document_id();
+    let first = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::from_text("first native body")).unwrap();
+    a.open_host_document("version.json", &first).unwrap();
+    let imported = a.session.document_id();
+    assert_ne!(imported, original);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "first native body");
+    let second = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::from_text("second native body")).unwrap();
+    a.open_host_document("version.json", &second).unwrap();
+    assert_ne!(a.session.document_id(), imported);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "second native body");
+    assert!(!a.session.dirty);
+}
+
+#[test]
+fn correlated_host_open_reports_parse_failure_without_replacing_the_document() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("retain original")), Services::default());
+    let original = a.session.document_id();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    assert!(a.open_host_document("version.json", br#"{"body":"malformed"}"#).is_err());
+    assert_eq!(a.session.document_id(), original);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+}
+
+#[test]
+fn correlated_host_open_refuses_unsaved_work_without_queueing_a_replacement_dialog() {
+    let mut a = typed();
+    a.ui.backstage = true;
+    let original = a.session.document_id();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::new()).unwrap();
+    assert!(a.open_host_document("version.json", &bytes).is_err());
+    assert_eq!(a.session.document_id(), original);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+    assert!(a.session.dirty);
+    assert!(a.ui.backstage);
+    assert_eq!(prompt(&a), None);
+}
+
+#[test]
+fn correlated_host_open_refuses_a_save_that_is_still_unconfirmed() {
+    let (mut a, _saves, _last) = web_picker_app();
+    a.execute("file.save", json!({})).unwrap();
+    assert!(!a.session.dirty);
+    assert!(a.save_unconfirmed());
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::new()).unwrap();
+    assert!(a.open_host_document("version.json", &bytes).is_err());
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+    assert!(a.save_unconfirmed());
+}
+
+#[test]
+fn correlated_host_open_leaves_file_home_only_after_actual_success() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.backstage = true;
+    let original = a.session.document_id();
+    assert!(a.open_host_document("version.json", br#"{"body":"malformed"}"#).is_err());
+    assert!(a.ui.backstage);
+    assert_eq!(a.session.document_id(), original);
+    let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::from_text("show the native editor")).unwrap();
+    a.open_host_document("version.json", &bytes).unwrap();
+    assert!(!a.ui.backstage, "successful correlated host import leaves File Home");
+}
