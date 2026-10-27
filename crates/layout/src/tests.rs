@@ -12988,3 +12988,57 @@ fn a_kept_caption_whose_leading_runs_into_the_bottom_margin_goes_with_the_table(
         }
     }
 }
+
+/// Before Word 2013 layout (compatibility mode 15, measured in Word for Mac in modes 12 and 14) a
+/// row split across pages divides its cells' text at any line, the repeated header row may stay
+/// alone at the foot of a page, and a caption kept with the table keeps with the header row only.
+/// The caption's space before grows a point at a time under lines exactly 12 pt high, so it lands
+/// at every offset from the foot of the page, whatever the font's metrics.
+#[test]
+fn before_word_2013_layout_a_kept_caption_goes_with_the_header_row_only() {
+    let (mut one_line, mut header_alone) = (false, false);
+    // 44 lines end 120 pt above the bottom margin.
+    let fill = 44;
+    for push in 0..120 {
+        let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+        d.settings.compat_mode = wordcraft_doc::LEGACY_COMPAT_MODE;
+        d.format_paragraphs(&Pos::body(0, 0), &Pos::body(fill - 1, 0), &|p| {
+            p.line_spacing = Some(wordcraft_doc::props::LineSpacing::Exactly(12.0));
+            p.space_before = Some(0.0);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        // (No space after the caption: the table starts right under it.)
+        d.format_paragraphs(&Pos::body(fill, 0), &Pos::body(fill, 0), &|p| {
+            p.keep_next = Some(true);
+            p.space_before = Some(push as f32);
+            p.space_after = Some(0.0);
+        })
+        .unwrap();
+        let mut t = Table::new(2, 1, 468.0);
+        t.rows[0].props.header = true;
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Header", Default::default()))];
+        t.rows[1].cells[0].blocks =
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"first row words go on and on ".repeat(60), Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = l
+            .pages
+            .iter()
+            .find(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+            .unwrap();
+        let rows: Vec<usize> = page.items.iter().filter_map(|it| if let Placed::Cell { row, .. } = it { Some(*row) } else { None }).collect();
+        let lines: usize = page
+            .items
+            .iter()
+            .filter_map(|it| match it {
+                Placed::Lines { path, l0, l1, .. } if path.0.len() > 1 && path.0.get(1) == Some(&1) => Some(l1 - l0),
+                _ => None,
+            })
+            .sum();
+        assert!(rows.contains(&0), "{push} pt before the caption: the caption is alone on its page");
+        one_line |= lines == 1;
+        header_alone |= !rows.contains(&1);
+    }
+    assert!(one_line && header_alone, "one line of the first row: {one_line}, the header row alone: {header_alone}");
+}
