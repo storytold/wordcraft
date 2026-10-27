@@ -20,6 +20,17 @@ impl WordApp {
         }
     }
 
+    /// Commit pending comment/reply text as a normal save does, without acknowledging any
+    /// storage or clearing dirty state. A refused draft stays local and returns an error.
+    pub fn prepare_native_snapshot(&mut self) -> Result<(), String> {
+        panes::flush_comment_drafts(self)
+    }
+
+    /// Changes to pending comment/reply text, independent of the document's dirty flag.
+    pub fn native_draft_revision(&self) -> u64 {
+        self.comment_drafts.revision_for(self.session.document_id())
+    }
+
     /// Tell the host whether the document has unsaved changes ([`Services::on_dirty`]).
     pub(super) fn report_dirty(&self) {
         if let Some(f) = &self.services.on_dirty {

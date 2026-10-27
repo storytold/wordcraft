@@ -18,12 +18,23 @@
 //!   - Save As or Export to a format that doesn't (PDF, Markdown, plain text), Export as PDF and
 //!     Export Page as PNG: `false`. They are copies; the document's file stays the same.
 //! - `wordcraft:dirty` (to the parent): `{ dirty }` whenever unsaved changes appear or go away.
+//! - `wordcraft:changed` (to the parent): `{ revision }` after every native document revision,
+//!   including further edits while `dirty` stays true. Revision is an opaque string that also
+//!   distinguishes replacing the document.
+//! - `wordcraft:snapshot` (from the parent): `{ requestId }`, a nonempty string of at most 128
+//!   UTF-8 bytes. Requests the complete native JSON. Pending comment/reply text is committed as
+//!   for File Save; dirty state is never cleared and storage is not acknowledged.
+//! - `wordcraft:snapshot-result` (to the parent): `{ requestId, revision, bytes }` (a transferred
+//!   `ArrayBuffer` of native JSON), or `{ requestId, error }`. At most one request is pending;
+//!   another receives an error. The native Document parser checks the serialized snapshot.
+//!   Neither snapshot nor changed grants durable Saved. Reopen native bytes with `wordcraft:open`
+//!   and a `.json` name. The host guards unsaved work before replacing a document.
 //! - `wordcraft:failed` (to the parent): `{ error }` when the app couldn't start.
 //!
 //! Only the parent window on the page's own origin is heard or answered. In host mode the parent
 //! guards leaving the page, and `?author=` names the user for comments and tracked changes.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use wasm_bindgen::JsCast as _;
@@ -39,6 +50,8 @@ pub struct Bridge {
     window: web_sys::Window,
     parent: web_sys::Window,
     origin: String,
+    snapshot: Rc<RefCell<Option<String>>>,
+    observed: Rc<RefCell<crate::snapshot::RevisionObserver>>,
 }
 
 impl Bridge {
@@ -60,7 +73,7 @@ impl Bridge {
         if parent.location().origin().ok()? != origin {
             return None;
         }
-        Some(Self { window, parent, origin })
+        Some(Self { window, parent, origin, snapshot: Rc::default(), observed: Rc::default() })
     }
 
     /// Hand saved and exported files to the parent instead of downloading them, report unsaved
@@ -119,11 +132,27 @@ impl Bridge {
     fn listen(&self, inbox: Inbox, ctx: egui::Context) {
         let parent = self.parent.clone();
         let origin = self.origin.clone();
+        let snapshot = self.snapshot.clone();
+        let bridge = self.clone();
         let on_message = Closure::<dyn FnMut(web_sys::MessageEvent)>::new(move |event: web_sys::MessageEvent| {
             if event.origin() != origin || !event.source().is_some_and(|s| js_sys::Object::is(&s, &parent)) {
                 return;
             }
             let data = event.data();
+            if string(&data, "type").as_deref() == Some("wordcraft:snapshot") {
+                let Some(id) = string(&data, "requestId").filter(|id| !id.is_empty() && id.len() <= 128) else { return };
+                if snapshot.borrow().is_some() {
+                    bridge.send(&[
+                        ("type", "wordcraft:snapshot-result".into()),
+                        ("requestId", id.into()),
+                        ("error", "snapshot already pending".into()),
+                    ]);
+                    return;
+                }
+                *snapshot.borrow_mut() = Some(id);
+                ctx.request_repaint();
+                return;
+            }
             if string(&data, "type").as_deref() != Some("wordcraft:open") {
                 return;
             }
@@ -135,6 +164,38 @@ impl Bridge {
         if self.window.add_event_listener_with_callback("message", on_message.as_ref().unchecked_ref()).is_ok() {
             // The listener lives as long as the page.
             on_message.forget();
+        }
+    }
+
+    /// Report native revisions independently of dirty state, then answer a pending native
+    /// snapshot request after the app has processed its inbox and commands. Pending comment/reply
+    /// drafts are committed through the same commands as Save. Neither is a save
+    /// acknowledgement; the host must confirm its own durable storage separately.
+    pub fn observe(&self, app: &mut WordApp) {
+        let pending = self.snapshot.borrow_mut().take();
+        let prepared = if pending.is_some() { app.prepare_native_snapshot() } else { Ok(()) };
+        let session = &app.session;
+        let draft_revision = app.native_draft_revision();
+        let revision = crate::snapshot::revision(session, draft_revision);
+        if self.observed.borrow_mut().changed(session, draft_revision) {
+            self.send(&[("type", "wordcraft:changed".into()), ("revision", revision.as_str().into())]);
+        }
+        let Some(id) = pending else { return };
+        let result = prepared.and_then(|()| crate::snapshot::native_snapshot(session)).and_then(|bytes| {
+            let buffer = js_sys::Uint8Array::from(bytes.as_slice()).buffer();
+            let value = message(&[
+                ("type", "wordcraft:snapshot-result".into()),
+                ("requestId", id.as_str().into()),
+                ("revision", revision.as_str().into()),
+                ("bytes", buffer.clone().into()),
+            ])
+            .ok_or_else(|| "couldn't build the snapshot message".to_string())?;
+            self.parent
+                .post_message_with_transfer(&value, &self.origin, &js_sys::Array::of1(&buffer))
+                .map_err(|e| e.as_string().unwrap_or_else(|| format!("{e:?}")))
+        });
+        if let Err(error) = result {
+            self.send(&[("type", "wordcraft:snapshot-result".into()), ("requestId", id.as_str().into()), ("error", error.as_str().into())]);
         }
     }
 
