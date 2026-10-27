@@ -217,13 +217,16 @@ impl Session {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
         }
         // The Normal template is written only now that the command has succeeded and passed the
-        // post-check; a failed write fails the command, which then rolls the document back.
+        // post-check; a failed write fails the command, which then rolls the document back. Reading
+        // and merging the stored template is input-driven, so it runs under the same panic guard
+        // as the command.
         let template = std::mem::replace(&mut self.pending_template, template_before);
-        if result.is_ok()
-            && !template.is_empty()
-            && let Err(e) = crate::cmd::defaults::commit_template(self, template)
-        {
-            result = Err(e);
+        if result.is_ok() && !template.is_empty() {
+            if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::defaults::commit_template(self, template)))
+                .unwrap_or_else(|_| Err(CmdError::Failed(format!("{id}: the Normal template could not be updated"))))
+            {
+                result = Err(e);
+            }
         }
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
