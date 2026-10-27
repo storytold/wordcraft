@@ -290,6 +290,43 @@ fn text_darkening_adds_ink_on_screen_only() {
     assert!(!RenderOptions::default().text_darkening);
 }
 
+/// A picture-filled ellipse shows its picture inside the ellipse only: its frame's corners
+/// stay paper, and a picture stretched past the frame (`a:fillRect`) is cut off at the outline.
+#[test]
+fn a_picture_fill_is_clipped_to_its_shape() {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    use wordcraft_doc::para::{Anchor, Float, InlineObject, Wrap};
+    let mut png = Vec::new();
+    image::RgbaImage::from_pixel(8, 8, image::Rgba([10, 200, 30, 255]))
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .unwrap();
+    let mut d = Document::from_text("");
+    d.media.insert("fill.png".into(), Arc::new(png));
+    let pic = PictureFill { media: "fill.png".into(), crop: [0.0; 4], stretch: [-20.0; 4], transparency: 0.0, rot_with_shape: true, tile: None };
+    let ellipse = InlineObject::Shape {
+        kind: ShapeKind::Ellipse,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(Fill::Picture(Arc::new(pic))),
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::InFrontOfText, h_rel: Anchor::Page, v_rel: Anchor::Page, x: 100.0, y: 100.0, ..Default::default() },
+        story: None,
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    d.insert_object(&wordcraft_doc::Pos::body(0, 0), ellipse, &Default::default()).unwrap();
+    let l = layout(&d, &mut LayoutCache::new(), &LayoutOptions::default());
+    let img = render_page(&d, &l.pages[0], 1.0, &RenderOptions::default());
+    let at = |x: u32, y: u32| img.pixel(x, y)[..3].to_vec();
+    assert_eq!(at(200, 150), [10, 200, 30], "the picture inside");
+    assert_eq!(at(198, 103), [10, 200, 30], "up to the top of the outline");
+    for (x, y) in [(103, 103), (297, 197), (90, 150), (200, 92)] {
+        assert_eq!(at(x, y), [255, 255, 255], "paper outside the ellipse at {x}, {y}");
+    }
+}
+
 #[test]
 fn page_picture_is_painted_behind_the_text() {
     let mut png = Vec::new();

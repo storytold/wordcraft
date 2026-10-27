@@ -1,5 +1,5 @@
 use super::options::DisplayOptions;
-use super::paint::{Paint, paint_for};
+use super::paint::{Outline, Paint, paint_for, picture_fill};
 use super::{
     BezPath, Document, Draw, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign, TextDirection,
 };
@@ -122,6 +122,8 @@ pub(super) struct ShapeLook<'a> {
 /// under Review › Hide Ink).
 pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, out: &mut Vec<Draw>) {
     let ShapeLook { kind, fill, stroke, stroke_width, effects, freeform, extra } = *look;
+    // A picture fill: the picture clipped to the outline, under the outline (see `picture_fill`).
+    let picture = fill.filter(|_| !kind.is_open()).and_then(|f| picture_fill(f, rect));
     // Freeforms are painted across the shape's frame, not each path's bounds.
     let fill = fill.and_then(|f| paint_for(f, rect));
     if kind.is_open() {
@@ -129,6 +131,37 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
         return;
     }
     let Some(f) = freeform.filter(|_| kind == ShapeKind::Freeform) else {
+        if let Some(pic) = picture {
+            // Shadow and glow behind the picture: the shape's silhouette, filled with nothing.
+            if !effects.sanitized().is_empty() {
+                out.push(Draw::Shape {
+                    rect,
+                    kind,
+                    fill: Some(Paint::Solid(Rgb::WHITE, 0.0)),
+                    stroke: None,
+                    stroke_width,
+                    effects,
+                    corner: extra.corner,
+                    dash: Vec::new(),
+                    cap: extra.cap,
+                });
+            }
+            out.push(Draw::ClipTo { outline: Outline::Shape { rect, kind, corner: extra.corner }, items: vec![pic] });
+            if stroke.is_some() {
+                out.push(Draw::Shape {
+                    rect,
+                    kind,
+                    fill: None,
+                    stroke,
+                    stroke_width,
+                    effects: Default::default(),
+                    corner: extra.corner,
+                    dash: extra.dash.pattern(stroke_width),
+                    cap: extra.cap,
+                });
+            }
+            return;
+        }
         out.push(Draw::Shape {
             rect,
             kind,
@@ -146,7 +179,21 @@ pub(super) fn shape_draws(rect: Rect, look: &ShapeLook, opts: &DisplayOptions, o
         return;
     }
     let width = if stroke_width.is_finite() { stroke_width.clamp(0.0, 200.0) } else { 0.75 };
-    for (pts, closed) in f.placed(rect.x, rect.y, rect.w, rect.h) {
+    let placed = f.placed(rect.x, rect.y, rect.w, rect.h);
+    // A picture fill: clipped to the closed paths together, under their outlines.
+    if let Some(pic) = picture.filter(|_| !f.is_ink()) {
+        let mut segs = Vec::new();
+        for (pts, _) in placed.iter().filter(|(_, closed)| *closed) {
+            for (i, [x, y]) in pts.iter().enumerate() {
+                segs.push(if i == 0 { PathSeg::Move(*x, *y) } else { PathSeg::Line(*x, *y) });
+            }
+            segs.push(PathSeg::Close);
+        }
+        if !segs.is_empty() {
+            out.push(Draw::ClipTo { outline: Outline::Path(segs), items: vec![pic] });
+        }
+    }
+    for (pts, closed) in placed {
         if f.is_ink() || (!closed && fill.is_none()) {
             if let Some(color) = stroke {
                 let mut pts: Vec<(f32, f32)> = pts.iter().map(|[x, y]| (*x, *y)).collect();
@@ -405,7 +452,11 @@ pub(super) fn object_draws(o: &InlineObject, rect: Rect, outer: Spin, alpha: f32
             match o.canvas_style() {
                 // A Drawing Canvas: its background and outline, then its members clipped to its
                 // frame, all inside its turn.
-                Some(c) => spun(own, rect, vec![canvas_background(rect, c), Draw::Clip { rect, items: members }], out),
+                Some(c) => {
+                    let mut items = canvas_background(rect, c);
+                    items.push(Draw::Clip { rect, items: members });
+                    spun(own, rect, items, out)
+                }
                 None => spun(own, rect, members, out),
             }
         }
@@ -462,9 +513,10 @@ pub(crate) fn inline_rect(obj: Option<&InlineObject>, cx: f32, base: f32, adv: f
     Rect::new(room.x + (room.w - fw) / 2.0, room.y + (room.h - fh) / 2.0, fw, fh)
 }
 
-/// A Drawing Canvas's background and outline over its frame `rect`.
-fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
-    Draw::Shape {
+/// A Drawing Canvas's background (a picture one cut to its frame) and outline over its frame `rect`.
+fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Vec<Draw> {
+    let picture = c.fill.as_ref().and_then(|f| picture_fill(f, rect)).map(|p| Draw::Clip { rect, items: vec![p] });
+    let frame = Draw::Shape {
         rect,
         kind: ShapeKind::Rectangle,
         fill: c.fill.as_ref().and_then(|f| paint_for(f, rect)),
@@ -474,5 +526,6 @@ fn canvas_background(rect: Rect, c: &wordcraft_doc::para::CanvasStyle) -> Draw {
         corner: None,
         dash: Vec::new(),
         cap: Default::default(),
-    }
+    };
+    picture.into_iter().chain([frame]).collect()
 }

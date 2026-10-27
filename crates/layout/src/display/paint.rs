@@ -1,4 +1,4 @@
-use super::{Rect, Rgb};
+use super::{Draw, PathSeg, Rect, Rgb, ShapeKind};
 
 /// How an area is painted: one colour or a gradient (page points), opacities 0..1.
 #[derive(Clone, Debug, PartialEq)]
@@ -58,12 +58,15 @@ impl Paint {
 /// the frame at its angle (`scaled`: the angle of the frame squashed to a square); a path
 /// gradient runs from the centre of its focus rectangle out to the farthest corner, drawn
 /// circular whatever its outline (rectangular and shape-following ones are approximated).
-/// `tileRect` and `flip` are kept but not drawn. `None` for no fill.
+/// `tileRect` and `flip` are kept but not drawn. `None` for no fill, and for a picture fill,
+/// which [`picture_fill`] draws.
 pub fn paint_for(fill: &wordcraft_doc::fill::Fill, frame: Rect) -> Option<Paint> {
     use wordcraft_doc::fill::{Fill, GradientKind};
     let g = match fill.sanitized()? {
         Fill::Solid { color, transparency } => return Some(Paint::Solid(color, 1.0 - transparency / 100.0)),
         Fill::Gradient(g) => g,
+        // Not a paint: drawn as a picture clipped to the shape (see `picture_fill`).
+        Fill::Picture(_) => return None,
     };
     let stops = g.stops.iter().map(|s| (s.pos / 100.0, s.color, 1.0 - s.transparency / 100.0)).collect();
     let (cx, cy) = (frame.x + frame.w / 2.0, frame.y + frame.h / 2.0);
@@ -88,6 +91,40 @@ pub fn paint_for(fill: &wordcraft_doc::fill::Fill, frame: Rect) -> Option<Paint>
             Paint::Radial { c, r: r.max(0.01), stops }
         }
     })
+}
+
+/// The picture of picture fill `fill` over a shape's frame `frame`: stretched over the frame
+/// inset by its `a:fillRect` (negative insets reach past the frame, for the clip to cut off), at
+/// its transparency. `None` for any other fill, or one that leaves no room. A tiled picture is
+/// drawn stretched, as one tile over the whole area.
+pub fn picture_fill(fill: &wordcraft_doc::fill::Fill, frame: Rect) -> Option<Draw> {
+    let wordcraft_doc::fill::Fill::Picture(p) = fill.sanitized()? else { return None };
+    let [l, t, r, b] = p.stretch;
+    let x0 = frame.x + frame.w * l / 100.0;
+    let x1 = frame.right() - frame.w * r / 100.0;
+    let y0 = frame.y + frame.h * t / 100.0;
+    let y1 = frame.bottom() - frame.h * b / 100.0;
+    if !(x1 > x0 && y1 > y0) {
+        return None;
+    }
+    Some(Draw::Image {
+        rect: Rect::new(x0, y0, x1 - x0, y1 - y0),
+        media: p.media.clone(),
+        crop: p.crop,
+        alpha: 1.0 - p.transparency / 100.0,
+        alt: String::new(),
+        decorative: false,
+    })
+}
+
+/// What a [`Draw::ClipTo`] clips to.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Outline {
+    /// Basic shape `kind` in `rect`, as [`Draw::Shape`] draws it (`corner`: a rounded
+    /// rectangle's).
+    Shape { rect: Rect, kind: ShapeKind, corner: Option<u32> },
+    /// A path in page points (a freeform's), its inside by the non-zero rule.
+    Path(Vec<PathSeg>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

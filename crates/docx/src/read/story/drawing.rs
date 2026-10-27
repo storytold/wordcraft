@@ -1,7 +1,8 @@
 use super::{
-    AltText, Anchor, Arc, Blocks, CHARTEX_URI, ConnEnd, ContentTypes, El, Embedded, Float, FloatAlign, Glow, Graphic, GraphicItem, GraphicKind,
-    INK_REL, INK_URI, InlineObject, MAX_STORY_DEPTH, Node, PartKind, Reader, Rels, Rgb, Shadow, ShapeEffects, ShapeExtra, ShapeKind, StoryCtx,
-    TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill, preset_kind, rt, shape_paint, u32_of,
+    AltText, Anchor, Arc, Blocks, CHARTEX_URI, ConnEnd, ContentTypes, El, Embedded, Fill, Float, FloatAlign, Glow, GradientFlip, Graphic,
+    GraphicItem, GraphicKind, INK_REL, INK_URI, InlineObject, MAX_STORY_DEPTH, Node, PartKind, PictureFill, PictureTile, Reader, Rels, Rgb, Shadow,
+    ShapeEffects, ShapeExtra, ShapeKind, StoryCtx, TextWarp, Wrap, WrapText, cap_alt, children_of_choice, int, measure, on_off_attr, own_fill,
+    own_fill_element, preset_kind, rt, shape_paint, u32_of,
 };
 
 impl Reader<'_> {
@@ -72,11 +73,9 @@ impl Reader<'_> {
             float.effect = float.effect.map(|e| e.max(0.0));
             return Some(InlineObject::Graphic { w, h, alt, float, graphic });
         }
-        // A textbox may contain a picture; its descendant blip is not the outer payload.
-        let direct_shape = gd.child("wps:wsp").filter(|shape| {
-            // Picture fills still use the image fallback; the shape model has no image fill.
-            shape.child("wps:spPr").and_then(|props| props.child("a:blipFill")).is_none()
-        });
+        // A textbox may contain a picture, and a shape may be filled with one: its descendant
+        // blip is not the outer payload.
+        let direct_shape = gd.child("wps:wsp");
         let mut obj = if let Some(c) = gd.child("wpc:wpc") {
             self.read_canvas(sc, c, rels, w, h, float)
         } else if let Some(g) = gd.child("wpg:wgp") {
@@ -266,6 +265,41 @@ impl Reader<'_> {
         Some(InlineObject::Image { media, w, h, alt, float, crop, ole: None })
     }
 
+    /// A shape's picture fill `bf` (`a:blipFill`, ECMA-376 Part 1 §20.1.8.14): its picture
+    /// (`a:blip`, faded by `a:alphaModFix`), the part of it used (`a:srcRect`), where it is
+    /// stretched to (`a:stretch/a:fillRect`) or how it is tiled (`a:tile`, kept for saving and
+    /// drawn stretched). `None` (no fill) when its picture can't be found.
+    fn picture_fill(&mut self, bf: &El, rels: &Rels) -> Option<Fill> {
+        let blip = bf.child("a:blip")?;
+        let media = blip.attr("r:embed").and_then(|id| self.media_for(rels, id))?;
+        // Percent insets, from thousandths of a percent.
+        let insets = |e: Option<&El>| {
+            let mut r = [0.0f32; 4];
+            for (slot, n) in r.iter_mut().zip(["l", "t", "r", "b"]) {
+                *slot = e.and_then(|e| e.attr(n)).and_then(int).map_or(0.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
+            }
+            r
+        };
+        let crop = insets(bf.child("a:srcRect")).map(|v| v / 100.0);
+        let stretch = insets(bf.child("a:stretch").and_then(|s| s.child("a:fillRect")));
+        let amt = blip.child("a:alphaModFix").and_then(|a| a.attr("amt")).and_then(int).unwrap_or(100_000);
+        let transparency = 100.0 - amt.clamp(0, 100_000) as f32 / 1000.0;
+        let tile = bf.child("a:tile").map(|t| {
+            let pct = |n: &str| t.attr(n).and_then(int).map_or(100.0, |v| v.clamp(-100_000_000, 100_000_000) as f32 / 1000.0);
+            let off = |n: &str| t.attr(n).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0);
+            let flip = match t.attr("flip") {
+                Some("x") => GradientFlip::X,
+                Some("y") => GradientFlip::Y,
+                Some("xy") => GradientFlip::Xy,
+                _ => GradientFlip::None,
+            };
+            let align = t.attr("algn").filter(|a| a.len() <= 3 && a.chars().all(|c| c.is_ascii_alphabetic())).unwrap_or("").to_string();
+            PictureTile { tx: off("tx"), ty: off("ty"), sx: pct("sx"), sy: pct("sy"), flip, align }
+        });
+        let rot_with_shape = on_off_attr(bf, "rotWithShape");
+        Fill::Picture(Arc::new(PictureFill { media, crop, stretch, transparency, rot_with_shape, tile })).sanitized()
+    }
+
     /// A `wpg:wgp` group (`w` × `h`): its pictures, shapes and text boxes, nested groups
     /// flattened into it. `None` when it has no member we can show.
     fn read_group(&mut self, sc: &mut StoryCtx, g: &El, rels: &Rels, w: f32, h: f32, mut float: Float) -> Option<InlineObject> {
@@ -426,7 +460,15 @@ impl Reader<'_> {
         // Explicit paint, else the theme's through the style references (#611).
         let paint = shape_paint(sppr, wsp.child("wps:style"), &self.doc.settings.theme_colors, &self.theme_fills, self.group_fill.as_ref());
         let (stroke, stroke_width) = (paint.stroke, paint.stroke_width);
-        let fill = if kind.is_open() { None } else { paint.fill };
+        let fill = if kind.is_open() {
+            None
+        } else {
+            // A picture fill (`a:blipFill`) is the shape's own fill, whatever its style says.
+            match sppr.and_then(|p| own_fill_element(p)).filter(|f| f.name == "a:blipFill") {
+                Some(bf) => self.picture_fill(bf, rels),
+                None => paint.fill,
+            }
+        };
         let ln = sppr.and_then(|s| s.child("a:ln"));
         let effects = sppr.and_then(|s| s.child("a:effectLst")).map(effect_list).unwrap_or_default();
         let story = match txbx {

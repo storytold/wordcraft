@@ -3,6 +3,7 @@ use super::{
     Draw, Exporter, Fill, FillRule, LineCap, LineJoin, LineStyle, PathBuilder, Rect, Rgb, ShapeKind, Size, Stroke, StrokeDash, Surface, Transform,
     append_path, fill, grown, krilla, norm, ok, paint_fill, pdf_line_cap, rect_path, rgb, shape_effects, shape_path, vector_picture,
 };
+use crate::paint::outline_path;
 
 impl Exporter<'_> {
     /// Paint one display item on the PDF surface in its current point-coordinate system.
@@ -157,6 +158,14 @@ impl Exporter<'_> {
             Draw::Mark { .. } | Draw::MarkText { .. } => {}
             Draw::Clip { rect, items } => {
                 let Some(clip) = rect_path(rect) else { return };
+                s.push_clip_path(&clip, &FillRule::NonZero);
+                for it in items {
+                    self.draw(s, it);
+                }
+                s.pop();
+            }
+            Draw::ClipTo { outline, items } => {
+                let Some(clip) = outline_path(outline) else { return };
                 s.push_clip_path(&clip, &FillRule::NonZero);
                 for it in items {
                     self.draw(s, it);

@@ -4,7 +4,7 @@
 use serde_json::Value;
 use std::sync::Arc;
 use wordcraft_doc::Pos;
-use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape};
+use wordcraft_doc::fill::{Fill, Gradient, GradientFlip, GradientKind, PathShape, PictureFill};
 use wordcraft_doc::para::InlineObject;
 use wordcraft_doc::props::Rgb;
 use wordcraft_doc::wordart::GradStop;
@@ -21,7 +21,7 @@ pub fn specs() -> Vec<CommandSpec> {
     vec![
         CommandSpec::new("shape.fill", "Shape Fill", "Shape Format › Shape Styles", shape_fill)
             .params(
-                r#"{"color": "RRGGBB" | null, "transparency"?: %} | {"gradient": {"stops": [{"pos": %, "color": "RRGGBB", "transparency"?: %}], "type"?: "linear|radial|rectangular|path", "angle"?: deg, "focus"?: [l, t, r, b], "tile"?: [l, t, r, b], "scaled"?: bool, "rotateWithShape"?: bool}}  (tile: percent insets of the gradient's area; scaled: a linear angle scaled with the shape; a colour alone keeps the shape's transparency; angle: linear only, 0 = left to right, 90 = top to bottom; focus: percent insets of where a radial, rectangular or path gradient starts; applies to every selected shape, text box and canvas background)"#,
+                r#"{"color": "RRGGBB" | null, "transparency"?: %} | {"gradient": {"stops": [{"pos": %, "color": "RRGGBB", "transparency"?: %}], "type"?: "linear|radial|rectangular|path", "angle"?: deg, "focus"?: [l, t, r, b], "tile"?: [l, t, r, b], "scaled"?: bool, "rotateWithShape"?: bool}}  (tile: percent insets of the gradient's area; scaled: a linear angle scaled with the shape; a colour alone keeps the shape's transparency; angle: linear only, 0 = left to right, 90 = top to bottom; focus: percent insets of where a radial, rectangular or path gradient starts; applies to every selected shape, text box and canvas background) | {"picture": {"media": key, "crop"?: [l, t, r, b], "stretch"?: [l, t, r, b], "transparency"?: %}}  (a picture of the document's, stretched over the shape and clipped to its outline: crop fractions 0-1, stretch percent insets)"#,
             )
             .when(super::objects::has_shape_or_canvas),
     ]
@@ -37,6 +37,11 @@ enum Change {
 
 fn shape_fill(s: &mut Session, v: &Value) -> CmdResult {
     let change = parse(v)?;
+    if let Change::Fill(Fill::Picture(p)) = &change
+        && !s.doc.media.contains_key(&p.media)
+    {
+        return Err(CmdError::Params(format!("`picture`: no picture `{}` in the document", p.media)));
+    }
     let targets = targets(s);
     if targets.is_empty() {
         return Err(CmdError::Disabled("no shape selected".into()));
@@ -85,6 +90,12 @@ fn color(v: &Value) -> Result<Rgb, CmdError> {
 }
 
 fn parse(v: &Value) -> Result<Change, CmdError> {
+    if let Some(pic) = v.get("picture") {
+        // A picture fill as `params` writes it (the document's own picture, by media key).
+        let bad = || CmdError::Params("`picture`: {\"media\": key, \"crop\"?, \"stretch\"?, \"transparency\"?}".into());
+        let p: PictureFill = serde_json::from_value(pic.clone()).map_err(|_| bad())?;
+        return Fill::Picture(Arc::new(p)).sanitized().map(Change::Fill).ok_or_else(bad);
+    }
     let Some(g) = v.get("gradient") else {
         return match v.get("color") {
             None | Some(Value::Null) => Ok(Change::None),
@@ -158,6 +169,7 @@ pub fn params(fill: Option<&Fill>) -> Value {
             }
             json!({"gradient": out})
         }
+        Some(Fill::Picture(p)) => json!({"picture": p.as_ref()}),
     }
 }
 
@@ -407,6 +419,14 @@ mod tests {
             g(GradientKind::Path { shape: PathShape::Circle, focus: [100.0, 0.0, 0.0, 100.0] }),
             g(GradientKind::Path { shape: PathShape::Rect, focus: [50.0; 4] }),
             g(GradientKind::Path { shape: PathShape::Shape, focus: [50.0; 4] }),
+            Fill::Picture(Arc::new(wordcraft_doc::fill::PictureFill {
+                media: "banner.png".into(),
+                crop: [0.1, 0.0, 0.0, 0.2],
+                stretch: [0.0, 0.0, -7.5, 0.0],
+                transparency: 20.0,
+                rot_with_shape: true,
+                tile: None,
+            })),
         ];
         let tiled = super::variations(Rgb(9, 9, 9))[0][3].0.clone();
         for f in fills.into_iter().chain([tiled]) {

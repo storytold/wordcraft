@@ -5,6 +5,7 @@ use std::sync::Arc;
 use wordcraft_doc::connector::{ConnEnd, ShapeExtra};
 use wordcraft_doc::control::{ContentControl, ControlWrap};
 use wordcraft_doc::effects::{Glow, Shadow, ShapeEffects};
+use wordcraft_doc::fill::{Fill, GradientFlip, PictureFill, PictureTile};
 use wordcraft_doc::graphic::{Embedded, Graphic, GraphicItem, GraphicKind};
 use wordcraft_doc::para::{AltText, Anchor, Float, FloatAlign, NoteKind, PTabAlign, PTabBase, ShapeKind, Wrap, WrapText, cap_alt};
 use wordcraft_doc::props::{CharProps, NumChange, PropChange, Rgb, TextColor};
@@ -13,7 +14,7 @@ use wordcraft_doc::{Block, Blocks, InlineObject, Paragraph, PartKind, RevisionKi
 
 use super::Reader;
 use super::props::{sectpr, tcpr, trpr};
-use super::shape_style::{own_fill, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
+use super::shape_style::{own_fill, own_fill_element, preset_kind, shape_paint, vml_color, vml_fill, vml_fraction, vml_preset_kind};
 use crate::package::{ContentTypes, Rels, rt};
 use crate::units::{int, measure, u32_of};
 use crate::xml::{El, Node};

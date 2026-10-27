@@ -12060,3 +12060,101 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+/// A shape with a picture fill (`a:blipFill`): `media` stretched over it per `stretch`, cropped by `crop`.
+fn picture_filled(kind: wordcraft_doc::para::ShapeKind, freeform: Option<wordcraft_doc::freeform::Freeform>, stretch: [f32; 4]) -> InlineObject {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    let pic = PictureFill { media: "fill.png".into(), crop: [0.25, 0.0, 0.0, 0.0], stretch, transparency: 50.0, rot_with_shape: true, tile: None };
+    InlineObject::Shape {
+        kind,
+        w: 200.0,
+        h: 100.0,
+        fill: Some(Fill::Picture(Arc::new(pic))),
+        stroke: Some(wordcraft_doc::props::Rgb::BLACK),
+        stroke_width: 1.0,
+        float: Default::default(),
+        story: None,
+        freeform: freeform.map(Arc::new),
+        effects: Default::default(),
+        extra: Default::default(),
+    }
+}
+
+/// Every draw, with clipped, rotated and figure draws' contents after them.
+fn deep(draws: &[display::Draw], out: &mut Vec<display::Draw>) {
+    for d in draws {
+        out.push(d.clone());
+        match d {
+            display::Draw::Figure { draws, .. } => deep(draws, out),
+            display::Draw::Clip { items, .. } | display::Draw::Rotated { items, .. } | display::Draw::ClipTo { items, .. } => deep(items, out),
+            _ => {}
+        }
+    }
+}
+
+/// A picture-filled shape draws its picture stretched over its frame (inset by `a:fillRect`,
+/// here 10 % past its right edge), cropped as the file says, clipped to the shape's outline, with
+/// its outline on top and no solid fill standing in for the picture.
+#[test]
+fn a_picture_fill_is_drawn_clipped_to_the_shape() {
+    use wordcraft_doc::para::ShapeKind;
+    let mut d = Document::from_text("Banner");
+    d.insert_object(&Pos::body(0, 0), picture_filled(ShapeKind::Ellipse, None, [0.0, 0.0, -10.0, 0.0]), &Default::default()).unwrap();
+    let l = lay(&d);
+    let draws = display::page_display(&d, &l.pages[0], &Default::default());
+    let i = draws.iter().position(|x| matches!(x, display::Draw::ClipTo { .. })).expect("a clipped picture");
+    let display::Draw::ClipTo { outline: display::Outline::Shape { rect: frame, kind, .. }, items } = &draws[i] else { panic!("{:?}", draws[i]) };
+    assert_eq!((*kind, frame.w, frame.h), (ShapeKind::Ellipse, 200.0, 100.0));
+    let [display::Draw::Image { rect, media, crop, alpha, .. }] = items.as_slice() else { panic!("{items:?}") };
+    assert_eq!((media.as_str(), *crop, *alpha), ("fill.png", [0.25, 0.0, 0.0, 0.0], 0.5));
+    assert_eq!((rect.x, rect.y, rect.w, rect.h), (frame.x, frame.y, 220.0, 100.0));
+    // The outline, unfilled, drawn over the picture.
+    let outline =
+        draws[i..].iter().find_map(|x| if let display::Draw::Shape { fill, stroke, .. } = x { Some((fill.clone(), *stroke)) } else { None });
+    assert_eq!(outline, Some((None, Some(wordcraft_doc::props::Rgb::BLACK))));
+    let mut all = Vec::new();
+    deep(&draws, &mut all);
+    assert!(!all.iter().any(|x| matches!(x, display::Draw::Shape { fill: Some(_), .. })), "no solid stand-in: {all:?}");
+}
+
+/// A freeform (`a:custGeom`) in a group clips its picture to its own path, in page coordinates.
+#[test]
+fn a_picture_filled_freeform_in_a_group_clips_to_its_path() {
+    use wordcraft_doc::freeform::{FreePath, Freeform};
+    use wordcraft_doc::graphic::PathSeg;
+    use wordcraft_doc::para::{GroupChild, ShapeKind};
+    let tri = Freeform {
+        w: 200.0,
+        h: 100.0,
+        paths: vec![FreePath { pts: vec![[0.0, 0.0], [200.0, 0.0], [100.0, 100.0]], closed: true }],
+        ..Default::default()
+    };
+    let member = picture_filled(ShapeKind::Freeform, Some(tri), [0.0; 4]);
+    let group = InlineObject::Group {
+        w: 400.0,
+        h: 200.0,
+        float: Default::default(),
+        ch_w: 400.0,
+        ch_h: 200.0,
+        children: vec![GroupChild { x: 50.0, y: 20.0, obj: member }],
+        canvas: None,
+    };
+    let mut d = Document::from_text("Group");
+    d.insert_object(&Pos::body(0, 0), group, &Default::default()).unwrap();
+    let l = lay(&d);
+    let mut all = Vec::new();
+    deep(&display::page_display(&d, &l.pages[0], &Default::default()), &mut all);
+    let (segs, items) = all
+        .iter()
+        .find_map(|x| match x {
+            display::Draw::ClipTo { outline: display::Outline::Path(segs), items } => Some((segs.clone(), items.clone())),
+            _ => None,
+        })
+        .expect("a picture clipped to the freeform's path");
+    let [display::Draw::Image { rect, .. }] = items.as_slice() else { panic!("{items:?}") };
+    assert_eq!((rect.w, rect.h), (200.0, 100.0));
+    let PathSeg::Move(x, y) = segs[0] else { panic!("{segs:?}") };
+    assert_eq!((x, y), (rect.x, rect.y), "the path starts at the member's corner");
+    assert!(matches!(segs.last(), Some(PathSeg::Close)), "{segs:?}");
+    assert!(!all.iter().any(|x| matches!(x, display::Draw::Path { fill: Some(_), .. })), "no solid stand-in");
+}

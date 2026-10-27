@@ -510,11 +510,7 @@ fn adopt(s: &mut Session, src: Document) -> Fragment {
                 _ => p.props.num_change = None,
             }
             for o in &mut p.objects {
-                if let wordcraft_doc::InlineObject::Image { media: key, .. } = o
-                    && let Some(k) = media.get(key.as_str())
-                {
-                    *key = k.clone();
-                }
+                o.remap_media(&|key| media.get(key).cloned());
             }
         });
     }

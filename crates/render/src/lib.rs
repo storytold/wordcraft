@@ -599,6 +599,20 @@ fn draw(ctx: &mut RenderContext, doc: &Document, it: &Draw, view: Affine, visibl
             }
             ctx.pop_layer();
         }
+        Draw::ClipTo { outline, items } => {
+            let Some(path) = outline_path(outline) else { return };
+            let b = path.bounding_box();
+            if !b.overlaps(*visible) {
+                return;
+            }
+            ctx.set_transform(view);
+            ctx.push_clip_layer(&path);
+            let local = b.intersect(*visible);
+            for it in items {
+                draw(ctx, doc, it, view, &local, opts);
+            }
+            ctx.pop_layer();
+        }
         Draw::Turned { x, y, turn, items } => {
             let m = Affine::new(Draw::turn_matrix(*turn, *x, *y).map(f64::from));
             let local = m.inverse().transform_rect_bbox(*visible);
@@ -950,6 +964,23 @@ fn draw_shape(ctx: &mut RenderContext, fr: &Frame, it: &Draw) {
         );
         ctx.stroke_path(&path);
     }
+}
+
+/// The path a [`Draw::ClipTo`] clips to; `None` when it has no finite area to clip to.
+fn outline_path(outline: &wordcraft_layout::display::Outline) -> Option<BezPath> {
+    use wordcraft_layout::display::Outline;
+    let path = match outline {
+        Outline::Shape { rect, kind, corner } => {
+            let r = kurbo::Rect::new(rect.x as f64, rect.y as f64, rect.right() as f64, rect.bottom() as f64);
+            if !r.is_finite() || r.width() <= 0.0 || r.height() <= 0.0 {
+                return None;
+            }
+            shape_path(*kind, r, *corner)
+        }
+        Outline::Path(segs) => wordcraft_layout::display::seg_path(segs),
+    };
+    let b = path.bounding_box();
+    (b.is_finite() && b.width() > 0.0 && b.height() > 0.0).then_some(path)
 }
 
 /// The line through an ink stroke's points (finite ones only); a single point is a dot.
