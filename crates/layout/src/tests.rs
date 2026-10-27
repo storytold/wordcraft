@@ -12924,3 +12924,29 @@ fn list_items_in_a_table_after_a_kept_caption_are_counted_once() {
     d.insert_block(StoryRef::Body, &Path::top(1), wordcraft_doc::Block::Table(t)).unwrap();
     assert_eq!(labels(&lay(&d)), ["1.", "2."]);
 }
+
+/// A first row that can't split starts under a kept caption only where it fits with the border
+/// below it, as placing it needs: otherwise the caption goes over with it instead of staying
+/// alone at the foot of the page. Swept over the caption's space before in 1 pt steps, so the
+/// room left lands between the row's height and its height with the border.
+#[test]
+fn a_caption_kept_with_an_unsplittable_row_counts_the_border_below_it() {
+    for fill in 20..34 {
+        for push in 0..24 {
+            let mut d = ruled_table(fill, 3, 6.0);
+            let Some(wordcraft_doc::Block::Table(t)) = d.body.get_mut(fill).map(std::sync::Arc::make_mut) else { panic!("no table") };
+            t.rows[0].props.cant_split = true;
+            let mut caption = wordcraft_doc::Paragraph::with_text("Caption", Default::default());
+            caption.props.keep_next = Some(true);
+            caption.props.space_before = Some(push as f32);
+            // No space after: what a kept paragraph's space after adds is not this test's.
+            caption.props.space_after = Some(0.0);
+            d.insert_block(StoryRef::Body, &Path::top(fill), wordcraft_doc::Block::Para(caption)).unwrap();
+            let l = lay(&d);
+            let page_of = |hit: &dyn Fn(&Placed) -> bool| l.pages.iter().position(|p| p.items.iter().any(hit)).unwrap();
+            let caption = page_of(&|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill)));
+            let row = page_of(&|it| matches!(it, Placed::Cell { row: 0, .. }));
+            assert_eq!(caption, row, "{fill} filler lines, {push} pt before the caption: the caption stays on page {} alone", caption + 1);
+        }
+    }
+}
