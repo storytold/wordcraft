@@ -82,7 +82,7 @@ pub(crate) fn table_start_need(ctx: &mut Ctx, t: &wordcraft_doc::Table, block: u
     let head: f32 = tl.rows.iter().take(headers).map(|r| r.height).sum();
     let (Some(row), Some(laid)) = (t.rows.get(headers), tl.rows.get(headers)) else { return head };
     // ponytail: bisection assumes starting a row gets no harder with more room.
-    let (mut lo, mut hi) = (0.0f32, laid.height);
+    let (mut lo, mut hi) = (0.0f32, laid.height + laid.edge);
     for _ in 0..12 {
         let mid = (lo + hi) / 2.0;
         if row_can_start(ctx.doc, row, laid, mid, f32::MAX) {
@@ -174,7 +174,8 @@ fn split_keeping_nested(doc: &wordcraft_doc::Document, row: &table::RowLayout, r
 }
 
 fn row_can_start(doc: &wordcraft_doc::Document, row: &wordcraft_doc::Row, laid: &table::RowLayout, room: f32, page_height: f32) -> bool {
-    if laid.height <= room + 0.01 {
+    // Whole, the row needs the border below it too, as `place_table` places it.
+    if laid.height + laid.edge <= room + 0.01 {
         return true;
     }
     if row.props.header || row.props.cant_split || (row.props.height_rule == HeightRule::Exact && row.props.height.is_some_and(|h| h > 0.0)) {
