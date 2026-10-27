@@ -289,7 +289,7 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
         // The blank tile pictures the Normal template, as stored now: saved or reset here or by
         // another window (#4237). One texture per tile: a new one replaces (frees) the old.
         let id = egui::Id::unique(("tpl", template));
-        let stamp = (ppp.to_bits(), if template == "blank" { normal_stamp(app, ui.ctx()) } else { 0 });
+        let stamp = (ppp.to_bits(), tile_stamp(app, ui.ctx(), template));
         let cached = ui.ctx().data(|d| d.get_temp::<((u32, u64), egui::TextureHandle)>(id)).filter(|(at, _)| *at == stamp).map(|(_, h)| h);
         let tex = cached.or_else(|| {
             let s = tile_session(app, template);
@@ -317,13 +317,26 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
     });
 }
 
+/// What a tile's picture depends on besides the pixel scale: the region (its paper, #838) and,
+/// for the blank tile, the stored Normal template.
+fn tile_stamp(app: &WordApp, ctx: &egui::Context, template: &str) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}{:?}", app.session.system_region, app.session.prefs.region).hash(&mut h);
+    if template == "blank" {
+        normal_stamp(app, ctx).hash(&mut h);
+    }
+    h.finish()
+}
+
 /// A hash of the stored Normal template (0 for none), read at most once a second while the New
-/// page shows: another window may change it.
+/// page shows: another window may change it, so the page repaints a second later to look again.
 fn normal_stamp(app: &WordApp, ctx: &egui::Context) -> u64 {
     use std::hash::{Hash, Hasher};
     let Some(store) = &app.session.normal_store else { return 0 };
     let id = egui::Id::unique("normal-template-stamp");
     let now = ctx.input(|i| i.time);
+    ctx.request_repaint_after(std::time::Duration::from_secs(1));
     if let Some((at, stamp)) = ctx.data(|d| d.get_temp::<(f64, u64)>(id))
         && now - at < 1.0
         && now >= at

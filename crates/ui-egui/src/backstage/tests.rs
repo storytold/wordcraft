@@ -1091,3 +1091,19 @@ fn the_blank_tile_follows_the_stored_template() {
     assert_ne!(tile(&h), first, "the tile was redrawn");
     assert!(h.ctx.tex_manager().read().num_allocated() <= textures, "old pictures were freed");
 }
+
+/// CodeRabbit on #4621: a new region (A4 instead of Letter) redraws the blank tile, as
+/// `file.new` would make the new paper.
+#[test]
+fn the_blank_tile_follows_the_region() {
+    let mut h = new_page_harness(None);
+    h.run_steps(4);
+    let tile = |h: &egui_kittest::Harness<'_, WordApp>| {
+        h.ctx.data(|d| d.get_temp::<((u32, u64), egui::TextureHandle)>(egui::Id::unique(("tpl", "blank")))).map(|(_, t)| t.id()).expect("blank tile")
+    };
+    let first = tile(&h);
+    let region = if h.state().session.prefs.region.as_deref() == Some("de-DE") { "en-US" } else { "de-DE" };
+    h.state_mut().session.prefs.region = Some(region.into());
+    h.run_steps(4);
+    assert_ne!(tile(&h), first, "the tile was redrawn");
+}
