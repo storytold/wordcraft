@@ -11,4 +11,4 @@ One document's own base formatting (the text and paragraph formatting every styl
 _Avoid_: default font (ambiguous: say which of the two is meant)
 
 **Set As Default**
-The action that copies formatting into the Normal template, and also applies it to the open document, after asking "this document only" or "all new documents".
+The action that applies formatting to the open document; when "all new documents" is chosen, it also copies that formatting into the Normal template.
