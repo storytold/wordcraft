@@ -1953,6 +1953,22 @@ fn paragraph_set_as_default_skips_mixed_line_spacing() {
     assert!(!props.contains_key("lineSpacing"), "{props:?}");
 }
 
+/// Re-review P2: a selection from One's start to Two's start covers only One (as the dialog
+/// shows it), so One's Exactly 12 is saved, not left out because of Two's 18.
+#[test]
+fn paragraph_set_as_default_uses_the_paragraphs_the_dialog_shows() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("One\nTwo")), crate::Services::default());
+    a.run("select.text", json!({"text": "One"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 12.0})).unwrap();
+    a.run("select.text", json!({"text": "Two"})).unwrap();
+    a.run("para.lineSpacing", json!({"exactly": 18.0})).unwrap();
+    a.run("select.range", json!({"anchor": {"block": 0, "off": 0}, "focus": {"block": 1, "off": 0}})).unwrap();
+    let d = Dialog::open("paragraph", &mut a).unwrap();
+    let props = super::paragraph::default_para_props(&a, &d);
+    let want = serde_json::to_value(wordcraft_doc::props::LineSpacing::Exactly(12.0)).unwrap();
+    assert_eq!(props.get("lineSpacing"), Some(&want), "{props:?}");
+}
+
 /// #4237: Modify Style › New documents based on this template; Options › Reset asks first.
 #[test]
 fn modify_style_for_new_documents_and_reset() {
