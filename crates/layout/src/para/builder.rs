@@ -7,6 +7,9 @@ use super::grid::east_asian;
 use super::model::{ClKind, Cluster, Enclosed, Glyph, ParaEnv, RubyLayout, StyleRun, SymbolRun};
 use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_HYPHEN};
 
+/// U+200B, a line break opportunity with no width or glyph.
+const ZERO_WIDTH_SPACE: char = '\u{200B}';
+
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
     pub(super) styles: Vec<StyleRun>,
@@ -66,7 +69,9 @@ impl<'a> Builder<'a> {
                 Some(k) if mark => k.face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
                 _ if !c.is_control() && c != SOFT_HYPHEN && run_face.is_some_and(|f| f.covers(dc)) => run_face,
-                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN => None,
+                // A zero-width space has nothing to draw: it stays in the run's font, so a line of
+                // them is as tall as a line of text in it (Word), not a fallback face's line.
+                _ if primary.covers(dc) || c.is_whitespace() || c.is_control() || c == SOFT_HYPHEN || c == ZERO_WIDTH_SPACE => None,
                 Some(SegKey { face: Some(face), .. }) if face.covers(dc) => Some(face),
                 _ if !complex && ea_face.is_some() && crate::kinsoku::is_east_asian(c) => ea_face,
                 _ => {
