@@ -11,6 +11,14 @@ on:
       - 'crates/ui-egui/src/documents.rs'
       - 'crates/ui-egui/src/canvas.rs'
       - 'crates/engine/src/cmd/review.rs'
+      - 'crates/engine/src/cmd/review/**'
+      - 'crates/engine/src/tests/**'
+      - 'crates/ui-egui/src/app.rs'
+      - 'crates/ui-egui/src/app/**'
+      - 'crates/ui-egui/src/canvas/**'
+      - 'crates/ui-egui/src/control/**'
+      - 'crates/ui-egui/src/panes/**'
+      - 'crates/ui-egui/src/dialogs/**'
       - '.github/workflows/spelling-review.yml'
   workflow_dispatch:
 

@@ -1,6 +1,6 @@
 # Spelling and grammar task pane
 
-> **Last updated:** 2026-10-26 · **Status:** historical three-platform checks passed; at f1264f3 the revised hosted gate, previews, Windows and Linux passed, while macOS remained unvalidated after pre-run cancellations. Overlap-review corrections now require new hosted checks.
+> **Last updated:** 2026-10-27 · **Status:** technical synchronization with main `436d444` prepared; validation on the new merge SHA is pending. Historical status: historical three-platform checks passed; at f1264f3 the revised hosted gate, previews, Windows and Linux passed, while macOS remained unvalidated after pre-run cancellations. Overlap-review corrections now require new hosted checks.
 
 ## Word reference
 
@@ -18,12 +18,16 @@ If another command changes the document body or selection, a cached suggestion i
 
 This work is independent of French contribution #3185. It consumes language-aware engine results and adds neither dictionaries nor grammar rules. Labels use the external shared translation lookup with English fallback for missing keys. No release date or readiness increase is implied.
 
+## Technical synchronization (2026-10-27)
+
+The language-independent pane is rebased by a three-way merge with main `436d444ef0ee35c2e2b9fb44f87aa7d08d72641f`. Engine navigation and exact selected-range lookup live in `crates/engine/src/cmd/review/proofing.rs`; the existing regressions follow into `review/tests.rs`. The UI command hook follows into `app/commands.rs`, construction into `app.rs`, inspection into `control/handler.rs`, and pane state/closure into `panes/state.rs` and `panes/host.rs`. The upstream context-menu and dropdown implementations stay intact. Workflow path filters cover the extracted modules while retaining historical paths. No dictionary, grammar rule, new feature or readiness increase is introduced by this synchronization.
+
 ## Verification
 
 - Engine: one-/two-paragraph navigation, forward-only completion, explicit wrapping, exact spelling selection within overlapping grammar in either selection direction, explicit-position fallback, correction and undo.
 - UI: direct suggestion correction and undo, Ignore Once progress/completion, Ignore All, personal dictionary addition, stale selection/body refusal, completion and Close, per-window isolation and document switching.
 - Offscreen: the ignored spelling_review_dialog_preview test writes light/dark PNGs for comparison with the recorded Word arrangement.
-- Required gate: cargo xtask ci. Cargo is unavailable on the preparation PC; hosted validation is required, and test definitions alone do not establish success.
+- Required gate: `cargo xtask ci`, plus the proofing preview workflow. No compilation or test was run in this resolution staging; the coordinator must validate the new merge SHA. Earlier hosted results do not validate this synchronization.
 
 The first light/dark artifacts at `20205a5` were inspected: the sentence frame shrank to its text and the unbounded suggestion list pushed actions below the viewport. The revised layout fills the pane width and scrolls the suggestion list after approximately three cards, keeping the actions below it visible. At `f1264f3`, the revised light/dark previews and full hosted gate passed; Windows and Linux UI checks passed, while macOS remained unvalidated after pre-run cancellations. Both PNGs were inspected, including the right-aligned Read Aloud control. The following review revision gives the exact selected spelling range priority over an overlapping grammar issue and requires new hosted checks. Exact pixel parity is not claimed.
 
@@ -31,6 +35,7 @@ The first light/dark artifacts at `20205a5` were inspected: the sentence frame s
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | trivial | Synchronize the existing pane with extracted engine/UI modules on main `436d444`; preserve selection/navigation/undo tests and compact menus, expand workflow path filters; new-SHA validation pending |
 | 2026-10-26 | minor | Resolve selected spelling before overlapping grammar, add command/pane regressions, include pane-integration workflow paths and distinguish validated history from pending review corrections |
 | 2026-10-26 | minor | Inspect first successful light/dark artifacts; fill the sentence frame and bound suggestion-list height, retaining all suggestions through scrolling |
 | 2026-10-26 | minor | Actual Word for Windows observation replaces the modal proposal with a right-side Proofing pane, sentence context and directly clickable suggestion cards |
