@@ -4206,6 +4206,31 @@ fn thai_drop_cap_leading_vowel_included() {
     assert!(nc >= 2, "leading vowel + consonant must both be in the drop cap ({nc} clusters)");
 }
 
+/// Sara aa (า U+0E32) is a trailing following vowel — it appears AFTER the consonant
+/// horizontally and must NOT be part of the drop cap TCB.
+/// "ข่าว..." → TCB = "ข่" (ข U+0E02 + ่ U+0E48, 6 bytes), body starts at byte 6.
+#[test]
+fn thai_drop_cap_sara_aa_stays_in_body() {
+    // ข (U+0E02, 3 bytes) + ่ (U+0E48, 3 bytes) + า (U+0E32, 3 bytes) + วดี…
+    let body = "ข่าวดี กบน.ปรับอัตราเงินกองทุนน้ำมันฯ ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| {
+        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
+    }).expect("no lines");
+
+    pl.drop_cap.expect("drop cap must be set");
+    // The cluster after the drop cap must start at byte 6 (past ข + ่ only),
+    // NOT byte 9 (which would incorrectly include sara aa า in the drop cap).
+    let (nc, _, _) = pl.drop_cap.unwrap();
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(6),
+        "sara aa (byte 6-9) must stay in body text, not be consumed by the drop cap; got {body_start:?}");
+}
+
 #[test]
 fn auto_hyphenation_breaks_long_words() {
     let text = "Internationalization considerations notwithstanding, administrators systematically reconsidered extraordinarily uncharacteristic responsibilities. ".repeat(4);
