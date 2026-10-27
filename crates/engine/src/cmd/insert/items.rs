@@ -56,7 +56,7 @@ pub(super) fn page_number(s: &mut Session, v: &Value) -> CmdResult {
     }
     s.doc.set_story(StoryRef::Part(id), vec![para_block(para)])?;
     if let Some(pfx) = prefix_param {
-        super::page::with_sect(s, |sect| {
+        crate::cmd::page::with_sect(s, |sect| {
             sect.page_num_prefix = if pfx.is_empty() { None } else { Some(pfx.to_string()) };
         })?;
     }
