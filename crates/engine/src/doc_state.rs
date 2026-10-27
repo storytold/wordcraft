@@ -117,6 +117,9 @@ pub struct FindState {
     /// Highlighted matches, for the document revision they were found in.
     #[serde(skip)]
     pub highlights: Option<(u64, Vec<(Pos, Pos)>)>,
+    /// Stories the last `edit.find` searched: Find Next/Previous keep that scope (#3270).
+    #[serde(skip)]
+    pub scope: Option<Vec<StoryRef>>,
 }
 
 #[derive(Clone)]
