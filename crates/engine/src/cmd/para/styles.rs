@@ -48,6 +48,7 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
             let len = para.len();
             para.format(0, len, &|c| {
                 c.font = None;
+                c.font_hansi = None;
                 c.font_cs = None;
                 c.font_ea = None;
                 c.size = None;
@@ -55,6 +56,7 @@ pub(super) fn apply_style(s: &mut Session, v: &Value) -> CmdResult {
                 c.color = None;
             })?;
             para.mark.font = None;
+            para.mark.font_hansi = None;
             para.mark.font_cs = None;
             para.mark.font_ea = None;
             para.mark.size = None;

@@ -7,13 +7,19 @@ pub(super) struct SegKey {
     pub(super) small: bool,
     /// Formatted with the complex-script properties (Persian, Arabic, Hebrew…).
     pub(super) complex: bool,
+    /// Set in the run's high-ANSI font (`w:hAnsi`): non-ASCII Latin text.
+    pub(super) high_ansi: bool,
     /// Odd bidi level: shaped right to left.
     pub(super) rtl: bool,
 }
 
 impl SegKey {
     pub(super) fn same(&self, o: &SegKey) -> bool {
-        self.face.map(|f| f.id()) == o.face.map(|f| f.id()) && self.small == o.small && self.complex == o.complex && self.rtl == o.rtl
+        self.face.map(|f| f.id()) == o.face.map(|f| f.id())
+            && self.small == o.small
+            && self.complex == o.complex
+            && self.high_ansi == o.high_ansi
+            && self.rtl == o.rtl
     }
 }
 

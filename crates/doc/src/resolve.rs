@@ -68,6 +68,9 @@ pub struct ResolvedChar {
     /// East Asian font (Chinese, Japanese and Korean text), when one is set.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub font_ea: Option<String>,
+    /// The font of non-ASCII Latin text (`w:hAnsi`), when it differs from `font`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub font_hansi: Option<String>,
     pub size_cs: f32,
     pub bold_cs: bool,
     pub italic_cs: bool,
@@ -113,6 +116,12 @@ impl ResolvedChar {
             cs: c.cs.unwrap_or(false),
             font_cs: c.font_cs.clone().or_else(|| c.font.clone()).unwrap_or_else(|| crate::styles::BODY_FONT.to_string()),
             font_ea: c.font_ea.clone(),
+            // A symbol is shown in its own font, whatever its class.
+            font_hansi: c.font_hansi.clone().filter(|h| {
+                c.sym_font.as_deref().is_none_or(|s| s.trim().is_empty())
+                    && !h.trim().is_empty()
+                    && !h.eq_ignore_ascii_case(c.font.as_deref().unwrap_or(crate::styles::BODY_FONT))
+            }),
             size_cs: c.size_cs.or(c.size).unwrap_or(crate::props::DEFAULT_FONT_SIZE).clamp(1.0, 1638.0),
             bold_cs: c.bold_cs.or(c.bold).unwrap_or(false),
             italic_cs: c.italic_cs.or(c.italic).unwrap_or(false),
@@ -122,7 +131,12 @@ impl ResolvedChar {
     /// size, bold and italic in place of the others (Word formats Arabic, Persian and Hebrew
     /// characters, and every character of an `rtl`/`cs` run, this way).
     pub fn complex(&self) -> ResolvedChar {
-        ResolvedChar { font: self.font_cs.clone(), size: self.size_cs, bold: self.bold_cs, italic: self.italic_cs, ..self.clone() }
+        ResolvedChar { font: self.font_cs.clone(), size: self.size_cs, bold: self.bold_cs, italic: self.italic_cs, font_hansi: None, ..self.clone() }
+    }
+    /// The formatting non-ASCII Latin text in this run is drawn with: the high-ANSI font in place
+    /// of the ASCII one (`None` when they are the same font).
+    pub fn high_ansi(&self) -> Option<ResolvedChar> {
+        self.font_hansi.as_ref().map(|f| ResolvedChar { font: f.clone(), font_hansi: None, ..self.clone() })
     }
     /// Whether the text is kerned: Word kerns only a run with Kerning for fonts set (`w:kern`) at
     /// a size of at least that many points, never by default (measured in Word for Windows).

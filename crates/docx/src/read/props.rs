@@ -235,7 +235,14 @@ impl PropCtx {
                     // `font_cs`: `w:hint` only picks between them for ambiguous characters, never for
                     // Latin letters. A Normal style with only `w:eastAsia`/`w:cs` keeps the
                     // `docDefaults` font, and so does a hinted run, as in Word.
-                    c.font = themed("w:asciiTheme").or_else(|| named("w:ascii")).or_else(|| themed("w:hAnsiTheme")).or_else(|| named("w:hAnsi"));
+                    // `w:ascii` is the font of U+0000-U+007F and `w:hAnsi` of the other Latin
+                    // characters (ECMA-376 §17.3.2.26), each inherited on its own: a run naming only
+                    // its hAnsi font keeps the inherited ASCII font. `font_hansi` stays unset when
+                    // both are the same font.
+                    let ascii = themed("w:asciiTheme").or_else(|| named("w:ascii"));
+                    let hansi = themed("w:hAnsiTheme").or_else(|| named("w:hAnsi")).filter(|f| f.len() < 256);
+                    c.font_hansi = hansi.filter(|h| ascii.as_ref().is_none_or(|a| a != h));
+                    c.font = ascii;
                     // The complex-script font (Persian, Arabic, Hebrew text). A `w:cstheme` font is
                     // left to inherit: the theme's per-script fonts aren't read.
                     c.font_cs = k.attr("w:cs").filter(|f| !f.is_empty() && f.len() < 256).map(str::to_string);

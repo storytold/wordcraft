@@ -484,6 +484,9 @@ fn region(r: &Value, f: &mut PartFormat) -> Result<(), CmdError> {
         chr.size = Some(sz.clamp(1.0, 1638.0));
         chr.size_cs = chr.size;
     }
+    if matches!(r.get("font"), Some(Value::Null | Value::String(_))) {
+        chr.font_hansi = None;
+    }
     match r.get("font") {
         None => {}
         // Null or empty: the part's font is inherited again.

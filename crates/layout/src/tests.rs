@@ -8262,6 +8262,33 @@ fn east_asian_text_takes_the_asian_font_and_latin_text_the_latin_font() {
     }
 }
 
+#[test]
+fn hansi_font_sets_non_ascii_latin_text_and_ascii_font_the_rest() {
+    // `w:hAnsi` names the font of a run's non-ASCII Latin characters (curly quotes, accented
+    // letters), `w:ascii` that of U+0000-U+007F (ECMA-376 Part 1 §17.3.2.26): a run with only an
+    // hAnsi font keeps the inherited font for its ASCII text.
+    let (ascii, hansi) = ("Source Serif 4", "JetBrains Mono");
+    let text = "say “café” now";
+    let mut d = Document::from_text(text);
+    d.format_range(&Pos::body(0, 0), &Pos::body(0, text.len()), &|c| {
+        c.font = Some(ascii.into());
+        c.font_hansi = Some(hansi.into());
+    })
+    .unwrap();
+    let l = lay(&d);
+    let para =
+        l.pages.iter().flat_map(|p| p.items.iter()).find_map(|it| if let Placed::Lines { para, .. } = it { Some(para) } else { None }).unwrap();
+    let mut seen = (false, false);
+    for c in &para.clusters {
+        let Some(ch) = text.get(c.start..c.end).and_then(|s| s.chars().next()).filter(|ch| !ch.is_whitespace()) else { continue };
+        let family = para.styles[c.style as usize].face.get().family.clone();
+        let want = if ch.is_ascii() { ascii } else { hansi };
+        assert_eq!(family, want, "{ch:?}");
+        if ch.is_ascii() { seen.0 = true } else { seen.1 = true }
+    }
+    assert_eq!(seen, (true, true));
+}
+
 /// A page total in the footer ("Page X of Y") is filled in after pagination, so it doesn't make
 /// the body lay out a second time; one in the body still does.
 #[test]

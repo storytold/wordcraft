@@ -2102,10 +2102,13 @@ fn theme_font_wins_over_the_fixed_font() {
     let d = themed_docx(body, styles, None);
     assert_eq!(d.styles.get("Heading1").unwrap().chr.font.as_deref(), Some("Major Face"));
     let p = paras(&d);
-    assert_eq!(p[1].props_of_char(0).font.as_deref(), Some("Minor Face"));
-    assert_eq!(p[1].props_of_char(1).font.as_deref(), Some("Minor Face"));
-    // An explicit ascii font still beats a theme font given only for hAnsi.
-    assert_eq!(p[1].props_of_char(2).font.as_deref(), Some("Arial"));
+    // The hAnsi theme font is the font of the run's non-ASCII Latin text only (ECMA-376
+    // §17.3.2.26); its ASCII font is inherited.
+    let fonts = |i: usize| (p[1].props_of_char(i).font.as_deref(), p[1].props_of_char(i).font_hansi.as_deref());
+    assert_eq!(fonts(0), (None, Some("Minor Face")));
+    assert_eq!(fonts(1), (Some("Minor Face"), None));
+    // An explicit ascii font beside a theme font given only for hAnsi: each for its characters.
+    assert_eq!(fonts(2), (Some("Arial"), Some("Major Face")));
 }
 
 /// Issue #400: moved text (ECMA-376 §17.13.5.21–28). `w:moveFrom` / `w:moveTo` inside named

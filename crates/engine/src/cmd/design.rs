@@ -96,7 +96,12 @@ fn set_fonts(s: &mut Session, heading: &str, body: &str) {
     s.doc.settings.major_font = heading.into();
     s.doc.settings.minor_font = body.into();
     s.doc.styles.default_chr.font = Some(body.into());
+    s.doc.styles.default_chr.font_hansi = None;
     for st in &mut s.doc.styles.styles {
+        // A style's own high-ANSI font goes with its font (see `CharProps::font_hansi`).
+        if st.chr.font.is_some() {
+            st.chr.font_hansi = None;
+        }
         if let Some(f) = &st.chr.font
             && (f == styles::HEADING_FONT || st.id.starts_with("Heading") || st.id == "Title")
         {

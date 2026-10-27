@@ -10,6 +10,11 @@ use super::{Arc, Document, FaceRef, NumeralMode, ResolvedChar, RubyAlign, SOFT_H
 /// U+200B, a line break opportunity with no width or glyph.
 const ZERO_WIDTH_SPACE: char = '\u{200B}';
 
+/// Whether `c` is set in a run's high-ANSI font: non-ASCII, neither complex script nor East Asian.
+fn high_ansi(rc: &ResolvedChar, c: char) -> bool {
+    !c.is_ascii() && !rc.uses_complex(c) && !east_asian(c)
+}
+
 pub(super) struct Builder<'a> {
     pub(super) env: &'a ParaEnv<'a>,
     pub(super) styles: Vec<StyleRun>,
@@ -29,6 +34,8 @@ struct SegmentInput<'a> {
     rc_cs: Option<&'a Arc<ResolvedChar>>,
     primary: FaceRef,
     primary_cs: Option<FaceRef>,
+    rc_ha: Option<&'a Arc<ResolvedChar>>,
+    primary_ha: Option<FaceRef>,
     primary_ea: Option<FaceRef>,
     run_face: Option<FaceRef>,
     ea_face: Option<FaceRef>,
@@ -50,7 +57,23 @@ impl<'a> Builder<'a> {
     }
 
     fn segment_keys(&self, input: SegmentInput<'_>) -> Vec<(usize, usize, SegKey)> {
-        let SegmentInput { text, rc, rc_cs, primary, primary_cs, primary_ea, run_face, ea_face, sym, levels, lbase, use_levels, context } = input;
+        let SegmentInput {
+            text,
+            rc,
+            rc_cs,
+            primary,
+            primary_cs,
+            rc_ha,
+            primary_ha,
+            primary_ea,
+            run_face,
+            ea_face,
+            sym,
+            levels,
+            lbase,
+            use_levels,
+            context,
+        } = input;
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let mut seg_start = 0;
         let mut cur: Option<SegKey> = None;
@@ -64,7 +87,17 @@ impl<'a> Builder<'a> {
                 Some(k) if mark => k.complex,
                 _ => rc_cs.is_some() && rc.uses_complex(dc),
             };
-            let primary = if complex { primary_cs.unwrap_or(primary) } else { primary };
+            let ha = match cur {
+                Some(k) if mark => k.high_ansi,
+                _ => !complex && rc_ha.is_some() && high_ansi(rc, dc),
+            };
+            let primary = if complex {
+                primary_cs.unwrap_or(primary)
+            } else if ha {
+                primary_ha.unwrap_or(primary)
+            } else {
+                primary
+            };
             let face = match cur {
                 Some(k) if mark => k.face,
                 _ if !complex && east_asian(c) && primary_ea.is_some_and(|f| f.covers(c)) => primary_ea,
@@ -79,7 +112,7 @@ impl<'a> Builder<'a> {
                     wordcraft_fonts::FontDb::global().fallback_styled(dc, primary.id(), bold, italic).map(|f| FaceRef::of(&f))
                 }
             };
-            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, rtl };
+            let key = SegKey { face, small: rc.small_caps && !rc.caps && c.is_lowercase(), complex, high_ansi: ha, rtl };
             match cur {
                 Some(previous) if previous.same(&key) => {}
                 Some(previous) => {
@@ -174,6 +207,11 @@ impl<'a> Builder<'a> {
         let sym = SymbolRun::of(&rc.font, &resolved);
         let show = |c: char| sym.map_or(c, |m| m.show(c));
         let primary_cs = rc_cs.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
+        // Non-ASCII Latin characters (curly quotes, accented letters) use the run's high-ANSI font
+        // (`w:hAnsi`, ECMA-376 §17.3.2.26) when it differs from its ASCII font.
+        let rc_ha: Option<Arc<ResolvedChar>> =
+            if sym.is_none() && text.chars().any(|c| high_ansi(rc, c)) { rc.high_ansi().map(Arc::new) } else { None };
+        let primary_ha = rc_ha.as_ref().map(|r| wordcraft_fonts::word::resolve(lookup_family(self.env.doc, &r.font), r.bold, r.italic).face);
         // Chinese, Japanese and Korean characters use the run's East Asian font (`w:eastAsia`) when
         // it is installed and has them.
         let primary_ea = rc
@@ -220,6 +258,8 @@ impl<'a> Builder<'a> {
             rc_cs: rc_cs.as_ref(),
             primary,
             primary_cs,
+            rc_ha: rc_ha.as_ref(),
+            primary_ha,
             primary_ea,
             run_face,
             ea_face,
@@ -232,8 +272,9 @@ impl<'a> Builder<'a> {
         let no_kern = [wordcraft_fonts::feature_value(b"kern", 0)];
         for (a, b, key) in segs {
             let Some(sub) = text.get(a..b) else { continue };
-            let rc = match (&rc_cs, key.complex) {
-                (Some(cs), true) => cs.clone(),
+            let rc = match (&rc_cs, &rc_ha) {
+                (Some(cs), _) if key.complex => cs.clone(),
+                (_, Some(ha)) if key.high_ansi => ha.clone(),
                 _ => rc.clone(),
             };
             let rc = &rc;
