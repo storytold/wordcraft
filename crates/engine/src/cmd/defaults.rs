@@ -139,7 +139,6 @@ fn update_template(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<(),
     nt::drop_unused_lists(&mut t);
     let bytes = nt::to_bytes(&t).map_err(CmdError::Failed)?;
     store.save(&bytes).map_err(|e| CmdError::Failed(format!("the Normal template couldn't be saved: {e}")))?;
-    nt::note_changed();
     Ok(())
 }
 
@@ -299,7 +298,6 @@ fn reset(s: &mut Session, _: &Value) -> CmdResult {
     let store =
         s.normal_store.clone().ok_or_else(|| CmdError::Failed("this session has no Normal template (headless or without preferences)".into()))?;
     store.reset().map_err(|e| CmdError::Failed(format!("the Normal template couldn't be deleted: {e}")))?;
-    nt::note_changed();
     s.status = "New documents will use WordCraft's built-in formatting.".into();
     Ok(json!({"reset": true}))
 }
