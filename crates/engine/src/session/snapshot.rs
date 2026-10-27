@@ -77,6 +77,7 @@ impl Session {
             normal_store: _,
             // Written or dropped before `run` returns.
             pending_template: _,
+            run_depth: _,
             dirty,
             clipboard: _,
             // Like the clipboard: what the next paste can make a move of.

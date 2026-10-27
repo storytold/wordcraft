@@ -185,14 +185,17 @@ impl Session {
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
         let default_language_before = self.prefs.default_language.clone();
-        // Set As Default queues its template change; it is written below only if this command
-        // succeeds. A nested command's queue is its own.
+        // Set As Default queues its template change; the outermost command writes the queue below,
+        // only if it succeeds. A nested command that succeeds hands its queue up to the command
+        // that ran it, so a macro failing after a Set As Default leaves the template alone.
         let template_before = std::mem::take(&mut self.pending_template);
         let run = spec.run;
         let mutates = spec.mutates;
         let ime_caret_before = self.current_ime_caret_state();
         let rev_before = self.rev;
+        self.run_depth = self.run_depth.saturating_add(1);
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::column::dispatch(self, id, mutates, run, params)));
+        self.run_depth = self.run_depth.saturating_sub(1);
         let mut result = match result {
             Ok(r) => r,
             Err(p) => {
@@ -217,12 +220,14 @@ impl Session {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
         }
         // The Normal template is written only now that the command has succeeded and passed the
-        // post-check; a failed write fails the command, which then rolls the document back. Reading
-        // and merging the stored template is input-driven, so it runs under the same panic guard
-        // as the command.
+        // post-check; a failed write fails the command, which then rolls the document back. A
+        // nested command's queue goes to the command that ran it. Reading and merging the stored
+        // template is input-driven, so it runs under the same panic guard as the command.
         let template = std::mem::replace(&mut self.pending_template, template_before);
         if result.is_ok() && !template.is_empty() {
-            if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::defaults::commit_template(self, template)))
+            if self.run_depth > 0 {
+                self.pending_template.extend(template);
+            } else if let Err(e) = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| crate::cmd::defaults::commit_template(self, template)))
                 .unwrap_or_else(|_| Err(CmdError::Failed(format!("{id}: the Normal template could not be updated"))))
             {
                 result = Err(e);

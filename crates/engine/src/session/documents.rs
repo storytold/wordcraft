@@ -243,6 +243,7 @@ impl Session {
             user_dict_path: _,
             normal_store: _,
             pending_template: _,
+            run_depth: _,
             clipboard: _,
             clipboard_text: _,
             clipboard_html: _,

@@ -397,3 +397,24 @@ fn a_panic_while_writing_the_template_is_an_error() {
     assert!(s.run("para.setDefault", &json!({"props": {"spaceAfter": 30.0}})).is_err());
     assert_eq!(s.doc.styles, before, "the document is rolled back");
 }
+
+/// Re-review P3: a Set As Default inside a macro reaches the template only if the whole macro
+/// succeeds; a later failing step leaves the template as it was.
+#[test]
+fn a_failing_macro_saves_no_default() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    let steps = json!([
+        {"command": "format.setDefault", "params": {"props": {"font": "Georgia"}}},
+        {"command": "para.setDefault", "params": {"props": {"spaceAfter": 30.0}}},
+        {"command": "no.such.command", "params": {}},
+    ]);
+    run(&mut s, "tools.macros", json!({"define": {"name": "m", "steps": steps}}));
+    assert!(s.run("tools.macros", &json!({"run": "m"})).is_err());
+    assert!(store.get().is_none(), "the template was never written");
+    // The same macro without the failing step does save.
+    let steps = json!([{"command": "format.setDefault", "params": {"props": {"font": "Georgia"}}}]);
+    run(&mut s, "tools.macros", json!({"define": {"name": "ok", "steps": steps}}));
+    run(&mut s, "tools.macros", json!({"run": "ok"}));
+    assert_eq!(body_font(&session(&store).normal_document()).0, "Georgia");
+}
