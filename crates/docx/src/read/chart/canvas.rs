@@ -1,5 +1,5 @@
 use super::model::Pos;
-use super::{CHAR_W, GAP, GraphicItem, LEGEND_SHARE, LINE, MAX_LEGEND_ROWS, PAD, PathSeg, Rgb, ShapeKind, TEXT, TextAlign};
+use super::{CHAR_W, GAP, GraphicItem, LEGEND_SHARE, LINE, MAX_LEGEND_ROWS, PAD, PathSeg, Rgb, ShapeKind, TextAlign};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(super) struct Rect {
@@ -41,14 +41,14 @@ pub(super) fn widest(items: &[String], size: f32) -> f32 {
     items.iter().map(|s| text_w(s, size)).fold(0.0, f32::max)
 }
 
-pub(super) fn text(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, align: TextAlign, bold: bool) {
-    out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color: TEXT, bold, align, font: None });
+pub(super) fn text(out: &mut Vec<GraphicItem>, rect: Rect, s: &str, size: f32, align: TextAlign, bold: bool, color: Rgb) {
+    out.push(GraphicItem::Text { rect: rect.arr(), text: s.to_string(), size, color, bold, align, font: None });
 }
 
 /// Text centred on `cx` with its top at `y`.
-pub(super) fn text_at(out: &mut Vec<GraphicItem>, cx: f32, y: f32, s: &str, size: f32) {
+pub(super) fn text_at(out: &mut Vec<GraphicItem>, cx: f32, y: f32, s: &str, size: f32, color: Rgb) {
     let w = text_w(s, size) + 4.0;
-    text(out, Rect { x: cx - w / 2.0, y, w, h: size * LINE }, s, size, TextAlign::Center, false);
+    text(out, Rect { x: cx - w / 2.0, y, w, h: size * LINE }, s, size, TextAlign::Center, false, color);
 }
 
 pub(super) fn fill(out: &mut Vec<GraphicItem>, segs: Vec<PathSeg>, color: Rgb) {
@@ -120,21 +120,21 @@ pub(super) const SWATCH: f32 = 7.0;
 const SEP: f32 = 10.0;
 
 /// Legend in the given side of `area`; returns the area left for the plot.
-pub(super) fn legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], pos: Pos, area: Rect, fs: f32) -> Rect {
+pub(super) fn legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], pos: Pos, area: Rect, fs: f32, color: Rgb) -> Rect {
     if entries.is_empty() {
         return area;
     }
     // Entry texts are cut to a share of the chart, so a long name can't push the legend out.
     let entries: Vec<(String, Rgb)> = entries.iter().map(|(s, c)| (clip_text(s, area.w * LEGEND_SHARE, fs), *c)).collect();
     match pos {
-        Pos::Right | Pos::Left => side_legend(out, &entries, pos == Pos::Left, area, fs),
-        Pos::Top | Pos::Bottom => row_legend(out, &entries, pos == Pos::Top, area, fs),
+        Pos::Right | Pos::Left => side_legend(out, &entries, pos == Pos::Left, area, fs, color),
+        Pos::Top | Pos::Bottom => row_legend(out, &entries, pos == Pos::Top, area, fs, color),
     }
 }
 
 /// A legend in a column at the left or right of `area`, keeping only the entries that fit above
 /// its bottom; returns the area left for the plot.
-fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], left: bool, area: Rect, fs: f32) -> Rect {
+fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], left: bool, area: Rect, fs: f32, color: Rgb) -> Rect {
     let lh = fs * LINE;
     let entries = entries.get(..((area.h / lh).floor().max(0.0) as usize).min(entries.len())).unwrap_or(&[]);
     if entries.is_empty() {
@@ -148,7 +148,7 @@ fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], left: bool
     for (k, (s, c)) in entries.iter().enumerate() {
         let y = y0 + lh * k as f32;
         swatch(out, x, y + (lh - SWATCH) / 2.0, *c);
-        text(out, Rect { x: x + SWATCH + GAP, y, w: tw + 2.0, h: lh }, s, fs, TextAlign::Left, false);
+        text(out, Rect { x: x + SWATCH + GAP, y, w: tw + 2.0, h: lh }, s, fs, TextAlign::Left, false, color);
     }
     let used = block_w + PAD;
     let mut area = area;
@@ -161,7 +161,7 @@ fn side_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], left: bool
 
 /// A legend in centred rows the width of `area` above or below it (at most
 /// [`MAX_LEGEND_ROWS`], and half its height); returns the area left for the plot.
-fn row_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], top: bool, area: Rect, fs: f32) -> Rect {
+fn row_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], top: bool, area: Rect, fs: f32, color: Rgb) -> Rect {
     let lh = fs * LINE;
     let max_rows = MAX_LEGEND_ROWS.min((area.h / 2.0 / lh).floor().max(1.0) as usize);
     let rows = legend_rows(entries, area.w, fs, max_rows);
@@ -172,7 +172,7 @@ fn row_legend(out: &mut Vec<GraphicItem>, entries: &[(String, Rgb)], top: bool, 
         let y = y0 + lh * r as f32;
         for (s, c, w) in row {
             swatch(out, x, y + (lh - SWATCH) / 2.0, *c);
-            text(out, Rect { x: x + SWATCH + GAP, y, w: w + 2.0, h: lh }, s, fs, TextAlign::Left, false);
+            text(out, Rect { x: x + SWATCH + GAP, y, w: w + 2.0, h: lh }, s, fs, TextAlign::Left, false, color);
             x += SWATCH + GAP + w + SEP;
         }
     }

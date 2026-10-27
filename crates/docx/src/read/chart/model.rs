@@ -62,6 +62,8 @@ pub(super) struct Axis {
     pub(super) max: Option<f64>,
     /// Number format of the tick labels, when not linked to the source data.
     pub(super) fmt: Option<String>,
+    /// Colour of the tick labels, when the axis's `c:txPr` states one.
+    pub(super) text: Option<Rgb>,
 }
 
 pub(super) struct Series {

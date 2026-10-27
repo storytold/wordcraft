@@ -1,7 +1,7 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
 use super::model::{Axis, Grouping, Kind, Pos, Series};
 use super::plot::label;
-use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, fill_colour, int, measure, slot};
+use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, fill_colour, int, measure, slot};
 
 impl Chart {
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
@@ -50,7 +50,8 @@ impl Chart {
         if grouping == Grouping::Percent {
             to_percent(&mut series, n);
         }
-        let (cat, val) = chart_axes(plot, scatter);
+        let (cat, val) = chart_axes(plot, scatter, theme);
+        let text_colour = chart_text_colour(space, theme);
         let val_fmt = if grouping == Grouping::Percent {
             "0%".to_string()
         } else {
@@ -80,7 +81,20 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            title_colour: chart.child("c:title").and_then(|t| element_text_colour(t, theme)).unwrap_or(text_colour),
+            legend_colour: chart.child("c:legend").and_then(|l| element_text_colour(l, theme)).unwrap_or(text_colour),
+            text_colour,
         })
+    }
+
+    /// Colour of the category (scatter: x) axis labels.
+    pub(super) fn cat_colour(&self) -> Rgb {
+        self.cat.text.unwrap_or(self.text_colour)
+    }
+
+    /// Colour of the value axis labels.
+    pub(super) fn val_colour(&self) -> Rgb {
+        self.val.text.unwrap_or(self.text_colour)
     }
 
     pub(super) fn stacked(&self) -> bool {
@@ -146,7 +160,7 @@ fn to_percent(series: &mut [Series], n: usize) {
 }
 
 /// The category axis (scatter: the horizontal value axis) and the value axis of a plot area.
-fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
+fn chart_axes(plot: &El, scatter: bool, theme: &[Rgb]) -> (Axis, Axis) {
     let vals_ax: Vec<&El> = plot.children("c:valAx").collect();
     let horiz_pos = |a: &&El| matches!(a.child("c:axPos").and_then(|p| p.attr("val")), Some("b" | "t"));
     let (val_el, x_el) = if scatter {
@@ -157,7 +171,7 @@ fn chart_axes(plot: &El, scatter: bool) -> (Axis, Axis) {
         (vals_ax.first().copied(), None)
     };
     let cat_el = plot.els().find(|e| matches!(e.name.as_str(), "c:catAx" | "c:dateAx"));
-    (axis(if scatter { x_el } else { cat_el }), axis(val_el))
+    (axis(if scatter { x_el } else { cat_el }, theme), axis(val_el, theme))
 }
 
 /// The chart's title. An empty `c:title` shows the series name (Word's automatic title of a
@@ -285,7 +299,7 @@ fn pts(cache: &El, cap: usize) -> Vec<Option<String>> {
     out
 }
 
-pub(super) fn axis(a: Option<&El>) -> Axis {
+pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
     let Some(a) = a else { return Axis { deleted: true, ..Default::default() } };
     let scaling = a.child("c:scaling");
     let num =
@@ -303,7 +317,28 @@ pub(super) fn axis(a: Option<&El>) -> Axis {
             .and_then(|f| f.attr("formatCode"))
             .filter(|f| f.len() <= MAX_FORMAT_CODE)
             .map(str::to_string),
+        text: element_text_colour(a, theme),
     }
+}
+
+/// The text colour a chart element (title, legend, axis) states for itself: its rich text's
+/// first run, else the default run properties of its rich text or `c:txPr`.
+pub(super) fn element_text_colour(e: &El, theme: &[Rgb]) -> Option<Rgb> {
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(|r| fill_colour(r, theme))
+        .or_else(|| rich.and_then(|r| run_defaults_colour(r, theme)))
+        .or_else(|| e.child("c:txPr").and_then(|t| run_defaults_colour(t, theme)))
+}
+
+/// The colour of a text body's default run properties (`a:defRPr`).
+fn run_defaults_colour(body: &El, theme: &[Rgb]) -> Option<Rgb> {
+    body.find("a:defRPr").and_then(|d| fill_colour(d, theme))
+}
+
+/// The chart's own text colour (its `c:txPr`), the grey Word's default style uses without one.
+pub(super) fn chart_text_colour(space: &El, theme: &[Rgb]) -> Rgb {
+    space.child("c:txPr").and_then(|t| run_defaults_colour(t, theme)).unwrap_or(TEXT)
 }
 
 fn title_text(t: &El) -> Option<String> {

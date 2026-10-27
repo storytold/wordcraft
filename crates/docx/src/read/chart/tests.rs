@@ -384,7 +384,7 @@ fn value_format_code_length_is_capped() {
 fn axis_format_code_length_is_capped() {
     let fmt = |code: &str| -> Option<String> {
         let x = format!(r#"<c:valAx {NS}><c:numFmt formatCode="{code}" sourceLinked="0"/></c:valAx>"#);
-        axis(Some(&crate::xml::parse(x.as_bytes()).unwrap())).fmt
+        axis(Some(&crate::xml::parse(x.as_bytes()).unwrap()), &[]).fmt
     };
     let ok = format!("{}0", "x".repeat(254));
     assert_eq!(fmt(&ok), Some(ok.clone()));
@@ -527,4 +527,47 @@ fn negative_sections_and_scientific_numbers() {
     assert_eq!(format_value(0.00012, "0.0E+0", 0.0001), "1.2E-4");
     assert_eq!(format_value(0.0, "0.00E+00", 1.0), "0.00E+00");
     assert_eq!(format_value(-12345.0, "0.0E-00", 1.0), "-1.2E04");
+}
+
+/// A chart's title, legend and axis labels take the colour their own text properties state
+/// (a dark chart style states light text); text that states none takes the chart's `c:txPr`
+/// colour, and the default grey without one. All of it used to be the default grey, which
+/// left the text of a dark chart invisible.
+#[test]
+fn chart_text_takes_the_colour_its_text_properties_state() {
+    let fill = |c: &str| format!(r#"<a:solidFill><a:srgbClr val="{c}"/></a:solidFill>"#);
+    let tx_pr = |c: &str| format!(r#"<c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr>{}</a:defRPr></a:pPr></a:p></c:txPr>"#, fill(c));
+    let chart = |own: bool, chart_default: Option<&str>| {
+        let rpr = if own { format!("<a:rPr>{}</a:rPr>", fill("FFFFFF")) } else { "<a:rPr/>".to_string() };
+        let title = format!(r#"<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:r>{rpr}<a:t>Revenue</a:t></a:r></a:p></c:rich></c:tx></c:title>"#);
+        let (cat, val, legend) = if own { (tx_pr("FF0000"), tx_pr("0000FF"), tx_pr("00FF00")) } else { Default::default() };
+        let plot = format!(
+            r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/>{cat}</c:catAx><c:valAx><c:axId val="2"/>{val}</c:valAx></c:plotArea>"#,
+            ser(0, "North", None, &["Q1", "Q2"], &["4", "8"])
+        );
+        let x = format!(
+            r#"<c:chartSpace {NS}><c:chart>{title}{plot}<c:legend><c:legendPos val="b"/>{legend}</c:legend></c:chart>{}</c:chartSpace>"#,
+            chart_default.map(tx_pr).unwrap_or_default()
+        );
+        chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0)
+    };
+    let colour = |items: &[GraphicItem], s: &str| {
+        items.iter().find_map(|it| match it {
+            GraphicItem::Text { text, color, .. } if text == s => Some(*color),
+            _ => None,
+        })
+    };
+    let own = chart(true, Some("123456"));
+    assert_eq!(colour(&own, "Revenue"), Some(Rgb(0xFF, 0xFF, 0xFF)), "title");
+    assert_eq!(colour(&own, "Q1"), Some(Rgb(0xFF, 0x00, 0x00)), "category axis");
+    assert_eq!(colour(&own, "8"), Some(Rgb(0x00, 0x00, 0xFF)), "value axis");
+    assert_eq!(colour(&own, "North"), Some(Rgb(0x00, 0xFF, 0x00)), "legend");
+    let inherited = chart(false, Some("123456"));
+    for s in ["Revenue", "Q1", "8", "North"] {
+        assert_eq!(colour(&inherited, s), Some(Rgb(0x12, 0x34, 0x56)), "{s} takes the chart's colour");
+    }
+    let plain = chart(false, None);
+    for s in ["Revenue", "Q1", "8", "North"] {
+        assert_eq!(colour(&plain, s), Some(TEXT), "{s} keeps the default grey");
+    }
 }

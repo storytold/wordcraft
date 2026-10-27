@@ -251,9 +251,9 @@ fn draw_value_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, ticks: &[
     for (t, s) in ticks {
         let p = g.val(*t);
         if g.horiz {
-            text_at(out, p, g.plot.bottom() + GAP / 2.0, s, fs);
+            text_at(out, p, g.plot.bottom() + GAP / 2.0, s, fs, c.val_colour());
         } else {
-            text(out, Rect { x: margin.x, y: p - lh / 2.0, w: margin.w - GAP, h: lh }, s, fs, TextAlign::Right, false);
+            text(out, Rect { x: margin.x, y: p - lh / 2.0, w: margin.w - GAP, h: lh }, s, fs, TextAlign::Right, false, c.val_colour());
         }
     }
 }
@@ -265,13 +265,13 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
     let plot = g.plot;
     if c.kind == Kind::Scatter {
         for (t, s) in xticks {
-            text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs);
+            text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs, c.cat_colour());
         }
     } else if g.horiz {
         for (i, lines) in m.wrapped.iter().enumerate() {
             let top = g.band_start(i) + g.band() / 2.0 - lines.len() as f32 * lh / 2.0;
             for (k, s) in lines.iter().enumerate() {
-                text(out, Rect { x: area.x, y: top + k as f32 * lh, w: m.left - GAP, h: lh }, s, fs, TextAlign::Right, false);
+                text(out, Rect { x: area.x, y: top + k as f32 * lh, w: m.left - GAP, h: lh }, s, fs, TextAlign::Right, false, c.cat_colour());
             }
         }
     } else {
@@ -279,7 +279,7 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
         for (i, lines) in m.wrapped.iter().enumerate().filter(|(i, _)| i % m.skip == 0) {
             for (k, s) in lines.iter().enumerate() {
                 let y = plot.bottom() + GAP / 2.0 + k as f32 * lh;
-                text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, false);
+                text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, false, c.cat_colour());
             }
         }
     }
