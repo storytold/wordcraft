@@ -6972,3 +6972,196 @@ fn focus_hides_the_ribbon_and_escape_brings_it_back() {
     h.step();
     assert!(h.state().session.view.read_mode && shown(&h, "Focus"), "Immersive Reader keeps the status bar");
 }
+
+#[test]
+fn correlated_host_open_finishes_the_actual_import_and_reimports_same_named_bytes() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    let original = a.session.document_id();
+    let first = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::from_text("first native body")).unwrap();
+    a.open_host_document("version.json", &first).unwrap();
+    let imported = a.session.document_id();
+    assert_ne!(imported, original);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "first native body");
+    let second = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::from_text("second native body")).unwrap();
+    a.open_host_document("version.json", &second).unwrap();
+    assert_ne!(a.session.document_id(), imported);
+    assert_eq!(a.session.doc.plain_text(wordcraft_doc::StoryRef::Body), "second native body");
+    assert!(!a.session.dirty);
+}
+
+#[test]
+fn correlated_host_open_reports_parse_failure_without_replacing_the_document() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::from_text("retain original")), Services::default());
+    let original = a.session.document_id();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    assert!(a.open_host_document("version.json", br#"{"body":"malformed"}"#).is_err());
+    assert_eq!(a.session.document_id(), original);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+}
+
+#[test]
+fn correlated_host_open_refuses_unsaved_work_without_queueing_a_replacement_dialog() {
+    let mut a = typed();
+    a.ui.backstage = true;
+    let original = a.session.document_id();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::new()).unwrap();
+    assert!(a.open_host_document("version.json", &bytes).is_err());
+    assert_eq!(a.session.document_id(), original);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+    assert!(a.session.dirty);
+    assert!(a.ui.backstage);
+    assert_eq!(prompt(&a), None);
+}
+
+#[test]
+fn correlated_host_open_refuses_a_save_that_is_still_unconfirmed() {
+    let (mut a, _saves, _last) = web_picker_app();
+    a.execute("file.save", json!({})).unwrap();
+    assert!(!a.session.dirty);
+    assert!(a.save_unconfirmed());
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::new()).unwrap();
+    assert!(a.open_host_document("version.json", &bytes).is_err());
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+    assert!(a.save_unconfirmed());
+}
+
+#[test]
+fn correlated_host_open_leaves_file_home_only_after_actual_success() {
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.ui.backstage = true;
+    let original = a.session.document_id();
+    assert!(a.open_host_document("version.json", br#"{"body":"malformed"}"#).is_err());
+    assert!(a.ui.backstage);
+    assert_eq!(a.session.document_id(), original);
+    let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::from_text("show the native editor")).unwrap();
+    a.open_host_document("version.json", &bytes).unwrap();
+    assert!(!a.ui.backstage, "successful correlated host import leaves File Home");
+}
+
+fn managed_host_app() -> (WordApp, async_saves::AsyncSaves, std::rc::Rc<std::cell::RefCell<Vec<u64>>>) {
+    let mut a = typed();
+    let saves = async_saves::AsyncSaves::default();
+    let requests = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let (hook, seen) = (saves.clone(), requests.clone());
+    a.services.download = Some(Box::new(|_, _| Err("native save must not download a package".into())));
+    a.services.host_save_request = Some(Box::new(move |_, _| {
+        let ticket = hook.start();
+        seen.borrow_mut().push(ticket);
+        Ok(ticket)
+    }));
+    a.services.async_saves = Some(saves.clone());
+    (a, saves, requests)
+}
+
+#[test]
+fn managed_native_save_request_leaves_document_dirty_and_does_not_stamp_or_export_it() {
+    let (mut a, saves, requests) = managed_host_app();
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let path = a.session.path.clone();
+    let rev = a.session.rev();
+    let result = a.execute("file.save", json!({})).unwrap();
+    let ticket = requests.borrow()[0];
+    assert_eq!(result["pendingSave"], ticket);
+    assert_eq!(saves.pending(), 1);
+    assert!(a.session.dirty);
+    assert_eq!(a.session.path, path);
+    assert_eq!(a.session.rev(), rev);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+}
+
+#[test]
+fn managed_save_as_exports_a_copy_without_marking_the_native_document_saved() {
+    let (mut a, got) = host_app(false);
+    a.services.host_save_request = Some(Box::new(|_, _| Err("SaveAs exports a copy; no native save request".into())));
+    let before = serde_json::to_value(&a.session.doc).unwrap();
+    let path = a.session.path.clone();
+    a.execute("file.saveAs", json!({"path":"copy.docx"})).unwrap();
+    assert!(a.session.dirty);
+    assert_eq!(a.session.path, path);
+    assert_eq!(serde_json::to_value(&a.session.doc).unwrap(), before);
+    let got = got.borrow();
+    assert_eq!(got.len(), 1);
+    assert_eq!(got[0].0, "copy.docx");
+    assert!(!got[0].1, "download copy, never host file identity");
+    assert!(got[0].2 > 0);
+}
+
+#[test]
+fn managed_save_before_close_waits_for_a_confirmed_snapshot() {
+    let (mut a, saves, requests) = managed_host_app();
+    a.run("file.close", json!({})).unwrap();
+    let result = a.run("ui.saveChanges", json!({"answer":"save"})).unwrap();
+    assert_eq!(result["pending"], "save");
+    a.settle_async_saves();
+    assert!(body_text(&a).contains(UNSAVED));
+    assert!(a.session.dirty);
+    // Simulate the bridge accepting an exact current snapshot ACK, then settling its ticket.
+    a.session.dirty = false;
+    saves.finish(requests.borrow()[0], async_saves::SaveOutcome::Saved);
+    a.settle_async_saves();
+    assert!(!body_text(&a).contains(UNSAVED));
+    assert_eq!(prompt(&a), None);
+}
+
+#[test]
+fn managed_save_failure_keeps_the_document_and_can_retry() {
+    let (mut a, saves, requests) = managed_host_app();
+    a.run("file.close", json!({})).unwrap();
+    a.run("ui.saveChanges", json!({"answer":"save"})).unwrap();
+    let first = requests.borrow()[0];
+    saves.finish(first, async_saves::SaveOutcome::Failed("store unavailable".into()));
+    a.settle_async_saves();
+    assert!(a.session.dirty && body_text(&a).contains(UNSAVED));
+    assert_eq!(prompt(&a), Some("saveChanges"));
+    a.run("ui.saveChanges", json!({"answer":"save"})).unwrap();
+    assert_ne!(requests.borrow()[1], first);
+    assert_eq!(saves.pending(), 1);
+}
+
+#[test]
+fn managed_stale_saved_ticket_settles_but_keeps_newer_edits_and_allows_manual_retry() {
+    let (mut a, saves, requests) = managed_host_app();
+    a.execute("file.save", json!({})).unwrap();
+    let first = requests.borrow()[0];
+    a.execute("text.insert", json!({"text":"newer edit"})).unwrap();
+    // Known old durable ACK: finish only its ticket; the bridge must not clear dirty.
+    saves.finish(first, async_saves::SaveOutcome::Saved);
+    a.settle_async_saves();
+    assert_eq!(saves.pending(), 0);
+    assert!(a.session.dirty);
+    a.execute("file.save", json!({})).unwrap();
+    assert_ne!(requests.borrow()[1], first);
+    assert_eq!(saves.pending(), 1);
+}
+
+#[test]
+fn managed_stale_saved_ticket_never_continues_close_over_newer_edits() {
+    let (mut a, saves, requests) = managed_host_app();
+    a.run("file.close", json!({})).unwrap();
+    a.run("ui.saveChanges", json!({"answer":"save"})).unwrap();
+    let first = requests.borrow()[0];
+    a.execute("text.insert", json!({"text":"newer edit"})).unwrap();
+    saves.finish(first, async_saves::SaveOutcome::Saved);
+    a.settle_async_saves();
+    assert_eq!(saves.pending(), 0);
+    assert!(a.session.dirty && body_text(&a).contains(UNSAVED));
+    assert_eq!(prompt(&a), Some("saveChanges"));
+    a.run("ui.saveChanges", json!({"answer":"save"})).unwrap();
+    assert_ne!(requests.borrow()[1], first);
+    assert_eq!(saves.pending(), 1);
+}
+
+#[test]
+fn managed_save_of_a_clean_document_still_guards_replacement_until_its_ticket_finishes() {
+    let (mut a, saves, requests) = managed_host_app();
+    a.session.dirty = false;
+    a.execute("file.save", json!({})).unwrap();
+    assert!(a.save_unconfirmed());
+    a.run("file.close", json!({})).unwrap();
+    assert_eq!(prompt(&a), Some("saveChanges"));
+    saves.finish(requests.borrow()[0], async_saves::SaveOutcome::Saved);
+    a.settle_async_saves();
+    assert!(!a.save_unconfirmed());
+}

@@ -42,6 +42,10 @@ pub struct Services {
     /// under its own name and format, as on the desktop, and a Save or Save As that keeps
     /// everything makes that name the document's file, so the next Save goes to it.
     pub host_save: Option<HostSaveFn>,
+    /// Opt-in native host persistence: Save requests an asynchronous ticket without exporting,
+    /// stamping metadata or marking the document saved. The hook starts the ticket in
+    /// `async_saves`; the host completes it only after durable storage (or failure).
+    pub host_save_request: Option<HostSaveRequestFn>,
     /// Web: told whether the document has unsaved changes after each pass, for the browser's
     /// leave-page guard (`beforeunload` runs between frames and can't ask the app).
     pub on_dirty: Option<Box<dyn Fn(bool)>>,
@@ -100,3 +104,7 @@ pub type Inbox = std::sync::Arc<std::sync::Mutex<Vec<(String, Vec<u8>)>>>;
 /// [`Services::host_save`]: `(file name, bytes, save_as)`. An error means the page didn't get
 /// the file, and the save failed.
 pub type HostSaveFn = Box<dyn Fn(&str, &[u8], bool) -> Result<(), String>>;
+
+/// A native Save request: the current session and pending-draft revision, returning the ticket
+/// started in [`Services::async_saves`]. The session is read-only to the hook.
+pub type HostSaveRequestFn = Box<dyn Fn(&Session, u64) -> Result<u64, String>>;

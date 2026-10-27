@@ -61,6 +61,11 @@ impl WordApp {
     /// In the browser the save picker may write the file later ([`PromptSave::Later`], #1315).
     fn save_for_prompt(&mut self) -> Result<PromptSave, String> {
         let v = self.execute("file.save", json!({}))?;
+        if self.services.host_save_request.is_some()
+            && let Some(ticket) = v.get("pendingSave").and_then(Value::as_u64)
+        {
+            return Ok(PromptSave::Later(ticket));
+        }
         let saved = v.get("saved").and_then(Value::as_bool) == Some(true) || v.get("downloaded").is_some();
         if !self.safely_saved(saved) {
             return Ok(PromptSave::NotSaved);
@@ -75,7 +80,7 @@ impl WordApp {
     /// looks saved, but nothing is written yet, so New/Open ask first.
     pub(crate) fn save_unconfirmed(&self) -> bool {
         let document = self.session.document_id();
-        self.saves_in_flight.iter().any(|s| s.marked_saved && s.document == document)
+        self.saves_in_flight.iter().any(|s| (s.marked_saved || s.host_managed) && s.document == document)
     }
 
     /// The document's name as the Save Changes prompt shows it: its file's name, else its title.
@@ -128,7 +133,12 @@ impl WordApp {
                     }
                 }
                 if let async_saves::SaveOutcome::Failed(error) = &outcome {
-                    let msg = i18n::fmt(tl!("Couldn't download {name}: {error}"), &[("name", &save.name), ("error", error)]);
+                    let template = if save.host_managed {
+                        tl!("Couldn't save {name}, so it is still open and nothing was lost: {error}")
+                    } else {
+                        tl!("Couldn't download {name}: {error}")
+                    };
+                    let msg = i18n::fmt(template, &[("name", &save.name), ("error", error)]);
                     log::error!("the save picker couldn't save {}: {error}", save.name);
                     self.status(msg);
                 }
@@ -140,7 +150,12 @@ impl WordApp {
             }
             match outcome {
                 // Only when nothing changed since and no later save of it is still unconfirmed.
-                async_saves::SaveOutcome::Saved if !self.session.dirty && self.session.rev() == wait.rev && !self.save_unconfirmed() => {
+                async_saves::SaveOutcome::Saved
+                    if !self.session.dirty
+                        && self.session.rev() == wait.rev
+                        && !self.save_unconfirmed()
+                        && (self.services.host_save_request.is_none() || !panes::has_comment_drafts(self)) =>
+                {
                     if let Err(e) = self.execute_user(&wait.then, wait.params) {
                         self.status(e);
                     }

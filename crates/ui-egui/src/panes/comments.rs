@@ -72,6 +72,7 @@ pub(crate) struct CommentDrafts {
     document: u64,
     edits: BTreeMap<u32, String>,
     replies: BTreeMap<u32, String>,
+    revision: u64,
 }
 
 impl CommentDrafts {
@@ -83,6 +84,37 @@ impl CommentDrafts {
             self.document = document;
         }
         self
+    }
+
+    /// A cheap change token for unsaved text that is not in the native model yet.
+    pub(crate) fn revision_for(&self, document: u64) -> u64 {
+        if self.document == document { self.revision } else { 0 }
+    }
+
+    fn record_edit(&mut self, id: u32, text: String) {
+        if self.edits.get(&id) != Some(&text) {
+            self.edits.insert(id, text);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    fn record_reply(&mut self, id: u32, text: String) {
+        if self.replies.get(&id) != Some(&text) {
+            self.replies.insert(id, text);
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    fn forget_edit(&mut self, id: u32) {
+        if self.edits.remove(&id).is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
+    }
+
+    fn forget_reply(&mut self, id: u32) {
+        if self.replies.remove(&id).is_some() {
+            self.revision = self.revision.wrapping_add(1);
+        }
     }
 
     /// Nothing typed and not yet written.
@@ -133,12 +165,12 @@ pub(crate) fn comment_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Opti
         r.request_focus();
     }
     if r.changed() {
-        drafts(app).edits.insert(id, text);
+        drafts(app).record_edit(id, text);
     }
     if r.lost_focus() {
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             // Escape throws the draft away: the field shows the comment's text again.
-            drafts(app).edits.remove(&id);
+            drafts(app).forget_edit(id);
         } else {
             // A refusal is on the status line, and the draft stays in the field.
             let _ = commit_comment(app, id);
@@ -161,7 +193,7 @@ pub(crate) fn commit_comment(app: &mut WordApp, id: u32) -> Result<(), String> {
     {
         app.run("review.editComment", json!({"id": id, "text": text}))?;
     }
-    drafts(app).edits.remove(&id);
+    drafts(app).forget_edit(id);
     Ok(())
 }
 
@@ -193,11 +225,11 @@ pub(crate) fn reply_editor(app: &mut WordApp, ui: &mut Ui, id: u32, font: Option
         r.request_focus();
     }
     if r.changed() {
-        drafts(app).replies.insert(id, text);
+        drafts(app).record_reply(id, text);
     }
     if r.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Escape)) {
         // Escape throws the reply away and closes the field.
-        drafts(app).replies.remove(&id);
+        drafts(app).forget_reply(id);
         return true;
     }
     r.lost_focus() && commit_reply(app, id).is_ok()
@@ -211,7 +243,7 @@ pub(crate) fn commit_reply(app: &mut WordApp, id: u32) -> Result<(), String> {
         let root = thread_root(app, id);
         app.run("review.reply", json!({"id": root, "text": text.trim_end()}))?;
     }
-    drafts(app).replies.remove(&id);
+    drafts(app).forget_reply(id);
     Ok(())
 }
 
@@ -237,4 +269,111 @@ pub(crate) fn flush_comment_drafts(app: &mut WordApp) -> Result<(), String> {
         }
     }
     first
+}
+
+#[cfg(test)]
+mod native_snapshot_tests {
+    use super::*;
+    use crate::Services;
+    use wordcraft_engine::Session;
+
+    #[test]
+    fn native_snapshot_commits_pending_comment_and_keeps_it_unsaved() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.run("review.newComment", json!({"text":"original"})).unwrap();
+        let id = *app.session.doc.comments.keys().next().unwrap();
+        let part = app.session.doc.comments[&id].part;
+        let before = app.session.rev();
+        drafts(&mut app).record_edit(id, "pending native comment".into());
+        assert_eq!(app.session.doc.plain_text(StoryRef::Part(part)), "original");
+        app.prepare_native_snapshot().unwrap();
+        assert_eq!(app.session.doc.plain_text(StoryRef::Part(part)), "pending native comment");
+        assert!(app.session.dirty, "export is not a storage acknowledgement");
+        assert!(app.session.rev() > before);
+        assert!(!has_comment_drafts(&app));
+    }
+
+    #[test]
+    fn every_pending_comment_and_reply_edit_changes_the_native_draft_token() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.session.dirty = true;
+        let first = app.native_draft_revision();
+        drafts(&mut app).record_edit(0, "first".into());
+        let second = app.native_draft_revision();
+        drafts(&mut app).record_edit(0, "second".into());
+        let third = app.native_draft_revision();
+        drafts(&mut app).record_reply(0, "reply draft".into());
+        let fourth = app.native_draft_revision();
+        assert_ne!(first, second);
+        assert_ne!(second, third);
+        assert_ne!(third, fourth);
+        assert!(app.session.dirty);
+    }
+    #[test]
+    fn refused_pending_comment_stays_local_and_snapshot_preparation_fails() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.run("review.newComment", json!({"text":"original"})).unwrap();
+        let id = *app.session.doc.comments.keys().next().unwrap();
+        drafts(&mut app).record_edit(id, "pending retained".into());
+        app.session.run("review.restrict", &json!({"mode":"readOnly"})).unwrap();
+        let before = serde_json::to_value(&app.session.doc).unwrap();
+        assert!(app.prepare_native_snapshot().is_err());
+        assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+        assert_eq!(comment_draft(&app, id).as_deref(), Some("pending retained"));
+    }
+
+    #[test]
+    fn correlated_host_open_refuses_pending_comment_without_flushing_or_replacing_it() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.run("review.newComment", json!({"text":"original"})).unwrap();
+        let id = *app.session.doc.comments.keys().next().unwrap();
+        app.session.dirty = false;
+        app.ui.backstage = true;
+        drafts(&mut app).record_edit(id, "pending retained".into());
+        let before = serde_json::to_value(&app.session.doc).unwrap();
+        let document = app.session.document_id();
+        let revision = app.native_draft_revision();
+        let bytes = wordcraft_engine::io::save_bytes("version.json", &wordcraft_doc::Document::new()).unwrap();
+        assert!(app.open_host_document("version.json", &bytes).is_err());
+        assert_eq!(app.session.document_id(), document);
+        assert_eq!(app.native_draft_revision(), revision);
+        assert!(app.ui.backstage);
+        assert_eq!(serde_json::to_value(&app.session.doc).unwrap(), before);
+        assert_eq!(comment_draft(&app, id).as_deref(), Some("pending retained"));
+    }
+    #[test]
+    fn stale_manual_ack_never_closes_a_new_comment_draft_after_an_earlier_auto_ack() {
+        let mut app = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+        app.run("review.newComment", json!({"text":"original native comment"})).unwrap();
+        let id = *app.session.doc.comments.keys().next().unwrap();
+        let document = app.session.document_id();
+        let saves = crate::async_saves::AsyncSaves::default();
+        let hook = saves.clone();
+        let ticket = std::rc::Rc::new(std::cell::Cell::new(0));
+        let seen = ticket.clone();
+        app.services.download = Some(Box::new(|_, _| Err("native managed save never downloads".into())));
+        app.services.async_saves = Some(saves.clone());
+        app.services.host_save_request = Some(Box::new(move |_, _| {
+            let id = hook.start();
+            seen.set(id);
+            Ok(id)
+        }));
+        app.run("file.close", json!({})).unwrap();
+        app.run("ui.saveChanges", json!({"answer":"save"})).unwrap();
+        assert_ne!(ticket.get(), 0);
+        // A separate, exact current auto-snapshot ACK arrived first. It legitimately clears
+        // Session.dirty; the original manual ticket is still waiting for its durable reply.
+        app.session.dirty = false;
+        drafts(&mut app).record_edit(id, "newer uncommitted comment".into());
+        let draft_revision = app.native_draft_revision();
+        // The bridge knows the old manual snapshot/ticket but its current draft token differs:
+        // settle that ticket as Saved without flushing or clearing the newer draft.
+        saves.finish(ticket.get(), crate::async_saves::SaveOutcome::Saved);
+        app.settle_async_saves();
+        assert!(app.has_document(), "Close must wait for the newer pending comment");
+        assert_eq!(app.session.document_id(), document);
+        assert_eq!(app.native_draft_revision(), draft_revision);
+        assert_eq!(comment_draft(&app, id).as_deref(), Some("newer uncommitted comment"));
+        assert!(matches!(app.dialog.as_ref(), Some(crate::dialogs::Dialog::SaveChanges { .. })));
+    }
 }

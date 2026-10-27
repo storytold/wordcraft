@@ -384,7 +384,7 @@ pub fn title_bar(app: &mut WordApp, ui: &mut Ui) {
                 format!(
                     "{} — {}",
                     app.title_stem(),
-                    if app.session.dirty {
+                    if app.session.dirty || (app.services.host_save_request.is_some() && crate::panes::has_comment_drafts(app)) {
                         tl!("Edited")
                     } else if app.session.path.is_some() {
                         tl!("Saved")

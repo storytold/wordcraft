@@ -29,7 +29,11 @@ pub fn start() {
         };
         // `?host=parent`: a same-origin page framing WordCraft opens documents in it and stores
         // what it saves (`host`). That page guards leaving it, so this one doesn't.
-        let bridge = if query_param("host").as_deref() == Some("parent") { crate::host::Bridge::new() } else { None };
+        let bridge = match query_param("host").as_deref() {
+            Some("parent") => crate::host::Bridge::new(query_param("save").as_deref() == Some("managed")),
+            Some("port") => query_param("parent_origin").and_then(|origin| crate::host::Bridge::new_port(&origin)),
+            _ => None,
+        };
         let app_bridge = bridge.clone();
         let dirty = Rc::new(Cell::new(false));
         let saves = AsyncSaves::default();
@@ -99,7 +103,7 @@ pub fn start() {
                         crate::host::Bridge::set_author(&mut app, &author);
                         prefs.keep_own_author(&app.session.author, &own);
                     }
-                    Ok(Box::new(WebShell { app, inbox, messages, prefs }))
+                    Ok(Box::new(WebShell { app, inbox, messages, prefs, bridge: app_bridge }))
                 }),
             )
             .await;
@@ -134,6 +138,7 @@ struct WebShell {
     inbox: Inbox,
     messages: Rc<RefCell<Vec<String>>>,
     prefs: crate::prefs::PrefsSync,
+    bridge: Option<crate::host::Bridge>,
 }
 
 fn local_storage() -> Option<web_sys::Storage> {
@@ -155,6 +160,9 @@ impl eframe::App for WebShell {
             self.app.status(msg);
         }
         self.app.logic(ctx);
+        if let Some(bridge) = &self.bridge {
+            bridge.observe(&mut self.app, ctx);
+        }
         // Store changed preferences straight away: a reload or closed tab runs no exit code (#2132).
         if let Some(json) = self.prefs.changed(&self.app) {
             match local_storage() {
