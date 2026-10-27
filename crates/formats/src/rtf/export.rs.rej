@@ -1,0 +1,33 @@
+--- rtf/export.rs
++++ rtf/export.rs
+@@ -97,7 +113,30 @@ impl Tables {
+     }
+ }
+ 
++/// What a place marker in the exported text stands for (see [`MARK_OPEN`]).
++enum Mark {
++    Note {
++        endnote: bool,
++        blocks: Vec<FBlock>,
++    },
++    RangeStart(u32),
++    /// The end of a comment's range; the first end of each comment also carries its annotation.
++    RangeEnd {
++        id: u32,
++        ann: Option<Annotation>,
++    },
++    Done,
++}
++
++struct Annotation {
++    author: String,
++    initials: String,
++    date: String,
++    blocks: Vec<FBlock>,
++}
++
+ struct Writer {
++    marks: Vec<Mark>,
+     t: Tables,
+     /// List definitions: per list, the ordered flag per level.
+     lists: Vec<[bool; 9]>,
