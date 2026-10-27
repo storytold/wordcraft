@@ -86,6 +86,7 @@ fn update_template(s: &mut Session, f: impl FnOnce(&mut Document)) -> Result<(),
         }
     };
     f(&mut t);
+    nt::drop_unused_lists(&mut t);
     let bytes = nt::to_bytes(&t).map_err(CmdError::Failed)?;
     store.save(&bytes).map_err(|e| CmdError::Failed(format!("the Normal template couldn't be saved: {e}")))
 }

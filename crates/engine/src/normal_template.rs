@@ -223,6 +223,16 @@ pub fn apply_to_import(d: &mut Document, t: &Document) {
 }
 
 /// Theme fonts, colours and name from `from`.
+/// Drops lists no style numbers with, so saving the same styles again (which copies their lists
+/// afresh) doesn't grow the template.
+// ponytail: only styles are checked; the template's body is never used, so its paragraphs don't count.
+pub(crate) fn drop_unused_lists(t: &mut Document) {
+    let used: std::collections::HashSet<u32> = t.styles.styles.iter().filter_map(|st| st.para.numbering.map(|n| n.num)).collect();
+    t.numbering.nums.retain(|n| used.contains(&n.id));
+    let abstracts: std::collections::HashSet<u32> = t.numbering.nums.iter().map(|n| n.abstract_id).collect();
+    t.numbering.abstracts.retain(|a| abstracts.contains(&a.id));
+}
+
 pub(crate) fn copy_theme(to: &mut wordcraft_doc::Settings, from: &wordcraft_doc::Settings) {
     to.major_font = from.major_font.clone();
     to.minor_font = from.minor_font.clone();
