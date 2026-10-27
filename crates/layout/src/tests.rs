@@ -12950,3 +12950,41 @@ fn a_caption_kept_with_an_unsplittable_row_counts_the_border_below_it() {
         }
     }
 }
+
+/// A double-spaced caption kept with a table fits by itself where its text does, its last line's
+/// leading running into the bottom margin, and so it goes over with the table that doesn't fit
+/// under it. Measured in Word for Mac (Times New Roman 12 pt, double spacing, the caption's top
+/// 0, 4 and 8 pt below the foot of 52 exactly 12 pt lines): not kept, the caption stays at the
+/// foot of page 1; kept, it starts page 2 with the table.
+#[test]
+fn a_kept_caption_whose_leading_runs_into_the_bottom_margin_goes_with_the_table() {
+    use wordcraft_doc::props::LineSpacing;
+    let fill = 52;
+    for push in [0.0f32, 4.0, 8.0] {
+        for keep in [false, true] {
+            let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+            d.styles.default_chr.font = Some(WRAP_TEST_FONT.into());
+            d.styles.default_chr.size = Some(12.0);
+            for i in 0..=fill {
+                let p = d.para_mut(StoryRef::Body, &Path::top(i)).unwrap();
+                p.props.line_spacing = Some(if i < fill { LineSpacing::Exactly(12.0) } else { LineSpacing::Multiple(2.0) });
+                p.props.space_before = Some(if i < fill { 0.0 } else { push });
+                p.props.space_after = Some(0.0);
+                p.props.keep_next = Some(i == fill && keep);
+            }
+            let mut t = Table::new(3, 1, 468.0);
+            t.rows[0].props.cant_split = true;
+            for row in &mut t.rows {
+                row.cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("row", Default::default()))];
+            }
+            d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+            let l = lay(&d);
+            let caption = l
+                .pages
+                .iter()
+                .position(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+                .unwrap();
+            assert_eq!(caption, usize::from(keep), "{push} pt before the caption, kept with the table: {keep}");
+        }
+    }
+}
