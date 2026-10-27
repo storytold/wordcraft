@@ -613,6 +613,10 @@ fn start_screen_shows_file_home_and_esc_leaves_no_document() {
     let refused = a.run("ui.zotero.status", json!({})).unwrap_err();
     assert!(refused.contains("No document is open"), "refused before it runs: {refused}");
     assert!(works_without_document("font.add"), "a font file dropped on the empty window is added");
+    // #4585: File › Options › Proofing › AutoCorrect Options edits a user setting, not the document.
+    a.run("tools.autocorrect", json!({})).unwrap();
+    assert_eq!(a.dialog.as_ref().map(|d| d.name()), Some("autoCorrect"));
+    a.dialog = None;
     // Neither keys nor commands reach the hidden placeholder.
     assert!(a.run("text.insert", json!({"text": "Hello"})).is_err());
     assert!(a.execute("format.bold", json!({})).is_err());

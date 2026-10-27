@@ -975,7 +975,8 @@ fn input_dialog_other(id: &str, params: &Value) -> Option<&'static str> {
 
 /// Commands that work while no document is open (#1129): opening or creating one, closing the
 /// window, Help, adding fonts (a font file dropped on the empty window), and the settings (File ›
-/// Options, the view and interface preferences it sets, Customize Ribbon and Keyboard).
+/// Options, the view and interface preferences it sets, AutoCorrect Options, Customize Ribbon and
+/// Keyboard).
 /// Everything else needs a document, `ui.*` included: only the interface commands listed here
 /// (tabs, Backstage, dialogs, appearance, opening files) work without one.
 pub(crate) fn works_without_document(id: &str) -> bool {
@@ -993,6 +994,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "font.remove"
             | "readAloud.speed"
             | "readAloud.skipCitations"
+            | "tools.autocorrect"
             | "tools.customizeKeyboard"
             | "tools.customizeRibbon"
             | "view.darkMode"
