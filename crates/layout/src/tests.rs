@@ -12988,3 +12988,35 @@ fn a_kept_caption_whose_leading_runs_into_the_bottom_margin_goes_with_the_table(
         }
     }
 }
+
+/// A paragraph kept with a table counts its space after: the table starts below it, so the
+/// caption goes over with the table when the header row and the start of the first row fit under
+/// the caption but not under its space after (measured in Word for Mac, 12 pt after the caption,
+/// compatibility modes 12 and 15). The bottom margin shrinks a point at a time.
+#[test]
+fn a_caption_kept_with_a_table_counts_its_space_after() {
+    for extra in 0..40 {
+        let fill = 25;
+        let mut d = Document::from_text(&format!("{}Caption", "filler\n".repeat(fill)));
+        d.last_section.margin_bottom -= extra as f32;
+        d.format_paragraphs(&Pos::body(fill, 0), &Pos::body(fill, 0), &|p| {
+            p.keep_next = Some(true);
+            p.space_after = Some(12.0);
+        })
+        .unwrap();
+        let mut t = Table::new(2, 1, 468.0);
+        t.rows[0].props.header = true;
+        t.rows[0].cells[0].blocks = vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text("Header", Default::default()))];
+        t.rows[1].cells[0].blocks =
+            vec![wordcraft_doc::para_block(wordcraft_doc::Paragraph::with_text(&"first row words go on and on ".repeat(60), Default::default()))];
+        d.insert_block(StoryRef::Body, &Path::top(fill + 1), wordcraft_doc::Block::Table(t)).unwrap();
+        let l = lay(&d);
+        let page = l
+            .pages
+            .iter()
+            .find(|p| p.items.iter().any(|it| matches!(it, Placed::Lines { story: StoryRef::Body, path, .. } if *path == Path::top(fill))))
+            .unwrap();
+        let rows: Vec<usize> = page.items.iter().filter_map(|it| if let Placed::Cell { row, .. } = it { Some(*row) } else { None }).collect();
+        assert!(rows.contains(&1), "bottom margin -{extra}: the caption's page holds rows {rows:?}");
+    }
+}
