@@ -26,6 +26,7 @@ mod table_contact;
 mod table_first_line;
 mod textbox;
 mod vertical;
+mod zwsp;
 
 const WRAP_TEST_FONT: &str = "Source Sans 3";
 
