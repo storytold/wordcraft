@@ -335,7 +335,11 @@ impl Reader<'_> {
         };
         let ln = c.child("wpc:whole").and_then(|e| e.child("a:ln"));
         let style = wordcraft_doc::para::CanvasStyle {
-            fill: own_fill(c.child("wpc:bg"), &self.doc.settings.theme_colors, None).flatten(),
+            // A picture background reads as the picture fill shapes have.
+            fill: match c.child("wpc:bg").and_then(|bg| bg.child("a:blipFill")) {
+                Some(bf) => self.picture_fill(bf, rels),
+                None => own_fill(c.child("wpc:bg"), &self.doc.settings.theme_colors, None).flatten(),
+            },
             stroke: solid(ln),
             stroke_width: ln.and_then(|l| l.attr("w")).and_then(|v| measure(v, 12_700.0)).unwrap_or(0.0).clamp(0.0, 100.0),
         };

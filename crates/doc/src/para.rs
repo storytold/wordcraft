@@ -807,4 +807,34 @@ mod tests {
             }
         }
     }
+
+    /// Pasting renames media; a Drawing Canvas's picture background is renamed with the rest
+    /// rather than left pointing at the source document's picture.
+    #[test]
+    fn remap_media_reaches_a_canvas_picture_background() {
+        use crate::fill::{Fill, PictureFill};
+        let pic = |media: &str| {
+            Some(Fill::Picture(std::sync::Arc::new(PictureFill {
+                media: media.into(),
+                crop: [0.0; 4],
+                stretch: [0.0; 4],
+                transparency: 0.0,
+                rot_with_shape: true,
+                tile: None,
+            })))
+        };
+        let mut canvas = InlineObject::Group {
+            w: 10.0,
+            h: 10.0,
+            float: Default::default(),
+            ch_w: 10.0,
+            ch_h: 10.0,
+            children: Vec::new(),
+            canvas: Some(CanvasStyle { fill: pic("source.png"), stroke: None, stroke_width: 0.0 }),
+        };
+        canvas.remap_media(&|key| (key == "source.png").then(|| "pasted.png".to_string()));
+        let InlineObject::Group { canvas: Some(c), .. } = &canvas else { panic!() };
+        let Some(Fill::Picture(p)) = &c.fill else { panic!("{:?}", c.fill) };
+        assert_eq!(p.media, "pasted.png");
+    }
 }

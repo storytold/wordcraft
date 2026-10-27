@@ -249,3 +249,29 @@ fn a_tiled_picture_fill_keeps_its_tiling() {
     let q = picture_fill(&back.body[0].as_para().unwrap().objects[0]);
     assert_eq!(q.tile, p.tile);
 }
+
+/// A Drawing Canvas's picture background is saved with its picture and reads back as that
+/// picture fill; it was written as `a:noFill` and lost on save.
+#[test]
+fn a_canvas_picture_background_round_trips() {
+    use wordcraft_doc::fill::{Fill, PictureFill};
+    let mut doc = Document::new();
+    doc.media.insert("background.png".into(), Arc::new(BLUE_PNG.to_vec()));
+    let pic = PictureFill { media: "background.png".into(), crop: [0.0; 4], stretch: [0.0; 4], transparency: 0.0, rot_with_shape: true, tile: None };
+    let canvas = InlineObject::Group {
+        w: 200.0,
+        h: 100.0,
+        float: Float::default(),
+        ch_w: 200.0,
+        ch_h: 100.0,
+        children: Vec::new(),
+        canvas: Some(CanvasStyle { fill: Some(Fill::Picture(Arc::new(pic))), stroke: None, stroke_width: 0.0 }),
+    };
+    doc.insert_object(&Pos::body(0, 0), canvas, &Default::default()).unwrap();
+    let back = wordcraft_docx::read(&wordcraft_docx::write(&doc).unwrap()).unwrap();
+    let InlineObject::Group { canvas: Some(c), .. } = &back.body[0].as_para().unwrap().objects[0] else {
+        panic!("canvas lost: {:?}", back.body[0].as_para().unwrap().objects);
+    };
+    let Some(Fill::Picture(p)) = &c.fill else { panic!("background is not a picture fill: {:?}", c.fill) };
+    assert_eq!(back.media[&p.media].as_slice(), BLUE_PNG);
+}

@@ -295,7 +295,13 @@ impl InlineObject {
                     std::sync::Arc::make_mut(p).media = k;
                 }
             }
-            InlineObject::Group { children, .. } => {
+            InlineObject::Group { children, canvas, .. } => {
+                // A Drawing Canvas's picture background names media too.
+                if let Some(crate::fill::Fill::Picture(p)) = canvas.as_mut().and_then(|c| c.fill.as_mut())
+                    && let Some(k) = map(&p.media)
+                {
+                    std::sync::Arc::make_mut(p).media = k;
+                }
                 for c in children {
                     c.obj.remap_media(map);
                 }

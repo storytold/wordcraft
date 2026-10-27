@@ -13,6 +13,23 @@ pub(super) struct DrawingInfo<'a> {
 }
 
 impl Writer<'_> {
+    /// An area's fill (a shape's, or a Drawing Canvas's background): a picture fill as
+    /// `a:blipFill` with the relationship to its picture, anything else as [`write_fill`].
+    pub(super) fn area_fill(&mut self, w: &mut W, fill: Option<&Fill>, rels: &mut PartRels) {
+        let picture = match fill.and_then(Fill::sanitized) {
+            Some(Fill::Picture(p)) => self.media_files.get(&p.media).cloned().map(|file| (p, file)),
+            _ => None,
+        };
+        match picture {
+            Some((p, file)) => {
+                let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
+                self.used_media.insert(p.media.clone());
+                blip_fill(w, &p, &rid);
+            }
+            None => write_fill(w, fill),
+        }
+    }
+
     /// A picture's `pic:pic` (the image in `media/{file}`), at `off` in its group (or 0, 0).
     pub(super) fn pic(&mut self, w: &mut W, o: &InlineObject, file: &str, off: (f32, f32), rels: &mut PartRels) {
         let InlineObject::Image { media, w: iw, h: ih, alt, crop, float, .. } = o else { return };
@@ -113,19 +130,7 @@ impl Writer<'_> {
         let alpha = geom.map_or(1.0, |f| f.alpha);
         let ink = geom.is_some_and(|f| f.is_ink());
         let fill = fill.as_ref().filter(|_| !ink && !kind.is_open());
-        // A picture fill, with the relationship to its picture.
-        let picture = match fill.and_then(Fill::sanitized) {
-            Some(Fill::Picture(p)) => self.media_files.get(&p.media).cloned().map(|file| (p, file)),
-            _ => None,
-        };
-        match picture {
-            Some((p, file)) => {
-                let rid = rels.add(rt::IMAGE, &format!("media/{file}"), false);
-                self.used_media.insert(p.media.clone());
-                blip_fill(w, &p, &rid);
-            }
-            None => write_fill(w, fill),
-        }
+        self.area_fill(w, fill, rels);
         match stroke {
             Some(c) => {
                 let width = emu(stroke_width.clamp(0.0, 100.0));
