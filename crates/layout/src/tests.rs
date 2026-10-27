@@ -4153,6 +4153,59 @@ fn drop_cap_options_place_the_letter() {
     assert_ne!(text_style.as_deref(), Some("Liberation Mono"), "only the letter");
 }
 
+/// Thai drop cap: the whole TCB (consonant + following vowels/tone marks) must be enlarged
+/// together — not just the first codepoint.
+#[test]
+fn thai_drop_cap_takes_whole_tcb() {
+    // "กุ" = ก (U+0E01, 3 bytes) + ุ sara u (U+0E38, 3 bytes), followed by body text.
+    let body = "กุรุณาอ่านข้อความนี้ให้ครบถ้วน ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| {
+        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
+    }).expect("no lines");
+
+    let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set");
+    assert_eq!(lines, 3, "should span 3 lines");
+    // The Thai shaper merges ก + ุ into 1 shaped cluster, so nc == 1 is expected.
+    assert_eq!(nc, 1, "shaper produces 1 cluster for the TCB");
+    // Critical: the cluster right after the drop cap must start at byte 6 (past "กุ"),
+    // NOT byte 3 (past "ก" only) — the sara u must be consumed by the drop cap, not
+    // rendered separately at body-text size.
+    let body_start = pl.clusters.get(nc).map(|c| c.start);
+    assert_eq!(body_start, Some(6),
+        "body text must start at byte 6 (past กุ); got {body_start:?} — sara u leaked into body");
+    // The drop cap's glyph should be significantly larger than body text (12 pt default).
+    // Drop cap clusters come first; nc=1 means cluster[0] is the drop cap.
+    let cap_size = pl.clusters.first()
+        .and_then(|c| pl.styles.get(c.style as usize))
+        .map(|s| s.rc.size)
+        .unwrap_or(0.0);
+    assert!(cap_size > 30.0, "drop cap font size {cap_size} should be >> 12pt for 3 lines");
+}
+
+/// Thai drop cap with a leading vowel: เก (เ U+0E40 + ก U+0E01) — both codepoints enlarged.
+#[test]
+fn thai_drop_cap_leading_vowel_included() {
+    let body = "เกาะติดกับเรื่องราวที่น่าสนใจและสำคัญยิ่ง ".repeat(8);
+    let mut p = wordcraft_doc::Paragraph::with_text(&body, Default::default());
+    p.props.drop_cap = Some(3);
+    let mut d = Document::from_text("x");
+    d.body = vec![wordcraft_doc::para_block(p)];
+    let l = lay(&d);
+    let pl = l.pages[0].items.iter().find_map(|i| {
+        if let Placed::Lines { para, .. } = i { Some(para.clone()) } else { None }
+    }).expect("no lines");
+
+    let (nc, lines, _) = pl.drop_cap.expect("drop cap must be set for leading-vowel TCB");
+    assert_eq!(lines, 3);
+    // เก = 2 codepoints → 2 clusters (leading vowel + consonant).
+    assert!(nc >= 2, "leading vowel + consonant must both be in the drop cap ({nc} clusters)");
+}
+
 #[test]
 fn auto_hyphenation_breaks_long_words() {
     let text = "Internationalization considerations notwithstanding, administrators systematically reconsidered extraordinarily uncharacteristic responsibilities. ".repeat(4);
