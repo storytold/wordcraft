@@ -623,3 +623,16 @@ fn closing_the_backstage_ends_its_keytips() {
     assert!(!h.state().ui.backstage);
     assert_eq!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).trim(), "c", "C is typed");
 }
+
+/// #4237 re-review: Design › Set as Default by keytip asks first, as the button does; nothing
+/// is saved until the question's OK.
+#[test]
+fn design_set_as_default_keytip_asks_first() {
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = app();
+    a.session.normal_store = Some(store.clone());
+    let ctrl = controls("Design").into_iter().find(|c| c.tip == "Set as Default").expect("Design has Set as Default");
+    ctrl.target.run(&mut a);
+    assert!(matches!(a.dialog, Some(crate::dialogs::Dialog::DesignDefault)), "the question opens");
+    assert!(store.get().is_none(), "and nothing is saved yet");
+}
