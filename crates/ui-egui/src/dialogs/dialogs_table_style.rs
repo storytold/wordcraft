@@ -110,7 +110,7 @@ fn align_name(h: Option<Align>, v: Option<VAlign>) -> String {
         return String::new();
     }
     let (h, v) = (h.unwrap_or(Align::Left), v.unwrap_or(VAlign::Top));
-    let h = if matches!(h, Align::Justify | Align::Distribute) { Align::Left } else { h };
+    let h = if h.stretches() { Align::Left } else { h };
     CELL_ALIGNS.iter().find(|(_, va, ha)| *va == v && *ha == h).map(|(n, _, _)| n.to_string()).unwrap_or_default()
 }
 

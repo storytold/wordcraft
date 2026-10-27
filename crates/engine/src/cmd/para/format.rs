@@ -114,6 +114,8 @@ pub(super) fn set_props(s: &mut Session, v: &Value) -> CmdResult {
         Some("right") => Some(Align::Right),
         Some("justify" | "both") => Some(Align::Justify),
         Some("distribute") => Some(Align::Distribute),
+        Some("thaiDistribute") => Some(Align::ThaiDistribute),
+        Some("khmerJustify") => Some(Align::KhmerJustify),
         Some(x) => return Err(CmdError::Params(format!("unknown alignment `{x}`"))),
     };
     let indent = |k: &str| p::f32(&page, k).map(|x| x.clamp(-1584.0, 1584.0));

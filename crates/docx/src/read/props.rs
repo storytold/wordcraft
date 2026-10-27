@@ -417,7 +417,12 @@ impl PropCtx {
                         _ => {}
                     }
                 }
-                "w:jc" => p.align = k.attr("w:val").map(align),
+                "w:jc" => {
+                    p.align = k.attr("w:val").map(|v| match (v, k.attr("wc:khmer")) {
+                        ("thaiDistribute", Some("1" | "true")) => Align::KhmerJustify,
+                        _ => align(v),
+                    })
+                }
                 "w:outlineLvl" => p.outline_level = k.attr("w:val").and_then(u32_of).map(|v| v.min(9) as u8),
                 "w:rPr" => mark = self.rpr(k),
                 _ => {}
@@ -432,7 +437,8 @@ pub fn align(v: &str) -> Align {
         "center" => Align::Center,
         "right" | "end" => Align::Right,
         "both" | "justify" | "lowKashida" | "mediumKashida" | "highKashida" => Align::Justify,
-        "distribute" | "thaiDistribute" => Align::Distribute,
+        "distribute" => Align::Distribute,
+        "thaiDistribute" => Align::ThaiDistribute,
         _ => Align::Left,
     }
 }
@@ -849,5 +855,18 @@ fn east_asian_layout(e: &El) -> EastAsianLayout {
         combine_brackets: e.attr("w:combineBrackets").and_then(|v| CombineBrackets::from_ooxml(v.trim())),
         vert: flag("w:vert"),
         vert_compress: flag("w:vertCompress"),
+    }
+}
+
+#[cfg(test)]
+mod khmer_tests {
+    use super::*;
+
+    /// A file written by Word has no `wc:khmer` mark: its Thai Distributed stays Thai Distributed.
+    #[test]
+    fn word_thai_distributed_reads_as_thai_distributed() {
+        assert_eq!(align("thaiDistribute"), Align::ThaiDistribute);
+        assert_eq!(align("distribute"), Align::Distribute);
+        assert_eq!(align("both"), Align::Justify);
     }
 }

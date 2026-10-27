@@ -369,6 +369,7 @@ impl Reader {
             "qr" => self.st.align = Some(Align::Right),
             "qj" => self.st.align = Some(Align::Justify),
             "qd" => self.st.align = Some(Align::Distribute),
+            "qt" => self.st.align = Some(Align::ThaiDistribute),
             "s" => self.st.style = pv,
             "outlinelevel" => self.st.outline = Some(pv.clamp(0, 9) as u8),
             "pagebb" => self.st.pagebb = on,

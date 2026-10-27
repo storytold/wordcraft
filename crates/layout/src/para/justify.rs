@@ -133,3 +133,53 @@ pub(super) fn hyphenation_points(
     out.dedup();
     out
 }
+
+/// The gap after each cluster for Thai Distributed and Khmer Justify. A zero-width space is a
+/// cluster of its own with no width: the gap after it is the word boundary it marks, and the
+/// cluster before it has none.
+pub(crate) fn cluster_gaps(text: &str, clusters: &[Cluster]) -> Vec<wordcraft_doc::khmer::Gap> {
+    use wordcraft_doc::khmer::{self, Gap};
+    let slice = |c: &Cluster| text.get(c.start..c.end).unwrap_or("");
+    let mut out = vec![Gap::None; clusters.len()];
+    let mut k = 0;
+    while let Some(c) = clusters.get(k) {
+        k += 1;
+        let t = slice(c);
+        if c.kind == ClKind::Space {
+            if let Some(g) = out.get_mut(k - 1) {
+                *g = Gap::Space;
+            }
+            continue;
+        }
+        if !matches!(c.kind, ClKind::Text) {
+            continue;
+        }
+        let Some(before) = t.chars().next_back() else { continue };
+        // Skip what takes no room (zero-width spaces, bookmark and comment anchors, soft hyphens):
+        // a zero-width space turns the gap into a word boundary, the rest leave it as it is.
+        let mut j = k;
+        let mut zwsp = false;
+        while let Some(n) = clusters.get(j).filter(|n| n.kind == ClKind::Marker) {
+            let t = slice(n);
+            zwsp |= !t.is_empty() && t.chars().all(khmer::is_zero_width_space);
+            j += 1;
+        }
+        let Some(next) = clusters.get(j).filter(|n| n.kind == ClKind::Text) else { continue };
+        let Some(after) = slice(next).chars().next() else { continue };
+        if khmer::is_zero_width_space(before) {
+            continue;
+        }
+        let gap =
+            match (khmer::is_khmer(before) || khmer::is_khmer(after), wordcraft_doc::thai::is_thai(before) || wordcraft_doc::thai::is_thai(after)) {
+                (true, _) => khmer::gap_between(before, after, zwsp),
+                (false, true) => wordcraft_doc::thai::gap_between(before, after),
+                _ if zwsp => Gap::Word,
+                _ => Gap::None,
+            };
+        // The gap sits after the last cluster before `next` (the zero-width space, if any).
+        if let Some(g) = out.get_mut(j - 1) {
+            *g = gap;
+        }
+    }
+    out
+}

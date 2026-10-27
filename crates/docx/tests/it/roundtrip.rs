@@ -223,6 +223,8 @@ fn every_para_prop_round_trips() {
         ParaProps { line_spacing: Some(LineSpacing::AtLeast(14.0)), indent_first: Some(24.0), align: Some(Align::Center), ..Default::default() },
         ParaProps { line_spacing: Some(LineSpacing::Exactly(20.0)), align: Some(Align::Right), ..Default::default() },
         ParaProps { align: Some(Align::Distribute), ..Default::default() },
+        ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() },
+        ParaProps { align: Some(Align::KhmerJustify), ..Default::default() },
         ParaProps { kinsoku: Some(true), word_wrap: Some(true), auto_space_dn: Some(false), ..Default::default() },
         ParaProps::default(),
     ];
@@ -2734,4 +2736,18 @@ fn drop_cap_options_round_trip() {
         (b.props.drop_cap, b.props.drop_cap_margin, b.props.drop_cap_distance, b.props.drop_cap_font.as_deref()),
         (Some(4), Some(true), None, None)
     );
+}
+
+/// Thai Distributed is `w:jc="thaiDistribute"`; Khmer Justify is the same value plus the ignorable
+/// `wc:khmer` mark, so Word shows Thai Distributed and WordCraft shows Khmer Justify.
+#[test]
+fn thai_distributed_and_khmer_justify_stay_apart() {
+    let mut a = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    a.props = ParaProps { align: Some(Align::ThaiDistribute), ..Default::default() };
+    let mut b = Paragraph::with_text("ខ្មែរ", CharProps::default());
+    b.props = ParaProps { align: Some(Align::KhmerJustify), ..Default::default() };
+    let r = rt(&doc_with(vec![a, b]));
+    let got = paras(&r);
+    assert_eq!(got[0].props.align, Some(Align::ThaiDistribute));
+    assert_eq!(got[1].props.align, Some(Align::KhmerJustify));
 }

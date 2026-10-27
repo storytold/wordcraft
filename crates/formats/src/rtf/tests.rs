@@ -1454,6 +1454,18 @@ fn hyperlink_field_targets() {
     assert_eq!(hyperlink(r#"HYPERLINK "http://example.com" \o "Help text""#), Some("http://example.com".into()));
 }
 
+/// `\qt` is Thai distributed: it is read as Thai Distributed and written back as `\qt`, for Khmer
+/// Justify too (RTF has no word for it).
+#[test]
+fn thai_distributed_alignment_round_trips() {
+    let rtf = br"{\rtf1\ansi\pard\qt Thai\par}";
+    let flow = parse(rtf).unwrap();
+    let FBlock::Para(p) = &flow.blocks[0] else { panic!("expected para") };
+    assert_eq!(p.align, Some(Align::ThaiDistribute));
+    let exported = export(&import(rtf).unwrap());
+    assert!(exported.contains("\\qt") && !exported.contains("\\qj"), "{exported}");
+}
+
 #[test]
 fn distributed_alignment_round_trips() {
     let rtf = br"{\rtf1\ansi\pard\qd Distributed\par\pard\qj Justified\par}";

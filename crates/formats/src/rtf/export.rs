@@ -449,6 +449,8 @@ impl Writer {
             Some(Align::Right) => out.push_str("\\qr"),
             Some(Align::Justify) => out.push_str("\\qj"),
             Some(Align::Distribute) => out.push_str("\\qd"),
+            // Thai distributed; Khmer Justify has no RTF word of its own.
+            Some(Align::ThaiDistribute | Align::KhmerJustify) => out.push_str("\\qt"),
             _ => out.push_str("\\ql"),
         }
         if p.page_break {

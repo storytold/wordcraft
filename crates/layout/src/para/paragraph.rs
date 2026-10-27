@@ -2,7 +2,7 @@ use super::bidi::{Dir, bidi_levels, visual_order};
 use super::builder::{Builder, left_out, overstrike};
 use super::chars::caps_char;
 use super::grid::{auto_space, snap_chars};
-use super::justify::hyphenation_points;
+use super::justify::{cluster_gaps, hyphenation_points};
 use super::lines::break_lines;
 use super::model::{ClKind, Cluster, Glyph, Label, LabelRun, ParaEnv, undrawable_bullet};
 use super::proof::{ProofRun, is_list_item, proof_issues};
@@ -502,7 +502,11 @@ pub fn layout_para(p: &Paragraph, env: &ParaEnv) -> ParaLayout {
         left_out: Vec::new(),
         enclosures,
         auto_space,
+        gaps: Vec::new(),
     };
+    if matches!(pl.rp.align, Align::ThaiDistribute | Align::KhmerJustify) {
+        pl.gaps = cluster_gaps(&p.text, &pl.clusters);
+    }
     let auto = env.doc.settings.auto_hyphenation && !pl.rp.suppress_hyphens;
     pl.hyph_after = hyphenation_points(&text, to_para, &pl, auto, env.doc.settings.hyphenate_caps, &runs);
     // A paragraph whose text and mark are all a deletion the layout leaves out (a deleted

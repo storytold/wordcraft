@@ -466,6 +466,52 @@ fn merge_records_dialog_checks_the_range_before_merging() {
     assert!(h.state().session.doc.plain_text(wordcraft_doc::StoryRef::Body).contains("unsaved"), "the unsaved document is still open");
 }
 
+/// Thai Distributed and Khmer Justify in the Paragraph dialog's Alignment list: each shows by
+/// name when the paragraph has it, and picking one then OK sets that alignment.
+#[test]
+fn paragraph_dialog_offers_thai_distributed_and_khmer_justify() {
+    use egui_kittest::kittest::{NodeT, Queryable};
+    for (label, want) in [("Thai Distributed", Align::ThaiDistribute), ("Khmer Justify", Align::KhmerJustify)] {
+        let mut app = app_with("Text");
+        app.dialog = Dialog::open("paragraph", &mut app);
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            app,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        // The Alignment list is the dialog's only combo box; its text is the node's value.
+        let combo = h.get_by_role(egui::accesskit::Role::ComboBox);
+        assert_eq!(combo.accesskit_node().value().as_deref(), Some("Left"));
+        combo.click();
+        for _ in 0..3 {
+            h.step();
+        }
+        h.get_by_label(label).click();
+        for _ in 0..3 {
+            h.step();
+        }
+        let Some(Dialog::Paragraph { align, .. }) = &h.state().dialog else { panic!("no paragraph dialog") };
+        assert_eq!(align, &serde_json::to_value(want).unwrap().as_str().unwrap().to_string(), "{label}");
+        h.get_by_role_and_label(egui::accesskit::Role::Button, "OK").click();
+        for _ in 0..3 {
+            h.step();
+        }
+        assert!(h.state().dialog.is_none(), "OK closes the dialog");
+        assert_eq!(para_props(h.state(), 0).align, Some(want), "{label}");
+        // Reopened, the dialog shows the paragraph's alignment by name, not a raw token.
+        let mut app = std::mem::replace(h.state_mut(), app_with(""));
+        app.dialog = Dialog::open("paragraph", &mut app);
+        let Some(Dialog::Paragraph { align, .. }) = &app.dialog else { panic!("no paragraph dialog") };
+        assert_eq!(align, &serde_json::to_value(want).unwrap().as_str().unwrap().to_string(), "reopened: {label}");
+    }
+}
+
 #[test]
 fn paragraph_dialog_sets_a_mixed_check_box_for_all() {
     use egui_kittest::kittest::{NodeT, Queryable};

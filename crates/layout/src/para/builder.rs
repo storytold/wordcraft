@@ -299,7 +299,10 @@ impl<'a> Builder<'a> {
                 let ch = s.chars().next().unwrap_or(' ');
                 let kind = kind_override.unwrap_or(if ch == ' ' || ch == '\u{3000}' {
                     ClKind::Space
-                } else if ch == SOFT_HYPHEN {
+                } else if ch == SOFT_HYPHEN || matches!(ch, '\u{200B}' | '\u{2060}' | '\u{FEFF}') {
+                    // The zero-width space, word joiner and no-break mark are invisible and take no
+                    // room, whatever the font draws for them (Khmer OS Battambang has no glyph for
+                    // U+200B at all).
                     ClKind::Marker
                 } else {
                     ClKind::Text
