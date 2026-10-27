@@ -107,6 +107,7 @@ pub fn show(app: &mut WordApp, ctx: &egui::Context) {
         Dialog::DiscardRecovery { .. } => "Discard recovery copy",
         Dialog::SetDefault { .. } => "Set As Default",
         Dialog::ResetDefaults => "Reset Default Formatting",
+        Dialog::DesignDefault => "Set as Default",
         Dialog::RecipientList { .. } => "Recipient List",
         Dialog::SelectTable { .. } => "Select Table",
         Dialog::InsertMergeField { .. } => "Insert Merge Field",

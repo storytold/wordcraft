@@ -149,3 +149,52 @@ pub(super) fn page_valign_value(v: wordcraft_doc::section::PageVAlign) -> &'stat
         PageVAlign::Bottom => "bottom",
     }
 }
+
+/// Page Setup's OK as one undo step: the commands the dialog's fields call for, and with
+/// `save_default` Set As Default for all new documents after them (#4237). Refused (the margins
+/// don't fit, a command fails): nothing applied, and the reason to show in the dialog.
+pub(super) fn apply_page_setup(app: &mut WordApp, d: &Dialog, save_default: bool) -> Result<(), String> {
+    let Dialog::PageSetup {
+        top, bottom, left, right, landscape, mirror, rtl, grid, grid_was, paper, paper_was, valign, odd_even, first_page, ..
+    } = d
+    else {
+        return Ok(());
+    };
+    page_layout_commands(app, (*paper, *paper_was), *landscape, (*top, *bottom, *left, *right)).map_err(|e| tl!(e).to_string()).and_then(
+        |mut commands| {
+            // Mirror margins go with the margins (#1181).
+            if let Some((_, v)) = commands.iter_mut().rev().find(|(id, _)| *id == "layout.margins") {
+                v["mirror"] = json!(*mirror);
+            }
+            if grid != grid_was {
+                let kind = ["none", "lines", "linesAndChars", "snapToChars"].get(grid.0 as usize).copied().unwrap_or("none");
+                let mut v = json!({"type": kind});
+                if grid.1 != grid_was.1 {
+                    v["linesPerPage"] = json!(grid.1);
+                }
+                if grid.2 != grid_was.2 {
+                    v["charsPerLine"] = json!(grid.2);
+                }
+                commands.push(("layout.documentGrid", v));
+            }
+            if *rtl != wordcraft_engine::cmd::page::sect(&app.session).rtl {
+                commands.push(("layout.sectionRtl", json!({"value": *rtl})));
+            }
+            if *valign != wordcraft_engine::cmd::page::sect(&app.session).valign {
+                commands.push(("layout.verticalAlign", json!({"value": page_valign_value(*valign)})));
+            }
+            if *odd_even != app.session.doc.settings.even_odd_headers {
+                commands.push(("layout.differentOddEven", json!({"value": *odd_even})));
+            }
+            if *first_page != wordcraft_engine::cmd::page::sect(&app.session).title_page {
+                commands.push(("layout.differentFirstPage", json!({"value": *first_page})));
+            }
+            // Set As Default for all new documents: in the same step, so a refused save applies
+            // nothing either (#4237).
+            if save_default {
+                commands.push(("layout.setDefault", json!({"scope": "new"})));
+            }
+            run_as_one_step(app, commands)
+        },
+    )
+}

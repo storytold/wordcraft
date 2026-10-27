@@ -122,19 +122,31 @@ pub(super) fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
 
 /// The Paragraph dialog's Set As Default (#4237): every field the selected paragraphs share or
 /// the user set, as `para.setDefault` takes them. The alignment and indents are turned from as
-/// seen on the page into the paragraph's start and end.
-pub(super) fn default_para_props(d: &Dialog) -> serde_json::Map<String, Value> {
-    let Dialog::Paragraph { rtl, mixed, .. } = d else { return serde_json::Map::new() };
+/// seen on the page into the paragraph's start and end. What the dialog can't show stays as the
+/// paragraph has it: Exactly and At Least line spacing (the dialog shows them as 1.0) unless the
+/// box was changed; the direction only when right-to-left or changed.
+pub(super) fn default_para_props(app: &WordApp, d: &Dialog) -> serde_json::Map<String, Value> {
+    let Dialog::Paragraph { rtl, mixed, start, .. } = d else { return serde_json::Map::new() };
     let mut props = serde_json::Map::new();
     for (k, v) in para_fields(d) {
         if mixed.contains(&k) {
             continue;
         }
+        let unchanged = start.get(&k) == Some(&v);
         let key = match k.as_str() {
             "left" if *rtl => "indentRight",
             "left" => "indentLeft",
             "right" if *rtl => "indentLeft",
             "right" => "indentRight",
+            "bidi" if unchanged && !*rtl => continue,
+            "lineSpacing" if unchanged => {
+                let at = &app.session.sel.focus;
+                let actual = app.session.doc.para_at(at).map(|p| app.session.doc.styles.resolve_para(&p.props).line_spacing);
+                if let Some(ls) = actual.and_then(|ls| serde_json::to_value(ls).ok()) {
+                    props.insert("lineSpacing".into(), ls);
+                }
+                continue;
+            }
             "align" => {
                 let visual = match v.as_str() {
                     Some("center") => wordcraft_doc::Align::Center,

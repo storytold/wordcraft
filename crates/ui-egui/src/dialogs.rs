@@ -267,7 +267,13 @@ pub enum Dialog {
         params: Value,
         /// All documents based on the Normal template (else this document only).
         all: bool,
+        /// The dialog that asked, with its edits: Cancel goes back to it; for Page Setup, OK
+        /// applies it.
+        #[serde(skip)]
+        back: Option<Box<Dialog>>,
     },
+    /// Design › Set as Default asks before saving the document's look for new documents.
+    DesignDefault,
     /// File › Options › Advanced › Reset default formatting: asks before deleting the Normal
     /// template (#4237).
     ResetDefaults,
@@ -532,6 +538,7 @@ impl Dialog {
             Dialog::DiscardRecovery { .. } => "discardRecovery",
             Dialog::SetDefault { .. } => "setDefault",
             Dialog::ResetDefaults => "resetDefaults",
+            Dialog::DesignDefault => "designSetDefault",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
             Dialog::InsertMergeField { .. } => "insertMergeField",
@@ -779,6 +786,7 @@ impl Dialog {
             "renameDocument" => Dialog::RenameDocument { name: app.title_stem(), message: String::new(), focus: true },
             // Options › Advanced › Reset… (#4237).
             "resetDefaults" => Dialog::ResetDefaults,
+            "designSetDefault" => Dialog::DesignDefault,
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
