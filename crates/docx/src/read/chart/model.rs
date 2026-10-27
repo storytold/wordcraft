@@ -1,4 +1,4 @@
-use super::Rgb;
+use super::{Fill, Rgb};
 
 /// A data label to draw once the chart is: the value at (`x`, `y`), centred there (`inside`, in
 /// white on the fill) or just beside it (above, or right of a horizontal bar's end).
@@ -65,14 +65,61 @@ pub(super) struct Axis {
     pub(super) text: Option<Rgb>,
     /// The display unit the tick labels count in (`c:dispUnits`): 1000 for thousands.
     pub(super) unit: f64,
-    /// The display unit's label, when the axis shows one, and its colour.
-    pub(super) unit_label: Option<(String, Option<Rgb>)>,
+    /// The display unit's label, when the axis shows one: its text, colour and weight.
+    pub(super) unit_label: Option<(String, Option<Rgb>, bool)>,
+    /// Where this axis crosses the other one (`c:crosses` / `c:crossesAt`).
+    pub(super) crosses: Crosses,
+    /// Where its tick labels sit (`c:tickLblPos`).
+    pub(super) tick_pos: TickPos,
+    /// The axis line's colour and width, when its `c:spPr` states them.
+    pub(super) line_colour: Option<Rgb>,
+    pub(super) line_w: f32,
+    /// Bold tick labels, when its text properties say.
+    pub(super) bold: Option<bool>,
 }
 
 impl Default for Axis {
     fn default() -> Self {
-        Axis { deleted: false, grid: false, line: false, mid: false, min: None, max: None, fmt: None, text: None, unit: 1.0, unit_label: None }
+        Axis {
+            deleted: false,
+            grid: false,
+            line: false,
+            mid: false,
+            min: None,
+            max: None,
+            fmt: None,
+            text: None,
+            unit: 1.0,
+            unit_label: None,
+            crosses: Crosses::AutoZero,
+            tick_pos: TickPos::NextTo,
+            line_colour: None,
+            line_w: 0.75,
+            bold: None,
+        }
     }
+}
+
+/// Where an axis crosses the other axis.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(super) enum Crosses {
+    /// At zero, or at the end of the range nearer zero when zero is outside it.
+    AutoZero,
+    Min,
+    Max,
+    At(f64),
+}
+
+/// Where an axis's tick labels sit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum TickPos {
+    /// Beside the axis, wherever it crosses.
+    NextTo,
+    /// At the low end of the other axis (under a column chart's plot).
+    Low,
+    /// At the high end.
+    High,
+    None,
 }
 
 pub(super) struct Series {
@@ -98,6 +145,8 @@ pub(super) struct Series {
     pub(super) kind: Kind,
     /// The marker drawn at each point of a line series, when it shows them.
     pub(super) marker: Option<Marker>,
+    /// A gradient fill (`a:gradFill`) its columns are painted with; `color` is its first colour.
+    pub(super) shading: Option<Fill>,
 }
 
 /// A line series' point marker.
@@ -158,5 +207,6 @@ pub(super) struct DataTable {
     pub(super) outline: bool,
     pub(super) keys: bool,
     pub(super) text: Rgb,
+    pub(super) bold: bool,
     pub(super) line: Rgb,
 }

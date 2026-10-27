@@ -681,3 +681,116 @@ fn a_legend_placed_by_hand_is_drawn_where_the_file_puts_it() {
     assert!(r[1] >= 18.0 && r[1] + r[3] <= 42.0, "inside the box 20..40 pt down: {r:?}");
     assert!(r[0] >= 30.0 && r[0] + r[2] <= 150.0, "inside the box 30..150 pt across: {r:?}");
 }
+
+/// A column chart with negative values: the category axis crosses the value axis at zero
+/// (`c:crosses` autoZero, the default), so its line is drawn there, in the colour and width
+/// its `c:spPr` states; its labels sit next to it unless `c:tickLblPos` says `low`.
+#[test]
+fn the_category_axis_crosses_at_zero_in_its_own_line() {
+    let chart = |tick: &str| {
+        let plot = format!(
+            r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/>{tick}<c:spPr><a:ln w="19050"><a:solidFill><a:srgbClr val="000000"/></a:solidFill></a:ln></c:spPr></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+            ser(0, "S", Some("FF0000"), &["A", "B"], &["-2", "4"]),
+        );
+        chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0)
+    };
+    let items = chart("");
+    let texts = chart_texts(&items);
+    let mid = |s: &str| texts.iter().find(|(t, _, _)| t == s).map(|(_, r, _)| r[1] + r[3] / 2.0).unwrap();
+    let zero = mid("0");
+    let axis: Vec<(f32, f32)> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Path { segs, stroke: Some(c), stroke_width, .. } if *c == Rgb::BLACK => match segs.first() {
+                Some(PathSeg::Move(_, y)) => Some((*y, *stroke_width)),
+                _ => None,
+            },
+            _ => None,
+        })
+        .collect();
+    assert_eq!(axis.len(), 1, "one black axis line: {axis:?}");
+    assert!((axis[0].0 - zero).abs() < 0.5, "the axis at zero ({zero}), not the bottom: {axis:?}");
+    assert!((axis[0].1 - 1.5).abs() < 0.01, "its own 1.5 pt width");
+    let label_top = |items: &[GraphicItem]| chart_texts(items).iter().find(|(t, _, _)| t == "A").map(|(_, r, _)| r[1]).unwrap();
+    assert!((label_top(&items) - zero).abs() < 10.0, "labels next to the axis");
+    let low = chart(r#"<c:tickLblPos val="low"/>"#);
+    assert!(label_top(&low) > zero + 40.0, "low labels under the plot");
+}
+
+/// Bold comes from the text properties: a bold display-units label, a title that turns bold
+/// off, axis labels as they are.
+#[test]
+fn chart_text_is_bold_as_its_text_properties_say() {
+    let plot = format!(
+        r#"<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr b="0"/></a:pPr><a:r><a:t>Plain title</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/><c:dispUnits><c:builtInUnit val="thousands"/><c:dispUnitsLbl><c:txPr><a:bodyPr/><a:p><a:pPr><a:defRPr b="1"/></a:pPr></a:p></c:txPr></c:dispUnitsLbl></c:dispUnits></c:valAx></c:plotArea>"#,
+        ser(0, "S", None, &["A", "B"], &["4000", "8000"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let bold = |s: &str| {
+        items.iter().find_map(|it| match it {
+            GraphicItem::Text { text, bold, .. } if text == s => Some(*bold),
+            _ => None,
+        })
+    };
+    assert_eq!(bold("Thousands"), Some(true));
+    assert_eq!(bold("Plain title"), Some(false));
+    assert_eq!(bold("A"), Some(false));
+}
+
+/// The chart area's gradient (`a:gradFill`) and the plot area's own fill are painted, the
+/// plot's over the chart's.
+#[test]
+fn chart_and_plot_area_fills_are_painted() {
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:spPr><a:solidFill><a:srgbClr val="FFFFFF"/></a:solidFill></c:spPr></c:plotArea>"#,
+        ser(0, "S", Some("FF0000"), &["A", "B"], &["1", "2"]),
+    );
+    let x = format!(
+        r#"<c:chartSpace {NS}><c:chart>{plot}</c:chart><c:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="DDDDDD"/></a:gs><a:gs pos="100000"><a:srgbClr val="999999"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="1"/></a:gradFill></c:spPr></c:chartSpace>"#
+    );
+    let items = chart_items(&crate::xml::parse(x.as_bytes()).unwrap(), &theme(), 300.0, 200.0);
+    let fills: Vec<(&[f32; 4], &wordcraft_doc::fill::Fill)> = items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Fill { rect, fill } => Some((rect, fill)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(fills.len(), 2, "the chart's and the plot's: {fills:?}");
+    assert!(matches!(fills[0].1, wordcraft_doc::fill::Fill::Gradient(_)), "the chart area's gradient first");
+    assert_eq!(fills[0].0, &[0.0, 0.0, 300.0, 200.0]);
+    assert!(matches!(fills[1].1, wordcraft_doc::fill::Fill::Solid { color: Rgb::WHITE, .. }), "then the white plot");
+    assert!(fills[1].0[2] < 300.0 && fills[1].0[3] < 200.0, "inside the chart");
+}
+
+/// A series filled with a gradient (Word's chart styles shade their columns) paints each
+/// column with that gradient rather than the gradient's first colour.
+#[test]
+fn a_gradient_series_fills_its_columns_with_the_gradient() {
+    let grad = r#"<c:spPr><a:gradFill><a:gsLst><a:gs pos="0"><a:srgbClr val="FFCC99"/></a:gs><a:gs pos="100000"><a:srgbClr val="CC6600"/></a:gs></a:gsLst><a:lin ang="5400000" scaled="0"/></a:gradFill></c:spPr>"#;
+    let ser = ser(0, "S", None, &["A", "B"], &["1", "2"]).replacen("<c:cat>", &format!("{grad}<c:cat>"), 1);
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{ser}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let shaded = items.iter().filter(|it| matches!(it, GraphicItem::Fill { fill: wordcraft_doc::fill::Fill::Gradient(_), .. })).count();
+    assert_eq!(shaded, 2, "both columns shaded");
+    assert!(filled(&items).is_empty(), "no flat column under them");
+}
+
+/// The title's size comes from its text properties (`sz`), 14 pt without one.
+#[test]
+fn the_title_takes_its_stated_size() {
+    let title = |rpr: &str| {
+        let plot = format!(
+            r#"<c:title><c:tx><c:rich><a:bodyPr/><a:p><a:pPr><a:defRPr {rpr}/></a:pPr><a:r><a:t>Sized</a:t></a:r></a:p></c:rich></c:tx></c:title><c:plotArea><c:barChart><c:barDir val="col"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+            ser(0, "S", None, &["A"], &["1"]),
+        );
+        chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0).iter().find_map(|it| match it {
+            GraphicItem::Text { text, size, .. } if text == "Sized" => Some(*size),
+            _ => None,
+        })
+    };
+    assert_eq!(title(r#"sz="1600""#), Some(16.0));
+    assert_eq!(title(""), Some(TITLE_SIZE));
+}

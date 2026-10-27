@@ -109,7 +109,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
             let y = at(*t, 0).1 as f32;
             let s = format_value(*t, &c.val_fmt, vs.step);
             let w = text_w(&s, fs) + 4.0;
-            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, false, c.val_colour());
+            text(out, Rect { x: cx as f32 - GAP / 2.0 - w, y: y - lh / 2.0, w, h: lh }, &s, fs, TextAlign::Right, c.val_bold(), c.val_colour());
         }
     }
     if labelled {
@@ -128,7 +128,7 @@ pub(super) fn radar(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
                 let cw = (text_w(&txt, fs) + 4.0).max(1.0);
                 (Rect { x: x - cw / 2.0, y: if sy > 0.0 { y - lh } else { y }, w: cw, h: lh }, TextAlign::Center)
             };
-            text(out, rect, &txt, fs, align, false, c.cat_colour());
+            text(out, rect, &txt, fs, align, c.cat_bold(), c.cat_colour());
         }
     }
 }

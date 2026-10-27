@@ -121,6 +121,8 @@ pub enum GraphicItem {
         #[serde(default)]
         vertical: bool,
     },
+    /// `rect` painted with a shape fill, solid or gradient (a chart area's or plot area's fill).
+    Fill { rect: [f32; 4], fill: crate::fill::Fill },
     /// A picture (`Document::media` key) stretched into `rect`.
     Image { rect: [f32; 4], media: String },
 }

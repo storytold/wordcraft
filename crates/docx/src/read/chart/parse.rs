@@ -1,8 +1,10 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, DataTable, Grouping, Key, Kind, Marker, MarkerShape, Pos, Series};
+use super::model::{Axis, Crosses, DataTable, Grouping, Key, Kind, Marker, MarkerShape, Pos, Series, TickPos};
+use super::plot::Scale;
 use super::plot::label;
 use super::{
-    AXIS, Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, fill_colour, int, measure, slot,
+    AXIS, Chart, El, FONT, Fill, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, TITLE_SIZE, fill_colour, int,
+    measure, read_fill, slot,
 };
 
 impl Chart {
@@ -60,6 +62,7 @@ impl Chart {
                     outline: flag("c:showOutline"),
                     keys: flag("c:showKeys"),
                     text: element_text_colour(d, theme).unwrap_or_else(|| chart_text_colour(space, theme)),
+                    bold: element_bold(d).or_else(|| chart_bold(space)).unwrap_or(false),
                     line: d.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)).unwrap_or(AXIS),
                 }
             })
@@ -111,6 +114,11 @@ impl Chart {
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
             legend_box: chart.child("c:legend").and_then(manual_layout),
             data_table,
+            plot_fill: plot.child("c:spPr").and_then(|p| own_fill(p, theme)),
+            title_bold: chart.child("c:title").and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true),
+            title_size: chart.child("c:title").and_then(element_size).unwrap_or(TITLE_SIZE),
+            legend_bold: chart.child("c:legend").and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(false),
+            text_bold: chart_bold(space).unwrap_or(false),
             title_colour: chart.child("c:title").and_then(|t| element_text_colour(t, theme)).unwrap_or(text_colour),
             legend_colour: chart.child("c:legend").and_then(|l| element_text_colour(l, theme)).unwrap_or(text_colour),
             text_colour,
@@ -125,6 +133,25 @@ impl Chart {
     /// Colour of the value axis labels.
     pub(super) fn val_colour(&self) -> Rgb {
         self.val.text.unwrap_or(self.text_colour)
+    }
+
+    /// Whether the category and value axis labels are bold.
+    pub(super) fn cat_bold(&self) -> bool {
+        self.cat.bold.unwrap_or(self.text_bold)
+    }
+
+    pub(super) fn val_bold(&self) -> bool {
+        self.val.bold.unwrap_or(self.text_bold)
+    }
+
+    /// Where the category axis crosses the value axis, as a value.
+    pub(super) fn cat_cross(&self, vs: &Scale) -> f64 {
+        match self.cat.crosses {
+            Crosses::AutoZero => 0.0f64.clamp(vs.lo.min(vs.hi), vs.lo.max(vs.hi)),
+            Crosses::Min => vs.lo,
+            Crosses::Max => vs.hi,
+            Crosses::At(v) => v.clamp(vs.lo.min(vs.hi), vs.lo.max(vs.hi)),
+        }
     }
 
     pub(super) fn stacked(&self) -> bool {
@@ -319,7 +346,8 @@ impl Series {
             fill: marker_sp.and_then(|p| fill_colour(p, theme)),
             line: marker_sp.and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
         });
-        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new(), kind: Kind::Bar, marker }
+        let shading = sp.and_then(|p| p.child("a:gradFill")).and_then(|g| read_fill(g, theme, None)).filter(|f| matches!(f, Fill::Gradient(_)));
+        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new(), kind: Kind::Bar, marker, shading }
     }
 }
 
@@ -415,9 +443,53 @@ pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
         unit: units.map_or(1.0, |(u, _)| u),
         unit_label: units.and_then(|(_, name)| {
             let l = du?.child("c:dispUnitsLbl")?;
-            Some((title_text(l).unwrap_or_else(|| name.to_string()), element_text_colour(l, theme)))
+            Some((title_text(l).unwrap_or_else(|| name.to_string()), element_text_colour(l, theme), element_bold(l).unwrap_or(false)))
         }),
+        crosses: match a.child("c:crossesAt").and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite()) {
+            Some(v) => Crosses::At(v),
+            None => match a.child("c:crosses").and_then(|e| e.attr("val")) {
+                Some("min") => Crosses::Min,
+                Some("max") => Crosses::Max,
+                _ => Crosses::AutoZero,
+            },
+        },
+        tick_pos: match a.child("c:tickLblPos").and_then(|e| e.attr("val")) {
+            Some("low") => TickPos::Low,
+            Some("high") => TickPos::High,
+            Some("none") => TickPos::None,
+            _ => TickPos::NextTo,
+        },
+        line_colour: a.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+        line_w: a
+            .child("c:spPr")
+            .and_then(|p| p.child("a:ln"))
+            .and_then(|l| l.attr("w"))
+            .and_then(|v| measure(v, 12_700.0))
+            .map_or(0.75, |w| w.clamp(0.0, 20.0)),
+        bold: element_bold(a),
     }
+}
+
+/// A chart element's text size, points, when its rich text's first run, its default run
+/// properties or its `c:txPr` state one (`sz`, hundredths of a point).
+pub(super) fn element_size(e: &El) -> Option<f32> {
+    let sz = |r: &El| r.attr("sz").and_then(int).map(|v| (v as f32 / 100.0).clamp(6.0, 72.0));
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(sz)
+        .or_else(|| rich.and_then(|r| r.find("a:defRPr")).and_then(sz))
+        .or_else(|| e.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(sz))
+}
+
+/// Whether a chart element's text is bold, when its rich text's first run, its default run
+/// properties or its `c:txPr` say (`b`).
+pub(super) fn element_bold(e: &El) -> Option<bool> {
+    let b = |r: &El| r.attr("b").map(truthy);
+    let rich = e.child("c:tx").and_then(|t| t.child("c:rich"));
+    rich.and_then(|r| r.find("a:rPr"))
+        .and_then(b)
+        .or_else(|| rich.and_then(|r| r.find("a:defRPr")).and_then(b))
+        .or_else(|| e.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(b))
 }
 
 /// A built-in display unit (`c:builtInUnit`): what it divides by, and its label.
@@ -463,6 +535,17 @@ pub(super) fn element_text_colour(e: &El, theme: &[Rgb]) -> Option<Rgb> {
 /// The colour of a text body's default run properties (`a:defRPr`).
 fn run_defaults_colour(body: &El, theme: &[Rgb]) -> Option<Rgb> {
     body.find("a:defRPr").and_then(|d| fill_colour(d, theme))
+}
+
+/// Whether the chart's own text properties (`c:txPr`) make its text bold.
+pub(super) fn chart_bold(space: &El) -> Option<bool> {
+    space.child("c:txPr").and_then(|t| t.find("a:defRPr")).and_then(|d| d.attr("b")).map(truthy)
+}
+
+/// The fill a `c:spPr` states for its area: solid, pattern (its foreground) or gradient.
+pub(super) fn own_fill(sp: &El, theme: &[Rgb]) -> Option<Fill> {
+    let f = sp.els().find(|e| matches!(e.name.as_str(), "a:solidFill" | "a:gradFill" | "a:pattFill"))?;
+    read_fill(f, theme, None)
 }
 
 /// The chart's own text colour (its `c:txPr`), the grey Word's default style uses without one.

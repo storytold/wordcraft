@@ -8,11 +8,12 @@
 
 use std::f64::consts::{FRAC_PI_2, TAU};
 
+use wordcraft_doc::fill::Fill;
 use wordcraft_doc::graphic::{GraphicItem, PathSeg, TextAlign};
 use wordcraft_doc::para::ShapeKind;
 use wordcraft_doc::props::Rgb;
 
-use super::drawing_color::{fill_colour, slot};
+use super::drawing_color::{fill as read_fill, fill_colour, slot};
 use crate::units::{int, measure};
 use crate::xml::El;
 
@@ -32,7 +33,7 @@ use format::{civil, excel_stamp, format_value};
 use model::{Axis, DataTable, Grouping, Kind, Pos, Series};
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
-use parse::{chart_text_colour, element_text_colour, read_series, text_size, title_of};
+use parse::{chart_bold, chart_text_colour, element_bold, element_size, element_text_colour, read_series, text_size, title_of};
 #[cfg(test)]
 use plot::{Scale, narrow, nice_scale};
 use plot::{backdrop, cartesian};
@@ -87,7 +88,7 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
     backdrop(&mut out, space, theme, w, h);
     let mut area = Rect { x: PAD, y: PAD, w: (w - 2.0 * PAD).max(1.0), h: (h - 2.0 * PAD).max(1.0) };
     if let Some(t) = &chart.title {
-        area = title_block(&mut out, t, area, chart.title_colour);
+        area = title_block(&mut out, t, area, chart.title_colour, chart.title_bold, chart.title_size);
     }
     if let Some(pos) = chart.legend {
         // Word lists bar series in the order they are drawn: reversed for clustered horizontal bars
@@ -104,9 +105,9 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
                 let (bx, by) = (x * w, y * h);
                 let bw = if bw > 0.0 { bw * w } else { (w - bx - PAD).max(1.0) };
                 let bh = if bh > 0.0 { bh * h } else { chart.text_size * LINE };
-                legend(&mut out, &entries, Pos::Top, Rect { x: bx, y: by, w: bw, h: bh }, chart.text_size, chart.legend_colour);
+                legend(&mut out, &entries, Pos::Top, Rect { x: bx, y: by, w: bw, h: bh }, chart.text_size, (chart.legend_colour, chart.legend_bold));
             }
-            None => area = legend(&mut out, &entries, pos, area, chart.text_size, chart.legend_colour),
+            None => area = legend(&mut out, &entries, pos, area, chart.text_size, (chart.legend_colour, chart.legend_bold)),
         }
     }
     match chart.kind {
@@ -118,9 +119,9 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
 }
 
 /// The title at the top of `area`; returns the room left under it.
-fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect, color: Rgb) -> Rect {
-    let lh = TITLE_SIZE * LINE;
-    text(out, Rect { x: area.x, y: area.y, w: area.w, h: lh }, t, TITLE_SIZE, TextAlign::Center, true, color);
+fn title_block(out: &mut Vec<GraphicItem>, t: &str, area: Rect, color: Rgb, bold: bool, size: f32) -> Rect {
+    let lh = size * LINE;
+    text(out, Rect { x: area.x, y: area.y, w: area.w, h: lh }, t, size, TextAlign::Center, bold, color);
     Rect { y: area.y + lh + PAD, h: (area.h - lh - PAD).max(1.0), ..area }
 }
 
@@ -141,7 +142,9 @@ fn placeholder(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h:
     let colour = chart_text_colour(space, theme);
     if let Some(t) = title_of(chart, &read_series(ty, false, theme)) {
         let title_colour = chart.child("c:title").and_then(|t| element_text_colour(t, theme)).unwrap_or(colour);
-        area = title_block(out, &t, area, title_colour);
+        let title_bold = chart.child("c:title").and_then(element_bold).or_else(|| chart_bold(space)).unwrap_or(true);
+        let title_size = chart.child("c:title").and_then(element_size).unwrap_or(TITLE_SIZE);
+        area = title_block(out, &t, area, title_colour, title_bold, title_size);
     }
     let size = text_size(space);
     let lh = size * LINE;
@@ -200,6 +203,14 @@ struct Chart {
     /// Where the file puts the legend by hand: x, y, width, height as shares of the chart.
     legend_box: Option<[f32; 4]>,
     data_table: Option<DataTable>,
+    /// The plot area's own fill (`c:plotArea/c:spPr`).
+    plot_fill: Option<Fill>,
+    /// Bold title, legend and other text, as their text properties say (a title is bold by
+    /// default).
+    title_bold: bool,
+    title_size: f32,
+    legend_bold: bool,
+    text_bold: bool,
     /// Text colour of the title, the legend, and any text that states none of its own.
     title_colour: Rgb,
     legend_colour: Rgb,

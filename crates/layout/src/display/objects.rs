@@ -37,6 +37,22 @@ pub(super) fn graphic_draws(doc: &Document, g: &Graphic, rect: Rect, alpha: f32)
                 })
             }
             GraphicItem::Text { rect: r, .. } => out.extend(text_glyphs(doc, inside(r), it, alpha, k)),
+            GraphicItem::Fill { rect: r, fill } => {
+                let rect = inside(r);
+                if let Some(paint) = paint_for(fill, rect) {
+                    out.push(Draw::Shape {
+                        rect,
+                        kind: ShapeKind::Rectangle,
+                        fill: Some(paint),
+                        stroke: None,
+                        stroke_width: 0.0,
+                        effects: Default::default(),
+                        corner: None,
+                        dash: Vec::new(),
+                        cap: Default::default(),
+                    });
+                }
+            }
             GraphicItem::Image { rect: r, media } => {
                 out.push(Draw::Image { rect: inside(r), media: media.clone(), crop: [0.0; 4], alpha, alt: String::new(), decorative: false })
             }

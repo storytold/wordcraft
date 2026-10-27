@@ -1,9 +1,10 @@
 use super::canvas::{Rect, clip_text, draw_key, fill, key_w, rect_segs, runs, seg, stroke, text, text_at, text_w, vertical_text, widest, wrap};
 use super::format::format_value;
-use super::model::{DataLabel, DataTable, Grouping, Kind, Marker, MarkerShape, Series};
+use super::model::{DataLabel, DataTable, Grouping, Kind, Marker, MarkerShape, Series, TickPos};
+use super::parse::own_fill;
 use super::parse::{category_text, series_key, series_name};
 use super::polar::{draw_data_labels, label_of, value_text};
-use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
+use super::{AXIS, Chart, El, Fill, GAP, GRID, GraphicItem, LINE, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
 
 pub(super) fn label(s: &str) -> String {
     s.chars().take(MAX_LABEL).collect()
@@ -12,7 +13,13 @@ pub(super) fn label(s: &str) -> String {
 /// Chart area: the chart space's fill and border (white and borderless by default).
 pub(super) fn backdrop(out: &mut Vec<GraphicItem>, space: &El, theme: &[Rgb], w: f32, h: f32) {
     let sp = space.child("c:spPr");
+    // A gradient is painted as the file states it; a solid fill as before.
+    let gradient = sp.and_then(|p| own_fill(p, theme)).filter(|f| matches!(f, Fill::Gradient(_)));
+    if let Some(fill) = gradient.clone() {
+        out.push(GraphicItem::Fill { rect: [0.0, 0.0, w, h], fill });
+    }
     let fill = match sp {
+        _ if gradient.is_some() => None,
         Some(p) if p.child("a:noFill").is_some() => None,
         Some(p) => fill_colour(p, theme).or(Some(Rgb::WHITE)),
         None => Some(Rgb::WHITE),
@@ -210,6 +217,9 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
         return;
     }
     let g = Frame { plot, horiz: c.horizontal, n: c.n, vs: ax.vs, xs: ax.xs, mid: c.val.mid };
+    if let Some(fill) = &c.plot_fill {
+        out.push(GraphicItem::Fill { rect: plot.arr(), fill: fill.clone() });
+    }
     if c.val.grid {
         draw_grid(out, &g, &ax.vticks);
     }
@@ -234,13 +244,13 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     draw_data_labels(out, &labels, c.text_size, g.horiz && c.kind == Kind::Bar);
     if !c.val.deleted {
         draw_value_labels(out, c, &g, &ax.vticks, Rect { w: m.left, ..area });
-        if let Some((label, colour)) = &c.val.unit_label {
+        if let Some((label, colour, bold)) = &c.val.unit_label {
             let (fs, lh) = (c.text_size, c.text_size * LINE);
             let colour = colour.unwrap_or_else(|| c.val_colour());
             if g.horiz {
-                text_at(out, plot.x + plot.w / 2.0, plot.bottom() + GAP / 2.0 + lh, label, fs, colour);
+                text_at(out, plot.x + plot.w / 2.0, plot.bottom() + GAP / 2.0 + lh, label, fs, colour, *bold);
             } else {
-                vertical_text(out, Rect { x: area.x, y: plot.y, w: lh, h: plot.h }, label, fs, colour);
+                vertical_text(out, Rect { x: area.x, y: plot.y, w: lh, h: plot.h }, label, fs, colour, *bold);
             }
         }
     }
@@ -275,7 +285,7 @@ fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Fra
     let bottom = top + rows as f32 * lh;
     for (i, cat) in c.cats.iter().enumerate() {
         let x = g.band_start(i);
-        text(out, Rect { x, y: top, w: band, h: lh }, &clip_text(cat, band, fs), fs, TextAlign::Center, false, t.text);
+        text(out, Rect { x, y: top, w: band, h: lh }, &clip_text(cat, band, fs), fs, TextAlign::Center, t.bold, t.text);
     }
     for (j, s) in c.series.iter().enumerate() {
         let y = top + (j + 1) as f32 * lh;
@@ -285,11 +295,11 @@ fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Fra
             draw_key(out, x, y + lh / 2.0, k, c.series_colour(j));
             x += key_w(k) + GAP;
         }
-        text(out, Rect { x, y, w: (plot.x - x - GAP).max(1.0), h: lh }, &series_name(s, j), fs, TextAlign::Left, false, t.text);
+        text(out, Rect { x, y, w: (plot.x - x - GAP).max(1.0), h: lh }, &series_name(s, j), fs, TextAlign::Left, t.bold, t.text);
         for i in 0..g.n {
             let Some(v) = s.raw.get(i).copied().flatten() else { continue };
             let x = g.band_start(i);
-            text(out, Rect { x, y, w: band, h: lh }, &clip_text(&value_text(s, v), band, fs), fs, TextAlign::Center, false, t.text);
+            text(out, Rect { x, y, w: band, h: lh }, &clip_text(&value_text(s, v), band, fs), fs, TextAlign::Center, t.bold, t.text);
         }
     }
     let line = |out: &mut Vec<GraphicItem>, segs| stroke(out, segs, t.line, 0.75);
@@ -328,15 +338,17 @@ fn draw_grid(out: &mut Vec<GraphicItem>, g: &Frame, ticks: &[(f64, String)]) {
 fn draw_axes(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame) {
     let plot = g.plot;
     if !c.cat.deleted && c.cat.line {
-        let segs = if g.horiz { seg(plot.x, plot.y, plot.x, plot.bottom()) } else { seg(plot.x, plot.bottom(), plot.right(), plot.bottom()) };
-        stroke(out, segs, AXIS, 0.75);
+        // Where the category axis crosses the value axis: at zero unless the file says otherwise.
+        let p = if c.kind == Kind::Scatter { if g.horiz { plot.x } else { plot.bottom() } } else { g.val(c.cat_cross(&g.vs)) };
+        let segs = if g.horiz { seg(p, plot.y, p, plot.bottom()) } else { seg(plot.x, p, plot.right(), p) };
+        stroke(out, segs, c.cat.line_colour.unwrap_or(AXIS), c.cat.line_w);
     }
     if let Some(color) = c.plot_border {
         stroke(out, rect_segs(plot.x, plot.y, plot.right(), plot.bottom()), color, 0.75);
     }
     if !c.val.deleted && c.val.line {
         let segs = if g.horiz { seg(plot.x, plot.bottom(), plot.right(), plot.bottom()) } else { seg(plot.x, plot.y, plot.x, plot.bottom()) };
-        stroke(out, segs, AXIS, 0.75);
+        stroke(out, segs, c.val.line_colour.unwrap_or(AXIS), c.val.line_w);
     }
 }
 
@@ -347,9 +359,9 @@ fn draw_value_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, ticks: &[
     for (t, s) in ticks {
         let p = g.val(*t);
         if g.horiz {
-            text_at(out, p, g.plot.bottom() + GAP / 2.0, s, fs, c.val_colour());
+            text_at(out, p, g.plot.bottom() + GAP / 2.0, s, fs, c.val_colour(), c.val_bold());
         } else {
-            text(out, Rect { x: margin.x, y: p - lh / 2.0, w: margin.w - GAP, h: lh }, s, fs, TextAlign::Right, false, c.val_colour());
+            text(out, Rect { x: margin.x, y: p - lh / 2.0, w: margin.w - GAP, h: lh }, s, fs, TextAlign::Right, c.val_bold(), c.val_colour());
         }
     }
 }
@@ -361,21 +373,28 @@ fn draw_category_labels(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, xticks
     let plot = g.plot;
     if c.kind == Kind::Scatter {
         for (t, s) in xticks {
-            text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs, c.cat_colour());
+            text_at(out, g.scat_x(*t), plot.bottom() + GAP / 2.0, s, fs, c.cat_colour(), c.cat_bold());
         }
     } else if g.horiz {
         for (i, lines) in m.wrapped.iter().enumerate() {
             let top = g.band_start(i) + g.band() / 2.0 - lines.len() as f32 * lh / 2.0;
             for (k, s) in lines.iter().enumerate() {
-                text(out, Rect { x: area.x, y: top + k as f32 * lh, w: m.left - GAP, h: lh }, s, fs, TextAlign::Right, false, c.cat_colour());
+                text(out, Rect { x: area.x, y: top + k as f32 * lh, w: m.left - GAP, h: lh }, s, fs, TextAlign::Right, c.cat_bold(), c.cat_colour());
             }
         }
     } else {
+        // Under the axis where it crosses (next to it), or under the plot (low). High labels,
+        // which Word puts over the plot, are drawn under it too: the margins hold no room above.
+        let top = match c.cat.tick_pos {
+            TickPos::None => return,
+            TickPos::NextTo => g.val(c.cat_cross(&g.vs)).min(plot.bottom()),
+            TickPos::Low | TickPos::High => plot.bottom(),
+        };
         let band = g.band();
         for (i, lines) in m.wrapped.iter().enumerate().filter(|(i, _)| i % m.skip == 0) {
             for (k, s) in lines.iter().enumerate() {
-                let y = plot.bottom() + GAP / 2.0 + k as f32 * lh;
-                text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, false, c.cat_colour());
+                let y = top + GAP / 2.0 + k as f32 * lh;
+                text(out, Rect { x: g.cat_x(i) - band / 2.0, y, w: band, h: lh }, s, fs, TextAlign::Center, c.cat_bold(), c.cat_colour());
             }
         }
     }
@@ -459,8 +478,18 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
             let a = g.band_start(i) + (band - group) / 2.0 + slot * thick * (1.0 - ov);
             let (p0, p1) = (g.val(v0), g.val(v1));
             let (p0, p1) = (p0.min(p1), p0.max(p1));
-            let segs = if g.horiz { rect_segs(p0, a, p1, a + thick) } else { rect_segs(a, p0, a + thick, p1) };
-            fill(out, segs, c.point_colour(j, i));
+            let own_colour = s.points.get(i).is_some_and(Option::is_some);
+            match &s.shading {
+                // A shaded series paints each column with its gradient (a point's own colour wins).
+                Some(shading) if !own_colour => {
+                    let rect = if g.horiz { [p0, a, p1 - p0, thick] } else { [a, p0, thick, p1 - p0] };
+                    out.push(GraphicItem::Fill { rect, fill: shading.clone() });
+                }
+                _ => {
+                    let segs = if g.horiz { rect_segs(p0, a, p1, a + thick) } else { rect_segs(a, p0, a + thick, p1) };
+                    fill(out, segs, c.point_colour(j, i));
+                }
+            }
             if let Some(text) = label_of(s, i) {
                 let mid = a + thick / 2.0;
                 let (x, y) = match (g.horiz, stacked) {
