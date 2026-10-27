@@ -330,3 +330,46 @@ fn page_default_reads_the_carets_section_from_any_story() {
     run(&mut s, "layout.setDefault", json!({}));
     assert_eq!(session(&store).normal_document().last_section.margin_left, 50.0, "the second section's, where the note is");
 }
+
+/// Review P3: a revision record in the params never reaches the defaults or the template.
+#[test]
+fn paragraph_defaults_carry_no_revision() {
+    let store = MemoryStore::new();
+    let mut s = session(&store);
+    let props = json!({"spaceAfter": 7.0, "numChange": {"rev": 3, "original": "1."}, "fmtChange": null});
+    run(&mut s, "para.setDefault", json!({"props": props}));
+    assert!(s.doc.styles.default_para.num_change.is_none());
+    let d = session(&store).normal_document();
+    assert_eq!(d.styles.default_para.space_after, Some(7.0));
+    assert!(d.styles.default_para.num_change.is_none());
+    assert!(d.styles.get("Normal").is_some_and(|n| n.para.num_change.is_none()));
+}
+
+/// Review P3: the template commands with junk parameters against a template store: no panic,
+/// and whatever they save still reads as a template.
+#[test]
+fn template_commands_survive_hostile_params() {
+    let junk = [
+        json!(null),
+        json!({}),
+        json!({"scope": 5}),
+        json!({"scope": "new", "props": 7}),
+        json!({"scope": "new", "props": {"size": 1e30, "spacing": -1e30, "kern": 1e30, "font": "\u{0}\u{FFFF}", "color": "zz"}}),
+        json!({"scope": "new", "props": {"spaceAfter": 1e30, "indentLeft": -1e30, "lineSpacing": {"rule": "multiple", "value": 1e30}, "tabs": [[1e30]]}}),
+        json!({"scope": "document", "style": "\u{0}", "props": {"bold": "x"}}),
+        json!({"style": 42}),
+    ];
+    for id in ["format.setDefault", "para.setDefault", "layout.setDefault", "styles.setDefault", "design.setDefault", "defaults.reset"] {
+        for j in &junk {
+            let store = MemoryStore::new();
+            let mut s = Session::new(crate::sample::sample_document());
+            s.normal_store = Some(store.clone());
+            let _ = s.run(id, j);
+            let _ = s.layout();
+            if let Some(bytes) = store.get() {
+                crate::normal_template::parse(&bytes).unwrap_or_else(|e| panic!("{id} {j}: {e}"));
+                let _ = session(&store).normal_document();
+            }
+        }
+    }
+}
