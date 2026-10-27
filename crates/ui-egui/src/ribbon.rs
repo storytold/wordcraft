@@ -1245,6 +1245,7 @@ fn home(app: &mut WordApp, ui: &mut Ui) {
                         ("I. II. III.", "outline"),
                         ("A. B. C.", "upperLetter"),
                         ("a) b) c)", "lowerLetter"),
+                        ("a. b. c.", "lowerLetterDot"),
                         ("i. ii. iii.", "lowerRoman"),
                     ] {
                         mi(ui, app, l, "para.numbering", json!({"kind": k}));
@@ -3821,6 +3822,47 @@ mod tests {
     /// #3242: Align used to run `arrange.align` directly with no `value`, which always centers
     /// (`crates/engine/src/cmd/objects.rs`) — there was no way to reach Left or Right from the
     /// ribbon short of dragging. Align now opens a menu, like Word's own Align dropdown.
+    /// #4281: the Numbering drop-down lists "a. b. c." and applies it, then switching to another
+    /// preset changes the list instead of turning it off.
+    #[test]
+    fn the_numbering_menu_offers_a_dot_b_dot_c_dot() {
+        use egui_kittest::kittest::{By, Queryable};
+        let item = |label: &'static str| By::new().label_contains(label);
+        let mut a = crate::WordApp::new(Session::new(wordcraft_doc::Document::new()), crate::Services::default());
+        a.run("text.insert", json!({"text": "One"})).unwrap();
+        let mut h = egui_kittest::Harness::builder().with_size(egui::vec2(1440.0, 900.0)).build_ui_state(
+            |ui, app: &mut crate::WordApp| {
+                let ctx = ui.ctx().clone();
+                app.logic(&ctx);
+                app.ui(ui);
+            },
+            a,
+        );
+        for _ in 0..4 {
+            h.step();
+        }
+        let label = |h: &mut egui_kittest::Harness<'_, crate::WordApp>| {
+            let l = h.state_mut().session.layout();
+            l.pages.iter().flat_map(|p| &p.items).find_map(|i| match i {
+                wordcraft_layout::Placed::Lines { para, l0: 0, .. } => para.label.as_ref().map(|lb| lb.text.clone()),
+                _ => None,
+            })
+        };
+        h.get_by_label("Numbering options").click();
+        h.run();
+        for want in ["1. 2. 3.", "a) b) c)", "a. b. c.", "i. ii. iii."] {
+            assert!(h.query(item(want)).is_some(), "the menu lists {want}");
+        }
+        h.get(item("a. b. c.")).click();
+        h.run();
+        assert_eq!(label(&mut h).as_deref(), Some("a."));
+        h.get_by_label("Numbering options").click();
+        h.run();
+        h.get(item("A. B. C.")).click();
+        h.run();
+        assert_eq!(label(&mut h).as_deref(), Some("A."), "another preset changes the list");
+    }
+
     #[test]
     fn align_menu_reaches_left_and_right_not_just_center() {
         use egui_kittest::kittest::{By, Queryable};

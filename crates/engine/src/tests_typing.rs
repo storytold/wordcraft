@@ -2273,6 +2273,40 @@ fn a_new_heading_after_a_heading_linked_list_is_numbered() {
     );
 }
 
+/// #4281: Home › Numbering offers every preset, "a. b. c." among them, and picking another preset
+/// for a list that is already numbered changes its style (only picking the same one again turns it off).
+#[test]
+fn the_numbering_gallery_presets_each_apply_and_switch_between_each_other() {
+    let labels = |s: &mut Session| numbers(s).into_iter().map(|(l, _)| l.unwrap_or_default()).collect::<Vec<_>>();
+    for (kind, want) in [
+        ("numbered", ["1.", "2.", "3."]),
+        ("numberedParen", ["1)", "2)", "3)"]),
+        ("outline", ["I.", "II.", "III."]),
+        ("upperLetter", ["A.", "B.", "C."]),
+        ("lowerLetter", ["a)", "b)", "c)"]),
+        ("lowerLetterDot", ["a.", "b.", "c."]),
+        ("lowerRoman", ["i.", "ii.", "iii."]),
+    ] {
+        let mut s = s();
+        typ(&mut s, "One\nTwo\nThree");
+        run(&mut s, "select.all", json!({}));
+        run(&mut s, "para.numbering", json!({"kind": kind}));
+        assert_eq!(labels(&mut s), want, "{kind}");
+        // Picking the same preset again turns the list off.
+        run(&mut s, "para.numbering", json!({"kind": kind}));
+        assert_eq!(labels(&mut s), ["", "", ""], "{kind} again");
+    }
+    // From one preset to another: the list changes style, it doesn't go off.
+    let mut s = s();
+    typ(&mut s, "One\nTwo\nThree");
+    run(&mut s, "select.all", json!({}));
+    run(&mut s, "para.numbering", json!({"kind": "numbered"}));
+    for (kind, want) in [("upperLetter", "A."), ("lowerLetterDot", "a."), ("lowerRoman", "i."), ("outline", "I."), ("numbered", "1.")] {
+        run(&mut s, "para.numbering", json!({"kind": kind}));
+        assert_eq!(labels(&mut s)[0], want, "to {kind}");
+    }
+}
+
 /// #1793: plain Numbering on a Heading 1 numbers it "1." and keeps Heading 1 (Word: "1. One").
 #[test]
 fn numbering_a_heading_keeps_the_heading_style() {
