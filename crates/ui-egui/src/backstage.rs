@@ -286,13 +286,10 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             egui::StrokeKind::Inside,
         );
         let ppp = ui.ctx().pixels_per_point();
-        let key = format!("tpl:{template}:{ppp}");
-        let region = app.session.region();
+        // A saved Normal template redraws the blank tile (#4237).
+        let key = format!("tpl:{template}:{ppp}:{}", wordcraft_engine::normal_template::revision());
         let tex = ui.ctx().data(|d| d.get_temp::<egui::TextureHandle>(egui::Id::unique(&key))).or_else(|| {
-            let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
-            // The blank tile shows the region's paper (#838).
-            s.system_region = region;
-            let _ = s.run("file.new", &json!({"template": template}));
+            let s = tile_session(app, template);
             let l = s.export_layout();
             let page = l.pages.first()?;
             let img = wordcraft_render::render_page(&s.doc, page, 150.0 / page.w * ppp, &crate::canvas::screen_render_options());
@@ -315,6 +312,17 @@ fn template_tile(ui: &mut Ui, app: &mut WordApp, label: &str, template: &str) {
             app.canvas.want_focus = true;
         }
     });
+}
+
+/// The document File › New's tile for `template` pictures: what `file.new` makes, the blank one
+/// on the region's paper (#838) and the Normal template (#4237).
+fn tile_session(app: &WordApp, template: &str) -> wordcraft_engine::Session {
+    let mut s = wordcraft_engine::Session::new(wordcraft_doc::Document::new());
+    s.system_region = app.session.system_region.clone();
+    s.prefs.region = app.session.prefs.region.clone();
+    s.normal_store = app.session.normal_store.clone();
+    let _ = s.run("file.new", &json!({"template": template}));
+    s
 }
 
 /// The built-in templates in gallery order: display label and the `file.new` template id.

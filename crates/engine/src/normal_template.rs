@@ -20,6 +20,19 @@ use wordcraft_doc::{Document, StyleSheet};
 /// setup, not content: a few tens of kilobytes. Anything bigger is not ours.
 pub const MAX_TEMPLATE_BYTES: usize = 8 << 20;
 
+/// Bumped whenever this process saves or deletes a template, so pictures of a new blank
+/// document (File › New's tile) know to redraw.
+static REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times this process has saved or deleted a template.
+pub fn revision() -> u64 {
+    REVISION.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+pub(crate) fn note_changed() {
+    REVISION.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+}
+
 /// The template's file name in the settings folder.
 pub const FILE_NAME: &str = "Normal.dotx";
 

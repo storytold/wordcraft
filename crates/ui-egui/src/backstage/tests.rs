@@ -1054,3 +1054,15 @@ fn backstage_save_as_sidebar_opens_save_as_page() {
     h.run_steps(4);
     assert_eq!(h.state().ui.backstage_page, "saveAs");
 }
+
+/// Review P3: File › New's blank tile pictures the Normal template.
+#[test]
+fn the_blank_tile_shows_the_normal_template() {
+    let store = wordcraft_engine::normal_template::MemoryStore::new();
+    let mut a = WordApp::new(wordcraft_engine::Session::new(wordcraft_doc::Document::new()), Services::default());
+    a.session.normal_store = Some(store.clone());
+    a.run("layout.orientation", json!({"value": "landscape"})).unwrap();
+    a.run("layout.setDefault", json!({})).unwrap();
+    assert!(super::tile_session(&a, "blank").doc.last_section.landscape);
+    assert!(!super::tile_session(&a, "letter").doc.last_section.landscape, "templates keep their own");
+}
