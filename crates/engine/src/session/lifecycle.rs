@@ -95,6 +95,7 @@ impl Session {
             user_dict_path: None,
             normal_store: None,
             pending_template: Vec::new(),
+            run_depth: 0,
             dirty,
             clipboard: None,
             pending_move,

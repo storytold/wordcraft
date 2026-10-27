@@ -72,6 +72,9 @@ pub struct Session {
     /// Set As Default changes waiting for the Normal template: written by [`Session::run`] only
     /// once the command has succeeded (see `cmd::defaults::TemplateEdit`).
     pub(crate) pending_template: Vec<crate::cmd::defaults::TemplateEdit>,
+    /// How many [`Session::run`] calls are dispatching right now: a nested run hands its
+    /// template queue to the outermost one.
+    pub(crate) run_depth: u32,
     pub clipboard: Option<Fragment>,
     /// A tracked cut the next paste can turn into a move (see `cmd::moves`).
     pub pending_move: Option<crate::cmd::moves::PendingMove>,
