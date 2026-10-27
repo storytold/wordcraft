@@ -173,8 +173,9 @@ pub struct RenderOptions {
     pub read_paper: Option<Rgb>,
 }
 
-/// Default grey for a dark page's paper.
-pub const DARK_PAPER: u8 = 0x33;
+/// Default grey for a dark page's paper: `#181818`, the page the reference Writer document uses
+/// (WordCraft's dark page used to be a lighter `#333`).
+pub const DARK_PAPER: u8 = 0x18;
 
 /// Read Mode's Sepia paper: Word's RGB (112, 66, 20) at 80% transparency over white.
 pub const SEPIA_PAPER: Rgb = Rgb(0xE2, 0xD9, 0xD0);

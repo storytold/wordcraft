@@ -877,6 +877,9 @@ pub fn show(app: &mut WordApp, ui: &mut Ui) {
             } else if let Some((_, tex)) = app.canvas.textures.get(&i) {
                 painter.image(tex.id(), visual_sr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
+            // The sheet's edge, drawn over the content: it is what tells a dark page from the
+            // workspace around it (#2572).
+            painter.rect_stroke(visual_sr, 0.0, Stroke::new(1.0, t.page_border), egui::StrokeKind::Inside);
             let page_scale = page_screen_scale(visual_sr, page, geo.scale);
             // Header/footer editing chrome.
             if let StoryRef::Part(id) = app.session.sel.focus.story {
