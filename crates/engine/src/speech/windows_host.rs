@@ -26,6 +26,9 @@ const STARTUP_TIMEOUT: Duration = Duration::from_secs(5);
 /// answering.
 #[cfg(target_os = "windows")]
 const SPEAK_TIMEOUT: Duration = Duration::from_secs(300);
+/// How long the host has to acknowledge a stop before it is considered unresponsive.
+#[cfg(target_os = "windows")]
+const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// The PowerShell program. It reads one JSON command per line and writes one reply per line.
 const HOST_SCRIPT: &str = r#"$ErrorActionPreference = 'Stop'
@@ -292,13 +295,17 @@ impl Host {
         }
     }
 
-    /// Cancel the current prompt and wait briefly for the host to acknowledge the stop.
+    /// Cancel the current prompt and wait briefly for the host to acknowledge the stop. A host
+    /// that does not answer is killed: it may still be speaking while the player is paused, and
+    /// the next sentence falls back.
     fn stop(&mut self, id: u64) {
-        let _ = writeln!(self.stdin, "{{\"cmd\":\"stop\",\"id\":{id}}}");
-        let _ = self.stdin.flush();
+        if writeln!(self.stdin, "{{\"cmd\":\"stop\",\"id\":{id}}}").and_then(|_| self.stdin.flush()).is_err() {
+            self.kill();
+            return;
+        }
         let stopped = format!("stopped {id}");
         let done = format!("done {id}");
-        let deadline = Instant::now() + Duration::from_secs(2);
+        let deadline = Instant::now() + STOP_TIMEOUT;
         while Instant::now() < deadline {
             match self.lines.recv_timeout(Duration::from_millis(30)) {
                 Ok(line) => {
@@ -314,7 +321,14 @@ impl Host {
                 }
             }
         }
+        self.kill();
+    }
+
+    /// Mark the host unusable and kill its child, so an unacknowledged stop cannot leave audio
+    /// playing; [`Drop`] then reaps the child and its reader.
+    fn kill(&mut self) {
         self.broken = true;
+        let _ = self.child.kill();
     }
 }
 
@@ -395,6 +409,19 @@ while ($null -ne ($line = $reader.ReadLine())) {
 }
 "#;
 
+    /// A stand-in that accepts commands but never acknowledges a stop; the host must kill it.
+    #[cfg(target_os = "windows")]
+    const FAKE_HOST_IGNORES_STOP: &str = r#"$utf8 = New-Object System.Text.UTF8Encoding($false)
+$reader = New-Object System.IO.StreamReader([Console]::OpenStandardInput(), $utf8)
+$out = New-Object System.IO.StreamWriter([Console]::OpenStandardOutput(), $utf8)
+$out.AutoFlush = $true
+$out.WriteLine('ready')
+while ($null -ne ($line = $reader.ReadLine())) {
+    $m = $line | ConvertFrom-Json
+    if ([string]$m.cmd -eq 'quit') { exit 0 }
+}
+"#;
+
     #[cfg(target_os = "windows")]
     /// Start the fake host used by the protocol tests.
     fn fake_host() -> Host {
@@ -445,6 +472,16 @@ while ($null -ne ($line = $reader.ReadLine())) {
         host.stop(99);
         assert!(!host.broken);
         drop(host);
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    /// A host that never acknowledges a stop is killed, so it cannot keep talking while paused.
+    fn fake_host_kills_a_child_that_ignores_stop() {
+        let mut host = Host::start_with(super::super::windows_command(None, FAKE_HOST_IGNORES_STOP).command(), &|| false).unwrap();
+        host.stop(1);
+        assert!(host.broken);
+        assert!(wait_for_exit(&mut host.child, Duration::from_secs(2)), "the child must be killed");
     }
 
     #[test]
