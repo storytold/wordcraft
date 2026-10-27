@@ -75,6 +75,8 @@ impl Session {
             user_dict_path: _,
             // Host wiring, like the dictionary file.
             normal_store: _,
+            // Written or dropped before `run` returns.
+            pending_template: _,
             dirty,
             clipboard: _,
             // Like the clipboard: what the next paste can make a move of.

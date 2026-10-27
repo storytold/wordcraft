@@ -38,13 +38,8 @@ pub fn specs() -> Vec<CommandSpec> {
 /// colours and paragraph spacing, for new documents.
 pub(crate) fn design_default(s: &mut Session, v: &Value) -> CmdResult {
     if scope_is_new(v)? {
-        let doc = s.doc.clone();
-        update_template(s, |t| {
-            crate::cmd::templates::apply_template_styles(t, &doc);
-            nt::copy_theme(&mut t.settings, &doc.settings);
-            nt::mark(t, Part::Styles);
-            nt::mark(t, Part::Theme);
-        })?;
+        let doc = Box::new(s.doc.clone());
+        queue(s, TemplateEdit::Design(doc))?;
         s.status = "These settings will be used for new documents.".into();
     }
     done(s, v)
@@ -66,6 +61,61 @@ fn done(s: &Session, v: &Value) -> CmdResult {
         o.insert("scope".into(), json!(if scope_is_new(v)? { "new" } else { "document" }));
     }
     Ok(r)
+}
+
+/// A change waiting for the Normal template. A Set As Default queues it; [`Session::run`] writes
+/// the queue once the command has succeeded and passed Restrict Editing's post-check, so a
+/// refused or failed command never leaves its change in the template (#4237 review).
+pub(crate) enum TemplateEdit {
+    Char(CharProps),
+    Para(ParaProps),
+    /// The page setup on this document's last section and settings.
+    Page(Box<Document>),
+    /// The whole Design state of this document.
+    Design(Box<Document>),
+    /// The style with this id, from this document.
+    Style(Box<Document>, String),
+}
+
+/// Queue `edit` for the template; refused when the session has none.
+fn queue(s: &mut Session, edit: TemplateEdit) -> Result<(), CmdError> {
+    if s.normal_store.is_none() {
+        return Err(CmdError::Failed("this session has no Normal template (headless or without preferences): use \"scope\": \"document\"".into()));
+    }
+    s.pending_template.push(edit);
+    Ok(())
+}
+
+/// Write the queued `edits` into the template, in one read-modify-write.
+pub(crate) fn commit_template(s: &mut Session, edits: Vec<TemplateEdit>) -> Result<(), CmdError> {
+    update_template(s, |t| {
+        for e in edits {
+            match e {
+                TemplateEdit::Char(c) => {
+                    apply_char(t, &c);
+                    nt::mark(t, Part::Styles);
+                }
+                TemplateEdit::Para(pp) => {
+                    apply_para(t, &pp);
+                    nt::mark(t, Part::Styles);
+                }
+                TemplateEdit::Page(from) => {
+                    nt::copy_page(t, &from);
+                    nt::mark(t, Part::Page);
+                }
+                TemplateEdit::Design(doc) => {
+                    crate::cmd::templates::apply_template_styles(t, &doc);
+                    nt::copy_theme(&mut t.settings, &doc.settings);
+                    nt::mark(t, Part::Styles);
+                    nt::mark(t, Part::Theme);
+                }
+                TemplateEdit::Style(doc, id) => {
+                    crate::cmd::templates::copy_styles(t, &doc, std::slice::from_ref(&id));
+                    nt::mark(t, Part::Styles);
+                }
+            }
+        }
+    })
 }
 
 /// Re-read the template, change it with `f`, write it back. A missing or damaged template starts
@@ -170,10 +220,7 @@ fn font_default(s: &mut Session, v: &Value) -> CmdResult {
     apply_char(&mut s.doc, &c);
     crate::cmd::para::touch_all(s);
     if all {
-        update_template(s, |t| {
-            apply_char(t, &c);
-            nt::mark(t, Part::Styles);
-        })?;
+        queue(s, TemplateEdit::Char(c))?;
         s.status = "New documents will use this font.".into();
     }
     done(s, v)
@@ -204,10 +251,7 @@ fn para_default(s: &mut Session, v: &Value) -> CmdResult {
     apply_para(&mut s.doc, &pp);
     crate::cmd::para::touch_all(s);
     if all {
-        update_template(s, |t| {
-            apply_para(t, &pp);
-            nt::mark(t, Part::Styles);
-        })?;
+        queue(s, TemplateEdit::Para(pp))?;
         s.status = "New documents will use this paragraph formatting.".into();
     }
     done(s, v)
@@ -224,10 +268,7 @@ fn page_default(s: &mut Session, v: &Value) -> CmdResult {
         }
         from.settings.even_odd_headers = s.doc.settings.even_odd_headers;
         from.settings.mirror_margins = s.doc.settings.mirror_margins;
-        update_template(s, |t| {
-            nt::copy_page(t, &from);
-            nt::mark(t, Part::Page);
-        })?;
+        queue(s, TemplateEdit::Page(Box::new(from)))?;
         s.status = "New documents will use this page setup.".into();
     }
     done(s, v)
@@ -244,11 +285,8 @@ fn style_default(s: &mut Session, v: &Value) -> CmdResult {
         .ok_or_else(|| CmdError::Params(format!("no style `{name}`")))?;
     let id = st.id.clone();
     if scope_is_new(v)? {
-        let doc = s.doc.clone();
-        update_template(s, |t| {
-            crate::cmd::templates::copy_styles(t, &doc, std::slice::from_ref(&id));
-            nt::mark(t, Part::Styles);
-        })?;
+        let doc = Box::new(s.doc.clone());
+        queue(s, TemplateEdit::Style(doc, id))?;
         s.status = "New documents will use this style.".into();
     }
     done(s, v)

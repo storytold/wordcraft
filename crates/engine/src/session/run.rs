@@ -181,6 +181,9 @@ impl Session {
         // A rejected command must not persist a new proofing default, including a rejection
         // by the protected-region check after its handler has succeeded. Undo stays document-only.
         let default_language_before = self.prefs.default_language.clone();
+        // Set As Default queues its template change; it is written below only if this command
+        // succeeds. A nested command's queue is its own.
+        let template_before = std::mem::take(&mut self.pending_template);
         let run = spec.run;
         let mutates = spec.mutates;
         let ime_caret_before = self.current_ime_caret_state();
@@ -194,6 +197,8 @@ impl Session {
             }
         };
         if self.document_id != home || (result.is_err() && self.order.iter().any(|d| *d >= mark)) {
+            // No Set As Default switches documents: whatever it queued is dropped.
+            self.pending_template = template_before;
             return self.finish_elsewhere(
                 ElsewhereContext { home, mark, before_doc, blocks_before, default_language_before, pending_application_change_before },
                 result,
@@ -206,6 +211,15 @@ impl Session {
             && !crate::cmd::protect::outside_unchanged(before, &self.doc, &self.author)
         {
             result = Err(CmdError::Disabled(format!("{id}: only the editable regions of this protected document can change")));
+        }
+        // The Normal template is written only now that the command has succeeded and passed the
+        // post-check; a failed write fails the command, which then rolls the document back.
+        let template = std::mem::replace(&mut self.pending_template, template_before);
+        if result.is_ok()
+            && !template.is_empty()
+            && let Err(e) = crate::cmd::defaults::commit_template(self, template)
+        {
+            result = Err(e);
         }
         match &result {
             Ok(_) => self.finish_success(SuccessContext {
