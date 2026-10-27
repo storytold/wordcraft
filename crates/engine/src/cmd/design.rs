@@ -80,11 +80,9 @@ pub fn specs() -> Vec<CommandSpec> {
         CommandSpec::new("design.pageBorders", "Page Borders", "Design › Page Background", page_borders).params(
             r#"{"kind"?: "box|none", "width"?: pt, "color"?: "RRGGBB", "style"?: "single|double|dotted|dashed|thick|triple|dotDash|wave", "sides"?: {"top"|"left"|"bottom"|"right": {"style"?, "width"?: pt, "color"?: "RRGGBB"} | null} (exactly these sides, instead of `kind`), "applyTo"?: "section|document"}"#,
         ),
-        CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", |s, _| {
-            s.status = "These settings will be used for new documents.".into();
-            sel_result(s)
-        })
-        .pure(),
+        CommandSpec::new("design.setDefault", "Set as Default", "Design › Document Formatting", super::defaults::design_default)
+            .params(r#"{"scope"?: "document" (changes nothing) | "new" (the default)} — the document's style set, document defaults, theme fonts and colours and paragraph spacing, saved in the Normal template for new documents"#)
+            .pure(),
         CommandSpec::new("design.themes", "Theme List", "Design › Document Formatting", |_, _| {
             Ok(json!(THEMES.iter().map(|t| t.0).collect::<Vec<_>>()))
         })

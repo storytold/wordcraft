@@ -64,9 +64,11 @@ pub fn start() {
                     let region = wordcraft_ui_egui::i18n::system_region();
                     // In host mode the parent sends the document to edit; no sample meanwhile.
                     let sample = app_bridge.is_none() && query().contains("sample");
-                    let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::blank_document(&region) };
+                    // A blank document is made below, once the preferences and the Normal template are in.
+                    let doc = if sample { wordcraft_engine::sample::sample_document() } else { wordcraft_engine::doc::Document::new() };
                     let mut session = Session::new(doc);
                     session.system_region = region;
+                    session.normal_store = Some(std::sync::Arc::new(NormalStore));
                     let messages = Rc::new(RefCell::new(Vec::new()));
                     let mut services = services(inbox.clone(), cc.egui_ctx.clone(), dirty, saves.clone(), messages.clone());
                     if let Some(bridge) = &app_bridge {
@@ -79,10 +81,11 @@ pub fn start() {
                     // Preferences from an earlier visit (#2132), as the desktop app reads `ui.json`.
                     let stored = stored_prefs();
                     crate::prefs::restore(&mut app, stored.as_deref());
-                    // A region chosen in File › Options replaces the browser's for the first blank
-                    // document too (#838).
-                    if !sample && app.session.prefs.region.is_some() {
-                        let doc = app.session.blank_document();
+                    // The first blank document, like every other: the Normal template's formatting
+                    // (#4237), on the paper of the region chosen in File › Options, else the
+                    // browser's (#838).
+                    if !sample {
+                        let doc = app.session.normal_document();
                         app.session.set_document(doc);
                     }
                     let mut prefs = crate::prefs::PrefsSync::new(stored);
@@ -138,6 +141,35 @@ struct WebShell {
 
 fn local_storage() -> Option<web_sys::Storage> {
     web_sys::window()?.local_storage().ok()?
+}
+
+/// The `localStorage` key of the Normal template (#4237): the `Normal.docx` bytes, base64.
+const NORMAL_KEY: &str = "wordcraft.normal";
+
+/// The Normal template in `localStorage` under [`NORMAL_KEY`], apart from the preferences so a
+/// damaged or oversized template never costs them. `localStorage` writes a value whole.
+struct NormalStore;
+
+impl wordcraft_engine::normal_template::NormalStore for NormalStore {
+    fn load(&self) -> Result<Option<Vec<u8>>, String> {
+        let Some(store) = local_storage() else { return Ok(None) };
+        let Some(text) = store.get_item(NORMAL_KEY).map_err(|e| format!("{e:?}"))? else { return Ok(None) };
+        // Base64 is 4 bytes for every 3.
+        if text.len() / 4 * 3 > wordcraft_engine::normal_template::MAX_TEMPLATE_BYTES {
+            return Err("the stored Normal template is too large".into());
+        }
+        wordcraft_engine::cmd::insert::base64_decode(&text).map(Some).ok_or_else(|| "the stored Normal template isn't base64".into())
+    }
+
+    fn save(&self, bytes: &[u8]) -> Result<(), String> {
+        let store = local_storage().ok_or("browser storage is unavailable")?;
+        store.set_item(NORMAL_KEY, &wordcraft_engine::cmd::insert::base64_encode(bytes)).map_err(|e| format!("browser storage refused it: {e:?}"))
+    }
+
+    fn reset(&self) -> Result<(), String> {
+        let store = local_storage().ok_or("browser storage is unavailable")?;
+        store.remove_item(NORMAL_KEY).map_err(|e| format!("{e:?}"))
+    }
 }
 
 /// The preferences stored on an earlier visit, if the browser allows storage.

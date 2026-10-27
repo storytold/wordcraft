@@ -16,6 +16,7 @@ mod io_ext;
 pub mod keymap;
 pub(crate) mod locale;
 pub mod math_gallery;
+pub mod normal_template;
 pub(crate) mod prefs;
 pub mod print;
 pub mod recovery;
@@ -35,7 +36,7 @@ pub use keymap::KeyMap;
 pub use ribbon::RibbonLayout;
 pub use session::{
     CellRange, ColumnBlock, DocInfo, DocState, EditSnapshot, FindState, MathEdit, Prefs, Selection, Session, StylesPaneDock, UNDO_LIST_MAX,
-    ViewState, WindowView, blank_document, next_math_session, set_system_locale,
+    ViewState, WindowView, next_math_session, set_system_locale,
 };
 /// The outcome a command reports for IME receipt classification.
 ///

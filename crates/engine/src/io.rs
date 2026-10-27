@@ -744,6 +744,14 @@ fn only_case_differs(source: &std::path::Path, destination: &std::path::Path) ->
     std::fs::read_dir(dir).is_ok_and(|entries| entries.filter_map(Result::ok).all(|entry| entry.file_name() != to))
 }
 
+/// Write `bytes` to the app's own file at `path` (the Normal template), replacing it only once
+/// the new bytes are fully written. Not for paths a command was given: those go through
+/// [`write_file`] and the automation write root.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    safe_save::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
 /// Write `bytes` to the file at `path`, inside the automation write root when there is one.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn write_file(path: &str, bytes: &[u8]) -> Result<(), String> {
