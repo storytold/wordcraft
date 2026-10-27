@@ -49,6 +49,7 @@ pub struct DocState {
     pub(super) pending_move: Option<crate::cmd::moves::PendingMove>,
     pub(super) find: FindState,
     pub(super) goal_x: Option<f32>,
+    pub(super) caret_line_end: Option<(u64, Selection)>,
     pub(super) page_hint: usize,
     pub(super) new_header_parts: Vec<u32>,
     pub(super) hf_return: Option<Selection>,
@@ -103,6 +104,7 @@ impl DocState {
             pending_move: None,
             find: FindState::default(),
             goal_x: None,
+            caret_line_end: None,
             page_hint: 0,
             new_header_parts: Vec::new(),
             hf_return: None,
@@ -203,6 +205,7 @@ impl Session {
             pending_move: _,
             find: _,
             goal_x: _,
+            caret_line_end: _,
             page_hint: _,
             new_header_parts: _,
             hf_return: _,
@@ -292,6 +295,7 @@ impl Session {
             pending_move,
             find,
             goal_x,
+            caret_line_end,
             page_hint,
             new_header_parts,
             hf_return,
@@ -339,6 +343,7 @@ impl Session {
         swap(&mut self.pending_move, pending_move);
         swap(&mut self.find, find);
         swap(&mut self.goal_x, goal_x);
+        swap(&mut self.caret_line_end, caret_line_end);
         swap(&mut self.page_hint, page_hint);
         swap(&mut self.new_header_parts, new_header_parts);
         swap(&mut self.hf_return, hf_return);

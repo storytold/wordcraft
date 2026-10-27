@@ -94,6 +94,10 @@ pub struct ColumnSelection<'a> {
     pub start: &'a Pos,
     /// The selection's opposite corner.
     pub end: &'a Pos,
+    /// `start` is at the end of its line where that line wraps after text ([`DocLayout::caret_at`]).
+    pub start_line_end: bool,
+    /// The same for `end`.
+    pub end_line_end: bool,
     /// One horizontal edge in page coordinates.
     pub left: f32,
     /// The other horizontal edge in page coordinates.
@@ -317,8 +321,9 @@ fn between(a: &Path, b: &Path, l: &Path) -> bool {
 }
 
 /// The position in turned text (a table cell's text direction) of `story` under page point
-/// (x, y), if there is turned text there.
-fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
+/// (x, y), if there is turned text there, and whether it is at the end of its line where that
+/// line wraps after text ([`ParaLayout::is_wrap_end`]).
+fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<(Pos, bool)> {
     items_of(page, story).find_map(|it| {
         let Placed::Lines { story: s, path, para, l0, l1, x: ox, y: oy, turn } = it else { return None };
         if *s != story || !it.turned_bounds()?.expand(2.0).contains(Point::new(x, y)) {
@@ -331,13 +336,14 @@ fn turned_hit(page: &Page, story: StoryRef, x: f32, y: f32) -> Option<Pos> {
             .filter_map(|li| para.lines.get(li).map(|l| (li, l.top - first.top, l.height)))
             .min_by(|a, b| band_dist(v, a.1, a.2).total_cmp(&band_dist(v, b.1, b.2)))?
             .0;
-        Some(Pos { story: *s, path: path.clone(), off: para.off_at_x(li, u) })
+        let off = para.off_at_x(li, u);
+        Some((Pos { story: *s, path: path.clone(), off }, para.is_wrap_end(li, off)))
     })
 }
 
 /// The position in the turned text of `story` nearest to page point (x, y), wherever it is, in a
-/// paragraph `skip` doesn't leave out.
-fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path) -> bool) -> Option<Pos> {
+/// paragraph `skip` doesn't leave out (and whether it is at a line's end, as for [`turned_hit`]).
+fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&Path) -> bool) -> Option<(Pos, bool)> {
     let dist = |r: Rect| band_dist(x, r.x, r.w).hypot(band_dist(y, r.y, r.h));
     let it = items_of(page, story)
         .filter(|it| matches!(it, Placed::Lines { story: s, path, .. } if *s == story && !skip(path)))
@@ -351,7 +357,8 @@ fn nearest_turned(page: &Page, story: StoryRef, x: f32, y: f32, skip: &dyn Fn(&P
         .filter_map(|li| para.lines.get(li).map(|l| (li, l.top - first.top, l.height)))
         .min_by(|a, b| band_dist(v, a.1, a.2).total_cmp(&band_dist(v, b.1, b.2)))?
         .0;
-    Some(Pos { story, path: path.clone(), off: para.off_at_x(li, u) })
+    let off = para.off_at_x(li, u);
+    Some((Pos { story, path: path.clone(), off }, para.is_wrap_end(li, off)))
 }
 
 /// The body line on `page` whose band is nearest height `y` (the leftmost on a tie, so in
@@ -394,9 +401,15 @@ fn band_dist(v: f32, top: f32, h: f32) -> f32 {
 impl DocLayout {
     /// The position nearest to (x, y) on `page`, in `story`.
     pub fn hit(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<Pos> {
+        self.hit_at(page, x, y, story).map(|(pos, _)| pos)
+    }
+
+    /// [`Self::hit`], and whether the position is at the end of the line hit where it wraps after
+    /// text ([`ParaLayout::is_wrap_end`]), rather than at the start of the next line.
+    pub fn hit_at(&self, page: usize, x: f32, y: f32, story: StoryRef) -> Option<(Pos, bool)> {
         let p = self.pages.get(page)?;
-        if let Some(pos) = turned_hit(p, story, x, y) {
-            return Some(pos);
+        if let Some(hit) = turned_hit(p, story, x, y) {
+            return Some(hit);
         }
         // Like Word, a click outside a floating table doesn't land in its cells while there's
         // other text on the page: below one, it goes to the text beside or after it (#2038).
@@ -410,7 +423,7 @@ impl DocLayout {
         let nearest = |a: &&LineHit, b: &&LineHit| score(a, x, y).total_cmp(&score(b, x, y));
         let best = lines.iter().filter(|l| !away(l.path)).min_by(nearest).or_else(|| lines.iter().min_by(nearest))?;
         let off = best.para.off_at_x(best.li, x - best.x);
-        Some(Pos { story: best.story, path: best.path.clone(), off })
+        Some((Pos { story: best.story, path: best.path.clone(), off }, best.para.is_wrap_end(best.li, off)))
     }
 
     /// The story whose text is under a point (body, footnotes, endnotes, text boxes; not
@@ -601,21 +614,36 @@ impl DocLayout {
         items_of(p, story).filter(|it| matches!(it, Placed::Lines { story: s, path: q, .. } if *s == story && q == path)).map(|it| (pi, it)).collect()
     }
 
+    /// Whether `pos` is where a line wraps after text ([`ParaLayout::is_wrap_end`]): the end of
+    /// one line and the start of the next.
+    pub fn is_wrap_end(&self, pos: &Pos, page_hint: usize) -> bool {
+        self.pieces(pos.story, &pos.path, page_hint)
+            .into_iter()
+            .any(|(_, it)| matches!(it, Placed::Lines { para, .. } if para.caret_line(pos.off, true) != para.line_of(pos.off)))
+    }
+
     /// Caret geometry for a position.
     pub fn caret(&self, pos: &Pos) -> Option<Caret> {
         self.caret_on(pos, 0)
     }
 
     pub fn caret_on(&self, pos: &Pos, page_hint: usize) -> Option<Caret> {
+        self.caret_at(pos, page_hint, false)
+    }
+
+    /// [`Self::caret_on`]; with `line_end`, a caret where a line wraps after text is at the end of
+    /// that line rather than at the start of the next ([`ParaLayout::caret_line`]).
+    pub fn caret_at(&self, pos: &Pos, page_hint: usize, line_end: bool) -> Option<Caret> {
         for (pi, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, x, y, turn, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.caret_line(pos.off, line_end);
             if li < *l0 || li >= *l1 {
                 continue;
             }
             let first = para.lines.get(*l0)?;
             let l = para.lines.get(li)?;
             let cx = para.x_of(li, pos.off)?;
+            let cx = if para.is_wrap_end(li, pos.off) { cx - para.trailing_auto_space(li) } else { cx };
             let cx = para.caret_limit(li).map_or(cx, |m| cx.min(m));
             // In the lines' own frame (turned text turns it onto the page).
             let top = l.top - first.top;
@@ -631,7 +659,14 @@ impl DocLayout {
 
     /// The position one line up (`dir < 0`) or down from `pos`, keeping `goal_x` (page x).
     pub fn vertical(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize) -> Option<(Pos, f32)> {
-        let c = self.caret_on(pos, page_hint)?;
+        self.vertical_at(pos, goal_x, dir, page_hint, false).map(|(pos, gx, _)| (pos, gx))
+    }
+
+    /// [`Self::vertical`] from the caret at `pos`, at the end of its line with `line_end` (as for
+    /// [`Self::caret_at`]), and whether the position it goes to is at the end of its line, where
+    /// that line wraps after text.
+    pub fn vertical_at(&self, pos: &Pos, goal_x: Option<f32>, dir: i32, page_hint: usize, line_end: bool) -> Option<(Pos, f32, bool)> {
+        let c = self.caret_at(pos, page_hint, line_end)?;
         let gx = goal_x.unwrap_or(c.x);
         let page = self.pages.get(c.page)?;
         let lines = page_lines(page, pos.story);
@@ -665,7 +700,7 @@ impl DocLayout {
         };
         if let Some(l) = target {
             let off = l.para.off_at_x(l.li, gx - l.x);
-            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx));
+            return Some((Pos { story: l.story, path: l.path.clone(), off }, gx, l.para.is_wrap_end(l.li, off)));
         }
         // Next/previous page.
         let np = if dir < 0 { c.page.checked_sub(1)? } else { c.page + 1 };
@@ -673,14 +708,15 @@ impl DocLayout {
         let lines = page_lines(p, pos.story);
         let l = if dir < 0 { lines.iter().max_by(|a, b| a.top.total_cmp(&b.top))? } else { lines.iter().min_by(|a, b| a.top.total_cmp(&b.top))? };
         let off = l.para.off_at_x(l.li, gx - l.x);
-        Some((Pos { story: l.story, path: l.path.clone(), off }, gx))
+        Some((Pos { story: l.story, path: l.path.clone(), off }, gx, l.para.is_wrap_end(l.li, off)))
     }
 
-    /// Start and end of the visual line holding `pos` (Home / End).
-    pub fn line_bounds(&self, pos: &Pos, page_hint: usize) -> Option<(Pos, Pos)> {
+    /// Start and end of the visual line holding the caret at `pos` (Home / End; `line_end` as for
+    /// [`Self::caret_at`]), and whether that end is where the line wraps after text.
+    pub fn line_bounds(&self, pos: &Pos, page_hint: usize, line_end: bool) -> Option<(Pos, Pos, bool)> {
         for (_, it) in self.pieces(pos.story, &pos.path, page_hint) {
             let Placed::Lines { para, l0, l1, .. } = it else { continue };
-            let li = para.line_of(pos.off);
+            let li = para.caret_line(pos.off, line_end);
             if li < *l0 || li >= *l1 {
                 continue;
             }
@@ -690,12 +726,13 @@ impl DocLayout {
             if matches!(l.end, crate::LineEnd::LineBreak | crate::LineEnd::PageBreak | crate::LineEnd::ColumnBreak) && end > l.start {
                 end = para.clusters.get(l.c1.saturating_sub(1)).map(|c| c.start).unwrap_or(end);
             } else if l.end == crate::LineEnd::Wrap {
-                // Before the wrapped line's trailing space: its last reachable offset, in logical
-                // order (the far edge is the left one in right-to-left text).
+                // Before the wrapped line's trailing space, or after its last character where it
+                // wraps after text: its last reachable offset, in logical order (the far edge is
+                // the left one in right-to-left text).
                 end = para.line_offsets(li).into_iter().max().unwrap_or(end);
             }
             let mk = |off| Pos { story: pos.story, path: pos.path.clone(), off };
-            return Some((mk(l.start), mk(end)));
+            return Some((mk(l.start), mk(end), para.is_wrap_end(li, end)));
         }
         None
     }
@@ -755,10 +792,12 @@ impl DocLayout {
     /// Column (block) selection: the piece of every line from the line holding `a` to the line
     /// holding `b` (document order) that lies between page x `left` and `right`. One `(start,
     /// end)` pair per line, both in the same paragraph; lines shorter than `left` give an empty
-    /// pair. At most `selection.max_lines` lines.
+    /// pair. At most `selection.max_lines` lines. `start_line_end` and `end_line_end` say whether
+    /// that corner is at the end of its line where the line wraps after text (as for
+    /// [`Self::caret_at`]).
     pub fn column_segments(&self, doc: &Document, selection: ColumnSelection<'_>) -> Vec<(Pos, Pos)> {
-        let ColumnSelection { start: a, end: b, left, right, page_hint, max_lines } = selection;
-        let (a, b) = if a <= b { (a, b) } else { (b, a) };
+        let ColumnSelection { start: a, end: b, start_line_end, end_line_end, left, right, page_hint, max_lines } = selection;
+        let ((a, a_end), (b, b_end)) = if a <= b { ((a, start_line_end), (b, end_line_end)) } else { ((b, end_line_end), (a, start_line_end)) };
         let (left, right) = if left <= right { (left, right) } else { (right, left) };
         let mut out = Vec::new();
         if a.story != b.story || !left.is_finite() || !right.is_finite() {
@@ -768,8 +807,8 @@ impl DocLayout {
         for path in doc.paths_between(a, b) {
             for (_, it) in self.pieces_in(&mut pages, &path, page_hint) {
                 let Placed::Lines { para, l0, l1, x, .. } = it else { continue };
-                let first = if path == a.path { para.line_of(a.off) } else { 0 };
-                let last = if path == b.path { para.line_of(b.off) } else { usize::MAX };
+                let first = if path == a.path { para.caret_line(a.off, a_end) } else { 0 };
+                let last = if path == b.path { para.caret_line(b.off, b_end) } else { usize::MAX };
                 for li in *l0..*l1 {
                     if li < first || li > last {
                         continue;

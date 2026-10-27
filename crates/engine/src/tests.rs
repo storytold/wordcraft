@@ -15,6 +15,7 @@ mod font_sizes;
 mod fonts;
 mod ime_noop;
 mod revision_checks;
+mod soft_wrap;
 mod typing;
 mod wordart;
 

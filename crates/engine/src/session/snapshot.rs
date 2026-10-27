@@ -82,6 +82,7 @@ impl Session {
             clip_history: _,
             find: _,
             goal_x: _,
+            caret_line_end: _,
             page_hint: _,
             registry: _,
             author: _,
