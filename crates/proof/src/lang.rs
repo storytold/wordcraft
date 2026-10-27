@@ -27,10 +27,16 @@ pub enum ProofLang {
     /// There is no Bulgarian dictionary or grammar yet, so, as for [`ProofLang::Other`], no
     /// spelling or grammar marks.
     Bg,
-    /// Portuguese (`pt`, `pt-BR`, `pt-PT`): the installed Hunspell dictionary (VERO and
+    /// Brazilian Portuguese, and Portuguese with no region or another region not listed for
+    /// [`ProofLang::PtPt`] (`pt`, `pt-BR`): the installed Hunspell `pt_BR` dictionary (VERO and
     /// friends, when there is one), the Portuguese grammar rules and the Portuguese hyphenation
     /// patterns.
     Pt,
+    /// European Portuguese (`pt-PT`, and the regions that follow its spelling: `pt-AO`, `pt-MZ`,
+    /// `pt-CV`…): the installed Hunspell `pt_PT` dictionary, so `facto`, `equipa` and `económico`
+    /// are words (the `pt_BR` one when there is no `pt_PT`). Grammar rules and hyphenation
+    /// patterns are [`ProofLang::Pt`]'s.
+    PtPt,
     /// Italian (`it`, `it-IT`, `it-CH`): the installed Hunspell dictionary (`it_IT`, when there
     /// is one), the Italian grammar rules and the Italian hyphenation patterns.
     It,
@@ -79,12 +85,13 @@ pub enum ProofLang {
 
 impl ProofLang {
     /// Every language with a spelling dictionary, in display order.
-    pub const PROOFED: [ProofLang; 15] = [
+    pub const PROOFED: [ProofLang; 16] = [
         ProofLang::En,
         ProofLang::EnGb,
         ProofLang::EnCa,
         ProofLang::Pl,
         ProofLang::Pt,
+        ProofLang::PtPt,
         ProofLang::It,
         ProofLang::Hr,
         ProofLang::Tr,
@@ -98,9 +105,9 @@ impl ProofLang {
     ];
 
     /// The proofing language of a BCP 47 tag (`pl-PL`, `en_GB`, `PL`…). The primary subtag
-    /// counts, and for English and Spanish the region too ([`ProofLang::english`],
-    /// [`ProofLang::spanish`]). No tag (or an empty one) is English, WordCraft's default editing
-    /// language.
+    /// counts, and for English, Portuguese and Spanish the region too ([`ProofLang::english`],
+    /// [`ProofLang::portuguese`], [`ProofLang::spanish`]). No tag (or an empty one) is English,
+    /// WordCraft's default editing language.
     pub fn from_tag(tag: Option<&str>) -> ProofLang {
         let Some(tag) = tag.map(str::trim).filter(|t| !t.is_empty()) else { return ProofLang::En };
         let primary = tag.split(['-', '_']).next().unwrap_or("");
@@ -111,7 +118,7 @@ impl ProofLang {
         } else if primary.eq_ignore_ascii_case("bg") || primary.eq_ignore_ascii_case("bul") {
             ProofLang::Bg
         } else if primary.eq_ignore_ascii_case("pt") || primary.eq_ignore_ascii_case("por") {
-            ProofLang::Pt
+            ProofLang::portuguese(tag)
         } else if primary.eq_ignore_ascii_case("it") || primary.eq_ignore_ascii_case("ita") {
             ProofLang::It
         } else if primary.eq_ignore_ascii_case("hr") || primary.eq_ignore_ascii_case("hrv") {
@@ -144,6 +151,16 @@ impl ProofLang {
         }
     }
 
+    /// The Portuguese of a Portuguese tag, by its [`region`]: Portugal and the regions that spell
+    /// like it are [`ProofLang::PtPt`]; Brazil, any other region and no region are
+    /// [`ProofLang::Pt`].
+    fn portuguese(tag: &str) -> ProofLang {
+        match region(tag) {
+            Some(r) if EUROPEAN_PORTUGUESE.iter().any(|e| e.eq_ignore_ascii_case(r)) => ProofLang::PtPt,
+            _ => ProofLang::Pt,
+        }
+    }
+
     /// The Spanish of a Spanish tag, by its [`region`]: Mexico is [`ProofLang::EsMx`], Uruguay
     /// [`ProofLang::EsUy`], Latin America (`419`) and the other countries of the Americas are
     /// [`ProofLang::Es419`], and Spain, any other region and no region are [`ProofLang::Es`].
@@ -161,6 +178,11 @@ impl ProofLang {
         matches!(self, ProofLang::En | ProofLang::EnGb | ProofLang::EnCa)
     }
 
+    /// Is this Portuguese, in either spelling ([`ProofLang::Pt`], [`ProofLang::PtPt`])?
+    pub fn is_portuguese(self) -> bool {
+        matches!(self, ProofLang::Pt | ProofLang::PtPt)
+    }
+
     /// Is this one of the Spanishes ([`ProofLang::Es`], [`ProofLang::EsMx`], [`ProofLang::Es419`],
     /// [`ProofLang::EsUy`])?
     pub fn is_spanish(self) -> bool {
@@ -173,7 +195,7 @@ impl ProofLang {
             ProofLang::En | ProofLang::EnGb | ProofLang::EnCa => "en",
             ProofLang::Pl => "pl",
             ProofLang::Bg => "bg",
-            ProofLang::Pt => "pt",
+            ProofLang::Pt | ProofLang::PtPt => "pt",
             ProofLang::It => "it",
             ProofLang::Hr => "hr",
             ProofLang::Tr => "tr",
@@ -202,6 +224,11 @@ fn region(tag: &str) -> Option<&str> {
         .take_while(|p| p.len() != 1)
         .find(|p| (p.len() == 2 && p.chars().all(|c| c.is_ascii_alphabetic())) || (p.len() == 3 && p.chars().all(|c| c.is_ascii_digit())))
 }
+
+/// Regions whose Portuguese follows the European spelling ([`ProofLang::PtPt`]): Portugal, and
+/// the African and Asian countries and territories whose norm follows it (Angola, Mozambique,
+/// Cape Verde, Guinea-Bissau, São Tomé and Príncipe, Timor-Leste, Macao, Equatorial Guinea).
+const EUROPEAN_PORTUGUESE: [&str; 9] = ["PT", "AO", "MZ", "CV", "GW", "ST", "TL", "MO", "GQ"];
 
 /// Regions whose Spanish is Latin American ([`ProofLang::Es419`]): Latin America and the
 /// Caribbean (`419`) and its parts (South America `005`, Central America `013`, the Caribbean
@@ -281,7 +308,7 @@ mod tests {
         for t in ["pl", "pl-PL", "PL-pl", "pl_PL", "pl_PL.UTF-8", " pl-PL ", "pol"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Pl, "{t}");
         }
-        for t in ["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", " pt-PT ", "por"] {
+        for t in ["pt", "pt-BR", "PT_br", "pt-BR.UTF-8", "por", "pt-Latn-BR", "pt-XX", "pt-p", "pt-x-pt"] {
             assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::Pt, "{t}");
         }
         for t in ["it", "it-IT", "IT_it", "it-CH", "it-CH.UTF-8", " it-IT ", "ita"] {
@@ -365,6 +392,22 @@ mod tests {
         assert_eq!(ProofLang::Hr.code(), "hr");
         assert_eq!(ProofLang::Tr.code(), "tr");
         assert!(ProofLang::PROOFED.contains(&ProofLang::Pt), "every proofed language is listed");
+    }
+
+    /// European Portuguese, and the regions that spell like Portugal, have their own dictionary;
+    /// Brazil, other regions and no region stay [`ProofLang::Pt`].
+    #[test]
+    fn portuguese_tags_resolve_by_region() {
+        for t in [" pt-PT ", "pt_PT", "PT-pt", "pt_PT.UTF-8", "pt_PT@euro", "pt-Latn-PT", "pt-AO", "pt-MZ", "pt_CV", "pt-TL", "pt-MO", "por-PT"] {
+            assert_eq!(ProofLang::from_tag(Some(t)), ProofLang::PtPt, "{t}");
+        }
+        for l in [ProofLang::Pt, ProofLang::PtPt] {
+            assert!(l.is_portuguese() && l.is_proofed() && ProofLang::PROOFED.contains(&l), "{l:?}");
+            assert!(!l.is_english() && !l.is_spanish());
+            assert_eq!(l.code(), "pt");
+        }
+        assert!(!ProofLang::En.is_portuguese() && !ProofLang::Es.is_portuguese() && !ProofLang::Other.is_portuguese());
+        assert_eq!(normalize_tag("pt_pt").as_deref(), Some("pt-PT"));
     }
 
     /// #3360, #3553: Spanish is proofed, by region: Spain (and no region), Mexico, Uruguay, and

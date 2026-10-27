@@ -33,7 +33,11 @@ PFX X 0 des .
 ";
 
 /// Stems (the count line first, as in Hunspell files).
-pub const DIC: &str = "76
+pub const DIC: &str = "80
+tem
+equipe
+ônibus
+econômico
 coração
 saudade
 saudê
@@ -116,6 +120,35 @@ uma
 /// install the same one, so tests running in parallel agree).
 pub fn install() {
     if let Err(e) = super::install_dictionary(AFF, DIC) {
+        panic!("test dictionary: {e}");
+    }
+}
+
+/// Stems of the synthetic European Portuguese dictionary: words Portugal spells its own way
+/// (`facto`, `equipa`, `económico`) next to ones both spellings share. It uses [`AFF`] too.
+pub const DIC_EUROPEAN: &str = "16
+facto
+equipa
+autocarro
+económico
+coração
+chegou
+tem
+que
+um
+uma
+o
+a
+é
+e
+de
+não
+";
+
+/// Make [`AFF`]/[`DIC_EUROPEAN`] the European Portuguese dictionary (as [`install`] does for
+/// the Brazilian one).
+pub fn install_european() {
+    if let Err(e) = super::install_dictionary_for(super::Variant::Pt, AFF, DIC_EUROPEAN) {
         panic!("test dictionary: {e}");
     }
 }
