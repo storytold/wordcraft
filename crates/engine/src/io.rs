@@ -744,12 +744,36 @@ fn only_case_differs(source: &std::path::Path, destination: &std::path::Path) ->
     std::fs::read_dir(dir).is_ok_and(|entries| entries.filter_map(Result::ok).all(|entry| entry.file_name() != to))
 }
 
-/// Write `bytes` to the app's own file at `path` (the Normal template), replacing it only once
-/// the new bytes are fully written. Not for paths a command was given: those go through
-/// [`write_file`] and the automation write root.
+/// The app's own file at `path` (the Normal template): `Ok(None)` when there is none, an error
+/// for anything but a regular file of at most `limit` bytes. Not for paths a command was given:
+/// those go through [`read_file`] and the automation read root.
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) fn write_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+pub(crate) fn read_app_file(path: &std::path::Path, limit: u64) -> Result<Option<Vec<u8>>, String> {
+    match std::fs::symlink_metadata(path) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(format!("{}: {e}", path.display())),
+        Ok(_) => {}
+    }
+    read_regular_file_within(path, limit).map(Some).ok_or_else(|| format!("{}: not a readable file of at most {limit} bytes", path.display()))
+}
+
+/// Replace the app's own file at `path` with `bytes`, making its folder first; the old file is
+/// replaced only once the new bytes are fully written.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn write_app_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    if let Some(dir) = path.parent() {
+        std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    }
     safe_save::write(path, bytes).map_err(|e| format!("{}: {e}", path.display()))
+}
+
+/// Delete the app's own file at `path`; a missing one is not an error.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn remove_app_file(path: &std::path::Path) -> Result<(), String> {
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", path.display())),
+        _ => Ok(()),
+    }
 }
 
 /// Write `bytes` to the file at `path`, inside the automation write root when there is one.
