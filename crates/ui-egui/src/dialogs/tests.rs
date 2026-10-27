@@ -1844,6 +1844,33 @@ fn cancelling_set_as_default_returns_to_the_dialog() {
     assert!(matches!(&h.state().dialog, Some(Dialog::Paragraph { after, .. }) if *after == 33.0));
 }
 
+/// Re-review P3: closing the Set As Default question with its title-bar × is Cancel: back to
+/// the dialog it was asked from, with its edits.
+#[test]
+fn closing_set_as_default_returns_to_the_dialog() {
+    use egui_kittest::kittest::Queryable;
+    let (mut h, store) = normal_template_harness("font", |d| {
+        if let Dialog::Font { size, .. } = d {
+            *size = "17".into();
+        }
+    });
+    h.run_steps(3);
+    h.get_by_label("Set As Default").click();
+    h.run_steps(3);
+    assert!(matches!(&h.state().dialog, Some(Dialog::SetDefault { .. })));
+    let window = h.ctx.memory(|m| m.area_rect(egui::Id::unique(("dialog", "Set As Default")))).expect("question is open");
+    let at = egui::pos2(window.right() - 6.0, crate::window_close::close_rect(window, 1.0, crate::window_close::geometry(&h.ctx)).center().y);
+    let button = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.event(egui::Event::PointerMoved(at));
+    h.step();
+    h.event(button(true));
+    h.step();
+    h.event(button(false));
+    h.run_steps(4);
+    assert!(matches!(&h.state().dialog, Some(Dialog::Font { size, .. }) if size == "17"), "back in Font with the edit");
+    assert!(store.get().is_none());
+}
+
 /// Review P3: Design › Set as Default asks before saving; Cancel saves nothing.
 #[test]
 fn design_set_as_default_asks_first() {
