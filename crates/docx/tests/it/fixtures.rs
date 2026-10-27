@@ -598,6 +598,26 @@ fn table_style_whole_table_shading_and_margins() {
     assert_eq!(merged.parts.cell_margins, Some([1.0, 14.4, 0.0, 14.4]), "from Base");
 }
 
+/// Word's built-in table styles (Grid Table 5 Dark and the like) give every cell its shading in a
+/// `w:tcPr` of the style itself, beside its `w:tblPr`, rather than in a `wholeTable` region. It
+/// fills the cells no conditional format covers; it was ignored, so they came out white.
+#[test]
+fn table_style_cell_shading_in_the_style_tcpr_fills_every_cell() {
+    let styles = format!(
+        r#"<w:styles {W_NS}>
+ <w:style w:type="table" w:styleId="Grid5"><w:name w:val="Grid Table 5 Dark"/><w:tblPr><w:tblBorders><w:top w:val="single" w:sz="4" w:space="0" w:color="FFFFFF"/></w:tblBorders></w:tblPr><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="F2CEED"/></w:tcPr><w:tblStylePr w:type="firstRow"><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="A02B93"/></w:tcPr></w:tblStylePr></w:style>
+ <w:style w:type="table" w:styleId="Region"><w:name w:val="Region"/><w:basedOn w:val="Grid5"/><w:tblStylePr w:type="wholeTable"><w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="DDEBF7"/></w:tcPr></w:tblStylePr></w:style>
+</w:styles>"#
+    );
+    let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", &styles)]);
+    let d = wordcraft_docx::read(&bytes).unwrap();
+    let grid = d.styles.table_style("Grid5").unwrap();
+    assert_eq!(grid.parts.fill, Some(wordcraft_doc::Rgb(0xF2, 0xCE, 0xED)));
+    // A derived style's own whole-table region still takes over.
+    let region = d.styles.table_style("Region").unwrap();
+    assert_eq!(region.parts.fill, Some(wordcraft_doc::Rgb(0xDD, 0xEB, 0xF7)));
+}
+
 fn gallery_ids(styles: &str) -> Vec<String> {
     let bytes = docx("<w:p/>", &[("rId1", "styles", "styles.xml")], &[("word/styles.xml", styles)]);
     let d = wordcraft_docx::read(&bytes).unwrap();
