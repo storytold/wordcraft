@@ -21,6 +21,7 @@ File|Backstage|Export PDF|file.exportPdf
 File|Backstage|Export Image|file.exportPng
 File|Backstage|Options|file.options
 File|Options|Numerals|view.numeral
+File|Options|Reset Default Formatting|defaults.reset
 File|Backstage|Share|file.share
 File|Backstage|Protect Document|file.protect
 File|Backstage|Inspect Document|file.inspect
@@ -53,6 +54,7 @@ Home|Font|Increase Font Size|format.growFont
 Home|Font|Decrease Font Size|format.shrinkFont
 Home|Font|Change Case|format.changeCase
 Home|Font|Clear All Formatting|format.clear
+Home|Font|Set As Default (Font dialog)|format.setDefault
 Home|Font|Bold|format.bold
 Home|Font|Italic|format.italic
 Home|Font|Underline|format.underline
@@ -106,6 +108,7 @@ Home|Paragraph|Shading|para.shading
 Home|Paragraph|Borders|para.borders
 Home|Paragraph|Horizontal Line|insert.horizontalLine
 Home|Paragraph|Paragraph Dialog|para.dialog
+Home|Paragraph|Set As Default (Paragraph dialog)|para.setDefault
 Home|Paragraph|Tabs|para.tabs
 Home|Paragraph|Keep with Next|para.keepNext
 Home|Paragraph|Keep Lines Together|para.keepLines
@@ -123,6 +126,7 @@ Home|Styles|Heading 2|para.heading2
 Home|Styles|Heading 3|para.heading3
 Home|Styles|Create a Style|styles.create
 Home|Styles|Modify Style|styles.modify
+Home|Styles|New Documents Based on This Template|styles.setDefault
 Home|Styles|Update Style to Match|styles.updateToMatch
 Home|Styles|Delete Style|styles.delete
 Home|Styles|Styles Pane|styles.pane
@@ -224,6 +228,7 @@ Layout|Page Setup|Breaks|layout.break
 Layout|Page Setup|Line Numbers|layout.lineNumbers
 Layout|Page Setup|Hyphenation|layout.hyphenation
 Layout|Page Setup|Page Setup Dialog|layout.pageSetup
+Layout|Page Setup|Set As Default (Page Setup dialog)|layout.setDefault
 Layout|Page Setup|Vertical Alignment|layout.verticalAlign
 Layout|Page Setup|Document Grid|layout.documentGrid
 Layout|Page Setup|Section Direction|layout.sectionRtl

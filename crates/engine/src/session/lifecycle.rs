@@ -93,6 +93,7 @@ impl Session {
             path,
             file_name,
             user_dict_path: None,
+            normal_store: None,
             dirty,
             clipboard: None,
             pending_move,
