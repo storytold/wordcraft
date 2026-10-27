@@ -6649,6 +6649,7 @@ dependencies = [
 name = "wordcraft"
 version = "0.11.0"
 dependencies = [
+ "android-activity",
  "arboard",
  "chrono",
  "clipboard-win",
@@ -6678,6 +6679,15 @@ dependencies = [
  "wordcraft-proof",
  "wordcraft-ui-egui",
  "zbus",
+]
+
+[[package]]
+name = "wordcraft-android"
+version = "0.11.0"
+dependencies = [
+ "android-activity",
+ "log",
+ "wordcraft",
 ]
 
 [[package]]
