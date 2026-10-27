@@ -12,7 +12,7 @@ use wordcraft_doc::para::{InlineObject, OBJ};
 use wordcraft_doc::{Pos, StoryRef};
 
 use super::sel_result;
-use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
+use crate::{CmdError, CmdResult, CommandSpec, FieldShading, Selection, Session, p};
 
 /// Longest field code accepted.
 const MAX_CODE: usize = 4096;
@@ -26,6 +26,21 @@ pub fn specs() -> Vec<CommandSpec> {
         })
         .key("Alt+F9")
         .params(r#"{"value"?: bool}"#)
+        .pure(),
+        // Word › File › Options › Advanced › Field shading (#4290): Never, When selected or
+        // Always. Screen only; the canvas draws it, so no relayout is needed.
+        CommandSpec::new("view.fieldShading", "Field Shading", "File › Options › Advanced", |s, v| match v.get("value") {
+            None => Ok(json!({"value": s.view.field_shading.name()})),
+            Some(Value::String(name)) => {
+                let Some(shading) = FieldShading::parse(name) else {
+                    return Err(CmdError::Params("field shading: never|whenSelected|always".into()));
+                };
+                s.view.field_shading = shading;
+                Ok(json!({"value": s.view.field_shading.name()}))
+            }
+            Some(_) => Err(CmdError::Params("field shading: never|whenSelected|always".into())),
+        })
+        .params(r#"{"value"?: "never|whenSelected|always"}"#)
         .pure(),
         CommandSpec::new("fields.toggleCode", "Toggle Field Codes", "Insert › Text › Quick Parts", toggle_code).key("Shift+F9"),
         CommandSpec::new("fields.setCode", "Edit Field Code", "Insert › Text › Quick Parts", set_code).params(r#"{"code": string}"#),
@@ -477,5 +492,22 @@ mod tests {
         s.run("fields.unlink", &json!({})).unwrap();
         let text = s.doc.plain_text(wordcraft_doc::StoryRef::Body);
         assert!(text.contains("2 of 1"), "unlinked text should reflect section 2: {text}");
+    }
+
+    #[test]
+    fn field_shading_sets_gets_and_rejects_junk() {
+        use crate::FieldShading;
+        let mut s = Session::new(wordcraft_doc::Document::new());
+        assert_eq!(s.view.field_shading, FieldShading::WhenSelected, "Word's default");
+        let r = s.run("view.fieldShading", &json!({"value": "always"})).unwrap();
+        assert_eq!(r["value"], "always");
+        assert_eq!(s.view.field_shading, FieldShading::Always);
+        let r = s.run("view.fieldShading", &json!({})).unwrap();
+        assert_eq!(r["value"], "always", "no params reads the current value");
+        s.run("view.fieldShading", &json!({"value": "Never"})).unwrap();
+        assert_eq!(s.view.field_shading, FieldShading::Never, "values ignore case");
+        assert!(s.run("view.fieldShading", &json!({"value": "sometimes"})).is_err());
+        assert!(s.run("view.fieldShading", &json!({"value": 1})).is_err());
+        assert_eq!(s.view.field_shading, FieldShading::Never, "rejected values keep the setting");
     }
 }

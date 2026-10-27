@@ -647,6 +647,7 @@ fn advanced(app: &mut WordApp, ui: &mut Ui) {
             });
         });
     });
+    field_shading_picker(app, ui);
     let mut keytips = app.ui.keytips_enabled;
     if ui.checkbox(&mut keytips, tl!("Show KeyTips (Alt or F10)")).changed() {
         let _ = app.run("ui.keytips", json!({"value": keytips}));
@@ -953,6 +954,25 @@ fn default_app_button(app: &mut WordApp, ui: &mut Ui) {
                 .weak(),
         );
     }
+}
+
+/// File ▸ Options ▸ Advanced ▸ Field shading: whether field results are shaded on screen
+/// (#4290), as in Word's File › Options › Advanced › Show document content.
+fn field_shading_picker(app: &mut WordApp, ui: &mut Ui) {
+    use wordcraft_engine::FieldShading;
+    ui.horizontal(|ui| {
+        let label = ui.label(tl!("Field shading:"));
+        let mut sel = app.session.view.field_shading;
+        let combo = egui::ComboBox::from_id_salt("field_shading").selected_text(tl!(sel.label())).width(220.0).show_ui(ui, |ui| {
+            for shading in FieldShading::ALL {
+                ui.selectable_value(&mut sel, shading, tl!(shading.label()));
+            }
+        });
+        combo.response.labelled_by(label.id);
+        if sel != app.session.view.field_shading {
+            let _ = app.run("view.fieldShading", json!({ "value": sel.name() }));
+        }
+    });
 }
 
 /// File ▸ Options ▸ Numerals: how digits look on screen (display only, like Word's
