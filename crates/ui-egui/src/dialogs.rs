@@ -254,7 +254,23 @@ pub enum Dialog {
         color: String,
         before: f32,
         after: f32,
+        /// "New documents based on this template": OK also saves the style in the Normal
+        /// template (`styles.setDefault`, #4237); off, the change is this document's only.
+        #[serde(default)]
+        new_documents: bool,
     },
+    /// Set As Default's question (#4237): this document only, or all documents based on the
+    /// Normal template. OK runs `command` with `params` and the chosen `scope`.
+    SetDefault {
+        command: String,
+        #[serde(skip)]
+        params: Value,
+        /// All documents based on the Normal template (else this document only).
+        all: bool,
+    },
+    /// File › Options › Advanced › Reset default formatting: asks before deleting the Normal
+    /// template (#4237).
+    ResetDefaults,
     /// Manage Styles: every style with its preview and description; modify, create, delete and
     /// show or hide them.
     ManageStyles {
@@ -514,6 +530,8 @@ impl Dialog {
             Dialog::About { .. } => "about",
             Dialog::SaveChanges { .. } => "saveChanges",
             Dialog::DiscardRecovery { .. } => "discardRecovery",
+            Dialog::SetDefault { .. } => "setDefault",
+            Dialog::ResetDefaults => "resetDefaults",
             Dialog::RecipientList { .. } => "recipientList",
             Dialog::SelectTable { .. } => "selectTable",
             Dialog::InsertMergeField { .. } => "insertMergeField",
@@ -759,6 +777,8 @@ impl Dialog {
             }
             "pasteSpecial" => Dialog::paste_special(app, &json!({})),
             "renameDocument" => Dialog::RenameDocument { name: app.title_stem(), message: String::new(), focus: true },
+            // Options › Advanced › Reset… (#4237).
+            "resetDefaults" => Dialog::ResetDefaults,
             "about" => Dialog::About { tab: 0 },
             "contributors" => Dialog::About { tab: 1 },
             "models" => Dialog::About { tab: 2 },
@@ -874,6 +894,7 @@ impl Dialog {
             },
             before: rp.space_before,
             after: rp.space_after,
+            new_documents: false,
         })
     }
 }

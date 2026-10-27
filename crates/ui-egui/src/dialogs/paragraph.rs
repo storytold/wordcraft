@@ -119,3 +119,35 @@ pub(super) fn apply_paragraph(app: &mut WordApp, d: &Dialog) {
         let _ = app.run("para.set", json!({"props": props, "onPage": page}));
     }
 }
+
+/// The Paragraph dialog's Set As Default (#4237): every field the selected paragraphs share or
+/// the user set, as `para.setDefault` takes them. The alignment and indents are turned from as
+/// seen on the page into the paragraph's start and end.
+pub(super) fn default_para_props(d: &Dialog) -> serde_json::Map<String, Value> {
+    let Dialog::Paragraph { rtl, mixed, .. } = d else { return serde_json::Map::new() };
+    let mut props = serde_json::Map::new();
+    for (k, v) in para_fields(d) {
+        if mixed.contains(&k) {
+            continue;
+        }
+        let key = match k.as_str() {
+            "left" if *rtl => "indentRight",
+            "left" => "indentLeft",
+            "right" if *rtl => "indentLeft",
+            "right" => "indentRight",
+            "align" => {
+                let visual = match v.as_str() {
+                    Some("center") => wordcraft_doc::Align::Center,
+                    Some("right") => wordcraft_doc::Align::Right,
+                    Some("justify") => wordcraft_doc::Align::Justify,
+                    _ => wordcraft_doc::Align::Left,
+                };
+                props.insert("align".into(), json!(visual.visual(*rtl)));
+                continue;
+            }
+            other => other,
+        };
+        props.insert(key.into(), v);
+    }
+    props
+}
