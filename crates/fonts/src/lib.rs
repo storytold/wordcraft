@@ -9,6 +9,7 @@
 
 pub mod color;
 mod fontdb;
+mod khmer;
 pub mod math;
 mod script;
 mod ui_fallback;
@@ -213,9 +214,22 @@ fn shape_dir(face: &FontFace, text: &str, features: &[Feature], map: &impl Fn(ch
         // shaped as Latin. Runs come in text order; right-to-left callers regroup by cluster.
         for r in script::script_runs(text) {
             let Some(sub) = text.get(r.clone()) else { continue };
+            let mut chars: Vec<(usize, char)> = sub.char_indices().map(|(i, c)| (r.start + i, map(c))).collect();
+            if khmer::has_triisap(sub) {
+                let needs = face.triisap_u.get_or_init(|| {
+                    khmer::probe(face, |s| {
+                        let mut b = UnicodeBuffer::new();
+                        b.push_str(s);
+                        b.guess_segment_properties();
+                        let gb = shaper.shape(b, ShapeOptions::new());
+                        gb.glyph_infos().iter().zip(gb.glyph_positions()).map(|(i, p)| (i.glyph_id, p.x_advance)).collect()
+                    })
+                });
+                khmer::apply(&mut chars, needs);
+            }
             let mut buf = UnicodeBuffer::new();
-            for (i, c) in sub.char_indices() {
-                buf.add(map(c), (r.start + i) as u32);
+            for (i, c) in chars {
+                buf.add(c, i as u32);
             }
             buf.guess_segment_properties();
             buf.set_direction(if rtl { Direction::RightToLeft } else { Direction::LeftToRight });
