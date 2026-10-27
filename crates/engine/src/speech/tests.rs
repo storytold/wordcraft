@@ -206,6 +206,23 @@ fn empty_queue_does_not_play() {
     r.play_pause();
     assert_eq!(r.state(), State::Stopped);
 }
+
+#[test]
+/// Only `start` begins a new reading; the worker rebuilds its speaker when this changes.
+fn a_new_reading_bumps_the_speaker_generation() {
+    let mut r = ReadAloud::default();
+    let reading = |r: &ReadAloud| lock(&r.shared.0).reading;
+    assert_eq!(reading(&r), 0);
+    r.start(Vec::new());
+    assert_eq!(reading(&r), 1);
+    // Pausing and skipping are not new readings.
+    r.play_pause();
+    r.skip(1);
+    assert_eq!(reading(&r), 1);
+    r.start(Vec::new());
+    assert_eq!(reading(&r), 2);
+}
+
 #[test]
 fn languages_are_detected_from_the_script() {
     for (text, tag) in [

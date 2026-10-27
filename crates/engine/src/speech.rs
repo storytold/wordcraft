@@ -544,6 +544,10 @@ struct Shared {
     rate: f32,
     /// Bumped on every change that should stop the sentence being spoken.
     generation: u64,
+    /// Bumped by `start`: a new reading gets a fresh speech host, so a failed host is retried
+    /// and a changed default voice is captured again.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    reading: u64,
     error: Option<String>,
     /// A worker thread is running (cleared under the lock as it exits).
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
@@ -568,7 +572,16 @@ impl Default for ReadAloud {
         let off = cfg!(test) || std::env::var("WORDCRAFT_SPEECH").is_ok_and(|v| v == "off");
         ReadAloud {
             shared: Arc::new((
-                Mutex::new(Shared { queue: Vec::new(), index: 0, state: State::Stopped, rate: 1.0, generation: 0, error: None, running: false }),
+                Mutex::new(Shared {
+                    queue: Vec::new(),
+                    index: 0,
+                    state: State::Stopped,
+                    rate: 1.0,
+                    generation: 0,
+                    reading: 0,
+                    error: None,
+                    running: false,
+                }),
                 Condvar::new(),
             )),
             backend: if off { Backend::Hold } else { Backend::System },
@@ -603,6 +616,7 @@ impl ReadAloud {
             s.state = if queue.is_empty() { State::Stopped } else { State::Playing };
             s.queue = queue;
             s.index = 0;
+            s.reading = s.reading.wrapping_add(1);
             s.error = None;
         });
     }
@@ -792,8 +806,9 @@ impl SystemSpeaker {
 fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
     let (m, cv) = shared;
     let mut speaker = SystemSpeaker::new();
+    let mut reading = lock(m).reading;
     loop {
-        let (text, lang, generation, rate) = {
+        let (text, lang, generation, rate, now) = {
             let mut s = lock(m);
             while s.state == State::Paused {
                 s = cv.wait(s).unwrap_or_else(PoisonError::into_inner);
@@ -803,7 +818,7 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 return;
             }
             match s.queue.get(s.index) {
-                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate),
+                Some(u) => (u.text.clone(), u.lang.clone(), s.generation, s.rate, s.reading),
                 None => {
                     s.state = State::Stopped;
                     s.running = false;
@@ -811,6 +826,12 @@ fn worker(shared: &(Mutex<Shared>, Condvar), backend: Backend) {
                 }
             }
         };
+        if now != reading {
+            // A new reading: drop the old host (quit or kill) and start afresh, so a failed host
+            // is retried and the default voice is captured again.
+            reading = now;
+            speaker = SystemSpeaker::new();
+        }
         let changed = || lock(m).generation != generation;
         let outcome = match backend {
             Backend::System => speaker.speak(&text, lang.as_deref(), rate, &changed),
