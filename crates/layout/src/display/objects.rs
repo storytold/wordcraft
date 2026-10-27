@@ -1,6 +1,8 @@
 use super::options::DisplayOptions;
 use super::paint::{Paint, paint_for};
-use super::{BezPath, Document, Draw, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign};
+use super::{
+    BezPath, Document, Draw, Graphic, GraphicItem, GraphicKind, InlineObject, PathSeg, Rect, Rgb, ShapeKind, Spin, TextAlign, TextDirection,
+};
 
 /// The draws of a chart or diagram's items inside `rect` (page coordinates). The items were built
 /// for the size `g.w` × `g.h` (0: `rect`'s own size), so they are scaled to `rect`; strokes and text
@@ -275,7 +277,19 @@ pub fn seg_path(segs: &[PathSeg]) -> BezPath {
 /// nothing to draw, or the item's rectangle or size isn't a finite number (a degenerate scale:
 /// `r` itself is always finite, as [`Rect::new`] makes it).
 fn text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Option<Draw> {
-    let GraphicItem::Text { rect, text, size, color, bold, align, font } = it else { return None };
+    let GraphicItem::Text { vertical, .. } = it else { return None };
+    if !*vertical {
+        return flat_text_glyphs(doc, r, it, alpha, k);
+    }
+    // Laid out in a frame turned 90° counter-clockwise: its x runs up `r` from the bottom left
+    // corner, its y across `r` to the right.
+    let glyphs = flat_text_glyphs(doc, Rect::new(0.0, 0.0, r.h, r.w), it, alpha, k)?;
+    Some(Draw::Turned { x: r.x, y: r.y + r.h, turn: TextDirection::Up, items: vec![glyphs] })
+}
+
+/// [`text_glyphs`] for an item read left to right across `r`.
+fn flat_text_glyphs(doc: &Document, r: Rect, it: &GraphicItem, alpha: f32, k: f32) -> Option<Draw> {
+    let GraphicItem::Text { rect, text, size, color, bold, align, font, .. } = it else { return None };
     let size = *size * k;
     if !rect.iter().chain([&size]).all(|v| v.is_finite()) {
         return None;

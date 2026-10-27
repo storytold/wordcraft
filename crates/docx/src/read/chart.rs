@@ -29,7 +29,7 @@ pub(super) use canvas::text_w;
 use canvas::{Rect, clip_text, legend, text};
 #[cfg(test)]
 use format::{civil, excel_stamp, format_value};
-use model::{Axis, Grouping, Kind, Pos, Series};
+use model::{Axis, DataTable, Grouping, Kind, Pos, Series};
 #[cfg(test)]
 use parse::{axis, category_text, labels, numbers};
 use parse::{chart_text_colour, element_text_colour, read_series, text_size, title_of};
@@ -98,7 +98,16 @@ pub(crate) fn chart_items(space: &El, theme: &[Rgb], w: f32, h: f32) -> Vec<Grap
         if reverse {
             entries.reverse();
         }
-        area = legend(&mut out, &entries, pos, area, chart.text_size, chart.legend_colour);
+        match chart.legend_box {
+            // Placed by hand: drawn in its box over the chart, taking no room from the plot.
+            Some([x, y, bw, bh]) => {
+                let (bx, by) = (x * w, y * h);
+                let bw = if bw > 0.0 { bw * w } else { (w - bx - PAD).max(1.0) };
+                let bh = if bh > 0.0 { bh * h } else { chart.text_size * LINE };
+                legend(&mut out, &entries, Pos::Top, Rect { x: bx, y: by, w: bw, h: bh }, chart.text_size, chart.legend_colour);
+            }
+            None => area = legend(&mut out, &entries, pos, area, chart.text_size, chart.legend_colour),
+        }
     }
     match chart.kind {
         Kind::Pie | Kind::Doughnut => pie(&mut out, &chart, area),
@@ -188,6 +197,9 @@ struct Chart {
     date1904: bool,
     /// Outline of the plot area, when the file draws one.
     plot_border: Option<Rgb>,
+    /// Where the file puts the legend by hand: x, y, width, height as shares of the chart.
+    legend_box: Option<[f32; 4]>,
+    data_table: Option<DataTable>,
     /// Text colour of the title, the legend, and any text that states none of its own.
     title_colour: Rgb,
     legend_colour: Rgb,

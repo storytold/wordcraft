@@ -51,7 +51,6 @@ pub(super) enum Pos {
 }
 
 /// One value axis (or category axis) as the file states it.
-#[derive(Default)]
 pub(super) struct Axis {
     pub(super) deleted: bool,
     pub(super) grid: bool,
@@ -64,6 +63,16 @@ pub(super) struct Axis {
     pub(super) fmt: Option<String>,
     /// Colour of the tick labels, when the axis's `c:txPr` states one.
     pub(super) text: Option<Rgb>,
+    /// The display unit the tick labels count in (`c:dispUnits`): 1000 for thousands.
+    pub(super) unit: f64,
+    /// The display unit's label, when the axis shows one, and its colour.
+    pub(super) unit_label: Option<(String, Option<Rgb>)>,
+}
+
+impl Default for Axis {
+    fn default() -> Self {
+        Axis { deleted: false, grid: false, line: false, mid: false, min: None, max: None, fmt: None, text: None, unit: 1.0, unit_label: None }
+    }
 }
 
 pub(super) struct Series {
@@ -82,7 +91,72 @@ pub(super) struct Series {
     pub(super) x_fmt: Option<String>,
     /// Data labels on or off for this series (`c:dLbls` of its own), when it says.
     pub(super) labels: Option<bool>,
-    /// The values as the file has them, for data labels (`values` become shares in a 100%
-    /// stacked chart); empty when the series shows no labels.
+    /// The values as the file has them, for data labels and a data table (`values` become
+    /// shares in a 100% stacked chart); empty when neither shows them.
     pub(super) raw: Vec<Option<f64>>,
+    /// The chart type the series is drawn as: a combination chart has more than one.
+    pub(super) kind: Kind,
+    /// The marker drawn at each point of a line series, when it shows them.
+    pub(super) marker: Option<Marker>,
+}
+
+/// A line series' point marker.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct Marker {
+    pub(super) shape: MarkerShape,
+    /// Width and height, points.
+    pub(super) size: f32,
+    pub(super) fill: Option<Rgb>,
+    pub(super) line: Option<Rgb>,
+}
+
+/// The marker shapes drawn; the others (x, star, plus, dash, dot, picture) are drawn as squares.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MarkerShape {
+    Square,
+    Diamond,
+    Triangle,
+    Circle,
+}
+
+impl MarkerShape {
+    /// The shape a `c:symbol` names; `None` for `none`.
+    pub(super) fn of(symbol: &str) -> Option<MarkerShape> {
+        Some(match symbol {
+            "none" => return None,
+            "diamond" => MarkerShape::Diamond,
+            "triangle" => MarkerShape::Triangle,
+            "circle" => MarkerShape::Circle,
+            _ => MarkerShape::Square,
+        })
+    }
+
+    /// The automatic marker of the series with index `idx`: diamond, square, triangle, x, star,
+    /// circle, plus, in turn (the ones not drawn as such fall back to squares).
+    pub(super) fn auto(idx: usize) -> MarkerShape {
+        match idx % 7 {
+            0 => MarkerShape::Diamond,
+            2 => MarkerShape::Triangle,
+            5 => MarkerShape::Circle,
+            _ => MarkerShape::Square,
+        }
+    }
+}
+
+/// How a legend entry (and a data table row) shows its series: a colour swatch, or for a line
+/// series a stretch of line with its marker.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Key {
+    Swatch,
+    Line(Option<Marker>),
+}
+
+/// A chart's data table (`c:dTable`): the plotted values in a grid under the plot.
+pub(super) struct DataTable {
+    pub(super) horz: bool,
+    pub(super) vert: bool,
+    pub(super) outline: bool,
+    pub(super) keys: bool,
+    pub(super) text: Rgb,
+    pub(super) line: Rgb,
 }

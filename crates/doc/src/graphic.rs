@@ -116,6 +116,10 @@ pub enum GraphicItem {
         align: TextAlign,
         #[serde(default)]
         font: Option<String>,
+        /// Turned 90° counter-clockwise, reading bottom to top up `rect` (a chart's display-units
+        /// label beside its value axis).
+        #[serde(default)]
+        vertical: bool,
     },
     /// A picture (`Document::media` key) stretched into `rect`.
     Image { rect: [f32; 4], media: String },

@@ -571,3 +571,113 @@ fn chart_text_takes_the_colour_its_text_properties_state() {
         assert_eq!(colour(&plain, s), Some(TEXT), "{s} keeps the default grey");
     }
 }
+
+/// The texts a chart draws, with their colour-independent facts.
+fn chart_texts(items: &[GraphicItem]) -> Vec<(String, [f32; 4], bool)> {
+    items
+        .iter()
+        .filter_map(|it| match it {
+            GraphicItem::Text { text, rect, vertical, .. } => Some((text.clone(), *rect, *vertical)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn whole_chart(chart: &str) -> El {
+    let x = format!(r#"<c:chartSpace {NS}><c:chart>{chart}</c:chart></c:chartSpace>"#);
+    crate::xml::parse(x.as_bytes()).unwrap()
+}
+
+/// A combination chart: columns and a line in one plot area, on the same axes (Word's "Clustered
+/// Column - Line"). Both are drawn, and the value axis takes in the line's values too. Only the
+/// first chart type used to be drawn.
+#[test]
+fn a_combination_chart_draws_its_columns_and_its_line_on_the_shared_axes() {
+    let cats = ["A", "B", "C"];
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:lineChart><c:grouping val="standard"/>{}<c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#,
+        ser(0, "Costs", Some("FF0000"), &cats, &["1", "2", "3"]),
+        ser(1, "Benefits", Some("00FF00"), &cats, &["2", "2", "2"]),
+        ser(2, "Total", Some("0000FF"), &cats, &["3", "7", "12"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    assert_eq!(filled(&items).len(), 6, "two column series of three");
+    let blue_line = items.iter().any(|it| matches!(it, GraphicItem::Path { fill: None, stroke: Some(c), .. } if *c == Rgb(0, 0, 0xFF)));
+    assert!(blue_line, "the line series is drawn");
+    let ticks: Vec<f64> = chart_texts(&items).iter().filter_map(|(t, _, _)| t.parse().ok()).collect();
+    assert!(ticks.iter().any(|t| *t >= 12.0), "the value axis reaches the line's 12: {ticks:?}");
+}
+
+/// A line chart with markers draws one per point in the series' marker colours; a series whose
+/// marker symbol is `none` draws none.
+#[test]
+fn line_markers_are_drawn_unless_the_series_turns_them_off() {
+    let marked = |symbol: &str| {
+        let ser = format!(
+            r#"<c:ser><c:idx val="1"/><c:order val="0"/><c:spPr><a:ln><a:solidFill><a:srgbClr val="4472C4"/></a:solidFill></a:ln></c:spPr><c:marker>{symbol}<c:size val="5"/><c:spPr><a:solidFill><a:srgbClr val="8EA9DB"/></a:solidFill></c:spPr></c:marker><c:cat><c:strRef><c:strCache><c:pt idx="0"><c:v>A</c:v></c:pt><c:pt idx="1"><c:v>B</c:v></c:pt><c:pt idx="2"><c:v>C</c:v></c:pt></c:strCache></c:strRef></c:cat><c:val><c:numRef><c:numCache><c:pt idx="0"><c:v>1</c:v></c:pt><c:pt idx="1"><c:v>3</c:v></c:pt><c:pt idx="2"><c:v>2</c:v></c:pt></c:numCache></c:numRef></c:val></c:ser>"#
+        );
+        let plot = format!(
+            r#"<c:plotArea><c:lineChart><c:grouping val="standard"/>{ser}<c:marker val="1"/><c:axId val="1"/><c:axId val="2"/></c:lineChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea>"#
+        );
+        let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+        items
+            .iter()
+            .filter(
+                |it| matches!(it, GraphicItem::Path { fill: Some(c), .. } | GraphicItem::Shape { fill: Some(c), .. } if *c == Rgb(0x8E, 0xA9, 0xDB)),
+            )
+            .count()
+    };
+    assert_eq!(marked(""), 3, "an automatic marker on each point");
+    assert_eq!(marked(r#"<c:symbol val="square"/>"#), 3);
+    assert_eq!(marked(r#"<c:symbol val="none"/>"#), 0);
+}
+
+/// Display units (`c:dispUnits`): the value axis labels count thousands, and the unit's name
+/// stands turned beside the axis.
+#[test]
+fn display_units_divide_the_axis_labels_and_name_the_unit() {
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/><c:dispUnits><c:builtInUnit val="thousands"/><c:dispUnitsLbl/></c:dispUnits></c:valAx></c:plotArea>"#,
+        ser(0, "S", None, &["A", "B"], &["4000", "8000"]),
+    );
+    let texts = chart_texts(&chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0));
+    let ticks: Vec<&str> = texts.iter().map(|(t, _, _)| t.as_str()).collect();
+    assert!(ticks.contains(&"8") && !ticks.contains(&"8000"), "labels in thousands: {ticks:?}");
+    let unit = texts.iter().find(|(t, _, _)| t == "Thousands").expect("the unit's name");
+    assert!(unit.2, "the unit's name is turned");
+}
+
+/// A data table (`c:dTable`) under the plot: the categories head its columns, and each series
+/// has a row of its values in its number format. The categories aren't drawn twice.
+#[test]
+fn a_data_table_lists_each_series_values_under_the_plot() {
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx><c:dTable><c:showHorzBorder val="1"/><c:showVertBorder val="1"/><c:showOutline val="1"/><c:showKeys val="1"/></c:dTable></c:plotArea>"#,
+        ser(0, "North", None, &["Q1", "Q2"], &["41", "-13"]),
+        ser(1, "South", None, &["Q1", "Q2"], &["27", "33"]),
+    );
+    let items = chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0);
+    let texts = chart_texts(&items);
+    let count = |s: &str| texts.iter().filter(|(t, _, _)| t == s).count();
+    // Values that are no axis tick, so each is drawn once.
+    for s in ["North", "South", "41", "-13", "27", "33"] {
+        assert_eq!(count(s), 1, "{s} in the table: {texts:?}");
+    }
+    assert_eq!(count("Q1"), 1, "the categories head the table, once");
+    let y = |s: &str| texts.iter().find(|(t, _, _)| t == s).map(|(_, r, _)| r[1]).unwrap();
+    assert!(y("Q1") < y("41") && y("41") < y("27"), "header row, then a row per series");
+}
+
+/// A legend placed by hand (`c:manualLayout`, edge mode) is drawn where the file puts it, over
+/// the chart, rather than in its automatic place.
+#[test]
+fn a_legend_placed_by_hand_is_drawn_where_the_file_puts_it() {
+    let plot = format!(
+        r#"<c:plotArea><c:barChart><c:barDir val="col"/><c:grouping val="clustered"/>{}<c:axId val="1"/><c:axId val="2"/></c:barChart><c:catAx><c:axId val="1"/></c:catAx><c:valAx><c:axId val="2"/></c:valAx></c:plotArea><c:legend><c:legendPos val="b"/><c:layout><c:manualLayout><c:xMode val="edge"/><c:yMode val="edge"/><c:x val="0.1"/><c:y val="0.1"/><c:w val="0.4"/><c:h val="0.1"/></c:manualLayout></c:layout></c:legend>"#,
+        ser(0, "Sales", None, &["A", "B"], &["1", "2"]),
+    );
+    let texts = chart_texts(&chart_items(&whole_chart(&plot), &theme(), 300.0, 200.0));
+    let (_, r, _) = texts.iter().find(|(t, _, _)| t == "Sales").expect("legend entry");
+    assert!(r[1] >= 18.0 && r[1] + r[3] <= 42.0, "inside the box 20..40 pt down: {r:?}");
+    assert!(r[0] >= 30.0 && r[0] + r[2] <= 150.0, "inside the box 30..150 pt across: {r:?}");
+}

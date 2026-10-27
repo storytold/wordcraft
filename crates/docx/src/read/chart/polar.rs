@@ -139,12 +139,15 @@ pub(super) fn label_of(s: &Series, i: usize) -> Option<String> {
     if s.labels != Some(true) {
         return None;
     }
-    let v = s.raw.get(i).copied().flatten()?;
-    let fmt = s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General"));
-    Some(match fmt {
+    Some(value_text(s, s.raw.get(i).copied().flatten()?))
+}
+
+/// A value of `s` in the series' number format.
+pub(super) fn value_text(s: &Series, v: f64) -> String {
+    match s.fmt.as_deref().filter(|f| !f.eq_ignore_ascii_case("General")) {
         Some(f) => format_value(v, f, 1.0),
         None => general_value(v),
-    })
+    }
 }
 
 /// A value in the `General` format: whole numbers without decimals, others with up to six.
@@ -171,7 +174,7 @@ pub(super) fn draw_data_labels(out: &mut Vec<GraphicItem>, labels: &[DataLabel],
             (Rect { x: l.x - w / 2.0, y: l.y - lh, w, h: lh }, TextAlign::Center)
         };
         let color = if l.inside { Rgb::WHITE } else { TEXT };
-        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None });
+        out.push(GraphicItem::Text { rect: rect.arr(), text: l.text.clone(), size: fs, color, bold: false, align, font: None, vertical: false });
     }
 }
 

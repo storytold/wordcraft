@@ -1,7 +1,9 @@
 use super::format::{date_text, excel_stamp, format_value, is_date_code};
-use super::model::{Axis, Grouping, Kind, Pos, Series};
+use super::model::{Axis, DataTable, Grouping, Key, Kind, Marker, MarkerShape, Pos, Series};
 use super::plot::label;
-use super::{Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, fill_colour, int, measure, slot};
+use super::{
+    AXIS, Chart, El, FONT, LINE_W, MAX_CELLS, MAX_POINTS, MAX_RADAR_SERIES, MAX_SERIES, MAX_SPOKES, Rgb, TEXT, fill_colour, int, measure, slot,
+};
 
 impl Chart {
     pub(super) fn parse(space: &El, theme: &[Rgb]) -> Option<Chart> {
@@ -11,10 +13,21 @@ impl Chart {
         let kind = Kind::of(&ty.name)?;
         let scatter = kind == Kind::Scatter;
         let date1904 = space.child("c:date1904").is_some_and(|d| d.attr("val").is_none_or(truthy));
+        let horizontal = kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar");
         let mut series = read_series(ty, scatter, theme);
+        let mut types = vec![ty];
+        if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
+            for other in combined_types(plot, ty) {
+                let room = MAX_SERIES.saturating_sub(series.len());
+                series.extend(read_series(other, false, theme).into_iter().take(room));
+                types.push(other);
+            }
+        }
         if series.is_empty() {
             return None;
         }
+        // Bar spacing comes from the bar chart type, wherever it is in a combination.
+        let bar_ty = types.iter().copied().find(|t| t.name == "c:barChart").unwrap_or(ty);
         let cats = ty.children("c:ser").find_map(|s| s.child("c:cat")).map(|c| labels(Some(c), MAX_POINTS, date1904)).unwrap_or_default();
         let n = if kind == Kind::Radar {
             series.iter().map(|s| s.values.len()).max().unwrap_or(0).max(cats.len()).min(MAX_SPOKES)
@@ -38,12 +51,26 @@ impl Chart {
         let mut cats = cats;
         cats.resize(n, String::new());
         let radar_style = ty.child("c:radarStyle").and_then(|r| r.attr("val"));
-        let type_labels = show_values(ty.child("c:dLbls"));
+        let data_table = if matches!(kind, Kind::Bar | Kind::Line | Kind::Area) && !horizontal {
+            plot.child("c:dTable").map(|d| {
+                let flag = |n: &str| d.child(n).is_some_and(|e| e.attr("val").is_none_or(truthy));
+                DataTable {
+                    horz: flag("c:showHorzBorder"),
+                    vert: flag("c:showVertBorder"),
+                    outline: flag("c:showOutline"),
+                    keys: flag("c:showKeys"),
+                    text: element_text_colour(d, theme).unwrap_or_else(|| chart_text_colour(space, theme)),
+                    line: d.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)).unwrap_or(AXIS),
+                }
+            })
+        } else {
+            None
+        };
         for s in &mut series {
             s.values.resize(n, None);
             s.xs.resize(n, None);
-            s.labels = Some(s.labels.or(type_labels).unwrap_or(false));
-            if s.labels == Some(true) {
+            s.labels = Some(s.labels.unwrap_or(false));
+            if s.labels == Some(true) || data_table.is_some() {
                 s.raw = s.values.clone();
             }
         }
@@ -58,12 +85,13 @@ impl Chart {
             val.fmt.clone().or_else(|| series.iter().find_map(|s| s.fmt.clone())).unwrap_or_else(|| "General".to_string())
         };
         let num = |n: &str| ty.child(n).and_then(|g| g.attr("val")).and_then(int);
+        let bar_num = |n: &str| bar_ty.child(n).and_then(|g| g.attr("val")).and_then(int);
         Some(Chart {
             kind,
-            horizontal: kind == Kind::Bar && ty.child("c:barDir").and_then(|d| d.attr("val")) == Some("bar"),
+            horizontal,
             grouping,
-            gap: num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
-            overlap: num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
+            gap: bar_num("c:gapWidth").unwrap_or(150).clamp(0, 500) as f32 / 100.0,
+            overlap: bar_num("c:overlap").unwrap_or(0).clamp(-100, 100) as f32 / 100.0,
             hole: num("c:holeSize").unwrap_or(50).clamp(10, 90) as f32 / 100.0,
             first_angle: num("c:firstSliceAng").unwrap_or(0).clamp(0, 360) as f64,
             radar_fill: radar_style == Some("filled"),
@@ -81,6 +109,8 @@ impl Chart {
             val_fmt,
             date1904,
             plot_border: plot.child("c:spPr").and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+            legend_box: chart.child("c:legend").and_then(manual_layout),
+            data_table,
             title_colour: chart.child("c:title").and_then(|t| element_text_colour(t, theme)).unwrap_or(text_colour),
             legend_colour: chart.child("c:legend").and_then(|l| element_text_colour(l, theme)).unwrap_or(text_colour),
             text_colour,
@@ -101,6 +131,17 @@ impl Chart {
         self.grouping != Grouping::Clustered
     }
 
+    /// Whether the series of chart type `kind` stack: only the first chart type's grouping counts
+    /// in a combination chart.
+    pub(super) fn stacks(&self, kind: Kind) -> bool {
+        self.stacked() && self.kind == kind
+    }
+
+    /// Whether any series is drawn as `kind`.
+    pub(super) fn has(&self, kind: Kind) -> bool {
+        self.series.iter().any(|s| s.kind == kind)
+    }
+
     fn accent(&self, i: usize) -> Rgb {
         self.accents.get(i % 6).copied().unwrap_or(Rgb::BLACK)
     }
@@ -118,33 +159,65 @@ impl Chart {
         if self.vary { self.accent(i) } else { self.series_colour(j) }
     }
 
-    pub(super) fn legend_entries(&self) -> Vec<(String, Rgb)> {
+    pub(super) fn legend_entries(&self) -> Vec<(String, Rgb, Key)> {
         if matches!(self.kind, Kind::Pie | Kind::Doughnut) {
             return self
                 .cats
                 .iter()
                 .enumerate()
-                .map(|(i, c)| (if c.is_empty() { (i + 1).to_string() } else { c.clone() }, self.point_colour(0, i)))
+                .map(|(i, c)| (if c.is_empty() { (i + 1).to_string() } else { c.clone() }, self.point_colour(0, i), Key::Swatch))
                 .collect();
         }
-        self.series
-            .iter()
-            .enumerate()
-            .map(|(j, s)| (if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }, self.series_colour(j)))
-            .collect()
+        self.series.iter().enumerate().map(|(j, s)| (series_name(s, j), self.series_colour(j), series_key(s))).collect()
     }
+}
+
+/// A series' name, or Word's "Series n" for one without.
+pub(super) fn series_name(s: &Series, j: usize) -> String {
+    if s.name.is_empty() { format!("Series {}", j + 1) } else { s.name.clone() }
+}
+
+/// How a series shows in a legend or data table: line series as a line with their marker.
+pub(super) fn series_key(s: &Series) -> Key {
+    if s.kind == Kind::Line { Key::Line(s.marker) } else { Key::Swatch }
 }
 
 /// The series of a chart type element, within the chart's cell budget.
 pub(super) fn read_series(ty: &El, scatter: bool, theme: &[Rgb]) -> Vec<Series> {
+    let kind = Kind::of(&ty.name).unwrap_or(Kind::Bar);
+    // A line chart shows its series' markers when it says so (`c:marker` of the chart type).
+    let markers = kind == Kind::Line && ty.child("c:marker").is_some_and(|m| m.attr("val").is_none_or(truthy));
+    let type_labels = show_values(ty.child("c:dLbls"));
     let mut budget = MAX_CELLS;
     let mut series = Vec::new();
     for ser in ty.children("c:ser").take(MAX_SERIES) {
-        let s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
+        let mut s = Series::parse(ser, scatter, theme, budget.min(MAX_POINTS));
         budget = budget.saturating_sub(s.values.len().max(s.xs.len()));
+        s.kind = kind;
+        s.labels = s.labels.or(type_labels);
+        if !markers {
+            s.marker = None;
+        }
         series.push(s);
     }
     series
+}
+
+/// The axis ids a chart type is plotted on.
+pub(super) fn axis_ids(ty: &El) -> Vec<&str> {
+    ty.children("c:axId").filter_map(|a| a.attr("val")).collect()
+}
+
+/// The other chart types a combination chart draws with `ty`: the column, line and area types on
+/// the same axes. Types on other axes (a secondary axis) and horizontal bars are left out.
+pub(super) fn combined_types<'a>(plot: &'a El, ty: &El) -> Vec<&'a El> {
+    let axes = axis_ids(ty);
+    plot.els()
+        .filter(|e| !std::ptr::eq(*e, ty))
+        .filter(|e| matches!(Kind::of(&e.name), Some(Kind::Bar | Kind::Line | Kind::Area)))
+        .filter(|e| e.child("c:barDir").and_then(|d| d.attr("val")) != Some("bar"))
+        .filter(|e| axis_ids(e) == axes)
+        .collect()
 }
 
 /// Values as their share of each category's total (100% stacked charts).
@@ -233,7 +306,20 @@ impl Series {
             }
         }
         let labels = show_values(ser.child("c:dLbls"));
-        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new() }
+        let mk = ser.child("c:marker");
+        let idx = ser.child("c:idx").and_then(|e| e.attr("val")).and_then(int).and_then(|i| usize::try_from(i).ok()).unwrap_or(0);
+        let shape = match mk.and_then(|m| m.child("c:symbol")).and_then(|e| e.attr("val")) {
+            Some(symbol) => MarkerShape::of(symbol),
+            None => Some(MarkerShape::auto(idx)),
+        };
+        let marker_sp = mk.and_then(|m| m.child("c:spPr"));
+        let marker = shape.map(|shape| Marker {
+            shape,
+            size: mk.and_then(|m| m.child("c:size")).and_then(|e| e.attr("val")).and_then(int).map_or(5.0, |v| (v as f32).clamp(2.0, 72.0)),
+            fill: marker_sp.and_then(|p| fill_colour(p, theme)),
+            line: marker_sp.and_then(|p| p.child("a:ln")).and_then(|l| fill_colour(l, theme)),
+        });
+        Series { name, color, line_w, line, values, xs, points, fmt, x_fmt, labels, raw: Vec::new(), kind: Kind::Bar, marker }
     }
 }
 
@@ -304,6 +390,14 @@ pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
     let scaling = a.child("c:scaling");
     let num =
         |n: &str| scaling.and_then(|s| s.child(n)).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f64>().ok()).filter(|v| v.is_finite());
+    let du = a.child("c:dispUnits");
+    let units = du.and_then(|d| {
+        if let Some(b) = d.child("c:builtInUnit") {
+            return builtin_unit(b.attr("val").unwrap_or("thousands"));
+        }
+        let v = d.child("c:custUnit")?.attr("val")?.trim().parse::<f64>().ok().filter(|v| v.is_finite() && *v > 0.0)?;
+        Some((v, ""))
+    });
     Axis {
         deleted: a.child("c:delete").and_then(|d| d.attr("val")).is_some_and(truthy),
         grid: a.child("c:majorGridlines").is_some(),
@@ -318,7 +412,42 @@ pub(super) fn axis(a: Option<&El>, theme: &[Rgb]) -> Axis {
             .filter(|f| f.len() <= MAX_FORMAT_CODE)
             .map(str::to_string),
         text: element_text_colour(a, theme),
+        unit: units.map_or(1.0, |(u, _)| u),
+        unit_label: units.and_then(|(_, name)| {
+            let l = du?.child("c:dispUnitsLbl")?;
+            Some((title_text(l).unwrap_or_else(|| name.to_string()), element_text_colour(l, theme)))
+        }),
     }
+}
+
+/// A built-in display unit (`c:builtInUnit`): what it divides by, and its label.
+fn builtin_unit(name: &str) -> Option<(f64, &'static str)> {
+    Some(match name {
+        "hundreds" => (1e2, "Hundreds"),
+        "thousands" => (1e3, "Thousands"),
+        "tenThousands" => (1e4, "10000"),
+        "hundredThousands" => (1e5, "100000"),
+        "millions" => (1e6, "Millions"),
+        "tenMillions" => (1e7, "10000000"),
+        "hundredMillions" => (1e8, "100000000"),
+        "billions" => (1e9, "Billions"),
+        "trillions" => (1e12, "Trillions"),
+        _ => return None,
+    })
+}
+
+/// A chart element's hand-set place (`c:layout/c:manualLayout` in edge mode): x, y, width and
+/// height as shares of the chart (0 when the file gives none).
+fn manual_layout(e: &El) -> Option<[f32; 4]> {
+    let m = e.child("c:layout")?.child("c:manualLayout")?;
+    let edge = |n: &str| m.child(n).and_then(|e| e.attr("val")) == Some("edge");
+    if !edge("c:xMode") || !edge("c:yMode") {
+        return None;
+    }
+    let share = |n: &str| {
+        m.child(n).and_then(|e| e.attr("val")).and_then(|v| v.trim().parse::<f32>().ok()).filter(|v| v.is_finite()).map(|v| v.clamp(0.0, 1.0))
+    };
+    Some([share("c:x")?, share("c:y")?, share("c:w").unwrap_or(0.0), share("c:h").unwrap_or(0.0)])
 }
 
 /// The text colour a chart element (title, legend, axis) states for itself: its rich text's

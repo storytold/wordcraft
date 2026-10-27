@@ -1,8 +1,8 @@
-use super::canvas::{Rect, fill, rect_segs, runs, seg, stroke, text, text_at, text_w, widest, wrap};
+use super::canvas::{Rect, clip_text, draw_key, fill, key_w, rect_segs, runs, seg, stroke, text, text_at, text_w, vertical_text, widest, wrap};
 use super::format::format_value;
-use super::model::{DataLabel, Grouping, Kind, Series};
-use super::parse::category_text;
-use super::polar::{draw_data_labels, label_of};
+use super::model::{DataLabel, DataTable, Grouping, Kind, Marker, MarkerShape, Series};
+use super::parse::{category_text, series_key, series_name};
+use super::polar::{draw_data_labels, label_of, value_text};
 use super::{AXIS, Chart, El, GAP, GRID, GraphicItem, LINE, MAX_LABEL, MAX_TICKS, PathSeg, Rgb, ShapeKind, TextAlign, fill_colour, measure};
 
 pub(super) fn label(s: &str) -> String {
@@ -127,7 +127,9 @@ impl Axes {
         // Lines and scatters don't need zero for a narrow range (1000..1050 stays on its own scale).
         let zero = !matches!(c.kind, Kind::Line | Kind::Scatter) || !narrow(dlo, dhi);
         let vs = nice_scale(dlo, dhi, zero, vmin, vmax);
-        let vticks = vs.ticks().into_iter().map(|t| (t, format_value(t, &c.val_fmt, vs.step))).collect();
+        // In display units the labels count thousands (or millions…) of the values.
+        let unit = c.val.unit;
+        let vticks = vs.ticks().into_iter().map(|t| (t, format_value(t / unit, &c.val_fmt, vs.step / unit))).collect();
         let xs = (c.kind == Kind::Scatter).then(|| {
             let (xl, xh) = x_extent(c);
             nice_scale(xl, xh, false, c.cat.min, c.cat.max)
@@ -157,13 +159,22 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let lh = fs * LINE;
     let scatter = c.kind == Kind::Scatter;
     let (cat_on, val_on) = (!c.cat.deleted, !c.val.deleted);
+    // A display-units label stands turned left of the value labels (under them for bars).
+    let unit_room = if val_on && c.val.unit_label.is_some() { lh + GAP } else { 0.0 };
     let left = if c.horizontal {
         if cat_on { widest(&c.cats, fs).min(area.w * 0.4) + GAP } else { 0.0 }
     } else if val_on {
-        ax.vticks.iter().map(|(_, s)| text_w(s, fs)).fold(0.0, f32::max) + GAP
+        ax.vticks.iter().map(|(_, s)| text_w(s, fs)).fold(0.0, f32::max) + GAP + unit_room
     } else {
         0.0
     };
+    // A data table's series names sit left of the plot, under the value labels.
+    let left = match &c.data_table {
+        Some(t) => left.max(table_names_w(c, t, fs).min(area.w * 0.4)),
+        None => left,
+    };
+    // A data table heads its columns with the categories, so they aren't drawn under the axis.
+    let cat_on = cat_on && c.data_table.is_none();
     let band_w = (area.w - left).max(1.0) / c.n as f32;
     let wrapped: Vec<Vec<String>> = if cat_on && !scatter {
         let width = if c.horizontal { left - GAP } else { band_w };
@@ -174,10 +185,12 @@ fn axis_margins(c: &Chart, ax: &Axes, area: Rect) -> Margins {
     let widest_line = wrapped.iter().flatten().map(|s| text_w(s, fs)).fold(0.0, f32::max);
     let skip = ((widest_line / band_w).ceil() as usize).max(1);
     let label_lines = wrapped.iter().map(Vec::len).max().unwrap_or(1) as f32;
-    let bottom = if cat_on && !c.horizontal {
+    let bottom = if let Some(t) = &c.data_table {
+        table_rows(c, t) as f32 * lh
+    } else if cat_on && !c.horizontal {
         if scatter { lh + GAP } else { label_lines * lh + GAP }
     } else if c.horizontal && val_on {
-        lh + GAP
+        lh + GAP + unit_room
     } else {
         0.0
     };
@@ -202,19 +215,102 @@ pub(super) fn cartesian(out: &mut Vec<GraphicItem>, c: &Chart, area: Rect) {
     }
     let mut labels = Vec::new();
     match c.kind {
-        Kind::Bar => bars(out, c, &g, &mut labels),
-        Kind::Line => lines(out, c, &g, &mut labels),
-        Kind::Area => areas(out, c, &g, &mut labels),
         Kind::Scatter => draw_scatter(out, c, &g, &mut labels),
         Kind::Pie | Kind::Doughnut | Kind::Radar => {}
+        // A combination chart draws its areas, then its columns, then its lines over them.
+        Kind::Bar | Kind::Line | Kind::Area => {
+            if c.has(Kind::Area) {
+                areas(out, c, &g, &mut labels);
+            }
+            if c.has(Kind::Bar) {
+                bars(out, c, &g, &mut labels);
+            }
+            if c.has(Kind::Line) {
+                lines(out, c, &g, &mut labels);
+            }
+        }
     }
     draw_axes(out, c, &g);
     draw_data_labels(out, &labels, c.text_size, g.horiz && c.kind == Kind::Bar);
     if !c.val.deleted {
         draw_value_labels(out, c, &g, &ax.vticks, Rect { w: m.left, ..area });
+        if let Some((label, colour)) = &c.val.unit_label {
+            let (fs, lh) = (c.text_size, c.text_size * LINE);
+            let colour = colour.unwrap_or_else(|| c.val_colour());
+            if g.horiz {
+                text_at(out, plot.x + plot.w / 2.0, plot.bottom() + GAP / 2.0 + lh, label, fs, colour);
+            } else {
+                vertical_text(out, Rect { x: area.x, y: plot.y, w: lh, h: plot.h }, label, fs, colour);
+            }
+        }
     }
-    if !c.cat.deleted {
+    if let Some(t) = &c.data_table {
+        draw_data_table(out, c, t, &g);
+    } else if !c.cat.deleted {
         draw_category_labels(out, c, &g, &ax.xticks, &m, area);
+    }
+}
+
+/// Rows of a data table: the category header and one per series.
+fn table_rows(c: &Chart, _t: &DataTable) -> usize {
+    1 + c.series.len()
+}
+
+/// Width of a data table's name column: keys, series names and padding.
+fn table_names_w(c: &Chart, t: &DataTable, fs: f32) -> f32 {
+    let keys = if t.keys { c.series.iter().map(|s| key_w(series_key(s))).fold(0.0, f32::max) + GAP } else { 0.0 };
+    let names = c.series.iter().enumerate().map(|(j, s)| text_w(&series_name(s, j), fs)).fold(0.0, f32::max);
+    keys + names + 2.0 * GAP
+}
+
+/// A data table under the plot: the categories over the plot's bands, then a row per series with
+/// its key and name left of the plot and its values under the categories.
+fn draw_data_table(out: &mut Vec<GraphicItem>, c: &Chart, t: &DataTable, g: &Frame) {
+    let (fs, lh) = (c.text_size, c.text_size * LINE);
+    let plot = g.plot;
+    let band = g.band();
+    let names_w = table_names_w(c, t, fs).min(plot.x.max(0.0));
+    let (x0, top) = (plot.x - names_w, plot.bottom());
+    let rows = table_rows(c, t);
+    let bottom = top + rows as f32 * lh;
+    for (i, cat) in c.cats.iter().enumerate() {
+        let x = g.band_start(i);
+        text(out, Rect { x, y: top, w: band, h: lh }, &clip_text(cat, band, fs), fs, TextAlign::Center, false, t.text);
+    }
+    for (j, s) in c.series.iter().enumerate() {
+        let y = top + (j + 1) as f32 * lh;
+        let mut x = x0 + GAP;
+        if t.keys {
+            let k = series_key(s);
+            draw_key(out, x, y + lh / 2.0, k, c.series_colour(j));
+            x += key_w(k) + GAP;
+        }
+        text(out, Rect { x, y, w: (plot.x - x - GAP).max(1.0), h: lh }, &series_name(s, j), fs, TextAlign::Left, false, t.text);
+        for i in 0..g.n {
+            let Some(v) = s.raw.get(i).copied().flatten() else { continue };
+            let x = g.band_start(i);
+            text(out, Rect { x, y, w: band, h: lh }, &clip_text(&value_text(s, v), band, fs), fs, TextAlign::Center, false, t.text);
+        }
+    }
+    let line = |out: &mut Vec<GraphicItem>, segs| stroke(out, segs, t.line, 0.75);
+    if t.horz {
+        for r in 1..rows {
+            let y = top + r as f32 * lh;
+            line(out, seg(if r == 1 { plot.x } else { x0 }, y, plot.right(), y));
+            if r == 1 {
+                line(out, seg(x0, y, plot.x, y));
+            }
+        }
+    }
+    if t.vert {
+        for i in 0..=g.n {
+            let x = plot.x + i as f32 * band;
+            line(out, seg(x, top, x, bottom));
+        }
+    }
+    if t.outline {
+        line(out, rect_segs(plot.x, top, plot.right(), top + lh));
+        line(out, rect_segs(x0, top + lh, plot.right(), bottom));
     }
 }
 
@@ -303,7 +399,7 @@ fn extent(c: &Chart) -> (f64, f64) {
     if c.stacked() {
         for i in 0..c.n {
             let (mut p, mut q) = (0.0, 0.0);
-            for s in &c.series {
+            for s in c.series.iter().filter(|s| s.kind == c.kind) {
                 match s.values.get(i).copied().flatten() {
                     Some(v) if v >= 0.0 => p += v,
                     Some(v) => q += v,
@@ -313,6 +409,8 @@ fn extent(c: &Chart) -> (f64, f64) {
             pts.push(p);
             pts.push(q);
         }
+        // The other chart types of a combination chart don't stack.
+        pts.extend(c.series.iter().filter(|s| s.kind != c.kind).flat_map(|s| s.values.iter().flatten().copied()));
     } else {
         pts.extend(c.series.iter().flat_map(|s| s.values.iter().flatten().copied()));
     }
@@ -330,8 +428,9 @@ fn x_extent(c: &Chart) -> (f64, f64) {
 }
 
 fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
-    let stacked = c.stacked();
-    let slots = if stacked { 1 } else { c.series.len().max(1) };
+    let stacked = c.stacks(Kind::Bar);
+    let bar_series: Vec<(usize, &Series)> = c.series.iter().enumerate().filter(|(_, s)| s.kind == Kind::Bar).collect();
+    let slots = if stacked { 1 } else { bar_series.len().max(1) };
     let ov = if stacked { 0.0 } else { c.overlap };
     let ns = slots as f32;
     let band = g.band();
@@ -339,8 +438,8 @@ fn bars(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataL
     let group = thick * (ns - (ns - 1.0) * ov);
     let mut pos = vec![0.0f64; g.n];
     let mut neg = vec![0.0f64; g.n];
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
-        let slot = if stacked { 0 } else { j };
+    for (k, &(j, s)) in bar_series.iter().enumerate().filter(|(_, (_, s))| has_values(s)) {
+        let slot = if stacked { 0 } else { k };
         let slot = (if g.horiz { slots.saturating_sub(1 + slot) } else { slot }) as f32;
         for i in 0..g.n {
             let Some(v) = s.values.get(i).copied().flatten() else { continue };
@@ -384,13 +483,14 @@ pub(super) fn has_values(s: &Series) -> bool {
 
 /// Line series; stacked ones are drawn at the running total of the series up to them.
 fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
+    let stacked = c.stacks(Kind::Line);
     let mut total = vec![0.0f64; g.n];
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
+    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| s.kind == Kind::Line && has_values(s)) {
         let pts: Vec<Option<(f32, f32)>> = (0..g.n)
             .map(|i| {
                 let v = s.values.get(i).copied().flatten()?;
                 let y = match total.get_mut(i) {
-                    Some(t) if c.stacked() => {
+                    Some(t) if stacked => {
                         *t += v;
                         *t
                     }
@@ -404,13 +504,38 @@ fn lines(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                 labels.push(DataLabel { x: *x, y: *y, text, inside: false });
             }
         }
-        stroke(out, runs(pts.into_iter()), c.series_colour(j), s.line_w);
+        let colour = c.series_colour(j);
+        stroke(out, runs(pts.iter().copied()), colour, s.line_w);
+        if let Some(m) = s.marker {
+            for (x, y) in pts.iter().flatten() {
+                marker(out, *x, *y, &m, colour);
+            }
+        }
     }
 }
 
+/// A point marker centred on (`x`, `y`), in its own colours or the series' `colour`.
+pub(super) fn marker(out: &mut Vec<GraphicItem>, x: f32, y: f32, m: &Marker, colour: Rgb) {
+    let r = m.size / 2.0;
+    let (fill, stroke) = (Some(m.fill.unwrap_or(colour)), Some(m.line.unwrap_or(colour)));
+    let segs = match m.shape {
+        MarkerShape::Circle => {
+            out.push(GraphicItem::Shape { rect: [x - r, y - r, m.size, m.size], kind: ShapeKind::Ellipse, fill, stroke, stroke_width: 0.75 });
+            return;
+        }
+        MarkerShape::Square => rect_segs(x - r, y - r, x + r, y + r),
+        MarkerShape::Diamond => {
+            vec![PathSeg::Move(x, y - r), PathSeg::Line(x + r, y), PathSeg::Line(x, y + r), PathSeg::Line(x - r, y), PathSeg::Close]
+        }
+        MarkerShape::Triangle => vec![PathSeg::Move(x, y - r), PathSeg::Line(x + r, y + r), PathSeg::Line(x - r, y + r), PathSeg::Close],
+    };
+    out.push(GraphicItem::Path { segs, fill, stroke, stroke_width: 0.75 });
+}
+
 fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<DataLabel>) {
+    let stacked = c.stacks(Kind::Area);
     let mut base = vec![0.0f64; g.n];
-    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| has_values(s)) {
+    for (j, s) in c.series.iter().enumerate().filter(|(_, s)| s.kind == Kind::Area && has_values(s)) {
         let vals = (0..g.n).map(|i| s.values.get(i).copied().flatten().unwrap_or(0.0));
         let top: Vec<f64> = base.iter().zip(vals).map(|(b, v)| b + v).collect();
         let mut segs = Vec::with_capacity(2 * g.n + 1);
@@ -428,7 +553,7 @@ fn areas(out: &mut Vec<GraphicItem>, c: &Chart, g: &Frame, labels: &mut Vec<Data
                 labels.push(DataLabel { x: g.cat_x(i), y: g.val((t + b) / 2.0), text, inside: true });
             }
         }
-        if c.stacked() {
+        if stacked {
             base = top;
         }
     }
