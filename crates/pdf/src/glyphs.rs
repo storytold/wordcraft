@@ -3,7 +3,8 @@ use super::*;
 
 /// A shaped glyph id as krilla takes it. Shaping gives 32-bit ids (a format-12 cmap can map to
 /// any), but krilla's font subsetting takes 16-bit ones and panics on a larger id (#3674): one
-/// that doesn't fit is written as .notdef (glyph 0), keeping its place and its text.
+/// that doesn't fit is written as .notdef (glyph 0), keeping its place. Its own character doesn't
+/// extract, since krilla maps no text to .notdef.
 pub(crate) fn glyph_id(g: u32) -> GlyphId {
     GlyphId::new(u16::try_from(g).map_or(0, u32::from))
 }
