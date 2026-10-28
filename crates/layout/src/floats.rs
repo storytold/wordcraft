@@ -336,6 +336,7 @@ pub(crate) fn anchor_floats(
 ) -> (HashMap<usize, Rect>, Arc<ParaLayout>, Vec<para::Exclusion>) {
     let FloatAnchor { p, block, y0, before, excl_mark, label, place } = anchor;
     ctx.fields.page = pb.number;
+    ctx.fields.page_format = pb.page_format;
     let (col_x, width) = (pb.col_x(), pb.col_w());
     let mut rects = HashMap::new();
     if !pb.web && place {

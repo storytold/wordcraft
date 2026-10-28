@@ -9,6 +9,8 @@ use super::{Block, Border, FloatAlign, Page, ParaLayout, Rect, SectionProps, Sto
 pub(crate) struct PageBuilder<'a> {
     pub(crate) pages: Vec<Page>,
     pub(crate) sect: &'a SectionProps,
+    /// The current document section's numbering format, even when reflow uses first-section page geometry.
+    pub(crate) page_format: wordcraft_doc::section::NumFormat,
     pub(crate) sect_idx: usize,
     pub(crate) col: usize,
     pub(crate) cols: Vec<(f32, f32)>,

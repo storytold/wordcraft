@@ -100,8 +100,9 @@ pub fn specs() -> Vec<CommandSpec> {
 
 /// A field instruction split into its name, positional arguments and switches (ECMA-376
 /// §17.16.1): `TOC \o "1-3" \h` → name `TOC`, switches `o` = `1-3` and `h`. Quoted text stays
-/// whole (without the quotes; `\"` and `\\` inside it are a quote and a backslash). A switch
-/// takes the word after it as its argument unless that word is another switch.
+/// whole (without the quotes; a backslash inside it makes the next character literal, as in Word:
+/// `\"` is a quote, `\\` a backslash, `\*` an asterisk). A switch takes the word after it as its
+/// argument unless that word is another switch.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct FieldCode {
     pub name: String,
@@ -123,7 +124,7 @@ impl FieldCode {
                 while let Some(c) = chars.next() {
                     match c {
                         '"' => break,
-                        '\\' if matches!(chars.peek(), Some('"' | '\\')) => w.extend(chars.next()),
+                        '\\' if chars.peek().is_some() => w.extend(chars.next()),
                         c => w.push(c),
                     }
                 }
