@@ -1,7 +1,7 @@
 //! Thai character name constants, type-class flags, and the per-character type table.
 //!
 //! Each of the 96 codepoints in the Thai Unicode block (U+0E00–U+0E5F) is assigned a
-//! bitmask of [`TCT_*`] flags that describe how it participates in layout, rendering,
+//! bitmask of `TCT_*` flags that describe how it participates in layout, rendering,
 //! and input-sequence checking.  The classification is derived from the Unicode Standard
 //! (Thai block, Chapter 16) and TIS-620 (Thai Industrial Standard 620-2533), which define
 //! the script properties of every Thai character.  Call [`thai_char_type`] to obtain the
@@ -351,7 +351,7 @@ static THAI_CHAR_TYPE: [u16; 96] = [
 #[inline]
 pub fn thai_char_type(c: char) -> u16 {
     let cp = u32::from(c);
-    if cp >= 0x0E00 && cp <= 0x0E5F { THAI_CHAR_TYPE[(cp - 0x0E00) as usize] } else { TCT_CONTROL }
+    if (0x0E00u32..=0x0E5F).contains(&cp) { THAI_CHAR_TYPE[(cp - 0x0E00) as usize] } else { TCT_CONTROL }
 }
 
 // ── Convenience predicates ─────────────────────────────────────────────────────────────────
