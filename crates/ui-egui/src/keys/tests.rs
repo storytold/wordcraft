@@ -122,6 +122,16 @@ fn cmd_option_r_collapses_the_ribbon_on_macos() {
 }
 
 #[test]
+fn cmd_m_minimizes_on_macos() {
+    let m = |mac_cmd, shift, ctrl| egui::Modifiers { mac_cmd, command: mac_cmd, shift, ctrl, ..Default::default() };
+    let minimize = Some(("ui.minimize", json!({})));
+    assert_eq!(ui_shortcut(Key::M, m(true, false, false)), if cfg!(target_os = "macos") { minimize } else { None });
+    assert_eq!(ui_shortcut(Key::M, m(true, true, false)), None, "⌘⇧M decreases the indent");
+    assert_eq!(ui_shortcut(Key::M, m(false, true, true)), None, "⌃⇧M increases the indent");
+    assert_eq!(ui_shortcut(Key::M, m(false, false, false)), None, "a plain M");
+}
+
+#[test]
 fn only_plain_paste_releases_paste_a_clipboard_picture() {
     let m = |command, shift, alt| egui::Modifiers { command, shift, alt, ..Default::default() };
     assert!(is_paste_release(Key::V, m(true, false, false)), "Mod+V");

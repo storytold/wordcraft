@@ -281,6 +281,116 @@ fn quitting_from_the_empty_window_asks_about_the_other_windows() {
     assert!(a.quit_requested);
 }
 
+/// Mod+W in the last window: on macOS it closes the window, as Word for Mac does, and so quits
+/// once the unsaved changes are answered; elsewhere the window stays with no page (#1712).
+#[test]
+fn mod_w_in_the_last_window_closes_it_on_macos() {
+    let ctx = backend();
+    let mut a = app("Only");
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 4);
+    let mac = cfg!(target_os = "macos");
+    let modifiers = egui::Modifiers { ctrl: !mac, mac_cmd: mac, command: true, ..Default::default() };
+    let key = egui::Event::Key { key: egui::Key::W, physical_key: None, pressed: true, repeat: false, modifiers };
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(key));
+    frame(&ctx, &mut a);
+    assert_eq!(prompt(&a), Some("saveChanges"), "unsaved changes are asked about first");
+    assert!(!a.quit_requested);
+    a.run("ui.saveChanges", json!({"answer": "dontSave"})).unwrap();
+    assert_eq!(a.quit_requested, mac, "the last window closes on macOS only");
+    if !mac {
+        assert!(!a.has_document(), "elsewhere the window stays with no page");
+    }
+}
+
+/// Mod+W in the Start screen's empty window beside another window closes the empty window, as
+/// its close button does, and leaves the other window and its document as they are.
+#[test]
+fn mod_w_closes_the_empty_window_beside_another() {
+    let ctx = backend();
+    let mut a = WordApp::new(Session::new(wordcraft_doc::Document::new()), Services::default());
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    a.run("file.close", json!({})).unwrap();
+    assert!(!a.has_document());
+    let empty = a.windows.shown();
+    let placeholder = a.session.document_id();
+    let other = a.session.with_document(placeholder, |s| s.add_document(wordcraft_doc::Document::new())).unwrap();
+    a.session.with_document(other, |s| s.run("text.insert", &json!({"text": "Kept"}))).unwrap().unwrap();
+    frames(&ctx, &mut a, 2);
+    assert_eq!((a.window_count(), a.windows.shown(), a.active_viewport()), (2, empty, ViewportId::ROOT), "the empty window is in front");
+    let mac = cfg!(target_os = "macos");
+    let modifiers = egui::Modifiers { ctrl: !mac, mac_cmd: mac, command: true, ..Default::default() };
+    let key = egui::Event::Key { key: egui::Key::W, physical_key: None, pressed: true, repeat: false, modifiers };
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(key));
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.window_count(), 1, "the empty window closed");
+    assert_ne!(a.windows.shown(), empty);
+    assert_eq!((a.session.document_id(), prompt(&a), text(&a).as_str()), (other, None, "Kept"), "the other window's document is untouched");
+    assert!(!a.quit_requested);
+}
+
+#[cfg(target_os = "macos")]
+fn cmd_m() -> egui::Event {
+    let modifiers = egui::Modifiers { mac_cmd: true, command: true, ..Default::default() };
+    egui::Event::Key { key: egui::Key::M, physical_key: None, pressed: true, repeat: false, modifiers }
+}
+
+#[cfg(target_os = "macos")]
+fn minimized(id: ViewportId) -> usize {
+    COMMANDS.with(|c| c.borrow().get(&id).map_or(0, |v| v.iter().filter(|c| **c == ViewportCommand::Minimized(true)).count()))
+}
+
+/// ⌘M minimizes the window it was pressed in, also when the window list hasn't seen that window
+/// focused yet (the key comes in the frame that brought it forward).
+#[test]
+#[cfg(target_os = "macos")]
+fn cmd_m_minimizes_the_window_it_was_pressed_in() {
+    let ctx = backend();
+    let mut a = app("First");
+    frames(&ctx, &mut a, 2);
+    a.run("file.new", json!({})).unwrap();
+    frames(&ctx, &mut a, 3);
+    let child = a.active_viewport();
+    assert_ne!(child, ViewportId::ROOT, "the second window has a viewport of its own");
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    assert_eq!(a.active_viewport(), ViewportId::ROOT, "the first window is the active one");
+    COMMANDS.with(|c| c.borrow_mut().clear());
+    EVENTS.with(|e| e.borrow_mut().entry(child).or_default().push(cmd_m()));
+    frame(&ctx, &mut a);
+    assert_eq!((minimized(child), minimized(ViewportId::ROOT)), (1, 0), "the window that got ⌘M went to the Dock, not the active one");
+}
+
+/// ⌘M minimizes the window from a text field (the Navigation pane's search) and from a dialog's
+/// field, as Window › Minimize's key does in every Mac app, once each time.
+#[test]
+#[cfg(target_os = "macos")]
+fn cmd_m_minimizes_from_a_text_field_or_a_dialog() {
+    let ctx = backend();
+    let mut a = app("Only");
+    focus(ViewportId::ROOT);
+    frames(&ctx, &mut a, 2);
+    a.run("view.navigationPane", json!({"value": true})).unwrap();
+    frames(&ctx, &mut a, 2);
+    a.nav_search_focus = true;
+    frames(&ctx, &mut a, 2);
+    assert!(ctx.text_edit_focused() && !a.canvas.focused, "the search box has the keyboard");
+    COMMANDS.with(|c| c.borrow_mut().clear());
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(cmd_m()));
+    frame(&ctx, &mut a);
+    assert_eq!(minimized(ViewportId::ROOT), 1, "⌘M from the search box");
+
+    a.run("ui.dialog", json!({"name": "goto"})).unwrap();
+    frames(&ctx, &mut a, 2);
+    assert!(ctx.text_edit_focused() && prompt(&a) == Some("goto"), "Go To's page box has the keyboard");
+    COMMANDS.with(|c| c.borrow_mut().clear());
+    EVENTS.with(|e| e.borrow_mut().entry(ViewportId::ROOT).or_default().push(cmd_m()));
+    frame(&ctx, &mut a);
+    assert_eq!(minimized(ViewportId::ROOT), 1, "⌘M from the Go To dialog");
+    assert_eq!(prompt(&a), Some("goto"), "the dialog stays open");
+}
+
 /// Mod+W in a window with no changes closes it; the keys typed after it in the same frame
 /// don't reach the window that comes forward.
 #[test]

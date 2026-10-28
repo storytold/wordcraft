@@ -101,17 +101,42 @@ pub fn combo(m: Modifiers, key: &str, with_shift: bool) -> String {
 
 /// Shortcuts for interface commands (`ui.*`), which aren't in the engine's keymap: Alt+Q moves
 /// to "Tell me" command search, as in Word for Windows (#819). Not on macOS, where Option+Q types
-/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac.
+/// a character. On macOS ⌘⌥R collapses or expands the ribbon, as in Word for Mac, and ⌘M
+/// minimizes the window, as in every Mac app.
 pub(super) fn ui_shortcut(key: Key, m: Modifiers) -> Option<(&'static str, Value)> {
     let alt_only = m.alt && !m.command && !m.ctrl && !m.mac_cmd && !m.shift;
     let mac_cmd_alt = cfg!(target_os = "macos") && m.mac_cmd && m.alt && !m.ctrl && !m.shift;
     match key {
         Key::Q if alt_only && !cfg!(target_os = "macos") => Some(("ui.dialog", json!({"name": "commands"}))),
         Key::R if mac_cmd_alt => Some(("ui.collapseRibbon", json!({}))),
+        Key::M if cfg!(target_os = "macos") && m.mac_cmd && !m.alt && !m.ctrl && !m.shift => Some(("ui.minimize", json!({}))),
         // Ctrl+F1 collapses or expands the ribbon, as in Word for Windows (#1678). Not on macOS,
         // where Ctrl+F1 is the system's keyboard-access switch.
         Key::F1 if m.ctrl && !m.alt && !m.shift && !m.mac_cmd && !cfg!(target_os = "macos") => Some(("ui.collapseRibbon", json!({}))),
         _ => None,
+    }
+}
+
+/// ⌘M belongs to the window, as Window › Minimize's key does in every Mac app: it minimizes the
+/// window whatever has the keyboard there (a text field, a dialog), not only from the page, which
+/// runs it itself. Customize Keyboard still records it. The key leaves the frame's input, so the
+/// other shortcuts don't run it again.
+pub fn window_shortcuts(app: &mut WordApp, ctx: &egui::Context) {
+    if app.canvas.focused || matches!(app.dialog, Some(crate::dialogs::Dialog::CustomizeKeyboard { .. })) {
+        return;
+    }
+    let mut minimize = false;
+    ctx.input_mut(|i| {
+        i.events.retain(|e| match e {
+            egui::Event::Key { key, pressed, modifiers, .. } if ui_shortcut(*key, *modifiers).is_some_and(|(id, _)| id == "ui.minimize") => {
+                minimize |= *pressed;
+                false
+            }
+            _ => true,
+        });
+    });
+    if minimize {
+        let _ = app.run("ui.minimize", json!({}));
     }
 }
 
@@ -132,7 +157,11 @@ pub(super) fn dispatch(app: &mut WordApp, key: Key, m: Modifiers) -> bool {
         if m.alt && !crate::widgets::enabled(app, spec.id) {
             return false;
         }
-        let _ = app.run(spec.id, json!({}));
+        if spec.id == "file.close" {
+            app.close_from_key();
+        } else {
+            let _ = app.run(spec.id, json!({}));
+        }
         return true;
     }
     let Some(name) = name else { return false };

@@ -213,6 +213,14 @@ fn word_default_shortcuts_resolve_function_keys() {
     assert_eq!(id("Shift+F3"), Some("format.changeCase"));
     assert_eq!(id("F12"), Some("file.saveAs"));
     assert_eq!(id("Mod+Alt+M"), Some("review.newComment"));
+    // Word for Mac indents with Control+Shift+M; ⌘M is the system's Minimize.
+    if cfg!(target_os = "macos") {
+        assert_eq!(id("Ctrl+Shift+M"), Some("para.indent"));
+        assert_eq!(id("Mod+M"), None);
+    } else {
+        assert_eq!(id("Mod+M"), Some("para.indent"));
+    }
+    assert_eq!(id("Mod+Shift+M"), Some("para.outdent"));
     assert_eq!(id("Mod+H"), Some("edit.findReplace"));
 }
 

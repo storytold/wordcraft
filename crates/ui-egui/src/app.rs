@@ -215,6 +215,7 @@ impl WordApp {
 
     /// Per-frame logic before layout: control requests, screenshots, shortcuts, file drops.
     pub fn logic(&mut self, ctx: &egui::Context) {
+        unstick_minimized(ctx);
         updates_ui::tick(self, ctx);
         let lang = i18n::Lang::from_pref(&self.ui.language);
         i18n::set_current(lang);
@@ -438,5 +439,17 @@ impl WordApp {
         }
         // The synthetic step this frame took is done even when drawing ended early.
         self.flush_shot_and_synthetic(&ctx);
+    }
+}
+
+/// ⌘M's `Minimized(true)` leaves egui's record of the window saying minimized, and on macOS
+/// egui never reads the window's state back, so after the Dock brings the window back it would
+/// stay "hidden": nothing drawn, no keys. A window with the keyboard isn't minimized, so the
+/// record is put right. (The window's yellow button doesn't go through egui and never sets it.)
+pub(crate) fn unstick_minimized(ctx: &egui::Context) {
+    let stale: Vec<egui::ViewportId> =
+        ctx.input(|i| i.raw.viewports.iter().filter(|(_, v)| v.minimized == Some(true) && v.focused == Some(true)).map(|(id, _)| *id).collect());
+    for id in stale {
+        ctx.send_viewport_cmd_to(id, egui::ViewportCommand::Minimized(false));
     }
 }

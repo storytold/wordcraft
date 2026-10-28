@@ -95,6 +95,7 @@ impl WordApp {
         if moved(self) {
             return;
         }
+        keys::window_shortcuts(self, ctx);
         keys::global_shortcuts(self, ctx);
         if moved(self) {
             return;

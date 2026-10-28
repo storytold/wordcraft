@@ -132,6 +132,11 @@ impl Windows {
         self.driven
     }
 
+    /// The windows are being drawn, each in its own viewport's pass.
+    pub(crate) fn drawing(&self) -> bool {
+        self.showing
+    }
+
     /// The key of the window whose state is in [`WordApp`]'s fields.
     pub(crate) fn shown(&self) -> u64 {
         self.shown
@@ -305,6 +310,21 @@ impl WordApp {
     /// and the host keeps the app running.
     pub fn closes_a_window(&self) -> bool {
         self.window_count() > 1 && !self.quit_requested
+    }
+
+    /// File › Close from its key (⌘W). On macOS it closes the window, as Word for Mac does; in the
+    /// last window, with no menu bar for the app to stay behind in, that quits, asking first about
+    /// unsaved changes as the window's close button does. The Start screen's empty window beside
+    /// others closes as its close button closes it. Elsewhere, and for the Backstage's Close and
+    /// an agent's `file.close`, the last window stays with no page (#1712).
+    pub(crate) fn close_from_key(&mut self) {
+        if cfg!(target_os = "macos") && self.window_count() <= 1 {
+            self.quit();
+        } else if !self.has_document() && self.window_count() > 1 {
+            self.close_window(self.windows.shown());
+        } else if let Err(e) = self.run("file.close", json!({})) {
+            log::warn!("closing: {e}");
+        }
     }
 
     /// Quit the app (the app menu's Quit): ask about every document with unsaved work, each in

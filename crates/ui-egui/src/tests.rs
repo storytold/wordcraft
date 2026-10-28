@@ -7,6 +7,27 @@ fn mod_key(key: egui::Key) -> egui::Event {
     egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }
 }
 
+/// After ⌘M, egui's record says minimized; once the window has the keyboard again the record is
+/// put right, so the window draws and takes keys. A window still in the Dock is left alone.
+#[test]
+fn a_window_back_from_the_dock_is_not_left_minimized() {
+    let ctx = egui::Context::default();
+    let restores = |minimized, focused| {
+        let mut raw = egui::RawInput::default();
+        let root = raw.viewports.entry(egui::ViewportId::ROOT).or_default();
+        root.minimized = Some(minimized);
+        root.focused = Some(focused);
+        let out = ctx.run_ui(raw, |ui| crate::app::unstick_minimized(ui.ctx()));
+        let commands = out.viewport_output.get(&egui::ViewportId::ROOT).map(|v| v.commands.clone()).unwrap_or_default();
+        // No painter here: dropping the font atlas delta unapplied trips an epaint debug assertion.
+        out.drop_without_applying_deltas();
+        commands.contains(&egui::ViewportCommand::Minimized(false))
+    };
+    assert!(restores(true, true), "back from the Dock");
+    assert!(!restores(true, false), "still in the Dock");
+    assert!(!restores(false, true), "never minimized");
+}
+
 /// Issue #14: Mod+- (optional hyphen) also zoomed the whole window out, so it read as "zoom out".
 #[test]
 fn word_shortcuts_do_not_zoom_the_window() {
