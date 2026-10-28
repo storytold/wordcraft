@@ -1,6 +1,6 @@
 # WordCraft parity with Microsoft Word
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-19 · **Change:** trivial (Insert Table of Figures lists any caption label, #3013; previously trivial: Performance row: typing no longer starts render threads on every repaint, #3027; previously trivial: shapes inserted in a row are all kept, #2019; previously trivial: East Asian typography: `w:eastAsianLayout` kept on save, not laid out; previously trivial: Ink to Shape recognises arrows; previously trivial: Windows Magnifier follows the caret onto a new line, #1119; previously trivial: table border drags with Ctrl and Alt, from the left edge and of selected cells, #711; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: all 12 bibliography styles, #383; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-27 · **Change:** trivial (docs truth: headline numbers re-measured (505 / 520 catalog, 648 commands, v0.11.0); previously trivial: Insert Table of Figures lists any caption label, #3013; previously trivial: Performance row: typing no longer starts render threads on every repaint, #3027; previously trivial: shapes inserted in a row are all kept, #2019; previously trivial: East Asian typography: `w:eastAsianLayout` kept on save, not laid out; previously trivial: Ink to Shape recognises arrows; previously trivial: Windows Magnifier follows the caret onto a new line, #1119; previously trivial: table border drags with Ctrl and Alt, from the left edge and of selected cells, #711; previously trivial: table column and row markers on the rulers, #700; previously trivial: table borders and the resize handle drag on the page, #217; previously trivial: all 12 bibliography styles, #383; previously trivial: formatting revisions landed, #41; previously trivial: Draw Table and Eraser landed, #303; previously minor: readiness table with hours per audience; full number back to the additive weighted sum, 60%; mainstream and essentials numbers added; alpha gate checked; previously major: full re-measure against Word for Mac 16.113.4; replaces the parity tables that lived in ROADMAP.md) · **Target:** Microsoft Word (Microsoft 365) for Mac 16.113.4
 
 The authoritative assessment of how close WordCraft is to Microsoft Word. [`ROADMAP.md`](../ROADMAP.md)
 summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklists are
@@ -9,11 +9,11 @@ summarizes it; [`gaps.md`](gaps.md) itemizes every shortfall; the deep checklist
 [`hardware-parity.md`](hardware-parity.md) and [`localization-parity.md`](localization-parity.md).
 The generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 
-## Headline (2026-10-10, origin/main `a99dddc`, v0.4.0 + ~90 merged PRs)
+## Headline (2026-10-27, origin/main `4b8b06fe`, v0.11.0)
 
 | Number | Value | Kind |
 |---|---|---|
-| Ribbon/menu catalog coverage | **487 / 502 (97.0%)** | **measured**: `cargo xtask parity` (re-derived this pass from `crates/engine/src/catalog.rs` against every `CommandSpec::new` id in the source; identical to the checked-in `parity-checklist.md`) |
+| Ribbon/menu catalog coverage | **505 / 520 (97.1%)** | **measured**: `wordcraft-cli parity` (2026-10-27), identical to the checked-in `parity-checklist.md` |
 | Feature breadth (weighted, beyond the ribbon: dialog options, citation styles, proofing languages, chart types, UI languages) | **~80%** | estimated |
 | Feature depth (weighted by use, table below) | **~68%** | estimated |
 | **Ready for real work** (full target) | **~60%** (range 55–63%) | estimated: weighted sum over the dimension table ([By dimension](#by-dimension)) |
@@ -21,9 +21,9 @@ The generated ribbon checklist is [`parity-checklist.md`](parity-checklist.md).
 | **Essentials user** | **~63%** | estimated, same method |
 | Remaining effort to beta | **~150–230 h** of Opus 5.5 agent wall-clock: the blocking beta list ([gaps.md](gaps.md) #1–#7), which lifts file formats, layout, stability and UI enough to reach ~75% | estimated |
 | Remaining effort to full parity with Word desktop | **~750–1,250 h** | estimated |
-| Commands | 431 engine commands (+ `ui.*` commands in the front end) | measured (source count) |
-| Tests | 852 `#[test]` functions + 10 `proptest!` blocks | measured (source count) |
-| Code | ~88,700 lines of Rust in 15 crates, 3 apps and xtask | measured (`wc -l`) |
+| Commands | 648 registered commands (`wordcraft-cli commands`, 2026-10-27) | measured |
+| Tests | 4,611 `#[test]` functions + 23 `proptest!` blocks | measured (source count, 2026-10-27) |
+| Code | ~330,000 lines of Rust in 16 crates, 3 apps and xtask | measured (`wc -l`, 2026-10-27) |
 
 **Stage: alpha.** All six core workflows pass the [alpha gate](roadmap.md#alpha-gate-core-workflows); see [`ROADMAP.md`](../ROADMAP.md) for why it isn't beta, and the distance.
 
@@ -207,9 +207,9 @@ Word. Their weighted sum is the **full ready for real work** number.
 ## Methodology
 
 - **Measured** numbers come from the source on origin/main: the catalog/registry diff (the same
-  computation as `cargo xtask parity`), `#[test]` counts, i18n catalog rows, reader/writer element
+  computation as `cargo xtask parity`, run as `wordcraft-cli parity` and `wordcraft-cli commands` on 2026-10-27 at `4b8b06fe`), `#[test]` counts, i18n catalog rows, reader/writer element
   coverage (`grep` over `crates/docx`, `crates/docbin`, `crates/formats`) and the Word bundle
-  listing. Nothing was built or run this pass (disk budget).
+  listing. The 2026-10-27 refresh built `wordcraft-cli` and ran those two commands; the estimates below are not re-run.
 - **Estimated** numbers are judgements from that evidence plus Word's documented feature set. The
   previous estimate (~62% "real feature parity", 2026-10-06) measured feature depth only. This pass
   splits it into feature depth (67%, up: equations, .doc import, RTL, text boxes, Zotero landed) and
@@ -251,6 +251,7 @@ can be used without committing Word output.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-27 | trivial | Headline numbers re-measured: 505 / 520 catalog features, 648 commands, 4,611 tests, ~330,000 lines |
 | 2026-10-18 | trivial | References: Insert Table of Figures dialog; a table of figures lists any caption label (`TOC \c`), without label and number (`\a`), without page numbers (`\n`) or with them after the text (`\p`); Word's switch order is recognised and the leader kept on update (#3013); no percentage change |
 | 2026-10-15 | trivial | Pictures, shapes, text boxes: Insert › Shapes adds the new shape beside the selection, as Word draws it, so a second shape no longer replaces the first (still selected after its insert) and selected text stays; a picture still replaces a selected picture, as in Word (#2019) |
 | 2026-10-19 | trivial | Performance row: render threads reused while typing (#3027) |
