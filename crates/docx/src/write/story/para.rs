@@ -119,8 +119,12 @@ impl Writer<'_> {
             self.rev_close(w, &props);
         }
         let toc_end = std::mem::take(&mut self.toc_end_here);
+        let toa_end = top && std::mem::take(&mut self.toa_end_here);
         self.para_content(w, p, rels, depth);
-        if toc_end {
+        if top {
+            self.toa_open_here = false;
+        }
+        if toc_end || toa_end {
             w.raw(r#"<w:r><w:fldChar w:fldCharType="end"/></w:r>"#);
         }
         // Move ranges stay open across a moved paragraph mark; others end with the paragraph.

@@ -184,6 +184,27 @@ fn cross_reference_dialog_inserts_a_reference_to_a_custom_label() {
     assert!(instrs(h.state()).iter().any(|i| i.starts_with("REF _Ref")), "{:?}", instrs(h.state()));
 }
 
+/// Mark Citation opens with the selection as the long and the short citation and Cases as the
+/// category, as Word's does; Mark writes the long mark and Mark All the short ones.
+#[test]
+fn mark_citation_dialog_marks_long_and_short_citations() {
+    let mut a = app("Doe v. Roe, 123 So. 3d 456 (Ala. 2020) held it.\nAs in Doe v. Roe, we agree.");
+    a.run("select.text", json!({"text": "Doe v. Roe, 123 So. 3d 456 (Ala. 2020)"})).unwrap();
+    assert_eq!(a.run("references.markCitation", json!({})).unwrap(), json!({"pending": "markCitation"}));
+    let RefsDialog::MarkCitation(mut f) = form(&a) else { panic!() };
+    assert_eq!(
+        (f.long.as_str(), f.short.as_str(), f.category),
+        ("Doe v. Roe, 123 So. 3d 456 (Ala. 2020)", "Doe v. Roe, 123 So. 3d 456 (Ala. 2020)", 1)
+    );
+    f.short = "Doe v. Roe".into();
+    let v = a.run("references.markCitation", f.params(true)).unwrap();
+    assert_eq!(v["marked"], 2, "{v}");
+    assert_eq!(
+        instrs(&a),
+        ["TA \\l \"Doe v. Roe, 123 So. 3d 456 (Ala. 2020)\" \\s \"Doe v. Roe\" \\c 1".to_string(), "TA \\s \"Doe v. Roe\"".to_string()]
+    );
+}
+
 /// #402: Mark Entry opens with the selection; Insert Index opens with Word's defaults and
 /// reads the index back; both write their switches.
 #[test]

@@ -2769,3 +2769,89 @@ fn drop_cap_options_round_trip() {
         (Some(4), Some(true), None, None)
     );
 }
+
+/// A text box in a table of authorities' heading, before its field, doesn't stop the field from
+/// spanning the entries; and a paragraph after the entries in another style (a generated list's
+/// entry here) stays out of the field's result.
+#[test]
+fn table_of_authorities_field_ignores_a_text_box_and_the_paragraphs_after() {
+    let mut d = Document::new();
+    let story = d.add_part(PartKind::TextBox, vec![para_block(Paragraph::with_text("Boxed", CharProps::default()))]);
+    let mut head = Paragraph::with_text("Cases", CharProps::default());
+    head.props.style = Some("TOAHeading".into());
+    head.insert_object(
+        0,
+        InlineObject::Field {
+            instr: "TOA \\h \\c \"1\" \\p".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let tb = InlineObject::Shape {
+        kind: ShapeKind::TextBox,
+        w: 144.0,
+        h: 72.0,
+        fill: None,
+        stroke: None,
+        stroke_width: 0.0,
+        float: Float { wrap: Wrap::Square, h_rel: Anchor::Margin, v_rel: Anchor::Paragraph, ..Default::default() },
+        story: Some(story),
+        freeform: None,
+        effects: Default::default(),
+        extra: Default::default(),
+    };
+    head.insert_object(0, tb, &CharProps::default()).unwrap();
+    let mut entry = Paragraph::with_text("Able v. Baker\t3", CharProps::default());
+    entry.props.style = Some("TableofAuthorities".into());
+    let mut other = Paragraph::with_text("Not an authority", CharProps::default());
+    other.props.style = Some("ListEntry".into());
+    let d = {
+        let mut x = doc_with(vec![head, entry, other]);
+        x.parts = d.parts;
+        x
+    };
+    let xml = document_xml(&wordcraft_docx::write(&d).unwrap());
+    let at = |s: &str| xml.find(s).unwrap_or_else(|| panic!("{s} in {xml}"));
+    assert_eq!(xml.matches("fldCharType=\"end\"").count(), 1, "one field end: {xml}");
+    let end = at("fldCharType=\"end\"");
+    assert!(at(">Boxed<") < at("fldCharType=\"separate\"") && at(">3<") < end && end < at(">Not an authority<"), "{xml}");
+}
+
+/// A table of authorities is saved as Word saves one: its field opens in the TOA Heading
+/// paragraph, before the category's name, and its result runs through the entries, so Word
+/// updates the table in place instead of adding a second one. Reading it back and saving again
+/// gives the same file.
+#[test]
+fn table_of_authorities_field_spans_its_entries() {
+    let mut head = Paragraph::with_text("Cases", CharProps::default());
+    head.props.style = Some("TOAHeading".into());
+    head.insert_object(
+        0,
+        InlineObject::Field {
+            instr: "TOA \\h \\c \"1\" \\p".into(),
+            result: String::new(),
+            locked: false,
+            dirty: false,
+            code: false,
+            form: String::new(),
+        },
+        &CharProps::default(),
+    )
+    .unwrap();
+    let mut entry = Paragraph::with_text("Able v. Baker, 111 So. 2d 222 (Ala. 1990)\t3", CharProps::default());
+    entry.props.style = Some("TableofAuthorities".into());
+    let d = doc_with(vec![head, entry, Paragraph::with_text("Body text.", CharProps::default())]);
+    let bytes = wordcraft_docx::write(&d).unwrap();
+    let xml = document_xml(&bytes);
+    let at = |s: &str| xml.find(s).unwrap_or_else(|| panic!("{s} in {xml}"));
+    let (begin, sep, end) = (at("fldCharType=\"begin\""), at("fldCharType=\"separate\""), at("fldCharType=\"end\""));
+    assert!(begin < sep && sep < at(">Cases<") && at(">Cases<") < at(">3<") && at(">3<") < end && end < at(">Body text.<"), "{xml}");
+    let r = wordcraft_docx::read(&bytes).unwrap();
+    assert_eq!(paras(&r).iter().map(|p| p.plain_text()).collect::<Vec<_>>(), paras(&d).iter().map(|p| p.plain_text()).collect::<Vec<_>>());
+    assert_eq!(document_xml(&wordcraft_docx::write(&r).unwrap()), xml, "a second save changes nothing");
+}

@@ -122,6 +122,10 @@ pub(crate) struct Writer<'d> {
     toc_begin_here: bool,
     /// Close the open TOC field at the end of the paragraph being written.
     toc_end_here: bool,
+    /// The paragraph being written opens a table of authorities' field that spans its entries.
+    toa_open_here: bool,
+    /// Close the open table of authorities' field at the end of the paragraph being written.
+    toa_end_here: bool,
     /// Byte offsets of the content control markers the next paragraph writes inline.
     inline_controls: Vec<usize>,
     /// Media keys actually referenced by a written drawing.

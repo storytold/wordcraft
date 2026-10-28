@@ -1,18 +1,21 @@
 use super::caption::{CaptionForm, caption_ui, new_label_ui, numbering_ui};
+use super::citation::{CitationForm, citation_ui};
 use super::cross_ref::{CrossRefForm, cross_ref_ui};
 use super::index::{IndexForm, MarkForm, index_ui, mark_ui};
 use super::sources::{SourceForm, source_ui, sources_ui};
 use super::toc::{FiguresForm, TocForm, figures_ui, toc_options_ui, toc_styles_ui, toc_ui};
 use super::{RefsDialog, Ui, WordApp};
 
-/// The dialog `ui.dialog` opens by `name`: `caption`, `crossReference`, `index`, `markEntry`, `toc`,
-/// `tableOfFigures`, `sourceManager` or `createSource` (which inserts a citation of the new source).
+/// The dialog `ui.dialog` opens by `name`: `caption`, `crossReference`, `index`, `markEntry`,
+/// `markCitation`, `toc`, `tableOfFigures`, `sourceManager` or `createSource` (which inserts a
+/// citation of the new source).
 pub fn open(name: &str, app: &WordApp) -> Option<RefsDialog> {
     Some(match name {
         "caption" => RefsDialog::Caption(CaptionForm::read(app)),
         "crossReference" => RefsDialog::CrossRef(CrossRefForm::read(app, "heading")),
         "index" => RefsDialog::Index(IndexForm::read(app)),
         "markEntry" => RefsDialog::MarkEntry(MarkForm::read(app)),
+        "markCitation" => RefsDialog::MarkCitation(CitationForm::read(app)),
         "toc" => RefsDialog::Toc(TocForm::read(app)),
         "tableOfFigures" => RefsDialog::Figures(FiguresForm::read(app)),
         "sourceManager" => RefsDialog::Sources { selected: None },
@@ -30,6 +33,7 @@ pub fn body(app: &mut WordApp, ui: &mut Ui, d: &mut RefsDialog) -> bool {
         RefsDialog::CrossRef(f) => cross_ref_ui(app, ui, f),
         RefsDialog::Index(f) => index_ui(app, ui, f),
         RefsDialog::MarkEntry(f) => mark_ui(app, ui, f),
+        RefsDialog::MarkCitation(f) => citation_ui(app, ui, f),
         RefsDialog::Toc(f) => toc_ui(app, ui, f),
         RefsDialog::TocOptions { form, was } => toc_options_ui(app, ui, form, was),
         RefsDialog::TocStyles { form, level } => toc_styles_ui(app, ui, form, level),

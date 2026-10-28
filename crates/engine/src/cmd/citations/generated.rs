@@ -1,3 +1,4 @@
+use super::authorities::{TOA_ENTRY_STYLE, add_toa_entry_style, is_toa, toa_entries, toa_heading};
 use super::cross_refs::caption_label;
 use super::render::entry;
 use super::sources::bib_order;
@@ -148,25 +149,40 @@ fn caption_body(p: &Paragraph, label: &str) -> String {
 
 pub(super) const ENTRY_STYLE: &str = "ListEntry";
 
-/// Rebuild every generated list.
+/// Rebuild every generated list. Tables of authorities are built twice: rebuilding one moves the
+/// pages below it, and a table read from a file loses its old result as it is rebuilt, so the
+/// second pass reads the pages the finished document has.
 pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
+    if update_lists(s, false)? {
+        s.touch();
+        update_lists(s, true)?;
+    }
+    Ok(())
+}
+
+/// One pass of [`update_generated`] over every list, or with `toa_only` over the tables of
+/// authorities; whether it rebuilt a table of authorities.
+fn update_lists(s: &mut Session, toa_only: bool) -> Result<bool, CmdError> {
+    let mut any_toa = false;
     let mut i = 0;
     while i < s.doc.body.len() {
         let kind = s.doc.body.get(i).and_then(|b| b.as_para()).and_then(list_kind);
-        let Some(kind) = kind else {
+        let Some(kind) = kind.filter(|k| !toa_only || is_toa(k)) else {
             i += 1;
             continue;
         };
+        any_toa |= is_toa(&kind);
         add_entry_style(s);
         if kind.starts_with("INDEX") {
             crate::cmd::index::rebuild(s, i, None)?;
             i += 1;
             continue;
         }
-        // A table of figures from Word can hold the list it saved as the field's result, in the
-        // field's own paragraph: the rebuilt entries replace it, keeping its leader.
+        // A table of figures or of authorities from Word can hold the list it saved as the field's
+        // result, in the field's own paragraph: the rebuilt entries replace it, keeping its leader.
+        let toa = is_toa(&kind);
         let mut saved_leader = None;
-        if figures_label(&kind).is_some()
+        if (figures_label(&kind).is_some() || toa)
             && let Ok(p) = s.doc.para_mut(StoryRef::Body, &Path::top(i))
         {
             let leader = p.props.tabs.as_ref().and_then(|t| t.last()).map(|t| t.leader);
@@ -174,7 +190,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
             for o in &mut p.objects {
                 if let InlineObject::Field { instr, result, .. } = o
                     && !result.is_empty()
-                    && figures_label(instr).is_some()
+                    && (figures_label(instr).is_some() || is_toa(instr))
                 {
                     result.clear();
                     cleared = true;
@@ -185,23 +201,44 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
                 p.touch();
             }
         }
-        // Remove old entries, keeping their tab leader.
-        let leader = s
-            .doc
-            .body
-            .get(i + 1)
+        // Remove old entries, keeping their tab leader. A table of authorities Word built has its
+        // entries in Word's Table of Authorities style; the rebuilt ones take it too.
+        let entry_style = if toa {
+            add_toa_entry_style(s);
+            TOA_ENTRY_STYLE
+        } else {
+            ENTRY_STYLE
+        };
+        // A table of authorities' entries are in the Table of Authorities style only, so a list
+        // in WordCraft's List Entry style right after the table is not taken as its entries. The
+        // one exception is a table WordCraft made before it used Word's style: its field is a bare
+        // `TOA` (Word and Insert Table of Authorities always write `\c`) and its entries are in
+        // List Entry. Those are replaced once, in Word's style, and then go by that style.
+        let legacy_toa = toa
+            && FieldCode::parse(&kind).arg('c').is_none()
+            && s.doc.body.get(i + 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE));
+        let old_style = if toa && !legacy_toa { TOA_ENTRY_STYLE } else { ENTRY_STYLE };
+        let is_entry = |b: Option<&Block>| b.and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(old_style));
+        let leader = Some(s.doc.body.get(i + 1).map(|b| &**b))
+            .filter(|b| is_entry(*b))
+            .flatten()
             .and_then(|b| b.as_para())
-            .filter(|p| p.props.style.as_deref() == Some(ENTRY_STYLE))
             .and_then(|p| p.props.tabs.as_ref()?.last().map(|t| t.leader))
             .or(saved_leader)
             .unwrap_or(TabLeader::Dot);
-        while s.doc.body.get(i + 1).and_then(|b| b.as_para()).is_some_and(|p| p.props.style.as_deref() == Some(ENTRY_STYLE)) {
+        while is_entry(s.doc.body.get(i + 1).map(|b| &**b)) {
             s.doc.remove_block(StoryRef::Body, &Path::top(i + 1))?;
         }
+        if toa {
+            toa_heading(s, i, &kind)?;
+        }
+        // Pages are read from the layout: lay out the document as it is now, without the old
+        // entries, or each mark would be looked up a paragraph off.
+        s.touch();
         let lines = entries_for(s, &kind);
         let width = crate::cmd::page::sect(s).text_width();
         for (k, (text, hanging)) in lines.into_iter().enumerate() {
-            let mut para = Paragraph::with_text(&text, CharProps::default()).styled(ENTRY_STYLE);
+            let mut para = Paragraph::with_text(&text, CharProps::default()).styled(entry_style);
             if hanging {
                 para.props.indent_left = Some(36.0);
                 para.props.indent_first = Some(-36.0);
@@ -214,7 +251,7 @@ pub fn update_generated(s: &mut Session) -> Result<(), CmdError> {
         i += 1;
     }
     s.touch();
-    Ok(())
+    Ok(any_toa)
 }
 
 /// Add the style generated list entries take, if the document doesn't have it yet. Only when a
@@ -241,6 +278,9 @@ pub(super) fn page_of(s: &mut Session, pos: &Pos) -> u32 {
 
 /// Entry lines (text, hanging indent) for a generated list.
 fn entries_for(s: &mut Session, kind: &str) -> Vec<(String, bool)> {
+    if is_toa(kind) {
+        return toa_entries(s, kind);
+    }
     if kind.starts_with("BIBLIOGRAPHY") {
         let st = style(&s.bib_style);
         return bib_order(&s.doc, st, crate::cmd::default_lang(s))

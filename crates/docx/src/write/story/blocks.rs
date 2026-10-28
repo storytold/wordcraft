@@ -1,4 +1,4 @@
-use super::toc::written_toc_span;
+use super::toc::{toa_spans, written_toc_span};
 use super::{Block, Blocks, CharProps, MAX_DEPTH, PartRels, Table, W, Writer, tblpr, tcpr, trpr, twips};
 
 impl Writer<'_> {
@@ -23,11 +23,18 @@ impl Writer<'_> {
         }
         let plan = crate::write::sdt::plan(bl);
         let toc = if top { written_toc_span(bl) } else { None };
+        let toas = if top { toa_spans(bl) } else { Vec::new() };
         // Whether the heading's TOC field was written and still needs its end.
         let mut toc_field_open = false;
         for (i, b) in bl.iter().enumerate() {
             for c in plan.opens.get(i).into_iter().flatten() {
                 crate::write::sdt::open(w, c);
+            }
+            // Only the body's own blocks: a text box in a TOA heading writes blocks of its own,
+            // which must not clear the heading's flags before its field is written.
+            if top {
+                self.toa_open_here = toas.iter().any(|(start, _)| *start == i);
+                self.toa_end_here = toas.iter().any(|(_, end)| *end == i);
             }
             self.update_toc_before_block(i, toc, toc_field_open, w);
             match &**b {

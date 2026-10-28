@@ -12,12 +12,14 @@ use super::references::FieldCode;
 use super::{delete_selection, sel_result};
 use crate::{CmdError, CmdResult, CommandSpec, Selection, Session, p};
 
+mod authorities;
 mod cross_refs;
 mod generated;
 mod render;
 mod sources;
 mod styles;
 
+use authorities::{insert_authorities, mark_citation};
 use cross_refs::cross_ref;
 pub use cross_refs::{caption_labels, ref_targets};
 #[cfg(test)]
@@ -62,21 +64,13 @@ pub fn specs() -> Vec<CommandSpec> {
             update_generated(s)?;
             sel_result(s)
         }),
-        CommandSpec::new("references.markCitation", "Mark Citation", "References › Table of Authorities", |s, v| {
-            let entry = p::str(v, "entry").map(str::to_string).unwrap_or_else(|| s.selected_text().trim().to_string());
-            if entry.is_empty() {
-                return Err(CmdError::Params("select a citation or give `entry`".into()));
-            }
-            let (_, b) = s.sel.ordered();
-            s.doc.insert_object(&b, InlineObject::Field { instr: format!("TA \\l \"{}\"", entry.replace('"', "")), result: String::new(), locked: false, dirty: false, code: false, form: String::new() }, &CharProps { hidden: Some(true), ..Default::default() })?;
-            Ok(json!({"entry": entry}))
-        })
-        .params(r#"{"entry"?: string}"#)
-        .key(super::non_mac("Alt+Shift+I")),
-        CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", |s, _| {
-            generated_list(s, "TOA", "Table of Authorities")?;
-            sel_result(s)
-        }),
+        CommandSpec::new("references.markCitation", "Mark Citation", "References › Table of Authorities", mark_citation)
+            .params(
+                r#"{"long"?: string (the citation as the table lists it; default: the selected text), "short"?: string (default: the long citation), "category"?: 1-16 (1 Cases, 2 Statutes, 3 Other Authorities, 4 Rules, 5 Treatises, 6 Regulations, 7 Constitutional Provisions; default 1), "all"?: bool (Mark All: also every other place the long or short citation appears, exactly as typed; at most 1000 marks, `capped` in the result says more were left), "entry"?: string (same as long)}"#,
+            )
+            .key(super::non_mac("Alt+Shift+I")),
+        CommandSpec::new("references.tableOfAuthorities", "Insert Table of Authorities", "References › Table of Authorities", insert_authorities)
+            .params(r#"{"category"?: 0-16 (0, the default: All, one table per category that has citations, as Word inserts them), "passim"?: bool (Use passim: five pages or more read "passim"; default true)}"#),
         CommandSpec::new("references.updateAuthorities", "Update Table", "References › Table of Authorities", |s, _| {
             update_generated(s)?;
             sel_result(s)

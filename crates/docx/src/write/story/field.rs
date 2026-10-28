@@ -1,4 +1,4 @@
-use super::toc::is_toc;
+use super::toc::{is_toa, is_toc};
 use super::{CharProps, W, Writer, rpr};
 
 pub(super) struct FieldData<'a> {
@@ -16,6 +16,15 @@ impl Writer<'_> {
             // A TOC heading's field opens in the first entry and closes after the last (see `toc_span`).
             self.toc_hold_end = false;
             self.toc_field = Some((instr.to_string(), locked, dirty, props.clone()));
+            return;
+        }
+        if self.toa_open_here && is_toa(instr) {
+            // A table of authorities' field spans its heading's text and its entries, as Word
+            // writes it (see `toa_spans`): it ends after the last entry.
+            self.toa_open_here = false;
+            self.rev_open(w, props);
+            self.field_start(w, instr, locked, dirty, form, props);
+            self.rev_close(w, props);
             return;
         }
         if let Some(e) = wordcraft_doc::eq::Enclosure::parse(instr) {

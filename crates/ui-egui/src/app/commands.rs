@@ -946,6 +946,8 @@ fn input_dialog_references(id: &str, params: &Value) -> Option<&'static str> {
         "references.index" if no_settings(params) => Some("index"),
         "references.tableOfFigures" if no_settings(params) => Some("tableOfFigures"),
         "references.markEntry" if !has_value(params, "entry") => Some("markEntry"),
+        // Mark Citation without a citation shows its dialog, as Word does.
+        "references.markCitation" if !has_value(params, "long") && !has_value(params, "entry") => Some("markCitation"),
         "references.sources" if no_settings(params) => Some("sourceManager"),
         "references.citation" if !has_value(params, "tag") && !has_value(params, "source") => Some("createSource"),
         _ => None,

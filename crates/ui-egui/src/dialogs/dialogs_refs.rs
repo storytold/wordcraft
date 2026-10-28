@@ -1,9 +1,9 @@
 //! References dialogs (#402): Caption (with New Label and Numbering), Cross-reference (#916),
-//! Index and Mark Index Entry, Custom Table of Contents (with Options and the TOC styles), Table of
-//! Figures (#3013), and the Source Manager with Create / Edit Source. Each fills a form from the
-//! session and ends in a command (`references.caption`, `insert.crossReference`, `references.index`,
-//! `references.markEntry`, `references.toc`, `references.tableOfFigures`, `references.sources`,
-//! `references.citation`), so
+//! Index and Mark Index Entry, Mark Citation, Custom Table of Contents (with Options and the TOC
+//! styles), Table of Figures (#3013), and the Source Manager with Create / Edit Source. Each fills a
+//! form from the session and ends in a command (`references.caption`, `insert.crossReference`,
+//! `references.index`, `references.markEntry`, `references.markCitation`, `references.toc`,
+//! `references.tableOfFigures`, `references.sources`, `references.citation`), so
 //! agents get the same result without the dialog. Shown through [`crate::dialogs::Dialog::Refs`].
 
 use egui::{Sense, Ui, vec2};
@@ -19,6 +19,7 @@ use crate::file_dialogs::{AfterPick, Asked, FileDialogRequest};
 use crate::theme::{Tokens, semibold};
 
 mod caption;
+mod citation;
 mod common;
 mod cross_ref;
 mod index;
@@ -27,6 +28,7 @@ mod sources;
 mod toc;
 
 pub use caption::CaptionForm;
+pub use citation::CitationForm;
 pub use cross_ref::CrossRefForm;
 #[cfg(test)]
 use cross_ref::ref_types;
@@ -52,6 +54,7 @@ pub enum RefsDialog {
     CrossRef(CrossRefForm),
     Index(IndexForm),
     MarkEntry(MarkForm),
+    MarkCitation(CitationForm),
     Toc(TocForm),
     /// Table of Contents › Options…; `was` comes back on Cancel.
     TocOptions {
@@ -80,6 +83,7 @@ impl RefsDialog {
             RefsDialog::CrossRef(_) => "crossReference",
             RefsDialog::Index(_) => "index",
             RefsDialog::MarkEntry(_) => "markEntry",
+            RefsDialog::MarkCitation(_) => "markCitation",
             RefsDialog::Toc(_) => "toc",
             RefsDialog::TocOptions { .. } => "tocOptions",
             RefsDialog::TocStyles { .. } => "tocStyles",
@@ -99,6 +103,7 @@ impl RefsDialog {
             RefsDialog::CrossRef(_) => "Cross-reference",
             RefsDialog::Index(_) => "Index",
             RefsDialog::MarkEntry(_) => "Mark Index Entry",
+            RefsDialog::MarkCitation(_) => "Mark Citation",
             RefsDialog::Toc(_) => "Table of Contents",
             RefsDialog::TocOptions { .. } => "Table of Contents Options",
             RefsDialog::TocStyles { .. } => "Table of Contents Styles",

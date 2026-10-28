@@ -1,4 +1,4 @@
-use super::{Blocks, InlineObject, W, Writer};
+use super::{Block, Blocks, InlineObject, W, Writer};
 
 impl Writer<'_> {
     pub(super) fn update_toc_before_block(&mut self, i: usize, toc: Option<(usize, usize)>, toc_field_open: bool, w: &mut W) {
@@ -32,6 +32,41 @@ const TOC_SDT_OPEN: &str =
 
 pub(super) fn is_toc(instr: &str) -> bool {
     instr.split_whitespace().next().is_some_and(|k| k.eq_ignore_ascii_case("TOC"))
+}
+
+pub(super) fn is_toa(instr: &str) -> bool {
+    instr.split_whitespace().next().is_some_and(|k| k.eq_ignore_ascii_case("TOA"))
+}
+
+/// The tables of authorities the engine builds: a paragraph holding an empty `TOA` field, then
+/// its entries (Word's Table of Authorities style; nothing else is taken as one), then, as Word saves
+/// one, maybe an empty paragraph its field ends in. Returns (heading, last paragraph) for each,
+/// so the field can be written spanning the heading's text and the entries, as Word does.
+pub(super) fn toa_spans(bl: &Blocks) -> Vec<(usize, usize)> {
+    let entry = |b: &Block| b.as_para().is_some_and(|p| p.section.is_none() && matches!(p.props.style.as_deref(), Some("TableofAuthorities")));
+    let mut out = Vec::new();
+    for (start, b) in bl.iter().enumerate() {
+        let heading = b.as_para().is_some_and(|p| {
+            p.section.is_none()
+                && p.objects.iter().any(|o| matches!(o, InlineObject::Field { instr, result, .. } if is_toa(instr) && result.is_empty()))
+        });
+        if !heading {
+            continue;
+        }
+        let entries = bl[start + 1..].iter().take_while(|b| entry(b)).count();
+        let mut end = start + entries;
+        if let Some(p) = bl.get(end + 1).and_then(|b| b.as_para())
+            && p.section.is_none()
+            && p.text.is_empty()
+            && p.objects.is_empty()
+        {
+            end += 1;
+        }
+        if end > start {
+            out.push((start, end));
+        }
+    }
+    out
 }
 
 /// The body TOC the writer wraps in Word's Table of Contents control (`toc_span`): not one whose
