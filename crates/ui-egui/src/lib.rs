@@ -53,6 +53,7 @@ pub mod previews;
 pub mod print_page;
 pub mod printing;
 pub mod read_aloud;
+mod report_issue;
 pub mod ribbon;
 pub mod ribbon_fit;
 pub mod ruler_tabs;

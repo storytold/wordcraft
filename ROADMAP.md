@@ -1,6 +1,6 @@
 # WordCraft roadmap
 
-> **Highlight update:** 2026-10-25 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
+> **Highlight update:** 2026-10-27 · Highlight shortcut toggles the last chosen colour off when the whole selection has it; explicit colour commands remain setters (#4085). Readiness estimates unchanged.
 
 **Stage: alpha** · next: beta, ~15 points (60% → 75% ready for real work) and ~150–230 h away
 
@@ -140,6 +140,7 @@ Ranked, to beta (detail and remaining milestones in [docs/roadmap.md](docs/roadm
 
 ## Progress log
 
+- 2026-10-27: Help › Report an Issue… (`help.reportIssue`) opens a new GitHub issue with the version, platform and the document's file type filled in (never its name, path or contents).
 - 2026-10-22: View › Window › New Window opens a second window on the document (desktop). The windows are titled `Name:1` and `Name:2` and each keeps its own caret, scroll position, zoom and view; edits and Undo are the document's and show in both. Closing one of them asks nothing; the last one asks about unsaved changes, and quitting asks once per document.
 - 2026-10-22: One native window per open document on the desktop. File › New and Open (from the ribbon, File, shortcuts, the file manager, the command line or the control channel) open the document in a window of its own, focused and placed a step below and right of the last one; opening a file replaces a blank document nobody has used in its own window, and a file that is already open brings its window to the front. Each window keeps its own ribbon tab, File page, dialogs, panes, scroll position and composition. View › Window › Switch Windows lists the windows and brings the chosen one forward. File › Close and a window's close button close that window, asking about unsaved changes first; the last window stays open with no document. Quitting asks about each document with unsaved changes in its own window, and Cancel keeps everything open. The control channel's input and screenshots go to the window focused last. The web app keeps one window.
 - 2026-10-22: Recovery covers every open document. Each dirty document keeps its own copy, written on the same ten-second cadence whether it is shown or not; closing a document without saving deletes its copy, as saving does, and a clean exit deletes the copies of every document saved or closed since its last copy. File › Recover lists only copies no open document keeps, and Restore opens a copy as another document (or in place of an untouched blank one), so it never replaces work. After a crash with several unsaved documents, the next start lists all of them.

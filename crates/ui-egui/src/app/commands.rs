@@ -731,6 +731,7 @@ impl WordApp {
                         .into(),
                 ));
             }
+            "help.reportIssue" => crate::report_issue::run(self),
             "ui.discord" => {
                 self.canvas.open_url = Some("https://discord.gg/artcraft".into());
                 json!({})
@@ -987,6 +988,7 @@ pub(crate) fn works_without_document(id: &str) -> bool {
             | "file.open"
             | "file.close"
             | "file.options"
+            | "help.reportIssue"
             | "file.setAuthor"
             | "font.add"
             | "font.list"
