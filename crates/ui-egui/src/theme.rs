@@ -920,6 +920,20 @@ mod tests {
         }
     }
 
+    /// The test root declares egui's `default_fonts` and `monochrome_emoji_fonts` features
+    /// explicitly (kittest's own dev-dependencies do not propagate). WordCraft inserts Inter at
+    /// the front and SourceSans after egui's complete default fallback block, including the
+    /// monochrome emoji faces. Production keeps only `default_fonts` through eframe.
+    #[test]
+    fn interface_font_order_keeps_test_default_fonts_explicit() {
+        let defs = super::font_definitions(false, false);
+        let prop = &defs.families[&egui::FontFamily::Proportional];
+        assert_eq!(
+            prop.iter().take(6).map(String::as_str).collect::<Vec<_>>(),
+            ["Inter", "Ubuntu-Light", "egui-icons", "NotoEmoji-Regular", "emoji-icon-font", "SourceSans"]
+        );
+    }
+
     /// #565: the composition of an input method (Bangla through ibus) drew as boxes because only the
     /// interface fonts were used. Faces found for the uncovered characters are added as fallbacks,
     /// once, and not for characters the interface fonts draw.
@@ -969,10 +983,9 @@ mod tests {
     fn interface_colours_come_from_the_theme() {
         let banned = ["fill(crate::theme::APP_COLOR)", "0x58, 0x65, 0xF2", "0x47, 0x52, 0xC4", "0xFF, 0xF1, 0x76", "0xD1, 0x3B, 0x3B"];
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
+        for path in crate::rust_sources(&dir) {
             let name = path.file_name().unwrap().to_string_lossy().to_string();
-            if !name.ends_with(".rs") || name == "theme.rs" || name == "icons.rs" {
+            if path == dir.join("theme.rs") || path == dir.join("icons.rs") {
                 continue;
             }
             let src = std::fs::read_to_string(&path).unwrap();
@@ -1014,11 +1027,8 @@ mod tests {
         ctx.run_ui(egui::RawInput::default(), |_| {}).drop_without_applying_deltas();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         let mut symbols = BTreeSet::new();
-        for entry in std::fs::read_dir(&dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|e| e != "rs") {
-                continue;
-            }
+        // The i18n module's literals are catalog and pseudo-locale test text, not interface text.
+        for path in crate::rust_sources(&dir).into_iter().filter(|p| !p.starts_with(dir.join("i18n"))) {
             let code = std::fs::read_to_string(&path).unwrap();
             // Characters inside string literals, line by line (good enough for this code base).
             for line in code.lines().filter(|l| !l.trim_start().starts_with("//")) {
@@ -1027,7 +1037,7 @@ mod tests {
                         symbols.extend(
                             part.chars()
                                 .filter(|c| !c.is_ascii() && !c.is_alphabetic() && !c.is_whitespace())
-                                .map(|c| (c, path.file_name().unwrap().to_string_lossy().to_string())),
+                                .map(|c| (c, path.strip_prefix(&dir).unwrap().to_string_lossy().replace('\\', "/"))),
                         );
                     }
                 }
@@ -1038,7 +1048,7 @@ mod tests {
         // The ➢ bullet is a value for `para.bullets`; its menu tile draws the shape instead.
         let exempt = |c: char, file: &str| match file {
             "equation_tab.rs" => matches!(c, '≜' | '┬'),
-            "ribbon.rs" => c == '➢',
+            _ if file == "ribbon.rs" || file.starts_with("ribbon/") => c == '➢',
             _ => false,
         };
         symbols.retain(|(c, file)| !exempt(*c, file));

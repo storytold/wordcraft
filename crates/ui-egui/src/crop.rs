@@ -78,14 +78,13 @@ fn axis(len: f32, lo: f32, hi: f32, grab: i8, d: f32) -> (f32, f32, f32, f32) {
 /// Hostile numbers (non-finite, non-positive sizes) leave it as it was; sizes are taken within
 /// 1–4000 pt, as `picture.crop` takes them.
 pub fn cropped(w: f32, h: f32, crop: [f32; 4], handle: Handle, dx: f32, dy: f32) -> Cropped {
-    cropped_on_screen(w, h, crop, false, false, handle, dx, dy)
+    cropped_on_screen((w, h), crop, (false, false), handle, (dx, dy))
 }
 
 /// [`cropped`] for a picture flipped left to right (`flip_h`) and/or top to bottom (`flip_v`):
 /// `handle` and the drag are on screen, the crop is the source's. Flipped, the side under a
 /// handle is the source's opposite side, so that's the one that moves.
-#[allow(clippy::too_many_arguments)]
-pub fn cropped_on_screen(w: f32, h: f32, crop: [f32; 4], flip_h: bool, flip_v: bool, handle: Handle, dx: f32, dy: f32) -> Cropped {
+pub fn cropped_on_screen((w, h): (f32, f32), crop: [f32; 4], (flip_h, flip_v): (bool, bool), handle: Handle, (dx, dy): (f32, f32)) -> Cropped {
     let fin = |x: f32| if x.is_finite() { x } else { 0.0 };
     let crop = crop.map(|c| fin(c).clamp(0.0, MAX_SIDE));
     let (w, h) = (fin(w), fin(h));
@@ -139,7 +138,7 @@ impl CropDrag {
         }
         self.moved = true;
         let d = (at - self.press) / scale.max(0.01);
-        self.now = cropped_on_screen(self.w, self.h, self.crop, self.flip_h, self.flip_v, self.handle, d.x, d.y);
+        self.now = cropped_on_screen((self.w, self.h), self.crop, (self.flip_h, self.flip_v), self.handle, (d.x, d.y));
     }
 }
 
@@ -285,7 +284,7 @@ pub fn cursor(app: &WordApp, layout: &DocLayout, pages: &[Rect], scale: f32, at:
 /// it can't be decoded (then the cropped-away area is just dimmed).
 fn source(app: &WordApp, ctx: &egui::Context, media: &str) -> Option<egui::TextureHandle> {
     let bytes = app.session.doc.media.get(media)?;
-    let id = egui::Id::new(("crop_source", media, bytes.len()));
+    let id = egui::Id::unique(("crop_source", media, bytes.len()));
     if let Some(t) = ctx.data(|d| d.get_temp::<Option<egui::TextureHandle>>(id)) {
         return t;
     }
@@ -476,15 +475,15 @@ mod tests {
     #[test]
     fn flipped_pictures_trim_the_side_under_the_handle() {
         let c = |crop, w, h, dx, dy| Cropped { crop, w, h, dx, dy };
-        let r = cropped_on_screen(200.0, 100.0, [0.0; 4], true, false, H(-1, 0), 50.0, 0.0);
+        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (true, false), H(-1, 0), (50.0, 0.0));
         assert!(close(r, c([0.0, 0.0, 0.25, 0.0], 150.0, 100.0, 50.0, 0.0)), "flip H, left handle: {r:?}");
-        let r = cropped_on_screen(200.0, 100.0, [0.0; 4], true, false, H(1, 0), -40.0, 0.0);
+        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (true, false), H(1, 0), (-40.0, 0.0));
         assert!(close(r, c([0.2, 0.0, 0.0, 0.0], 160.0, 100.0, 0.0, 0.0)), "flip H, right handle: {r:?}");
-        let r = cropped_on_screen(200.0, 100.0, [0.0; 4], false, true, H(0, -1), 0.0, 10.0);
+        let r = cropped_on_screen((200.0, 100.0), [0.0; 4], (false, true), H(0, -1), (0.0, 10.0));
         assert!(close(r, c([0.0, 0.0, 0.0, 0.1], 200.0, 90.0, 0.0, 10.0)), "flip V, top handle: {r:?}");
         // Already cropped on the source's left (the screen's right), flipped: the left handle
         // restores nothing there and trims the right of the source.
-        let r = cropped_on_screen(160.0, 100.0, [0.2, 0.0, 0.0, 0.0], true, true, H(-1, -1), 20.0, 10.0);
+        let r = cropped_on_screen((160.0, 100.0), [0.2, 0.0, 0.0, 0.0], (true, true), H(-1, -1), (20.0, 10.0));
         assert!(close(r, c([0.2, 0.0, 0.1, 0.1], 140.0, 90.0, 20.0, 10.0)), "flip both, corner: {r:?}");
     }
 
