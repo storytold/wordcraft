@@ -109,7 +109,7 @@ pub fn parse(instr: &str) -> StyleRefCode {
 }
 
 /// What the search looks for.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 enum Target {
     Para(String),
     Char(String),
@@ -147,6 +147,9 @@ pub enum At {
 pub struct StyleIndex {
     entries: Vec<Entry>,
     by_path: HashMap<Path, usize>,
+    /// Ascending paragraph indexes for each paragraph or character style. A paragraph occurs
+    /// once per character style even when that style has several separate runs in it.
+    by_style: HashMap<Target, Vec<usize>>,
     /// Lower-cased style id or name → (id, character style).
     styles: HashMap<String, (String, bool)>,
 }
@@ -167,6 +170,7 @@ impl StyleIndex {
         let mut ordinals: HashMap<String, u32> = HashMap::new();
         let mut entries = Vec::new();
         let mut by_path = HashMap::new();
+        let mut by_style: HashMap<Target, Vec<usize>> = HashMap::new();
         for path in doc.para_paths(StoryRef::Body) {
             let Some(p) = doc.para(StoryRef::Body, &path) else { continue };
             let style = p.props.style.clone().unwrap_or_else(|| "Normal".to_string());
@@ -206,10 +210,18 @@ impl StyleIndex {
                 }
                 off = end;
             }
-            by_path.insert(path.clone(), entries.len());
+            let index = entries.len();
+            by_style.entry(Target::Para(style.clone())).or_default().push(index);
+            for (style, _) in &runs {
+                let indexes = by_style.entry(Target::Char(style.clone())).or_default();
+                if indexes.last() != Some(&index) {
+                    indexes.push(index);
+                }
+            }
+            by_path.insert(path.clone(), index);
             entries.push(Entry { path, style, text: clean(&p.plain_text()), runs, label, levels, ordinal });
         }
-        StyleIndex { entries, by_path, styles }
+        StyleIndex { entries, by_path, by_style, styles }
     }
 
     /// The entry of the body paragraph at `path`.
@@ -227,8 +239,10 @@ impl StyleIndex {
         match range {
             Some((first, last)) => At::Page { first, last: Some(last) },
             None => {
-                let first = self.entries.iter().position(|e| e.path.0.first().is_some_and(|b| *b as usize >= first_block));
-                At::Page { first: first.unwrap_or(self.entries.len()), last: None }
+                // Body paths are in document order, including paragraphs inside tables, so
+                // their top-level block indexes never decrease.
+                let first = self.entries.partition_point(|e| e.path.0.first().is_none_or(|b| (*b as usize) < first_block));
+                At::Page { first, last: None }
             }
         }
     }
@@ -261,28 +275,35 @@ impl StyleIndex {
         }
     }
 
+    /// The same nearest match as a document-order walk, searching only entries of this style.
+    fn find_match(&self, target: &Target, at: At, last: bool) -> Option<(usize, bool)> {
+        let candidates = self.by_style.get(target)?;
+        match at {
+            At::Page { first, last: end } => {
+                let start = candidates.partition_point(|i| *i < first);
+                let end = end.map_or(start, |end| candidates.partition_point(|i| *i <= end));
+                let on_page = candidates.get(start..end).and_then(|on| if last { on.last() } else { on.first() });
+                if let Some(i) = on_page {
+                    return Some((*i, true));
+                }
+                if let Some(i) = candidates.get(..start).and_then(|before| before.last()) {
+                    return Some((*i, false));
+                }
+                candidates.get(end).map(|i| (*i, true))
+            }
+            At::Body(i) => {
+                let after = candidates.partition_point(|k| *k <= i);
+                candidates.get(..after).and_then(|before| before.last()).map(|k| (*k, false)).or_else(|| candidates.get(after).map(|k| (*k, true)))
+            }
+        }
+    }
+
     /// The field's result.
     pub fn eval(&self, instr: &str, at: At) -> String {
         let code = parse(instr);
         let Some(target) = self.target(&code.style) else { return NO_TEXT.to_string() };
-        let n = self.entries.len();
-        // Candidates in search order, with whether each one counts as below the field (lazy:
-        // headers evaluate this for every page on every pass).
-        let order: Box<dyn Iterator<Item = (usize, bool)>> = match at {
-            At::Page { first, last } => {
-                let on = match last {
-                    Some(l) if first <= l => first..l.min(n.saturating_sub(1)).saturating_add(1),
-                    _ => 0..0,
-                };
-                let after = last.map_or(first, |l| l.saturating_add(1));
-                let page: Box<dyn Iterator<Item = usize>> = if code.last { Box::new(on.rev()) } else { Box::new(on) };
-                Box::new(page.map(|i| (i, true)).chain((0..first.min(n)).rev().map(|i| (i, false))).chain((after..n).map(|i| (i, true))))
-            }
-            At::Body(i) => Box::new((0..=i.min(n.saturating_sub(1))).rev().map(|k| (k, false)).chain((i.saturating_add(1)..n).map(|k| (k, true)))),
-        };
-        let Some((i, text, below)) = order.into_iter().find_map(|(i, below)| self.text_of(i, &target).map(|t| (i, t, below))) else {
-            return NO_TEXT.to_string();
-        };
+        let Some((i, below)) = self.find_match(&target, at, code.last) else { return NO_TEXT.to_string() };
+        let Some(text) = self.text_of(i, &target) else { return NO_TEXT.to_string() };
         let Some(e) = self.entries.get(i) else { return NO_TEXT.to_string() };
         let mut out = match code.number {
             Number::Text if code.position => String::new(),
@@ -361,5 +382,121 @@ mod tests {
     fn suppress_keeps_the_number() {
         assert_eq!(suppress("Chapter 2.", &[("2".into(), true)]), "2");
         assert_eq!(chapter_number("Chapter IV."), "IV");
+    }
+    /// Headers containing a defined but unused style used to rescan every body paragraph for
+    /// every field on every page. The bound distinguishes that walk from an indexed lookup.
+    #[test]
+    fn many_missing_header_style_results_finish_without_a_body_scan() {
+        let d = Document::from_text(&vec!["Original body paragraph."; 50_000].join("\n"));
+        let ix = StyleIndex::build(&d);
+        let started = std::time::Instant::now();
+        for i in 0..200_000 {
+            let first = 25_000 + i % 20_000;
+            assert_eq!(ix.eval("STYLEREF 9", At::Page { first, last: Some(first + 1) }), NO_TEXT);
+        }
+        assert!(started.elapsed().as_secs_f64() < 5.0, "missing-style lookups took {:?}", started.elapsed());
+    }
+    /// A simple document walk is the compatibility oracle for the indexed nearest match.
+    fn scan_match(ix: &StyleIndex, target: &Target, at: At, last: bool) -> Option<(usize, bool)> {
+        let n = ix.entries.len();
+        let mut order = Vec::new();
+        match at {
+            At::Page { first, last: end } => {
+                let on = match end {
+                    Some(end) if first <= end => first..end.min(n.saturating_sub(1)).saturating_add(1),
+                    _ => 0..0,
+                };
+                let mut page: Vec<_> = on.collect();
+                if last {
+                    page.reverse();
+                }
+                order.extend(page.into_iter().map(|i| (i, true)));
+                order.extend((0..first.min(n)).rev().map(|i| (i, false)));
+                order.extend((end.map_or(first, |i| i.saturating_add(1))..n).map(|i| (i, true)));
+            }
+            At::Body(i) => {
+                order.extend((0..=i.min(n.saturating_sub(1))).rev().map(|i| (i, false)));
+                order.extend((i.saturating_add(1)..n).map(|i| (i, true)));
+            }
+        }
+        order.into_iter().find(|(i, _)| {
+            ix.entries.get(*i).is_some_and(|e| match target {
+                Target::Para(style) => &e.style == style,
+                Target::Char(style) => e.runs.iter().any(|(s, _)| s == style),
+            })
+        })
+    }
+
+    fn search_document() -> Document {
+        use wordcraft_doc::{Block, Pos, Table};
+        let mut d = Document::from_text(&vec!["first middle last"; 42].join("\n"));
+        let mut table = Table::new(2, 2, 200.0);
+        table.rows[0].cells[0].blocks.push(std::sync::Arc::new(Block::Table(Table::new(1, 1, 100.0))));
+        d.body.insert(4, std::sync::Arc::new(Block::Table(table)));
+        for (i, path) in d.para_paths(StoryRef::Body).into_iter().enumerate() {
+            let p = d.para_mut(StoryRef::Body, &path).unwrap();
+            p.props.style = Some(
+                if i % 7 == 0 {
+                    "Heading1"
+                } else if i % 7 == 3 {
+                    "Heading2"
+                } else {
+                    "Normal"
+                }
+                .into(),
+            );
+            if i % 11 == 0 {
+                p.text.clear();
+                p.runs.clear();
+            } else if p.text == "first middle last" {
+                for (start, end, style) in [(0, 5, "Strong"), (6, 12, "Emphasis"), (13, 17, "Strong")] {
+                    d.format_range(
+                        &Pos { story: StoryRef::Body, path: path.clone(), off: start },
+                        &Pos { story: StoryRef::Body, path: path.clone(), off: end },
+                        &|c: &mut wordcraft_doc::CharProps| c.style = Some(style.into()),
+                    )
+                    .unwrap();
+                }
+            }
+        }
+        d
+    }
+
+    #[test]
+    fn indexed_matches_keep_the_document_walk_order_and_empty_results() {
+        let ix = StyleIndex::build(&search_document());
+        let n = ix.entries.len();
+        for instr in ["STYLEREF 1", "STYLEREF Heading2", "STYLEREF Normal", "STYLEREF Strong", "STYLEREF Emphasis", "STYLEREF 9"] {
+            let target = ix.target(&parse(instr).style).unwrap();
+            for first in (0..n + 2).chain([usize::MAX]) {
+                let mut positions = vec![At::Body(first), At::Page { first, last: None }];
+                positions.extend(
+                    [0, first.saturating_sub(2), first, first.saturating_add(2), usize::MAX].map(|last| At::Page { first, last: Some(last) }),
+                );
+                for at in positions {
+                    for last in [false, true] {
+                        assert_eq!(ix.find_match(&target, at, last), scan_match(&ix, &target, at, last), "{instr}, {at:?}, last={last}");
+                    }
+                }
+            }
+        }
+        // An empty heading still wins the search, rather than falling through to later text.
+        assert_eq!(ix.eval("STYLEREF 1", At::Body(0)), "");
+        // Several nonadjacent Strong runs still return the first matching run's text.
+        assert_eq!(ix.eval("STYLEREF Strong", At::Body(1)), "first");
+        let styled_paragraphs = ix.entries.iter().filter(|e| e.runs.iter().any(|(s, _)| s == "Strong")).count();
+        assert_eq!(ix.by_style.get(&Target::Char("Strong".into())).unwrap().len(), styled_paragraphs);
+        let empty = StyleIndex::default();
+        assert_eq!(empty.find_match(&Target::Para("Normal".into()), At::Body(usize::MAX), false), None);
+    }
+
+    #[test]
+    fn a_page_without_body_paths_finds_its_next_top_level_block() {
+        let ix = StyleIndex::build(&search_document());
+        for block in (0..50).chain([usize::MAX]) {
+            let first = ix.entries.iter().position(|e| e.path.0.first().is_some_and(|b| *b as usize >= block)).unwrap_or(ix.entries.len());
+            assert_eq!(ix.page_at(std::iter::empty(), block), At::Page { first, last: None });
+        }
+        assert_eq!(StyleIndex::default().page_at(std::iter::empty(), 0), At::Page { first: 0, last: None });
     }
 }
