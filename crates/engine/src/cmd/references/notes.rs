@@ -129,13 +129,16 @@ pub(super) fn note_refs(s: &Session, kind: Option<NoteKind>) -> Vec<Pos> {
     let mut v = Vec::new();
     for path in s.doc.para_paths(StoryRef::Body) {
         let Some(p) = s.doc.para(StoryRef::Body, &path) else { continue };
-        for o in p.object_offsets() {
-            if let Some(InlineObject::NoteRef { kind: k, .. }) = p.object_at(o)
+        for (off, object) in p.objects_with_offsets() {
+            if let InlineObject::NoteRef { kind: k, .. } = object
                 && (kind.is_none() || kind == Some(*k))
             {
-                v.push(Pos { story: StoryRef::Body, path: path.clone(), off: o });
+                v.push(Pos { story: StoryRef::Body, path: path.clone(), off });
             }
         }
     }
     v
 }
+
+#[cfg(test)]
+mod tests;
