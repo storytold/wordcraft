@@ -179,6 +179,42 @@ fn delimiters_grow_around_tall_content() {
 }
 
 #[test]
+fn nested_empty_delimiters_grow_with_nesting() {
+    use wordcraft_doc::math::*;
+    fn delim(inner: Vec<MNode>) -> MNode {
+        MNode::Delim { beg: Some('('), end: Some(')'), sep: None, grow: true, shp_match: false, elems: vec![inner] }
+    }
+    fn nest(level: usize) -> Vec<MNode> {
+        if level == 0 {
+            return Vec::new();
+        }
+        vec![delim(nest(level - 1))]
+    }
+    for display in [false, true] {
+        let heights: Vec<f32> = (1..=5)
+            .map(|level| {
+                let m = lay_in(&Math { nodes: nest(level), ..Default::default() }, "", display, 400.0, &MathProps::default());
+                m.ascent + m.descent
+            })
+            .collect();
+        for pair in heights.windows(2) {
+            assert!(pair[1] > pair[0] * 1.05, "display={display}: {heights:?}");
+        }
+        // A nested pair beside other content grows too; it need not be the whole argument.
+        let solo = lay_in(&Math { nodes: vec![delim(Vec::new())], ..Default::default() }, "", display, 400.0, &MathProps::default());
+        let mixed = lay_in(
+            &Math { nodes: vec![delim(vec![MNode::Run(MRun::new("x+")), delim(Vec::new())])], ..Default::default() },
+            "",
+            display,
+            400.0,
+            &MathProps::default(),
+        );
+        let h = |m: &MathLayout| m.ascent + m.descent;
+        assert!(h(&mixed) > h(&solo) * 1.05, "display={display}: {} vs {}", h(&mixed), h(&solo));
+    }
+}
+
+#[test]
 fn every_structure_lays_out() {
     use wordcraft_doc::math::*;
     let x = || vec![MNode::Run(MRun::new("x"))];

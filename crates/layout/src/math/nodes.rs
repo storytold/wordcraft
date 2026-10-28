@@ -335,9 +335,14 @@ impl Ctx {
                 let parts: Vec<Bx> = elems.iter().enumerate().map(|(k, e)| self.sub(k, e, st, d)).collect();
                 let a = parts.iter().map(|b| b.a).fold(0.0f32, f32::max);
                 let dd = parts.iter().map(|b| b.d).fold(0.0f32, f32::max);
+                // Word's nested brackets get a size larger at each level, even around an empty
+                // slot: the plain glyph is taller than the placeholder, so content alone would
+                // leave them all the same size (#4618).
+                let nested = elems.iter().flatten().any(|n| matches!(n, MNode::Delim { beg, end, .. } if beg.is_some() || end.is_some()));
+                let step = if nested { self.size(st) * 0.25 } else { 0.0 };
                 let mut row: Vec<Bx> = Vec::new();
                 if let Some(c) = beg {
-                    row.push(self.delimiter(*c, a, dd, st, *grow, *shp_match).cls(Cls::Open));
+                    row.push(self.delimiter(*c, a, dd, st, *grow, *shp_match, step).cls(Cls::Open));
                 }
                 let n = parts.len();
                 for (i, p) in parts.into_iter().enumerate() {
@@ -345,11 +350,11 @@ impl Ctx {
                     if i + 1 < n
                         && let Some(c) = sep
                     {
-                        row.push(self.delimiter(*c, a, dd, st, *grow, *shp_match).cls(Cls::Ord));
+                        row.push(self.delimiter(*c, a, dd, st, *grow, *shp_match, step).cls(Cls::Ord));
                     }
                 }
                 if let Some(c) = end {
-                    row.push(self.delimiter(*c, a, dd, st, *grow, *shp_match).cls(Cls::Close));
+                    row.push(self.delimiter(*c, a, dd, st, *grow, *shp_match, step).cls(Cls::Close));
                 }
                 // No spacing inside the brackets.
                 let mut out = hcat(row);
