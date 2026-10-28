@@ -1902,19 +1902,10 @@ pub(crate) fn field_shading_rects(
                 continue;
             }
             let end = field.end.unwrap_or_else(|| Pos { off: field.at.off + wordcraft_doc::para::OBJ.len_utf8(), ..field.at.clone() });
-            // A field whose page span reaches a visible page has a visible result; checking only
-            // its endpoints would drop a field that starts before and ends after the viewport.
-            let visible_page = |page: usize| visible_pages.get(page).copied().unwrap_or(false);
-            let on_screen = match (layout.page_of(&field.at), layout.page_of(&end)) {
-                (Some(start), Some(end)) => (start.min(end)..=start.max(end)).any(visible_page),
-                _ => true,
-            };
-            if !visible_pages.is_empty() && !on_screen {
-                continue;
-            }
             fields.push((field.at, end));
         }
     }
+    let visible: Vec<usize> = visible_pages.iter().enumerate().filter_map(|(pi, seen)| seen.then_some(pi)).collect();
     let mut out = Vec::new();
     for (start, end) in fields {
         let shade = match shading {
@@ -1931,7 +1922,21 @@ pub(crate) fn field_shading_rects(
             }
         };
         if shade {
-            out.extend(layout.selection_rects(doc, &start, &end, page_hint));
+            if start.story == StoryRef::Body {
+                // Body pieces are all on the layout; keep only those whose page is visible.
+                out.extend(
+                    layout
+                        .selection_rects(doc, &start, &end, page_hint)
+                        .into_iter()
+                        .filter(|(pi, _)| visible_pages.get(*pi).copied().unwrap_or(true)),
+                );
+            } else {
+                // A header, footer or note can be shown on many pages; `selection_rects` gives one
+                // placement per hint, so ask for each visible page (CodeRabbit #4290).
+                for pi in &visible {
+                    out.extend(layout.selection_rects(doc, &start, &end, *pi).into_iter().filter(|(p, _)| p == pi));
+                }
+            }
         }
     }
     out
