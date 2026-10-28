@@ -1,0 +1,18 @@
+[package]
+name = "wordcraft-collab"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Co-editing for WordCraft: the macula-craft-seam session over WordCraft's document and its command bus, behind the `collab` feature"
+
+[lints]
+workspace = true
+
+[dependencies]
+wordcraft-doc = { workspace = true }
+wordcraft-engine = { workspace = true }
+# The transport-neutral collaboration seam (signed ops, grants, invites, the
+# CRDT body, the shared-document protocol). The mesh transport itself is
+# macula-craft-collab and comes in with the `collab` feature, not here.
+craft-collab = { package = "macula-craft-seam", version = "0.6.1" }
+serde_json = { workspace = true }
