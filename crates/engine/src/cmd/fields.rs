@@ -73,8 +73,8 @@ pub fn story_fields(s: &Session, story: StoryRef) -> Vec<FieldAt> {
     let mut out = Vec::new();
     for path in s.doc.para_paths(story) {
         let Some(para) = s.doc.para(story, &path) else { continue };
-        for off in para.object_offsets() {
-            if let Some(InlineObject::Field { instr, locked, code, .. }) = para.object_at(off) {
+        for (off, object) in para.objects_with_offsets() {
+            if let InlineObject::Field { instr, locked, code, .. } = object {
                 out.push(FieldAt { at: Pos::new(story, path.clone(), off), end: None, instr: instr.clone(), locked: *locked, code: *code });
             }
         }
@@ -274,6 +274,185 @@ mod tests {
     use wordcraft_doc::para::InlineObject;
 
     use crate::Session;
+
+    fn marker_paragraph(objects: Vec<InlineObject>) -> wordcraft_doc::Paragraph {
+        use wordcraft_doc::para::{OBJ, Run};
+        let mut p = wordcraft_doc::Paragraph::new();
+        p.text = format!("é{}tail", OBJ.to_string().repeat(objects.len()));
+        p.runs = vec![Run { len: p.len(), props: Default::default() }];
+        p.objects = objects;
+        p
+    }
+
+    // Advancing thread CPU counters exclude scheduler wait. Systems without working counters
+    // use elapsed samples, as in the layout scaling checks.
+    fn field_cost(f: &mut impl FnMut()) -> f64 {
+        let ran = || {
+            let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+            s.split_whitespace().next()?.parse::<u64>().ok()
+        };
+        let (t, before) = (std::time::Instant::now(), ran());
+        f();
+        match (before, ran()) {
+            (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+            _ => t.elapsed().as_secs_f64(),
+        }
+    }
+
+    #[test]
+    fn field_enumeration_scales_with_marker_count() {
+        use wordcraft_doc::{Document, StoryRef, para_block};
+        let session = |n: usize| {
+            let mut objects = vec![InlineObject::BookmarkStart { name: "Other".into() }; n];
+            objects.push(InlineObject::Field {
+                instr: "AUTHOR".into(),
+                result: "Ada".into(),
+                locked: true,
+                code: false,
+                dirty: false,
+                form: String::new(),
+            });
+            let mut doc = Document::new();
+            doc.body = vec![para_block(marker_paragraph(objects))];
+            Session::new(doc)
+        };
+        let (small, big) = (session(2_000), session(16_000));
+        let check = |s: &Session, n| {
+            let fields = super::story_fields(s, StoryRef::Body);
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0].at, wordcraft_doc::Pos::body(0, 2 + n * wordcraft_doc::para::OBJ.len_utf8()));
+            assert_eq!(fields[0].instr, "AUTHOR");
+            assert!(fields[0].locked);
+            std::hint::black_box(fields);
+        };
+        check(&small, 2_000);
+        check(&big, 16_000);
+        let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+        for _ in 0..5 {
+            t1 = t1.min(field_cost(&mut || (0..8).for_each(|_| check(&small, 2_000))) / 8.0);
+            t8 = t8.min(field_cost(&mut || check(&big, 16_000)));
+        }
+        let ratio = t8 / t1.max(1e-9);
+        eprintln!("field enumeration: small={t1:.6}s big={t8:.6}s ratio={ratio:.2}");
+        assert!(ratio < 24.0, "8x markers must not require quadratic prefix scans: {ratio:.2}x");
+    }
+
+    #[test]
+    fn field_enumeration_preserves_mixed_ranges_offsets_and_selection() {
+        use crate::Selection;
+        use wordcraft_doc::para::{OBJ, Run};
+        use wordcraft_doc::{Document, Pos, StoryRef, para_block};
+        let simple = |instr: &str| InlineObject::Field {
+            instr: instr.into(),
+            result: "result".into(),
+            locked: true,
+            code: true,
+            dirty: false,
+            form: String::new(),
+        };
+        let mut p = marker_paragraph(vec![
+            InlineObject::BookmarkStart { name: "Mark".into() },
+            simple("AUTHOR"),
+            InlineObject::FieldStart { instr: "OUTER".into(), locked: true, dirty: false },
+            simple("TITLE"),
+            InlineObject::FieldStart { instr: "INNER".into(), locked: false, dirty: false },
+            InlineObject::FieldEnd,
+            InlineObject::FieldEnd,
+            InlineObject::BookmarkEnd { name: "Mark".into() },
+        ]);
+        p.text = format!("é{OBJ}漢{OBJ}{OBJ}x{OBJ}{OBJ}y{OBJ}{OBJ}{OBJ}尾");
+        p.runs = vec![Run { len: p.len(), props: Default::default() }];
+        let mut doc = Document::new();
+        doc.body = vec![para_block(p)];
+        let mut s = Session::new(doc);
+        let original = s.doc.clone();
+        let fields = super::story_fields(&s, StoryRef::Body);
+        let expected = [
+            (8, None, "AUTHOR", true, true),
+            (11, Some(25), "OUTER", true, false),
+            (15, None, "TITLE", true, true),
+            (18, Some(22), "INNER", false, false),
+        ];
+        assert_eq!(fields.len(), expected.len());
+        for (f, (off, end, instr, locked, code)) in fields.iter().zip(expected) {
+            assert_eq!(f.at, Pos::body(0, off));
+            assert_eq!(f.end, end.map(|o| Pos::body(0, o)));
+            assert_eq!((&*f.instr, f.locked, f.code), (instr, locked, code));
+        }
+        s.sel = Selection::caret(Pos::body(0, 21));
+        assert_eq!(super::selected(&s), vec![fields[3].clone()]);
+        s.sel = Selection { anchor: Pos::body(0, 18), focus: Pos::body(0, 8) };
+        assert_eq!(super::selected(&s), fields[..3]);
+        s.run("fields.next", &json!({})).unwrap();
+        assert_eq!(s.sel, Selection { anchor: Pos::body(0, 11), focus: Pos::body(0, 28) });
+        s.run("fields.previous", &json!({})).unwrap();
+        assert_eq!(s.sel, Selection { anchor: Pos::body(0, 8), focus: Pos::body(0, 11) });
+        s.run("fields.previous", &json!({})).unwrap();
+        assert_eq!(s.sel, Selection { anchor: Pos::body(0, 18), focus: Pos::body(0, 25) });
+        assert_eq!(s.doc, original);
+        assert!(s.undo_labels().is_empty());
+    }
+
+    #[test]
+    fn field_enumeration_ignores_unmatched_object_storage() {
+        use wordcraft_doc::{Document, StoryRef, para_block};
+        let field =
+            InlineObject::Field { instr: "AUTHOR".into(), result: "Ada".into(), locked: false, code: false, dirty: false, form: String::new() };
+        for extra_objects in [false, true] {
+            let mut p = marker_paragraph(vec![field.clone()]);
+            if extra_objects {
+                p.objects.push(field.clone());
+            } else {
+                p.objects.clear();
+            }
+            let mut doc = Document::new();
+            doc.body = vec![para_block(p)];
+            let s = Session::new(doc);
+            assert_eq!(super::story_fields(&s, StoryRef::Body).len(), usize::from(extra_objects));
+        }
+    }
+
+    #[test]
+    fn field_enumeration_keeps_story_and_cell_order() {
+        use wordcraft_doc::{Block, Document, PartKind, Path, Pos, StoryRef, Table, para_block};
+        let field = |instr: &str| {
+            marker_paragraph(vec![InlineObject::Field {
+                instr: instr.into(),
+                result: "value".into(),
+                locked: false,
+                dirty: false,
+                code: false,
+                form: String::new(),
+            }])
+        };
+        let mut table = Table::new(1, 2, 400.0);
+        table.rows[0].cells[0].blocks = vec![para_block(field("TITLE"))];
+        table.rows[0].cells[1].blocks = vec![para_block(field("SUBJECT"))];
+        let mut doc = Document::new();
+        doc.body = vec![para_block(field("AUTHOR")), std::sync::Arc::new(Block::Table(table)), para_block(field("COMMENTS"))];
+        let header = doc.try_add_part(PartKind::Header, vec![para_block(field("KEYWORDS"))]).unwrap();
+        let mut s = Session::new(doc);
+        let fields = super::story_fields(&s, StoryRef::Body);
+        assert_eq!(fields.iter().map(|f| f.instr.as_str()).collect::<Vec<_>>(), ["AUTHOR", "TITLE", "SUBJECT", "COMMENTS"]);
+        assert_eq!(
+            fields.iter().map(|f| f.at.clone()).collect::<Vec<_>>(),
+            [
+                Pos::body(0, 2),
+                Pos::new(StoryRef::Body, Path(vec![1, 0, 0, 0]), 2),
+                Pos::new(StoryRef::Body, Path(vec![1, 0, 1, 0]), 2),
+                Pos::body(2, 2),
+            ]
+        );
+        let fields = super::story_fields(&s, StoryRef::Part(header));
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].at, Pos::new(StoryRef::Part(header), Path::top(0), 2));
+        assert_eq!(fields[0].instr, "KEYWORDS");
+        s.sel = crate::Selection::caret(Pos::new(StoryRef::Part(header), Path::top(0), 0));
+        s.run("fields.next", &json!({})).unwrap();
+        assert_eq!(super::selected(&s), fields);
+        s.run("fields.previous", &json!({})).unwrap();
+        assert_eq!(super::selected(&s), fields);
+    }
 
     fn session_with_fields() -> Session {
         let mut s = Session::new(wordcraft_doc::Document::new());
