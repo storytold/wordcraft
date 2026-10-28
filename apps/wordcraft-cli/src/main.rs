@@ -412,6 +412,14 @@ fn run_source_paths(rest: &[String], script: Option<&script::Script>) -> (Option
     (from_file, from_template)
 }
 
+fn report_missing_metric_fonts() {
+    for (word, used) in wordcraft_fonts::word::missing_metric_fonts() {
+        eprintln!(
+            "note: {word} and its metric-compatible twins aren't installed; the primary family is {used}, so lines and pages may not match Word's; uncovered characters may use glyph fallback"
+        );
+    }
+}
+
 /// Run the subcommand named by `args` (the command line after the program name). Files named
 /// there are opened by their real names, which may not be valid Unicode.
 fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
@@ -436,6 +444,7 @@ fn run<S: AsRef<OsStr>>(args: &[S]) -> Result<(), Failure> {
             let markup = rest.iter().any(|a| a == "--markup");
             let password = password_from(&rest)?;
             let mut s = open(&i, password.as_deref())?;
+            report_missing_metric_fonts();
             if rest.iter().any(|a| a == "--update-fields") {
                 s.run("references.updateFields", &json!({})).map_err(|e| e.to_string())?;
             }

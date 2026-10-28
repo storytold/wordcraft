@@ -39,10 +39,10 @@ pub fn has_named_substitutes(family: &str) -> bool {
 fn substitutes_by_name(family: &str) -> (&'static [&'static str], bool) {
     const SANS: &[&str] = &["Carlito", "Helvetica Neue", "Arial", "Liberation Sans", "Noto Sans", "DejaVu Sans", "Source Sans 3"];
     const SERIF: &[&str] = &["Caladea", "Times New Roman", "Liberation Serif", "Georgia", "Noto Serif", "DejaVu Serif", "Source Serif 4"];
-    const MONO: &[&str] = &["Courier New", "Liberation Mono", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
-    const ARIAL: &[&str] = &["Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
-    const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Helvetica", "Helvetica Neue", "Arimo", "Source Sans 3"];
-    const TIMES: &[&str] = &["Liberation Serif", "Times", "Tinos", "Source Serif 4"];
+    const MONO: &[&str] = &["Courier New", "Liberation Mono", "Cousine", "Menlo", "Consolas", "DejaVu Sans Mono", "JetBrains Mono"];
+    const ARIAL: &[&str] = &["Liberation Sans", "Arimo", "Helvetica", "Helvetica Neue", "Source Sans 3"];
+    const ARIAL_UNICODE: &[&str] = &["Arial", "Liberation Sans", "Arimo", "Helvetica", "Helvetica Neue", "Source Sans 3"];
+    const TIMES: &[&str] = &["Liberation Serif", "Tinos", "Times", "Source Serif 4"];
     // Word's symbol fonts (Symbol, Wingdings…) are proprietary: their characters are drawn as their
     // Unicode equivalents (`wordcraft_doc::symbol_fonts`) from these faces or any face that has them.
     const SYMBOL: &[&str] = &["Apple Symbols", "Segoe UI Symbol", "DejaVu Sans", "Noto Sans Symbols", "Noto Sans Symbols 2", "Source Sans 3"];
@@ -358,6 +358,34 @@ fn substitute(db: &FontDb, family: &str) -> Option<&'static str> {
         .find(|s| covers(s, &['\u{0E19}', 'A', 'z', '0', '9']))
         .or_else(|| installed.iter().copied().find(|s| covers(s, &['\u{0E19}'])))
         .or_else(|| installed.first().copied())
+}
+
+/// Word's core families, each with the open fonts that share its metrics. Without the family or
+/// a twin, text set in it wraps and paginates differently from Word (Times New Roman drawn in a
+/// wider serif fits fewer lines to a page).
+const METRIC_TWINS: &[(&str, &[&str])] = &[
+    ("Times New Roman", &["Liberation Serif", "Tinos"]),
+    ("Arial", &["Liberation Sans", "Arimo"]),
+    ("Courier New", &["Liberation Mono", "Cousine"]),
+    ("Calibri", &["Carlito"]),
+    ("Cambria", &["Caladea"]),
+];
+
+/// Word's core families not drawn with themselves or a metric twin, paired with the primary
+/// resolved family. Glyphs the primary family cannot draw may still use glyph fallback.
+pub fn missing_metric_fonts() -> Vec<(&'static str, String)> {
+    let db = FontDb::global();
+    METRIC_TWINS
+        .iter()
+        .filter_map(|(word, twins)| {
+            let resolved = resolve(word, false, false);
+            if db.has_family(word) || twins.iter().any(|twin| resolved.face.family.eq_ignore_ascii_case(twin)) {
+                None
+            } else {
+                Some((*word, resolved.face.family.clone()))
+            }
+        })
+        .collect()
 }
 
 fn style_name(bold: bool, italic: bool) -> &'static str {
@@ -693,5 +721,21 @@ mod tests {
         for f in ["No Such Brand Font", "Cambria", "Georgia", "Brand Serif"] {
             assert!(!has_named_substitutes(f), "{f}");
         }
+    }
+
+    #[test]
+    fn a_missing_core_font_is_reported_only_when_a_metric_twin_is_not_the_one_drawn() {
+        let db = FontDb::global();
+        let missing = missing_metric_fonts();
+        for (word, twins) in METRIC_TWINS {
+            let reported = missing.iter().any(|(w, _)| w == word);
+            let drawn = resolve(word, false, false).face.family.clone();
+            let has_metric_match = db.has_family(word) || twins.iter().any(|twin| drawn.eq_ignore_ascii_case(twin));
+            assert_eq!(reported, !has_metric_match, "{word}: {drawn}");
+            if reported {
+                assert_eq!(missing.iter().find(|(name, _)| name == word).map(|(_, used)| used), Some(&drawn));
+            }
+        }
+        assert!(missing.iter().all(|(_, used)| db.has_family(used)));
     }
 }
