@@ -182,7 +182,7 @@ fn add_exception(s: &mut Session) -> Result<(), CmdError> {
 /// Remove the exceptions that touch the selection (or all of them).
 fn remove_exceptions(s: &mut Session, all: bool) -> Result<(), CmdError> {
     let (a, b) = s.sel.ordered();
-    let ids: Vec<u32> =
+    let ids: HashSet<u32> =
         s.doc.perm_ranges().iter().filter(|r| all || (r.start.story == a.story && r.start <= b && a <= r.end)).map(|r| r.id).collect();
     if ids.is_empty() {
         return Ok(());
@@ -192,11 +192,10 @@ fn remove_exceptions(s: &mut Session, all: bool) -> Result<(), CmdError> {
         for path in s.doc.para_paths(story) {
             let Some(p) = s.doc.para(story, &path) else { continue };
             let marks: Vec<usize> = p
-                .object_offsets()
-                .into_iter()
-                .filter(
-                    |off| matches!(p.object_at(*off), Some(InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id }) if ids.contains(id)),
-                )
+                .objects_with_offsets()
+                .filter_map(|(off, obj)| {
+                    matches!(obj, InlineObject::PermStart { id, .. } | InlineObject::PermEnd { id } if ids.contains(id)).then_some(off)
+                })
                 .collect();
             if marks.is_empty() {
                 continue;

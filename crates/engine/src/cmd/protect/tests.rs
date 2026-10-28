@@ -922,3 +922,165 @@ fn legacy_password_is_verified_and_unknown_forms_refused() {
     assert!(e.to_string().contains(super::UNSUPPORTED_PASSWORD));
     assert!(super::enforced(&s.doc));
 }
+
+/// Missing or nonadvancing thread CPU counters fall back to elapsed time.
+fn exception_cost(f: impl FnOnce()) -> f64 {
+    let ran = || {
+        let s = std::fs::read_to_string("/proc/thread-self/schedstat").ok()?;
+        s.split_whitespace().next()?.parse::<u64>().ok()
+    };
+    let (t, before) = (std::time::Instant::now(), ran());
+    f();
+    match (before, ran()) {
+        (Some(a), Some(b)) if b > a => (b - a) as f64 * 1e-9,
+        _ => t.elapsed().as_secs_f64(),
+    }
+}
+
+fn exception_marker_doc(n: usize) -> Document {
+    use wordcraft_doc::{Paragraph, para::Run, para_block};
+    let mut p = Paragraph::new();
+    p.text = format!("é{}{OBJ}editable{OBJ}漢", OBJ.to_string().repeat(n));
+    p.runs = vec![Run { len: p.len(), props: CharProps { bold: Some(true), ..Default::default() } }];
+    p.objects = vec![InlineObject::BookmarkStart { name: "Keep".into() }; n];
+    p.objects.push(InlineObject::PermStart { id: 42, group: "everyone".into(), editor: String::new() });
+    p.objects.push(InlineObject::PermEnd { id: 42 });
+    let mut d = Document::new();
+    d.body = vec![para_block(p)];
+    d
+}
+
+#[test]
+fn removing_exceptions_scales_with_unrelated_markers() {
+    let (small, big) = (exception_marker_doc(2_000), exception_marker_doc(16_000));
+    let cost = |d: &Document, n| {
+        let mut s = Session::new(d.clone());
+        let elapsed = exception_cost(|| remove_exceptions(&mut s, true).unwrap());
+        let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        assert_eq!(p.objects.len(), n);
+        assert!(p.objects.iter().all(|o| matches!(o, InlineObject::BookmarkStart { name } if name == "Keep")));
+        assert_eq!(p.text, format!("é{}editable漢", OBJ.to_string().repeat(n)));
+        assert!(p.runs.iter().all(|r| r.props.bold == Some(true)));
+        elapsed
+    };
+    cost(&small, 2_000);
+    cost(&big, 16_000);
+    let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        t1 = t1.min((0..8).map(|_| cost(&small, 2_000)).sum::<f64>() / 8.0);
+        t8 = t8.min(cost(&big, 16_000));
+    }
+    let ratio = t8 / t1.max(1e-9);
+    assert!(ratio < 24.0, "exception removal: {t1:.6}s -> {t8:.6}s, {ratio:.2}x for 8x markers");
+}
+
+#[test]
+fn removing_touching_exceptions_keeps_other_ranges_and_text() {
+    let mut s = Session::new(Document::from_text("é first middle last 漢"));
+    select(&mut s, "first");
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    select(&mut s, "last");
+    s.run("review.restrict", &json!({"exception": "add"})).unwrap();
+    let original = s.doc.clone();
+    let ranges = s.doc.perm_ranges();
+    let first = &ranges[0];
+    // Touching either boundary selects the range, even for a reversed selection.
+    s.sel = Selection { anchor: first.end.clone(), focus: first.start.clone() };
+    s.run("review.restrict", &json!({"exception": "remove"})).unwrap();
+    let left = s.doc.perm_ranges();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].id, ranges[1].id);
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "é first middle last 漢");
+    let removed = s.doc.clone();
+    s.run("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.doc, original);
+    s.run("edit.redo", &json!({})).unwrap();
+    assert_eq!(s.doc, removed);
+    s.sel = Selection::caret(s.doc.perm_ranges()[0].end.clone());
+    s.run("review.restrict", &json!({"exception": "remove"})).unwrap();
+    assert!(s.doc.perm_ranges().is_empty());
+    assert_eq!(s.doc.plain_text(StoryRef::Body), "é first middle last 漢");
+}
+
+#[test]
+fn removing_exceptions_keeps_duplicate_id_and_story_behavior() {
+    use wordcraft_doc::{Part, PartKind};
+    let mut s = Session::new(exception_marker_doc(2));
+    // A selected ID removes matching markers in every story, including orphan ends.
+    let blocks = s.doc.body.clone();
+    s.doc.parts.insert(7, Part { kind: PartKind::Header, blocks, ..Default::default() });
+    s.doc.parts.insert(8, Part { kind: PartKind::Footnote, blocks: s.doc.body.clone(), ..Default::default() });
+    let p = s.doc.para_mut(StoryRef::Part(8), &Path::top(0)).unwrap();
+    p.objects[2] = InlineObject::PermEnd { id: 42 };
+    s.sel = Selection::caret(s.doc.perm_ranges()[0].start.clone());
+    remove_exceptions(&mut s, false).unwrap();
+    for story in [StoryRef::Body, StoryRef::Part(7), StoryRef::Part(8)] {
+        let p = s.doc.para(story, &Path::top(0)).unwrap();
+        assert_eq!(p.objects.len(), 2);
+        assert_eq!(p.text, format!("é{OBJ}{OBJ}editable漢"));
+    }
+    assert!(s.doc.perm_ranges().is_empty());
+}
+
+#[test]
+fn exception_removal_ignores_unpaired_object_storage() {
+    for extra_marker in [false, true] {
+        let mut d = exception_marker_doc(1);
+        let p = d.para_mut(StoryRef::Body, &Path::top(0)).unwrap();
+        if extra_marker {
+            p.text.push(OBJ);
+            p.runs.last_mut().unwrap().len += OBJ.len_utf8();
+        } else {
+            p.objects.push(InlineObject::BookmarkEnd { name: "Unpaired".into() });
+        }
+        let mut s = Session::new(d);
+        remove_exceptions(&mut s, true).unwrap();
+        let p = s.doc.para(StoryRef::Body, &Path::top(0)).unwrap();
+        assert_eq!(p.text, format!("é{OBJ}editable漢{}", if extra_marker { OBJ.to_string() } else { String::new() }));
+        assert_eq!(p.objects.len(), if extra_marker { 1 } else { 2 });
+        assert!(matches!(&p.objects[0], InlineObject::BookmarkStart { name } if name == "Keep"));
+        if !extra_marker {
+            assert!(matches!(&p.objects[1], InlineObject::BookmarkEnd { name } if name == "Unpaired"));
+        }
+    }
+}
+
+#[test]
+fn removing_many_exception_ids_avoids_repeated_membership_scans() {
+    use wordcraft_doc::{Paragraph, para_block};
+    let doc = |n: u32| {
+        let mut d = Document::new();
+        d.body = (0..n)
+            .map(|id| {
+                let mut p = Paragraph::with_text("é keep 漢", CharProps::default());
+                p.insert_object(p.len(), InlineObject::PermEnd { id }, &CharProps::default()).unwrap();
+                p.insert_object(0, InlineObject::PermStart { id, group: "everyone".into(), editor: String::new() }, &CharProps::default()).unwrap();
+                // Nonselected orphan ends must test membership without adding deletion work.
+                for _ in 0..8 {
+                    p.insert_object(p.len(), InlineObject::PermEnd { id: u32::MAX }, &CharProps::default()).unwrap();
+                }
+                para_block(p)
+            })
+            .collect();
+        d
+    };
+    let (small, big) = (doc(1_000), doc(8_000));
+    let cost = |d: &Document| {
+        let mut s = Session::new(d.clone());
+        let elapsed = exception_cost(|| remove_exceptions(&mut s, true).unwrap());
+        assert!(s.doc.perm_ranges().is_empty());
+        assert!(s.doc.body.iter().all(|b| b.as_para().is_some_and(
+            |p| p.text == format!("é keep 漢{}", OBJ.to_string().repeat(8)) && p.objects == vec![InlineObject::PermEnd { id: u32::MAX }; 8]
+        )));
+        elapsed
+    };
+    cost(&small);
+    cost(&big);
+    let (mut t1, mut t8) = (f64::INFINITY, f64::INFINITY);
+    for _ in 0..5 {
+        t1 = t1.min(cost(&small));
+        t8 = t8.min(cost(&big));
+    }
+    let ratio = t8 / t1.max(1e-9);
+    assert!(ratio < 24.0, "exception IDs: {t1:.6}s -> {t8:.6}s, {ratio:.2}x for 8x ranges");
+}
