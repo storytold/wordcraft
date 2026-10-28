@@ -133,6 +133,17 @@ fn cannot_start_line(c: char) -> bool {
         || ('\u{0E47}'..='\u{0E4E}').contains(&c)
 }
 
+/// A Thai digit (`๐`–`๙`).
+fn is_thai_digit(c: char) -> bool {
+    ('\u{0E50}'..='\u{0E59}').contains(&c)
+}
+
+/// Would a break between `before` and `after` split an amount: after the baht sign `฿`, or
+/// between two Thai digits?
+fn splits_amount(before: char, after: char) -> bool {
+    before == '\u{0E3F}' || (is_thai_digit(before) && is_thai_digit(after))
+}
+
 /// Byte offsets of `text` where a line may break between two Thai words, found by segmenting it
 /// with the word list. Sorted; never 0 or `text.len()`; always on a character boundary; only
 /// between two Thai characters (UAX #14 decides everywhere else), never after a leading vowel and
@@ -148,7 +159,7 @@ pub fn break_offsets(text: &str) -> Vec<usize> {
             continue;
         }
         let (Some(before), Some(after)) = (text.get(..at).and_then(|s| s.chars().next_back()), t.text.chars().next()) else { continue };
-        if is_thai_char(before) && is_thai_char(after) && !is_leading_vowel(before) && !cannot_start_line(after) {
+        if is_thai_char(before) && is_thai_char(after) && !is_leading_vowel(before) && !cannot_start_line(after) && !splits_amount(before, after) {
             out.push(at);
         }
     }
@@ -247,6 +258,19 @@ mod tests {
                 assert!(after.is_some_and(|c| !cannot_start_line(c)), "{text}: before {after:?} at {b}");
             }
         }
+    }
+
+    #[test]
+    fn a_baht_sign_and_thai_digits_stay_together() {
+        for text in ["฿๑๒๓", "ราคา ฿๑๒๓ บาท", "ราคา฿๑๒๓", "๑๒๓๔๕", "๑๒๓฿๔๕๖"] {
+            for b in break_offsets(text) {
+                let before = text.get(..b).and_then(|s| s.chars().next_back());
+                let after = text.get(b..).and_then(|s| s.chars().next());
+                let (Some(before), Some(after)) = (before, after) else { continue };
+                assert!(!splits_amount(before, after), "{text}: break at {b} splits an amount");
+            }
+        }
+        assert!(break_offsets("฿๑๒๓").is_empty());
     }
 
     #[test]

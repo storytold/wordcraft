@@ -724,13 +724,14 @@ fn spelling_issues(text: &str, lang: impl Fn(usize) -> ProofLang, opts: &Options
 /// addresses, as numbers, and when the run is in the user dictionary.
 fn thai_spelling_issues(text: &str, a: usize, b: usize, opts: &Options, internet: bool, out: &mut Vec<Issue>) {
     let Some(run) = text.get(a..b) else { return };
-    if (opts.ignore_internet && internet) || accepted_by_options(run, opts) {
+    if opts.ignore_internet && internet {
         return;
     }
     for r in th::misspelled_ranges(run) {
         let (Some(start), Some(end)) = (a.checked_add(r.start), a.checked_add(r.end)) else { continue };
         let Some(word) = text.get(start..end) else { continue };
-        if in_user_dictionary(&word.to_lowercase()) {
+        // The options (numbers, capitals) apply to the word, not to the unspaced run around it.
+        if accepted_by_options(word, opts) || in_user_dictionary(&word.to_lowercase()) {
             continue;
         }
         out.push(Issue {
@@ -1050,6 +1051,20 @@ fn starts_consonant_sound(w: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    /// A digit next to a Thai word must not hide the word's misspelling (the number option judges
+    /// the word, not the unspaced run around it).
+    #[test]
+    fn a_digit_beside_a_thai_word_does_not_hide_its_spelling() {
+        for text in ["สวัดดี2", "2สวัดดี", "ฉันไปสวัดดี2ครับ", "สวัดดี๒"] {
+            let issues = check_text(text, &[(0..text.len(), ProofLang::Th)]);
+            let bad: Vec<&str> = issues.iter().filter_map(|i| text.get(i.start..i.end)).collect();
+            assert!(bad.iter().any(|w| w.contains("สวัดดี")), "{text}: {bad:?}");
+        }
+        // A correct word with a digit is still left alone.
+        let ok = "สวัสดี2";
+        assert!(check_text(ok, &[(0..ok.len(), ProofLang::Th)]).is_empty());
+    }
+
     /// Thai: the word list is built in, each unknown word is one issue, a sentence is not one word.
     #[test]
     fn thai_spelling_marks_each_unknown_word() {
