@@ -54,8 +54,9 @@ const MAX_FONT_NAME: usize = 256;
 const MAX_PARTS: usize = 50_000;
 /// Deepest chain of headers/footers whose own sections reference further headers/footers.
 const MAX_HF_DEPTH: usize = 4;
-/// Most graphic work (items plus path segments, see `story::graphic_work`) built for one file's
-/// charts and diagrams; later ones are left empty.
+/// Most graphic work for one file's charts and diagrams: input bytes for each uncached size,
+/// plus output items and path segments. A last build may spend the remaining budget; later
+/// uncached sizes are left empty, with their source parts kept for saving.
 const MAX_GRAPHIC_WORK: usize = 2_000_000;
 /// Custom XML parts looked at for bibliography sources.
 const MAX_BIBLIOGRAPHY_PARTS: usize = 64;

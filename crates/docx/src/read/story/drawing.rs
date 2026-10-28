@@ -205,8 +205,8 @@ impl Reader<'_> {
 
     /// The chart or SmartArt diagram in an `a:graphicData`, as items in points from its top-left
     /// corner. Charts are drawn from their cached data, SmartArt diagrams from the drawing Word
-    /// stores beside them. Built once per part and size; once the file's graphic budget is spent,
-    /// later ones are empty.
+    /// stores beside them. Built once per part and size; input and output both spend the file's
+    /// graphic budget. Later uncached sizes are empty, but keep their source for saving.
     fn graphic(&mut self, kind: GraphicKind, gd: &El, rels: &Rels, w: f32, h: f32, source: Option<Arc<Embedded>>) -> Arc<Graphic> {
         let part = match kind {
             GraphicKind::Chart => gd.child("c:chart").and_then(|c| c.attr("r:id")).and_then(|id| crate::read::part_of(rels, id, rt::CHART)),
@@ -218,7 +218,16 @@ impl Reader<'_> {
         if let Some(g) = self.graphics.get(&key) {
             return g.clone();
         }
-        let items = if self.graphic_budget == 0 { Vec::new() } else { self.graphic_items(kind, &key.1, w, h) };
+        let items = if self.graphic_budget == 0 {
+            Vec::new()
+        } else {
+            // Few (or no) drawing items can still require scanning a large part on each size
+            // miss. Charge before building, including diagram relationships read by the build.
+            let input = self.pkg.get(&key.1).map_or(1, |bytes| bytes.len().max(1));
+            let rels = if kind == GraphicKind::Diagram { self.pkg.get(&crate::package::rels_path(&key.1)).map_or(0, <[u8]>::len) } else { 0 };
+            self.graphic_budget = self.graphic_budget.saturating_sub(input.saturating_add(rels));
+            self.graphic_items(kind, &key.1, w, h)
+        };
         self.graphic_budget = self.graphic_budget.saturating_sub(graphic_work(&items));
         // A chart or SmartArt that is exactly what WordCraft writes for its model can be edited
         // (and is written from the model); any other stays as it was read.

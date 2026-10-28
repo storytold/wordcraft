@@ -320,8 +320,8 @@ impl Package {
 
     /// Relationships of `part` (from `dir/_rels/name.rels`).
     pub fn rels(&self, part: &str) -> Rels {
-        let (dir, file) = split_dir(part);
-        let path = if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") };
+        let (dir, _) = split_dir(part);
+        let path = rels_path(part);
         let mut rels = Rels::default();
         let root = match self.xml(&path) {
             Ok(Some(root)) => root,
@@ -406,6 +406,12 @@ impl Rels {
     pub fn by_type(&self, full: &str) -> Option<&Rel> {
         self.list.iter().find(|r| rel_is(&r.kind, full))
     }
+}
+
+/// The OPC relationship part belonging to `part`.
+pub(crate) fn rels_path(part: &str) -> String {
+    let (dir, file) = split_dir(part);
+    if dir.is_empty() { format!("_rels/{file}.rels") } else { format!("{dir}/_rels/{file}.rels") }
 }
 
 fn split_dir(part: &str) -> (&str, &str) {
