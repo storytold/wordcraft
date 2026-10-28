@@ -11899,3 +11899,36 @@ fn an_empty_bulleted_mark_after_a_bulleted_section_closer_draws_no_bullet() {
         assert!(text, "{filler} lines above: the text closer keeps its bullet");
     }
 }
+
+#[test]
+fn many_list_definitions_do_not_rescan_for_each_paragraph() {
+    use std::time::{Duration, Instant};
+    use wordcraft_doc::numbering::{AbstractNum, Level, Num};
+    use wordcraft_doc::props::NumRef;
+
+    let mut doc = Document::from_text(&(0..16000).map(|i| format!("Item {i}")).collect::<Vec<_>>().join("\n"));
+    doc.numbering.abstracts = (0..12_000).map(|id| AbstractNum { id, levels: vec![Level::default()], ..Default::default() }).collect();
+    doc.numbering.nums = (1..=12_000).map(|id| Num { id, abstract_id: id - 1, ..Default::default() }).collect();
+    for block in &mut doc.body {
+        let Block::Para(p) = Arc::make_mut(block) else { panic!("paragraph fixture") };
+        p.props.numbering = Some(NumRef { num: 12_000, level: 0 });
+        p.props.space_before = Some(0.0);
+        p.props.space_after = Some(0.0);
+    }
+    let start = Instant::now();
+    let layout = lay(&doc);
+    let elapsed = start.elapsed();
+    let labels: Vec<_> = layout
+        .pages
+        .iter()
+        .flat_map(|page| &page.items)
+        .filter_map(|item| match item {
+            Placed::Lines { story: StoryRef::Body, para, .. } => para.label.as_ref().map(|label| label.text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(labels.len(), 16000);
+    assert_eq!(labels.first().copied(), Some("1."));
+    assert_eq!(labels.last().copied(), Some("16000."));
+    assert!(elapsed < Duration::from_secs(4), "definition-heavy layout took {elapsed:?}");
+}

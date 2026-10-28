@@ -1250,7 +1250,7 @@ fn blocks_content(ctx: &mut Ctx, blocks: &Blocks, text: Option<&CellText>, depth
 /// The list level `p` is in, for its indents (without counting it: measuring isn't laying out).
 fn list_level(ctx: &Ctx, p: &Paragraph) -> Option<wordcraft_doc::numbering::Level> {
     let n = p.props.numbering.or_else(|| ctx.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
-    ctx.doc.numbering.level(n.num, n.level).cloned()
+    ctx.numbering.level(n.num, n.level).cloned()
 }
 
 /// A width to lay a paragraph out in so that only its own line breaks end lines.

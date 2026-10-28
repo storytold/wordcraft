@@ -73,6 +73,7 @@ fn new_ctx<'a>(
     });
     Ctx {
         doc,
+        numbering: wordcraft_doc::numbering::NumberingIndex::new(&doc.numbering),
         cache,
         opts,
         hide_deleted: opts.hides_deleted(StoryRef::Body),

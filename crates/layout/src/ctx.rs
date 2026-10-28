@@ -18,6 +18,7 @@ pub(crate) enum Pass {
 /// Walk state while paginating.
 pub(crate) struct Ctx<'a> {
     pub(crate) doc: &'a Document,
+    pub(crate) numbering: wordcraft_doc::numbering::NumberingIndex<'a>,
     pub(crate) cache: &'a mut LayoutCache,
     pub(crate) opts: &'a LayoutOptions,
     pub(crate) counters: Counters,
@@ -211,11 +212,11 @@ impl Ctx<'_> {
             .numbering
             .or_else(|| self.doc.styles.resolve_para(&p.props).numbering)
             .filter(|n| n.num != 0)
-            .is_some_and(|n| self.doc.numbering.shows_label(n.num, n.level))
+            .is_some_and(|n| self.numbering.shows_label(n.num, n.level))
     }
     pub(crate) fn next_label(&mut self, p: &Paragraph) -> Option<(String, Level)> {
         let n = p.props.numbering.or_else(|| self.doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0)?;
-        self.counters.next_label(&self.doc.numbering, n.num, n.level)
+        self.counters.next_label_indexed(&self.numbering, n.num, n.level)
     }
 
     /// Lay out `p` with its already counted `label`, so laying a paragraph out again (around

@@ -163,6 +163,7 @@ impl StyleIndex {
             styles.entry(st.name.to_lowercase()).or_insert_with(|| v.clone());
             styles.insert(st.id.to_lowercase(), v);
         }
+        let numbering = wordcraft_doc::numbering::NumberingIndex::new(&doc.numbering);
         let mut counters = Counters::default();
         let mut ordinals: HashMap<String, u32> = HashMap::new();
         let mut entries = Vec::new();
@@ -176,12 +177,12 @@ impl StyleIndex {
             let num = p.props.numbering.or_else(|| doc.styles.resolve_para(&p.props).numbering).filter(|n| n.num != 0);
             let (mut label, mut levels) = (None, Vec::new());
             if let Some(n) = num
-                && let Some((l, def)) = counters.next_label(&doc.numbering, n.num, n.level)
+                && let Some((l, def)) = counters.next_label_indexed(&numbering, n.num, n.level)
                 && def.format != NumFormat::Bullet
             {
-                let vals = counters.values(&doc.numbering, n.num).unwrap_or_default();
+                let vals = counters.values_indexed(&numbering, n.num).unwrap_or_default();
                 for (k, v) in vals.iter().enumerate().take(usize::from(n.level.min(8)) + 1) {
-                    let Some(lv) = doc.numbering.level(n.num, k as u8) else { continue };
+                    let Some(lv) = numbering.level(n.num, k as u8) else { continue };
                     if matches!(lv.format, NumFormat::None | NumFormat::Bullet) {
                         continue;
                     }

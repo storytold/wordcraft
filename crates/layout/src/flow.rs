@@ -881,7 +881,7 @@ fn next_first_line(ctx: &mut Ctx, block: usize, width: f32, depth: usize, counte
             // Keep list indents and label metrics without consuming the document counters.
             let rp = ctx.doc.styles.resolve_para(&p.props);
             let label =
-                p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label(&ctx.doc.numbering, n.num, n.level));
+                p.props.numbering.or(rp.numbering).filter(|n| n.num != 0).and_then(|n| counters.next_label_indexed(&ctx.numbering, n.num, n.level));
             let pl = match ctx.para_ahead(p, width, label.clone()) {
                 Some(pl) => pl,
                 None => {

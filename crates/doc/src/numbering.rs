@@ -109,6 +109,50 @@ pub struct Numbering {
     pub nums: Vec<Num>,
 }
 
+/// Borrowed definition lookups for a walk over immutable numbering. The first occurrence of
+/// each id wins, as in the linear methods; the public vectors and saved data are unchanged.
+pub struct NumberingIndex<'a> {
+    nums: HashMap<u32, &'a Num>,
+    abstracts: HashMap<u32, &'a AbstractNum>,
+}
+
+impl<'a> NumberingIndex<'a> {
+    pub fn new(numbering: &'a Numbering) -> Self {
+        let mut nums = HashMap::new();
+        let mut abstracts = HashMap::new();
+        for n in &numbering.nums {
+            nums.entry(n.id).or_insert(n);
+        }
+        for a in &numbering.abstracts {
+            abstracts.entry(a.id).or_insert(a);
+        }
+        Self { nums, abstracts }
+    }
+
+    pub fn num(&self, id: u32) -> Option<&'a Num> {
+        self.nums.get(&id).copied()
+    }
+
+    pub fn abstract_of(&self, num: u32) -> Option<&'a AbstractNum> {
+        self.abstracts.get(&self.num(num)?.abstract_id).copied()
+    }
+
+    pub fn level(&self, num: u32, level: u8) -> Option<&'a Level> {
+        self.num(num)?.level(self.abstract_of(num), level)
+    }
+
+    /// Whether a paragraph has a visible label, without advancing the counters.
+    pub fn shows_label(&self, num: u32, level: u8) -> bool {
+        self.abstract_of(num).is_some() && self.level(num, level.min(8)).is_some_and(|d| d.format != NumFormat::None)
+    }
+}
+
+impl Num {
+    fn level<'a>(&'a self, abstract_num: Option<&'a AbstractNum>, level: u8) -> Option<&'a Level> {
+        self.level_overrides.iter().find(|(i, _)| *i == level).map(|(_, l)| l).or_else(|| abstract_num?.levels.get(level as usize))
+    }
+}
+
 /// Built-in list kinds for the Bullets / Numbering / Multilevel galleries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -313,10 +357,28 @@ impl Counters {
     /// Advance the counter for `num`/`level` and return the label (`"1."`, `"a)"`, `"•"`).
     pub fn next_label(&mut self, numbering: &Numbering, num: u32, level: u8) -> Option<(String, Level)> {
         let n = numbering.num(num)?;
+        let abs = numbering.abstracts.iter().find(|a| a.id == n.abstract_id)?;
+        self.next_label_from(n, abs, level)
+    }
+
+    /// Like [`Self::next_label`], using one walk's borrowed definition index.
+    pub fn next_label_indexed(&mut self, numbering: &NumberingIndex<'_>, num: u32, level: u8) -> Option<(String, Level)> {
+        let n = numbering.num(num)?;
+        let abs = numbering.abstracts.get(&n.abstract_id).copied()?;
+        self.next_label_from(n, abs, level)
+    }
+
+    /// Like [`Self::values`], using one walk's borrowed definition index.
+    pub fn values_indexed(&self, numbering: &NumberingIndex<'_>, num: u32) -> Option<[u32; 9]> {
         let abs = numbering.abstract_of(num)?;
+        Some(self.state.get(&abs.id).copied().unwrap_or([0; 9]))
+    }
+
+    fn next_label_from(&mut self, n: &Num, abs: &AbstractNum, level: u8) -> Option<(String, Level)> {
+        let num = n.id;
         let lv = (level as usize).min(8);
         // This list's own definition of a level wins over its abstract list's.
-        let level_def = |k: usize| numbering.level(num, k as u8);
+        let level_def = |k: usize| n.level(Some(abs), k as u8);
         let def = level_def(lv)?.clone();
         // A "none" level shows no label at all (Word's numFmt none) — not even its text.
         if def.format == NumFormat::None {
@@ -588,5 +650,67 @@ mod tests {
         assert_eq!(n.level(r, 0), Some(&own));
         let mut c = Counters::default();
         assert_eq!(c.next_label(&n, r, 0).unwrap().0, "Part V");
+    }
+
+    #[test]
+    fn definition_index_keeps_first_ids_overrides_and_missing_definitions() {
+        let override_level = Level { start: 0, text: "own %1".into(), ..Default::default() };
+        let n = Numbering {
+            abstracts: vec![
+                AbstractNum { id: 7, levels: levels_for(ListKind::Numbered), ..Default::default() },
+                AbstractNum { id: 7, levels: levels_for(ListKind::Bullet), ..Default::default() },
+                AbstractNum { id: 8, levels: Vec::new(), ..Default::default() },
+            ],
+            nums: vec![
+                Num { id: 0, abstract_id: 7, ..Default::default() },
+                Num { id: 1, abstract_id: 7, ..Default::default() },
+                Num { id: 1, abstract_id: 8, ..Default::default() },
+                Num { id: 2, abstract_id: 99, level_overrides: vec![(0, override_level.clone())], ..Default::default() },
+                Num { id: 3, abstract_id: 8, level_overrides: vec![(0, override_level), (0, Level::default())], ..Default::default() },
+            ],
+        };
+        let index = NumberingIndex::new(&n);
+        for id in [0, 1, 2, 3, 7, 99, u32::MAX] {
+            assert_eq!(index.num(id), n.num(id));
+            assert_eq!(index.abstract_of(id), n.abstract_of(id));
+            for level in [0, 1, 2, 8, 9, u8::MAX] {
+                assert_eq!(index.level(id, level), n.level(id, level));
+                assert_eq!(index.shows_label(id, level), n.shows_label(id, level));
+            }
+        }
+        assert_eq!(index.level(3, 0).unwrap().start, 0);
+        assert!(index.level(2, 0).is_some(), "a local override exists even without its abstract");
+        assert!(!index.shows_label(2, 0), "counting still requires the abstract list");
+    }
+
+    #[test]
+    fn indexed_counters_preserve_shared_state_starts_and_restarts() {
+        let mut n = Numbering::default();
+        let a = n.add_list(ListKind::Legal);
+        let b = n.restart(a).unwrap();
+        let bullet = n.add_list(ListKind::Bullet);
+        let none = n.add_list(ListKind::Numbered);
+        n.abstracts[0].levels[0].start = 0;
+        n.abstracts[0].levels[1].restart_after = Some(1);
+        n.abstracts[0].levels[2].restart = false;
+        n.abstracts[0].levels[3].format = NumFormat::DecimalZero;
+        n.nums[0].start_overrides = vec![(1, 5), (1, 99)];
+        n.nums[1].start_overrides = vec![(0, 9), (2, 0)];
+        n.nums[1].level_overrides = vec![
+            (2, Level { format: NumFormat::UpperRoman, text: "%1.%2.%3.".into(), legal: true, ..Default::default() }),
+            (2, Level { format: NumFormat::None, ..Default::default() }),
+        ];
+        n.abstracts.last_mut().unwrap().levels[0].format = NumFormat::None;
+        let index = NumberingIndex::new(&n);
+        let (mut linear, mut indexed) = (Counters::default(), Counters::default());
+        let sequence = [(a, 0), (a, 1), (a, 2), (a, 1), (b, 2), (b, 0), (a, 2), (a, 3), (bullet, 0), (none, 0), (a, 255), (999, 0)];
+        for (num, level) in sequence.into_iter().cycle().take(120) {
+            assert_eq!(indexed.next_label_indexed(&index, num, level), linear.next_label(&n, num, level), "{num}/{level}");
+            for id in [a, b, bullet, none, 999] {
+                assert_eq!(indexed.values_indexed(&index, id), linear.values(&n, id));
+            }
+        }
+        assert_eq!(indexed.state, linear.state);
+        assert_eq!(indexed.seen, linear.seen);
     }
 }
