@@ -199,6 +199,7 @@ pub struct ResolvedPara {
     /// Latin words wrap whole (`false`: they may break at any character).
     pub word_wrap: bool,
     /// Force a break between every character including Thai/Lao (stacked-text mode).
+    #[serde(default)]
     pub force_char_break: bool,
     pub overflow_punct: bool,
     pub top_line_punct: bool,
